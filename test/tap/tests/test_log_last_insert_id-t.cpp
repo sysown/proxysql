@@ -20,8 +20,9 @@ using std::string;
 using nlohmann::json;
 using std::fstream;
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	MYSQL * proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -29,9 +30,6 @@ int main(int argc, char** argv) {
 	char * datadir = NULL;
 
 	plan(4); // 3 INSERTs + a count on entries
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-	}
 
 	datadir = getenv("REGULAR_INFRA_DATADIR");
 	if (datadir == NULL) {
@@ -40,16 +38,8 @@ int main(int argc, char** argv) {
 	}
 
 	// Connect to ProxySQL Admin and check current SQLite3 configuration
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username, cl.admin_password,
-			NULL, cl.admin_port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		goto cleanup;
 	}
 
@@ -59,10 +49,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	
 	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_mysql)
-		);
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
 	}
 

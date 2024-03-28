@@ -16,18 +16,21 @@
 
 #include <stdlib.h>
 #include "tap.h"
+#include "command_line.h"
+
+CommandLine cl;
 
 int main() {
-  plan(5);
-  ok(1 == 1, "testing basic functions");
-  ok(2 == 2, " ");
-  ok1(3 == 3);
-  if (1 == 1)
-    skip(2, "Sensa fragoli");
-  else {
-    ok(1 == 2, "Should not be run at all");
-    ok(1, "This one neither");
-  }
-  return exit_status();
+	plan(5);
+	ok(1 == 1, "testing basic functions");
+	ok(2 == 2, " ");
+	ok1(3 == 3);
+	if (1 == 1) {
+		skip(2, "Sensa fragoli");
+	} else {
+		ok(1 == 2, "Should not be run at all");
+		ok(1, "This one neither");
+	}
+	return exit_status();
 }
 

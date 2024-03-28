@@ -901,7 +901,9 @@ string tap_curtime() {
 	return s;
 }
 
-int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usage) {
+int get_proxysql_cpu_usage(uint32_t intv, double& cpu_usage) {
+	// cl must be a TAP test global
+	extern CommandLine cl;
 	// check if proxysql process is consuming higher cpu than it should
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {

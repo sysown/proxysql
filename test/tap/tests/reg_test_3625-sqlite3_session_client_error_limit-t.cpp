@@ -22,12 +22,13 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 using query_spec = std::tuple<std::string, int>;
 
 const int sqlite3_port = 0;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// plan as many tests as queries
 	plan(
@@ -39,24 +40,11 @@ int main(int argc, char** argv) {
 		1
 	);
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
 	// Connect to ProxySQL Admin and check current SQLite3 configuration
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username, cl.admin_password,
-			NULL, cl.admin_port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
 
@@ -83,12 +71,7 @@ int main(int argc, char** argv) {
 			// Connect with invalid username
 			std::string inv_user_err {};
 			bool failed_to_connect = false;
-			if (
-				!mysql_real_connect(
-					proxysql_sqlite3, host_port.first.c_str(), "foobar_user", cl.password,
-					NULL, host_port.second, NULL, 0
-				)
-			) {
+			if (!mysql_real_connect(proxysql_sqlite3, host_port.first.c_str(), "foobar_user", cl.password, NULL, host_port.second, NULL, 0)) {
 				inv_user_err = mysql_error(proxysql_sqlite3);
 				failed_to_connect = true;
 			}
@@ -106,12 +89,7 @@ int main(int argc, char** argv) {
 			// Connect with invalid password
 			std::string inv_pass_err {};
 			failed_to_connect = false;
-			if (
-				!mysql_real_connect(
-					proxysql_sqlite3, host_port.first.c_str(), cl.username, "foobar_pass",
-					NULL, host_port.second, NULL, 0
-				)
-			) {
+			if (!mysql_real_connect(proxysql_sqlite3, host_port.first.c_str(), cl.username, "foobar_pass", NULL, host_port.second, NULL, 0)) {
 				inv_pass_err = mysql_error(proxysql_sqlite3);
 				failed_to_connect = true;
 			}
@@ -130,12 +108,7 @@ int main(int argc, char** argv) {
 		// Perform the valid connection
 		{
 			// Correctly connect to SQLite3 server
-			MYSQL* connect_errno =
-				mysql_real_connect(
-					proxysql_sqlite3, host_port.first.c_str(), cl.username, cl.password,
-					NULL, host_port.second, NULL, 0
-				);
-
+			MYSQL* connect_errno = mysql_real_connect(proxysql_sqlite3, host_port.first.c_str(), cl.username, cl.password, NULL, host_port.second, NULL, 0);
 			ok(
 				connect_errno != NULL,
 				"Connection should succeed when using a valid 'username:password' (%s:%s)",

@@ -33,6 +33,8 @@
 
 using nlohmann::json;
 
+CommandLine cl;
+
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
@@ -159,12 +161,6 @@ int test_use_queries(MYSQL* proxysql_mysql, bool enabled_digests) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 
@@ -186,15 +182,8 @@ int main(int argc, char** argv) {
 
 	plan(db_query.size() * 2);
 
-	if (
-		!mysql_real_connect(
-			proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_mysql)
-		);
+	if (!mysql_real_connect( proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
 	}
 

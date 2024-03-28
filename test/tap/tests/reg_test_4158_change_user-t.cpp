@@ -99,11 +99,6 @@ int main(int, char**) {
 
 	plan(loop1 * (loop2 + 2));
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 /*
 	// PLACEHOLDER
 	MYSQL* admin = mysql_init(NULL);

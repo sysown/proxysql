@@ -20,6 +20,8 @@
 using std::pair;
 using std::string;
 
+CommandLine cl;
+
 int get_user_def_hg(MYSQL* admin, const string& user) {
 	const string sel_q { "SELECT default_hostgroup FROM mysql_users WHERE username='" + user + "'" };
 	if (mysql_query(admin, sel_q.c_str())) {
@@ -78,28 +80,38 @@ pair<string,int> get_def_srv_host(MYSQL* admin, const string user) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// TODO: Harcoded for now, this is an initial version of the test.
-	plan(6);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
+	plan(2+2+2 + 6);
 
 	MYSQL* proxy = mysql_init(NULL);
-	MYSQL* mysql = mysql_init(NULL);
-	MYSQL* admin = mysql_init(NULL);
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
+	MYSQL* admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	const pair<string,int> srv_host { get_def_srv_host(admin, cl.username) };
@@ -109,9 +121,19 @@ int main(int argc, char** argv) {
 	}
 
 	{
+		MYSQL* mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, srv_host.first.c_str(), cl.username, cl.password, NULL, srv_host.second, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			goto cleanup;
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
 
 		int exp_mysql_srv_st = SERVER_STATUS_AUTOCOMMIT;
@@ -192,11 +214,11 @@ int main(int argc, char** argv) {
 			"ProxySQL new server status should match expected - exp: '%d', act:'%d'",
 			exp_proxy_srv_st, proxy->server_status
 		);
+		mysql_close(mysql);
 	}
 
 cleanup:
 	mysql_close(proxy);
-	mysql_close(mysql);
 	mysql_close(admin);
 
 	return exit_status();

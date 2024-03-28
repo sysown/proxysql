@@ -36,6 +36,8 @@ using std::function;
 
 using nlohmann::json;
 
+CommandLine cl;
+
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
@@ -168,14 +170,22 @@ function<bool(const json&)> capture_exception(const function<bool(const json&)> 
 	};
 }
 
-int prepare_stmt_queries(const CommandLine& cl, const vector<query_t>& p_queries) {
+int prepare_stmt_queries(const vector<query_t>& p_queries) {
 	// 1. Prepare the stmt in a connection
-	MYSQL* proxy_mysql = mysql_init(NULL);
 
+	MYSQL* proxy_mysql = mysql_init(NULL);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 	diag("%s: Openning INITIAL connection...", tap_curtime().c_str());
 	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 	}
 
 	vector<query_t> queries {};
@@ -499,9 +509,8 @@ int exec_and_discard(MYSQL* proxy_mysql, const vector<string>& queries) {
 
 using queries_exec_t = function<int(MYSQL*, const vector<query_t>&)>;
 
-int exec_simple_conn_tests(
-	const CommandLine& cl, const vector<test_def_t>& tests_def, const queries_exec_t& queries_exec
-) {
+int exec_simple_conn_tests(const vector<test_def_t>& tests_def, const queries_exec_t& queries_exec) {
+
 	for (const auto& test_def : tests_def) {
 		const string& test_name { std::get<SCONN_TEST_DEF::NAME>(test_def) };
 		const setup_teardown_t& setup_teardown = std::get<SCONN_TEST_DEF::SETUP_TEARDOWN>(test_def);
@@ -510,10 +519,18 @@ int exec_simple_conn_tests(
 		diag("Starting test '%s'", test_name.c_str());
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
-
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 		}
 
 		// TEST SETUP queries
@@ -532,7 +549,7 @@ int exec_simple_conn_tests(
 
 	return EXIT_SUCCESS;
 }
-int text_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>& tests_def) {
+int text_exec_simple_conn_tests(const vector<test_def_t>& tests_def) {
 	for (const auto& test_def : tests_def) {
 		const string& test_name { std::get<SCONN_TEST_DEF::NAME>(test_def) };
 		const setup_teardown_t& setup_teardown = std::get<SCONN_TEST_DEF::SETUP_TEARDOWN>(test_def);
@@ -541,10 +558,18 @@ int text_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>&
 		diag("Starting test '%s'", test_name.c_str());
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
-
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 		}
 
 		// TEST SETUP queries
@@ -565,9 +590,7 @@ int text_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>&
 
 const double COLISSION_PROB = 1e-8;
 
-int _wait_for_replication(
-	const CommandLine& cl, MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t read_hg
-) {
+int _wait_for_replication(MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t read_hg) {
 	const std::string t_count_reader_hg_servers {
 		"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d"
 	};
@@ -601,9 +624,18 @@ int _wait_for_replication(
 
 		while (elapsed.count() < timeout && queries < retries) {
 			MYSQL* proxy = mysql_init(NULL);
+			diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
+			if (cl.use_ssl)
+				mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+			if (cl.compression)
+				mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 			if (!mysql_real_connect(proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 				return EXIT_FAILURE;
+			} else {
+				const char * c = mysql_get_ssl_cipher(proxy);
+				ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+				ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 			}
 
 			int rc = mysql_query(proxy, check.c_str());
@@ -644,7 +676,7 @@ int _wait_for_replication(
 	return result;
 }
 
-int stmt_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>& tests_def) {
+int stmt_exec_simple_conn_tests(const vector<test_def_t>& tests_def) {
 	for (const auto& test_def : tests_def) {
 		const string& test_name { std::get<SCONN_TEST_DEF::NAME>(test_def) };
 		const setup_teardown_t& setup_teardown = std::get<SCONN_TEST_DEF::SETUP_TEARDOWN>(test_def);
@@ -653,10 +685,18 @@ int stmt_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>&
 		diag("Starting test '%s'", test_name.c_str());
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
-
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 		}
 
 		// TEST SETUP queries
@@ -673,12 +713,21 @@ int stmt_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>&
 				diag("Executing query '%s' with REPLICATION WAIT", query.c_str());
 
 				MYSQL* admin = mysql_init(NULL);
+				diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+				if (cl.use_ssl)
+					mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+				if (cl.compression)
+					mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 				if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 					return EXIT_FAILURE;
+				} else {
+					const char * c = mysql_get_ssl_cipher(admin);
+					ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+					ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 				}
 
-				int wait_res = _wait_for_replication(cl, admin, query, 10, 1);
+				int wait_res = _wait_for_replication(admin, query, 10, 1);
 				if (wait_res != EXIT_SUCCESS) {
 					diag("Waiting for replication FAILED. EXITING");
 					return EXIT_FAILURE;
@@ -688,7 +737,7 @@ int stmt_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>&
 			}
 		}
 
-		prepare_stmt_queries(cl, test_queries);
+		prepare_stmt_queries(test_queries);
 
 		exec_stmt_queries(proxy_mysql, test_queries);
 
@@ -960,12 +1009,21 @@ const vector<query_t> test_compression_queries {
 	{ "PROXYSQL INTERNAL SESSION", {}, {{{"conn","status","compression"}, check_if_tg_elem_is_true, "COMPRESSED_CONNECTION"}} },
 };
 
-int test_client_conn_compression_st(const CommandLine& cl) {
-	MYSQL* proxysql_mysql = mysql_init(NULL);
+int test_client_conn_compression_st() {
 
+	MYSQL* proxysql_mysql = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, CLIENT_COMPRESS)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_mysql->net.compress == 1, "Compression: (%d)", proxysql_mysql->net.compress);
 	}
 
 	exec_test_queries(proxysql_mysql, test_compression_queries);
@@ -1003,11 +1061,6 @@ uint32_t compute_planned_tests(const vector<test_def_t> text_tests_def, const ve
 }
 
 int main(int argc, char *argv[]) {
-	CommandLine cl;
-
-	if(cl.getEnv()) {
-		return exit_status();
-	}
 
 	uint32_t computed_exp_tests = compute_planned_tests(text_tests_defs, stmt_compatible_tests);
 	uint32_t compression_exp_tests = 2;
@@ -1015,12 +1068,21 @@ int main(int argc, char *argv[]) {
 	diag("Computed simple connection 'TEXT' and 'STMT' tests where: '%d'", computed_exp_tests);
 	diag("Special connections tests where: '%d'", compression_exp_tests);
 
-	plan(compression_exp_tests + computed_exp_tests);
+	plan(2+2+2*6+2*4+2*102+2*10+2*4 + compression_exp_tests + computed_exp_tests);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy_admin->net.compress, "Compression: (%d)", proxy_admin->net.compress);
 	}
 
 	// Set a replication lag inferior to default one (60). This is to prevent reads
@@ -1048,17 +1110,17 @@ int main(int argc, char *argv[]) {
 	};
 
 	diag("####### START SPECIAL CONNECTIONS TESTS #######");
-	int t_res = test_client_conn_compression_st(cl);
+	int t_res = test_client_conn_compression_st();
 	if (t_res) { goto cleanup; }
 	diag("#######  END SPECIAL PROTOCOL TESTS  #######\n");
 
 	diag("####### START TEXT PROTOCOL TESTS #######");
-	t_res = text_exec_simple_conn_tests(cl, text_tests_defs);
+	t_res = text_exec_simple_conn_tests(text_tests_defs);
 	if (t_res) { goto cleanup; }
 	diag("#######  END TEXT PROTOCOL TESTS  #######\n");
 
 	diag("####### START STMT PROTOCOL TESTS #######");
-	t_res = stmt_exec_simple_conn_tests(cl, stmt_supp_tests);
+	t_res = stmt_exec_simple_conn_tests(stmt_supp_tests);
 	if (t_res) { goto cleanup; }
 	diag("#######  END STMT PROTOCOL TESTS  #######\n");
 

@@ -106,27 +106,33 @@ std::vector<std::string> repl_queries_set1 = { // only 1 set, maybe more later
 
 int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::vector<std::string>& mysql_queries) {
 	diag("Running %s using server_id %d , frontend_ssl = %s , backend_ssl = %s", __func__ , server_id, (frontend_ssl ? "TRUE" : "FALSE") , (backend_ssl ? "TRUE" : "FALSE"));
-	MYSQL * mysql = mysql_init(NULL);
 
 	std::vector<std::string> admin_queries = {};
 	admin_queries.push_back(std::string("SET mysql-have_ssl='") + std::string(frontend_ssl ? "true" : "false") + "'");
 	admin_queries.push_back("LOAD MYSQL VARIABLES TO RUNTIME");
+	admin_queries.push_back(std::string("UPDATE mysql_users SET use_ssl=") + std::string(frontend_ssl ? "1" : "0") + " WHERE username = 'root'");
+	admin_queries.push_back("LOAD MYSQL USERS TO RUNTIME");
 	admin_queries.push_back(std::string("UPDATE mysql_servers SET use_ssl=") + std::string(backend_ssl ? "1" : "0"));
 	admin_queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
 
-	if (!mysql)
-		return exit_status();
-	if (frontend_ssl) {
-		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
-	}
-//	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
-	//if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, 3306, NULL, 0)) {
-		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
-		return exit_status();
-	}
 	if (run_queries_sets(admin_queries, mysqladmin, "Running on Admin"))
 		return exit_status();
+
+	MYSQL * mysql = mysql_init(NULL);
+	diag("Connecting: cl.root_username='%s' frontend_ssl=%d", cl.root_username,frontend_ssl);
+	if (frontend_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(mysql, cl.host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
+		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
+		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(frontend_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
+	}
+
 	if (run_queries_sets(mysql_queries, mysql, "Running on MySQL"))
 		return exit_status();
 	int rc = pull_replication(mysql, server_id);
@@ -139,19 +145,21 @@ int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::v
 
 int main(int argc, char** argv) {
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(8); // each test has 2 OK
+	plan(2+4*2 + 8); // each test has 2 OK
 
 	mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
-		return exit_status();
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysqladmin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				  __FILE__, __LINE__, mysql_error(mysqladmin));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysqladmin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysqladmin->net.compress, "Compression: (%d)", mysqladmin->net.compress);
 	}
 
 	const std::vector<std::string> query_rules = { "INSERT OR IGNORE INTO mysql_query_rules (rule_id,active,match_digest,destination_hostgroup,multiplex,apply) VALUES\

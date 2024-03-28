@@ -20,6 +20,32 @@
 #include "command_line.h"
 
 
+CommandLine cl;
+
+bool debug_diag = true;
+unsigned int num_threads = 5;
+int count = 10;
+char *schema = (char *)"information_schema";
+int silent = 0;
+int sysbench = 0;
+int transactions = 200;
+int uniquequeries = 0;
+int histograms = -1;
+
+unsigned int g_passed = 0;
+unsigned int g_failed = 0;
+
+std::atomic<int> cnt_transactions;
+std::atomic<int> cnt_SELECT_outside_transactions;
+std::atomic<int> cnt_expected_errors;
+
+unsigned int status_connections = 0;
+unsigned int connect_phase_completed = 0;
+unsigned int query_phase_completed = 0;
+
+__thread int g_seed;
+std::mutex mtx_;
+
 unsigned long long monotonic_time() {
 	struct timespec ts;
 	//clock_gettime(CLOCK_MONOTONIC_COARSE, &ts); // this is faster, but not precise
@@ -36,39 +62,10 @@ struct cpu_timer
 	{
 		unsigned long long end = monotonic_time();
 		std::cerr << double( end - begin ) / 1000000 << " secs.\n" ;
-		begin=end-begin;
+		begin = end-begin;
 	};
 	unsigned long long begin;
 };
-
-bool debug_diag = true;
-unsigned int num_threads=5;
-int count=10;
-char *username=NULL;
-char *password=NULL;
-char *host=(char *)"localhost";
-int port=3306;
-char *schema=(char *)"information_schema";
-int silent = 0;
-int sysbench = 0;
-int local=0;
-int transactions=200;
-int uniquequeries=0;
-int histograms=-1;
-
-unsigned int g_passed=0;
-unsigned int g_failed=0;
-
-std::atomic<int> cnt_transactions;
-std::atomic<int> cnt_SELECT_outside_transactions;
-std::atomic<int> cnt_expected_errors;
-
-unsigned int status_connections = 0;
-unsigned int connect_phase_completed = 0;
-unsigned int query_phase_completed = 0;
-
-__thread int g_seed;
-std::mutex mtx_;
 
 inline int fastrand() {
 	g_seed = (214013*g_seed+2531011);
@@ -76,15 +73,15 @@ inline int fastrand() {
 }
 
 void gen_random(char *s, const int len) {
-    static const char alphanum[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz";
+	static const char alphanum[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		"abcdefghijklmnopqrstuvwxyz";
 
-    for (int i = 0; i < len; ++i) {
-        s[i] = alphanum[fastrand() % (sizeof(alphanum) - 1)];
-    }
+	for (int i = 0; i < len; ++i) {
+		s[i] = alphanum[fastrand() % (sizeof(alphanum) - 1)];
+	}
 
-    s[len] = 0;
+	s[len] = 0;
 }
 
 void * my_conn_thread(void *arg) {
@@ -100,18 +97,22 @@ void * my_conn_thread(void *arg) {
 
 
 	for (i=0; i<count; i++) {
-		MYSQL *mysql=mysql_init(NULL);
 
-		if (mysql==NULL) {
+		MYSQL* mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
+		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			exit(EXIT_FAILURE);
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
-		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : port) , NULL, 0);
-		if (rc==NULL) {
-			if (silent==0) {
-				fprintf(stderr,"%s\n", mysql_error(mysql));
-			}
-			exit(EXIT_FAILURE);
-		}
+
 		mysqlconns[i]=mysql;
 		__sync_add_and_fetch(&status_connections,1);
 	}
@@ -366,29 +367,23 @@ int main(int argc, char *argv[]) {
 	cnt_transactions = 0;
 	cnt_SELECT_outside_transactions = 0;
 	cnt_expected_errors = 0;
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
-
-	username = cl.username;
-	password = cl.password;
-	host = cl.host;
-	port = cl.port;
 
 	{
-		MYSQL *mysql=mysql_init(NULL);
+		MYSQL* mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
+		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+			exit(EXIT_FAILURE);
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
+		}
 
-		if (mysql==NULL) {
-			exit(EXIT_FAILURE);
-		}
-		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : port) , NULL, 0);
-		if (rc==NULL) {
-			if (silent==0) {
-				fprintf(stderr,"%s\n", mysql_error(mysql));
-			}
-			exit(EXIT_FAILURE);
-		}
 		MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
 		MYSQL_QUERY(mysql, "CREATE TABLE IF NOT EXISTS test.test_savepoint(id INT NOT NULL AUTO_INCREMENT PRIMARY KEY) ENGINE=INNODB");
 		MYSQL_QUERY(mysql, "DELETE FROM test.test_savepoint");
@@ -396,15 +391,22 @@ int main(int argc, char *argv[]) {
 
 		mysql_close(mysql);
 	}
-	MYSQL* mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
-		return exit_status();
 
-	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
+	MYSQL* mysqladmin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysqladmin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(mysqladmin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysqladmin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysqladmin->net.compress, "Compression: (%d)", mysqladmin->net.compress);
 	}
+
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='false' where variable_name='mysql-enforce_autocommit_on_reads'");
 	MYSQL_QUERY(mysqladmin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(mysqladmin, "DROP TABLE IF EXISTS mysql_query_rules_948");
@@ -440,7 +442,7 @@ int main(int argc, char *argv[]) {
 	//count = 10;
 
 	// plan(transactions * num_threads + 1); // this was too verbose
-	plan(1);
+	plan(2+2+2*num_threads*count + 1);
 
 	if (debug_diag==true) {
 		diag("Running test with debug enabled. Set debug_diag=false for less verbosity");
@@ -448,9 +450,6 @@ int main(int argc, char *argv[]) {
 		diag("Running test with debug disabled. Set debug_diag=true for more verbosity");
 	}
 
-	if (strcmp(host,"localhost")==0) {
-		local = 1;
-	}
 	pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
 	if (thi==NULL)
 		return exit_status();

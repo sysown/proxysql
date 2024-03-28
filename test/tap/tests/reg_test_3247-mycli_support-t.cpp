@@ -17,6 +17,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 std::vector<std::string> split(const std::string& s, char delimiter)
 {
 	std::vector<std::string> tokens;
@@ -30,12 +32,6 @@ std::vector<std::string> split(const std::string& s, char delimiter)
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(2);
 

@@ -16,13 +16,9 @@
 
 using std::string;
 
-int main(int argc, char** argv) {
-	CommandLine cl;
+CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
+int main(int argc, char** argv) {
 
 	plan(1);
 

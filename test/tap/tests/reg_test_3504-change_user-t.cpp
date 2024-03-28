@@ -34,6 +34,8 @@ using nlohmann::json;
 
 using test_opts = std::tuple<std::string, bool, bool>;
 
+CommandLine cl;
+
 const std::vector<test_opts> tests_defs {
 	std::make_tuple("mysql_clear_password", false, false),
 	std::make_tuple("mysql_native_password", false, false),
@@ -145,21 +147,10 @@ void perform_helper_test(
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
-	if (
-		!mysql_real_connect(
-			proxysql_admin, "127.0.0.1", cl.admin_username, cl.admin_password,
-			"information_schema", cl.admin_port, NULL, 0
-		)
-	) {
+	if (!mysql_real_connect(proxysql_admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}

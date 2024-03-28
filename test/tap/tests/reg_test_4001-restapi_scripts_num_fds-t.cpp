@@ -34,6 +34,8 @@ using nlohmann::json;
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 const int NUM_CONNECTIONS = 1300;
 const string base_address { "http://localhost:6070/sync/" };
 
@@ -49,12 +51,6 @@ const vector<honest_req_t> honest_requests {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	diag("Setting new process limits beyond 'FD_SETSIZE'");
 	struct rlimit limits { 0, 0 };

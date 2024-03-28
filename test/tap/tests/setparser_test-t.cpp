@@ -8,11 +8,9 @@
 
 #include <stdlib.h>
 
-int main(int argc, char** argv) {
-	CommandLine cl;
+CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
+int main(int argc, char** argv) {
 
 	plan(1);
 	std::string test_bin { std::string { cl.workdir } + "setparser_test" };

@@ -21,6 +21,8 @@
 #include "tap.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /**
  * @brief List of the pairs holding the unsupported queries to be executed by ProxySQL
  *   together with the error code that they should return.
@@ -61,7 +63,7 @@ using query_test_info =
 		int,
 		// Function performing an internal 'ok' test checking that the
 		// enabled / disabled query responds as expected
-		std::function<void(const CommandLine&, MYSQL*, int, bool)>
+		std::function<void(MYSQL*, int, bool)>
 	>;
 
 // "SET mysql-enable_load_data_local_infile='true'",
@@ -167,9 +169,8 @@ using mysql_res_row = std::vector<std::string>;
  * @param test_for_success Select the operation mode of the test, 'true' for
  *   testing for success, 'false' for failure. It's 'true' by default.
  */
-void helper_test_load_data_local_infile(
-	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
-) {
+void helper_test_load_data_local_infile(MYSQL* proxysql, int exp_err=0, bool test_for_success=true) {
+
 	std::string datafile {
 		std::string { cl.workdir } + "load_data_local_datadir/insert_data.txt"
 	};
@@ -283,18 +284,21 @@ void helper_test_load_data_local_infile(
  *   'mysql-verbose_query_error' set to 'true'. This test only purpose is
  *   to exercise the code performing the additional extra logging.
  */
-void test_verbose_error_load_data_local_infile(
-	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
-) {
-	MYSQL* proxysql_admin = mysql_init(NULL);
+void test_verbose_error_load_data_local_infile(MYSQL* proxysql, int exp_err=0, bool test_for_success=true) {
 
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0
-		)
-	) {
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	std::vector<std::string> verbose_query_error_true {
@@ -309,7 +313,7 @@ void test_verbose_error_load_data_local_infile(
 		}
 	}
 
-	helper_test_load_data_local_infile(cl, proxysql, exp_err, test_for_success);
+	helper_test_load_data_local_infile(proxysql, exp_err, test_for_success);
 
 	std::vector<std::string> verbose_query_error_false {
 		"SET mysql-verbose_query_error='false'",
@@ -339,10 +343,8 @@ void test_verbose_error_load_data_local_infile(
  * @param test_for_success Select the operation mode of the test, 'true' for
  *   testing for success, 'false' for failure. It's 'true' by default.
  */
-void test_load_data_local_infile(
-	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
-) {
-	helper_test_load_data_local_infile(cl, proxysql, exp_err, test_for_success);
+void test_load_data_local_infile(MYSQL* proxysql, int exp_err=0, bool test_for_success=true) {
+	helper_test_load_data_local_infile(proxysql, exp_err, test_for_success);
 }
 
 /**
@@ -359,9 +361,8 @@ void test_load_data_local_infile(
  * @param test_for_success Select the operation mode of the test, 'true' for
  *   testing for success, 'false' for failure. It's 'true' by default.
  */
-void test_failing_load_data_local_infile(
-	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
-) {
+void test_failing_load_data_local_infile(MYSQL* proxysql, int exp_err=0, bool test_for_success=true) {
+
 	// Supply an invalid file
 	std::string datafile {
 		std::string { cl.workdir } + "load_data_local_datadir/non_existing_file.txt"
@@ -433,7 +434,7 @@ void test_failing_load_data_local_infile(
 std::vector<query_test_info> queries_tests_info {
 	std::make_tuple<
 		std::string, std::string, std::string, std::string, int,
-		std::function<void(const CommandLine&, MYSQL*, int, bool)>
+		std::function<void(MYSQL*, int, bool)>
 	>(
 		// Query to be tested
 		"LOAD DATA LOCAL INFILE",
@@ -451,7 +452,7 @@ std::vector<query_test_info> queries_tests_info {
 	),
 	std::make_tuple<
 		std::string, std::string, std::string, std::string, int,
-		std::function<void(const CommandLine&, MYSQL*, int, bool)>
+		std::function<void(MYSQL*, int, bool)>
 	>(
 		// Query to be tested
 		"LOAD DATA LOCAL INFILE",
@@ -469,7 +470,7 @@ std::vector<query_test_info> queries_tests_info {
 	),
 	std::make_tuple<
 		std::string, std::string, std::string, std::string, int,
-		std::function<void(const CommandLine&, MYSQL*, int, bool)>
+		std::function<void(MYSQL*, int, bool)>
 	>(
 		// Query to be tested
 		"LOAD DATA LOCAL INFILE",
@@ -490,28 +491,37 @@ std::vector<query_test_info> queries_tests_info {
 // ****************************************************************** //
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// plan as many tests as queries
-	plan(unsupported_queries.size() + 4 * queries_tests_info.size());
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
+	plan(
+		2*unsupported_queries.size() + // connections
+		2 + // connections
+		2*queries_tests_info.size() + // connections
+		4 + // connections
+		unsupported_queries.size() + 4 * queries_tests_info.size() // tests
+		);
 
 	// perform a different connection per query
 	for (const auto& unsupported_query : unsupported_queries) {
-		MYSQL* proxysql_mysql = mysql_init(NULL);
 
 		// extract the tuple elements
 		const std::string query = std::get<0>(unsupported_query);
 		const int exp_err_code = std::get<1>(unsupported_query);
 		const std::string exp_err_msg = std::get<2>(unsupported_query);
 
+		MYSQL* proxysql_mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
 		}
 
 		int query_err = mysql_query(proxysql_mysql, query.c_str());
@@ -534,19 +544,22 @@ int main(int argc, char** argv) {
 	// Create required connection to ProxySQL admin required to perform the
 	// tests for conditionally enabled queries.
 	MYSQL* proxysql_admin = mysql_init(NULL);
-
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0
-		)
-	) {
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	// Enable and test the queries that can be conditionally enabled
 	for (const auto& query_test_info : queries_tests_info) {
-		MYSQL* proxysql_mysql = mysql_init(NULL);
 
 		// extract the tuple elements
 		const std::string query = std::get<0>(query_test_info);
@@ -554,9 +567,19 @@ int main(int argc, char** argv) {
 		int exp_err = std::get<4>(query_test_info);
 		const auto& testing_fn = std::get<5>(query_test_info);
 
+		MYSQL* proxysql_mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
 		}
 
 		bool query_enabling_succeed = enable_query(proxysql_admin, query_test_info, true);
@@ -566,7 +589,7 @@ int main(int argc, char** argv) {
 		);
 
 		// Check that the query is now properly supported
-		testing_fn(cl, proxysql_mysql, 0, true);
+		testing_fn(proxysql_mysql, 0, true);
 
 		bool query_disabling_succeed = enable_query(proxysql_admin, query_test_info, false);
 		ok(
@@ -575,7 +598,7 @@ int main(int argc, char** argv) {
 		);
 
 		// Check that the query is now failing
-		testing_fn(cl, proxysql_mysql, exp_err, false);
+		testing_fn(proxysql_mysql, exp_err, false);
 
 		mysql_close(proxysql_mysql);
 	}

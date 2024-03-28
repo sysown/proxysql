@@ -3,31 +3,34 @@
  * @brief Test file for unit testing 'SetParser' type, responsible of parsing
  *   non-trivial 'SET' statements.
  */
+#include "command_line.h"
+
+CommandLine cl;
 
 #include "setparser_test_common.h"
 
 void TestParse(const Test* tests, int ntests, const std::string& title) {
-  for (int i = 0; i < ntests; i++) {
-    std::map<std::string, std::vector<std::string>> data;
-    for(auto it = std::begin(tests[i].results); it != std::end(tests[i].results); ++it) {
-      data[it->var] = it->values;
-    }
+	for (int i = 0; i < ntests; i++) {
+		std::map<std::string, std::vector<std::string>> data;
+		for(auto it = std::begin(tests[i].results); it != std::end(tests[i].results); ++it) {
+			data[it->var] = it->values;
+		}
 
-	cout << "Processing query: " << tests[i].query << endl;
-    SetParser parser(tests[i].query);
-    std::map<std::string, std::vector<std::string>> result = parser.parse1();
+		cout << "Processing query: " << tests[i].query << endl;
+		SetParser parser(tests[i].query);
+		std::map<std::string, std::vector<std::string>> result = parser.parse1();
 
-	cout << endl;
-    printMap("result", result);
-	cout << endl;
-    printMap("expected", data);
-	cout << endl;
+		cout << endl;
+		printMap("result", result);
+		cout << endl;
+		printMap("expected", data);
+		cout << endl;
 
-    CHECK_EQ(result.size(), data.size());
-	ok(result.size() == data.size() , "Sizes match: %lu, %lu" , result.size() , data.size());
-    CHECK(std::equal(std::begin(result), std::end(result), std::begin(data)));
-	ok(std::equal(std::begin(result), std::end(result), std::begin(data)) == true, "Elements match");
-  }
+		CHECK_EQ(result.size(), data.size());
+		ok(result.size() == data.size() , "Sizes match: %lu, %lu" , result.size() , data.size());
+		CHECK(std::equal(std::begin(result), std::end(result), std::begin(data)));
+		ok(std::equal(std::begin(result), std::end(result), std::begin(data)) == true, "Elements match");
+	}
 }
 
 

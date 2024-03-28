@@ -24,6 +24,8 @@ using std::string;
 using std::vector;
 using std::size_t;
 
+CommandLine cl;
+
 /**
  * @brief Generate random string of only letters of the supplied size, we do this to ensure no-escaped sequences.
  * @param size Target size of the string to generate.
@@ -58,9 +60,7 @@ int mysql_query_p(MYSQL* mysql, const char* query) {
 		} \
 	} while(0)
 
-int test_compress_split_packets(
-	const CommandLine& cl, const vector<size_t> test_payload_sizes, int last_insert_id = 0
-) {
+int test_compress_split_packets(const vector<size_t> test_payload_sizes, int last_insert_id = 0) {
 	diag("Create new conn to ProxySQL and ensure new backend conn is used for serving this queries");
 	MYSQL* proxy = mysql_init(NULL);
 
@@ -193,15 +193,9 @@ const vector<size_t> test_payload_sizes {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// '4' tests per payload, times '2' due to compression/non-compression on backend servers
 	plan(test_payload_sizes.size() * 4 * 2 + 2);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -232,7 +226,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_P(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	diag("TEST: Check compressed split packets through ProxySQL with backend conns with 'compression=0'");
-	int last_insert_id = test_compress_split_packets(cl, test_payload_sizes);
+	int last_insert_id = test_compress_split_packets(test_payload_sizes);
 	if (last_insert_id != test_payload_sizes.size()) {
 		diag("Failed tests for 'compression=0' aborting further testing");
 		goto cleanup;
@@ -243,7 +237,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_P(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	diag("TEST: Check compressed split packets through ProxySQL with backend conns with 'compression=1'");
-	test_compress_split_packets(cl, test_payload_sizes, last_insert_id);
+	test_compress_split_packets(test_payload_sizes, last_insert_id);
 
 cleanup:
 	mysql_close(admin);

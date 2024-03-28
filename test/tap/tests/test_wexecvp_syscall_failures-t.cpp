@@ -14,6 +14,9 @@
 #include "proxysql_utils.h"
 #include "tap.h"
 #include "utils.h"
+#include "command_line.h"
+
+CommandLine cl;
 
 using std::string;
 using std::vector;

@@ -38,6 +38,8 @@ using std::string;
 
 typedef std::chrono::high_resolution_clock hrc;
 
+CommandLine cl;
+
 /**
  * @brief Return the 'errno' when trying to connect to a particular port.
  * @param port The port in which to attempt to 'connect'.
@@ -146,14 +148,12 @@ int configure_target_user(MYSQL* admin, const string& ff_user, uint32_t def_hg, 
 	return EXIT_SUCCESS;
 }
 
-int check_connect_retries(
-	const CommandLine& cl, MYSQL* admin, uint32_t retries, uint32_t hg, uint32_t port, bool ff
-) {
-	const string USER { "sbtest10" };
+int check_connect_retries(MYSQL* admin, uint32_t retries, uint32_t hg, uint32_t port, bool ff) {
+	const string user { "sbtest10" };
 
 	int cnf_user_err = configure_target_user(admin, "sbtest10", hg, ff);
 	if (cnf_user_err) {
-		diag("Failed to configure target user '%s'", USER.c_str());
+		diag("Failed to configure target user '%s'", user.c_str());
 		return EXIT_FAILURE;
 	}
 
@@ -168,9 +168,18 @@ int check_connect_retries(
 	diag("Starting a '%s' connection with user 'sbtest10' and issuing query", conn_type.c_str());
 
 	MYSQL* proxy = mysql_init(NULL);
-	if (!mysql_real_connect(proxy, cl.host, USER.c_str(), USER.c_str(), NULL, cl.port, NULL, 0)) {
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", user.c_str(), cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxy, cl.host, user.c_str(), user.c_str(), NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	diag("START: Checking behavior first 'ConnectionError' in the connection");
@@ -286,9 +295,7 @@ int check_connect_retries(
 	return tests_failed();
 }
 
-int check_connect_error_consistency(
-	const CommandLine& cl, MYSQL* admin, uint32_t hg, bool ff, uint32_t queries
-) {
+int check_connect_error_consistency(MYSQL* admin, uint32_t hg, bool ff, uint32_t queries) {
 	const string user { "sbtest10" };
 	const uint32_t retries = 1;
 	const uint32_t timeout = 3000;
@@ -316,9 +323,18 @@ int check_connect_error_consistency(
 	usleep(1500 * 1000);
 
 	MYSQL* proxy = mysql_init(NULL);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", user.c_str(), cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, user.c_str(), user.c_str(), NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	diag("START: checking behavior first 'ConnectionError' in the connection");
@@ -351,7 +367,7 @@ int check_connect_error_consistency(
 	return EXIT_SUCCESS;
 }
 
-int check_connect_timeout_precedence(const CommandLine& cl, MYSQL* admin, uint32_t hg, bool ff) {
+int check_connect_timeout_precedence(MYSQL* admin, uint32_t hg, bool ff) {
 	const string user { "sbtest10" };
 	const uint32_t retries = 2;
 	const uint32_t timeout = 1000;
@@ -374,9 +390,18 @@ int check_connect_timeout_precedence(const CommandLine& cl, MYSQL* admin, uint32
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL* proxy = mysql_init(NULL);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", user.c_str(), cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, user.c_str(), user.c_str(), NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	diag("START: Checking that timeout should have precedence over retries");
@@ -395,9 +420,10 @@ const uint32_t MAX_RETRIES = 4;
 const uint32_t ERR_QUERIES = 3;
 
 int main(int, char**) {
-	CommandLine cl;
 
 	plan(
+		2 + // connections
+		4*MAX_RETRIES + 2*4 + // connections
 		// Number of retries per number of checks 'check_connect_retries'
 		MAX_RETRIES * 3 * 2 +
 		// Number of errors to check + 2 extra checks on 'check_connect_error_consistency'
@@ -406,15 +432,19 @@ int main(int, char**) {
 		1 * 2
 	);
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 	MYSQL* admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	uint32_t unused_port = get_unused_port();
@@ -450,21 +480,21 @@ int main(int, char**) {
 		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		// Test for a connection without fast-forward
-		int rc = check_connect_retries(cl, admin, retries, hg, unused_port, 0);
+		int rc = check_connect_retries(admin, retries, hg, unused_port, 0);
 		if (rc) { break; }
 
 		// Test for a connection with fast-forward
-		rc = check_connect_retries(cl, admin, retries, hg, unused_port, 1);
+		rc = check_connect_retries(admin, retries, hg, unused_port, 1);
 		if (rc) { break; }
 	}
 
 	// Check several connect errors in the same connection behave in a consistent way
-	check_connect_error_consistency(cl, admin, hg, 0, ERR_QUERIES);
-	check_connect_error_consistency(cl, admin, hg, 1, ERR_QUERIES);
+	check_connect_error_consistency(admin, hg, 0, ERR_QUERIES);
+	check_connect_error_consistency(admin, hg, 1, ERR_QUERIES);
 
 	// Check that retries never takes precedence over the 'connect_timeout'
-	check_connect_timeout_precedence(cl, admin, hg, 0);
-	check_connect_timeout_precedence(cl, admin, hg, 1);
+	check_connect_timeout_precedence(admin, hg, 0);
+	check_connect_timeout_precedence(admin, hg, 1);
 
 	mysql_close(admin);
 

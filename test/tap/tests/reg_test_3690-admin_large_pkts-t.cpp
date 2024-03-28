@@ -26,6 +26,8 @@
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 string create_testing_table_query(int col_num) {
 	string test_table_query { "CREATE TABLE reg_test_3690_table (id INT" };
 
@@ -150,12 +152,6 @@ uint32_t COLUMN_NUM = 10;
 uint32_t ROW_NUM = 10;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 

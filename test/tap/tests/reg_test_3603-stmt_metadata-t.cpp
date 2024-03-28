@@ -37,6 +37,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 int update_and_check(
 	MYSQL_STMT *stmti, MYSQL_STMT *stmts, int64_t id, char *cll_num, char *dst_num,
 	int64_t* dur, MYSQL_TIME *end_time, char *lst_msg, char *lst_st, int *mapping_id,
@@ -503,12 +505,6 @@ int update_and_check(
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	int np = 4; // init + prepare
 	np += 5*2; // number of INSERT+SELECT

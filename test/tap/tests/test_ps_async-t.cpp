@@ -14,11 +14,13 @@
 #include <poll.h>
 #include <assert.h>
 
-typedef int     myf;    // Type of MyFlags in my_funcs
-#define MYF(v)      (myf) (v)
-#define MY_KEEP_PREALLOC    1
-#define MY_ALIGN(A,L)    (((A) + (L) - 1) & ~((L) - 1))
-#define ALIGN_SIZE(A)    MY_ALIGN((A),sizeof(double))
+CommandLine cl;
+
+typedef int myf; // Type of MyFlags in my_funcs
+#define MYF(v) (myf) (v)
+#define MY_KEEP_PREALLOC 1
+#define MY_ALIGN(A,L) (((A) + (L) - 1) & ~((L) - 1))
+#define ALIGN_SIZE(A) MY_ALIGN((A),sizeof(double))
 void ma_free_root(MA_MEM_ROOT *root, myf MyFLAGS);
 void *ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size);
 //void ma_free_root(MA_MEM_ROOT *, int);
@@ -30,99 +32,99 @@ void *ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size);
 void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
 {
 #if defined(HAVE_purify) && defined(EXTRA_DEBUG)
-  MA_USED_MEM *next;
-  Size+=ALIGN_SIZE(sizeof(MA_USED_MEM));
+	MA_USED_MEM *next;
+	Size+=ALIGN_SIZE(sizeof(MA_USED_MEM));
 
-  if (!(next = (MA_USED_MEM*) malloc(Size)))
-  {
-    if (mem_root->error_handler)
-      (*mem_root->error_handler)();
-    return((void *) 0);             /* purecov: inspected */
-  }
-  next->next=mem_root->used;
-  mem_root->used=next;
-  return (void *) (((char*) next)+ALIGN_SIZE(sizeof(MA_USED_MEM)));
+	if (!(next = (MA_USED_MEM*) malloc(Size)))
+	{
+		if (mem_root->error_handler)
+			(*mem_root->error_handler)();
+		return((void *) 0);						 /* purecov: inspected */
+	}
+	next->next=mem_root->used;
+	mem_root->used=next;
+	return (void *) (((char*) next)+ALIGN_SIZE(sizeof(MA_USED_MEM)));
 #else
-  size_t get_size;
-  void * point;
-  MA_USED_MEM *next= 0;
-  MA_USED_MEM **prev;
+	size_t get_size;
+	void * point;
+	MA_USED_MEM *next= 0;
+	MA_USED_MEM **prev;
 
-  Size= ALIGN_SIZE(Size);
+	Size= ALIGN_SIZE(Size);
 
-  if ((*(prev= &mem_root->free)))
-  {
-    if ((*prev)->left < Size &&
-        mem_root->first_block_usage++ >= 16 &&
-        (*prev)->left < 4096)
-    {
-      next= *prev;
-      *prev= next->next;
-      next->next= mem_root->used;
-      mem_root->used= next;
-      mem_root->first_block_usage= 0;
-    }
-    for (next= *prev; next && next->left < Size; next= next->next)
-      prev= &next->next;
-  }
-  if (! next)
-  {                     /* Time to alloc new block */
-    get_size= MAX(Size+ALIGN_SIZE(sizeof(MA_USED_MEM)),
-              (mem_root->block_size & ~1) * ( (mem_root->block_num >> 2) < 4 ? 4 : (mem_root->block_num >> 2) ) );
+	if ((*(prev= &mem_root->free)))
+	{
+		if ((*prev)->left < Size &&
+				mem_root->first_block_usage++ >= 16 &&
+				(*prev)->left < 4096)
+		{
+			next= *prev;
+			*prev= next->next;
+			next->next= mem_root->used;
+			mem_root->used= next;
+			mem_root->first_block_usage= 0;
+		}
+		for (next= *prev; next && next->left < Size; next= next->next)
+			prev= &next->next;
+	}
+	if (! next)
+	{										 /* Time to alloc new block */
+		get_size= MAX(Size+ALIGN_SIZE(sizeof(MA_USED_MEM)),
+							(mem_root->block_size & ~1) * ( (mem_root->block_num >> 2) < 4 ? 4 : (mem_root->block_num >> 2) ) );
 
-    if (!(next = (MA_USED_MEM*) malloc(get_size)))
-    {
-      if (mem_root->error_handler)
-    (*mem_root->error_handler)();
-      return((void *) 0);               /* purecov: inspected */
-    }
-    mem_root->block_num++;
-    next->next= *prev;
-    next->size= get_size;
-    next->left= get_size-ALIGN_SIZE(sizeof(MA_USED_MEM));
-    *prev=next;
-  }
-  point= (void *) ((char*) next+ (next->size-next->left));
-  if ((next->left-= Size) < mem_root->min_malloc)
-  {                     /* Full block */
-    *prev=next->next;               /* Remove block from list */
-    next->next=mem_root->used;
-    mem_root->used=next;
-    mem_root->first_block_usage= 0;
-  }
-  return(point);
+		if (!(next = (MA_USED_MEM*) malloc(get_size)))
+		{
+			if (mem_root->error_handler)
+		(*mem_root->error_handler)();
+			return((void *) 0);							 /* purecov: inspected */
+		}
+		mem_root->block_num++;
+		next->next= *prev;
+		next->size= get_size;
+		next->left= get_size-ALIGN_SIZE(sizeof(MA_USED_MEM));
+		*prev=next;
+	}
+	point= (void *) ((char*) next+ (next->size-next->left));
+	if ((next->left-= Size) < mem_root->min_malloc)
+	{										 /* Full block */
+		*prev=next->next;							 /* Remove block from list */
+		next->next=mem_root->used;
+		mem_root->used=next;
+		mem_root->first_block_usage= 0;
+	}
+	return(point);
 #endif
 }
 
 
 void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
 { 
-  MA_USED_MEM *next,*old;
+	MA_USED_MEM *next,*old;
 
-  if (!root)
-    return; /* purecov: inspected */
-  if (!(MyFlags & MY_KEEP_PREALLOC))
-    root->pre_alloc=0;
+	if (!root)
+		return; /* purecov: inspected */
+	if (!(MyFlags & MY_KEEP_PREALLOC))
+		root->pre_alloc=0;
 
-  for ( next=root->used; next ;)
-  {
-    old=next; next= next->next ;
-    if (old != root->pre_alloc)
-      free(old);
-  }
-  for (next= root->free ; next ; )
-  {
-    old=next; next= next->next ;
-    if (old != root->pre_alloc)
-      free(old);
-  }
-  root->used=root->free=0;
-  if (root->pre_alloc)
-  {
-    root->free=root->pre_alloc;
-    root->free->left=root->pre_alloc->size-ALIGN_SIZE(sizeof(MA_USED_MEM));
-    root->free->next=0;
-  }
+	for ( next=root->used; next ;)
+	{
+		old=next; next= next->next ;
+		if (old != root->pre_alloc)
+			free(old);
+	}
+	for (next= root->free ; next ; )
+	{
+		old=next; next= next->next ;
+		if (old != root->pre_alloc)
+			free(old);
+	}
+	root->used=root->free=0;
+	if (root->pre_alloc)
+	{
+		root->free=root->pre_alloc;
+		root->free->left=root->pre_alloc->size-ALIGN_SIZE(sizeof(MA_USED_MEM));
+		root->free->next=0;
+	}
 }
 
 
@@ -453,64 +455,74 @@ int test_ps_async(MYSQL* proxy, MYSQL* admin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(4);
+	plan(2+2+2 + 4);
 	diag("Testing PS async store result");
 
 	MYSQL* admin = mysql_init(NULL);
-	if (!admin)
-		return EXIT_FAILURE;
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
-	}
-
-	MYSQL* proxy = mysql_init(NULL);
-	if (!proxy) {
-		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	// First test without 'CLIENT_DEPRECATE_EOF' support
 	{
 		// configure the connection as not blocking
 		diag("Setting mysql connection non blocking");
+		MYSQL* proxy = mysql_init(NULL);
 		mysql_options(proxy, MYSQL_OPT_NONBLOCK, 0);
-
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 		}
 
 		test_ps_async(proxy, admin);
-	}
-
-	mysql_close(proxy);
-	proxy = mysql_init(NULL);
-	if (!proxy) {
-		return EXIT_FAILURE;
+		mysql_close(proxy);
 	}
 
 	// Enable 'CLIENT_DEPRECATE_EOF' support and retest
 	{
 		// configure the connection as not blocking
 		diag("Setting mysql connection non blocking");
+		MYSQL* proxy = mysql_init(NULL);
 		mysql_options(proxy, MYSQL_OPT_NONBLOCK, 0);
 		proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
-
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 		}
 
 		test_ps_async(proxy, admin);
+		mysql_close(proxy);
 	}
 
-	mysql_close(proxy);
 	mysql_library_end();
 
 	return exit_status();

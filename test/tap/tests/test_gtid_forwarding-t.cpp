@@ -23,25 +23,27 @@
 #include "proxysql_utils.h"
 #include "re2/re2.h"
 
-int main(int, char**) {
-	CommandLine cl;
+CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
+int LOOPS = 1000;
+
+int main(int, char**) {
+
+	plan(2 + 3*LOOPS);
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
-
-	// Initialize connections
-	if (!proxysql_mysql) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
-		return -1;
-	}
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
 	}
 
 	MYSQL_QUERY(proxysql_mysql, "CREATE DATABASE IF NOT EXISTS test");
@@ -50,7 +52,7 @@ int main(int, char**) {
 
 	uint last_id { 0 };
 
-	for (uint32_t i = 0; i < 1000; i++) {
+	for (uint32_t i = 0; i < LOOPS; i++) {
 		// Simple select to verify resultset is being returned properly
 		MYSQL_QUERY(proxysql_mysql, "SELECT 1");
 		MYSQL_RES* select_res = mysql_store_result(proxysql_mysql);

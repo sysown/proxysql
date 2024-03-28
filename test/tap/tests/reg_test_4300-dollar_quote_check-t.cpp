@@ -25,6 +25,8 @@
 using std::vector;
 using std::string;
 
+CommandLine cl;
+
 const vector<string> versions { "5.6", "5.7", "8.0", "8.1.0", "8.1", "8.1.4" };
 
 int test_supports_dollar_quote(MYSQL* conn, int v_idx, int v8_1_0_idx) {
@@ -86,7 +88,7 @@ int test_versions_mysql(MYSQL* admin, MYSQL* proxy, const vector<string>& versio
 	return EXIT_SUCCESS;
 }
 
-int test_versions_admin(CommandLine& cl, MYSQL* admin, const vector<string>& versions) {
+int test_versions_admin(MYSQL* admin, const vector<string>& versions) {
 	const int64_t v8_1_0_idx { get_elem_idx(string { "8.1.0" }, versions) };
 	assert(v8_1_0_idx != -1 && "Invalid test payload, no '8.1.0' present in tested versions");
 
@@ -114,14 +116,8 @@ int test_versions_admin(CommandLine& cl, MYSQL* admin, const vector<string>& ver
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan((versions.size()*2 + 1)*2);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxy = mysql_init(NULL);
 	MYSQL* admin = mysql_init(NULL);
@@ -139,7 +135,7 @@ int main(int argc, char** argv) {
 	int rc = test_versions_mysql(admin, proxy, versions);
 	ok(rc == EXIT_SUCCESS, "Multiple 'mysql-server_version' tested correctly against MySQL interface");
 
-	rc = test_versions_admin(cl, admin, versions);
+	rc = test_versions_admin(admin, versions);
 	ok(rc == EXIT_SUCCESS, "Multiple 'mysql-server_version' tested correctly against Admin interface");
 
 	mysql_close(proxy);

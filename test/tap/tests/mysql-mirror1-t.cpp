@@ -9,6 +9,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 /*
 This app tests mirroring
@@ -32,48 +33,51 @@ int run_q(MYSQL *mysql, const char *q) {
 MYSQL * conns[NUM_CONNS];
 unsigned long mythreadid[NUM_CONNS];
 
-int create_connections(CommandLine& cl) {
+int create_connections() {
 	for (int i = 0; i < NUM_CONNS ; i++) {
-		MYSQL * mysql = mysql_init(NULL);
-		if (!mysql) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
-			return exit_status();
-		}
 
+		MYSQL * mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			return exit_status();
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
+
 		conns[i] = mysql;
 	}
 	return 0;
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	int np = 0;
+	int np = 2;
 	np += 6;
-	np += NUM_CONNS; // new admin connections
+	np += 4 * NUM_CONNS; // new user connections
+	np += 3 * NUM_CONNS; // new admin connections
 
 	plan(np);
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
-
-	MYSQL* proxysql_admin = mysql_init(NULL);
-	// Initialize connections
-	if (!proxysql_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
-	}
-
+	MYSQL* proxysql_admin = mysql_init(NULL);	// Initialize connections
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	MYSQL_QUERY(proxysql_admin, "SET mysql-have_ssl='true'");
@@ -95,7 +99,7 @@ int main(int argc, char** argv) {
 
 	MYSQL_RES* proxy_res;
 	int rc = 0;
-	rc = create_connections(cl);
+	rc = create_connections();
 	if (rc != 0) {
 		return exit_status();
 	}
@@ -152,7 +156,7 @@ int main(int argc, char** argv) {
 		MYSQL * mysql = conns[i];
 		mysql_close(mysql);
 	}
-	rc = create_connections(cl);
+	rc = create_connections();
 	if (rc != 0) {
 		return exit_status();
 	}
@@ -161,15 +165,20 @@ int main(int argc, char** argv) {
 
 	for (int i = 0 ; i < NUM_CONNS ; i++) {
 		MYSQL* proxysql_admin = mysql_init(NULL); // local scope
-		// Initialize connections
-		if (!proxysql_admin) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-			return -1;
-		}
+		diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 			return -1;
-		}
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
+	}
+
 		rc = run_q(proxysql_admin, "SELECT * FROM stats_mysql_processlist");
 		ok(rc == 0 , "SELECT FROM stats_mysql_processlist");
 		proxy_res = mysql_store_result(proxysql_admin);

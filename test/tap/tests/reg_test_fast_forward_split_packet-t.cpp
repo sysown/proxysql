@@ -24,17 +24,13 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 const int NUM_CONNS = 35;
 
 MYSQL* conns[NUM_CONNS];
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	// One query that should succeed per-connection
 	plan(NUM_CONNS);

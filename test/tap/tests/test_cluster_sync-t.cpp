@@ -100,6 +100,8 @@ using std::tuple;
 using std::fstream;
 using std::function;
 
+CommandLine cl;
+
 /**
  * @brief Helper function to verify that the sync of a table (or variable) have been performed.
  *
@@ -157,7 +159,7 @@ const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 10;
 const uint32_t R_PORT = 16062;
 
-int setup_config_file(const CommandLine& cl) {
+int setup_config_file() {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 	const std::string datadir_path = std::string(cl.workdir) + "test_cluster_sync_config";
@@ -244,17 +246,24 @@ int setup_config_file(const CommandLine& cl) {
 	return 0;
 }
 
-int check_nodes_sync(
-	const CommandLine& cl, const vector<mysql_res_row>& core_nodes, const string& check_query, uint32_t sync_timeout
-) {
+int check_nodes_sync(const vector<mysql_res_row>& core_nodes, const string& check_query, uint32_t sync_timeout) {
 	for (const auto& node : core_nodes) {
 		const string host { node[0] };
 		const int port = std::stol(node[1]);
 
 		MYSQL* c_node_admin = mysql_init(NULL);
+		diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(c_node_admin, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(c_node_admin, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(c_node_admin));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(c_node_admin);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == c_node_admin->net.compress, "Compression: (%d)", c_node_admin->net.compress);
 		}
 
 		int not_synced = sync_checker(c_node_admin, { check_query }, sync_timeout);
@@ -273,10 +282,7 @@ const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 using mysql_server_tuple = tuple<int,string,int,int,string,int,int,int,int,int,int,string>;
 
 
-int check_mysql_servers_sync(
-	const CommandLine& cl, MYSQL* proxy_admin, MYSQL* r_proxy_admin,
-	const vector<mysql_server_tuple>& insert_mysql_servers_values
-) {
+int check_mysql_servers_sync(MYSQL* proxy_admin, MYSQL* r_proxy_admin, const vector<mysql_server_tuple>& insert_mysql_servers_values) {
 	MYSQL_QUERY(proxy_admin, "SET mysql-monitor_enabled='false'");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
@@ -1058,13 +1064,7 @@ int check_modules_checksums_sync(
 
 int main(int, char**) {
 	int res = 0;
-	CommandLine cl;
 	std::atomic<bool> save_proxy_stderr(false);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	const size_t num_pls = module_sync_payloads.size();
 
@@ -1082,17 +1082,18 @@ int main(int, char**) {
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 
 	MYSQL* proxy_admin = mysql_init(NULL);
-
-	// Initialize connections
-	if (!proxy_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
-		return EXIT_FAILURE;
-	}
-
-	// Connnect to local proxysql
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy_admin->net.compress, "Compression: (%d)", proxy_admin->net.compress);
 	}
 
 	const std::string t_update_proxysql_servers {
@@ -1103,7 +1104,7 @@ int main(int, char**) {
 	string_format(t_update_proxysql_servers, update_proxysql_servers, cl.host, cl.admin_port);
 
 	// Setup the config file using the env variables in 'CommandLine'
-	if (setup_config_file(cl)) {
+	if (setup_config_file()) {
 		return EXIT_FAILURE;
 	}
 
@@ -1127,7 +1128,7 @@ int main(int, char**) {
 		check_no_primary_query, cl.host, cl.admin_port
 	);
 
-	int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+	int check_res = check_nodes_sync(core_nodes, check_no_primary_query, SYNC_TIMEOUT);
 	if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	// 4. Remove all current servers from primary instance (only secondary sync matters)
@@ -1136,7 +1137,7 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config
-	std::thread proxy_replica_th([&save_proxy_stderr, &cl] () {
+	std::thread proxy_replica_th([&save_proxy_stderr] () {
 		const string replica_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
 		const std::string proxysql_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql.db";
 		const std::string stats_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql_stats.db";
@@ -1196,7 +1197,7 @@ int main(int, char**) {
 			std::make_tuple(1001, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, "")
 		};
 
-		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values);
+		check_mysql_servers_sync(proxy_admin, r_proxy_admin, insert_mysql_servers_values);
 
 		vector<mysql_server_tuple> insert_mysql_servers_values_2 {
 			std::make_tuple(1000, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "mysql_1"),
@@ -1205,7 +1206,7 @@ int main(int, char**) {
 			std::make_tuple(1003, "127.0.0.1", 13309, 15, "OFFLINE_SOFT", 1, 0, 500, 300, 1, 200, "mysql_4_offline")
 		};
 
-		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values_2);
+		check_mysql_servers_sync(proxy_admin, r_proxy_admin, insert_mysql_servers_values_2);
 
 		vector<mysql_server_tuple> insert_mysql_servers_values_3 {
 			std::make_tuple(1000, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "mysql_1"),
@@ -1214,7 +1215,7 @@ int main(int, char**) {
 			std::make_tuple(1003, "127.0.0.1", 13309, 15, "OFFLINE_HARD", 1, 0, 500, 300, 1, 200, "mysql_4_offline")
 		};
 
-		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values_3);
+		check_mysql_servers_sync(proxy_admin, r_proxy_admin, insert_mysql_servers_values_3);
 	}
 
 	{
@@ -2645,10 +2646,14 @@ cleanup:
 		for (const auto& row : core_nodes) {
 			const string host { row[0] };
 			const int port = std::stol(row[1]);
+
 			MYSQL* c_node_admin = mysql_init(NULL);
-
 			diag("RESTORING: Inserting into node '%s:%d'", host.c_str(), port);
-
+			diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+			if (cl.use_ssl)
+				mysql_ssl_set(c_node_admin, NULL, NULL, NULL, NULL, NULL);
+			if (cl.compression)
+				mysql_options(c_node_admin, MYSQL_OPT_COMPRESS, NULL);
 			if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
 				const string err_msg {
 					"Connection to core node failed with '" + string { mysql_error(c_node_admin) } + "'. Retrying..."
@@ -2656,6 +2661,10 @@ cleanup:
 				fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, err_msg.c_str());
 				mysql_close(c_node_admin);
 				continue;
+			} else {
+				const char * c = mysql_get_ssl_cipher(c_node_admin);
+				ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+				ok(cl.compression == c_node_admin->net.compress, "Compression: (%d)", c_node_admin->net.compress);
 			}
 
 			int my_rc = mysql_query(c_node_admin, insert_query.c_str());
@@ -2678,7 +2687,7 @@ cleanup:
 		);
 
 		// Wait for the other nodes to sync ProxySQL servers to include Primary
-		int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+		int check_res = check_nodes_sync(core_nodes, check_no_primary_query, SYNC_TIMEOUT);
 		if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 		// Recover the old ProxySQL servers from backup in primary

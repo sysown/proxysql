@@ -17,26 +17,27 @@
 
 using std::string;
 
+CommandLine cl;
 
 struct memory {
-   char *response;
-   size_t size;
+	char *response;
+	size_t size;
 };
 
 static size_t cb(void *data, size_t size, size_t nmemb, void *userp) {
-   size_t realsize = size * nmemb;
-   struct memory *mem = (struct memory *)userp;
+	size_t realsize = size * nmemb;
+	struct memory *mem = (struct memory *)userp;
 
-   char *ptr = (char *)realloc((void *)mem->response, mem->size + realsize + 1);
-   if(ptr == NULL)
-	 return 0;  /* out of memory! */
+	char *ptr = (char *)realloc((void *)mem->response, mem->size + realsize + 1);
+	if(ptr == NULL)
+		return 0;  /* out of memory! */
 
-   mem->response = ptr;
-   memcpy(&(mem->response[mem->size]), data, realsize);
-   mem->size += realsize;
-   mem->response[mem->size] = 0;
+	mem->response = ptr;
+	memcpy(&(mem->response[mem->size]), data, realsize);
+	mem->size += realsize;
+	mem->response[mem->size] = 0;
 
-   return realsize;
+	return realsize;
 }
 
 
@@ -80,25 +81,22 @@ void run_request(const char *url) {
 }
 
 int main() {
-	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
-	plan(4);
+	plan(2 + 4);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	// Initialize connections
-	if (!proxysql_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
-	}
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	MYSQL_QUERY(proxysql_admin, "SET admin-web_enabled='true'");

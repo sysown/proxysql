@@ -98,9 +98,6 @@ void * my_conn_thread(void *arg) {
 
 int main(int argc, char** argv) {
 
-	if(cl.getEnv())
-		return exit_status();
-
 	plan(NTHR*(ITER+CPTH/2));
 	diag("Testing SSL and fast_forward");
 

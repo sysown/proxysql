@@ -42,7 +42,11 @@ oldcode/tests/connect_speed
 #pidfile and errorlog
 *.pid
 *.log
+*.keylog
+*.log.*
 *.err
+proxy-audit.*
+proxy-event*
 
 #binary
 src/proxysql

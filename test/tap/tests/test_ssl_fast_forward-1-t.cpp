@@ -12,6 +12,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 /*
 Several bugs were identified and fixed while developing this test:
@@ -93,10 +94,6 @@ int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::st
 #define ITER2	20
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
 
 	unsigned int p = 0;
 	p += 5*ITER1;

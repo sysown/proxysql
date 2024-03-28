@@ -31,6 +31,8 @@
 using nlohmann::json;
 using var_val = std::pair<std::string, std::string>;
 
+CommandLine cl;
+
 const std::vector<std::string> tracked_variables {
 	"sql_log_bin", "sql_mode", "time_zone", "sql_auto_is_null",  "sql_safe_updates", "session_track_gtids",
 	//"max_join_size", "net_write_timeout", "sql_select_limit",  "sql_select_limit", "character_set_results",
@@ -399,7 +401,7 @@ int get_default_trx_isolation_attr(const std::string& user_attributes, std::stri
 	return EXIT_SUCCESS;
 }
 
-int test_simple_select_after_reset(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_simple_select_after_reset(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Do an initial reset
 	if (com_reset) {
 		int err_code = mysql_reset_connection(proxysql);
@@ -444,17 +446,22 @@ int test_simple_select_after_reset(MYSQL* proxysql, const CommandLine&, const st
 	return EXIT_SUCCESS;
 }
 
-int test_simple_reset_admin(MYSQL*, const CommandLine& cl, const std::vector<user_config>&, bool) {
-	MYSQL* admin = mysql_init(NULL);
+int test_simple_reset_admin(MYSQL*, const std::vector<user_config>&, bool) {
 	int res = EXIT_FAILURE;
 
-	if (
-		!mysql_real_connect(
-			admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
-		)
-	) {
+	MYSQL* admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	// FIXME: 'COM_CHANGE_USER' doesn't return proper error right now for unsupported sessions types.
@@ -473,7 +480,7 @@ int test_simple_reset_admin(MYSQL*, const CommandLine& cl, const std::vector<use
 	return res;
 }
 
-int test_transaction_rollback(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_transaction_rollback(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	MYSQL_QUERY(proxysql, "DROP TABLE IF EXISTS test.com_reset_connection_trx");
 	MYSQL_QUERY(
 		proxysql,
@@ -528,7 +535,7 @@ int test_transaction_rollback(MYSQL* proxysql, const CommandLine&, const std::ve
 	return EXIT_SUCCESS;
 }
 
-int test_tracked_variables_cleanup(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_tracked_variables_cleanup(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Get the initial values for the tracked variables
 	std::vector<std::string> var_names {};
 	std::transform(
@@ -710,7 +717,7 @@ int test_tracked_variables_cleanup(MYSQL* proxysql, const CommandLine&, const st
 	return reset_values_match ? 0 : 1;
 }
 
-int test_user_defined_variables_cleanup(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_user_defined_variables_cleanup(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Do an initial reset
 	if (com_reset) {
 		int err_code = mysql_reset_connection(proxysql);
@@ -838,7 +845,7 @@ int test_user_defined_variables_cleanup(MYSQL* proxysql, const CommandLine&, con
 	return EXIT_SUCCESS;
 }
 
-int test_recover_session_values(MYSQL* proxysql, const CommandLine& cl, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_recover_session_values(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	std::string username = std::get<0>(user_configs[0]);
 	std::string password = std::get<1>(user_configs[0]);
 
@@ -971,18 +978,25 @@ int test_recover_session_values(MYSQL* proxysql, const CommandLine& cl, const st
 	}
 }
 
-int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_mysql_server_variables(MYSQL*, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Do an initial reset
-	MYSQL* mysql = mysql_init(NULL);
 
+	MYSQL* mysql = mysql_init(NULL);
 	// Use a known default charset for the connection
 	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	mysql->charset = latin2_charset;
-
-//	if (!mysql_real_connect(mysql, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d cl.compression=%d", cl.mysql_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 	std::vector<var_val> bef_vars_vals {};
@@ -1111,7 +1125,7 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 	return reset_values_match ? 0 : 1;
 }
 
-using test_function = std::function<int(MYSQL*,const CommandLine&,const std::vector<user_config>&,bool)>;
+using test_function = std::function<int(MYSQL*, const std::vector<user_config>&, bool)>;
 
 std::vector<std::pair<std::string, test_function>> tests_fns {
 	{ "test_simple_select_after_reset", test_simple_select_after_reset },
@@ -1126,39 +1140,41 @@ std::vector<std::pair<std::string, test_function>> tests_fns {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// One 'reset_connection' and 'change_user_test'
-	plan(tests_fns.size() * 2);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
+	plan(2+2+2+2+2 + tests_fns.size() * 2);
 
 	MYSQL* proxysql = mysql_init(NULL);
-
 	// Use a known default charset for the connection
 	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	proxysql->charset = latin2_charset;
-
-	if (
-		!mysql_real_connect(
-			proxysql, "127.0.0.1", cl.username, cl.password, "information_schema", cl.port, NULL, 0
-		)
-	) {
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, "information_schema", cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql->net.compress, "Compression: (%d)", proxysql->net.compress);
 	}
 
 	MYSQL* admin = mysql_init(NULL);
-	if (
-		!mysql_real_connect(
-			admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
-		)
-	) {
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	// Set the number of backend connections to '1' for making sure all the operations are performed in the same
@@ -1188,10 +1204,18 @@ int main(int argc, char** argv) {
 	};
 
 	MYSQL* mysql_server = mysql_init(NULL);
-//	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d cl.compression=%d", cl.mysql_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql_server, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql_server, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql_server);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql_server->net.compress, "Compression: (%d)", mysql_server->net.compress);
 	}
 
 	int err_code = create_extra_users(admin, mysql_server, extra_users);
@@ -1207,7 +1231,7 @@ int main(int argc, char** argv) {
 
 		// Test the 'reset_connection' first
 		try {
-			test_res = test_fn.second(proxysql, cl, extra_users, true);
+			test_res = test_fn.second(proxysql, extra_users, true);
 		} catch (const std::exception& ex) {
 			diag("Exception while executing test '%s', exception msg: '%s'", test_fn.first.c_str(), ex.what());
 		}
@@ -1218,7 +1242,7 @@ int main(int argc, char** argv) {
 
 		// Test the 'change_user' later
 		try {
-			test_res = test_fn.second(proxysql, cl, extra_users, false);
+			test_res = test_fn.second(proxysql, extra_users, false);
 		} catch (const std::exception& ex) {
 			diag("Exception while executing test '%s', exception msg: '%s'", test_fn.first.c_str(), ex.what());
 		}

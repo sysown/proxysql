@@ -9,6 +9,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 const int NUM_EXECUTIONS = 10;
 
 std::string select_query = "SELECT /* hostgroup=0 */ * FROM test.sbtest1 WHERE id = ?";
@@ -28,29 +30,27 @@ int idx2 = 0;
 int k = 0;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	int plans = 4 * 3; // 4 INSERT queries each of them triggers a SELECT and a data comparison
-	plans *= NUM_EXECUTIONS;
+	int plans = 2; // connection
+	plans += 4 * 3 * NUM_EXECUTIONS; // 4 INSERT queries each of them triggers a SELECT and a data comparison
 	plans += 5; // prepares
 	plans += (4 * NUM_EXECUTIONS / 5); //mysql_stmt_reset()
 
 	plan(plans);
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
-		return exit_status();
-	}
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 	idx = 1000;

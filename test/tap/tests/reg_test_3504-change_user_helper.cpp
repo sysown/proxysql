@@ -38,11 +38,14 @@
 #include "json.hpp"
 #include "tap.h"
 #include "utils.h"
+#include "command_line.h"
 
 using nlohmann::json;
 
 using std::vector;
 using std::string;
+
+CommandLine cl;
 
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
@@ -204,33 +207,18 @@ int main(int argc, char** argv) {
 		mysql_options(&mysql, MYSQL_OPT_SSL_MODE, &ssl_mode);
 	}
 
-	if (
-		!mysql_real_connect(
-			&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema",
-			port, NULL, 0
-		)
-	) {
-		string_format(
-			"Failed to connect to database: Error: %s\n", err_msg,
-			mysql_error(&mysql)
-		);
+	if (!mysql_real_connect(&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema", port, NULL, 0)) {
+		string_format("Failed to connect to database: Error: %s\n", err_msg, mysql_error(&mysql));
 		output["err_msg"] = err_msg;
 		res = EXIT_FAILURE;
-
 		goto exit;
 	}
 #else
 	if (SSL == true) {
 		mysql_ssl_set(&mysql, NULL, NULL, NULL, NULL, NULL);
-		conn_res = mysql_real_connect(
-			&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema",
-			port, NULL, CLIENT_SSL
-		);
+		conn_res = mysql_real_connect(&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema", port, NULL, CLIENT_SSL );
 	} else {
-		conn_res = mysql_real_connect(
-			&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema",
-			port, NULL, 0
-		);
+		conn_res = mysql_real_connect(&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema", port, NULL, 0 );
 	}
 
 	if (!conn_res) {

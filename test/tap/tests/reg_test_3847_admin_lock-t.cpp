@@ -21,12 +21,12 @@
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	const char* WORKSPACE = getenv("WORKSPACE");
-
-	if (cl.getEnv() || WORKSPACE == nullptr) {
+	if (WORKSPACE == nullptr) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
 
 	int launch_res = -1;
 
-	std::thread launch_sec_proxy = std::thread([&WORKSPACE,&cl] (int& err_code) -> void {
+	std::thread launch_sec_proxy = std::thread([&WORKSPACE] (int& err_code) -> void {
 		to_opts_t wexecvp_opts {};
 		wexecvp_opts.poll_to_us = 100*1000;
 		wexecvp_opts.waitpid_delay_us = 500*1000;
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(s_proxy_admin, "SET admin-cluster_mysql_variables_diffs_before_sync=1");
 	MYSQL_QUERY(s_proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
-	std::thread th_load_mysql_vars([&cl] (bool& stop, int& load_res) -> void {
+	std::thread th_load_mysql_vars([] (bool& stop, int& load_res) -> void {
 		MYSQL* admin = mysql_init(NULL);
 
 		if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
 		mysql_close(admin);
 	}, std::ref(stop), std::ref(q_load_res));
 
-	std::thread th_query_globals([&cl] (bool& stop, int& save_res) -> void {
+	std::thread th_query_globals([] (bool& stop, int& save_res) -> void {
 		MYSQL* admin = mysql_init(NULL);
 
 		if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, 26081, NULL, 0)) {

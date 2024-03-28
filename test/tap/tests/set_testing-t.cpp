@@ -33,32 +33,33 @@
 #include "command_line.h"
 
 
+CommandLine cl;
 
-int queries_per_connections=1;
-unsigned int num_threads=1;
-int count=0;
-char *username=NULL;
-char *password=NULL;
-char *host=(char *)"localhost";
-int port=3306;
-int multiport=1;
-char *schema=(char *)"information_schema";
+int queries_per_connections = 1;
+unsigned int num_threads = 1;
+int count= 0 ;
+//char *username = NULL;
+//char *password = NULL;
+//char *host = (char *)"localhost";
+//int port = 3306;
+int multiport = 1;
+char *schema = (char *)"information_schema";
 int silent = 0;
 int sysbench = 0;
-int local=0;
-int queries=0;
-int uniquequeries=0;
-int histograms=-1;
+//int local = 0;
+int queries = 0;
+int uniquequeries = 0;
+int histograms = -1;
 
 bool is_mariadb = false;
 bool is_cluster = false;
-unsigned int g_connect_OK=0;
-unsigned int g_connect_ERR=0;
-unsigned int g_select_OK=0;
-unsigned int g_select_ERR=0;
+unsigned int g_connect_OK = 0;
+unsigned int g_connect_ERR = 0;
+unsigned int g_select_OK = 0;
+unsigned int g_select_ERR = 0;
 
-unsigned int g_passed=0;
-unsigned int g_failed=0;
+unsigned int g_passed = 0;
+unsigned int g_failed = 0;
 
 unsigned int status_connections = 0;
 unsigned int connect_phase_completed = 0;
@@ -79,54 +80,59 @@ std::vector<std::string> forgotten_vars {};
 
 void * my_conn_thread(void *arg) {
 	g_seed = time(NULL) ^ getpid() ^ pthread_self();
-	unsigned int select_OK=0;
-	unsigned int select_ERR=0;
+	unsigned int select_OK = 0;
+	unsigned int select_ERR = 0;
 	int i, j;
 	MYSQL **mysqlconns=(MYSQL **)malloc(sizeof(MYSQL *)*count);
 	std::vector<json> varsperconn(count);
 
-	if (mysqlconns==NULL) {
+	if (mysqlconns == NULL) {
 		exit(EXIT_FAILURE);
 	}
 
 	std::vector<std::string> cs = {"latin1", "utf8", "utf8mb4", "latin2", "latin7"};
 
 	for (i=0; i<count; i++) {
-		MYSQL *mysql=mysql_init(NULL);
+
 		std::string nextcs = cs[i%cs.size()];
 
+		MYSQL *mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
-		if (mysql==NULL) {
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
+		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, cl.port + rand()%multiport, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			exit(EXIT_FAILURE);
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
-		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
-		if (rc==NULL) {
-			if (silent==0) {
-				fprintf(stderr,"%s\n", mysql_error(mysql));
-			}
-			exit(EXIT_FAILURE);
-		}
-		mysqlconns[i]=mysql;
-		__sync_add_and_fetch(&status_connections,1);
-	}
-	__sync_fetch_and_add(&connect_phase_completed,1);
 
-	while(__sync_fetch_and_add(&connect_phase_completed,0) != num_threads) {
+		mysqlconns[i] = mysql;
+		__sync_add_and_fetch(&status_connections, 1);
 	}
-	MYSQL *mysql=NULL;
+
+	__sync_fetch_and_add(&connect_phase_completed, 1);
+	while(__sync_fetch_and_add(&connect_phase_completed, 0) != num_threads) {}
+
+	MYSQL *mysql = NULL;
 	json vars;
 	std::string paddress = "";
 	for (j=0; j<queries; j++) {
 		int fr = fastrand();
-		int r1=fr%count;
-		//int r2=fastrand()%testCases.size();
-		int r2=rand()%testCases.size();
+		int r1 = fr%count;
+		//int r2 = fastrand() % testCases.size();
+		int r2 = rand() % testCases.size();
 
-		if (j%queries_per_connections==0) {
+		if (j%queries_per_connections == 0) {
 			mysql=mysqlconns[r1];
 			vars = varsperconn[r1];
 		}
-		if (strcmp(username,(char *)"root")) {
+		if (strcmp(cl.username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
 				std::lock_guard<std::mutex> lock(mtx_);
 				skip(1, "connections mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
@@ -149,7 +155,7 @@ void * my_conn_thread(void *arg) {
 				MYSQL_RES *result = mysql_store_result(mysql);
 				mysql_free_result(result);
 				select_OK++;
-				__sync_fetch_and_add(&g_select_OK,1);
+				__sync_fetch_and_add(&g_select_OK, 1);
 			}
 		}
 
@@ -200,12 +206,12 @@ void * my_conn_thread(void *arg) {
 		sprintf(query, "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
 		if (mysql_query(mysql,query)) {
 			select_ERR++;
-			__sync_fetch_and_add(&g_select_ERR,1);
+			__sync_fetch_and_add(&g_select_ERR, 1);
 		} else {
 			MYSQL_RES *result = mysql_store_result(mysql);
 			mysql_free_result(result);
 			select_OK++;
-			__sync_fetch_and_add(&g_select_OK,1);
+			__sync_fetch_and_add(&g_select_OK, 1);
 		}
 
 		json mysql_vars;
@@ -343,7 +349,7 @@ void * my_conn_thread(void *arg) {
 			ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], variables_tested [%d], command [%s]", mysql, paddress.c_str(), mysql->thread_id, variables_tested, testCases[r2].command.c_str());
 		}
 	}
-	__sync_fetch_and_add(&query_phase_completed,1);
+	__sync_fetch_and_add(&query_phase_completed, 1);
 
 	return NULL;
 }
@@ -351,17 +357,10 @@ void * my_conn_thread(void *arg) {
 
 
 int main(int argc, char *argv[]) {
-	CommandLine cl;
-
-	if(cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return exit_status();
-	}
 
 	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
 
-
-	if (detect_version(cl, is_mariadb, is_cluster) != 0) {
+	if (detect_version(is_mariadb, is_cluster) != 0) {
 		diag("Cannot detect MySQL version");
 		return exit_status();
 	}
@@ -369,10 +368,10 @@ int main(int argc, char *argv[]) {
 	num_threads = 10;
 	queries_per_connections = 10;
 	count = 10;
-	username = cl.username;
-	password = cl.password;
-	host = cl.host;
-	port = cl.port;
+//	username = cl.username;
+//	password = cl.password;
+//	host = cl.host;
+//	port = cl.port;
 
 	if (!readTestCases(fileName)) {
 		fprintf(stderr, "Cannot read %s\n", fileName.c_str());
@@ -381,11 +380,11 @@ int main(int argc, char *argv[]) {
 
 	queries = 300;
 
-	plan(queries * num_threads);
+	plan(2*count*num_threads + queries*num_threads);
 
-	if (strcmp(host,"localhost")==0) {
-		local = 1;
-	}
+//	if (strcmp(host,"localhost")==0) {
+//		local = 1;
+//	}
 	if (uniquequeries == 0) {
 		if (queries) uniquequeries=queries;
 	}
@@ -404,5 +403,6 @@ int main(int argc, char *argv[]) {
 	for (unsigned int i=0; i<num_threads; i++) {
 		pthread_join(thi[i], NULL);
 	}
+
 	return exit_status();
 }

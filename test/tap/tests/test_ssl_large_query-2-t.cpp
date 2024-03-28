@@ -12,6 +12,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 char * username = (char *)"user1459";
 char * password = (char *)"pass1459";
@@ -38,10 +39,6 @@ int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::st
 const std::string lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
 
 	plan(2+2*ITER);
 	diag("Testing SSL and fast_forward");

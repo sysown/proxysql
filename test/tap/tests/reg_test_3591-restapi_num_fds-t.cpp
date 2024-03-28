@@ -29,15 +29,12 @@
 using nlohmann::json;
 using std::string;
 
+CommandLine cl;
+
 const int NUM_CONNECTIONS = 2047;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
 	diag("Old process limits: { %ld, %ld }", limits.rlim_cur, limits.rlim_max);
@@ -67,15 +64,8 @@ int main(int argc, char** argv) {
 
 	for (int i = 0; i < NUM_CONNECTIONS; i++) {
 		MYSQL* proxy = mysql_init(NULL);
-		if (
-			!mysql_real_connect(
-				proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
-			)
-		) {
-			fprintf(
-				stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-				mysql_error(proxy)
-			);
+		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
 		}
 		mysql_connections.push_back(proxy);

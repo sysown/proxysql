@@ -31,6 +31,8 @@ using std::vector;
 using std::string;
 using std::pair;
 
+CommandLine cl;
+
 std::vector<std::string> queries {
 	"SELECT * FROM test.ok_packet_mariadb_test WHERE id=%d",
 	"INSERT INTO test.ok_packet_mariadb_test (c, pad) VALUES ('%s', '%s')",
@@ -183,12 +185,6 @@ int perform_workload_on_connection(MYSQL* proxy, MYSQL* admin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	MYSQL* proxy = mysql_init(NULL);
 	MYSQL* admin = mysql_init(NULL);

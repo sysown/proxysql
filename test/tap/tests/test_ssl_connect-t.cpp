@@ -15,6 +15,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 /* this test:
 	* enables mysql-have_ssl
 	* retrieves all tables in the most important schemas
@@ -22,13 +24,6 @@ using std::string;
 */
 
 int main() {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	// Initialize connections

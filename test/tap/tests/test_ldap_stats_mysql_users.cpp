@@ -25,6 +25,8 @@ using std::string;
 using std::vector;
 using std::map;
 
+CommandLine cl;
+
 using user_stats_t = std::tuple<string,uint32_t>;
 
 const string LDAP_USER_T { "clientuser" };
@@ -86,7 +88,10 @@ const uint32_t LDAP_MAX_CONNS = 20;
 const uint32_t USER_NUM = 30;
 
 int main(int argc, char** argv) {
+
 	plan(
+		2+2	+ // connections
+		2*USER_NUM + // connections *tg_conns ???
 		1 + // Check that 'ldap-max_db_connections' is properly updated
 		1 + // Check that row count from 'stats_mysql_users' match expected
 		USER_NUM + // Check that actual user conns match expected
@@ -94,13 +99,6 @@ int main(int argc, char** argv) {
 		LDAP_MAX_CONNS * 5 + // Check that conns are properly created below 'LDAP_MAX_CONNS'
 		5 // Check that conns fails to be created over 'LDAP_MAX_CONNS'
 	);
-
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
@@ -110,16 +108,33 @@ int main(int argc, char** argv) {
 	diag("New process limits: { %ld, %ld }", limits.rlim_cur, limits.rlim_max);
 
 	MYSQL* proxy = mysql_init(NULL);
-	MYSQL* admin = mysql_init(NULL);
-
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, 13306, NULL, 0)) {
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
+	MYSQL* admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	// Get the maximum number of connections per LDAP user right now, ''
@@ -202,9 +217,18 @@ int main(int argc, char** argv) {
 				diag("Creating connection for user '%s'", LDAP_USER.c_str());
 
 				MYSQL* conn = mysql_init(NULL);
+				diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", LDAP_USER.c_str(), cl.use_ssl, cl.compression);
+				if (cl.use_ssl)
+					mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
+				if (cl.compression)
+					mysql_options(conn, MYSQL_OPT_COMPRESS, NULL);
 				if (!mysql_real_connect(conn, cl.host, LDAP_USER.c_str(), LDAP_PASS.c_str(), NULL, cl.port, NULL, 0)) {
 					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(conn));
 					goto cleanup;
+				} else {
+					const char * c = mysql_get_ssl_cipher(conn);
+					ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+					ok(cl.compression == conn->net.compress, "Compression: (%d)", conn->net.compress);
 				}
 
 				user_conns.push_back(conn);

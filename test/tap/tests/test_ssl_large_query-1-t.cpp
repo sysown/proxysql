@@ -12,6 +12,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 char * username = (char *)"user1459";
 char * password = (char *)"pass1459";
@@ -49,10 +50,6 @@ int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::st
 
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
 
 	plan(33);
 	diag("Testing SSL and fast_forward");

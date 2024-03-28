@@ -31,6 +31,8 @@ using std::vector;
 using std::tuple;
 using std::string;
 
+CommandLine cl;
+
 enum query_type {
 	TEXT_SELECT_WARNING = 0,
 	TEXT_SELECT_NO_WARNING,
@@ -81,7 +83,6 @@ int create_testing_tables(MYSQL* mysql_server) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	uint32_t c_operations = 500;
 
@@ -93,11 +94,6 @@ int main(int argc, char** argv) {
 		floor(((double)c_operations - 1.0) * (1.0 / 8.0) * 5.0) + // Number of multistatements select checks
 		floor(((double)c_operations - 1.0) * (1.0 / 2.0));  // Number of updates checks
 	plan(plan_val);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxy_mysql = mysql_init(NULL);
 	MYSQL* proxy_admin = mysql_init(NULL);
@@ -112,10 +108,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	if (
-		!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL,
-			CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS)
-	) {
+	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
 	}

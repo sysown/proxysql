@@ -18,6 +18,9 @@
 
 using std::string;
 
+CommandLine cl;
+
+
 const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	const MARIADB_CHARSET_INFO * c = mariadb_compiled_charsets;
 	do {
@@ -29,21 +32,8 @@ const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	return NULL;
 }
 
-int check_all_collations(const CommandLine& cl, MYSQL* admin) {
+int check_all_collations(MYSQL* admin) {
 	const MARIADB_CHARSET_INFO* c = mariadb_compiled_charsets;
-	uint32_t num_tests = 0;
-
-	{
-		mysql_query(admin, "SELECT COUNT(*) FROM mysql_collations WHERE id < 256");
-		MYSQL_RES* myres = mysql_store_result(admin);
-		MYSQL_ROW myrow = mysql_fetch_row(myres);
-
-		if (myrow && myrow[0]) {
-			num_tests = atoi(myrow[0]);
-		}
-	}
-
-	plan(num_tests);
 
 	do {
 		if (c[0].nr > 255) {
@@ -61,10 +51,18 @@ int check_all_collations(const CommandLine& cl, MYSQL* admin) {
 		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		MYSQL* proxy = mysql_init(NULL);
-
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 		}
 
 		const MARIADB_CHARSET_INFO* charset_info = proxysql_find_charset_nr(proxy->server_language);
@@ -85,22 +83,35 @@ int check_all_collations(const CommandLine& cl, MYSQL* admin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 
 	MYSQL* admin = mysql_init(NULL);
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
-	check_all_collations(cl, admin);
+	uint32_t num_tests = 0;
+	{
+		mysql_query(admin, "SELECT COUNT(*) FROM mysql_collations WHERE id < 256");
+		MYSQL_RES* myres = mysql_store_result(admin);
+		MYSQL_ROW myrow = mysql_fetch_row(myres);
+
+		if (myrow && myrow[0]) {
+			num_tests = atoi(myrow[0]);
+		}
+	}
+	plan(2 + 3*num_tests);
+
+	check_all_collations(admin);
 
 cleanup:
 

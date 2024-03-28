@@ -479,7 +479,7 @@ bool check_session_track_gtids(const std::string& expVal, const std::string& sVa
 	return res;
 }
 
-int detect_version(CommandLine& cl, bool& is_mariadb) {
+int detect_version(bool& is_mariadb) {
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return 1;

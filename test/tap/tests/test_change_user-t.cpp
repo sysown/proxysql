@@ -35,6 +35,8 @@ using nlohmann::json;
 
 #define NCONNS 16
 
+CommandLine cl;
+
 int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::string& message_prefix) {
 	for (std::vector<std::string>::iterator it = queries.begin(); it != queries.end(); it++) {
 		std::string q = *it;
@@ -193,7 +195,6 @@ int TestSet1(const CommandLine& cl, const char *plugin, bool test_ssl , bool tes
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	int p = 1; // admin connection
 	// with mysql-default_authentication_plugin = mysql_native_password
@@ -228,11 +229,6 @@ int main(int argc, char** argv) {
 	p += NCONNS*2*1; // caching_sha2_password with SSL
 
 	plan(p);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	int rc = 0;
 	admin = mysql_init(NULL);

@@ -9,6 +9,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "utils.h"
 #include "json.hpp"
 
 #include "dotenv.h"
@@ -17,7 +18,12 @@ using nlohmann::json;
 using dotenv::env;
 
 
-CommandLine::CommandLine() {}
+CommandLine::CommandLine() {
+	if (getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		exit(-1);
+	}
+}
 
 CommandLine::~CommandLine() {
 	if (host)
@@ -125,11 +131,37 @@ int CommandLine::getEnv() {
 	{
 		// load environment
 		char temp[PATH_MAX];
-		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
-		std::string exe_path = (len > 0) ? std::string(temp, len) : std::string("");
+		ssize_t len = 0;
+//		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
+		{
+			FILE* fp = fopen("/proc/self/cmdline", "r");		// Linux
+			if (!fp)
+				fp = fopen("/proc/curproc/cmdline", "r");		// FreeBSD, needs procfs mounted
+			assert(fp);											// MacOS ?
+			len = strlen(fgets(temp, PATH_MAX, fp));
+			assert(len);
+			fclose(fp);
+		}
+		std::string cmd_line = std::string(temp, len);
+		std::string cmd_path = cmd_line.substr(0, cmd_line.find_last_of('/'));
+		if (cmd_line.find('/') == std::string::npos)
+			cmd_path = ".";
+		std::string cmd_name = cmd_line.substr(cmd_line.find_last_of('/')+1);
+
+//		diag(">>> cmd_line = %s <<<", cmd_line.c_str());
+//		diag(">>> cmd_path = %s <<<", cmd_path.c_str());
+//		diag(">>> cmd_name = %s <<<", cmd_name.c_str());
+
+		len = strlen(realpath(cmd_path.c_str(), temp));
+		std::string exe_path = (len > 0) ? std::string(temp, len) + "/" + cmd_name : std::string("");
 		std::string exe_name = exe_path.substr(exe_path.find_last_of('/') + 1);
 		std::string dir_path = exe_path.substr(0, exe_path.find_last_of('/'));
 		std::string dir_name = dir_path.substr(dir_path.find_last_of('/') + 1);
+
+//		diag(">>> exe_path = %s <<<", exe_path.c_str());
+//		diag(">>> exe_name = %s <<<", exe_name.c_str());
+//		diag(">>> dir_path = %s <<<", dir_path.c_str());
+//		diag(">>> dir_name = %s <<<", dir_name.c_str());
 
 		env.load_dotenv((dir_path + "/.env").c_str(), true);
 		bool loaded1 = env.loaded;
@@ -140,28 +172,46 @@ int CommandLine::getEnv() {
 		env.load_dotenv((exe_path + ".env").c_str(), true);
 		bool loaded3 = env.loaded;
 
-		bool quiet = (bool) getenv("TAP_QUIET_ENVLOAD");
-		if (loaded1 && ! quiet)
+		bool verbose = get_env_bool("TAP_VERBOSE_ENVLOAD", 0);
+		if (loaded1 && verbose) {
 			diag("loaded: %s", (dir_path + "/.env").c_str());
-		if (loaded2 && ! quiet)
+			FILE* fp = fopen((dir_path + "/.env").c_str(), "r");
+			while (fgets(temp, PATH_MAX, fp))
+				printf("# %s", temp);
+			fclose(fp);
+		}
+		if (loaded2 && verbose) {
 			diag("loaded: %s", (dir_path + "/" + dir_name + ".env").c_str());
-		if (loaded3 && ! quiet)
+			FILE* fp = fopen((dir_path + "/" + dir_name + ".env").c_str(), "r");
+			while (fgets(temp, PATH_MAX, fp))
+				printf("# %s", temp);
+			fclose(fp);
+		}
+		if (loaded3 && verbose) {
 			diag("loaded: %s", (exe_path + ".env").c_str());
+			FILE* fp = fopen((exe_path + ".env").c_str(), "r");
+			while (fgets(temp, PATH_MAX, fp))
+				printf("# %s", temp);
+			fclose(fp);
+		}
 	}
 
-	int env_port = 0;
+	int env_int = 0;
 	{
 		// unprivileged test connection
 		value = getenv("TAP_HOST");
 		if (value)
 			replace_str_field(&this->host, value);
 
-		value = getenv("TAP_PORT");
-		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				port = env_port;
-		}
+//		value = getenv("TAP_PORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				port = env_int;
+//		}
+		env_int = get_env_int("TAP_PORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			port = env_int;
 
 		value = getenv("TAP_USERNAME");
 		if (value)
@@ -178,12 +228,15 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->root_host, value);
 
-		value = getenv("TAP_ROOTPORT");
-		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				root_port = env_port;
-		}
+//		value = getenv("TAP_ROOTPORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				root_port = env_int;
+//		}
+		env_int = get_env_int("TAP_ROOTPORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			root_port = env_int;
 
 		value = getenv("TAP_ROOTUSERNAME");
 		if (value)
@@ -200,12 +253,15 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->admin_host, value);
 
-		value = getenv("TAP_ADMINPORT");
-		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				admin_port = env_port;
-		}
+//		value = getenv("TAP_ADMINPORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				admin_port = env_int;
+//		}
+		env_int = get_env_int("TAP_ADMINPORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			admin_port = env_int;
 
 		value = getenv("TAP_ADMINUSERNAME");
 		if (value)
@@ -222,12 +278,15 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->mysql_host, value);
 
-		value = getenv("TAP_MYSQLPORT");
-		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				mysql_port = env_port;
-		}
+//		value = getenv("TAP_MYSQLPORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				mysql_port = env_int;
+//		}
+		env_int = get_env_int("TAP_MYSQLPORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			mysql_port = env_int;
 
 		value = getenv("TAP_MYSQLUSERNAME");
 		if (value)
@@ -238,29 +297,45 @@ int CommandLine::getEnv() {
 			replace_str_field(&this->mysql_password, value);
 	}
 
+	{
+		// various
+		value = getenv("TAP_WORKDIR");
+		if (value)
+			replace_str_field(&this->workdir, value);
 
-	value = getenv("TAP_WORKDIR");
-	if (value)
-		replace_str_field(&this->workdir, value);
+//		value = getenv("TAP_USE_SSL");
+//		if (value) {
+//			env_int = strtol(value, NULL, 0);
+//			use_ssl = (bool) env_int;
+//		}
+		use_ssl = get_env_bool("TAP_USE_SSL", 0);
 
-	value = getenv("TAP_CLIENT_FLAGS");
-	if (value) {
-		char* end = NULL;
-		uint64_t env_c_flags = strtoul(value, &end, 10);
+//		value = getenv("TAP_COMPRESSION");
+//		if (value) {
+//			env_int = strtol(value, NULL, 0);
+//			compression = (bool) env_int;
+//		}
+		compression = get_env_bool("TAP_COMPRESSION", 0);
 
-		const char* errmsg { NULL };
+		value = getenv("TAP_CLIENT_FLAGS");
+		if (value) {
+			char* end = NULL;
+			uint64_t env_c_flags = strtoul(value, &end, 10);
 
-		if (env_c_flags == 0 && value == end) {
-			errmsg = "Invalid string to parse";
-		} else if (env_c_flags == ULONG_MAX && errno == ERANGE) {
-			errmsg = strerror(errno);
-		}
+			const char* errmsg { NULL };
 
-		if (errmsg) {
-			fprintf(stderr, "Failed to parse env variable 'CLIENT_FLAGS' with error: '%s'\n", strerror(errno));
-			return -1;
-		} else {
-			this->client_flags = env_c_flags;
+			if (env_c_flags == 0 && value == end) {
+				errmsg = "Invalid string to parse";
+			} else if (env_c_flags == ULONG_MAX && errno == ERANGE) {
+				errmsg = strerror(errno);
+			}
+
+			if (errmsg) {
+				fprintf(stderr, "Failed to parse env variable 'CLIENT_FLAGS' with error: '%s'\n", strerror(errno));
+				return -1;
+			} else {
+				this->client_flags = env_c_flags;
+			}
 		}
 	}
 

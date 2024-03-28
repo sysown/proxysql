@@ -4,8 +4,9 @@
 #include "tap.h"
 #include "command_line.h"
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	char* value = NULL;
 
@@ -18,11 +19,6 @@ int main(int argc, char** argv) {
 	// echo 'TAP_ENV_VAR1=.env' > .env
 	// echo 'TAP_ENV_VAR2=tests.env' > tests.env
 	// echo 'TAP_ENV_VAR3=envvars-t.env' > envvars-t.env
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(3);
 

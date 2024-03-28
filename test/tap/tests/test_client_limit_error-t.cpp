@@ -60,6 +60,8 @@ const uint32_t NUM_LOOPBACK_ADDRS = 5;
 
 using host_cache_entry = std::tuple<std::string, uint32_t, uint64_t>;
 
+CommandLine cl;
+
 inline unsigned long long realtime_time_s() {
 	time_t __now = time(NULL);
 	return __now;
@@ -88,7 +90,7 @@ std::vector<host_cache_entry> get_client_host_cache_entries(MYSQL* proxysql_admi
 	return host_cache_entries;
 }
 
-int invalid_proxysql_conn(const std::string& addr, const CommandLine& cl) {
+int invalid_proxysql_conn(const std::string& addr) {
 	MYSQL* proxysql = mysql_init(NULL);
 	int my_err = EXIT_SUCCESS;
 
@@ -101,7 +103,7 @@ int invalid_proxysql_conn(const std::string& addr, const CommandLine& cl) {
 	return my_err;
 }
 
-int invalid_proxysql_conn(const std::string& addr, const CommandLine& cl, std::string& err_msg) {
+int invalid_proxysql_conn(const std::string& addr, std::string& err_msg) {
 	MYSQL* proxysql = mysql_init(NULL);
 	int my_err = EXIT_SUCCESS;
 
@@ -115,13 +117,22 @@ int invalid_proxysql_conn(const std::string& addr, const CommandLine& cl, std::s
 	return my_err;
 }
 
-int valid_proxysql_conn(const std::string& addr, const CommandLine& cl, std::string& err_msg) {
-	MYSQL* proxysql = mysql_init(NULL);
+int valid_proxysql_conn(const std::string& addr, std::string& err_msg) {
 	int my_err = EXIT_SUCCESS;
 
+	MYSQL* proxysql = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql, addr.c_str(), cl.username, cl.password, NULL, 6033, NULL, 0)) {
 		my_err = mysql_errno(proxysql);
 		err_msg = mysql_error(proxysql);
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql->net.compress, "Compression: (%d)", proxysql->net.compress);
 	}
 
 	mysql_close(proxysql);
@@ -139,7 +150,7 @@ int valid_proxysql_conn(const std::string& addr, const CommandLine& cl, std::str
  *
  * @return 'EXIT_SUCCESS' in case of success, 'EXIT_FAILURE' otherwise.
  */
-int test_cache_filled_by_invalid_conn(const CommandLine& cl, MYSQL* proxysql_admin) {
+int test_cache_filled_by_invalid_conn(MYSQL* proxysql_admin) {
 	diag("                 START TEST NUMBER 1                         ");
 	diag("-------------------------------------------------------------");
 
@@ -154,7 +165,7 @@ int test_cache_filled_by_invalid_conn(const CommandLine& cl, MYSQL* proxysql_adm
 	const std::string exp_client_addr { "127.0.0.2" };
 
 	diag("Performing connection to fill 'client_host_cache'");
-	int inv_user_errno = invalid_proxysql_conn(exp_client_addr, cl);
+	int inv_user_errno = invalid_proxysql_conn(exp_client_addr);
 	if (inv_user_errno == EXIT_SUCCESS) {
 		diag("Expected failure but client connection succeed");
 		return EXIT_FAILURE;
@@ -197,7 +208,7 @@ int test_cache_filled_by_invalid_conn(const CommandLine& cl, MYSQL* proxysql_adm
  *
  * @return 'EXIT_SUCCESS' in case of success, 'EXIT_FAILURE' otherwise.
  */
-int test_cache_entry_count_by_invalid_conn(const CommandLine& cl, MYSQL* proxysql_admin) {
+int test_cache_entry_count_by_invalid_conn(MYSQL* proxysql_admin) {
 	printf("\n");
 	diag("                 START TEST NUMBER 2                         ");
 	diag("-------------------------------------------------------------");
@@ -210,7 +221,7 @@ int test_cache_entry_count_by_invalid_conn(const CommandLine& cl, MYSQL* proxysq
 
 	diag("Performing connection to fill 'client_host_cache'");
 	for (errors = 0; errors < 5; errors++) {
-		int inv_user_errno = invalid_proxysql_conn(exp_client_addr, cl);
+		int inv_user_errno = invalid_proxysql_conn(exp_client_addr);
 		if (inv_user_errno == EXIT_SUCCESS) {
 			diag("Expected failure but client connection succeed");
 			return EXIT_FAILURE;
@@ -254,7 +265,7 @@ int test_cache_entry_count_by_invalid_conn(const CommandLine& cl, MYSQL* proxysq
  *
  * @return 'EXIT_SUCCESS' in case of success, 'EXIT_FAILURE' otherwise.
  */
-int test_cache_entry_count_by_mult_invalid_conns(const CommandLine& cl, MYSQL* proxysql_admin) {
+int test_cache_entry_count_by_mult_invalid_conns(MYSQL* proxysql_admin) {
 	printf("\n");
 	diag("                 START TEST NUMBER 3                         ");
 	diag("-------------------------------------------------------------");
@@ -275,7 +286,7 @@ int test_cache_entry_count_by_mult_invalid_conns(const CommandLine& cl, MYSQL* p
 	for (int i = 2; i < NUM_LOOPBACK_ADDRS; i++) {
 		std::string loopback_addr { "127.0.0." + std::to_string(i) };
 		for (errors = 0; errors < 2; errors++) {
-			int inv_user_errno = invalid_proxysql_conn(loopback_addr, cl);
+			int inv_user_errno = invalid_proxysql_conn(loopback_addr);
 			diag("Client connection failed with error: %d", inv_user_errno);
 		}
 	}
@@ -329,7 +340,7 @@ int test_cache_entry_count_by_mult_invalid_conns(const CommandLine& cl, MYSQL* p
  *
  * @return 'EXIT_SUCCESS' in case of success, 'EXIT_FAILURE' otherwise.
  */
-int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxysql_admin) {
+int test_client_exceeding_cache_error_limit(MYSQL* proxysql_admin) {
 	printf("\n");
 	diag("                 START TEST NUMBER 4                         ");
 	diag("-------------------------------------------------------------");
@@ -354,7 +365,7 @@ int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxys
 	diag("Performing connections to fill 'client_host_cache'");
 	for (const auto loopback_addr : loopback_addrs) {
 		for (errors = 0; errors < 3; errors++) {
-			int inv_user_errno = invalid_proxysql_conn(loopback_addr, cl);
+			int inv_user_errno = invalid_proxysql_conn(loopback_addr);
 			diag("Client connection failed with error: %d", inv_user_errno);
 		}
 	}
@@ -408,7 +419,7 @@ int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxys
 	int limit_conn_err = EXIT_SUCCESS;
 
 	for (int limits = errors; limits < 5 + 1; limits++) {
-		limit_conn_err = invalid_proxysql_conn(loopback_addr, cl, command_res);
+		limit_conn_err = invalid_proxysql_conn(loopback_addr, command_res);
 		diag("Client connection failed with error: (%d, %s)", limit_conn_err, command_res.c_str());
 	}
 	printf("\n");
@@ -463,7 +474,7 @@ int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxys
 		// Client has exceeded maximum connections failure is expected
 		if (i == 4) {
 			std::string conn_err_msg {};
-			int limit_conn_err = valid_proxysql_conn(loopback_addr, cl, conn_err_msg);
+			int limit_conn_err = valid_proxysql_conn(loopback_addr, conn_err_msg);
 
 			ok(
 				limit_conn_err == 2013,
@@ -471,7 +482,7 @@ int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxys
 			);
 		} else {
 			std::string command_res {};
-			int command_err = valid_proxysql_conn(loopback_addr, cl, command_res);
+			int command_err = valid_proxysql_conn(loopback_addr, command_res);
 			ok(
 				command_err == 0,
 				"Connection should succeed for clients which limit haven't been exceeded."
@@ -501,7 +512,7 @@ int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxys
  *
  * @return 'EXIT_SUCCESS' in case of success, 'EXIT_FAILURE' otherwise.
  */
-int test_client_exceeding_changed_error_limit(const CommandLine& cl, MYSQL* proxysql_admin) {
+int test_client_exceeding_changed_error_limit(MYSQL* proxysql_admin) {
 	printf("\n");
 	diag("                 START TEST NUMBER 5                         ");
 	diag("-------------------------------------------------------------");
@@ -525,7 +536,7 @@ int test_client_exceeding_changed_error_limit(const CommandLine& cl, MYSQL* prox
 	diag("Performing connections to fill 'client_host_cache'");
 
 	for (int i = 0; i < 4; i++) {
-		int inv_user_errno = invalid_proxysql_conn(loopback_addr, cl);
+		int inv_user_errno = invalid_proxysql_conn(loopback_addr);
 		diag("Client connection failed with error: %d", inv_user_errno);
 	}
 
@@ -537,7 +548,7 @@ int test_client_exceeding_changed_error_limit(const CommandLine& cl, MYSQL* prox
 		printf("\n");
 
 		std::string conn_err_msg {};
-		int valid_user_err = valid_proxysql_conn(loopback_addr, cl, conn_err_msg);
+		int valid_user_err = valid_proxysql_conn(loopback_addr, conn_err_msg);
 		diag("Client connection failed with error: (%d, %s)", valid_user_err, conn_err_msg.c_str());
 
 		ok(
@@ -559,7 +570,7 @@ int test_client_exceeding_changed_error_limit(const CommandLine& cl, MYSQL* prox
  *
  * @return 'EXIT_SUCCESS' in case of success, 'EXIT_FAILURE' otherwise.
  */
-int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* proxysql_admin) {
+int test_cache_size_decrease_by_new_connections(MYSQL* proxysql_admin) {
 	printf("\n");
 	diag("                 START TEST NUMBER 6                         ");
 	diag("-------------------------------------------------------------");
@@ -587,7 +598,7 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 	diag("Performing connections to fill 'client_host_cache'");
 	for (const auto loopback_addr : loopback_addrs) {
 		for (errors = 0; errors < 3; errors++) {
-			int inv_user_errno = invalid_proxysql_conn(loopback_addr, cl);
+			int inv_user_errno = invalid_proxysql_conn(loopback_addr);
 			diag("Client connection failed with error: %d", inv_user_errno);
 		}
 	}
@@ -605,7 +616,7 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 		std::string loopback_addr { "127.0.0.4" };
 
 		printf("\n");
-		int inv_user_err = invalid_proxysql_conn(loopback_addr, cl);
+		int inv_user_err = invalid_proxysql_conn(loopback_addr);
 		diag("Client connection failed with error: %d", inv_user_err);
 
 		std::vector<host_cache_entry> updated_entries {
@@ -659,7 +670,7 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 
 		const std::string new_member { "127.0.0.5" };
 
-		inv_user_err = invalid_proxysql_conn(new_member, cl);
+		inv_user_err = invalid_proxysql_conn(new_member);
 		diag("Client connection failed with error: %d", inv_user_err);
 
 		diag("2.1 Checking that the address hasn't been added");
@@ -697,7 +708,7 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 
 		const std::string forgotten_address { "127.0.0.4" };
 		std::string err_msg {};
-		int valid_conn_err = valid_proxysql_conn(forgotten_address, cl, err_msg);
+		int valid_conn_err = valid_proxysql_conn(forgotten_address, err_msg);
 		if (valid_conn_err) {
 			diag("Failed to execute 'valid_proxysql_conn' at ('%s':'%d')", __FILE__, __LINE__);
 		}
@@ -720,7 +731,7 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 	return EXIT_SUCCESS;
 }
 
-int create_tcp_conn(const CommandLine& cl, const std::string& addr) {
+int create_tcp_conn(const std::string& addr) {
 	int sock = 0;
 	struct sockaddr_in serv_addr;
 
@@ -753,7 +764,7 @@ int create_tcp_conn(const CommandLine& cl, const std::string& addr) {
  *
  * @return 'EXIT_SUCCESS' in case of success, 'EXIT_FAILURE' otherwise.
  */
-int test_cache_populated_timeout_conns(const CommandLine& cl, MYSQL* proxysql_admin) {
+int test_cache_populated_timeout_conns(MYSQL* proxysql_admin) {
 	printf("\n");
 	diag("                 START TEST NUMBER 7                         ");
 	diag("-------------------------------------------------------------");
@@ -784,7 +795,7 @@ int test_cache_populated_timeout_conns(const CommandLine& cl, MYSQL* proxysql_ad
 	std::vector<int> sockets {};
 	for (int i = 2; i < NUM_LOOPBACK_ADDRS; i++) {
 		std::string loopback_addr { "127.0.0." + std::to_string(i) };
-		int inv_user_errno = create_tcp_conn(cl, loopback_addr);
+		int inv_user_errno = create_tcp_conn(loopback_addr);
 		diag("Client connection failed with error: %d", inv_user_errno);
 	}
 	sleep((client_timeout / 1000) * 2 + 1);
@@ -804,7 +815,7 @@ int test_cache_populated_timeout_conns(const CommandLine& cl, MYSQL* proxysql_ad
 	for (int i = 2; i < NUM_LOOPBACK_ADDRS; i++) {
 		std::string loopback_addr { "127.0.0." + std::to_string(i) };
 		for (errors = 0; errors < 2; errors++) {
-			int inv_user_errno = create_tcp_conn(cl, loopback_addr);
+			int inv_user_errno = create_tcp_conn(loopback_addr);
 			diag("Client connection timeout out with error: %d", inv_user_errno);
 		}
 	}
@@ -839,39 +850,24 @@ int test_cache_populated_timeout_conns(const CommandLine& cl, MYSQL* proxysql_ad
 }
 
 int main(int, char**) {
+
 	int res = 0;
-	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
-	plan(30);
+	plan(5*2 + 30);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-
-	// Initialize connections
-	if (!proxysql_admin) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
-	}
-
-	// Connect to ProxySQL Admin
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username, cl.admin_password,
-			NULL, cl.admin_port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
-		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	// Setup the virtual namespaces to be used by the test
@@ -921,13 +917,13 @@ int main(int, char**) {
 	printf("\n");
 
 
-	test_cache_filled_by_invalid_conn(cl, proxysql_admin);
-	test_cache_entry_count_by_invalid_conn(cl, proxysql_admin);
-	test_cache_entry_count_by_mult_invalid_conns(cl, proxysql_admin);
-	test_client_exceeding_cache_error_limit(cl, proxysql_admin);
-	test_client_exceeding_changed_error_limit(cl, proxysql_admin);
-	test_cache_size_decrease_by_new_connections(cl, proxysql_admin);
-	test_cache_populated_timeout_conns(cl, proxysql_admin);
+	test_cache_filled_by_invalid_conn(proxysql_admin);
+	test_cache_entry_count_by_invalid_conn(proxysql_admin);
+	test_cache_entry_count_by_mult_invalid_conns(proxysql_admin);
+	test_client_exceeding_cache_error_limit(proxysql_admin);
+	test_client_exceeding_changed_error_limit(proxysql_admin);
+	test_cache_size_decrease_by_new_connections(proxysql_admin);
+	test_cache_populated_timeout_conns(proxysql_admin);
 
 cleanup:
 	// Cleanup the virtual namespaces to be used by the test

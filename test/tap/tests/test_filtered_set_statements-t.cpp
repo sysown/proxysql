@@ -22,11 +22,14 @@
 #include "utils.h"
 #include <iostream>
 
+CommandLine cl;
+
 /**
  * @brief Queries to be tested that are known to be filtered by ProxySQL.
  *
  * TODO: Fill with all the statements that should be properly handled by ProxySQL.
  */
+
 std::vector<std::pair<std::string, std::string>> filtered_set_queries {
 	{ "sql_mode", "'ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO'" },
 	{ "wait_timeout", "28801" },
@@ -70,28 +73,40 @@ std::vector<std::string> get_valid_set_query_set(const std::string& set_query, c
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	// plan one test per statement attempt + one check 'SUM(sum_time) == 0' for each 'filtered_set_queries'
-	plan(filtered_set_queries.size() + filtered_set_queries.size()*get_valid_set_query_set("", "").size());
+	plan(2+2 + filtered_set_queries.size() + filtered_set_queries.size()*get_valid_set_query_set("", "").size());
 
 	// create a regular connection to 'proxysql'
 	MYSQL* proxysql_mysql = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
 	}
 
 	// create a connection to 'proxysql_admin'
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_password, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	// first clean the 'stats_mysql_query_digest' table

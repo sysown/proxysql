@@ -75,6 +75,8 @@ const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 using mysql_server_tuple = std::tuple<int,std::string,int,int,std::string,int,int,int,int,int,int,std::string>;
 using replication_hostgroups_tuple = std::tuple<int,int,std::string>;
 
+CommandLine cl;
+
 /**
  * @brief Computes the checksum for the resultset, excluding records labeled as 'OFFLINE_HARD', instead of checking each row individually.
  *
@@ -817,13 +819,7 @@ std::vector<std::vector<std::string>> queries = {
 
 int main(int, char**) {
 
-	CommandLine cl;
 	std::atomic<bool> save_proxy_stderr(false);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	plan( 1 + 1 // replica instances
 		+ 1 // confirming mysql server 127.0.0.1:13306 is a writer

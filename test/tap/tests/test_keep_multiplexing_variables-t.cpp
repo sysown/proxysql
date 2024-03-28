@@ -18,6 +18,8 @@
 using std::string;
 using namespace nlohmann;
 
+CommandLine cl;
+
 std::vector<std::string> select_queries {
 	"select @@session.autocommit,         @@session.big_tables, @@autocommit,@@bulk_insert_buffer_size,     @@character_set_database,@@transaction_isolation,    @@version,@@session.transaction_isolation",
 	"select  @@autocommit, @@sql_mode,        @@big_tables,    @@autocommit,@@bulk_insert_buffer_size,     @@character_set_database,@@session.transaction_isolation,    @@version,@@transaction_isolation",
@@ -32,12 +34,21 @@ std::vector<std::string> select_queries {
 	"select  @@session.autocommit, @@big_tables, @@autocommit,@@bulk_insert_buffer_size,     @@character_set_database,@@transaction_isolation,    @@version,@@session.transaction_isolation",
 };
 
-int check_multiplexing_disabled(const CommandLine& cl, const std::string query, bool& multiplex_disabled) {
-	MYSQL* proxysql_mysql = mysql_init(NULL);
+int check_multiplexing_disabled(const std::string query, bool& multiplex_disabled) {
 
+	MYSQL* proxysql_mysql = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
 	}
 
 	MYSQL_QUERY(proxysql_mysql, query.c_str());
@@ -60,20 +71,22 @@ int check_multiplexing_disabled(const CommandLine& cl, const std::string query, 
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
-	plan(26);
+	plan(2+2*4+2*2*select_queries.size() + 26);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	// Clean the 'keep_multiplexing_variables'
@@ -84,13 +97,13 @@ int main(int argc, char** argv) {
 	// Check that any query will disable multiplexing
 	{
 		bool disabled_multiplexing = false;
-		int check_multiplexing_err = check_multiplexing_disabled(cl, "SELECT @@sql_mode", disabled_multiplexing);
+		int check_multiplexing_err = check_multiplexing_disabled("SELECT @@sql_mode", disabled_multiplexing);
 		ok (disabled_multiplexing == true, "Simple 'SELECT @@*' should disable multiplexing.");
 	}
 
 	{
 		bool disabled_multiplexing = false;
-		int check_multiplexing_err = check_multiplexing_disabled(cl, "SELECT @@SESSION.sql_mode", disabled_multiplexing);
+		int check_multiplexing_err = check_multiplexing_disabled("SELECT @@SESSION.sql_mode", disabled_multiplexing);
 		ok (disabled_multiplexing == true, "Simple 'SELECT @@SESSION.*' should disable multiplexing.");
 	}
 
@@ -102,13 +115,13 @@ int main(int argc, char** argv) {
 	// Check that any query will disable multiplexing
 	{
 		bool disabled_multiplexing = false;
-		int check_multiplexing_err = check_multiplexing_disabled(cl, "SELECT @@sql_mode", disabled_multiplexing);
+		int check_multiplexing_err = check_multiplexing_disabled("SELECT @@sql_mode", disabled_multiplexing);
 		ok (disabled_multiplexing == false, "Simple 'SELECT @@*' should keep multiplexing enabled.");
 	}
 
 	{
 		bool disabled_multiplexing = false;
-		int check_multiplexing_err = check_multiplexing_disabled(cl, "SELECT @@SESSION.sql_mode", disabled_multiplexing);
+		int check_multiplexing_err = check_multiplexing_disabled("SELECT @@SESSION.sql_mode", disabled_multiplexing);
 		ok (disabled_multiplexing == false, "Simple 'SELECT @@SESSION.*' should keep multiplexing enabled.");
 	}
 
@@ -120,7 +133,7 @@ int main(int argc, char** argv) {
 	{
 		for (const std::string& query : select_queries) {
 			bool disabled_multiplexing = true;
-			int check_multiplexing_err = check_multiplexing_disabled(cl, query, disabled_multiplexing);
+			int check_multiplexing_err = check_multiplexing_disabled(query, disabled_multiplexing);
 			ok (disabled_multiplexing == true, "Complex 'SELECT @@SESSION.*, @@*' should disable multiplexing.");
 		}
 	}
@@ -133,7 +146,7 @@ int main(int argc, char** argv) {
 	{
 		for (const std::string& query : select_queries) {
 			bool disabled_multiplexing = false;
-			int check_multiplexing_err = check_multiplexing_disabled(cl, query, disabled_multiplexing);
+			int check_multiplexing_err = check_multiplexing_disabled(query, disabled_multiplexing);
 			ok (disabled_multiplexing == false, "Complex 'SELECT @@SESSION.*, @@*' queries should keep multiplexing enabled.");
 		}
 	}

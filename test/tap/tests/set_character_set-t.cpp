@@ -42,52 +42,46 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(11);
+	plan(2 + 11);
 	diag("Testing SET CHARACTER SET");
 
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-
-	if (mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "utf8")) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				__FILE__, __LINE__, mysql_error(mysql));
-		return exit_status();
-	}
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "utf8");
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "Failed to connect to database: Error: %s\n",
-				mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 	if (mysql_query(mysql, "drop database if exists test")) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				__FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (mysql_query(mysql, "create database test charset utf8")) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				__FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (mysql_query(mysql, "use test")) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				__FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (mysql_query(mysql, "set names 'utf8'")) {
-		fprintf(stderr, "SET NAMES 'utf8': Error: %s\n",
-				mysql_error(mysql));
+		fprintf(stderr, "SET NAMES 'utf8': Error: %s\n", mysql_error(mysql));
 		return exit_status();
 	}
 
@@ -110,8 +104,7 @@ int main(int argc, char** argv) {
 	ok(var_value.compare("utf8") == 0, "Initial database character set. Actual %s", var_value.c_str()); // ok_4
 
 	if (mysql_query(mysql, "set character set latin1")) {
-	    fprintf(stderr, "SET CHARACTER SET : Error: %s\n",
-	              mysql_error(mysql));
+		fprintf(stderr, "SET CHARACTER SET : Error: %s\n", mysql_error(mysql));
 		return exit_status();
 	}
 
@@ -136,8 +129,7 @@ int main(int argc, char** argv) {
 	ok(var_value.compare("latin1") == 0, "Results character set is changed. Actual %s", var_value.c_str()); // ok_7
 
 	if (mysql_query(mysql, "set names latin1")) {
-		fprintf(stderr, "SET NAMES : Error: %s\n",
-				mysql_error(mysql));
+		fprintf(stderr, "SET NAMES : Error: %s\n", mysql_error(mysql));
 		return exit_status();
 	}
 

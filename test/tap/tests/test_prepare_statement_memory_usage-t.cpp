@@ -11,6 +11,8 @@
 #include "proxysql_utils.h"
 #include "utils.h"
 
+CommandLine cl;
+
 enum ComparisonOperator {
 	kEqual = 0x00000001,
 	kGreaterThan = 0x00000002,
@@ -94,13 +96,6 @@ int check_prepare_statement_mem_usage(MYSQL* proxysql_admin, MYSQL* proxysql, co
 }
 
 int main(int argc, char** argv) {
-
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(4 * // query
 		 3 // checks

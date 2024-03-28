@@ -9,7 +9,6 @@
 
 #include "tap.h"
 #include "command_line.h"
-
 #include "utils.h"
 
 #include <ctype.h>
@@ -26,6 +25,8 @@ using std::vector;
 using std::pair;
 using std::string;
 using std::tuple;
+
+CommandLine cl;
 
 const vector<pair<string, string>> query_digest_pairs {
 	// TODO: KnownIssue - 10

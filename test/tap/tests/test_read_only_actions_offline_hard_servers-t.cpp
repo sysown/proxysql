@@ -24,6 +24,8 @@
 		} \
 	} while(0)
 
+CommandLine cl;
+
 const uint32_t SYNC_TIMEOUT = 10;
 
 using mysql_server_tuple = std::tuple<int,std::string,int,int,std::string,int,int,int,int,int,int,std::string>;
@@ -32,17 +34,20 @@ using replication_hostgroups_tuple = std::tuple<int,int,std::string>;
 MYSQL* create_new_connection(const char* host, const char* username, const char* password, int port) {
 
 	MYSQL* mysql = mysql_init(NULL);
-
-	if (!mysql) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
-		goto __exit;
-	}
-
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, host, username, password, NULL, port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		mysql_close(mysql);
 		mysql = NULL;
 		goto __exit;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 __exit:
@@ -101,9 +106,7 @@ int sync_checker(MYSQL* r_proxy_admin, const std::vector<std::string>& queries, 
 	}
 }
 
-int check_nodes_sync(
-	const CommandLine& cl, const std::vector<mysql_res_row>& core_nodes, const std::string& check_query, uint32_t sync_timeout
-) {
+int check_nodes_sync(const std::vector<mysql_res_row>& core_nodes, const std::string& check_query, uint32_t sync_timeout) {
 	int ret_status = EXIT_FAILURE;
 
 	for (const auto& node : core_nodes) {
@@ -111,9 +114,18 @@ int check_nodes_sync(
 		const int port = std::stol(node[1]);
 
 		MYSQL* c_node_admin = mysql_init(NULL);
+		diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(c_node_admin, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(c_node_admin, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(c_node_admin));
 			goto __exit;
+		} else {
+			const char * c = mysql_get_ssl_cipher(c_node_admin);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == c_node_admin->net.compress, "Compression: (%d)", c_node_admin->net.compress);
 		}
 
 		int not_synced = sync_checker(c_node_admin, { check_query }, sync_timeout);
@@ -192,7 +204,7 @@ int insert_mysql_servers_records(MYSQL* proxy_admin, const std::vector<mysql_ser
  * @brief Assumes that 'proxysql_servers' holds at least the one entry required for this test.
  * @details It's assumed that primary ProxySQL is part of a Cluster.
  */
-int update_proxysql_servers(const CommandLine& cl, MYSQL* admin) {
+int update_proxysql_servers(MYSQL* admin) {
 	const char update_proxysql_servers_t[] {
 		"UPDATE proxysql_servers SET comment='%s' WHERE hostname='%s' and port=%d"
 	};
@@ -267,7 +279,7 @@ __cleanup:
 	return ret_status;
 }
 
-int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
+int test_scenario_1(MYSQL* proxy_admin) {
 
 	diag("Running test_scenario_1 ...");
 
@@ -420,7 +432,7 @@ cleanup:
 	return ret_status;
 }
 
-int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
+int test_scenario_2(MYSQL* proxy_admin) {
 
 	diag("Running test_scenario_2 ...");
 
@@ -533,7 +545,7 @@ cleanup:
 	return ret_status;
 }
 
-int test_read_only_offline_hard_servers(MYSQL* proxy_admin, const CommandLine& cl, bool isolate_primary_node) {
+int test_read_only_offline_hard_servers(MYSQL* proxy_admin, bool isolate_primary_node) {
 
 	std::vector<mysql_res_row> core_nodes;
 	std::string check_no_primary_query;
@@ -564,7 +576,7 @@ int test_read_only_offline_hard_servers(MYSQL* proxy_admin, const CommandLine& c
 			check_no_primary_query, cl.host, cl.admin_port
 		);
 
-		int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+		int check_res = check_nodes_sync(core_nodes, check_no_primary_query, SYNC_TIMEOUT);
 		if (check_res != EXIT_SUCCESS) {
 			goto cleanup;
 		}
@@ -575,11 +587,11 @@ int test_read_only_offline_hard_servers(MYSQL* proxy_admin, const CommandLine& c
 		MYSQL_QUERY__(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 	}
 
-	if (test_scenario_1(proxy_admin, cl) != EXIT_SUCCESS) {
+	if (test_scenario_1(proxy_admin) != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
-	if (test_scenario_2(proxy_admin, cl) != EXIT_SUCCESS) {			
+	if (test_scenario_2(proxy_admin) != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
@@ -604,10 +616,15 @@ cleanup:
 			for (const auto& row : core_nodes) {
 				const std::string host{ row[0] };
 				const int port = std::stol(row[1]);
-				MYSQL* c_node_admin = mysql_init(NULL);
 
 				diag("RESTORING: Inserting into node '%s:%d'", host.c_str(), port);
 
+				MYSQL* c_node_admin = mysql_init(NULL);
+				diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+				if (cl.use_ssl)
+					mysql_ssl_set(c_node_admin, NULL, NULL, NULL, NULL, NULL);
+				if (cl.compression)
+					mysql_options(c_node_admin, MYSQL_OPT_COMPRESS, NULL);
 				if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
 					const std::string err_msg{
 						"Connection to core node failed with '" + std::string { mysql_error(c_node_admin) } + "'. Retrying..."
@@ -615,6 +632,10 @@ cleanup:
 					fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, err_msg.c_str());
 					mysql_close(c_node_admin);
 					continue;
+				} else {
+					const char * c = mysql_get_ssl_cipher(c_node_admin);
+					ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+					ok(cl.compression == c_node_admin->net.compress, "Compression: (%d)", c_node_admin->net.compress);
 				}
 
 				int my_rc = mysql_query(c_node_admin, insert_query.c_str());
@@ -637,7 +658,7 @@ cleanup:
 			);
 
 			// Wait for the other nodes to sync ProxySQL servers to include Primary
-			int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+			int check_res = check_nodes_sync(core_nodes, check_no_primary_query, SYNC_TIMEOUT);
 			if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 			// Recover the old ProxySQL servers from backup in primary
@@ -653,36 +674,30 @@ cleanup:
 
 int main(int, char**) {
 
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
-	plan(9+9);
+	plan(2+2*20 + 9+9);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
-
-	// Initialize connections
-	if (!proxy_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
-		return EXIT_FAILURE;
-	}
-
-	// Connnect to local proxysql
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy_admin->net.compress, "Compression: (%d)", proxy_admin->net.compress);
 	}
 
 	diag(">> test_read_only_offline_hard_servers() >> Primary node included in cluster\n");
-	if (test_read_only_offline_hard_servers(proxy_admin, cl, false) != EXIT_SUCCESS) {
+	if (test_read_only_offline_hard_servers(proxy_admin, false) != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 
 	diag(">> test_read_only_offline_hard_servers() >> Primary node isolated from cluster\n");
-	if (test_read_only_offline_hard_servers(proxy_admin, cl, true) != EXIT_SUCCESS) {
+	if (test_read_only_offline_hard_servers(proxy_admin, true) != EXIT_SUCCESS) {
 		goto cleanup;
 	}
 

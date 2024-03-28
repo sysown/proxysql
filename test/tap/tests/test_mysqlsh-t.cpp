@@ -17,13 +17,11 @@
 
 using std::string;
 
-int main(int argc, char** argv) {
-	CommandLine cl;
+CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
+int main(int argc, char** argv) {
+
+	plan(2 + 3);
 
 	// Test that mysqlsh is able to connect and execute a query
 
@@ -39,15 +37,18 @@ int main(int argc, char** argv) {
 	// Test the new introduced query "select concat(@@version, ' ', @@version_comment)"
 
 	MYSQL* mysql_server = mysql_init(NULL);
-
-	if (!mysql_server) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
-		return -1;
-	}
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql_server, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql_server, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql_server, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql_server);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql_server->net.compress, "Compression: (%d)", mysql_server->net.compress);
 	}
 
 	int query_res = mysql_query(mysql_server, "select concat(@@version, ' ', @@version_comment)");

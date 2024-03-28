@@ -18,17 +18,13 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 const int NUM_EXECUTIONS = 10000;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(NUM_EXECUTIONS);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql) {

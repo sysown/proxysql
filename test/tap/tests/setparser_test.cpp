@@ -21,6 +21,10 @@
 #include <algorithm>
 #include <iostream>
 
+#include "command_line.h"
+
+CommandLine cl;
+
 // *******************************************************************************************
 /**
  * TODO: This should be fixed once we have improved include hierarchy. All the following

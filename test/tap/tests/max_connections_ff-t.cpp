@@ -41,18 +41,30 @@ using hrc = std::chrono::high_resolution_clock;
 
 using nlohmann::json;
 
-int create_n_trxs(const CommandLine& cl, size_t n, vector<MYSQL*>& out_conns, int client_flags = 0) {
+CommandLine cl;
+
+int create_n_trxs(size_t n, vector<MYSQL*>& out_conns, int client_flags = 0) {
 	diag("Creating '%ld' transactions to test 'max_connections'", n);
 
 	vector<MYSQL*> res_conns {};
 
 	for (size_t i = 0; i < n; i++) {
+
 		MYSQL* proxy_mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, client_flags)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 		}
-	
+
 		mysql_query(proxy_mysql, "BEGIN");
 
 		res_conns.push_back(proxy_mysql);
@@ -140,7 +152,7 @@ cleanup:
 	return err;
 }
 
-int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, long srv_conn_to, int max_conns) {
+int test_ff_sess_exceeds_max_conns(MYSQL* proxy_admin, long srv_conn_to, int max_conns) {
 	// We assume 'regular infra' and use hardcoded hg '0' and username 'sbtest1' for this test
 	const int tg_hg = 0;
 	const string username = "sbtest1";
@@ -209,7 +221,7 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 	}
 
 	// See 'IMPORTANT-NOTE' on file @details.
-	my_err = create_n_trxs(cl, max_conns, trx_conns, CLIENT_IGNORE_SPACE);
+	my_err = create_n_trxs(max_conns, trx_conns, CLIENT_IGNORE_SPACE);
 	if (my_err) {
 		diag("Failed to create the required '%d' transactions", max_conns);
 		res = EXIT_FAILURE;
@@ -219,10 +231,19 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 	// Create a new ff connection and check that a query expires after 'connection'
 	{
 		MYSQL* proxy_ff = mysql_init(NULL);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", username.c_str(), cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_ff, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_ff, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_ff, cl.host, username.c_str(), username.c_str(), NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_ff));
 			res = EXIT_FAILURE;
 			goto cleanup;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_ff);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy_ff->net.compress, "Compression: (%d)", proxy_ff->net.compress);
 		}
 
 		std::chrono::nanoseconds duration;
@@ -272,7 +293,7 @@ cleanup:
 	return EXIT_SUCCESS;
 }
 
-int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int max_conns) {
+int test_ff_only_one_free_conn(MYSQL* proxy_admin, int max_conns) {
 	if (proxy_admin == NULL || max_conns == 0) {
 		diag("'test_ff_only_one_free_conn' received invalid params.");
 		return EINVAL;
@@ -321,7 +342,7 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 	}
 	mysql_free_result(mysql_store_result(proxy_admin));
 
-	my_err = create_n_trxs(cl, max_conns, trx_conns);
+	my_err = create_n_trxs(max_conns, trx_conns);
 	if (my_err) {
 		diag("Failed to create the required '%d' transactions", max_conns);
 		res = EXIT_FAILURE;
@@ -368,10 +389,19 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 		diag("Creating new 'fast_forward' connection using user '%s'", username.c_str());
 
 		MYSQL* proxy_ff = mysql_init(NULL);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", username.c_str(), cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_ff, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_ff, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_ff, cl.host, username.c_str(), username.c_str(), NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_ff));
 			res = EXIT_FAILURE;
 			goto cleanup;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_ff);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxy_ff->net.compress, "Compression: (%d)", proxy_ff->net.compress);
 		}
 
 		// 3.1 Issue a simple query into the new 'fast_forward' connection
@@ -433,35 +463,37 @@ cleanup:
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	// 'test_ff_sess_exceeds_max_conns' performs '1' check, 'test_ff_only_one_free_conn' performs '2' checks
-	plan(1 * 2 + 2 * 2);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	plan(
-		1*2 + // 'test_ff_sess_exceeds_max_conns'
-		2*2   // 'test_ff_only_one_free_conn'
+		2 +			// connection admin
+		4+8+4+8 +	// connection user
+		1*2 +		// 'test_ff_sess_exceeds_max_conns'
+		2*2			// 'test_ff_only_one_free_conn'
 	);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy_admin->net.compress, "Compression: (%d)", proxy_admin->net.compress);
 	}
 
 	// 1. Test for: '4000' timeout, '1' max_connections
-	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 8000, 1);
+	test_ff_sess_exceeds_max_conns(proxy_admin, 8000, 1);
 	// 2. Test for: '2000' timeout, '3' max_connections
-	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 2000, 3);
+	test_ff_sess_exceeds_max_conns(proxy_admin, 2000, 3);
 	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 1
-	test_ff_only_one_free_conn(cl, proxy_admin, 1);
+	test_ff_only_one_free_conn(proxy_admin, 1);
 	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 3
-	test_ff_only_one_free_conn(cl, proxy_admin, 3);
+	test_ff_only_one_free_conn(proxy_admin, 3);
 
 	mysql_close(proxy_admin);
 

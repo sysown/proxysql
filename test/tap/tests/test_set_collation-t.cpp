@@ -18,6 +18,8 @@
 #define N_ITERATION_2  2
 #define N_ITERATION_3  3
 
+CommandLine cl;
+
 MARIADB_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename) {
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
@@ -39,17 +41,26 @@ MARIADB_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename)
  *
  * @return Returns '0' in case of success, '-1' otherwise.
  */
-int create_proxysql_connections(const CommandLine& cl, const std::vector<std::string>& collations, std::vector<MYSQL*>& conns) {
+int create_proxysql_connections(const std::vector<std::string>& collations, std::vector<MYSQL*>& conns) {
 	std::vector<MYSQL*> _conns {};
 
 	for (const auto& collation : collations) {
+
 		MYSQL* mysql = mysql_init(NULL);
 		const MARIADB_CHARSET_INFO* charset = proxysqlTap_find_charset_collate(collation.c_str());
 		mysql->charset = charset;
-
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			return -1;
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
 
 		_conns.push_back(mysql);
@@ -61,7 +72,7 @@ int create_proxysql_connections(const CommandLine& cl, const std::vector<std::st
 	return 0;
 }
 
-int run_change_user_on_all(const CommandLine& cl, const std::vector<std::string>& collations, std::vector<MYSQL*>& conns) {
+int run_change_user_on_all(const std::vector<std::string>& collations, std::vector<MYSQL*>& conns) {
 	// start a transaction in every connection
 	// and then trigger a change user
 	// we first create a transaction in order to force the reset of the backend using CHANGE_USER
@@ -113,18 +124,13 @@ int query_and_check_session_variables(MYSQL *mysql, std::string collation, int i
 
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	std::vector<MYSQL*> conns {};
 	std::vector<std::string> collations { "latin1_spanish_ci", "latin1_german2_ci", "latin1_danish_ci", "latin1_general_ci", "latin1_bin", "utf8_general_ci", "utf8_unicode_ci" };
 
 	int ntests = 0;
-	ntests += 1; // create all connections
+	ntests += 2*7 + 1; // create all connections
 	ntests += (NUMBER_NEW_CONNECTIONS) * 4;
 	ntests += (N_ITERATION_1 * collations.size()) * 4;
 	ntests += collations.size() * 2; // number of times we will call mysql_change_user()
@@ -132,7 +138,7 @@ int main(int argc, char** argv) {
 	ntests += (N_ITERATION_3 * collations.size()) * 4;
 	plan(ntests);
 
-	int conns_res = create_proxysql_connections(cl, collations, conns);
+	int conns_res = create_proxysql_connections(collations, conns);
 
 	ok(conns_res == 0, "Successfully create all connections with different collations");
 	if (conns_res != 0) {
@@ -160,7 +166,7 @@ int main(int argc, char** argv) {
 	}
 
 	// we now want to check what happens after resetting backend connections
-	if (run_change_user_on_all(cl, collations, conns))
+	if (run_change_user_on_all(collations, conns))
 		return exit_status();
 
 	// we iterate and check through all the connections
@@ -173,7 +179,7 @@ int main(int argc, char** argv) {
 	// we now want to check what happens after resetting backend connections
 	// we also reverse the order of collations
 	std::reverse(collations.begin(), collations.end());
-	if (run_change_user_on_all(cl, collations, conns))
+	if (run_change_user_on_all(collations, conns))
 		return exit_status();
 	// we iterate and check through all the connections
 	for (int i = 0; i < conns.size(); i++) {

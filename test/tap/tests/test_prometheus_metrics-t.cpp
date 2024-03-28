@@ -92,7 +92,7 @@ int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
  * @param proxy MYSQL Oppened MYSQL handler to ProxySQL Admin.
  * @return True if the action was able to be performed correctly, false otherwise.
  */
-bool trigger_auto_increment_delay_multiplex_metric(MYSQL* proxy, MYSQL*, const CommandLine&) {
+bool trigger_auto_increment_delay_multiplex_metric(MYSQL* proxy, MYSQL*) {
 	int inc_query_res =
 		mysql_query(
 			proxy,
@@ -144,25 +144,24 @@ void check_auto_increment_delay_multiplex_metric(
 	}
 }
 
-bool trigger_access_denied_wrong_password_total(MYSQL*, MYSQL*, const CommandLine& cl) {
-	// Initialize ProxySQL connection
-	MYSQL* proxysql = mysql_init(NULL);
-	if (!proxysql) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
-		return -1;
-	}
-
-	// Connect to ProxySQL
+bool trigger_access_denied_wrong_password_total(MYSQL*, MYSQL*) {
 	bool access_denied_error = false;
-	void* connect_res = mysql_real_connect(proxysql, cl.host, "invalid_username", "invalid_password", NULL, cl.port, NULL, 0);
-	int access_errno = mysql_errno(proxysql);
-
-	if (!connect_res && access_errno == ER_ACCESS_DENIED_ERROR) {
-		access_denied_error = true;
-	} else {
-		diag("Connections should have failed due to access denied. ErrCode: %d", access_errno);
-		access_denied_error = false;
+	// Connect to ProxySQL
+	MYSQL* proxysql = mysql_init(NULL);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", "invalid_username", cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql, MYSQL_OPT_COMPRESS, NULL);
+	if(!mysql_real_connect(proxysql, cl.host, "invalid_username", "invalid_password", NULL, cl.port, NULL, 0)) {
+		if (mysql_errno(proxysql) == ER_ACCESS_DENIED_ERROR) {
+			access_denied_error = true;
+		} else {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+		}
 	}
+	if(!access_denied_error)
+		diag("Connections should have failed due to access denied. ErrCode: %d", 0);
 
 	return access_denied_error;
 }
@@ -191,7 +190,7 @@ void check_access_denied_wrong_password_total(
 	}
 }
 
-bool trigger_transaction_rollback_total(MYSQL* proxysql, MYSQL*, const CommandLine&) {
+bool trigger_transaction_rollback_total(MYSQL* proxysql, MYSQL*) {
 	int st_err = mysql_query(proxysql, "BEGIN");
 	bool res = false;
 
@@ -232,7 +231,7 @@ void check_transaction_rollback_total(
 
 string PROXYSQL_VERSION {};
 
-bool get_proxysql_version_info(MYSQL*, MYSQL* admin, const CommandLine&) {
+bool get_proxysql_version_info(MYSQL*, MYSQL* admin) {
 	int v_err = mysql_query(admin, "SELECT @@version");
 	if (v_err) {
 		diag(
@@ -324,17 +323,21 @@ map<string,string> extract_metric_tags(const string metric_id) {
 	return result;
 }
 
-bool trigger_message_count_parse_failure(MYSQL*, MYSQL*, const CommandLine& cl) {
+bool trigger_message_count_parse_failure(MYSQL*, MYSQL*) {
 	// Initialize ProxySQL connection
 	MYSQL* proxysql = mysql_init(NULL);
-	if (!proxysql) {
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return false;
-	}
-	// Connect to ProxySQL
-	if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
-		return false;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql->net.compress, "Compression: (%d)", proxysql->net.compress);
 	}
 
 	int res = false;
@@ -451,7 +454,7 @@ int get_target_metrics(
 	return EXIT_SUCCESS;
 }
 
-bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
+bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin) {
 	// Exercise some load on the hostgroup 0
 	for (size_t i = 0; i < 10; i++) {
 		int rc = mysql_query_d(proxy, "/* hostgroup=0 */ SELECT 1");
@@ -463,7 +466,7 @@ bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin, const CommandLine&
 	return EXIT_SUCCESS;
 }
 
-bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
+bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin) {
 	// Delete server and add it again to hostgroup
 	diag("Removing current 'mysql_servers' for target hostgroup '0'");
 	mysql_query_d(admin, "DELETE FROM mysql_servers WHERE hostgroup_id=0");
@@ -541,15 +544,15 @@ void check_server_data_recv(const map<string,double>& prev_metrics, const map<st
 	ok(failed_metrics.empty(), "All metric values were properly incremented after server rm/add from hostgroup");
 }
 
-using setup = function<bool(MYSQL*, MYSQL*, const CommandLine&)>;
-using metric_trigger = function<bool(MYSQL*, MYSQL*, const CommandLine&)>;
+using setup = function<bool(MYSQL*, MYSQL*)>;
+using metric_trigger = function<bool(MYSQL*, MYSQL*)>;
 using metric_check = function<void(const map<string, double>&, const map<string, double>&)>;
 
 struct CHECK {
 	enum funcs { SETUP, TRIGGER, CHECKER, _END };
 };
 
-bool placeholder_setup(MYSQL*, MYSQL*, const CommandLine&) { return true; }
+bool placeholder_setup(MYSQL*, MYSQL*) { return true; }
 
 /**
  * @brief Map of test identifier and pair functions holding the metrics tests:
@@ -594,35 +597,43 @@ using std::map;
 
 int main(int argc, char** argv) {
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
-	plan(metric_tests.size() * 4);
+	plan(
+		4*metric_tests.size() + // connections
+		2*2 + // connections
+		metric_tests.size() * 4 // tests
+		);
 
 	for (const auto& metric_test : metric_tests) {
 		// Initialize Admin connection
 		MYSQL* proxysql_admin = mysql_init(NULL);
-		if (!proxysql_admin) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-			return EXIT_FAILURE;
-		}
-		// Connnect to ProxySQL Admin
+		diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_admin);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 		}
+
 		// Initialize ProxySQL connection
 		MYSQL* proxysql = mysql_init(NULL);
-		if (!proxysql) {
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql, MYSQL_OPT_COMPRESS, NULL);
+		if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 			return EXIT_FAILURE;
-		}
-		// Connect to ProxySQL
-		if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
-			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == proxysql->net.compress, "Compression: (%d)", proxysql->net.compress);
 		}
 
 		// Log test start for metric
@@ -630,7 +641,7 @@ int main(int argc, char** argv) {
 
 		// Execute the action triggering the metric update
 		const auto& metric_setup = std::get<CHECK::SETUP>(metric_test.second);
-		bool action_res = metric_setup(proxysql, proxysql_admin, cl);
+		bool action_res = metric_setup(proxysql, proxysql_admin);
 		ok(action_res, "Setup action to prepare the env was successful.");
 
 		// Get the current metrics values
@@ -640,7 +651,7 @@ int main(int argc, char** argv) {
 
 		// Execute the action triggering the metric update
 		const auto& metric_trigger = std::get<CHECK::TRIGGER>(metric_test.second);
-		bool trigger_res = metric_trigger(proxysql, proxysql_admin, cl);
+		bool trigger_res = metric_trigger(proxysql, proxysql_admin);
 		ok(trigger_res, "Action to update the metric was executed properly.");
 
 		// Get the new updated metrics values

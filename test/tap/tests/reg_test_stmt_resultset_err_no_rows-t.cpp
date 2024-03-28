@@ -28,6 +28,8 @@ using std::string;
 using std::vector;
 using std::tuple;
 
+CommandLine cl;
+
 using test_case_t = tuple<bool,string,string>;
 
 const uint32_t STRING_SIZE = 1024;
@@ -39,13 +41,6 @@ int main(int argc, char** argv) {
 	int res = EXIT_SUCCESS;
 
 	plan(TEST_CASES.size());
-
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxy = mysql_init(NULL);
 	MYSQL* admin = mysql_init(NULL);

@@ -11,6 +11,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /*
 This TAP test validate the use of mysql-init_connect.
 It uses 2 valid init_connect, and 2 invalid ones that trigger PMC-10003.
@@ -24,32 +26,39 @@ inline unsigned long long monotonic_time() {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(8);
+	plan(2+2+2+2+2 + 8);
 
 	MYSQL* mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
-		return exit_status();
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysqladmin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysqladmin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysqladmin->net.compress, "Compression: (%d)", mysqladmin->net.compress);
 	}
 
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "Failed to connect to database: Error: %s\n",
-			mysql_error(mysql));
+		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
+
 	diag("Setting mysql-init_connect to DO 1");
 	MYSQL_QUERY(mysqladmin, "UPDATE global_variables SET variable_value='DO 1' WHERE variable_name = 'mysql-init_connect'");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
@@ -91,13 +100,20 @@ int main(int argc, char** argv) {
 	{
 		// reconnect
 		MYSQL* mysql = mysql_init(NULL);
-		if (!mysql)
-			return exit_status();
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-			fprintf(stderr, "Failed to connect to database: Error: %s\n",
-				mysql_error(mysql));
+			fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 			return exit_status();
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
+
 		const char *q = "SELECT /* create_new_connection=1 */ 300";
 		diag("Running query: %s", q);
 		unsigned long long begin = monotonic_time();
@@ -118,13 +134,20 @@ int main(int argc, char** argv) {
 	{
 		// reconnect
 		MYSQL* mysql = mysql_init(NULL);
-		if (!mysql)
-			return exit_status();
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-			fprintf(stderr, "Failed to connect to database: Error: %s\n",
-				mysql_error(mysql));
+			fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 			return exit_status();
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
+
 		const char *q = "SELECT /* create_new_connection=1 */ 400";
 		diag("Running query: %s", q);
 		int rc=mysql_query(mysql,q);
@@ -141,13 +164,20 @@ int main(int argc, char** argv) {
 	{
 		// reconnect
 		MYSQL* mysql = mysql_init(NULL);
-		if (!mysql)
-			return exit_status();
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-			fprintf(stderr, "Failed to connect to database: Error: %s\n",
-				mysql_error(mysql));
+			fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 			return exit_status();
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
+
 		const char *q = "SELECT /* create_new_connection=1 */ 500";
 		diag("Running query: %s", q);
 		MYSQL_QUERY(mysql, q);

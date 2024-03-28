@@ -31,6 +31,8 @@ using std::vector;
 // Used for 'extract_module_host_port'
 #include "modules_server_test.h"
 
+CommandLine cl;
+
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
@@ -160,9 +162,7 @@ int create_mysql_servers_range(
 	return EXIT_SUCCESS;
 };
 
-int create_fast_routing_rules_range(
-	const CommandLine& cl, MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end
-) {
+int create_fast_routing_rules_range(MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end) {
 	const string init { std::to_string(rng_init) };
 	const string end { std::to_string(rng_end) };
 
@@ -242,7 +242,7 @@ int test_fast_routing_algorithm(
 	diag("Initial 'mysql_query_rules_memory' of '%d'", init_rules_mem_stats);
 
 	// Check that fast_routing rules are being properly triggered
-	c_err = create_fast_routing_rules_range(cl, admin, host_port, rng_init, rng_end);
+	c_err = create_fast_routing_rules_range(admin, host_port, rng_init, rng_end);
 	if (c_err) { return EXIT_FAILURE; }
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
@@ -388,26 +388,38 @@ int test_fast_routing_algorithm(
 
 int main(int argc, char** argv) {
 	// `5` logic checks + 20*3 checks per query rule, per test
-	plan((8 + 20*3) * 2);
+	plan(2+2 + (8 + 20*3) * 2);
 
 	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 	MYSQL* proxy = mysql_init(NULL);
-	MYSQL* admin = mysql_init(NULL);
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
+	MYSQL* admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	pair<string,int> host_port {};

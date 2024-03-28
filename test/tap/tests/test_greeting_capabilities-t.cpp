@@ -17,6 +17,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 using std::pair;
 using std::string;
 using std::vector;
@@ -63,15 +65,23 @@ pair<bool,uint64_t> check_server_capabilities(
 	return { caps_match, exp_caps };
 }
 
-int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
+int test_proxy_capabilites(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mysql-enable_client_deprecate_eof=0");
 	MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL* proxy = mysql_init(NULL);
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	pair<bool,uint64_t> caps_res { check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF }, false) };
@@ -89,10 +99,18 @@ int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
 
 	proxy = mysql_init(NULL);
 	proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	caps_res = check_server_capabilities(proxy, { CLIENT_DEPRECATE_EOF }, true);
@@ -109,24 +127,26 @@ int test_proxy_capabilites(const CommandLine& cl, MYSQL* admin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// TODO: Harcoded for now, this is an initial version of the test.
-	plan(2);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
+	plan(2+2+2 + 2);
 
 	MYSQL* admin = mysql_init(NULL);
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
-	test_proxy_capabilites(cl, admin);
+	test_proxy_capabilites(admin);
 
 	mysql_close(admin);
 

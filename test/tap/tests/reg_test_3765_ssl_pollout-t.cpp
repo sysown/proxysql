@@ -26,6 +26,8 @@
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 /**
  * @brief TODO: Refactor this into utils, also used in another PR.
  */
@@ -61,9 +63,9 @@ const uint32_t MYSQL_CONN_NUM = 100;
 const uint32_t REPORT_INTV_SEC = 5;
 double MAX_ALLOWED_CPU_USAGE = (double) get_env_int("TAP_MAX_ALLOWED_CPU_USAGE", 13);
 
-int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms, double& final_cpu_ms) {
+int get_idle_conns_cpu_usage(uint64_t mode, double& idle_cpu_ms, double& final_cpu_ms) {
 	// get ProxySQL idle cpu usage
-	int idle_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu_ms);
+	int idle_err = get_proxysql_cpu_usage(REPORT_INTV_SEC, idle_cpu_ms);
 	if (idle_err) {
 	    diag("File %s, line %d, Error: '%s'", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
 		return idle_err;
@@ -87,7 +89,7 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms
 		return EXIT_FAILURE;
 	}
 
-	int final_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, final_cpu_ms);
+	int final_err = get_proxysql_cpu_usage(REPORT_INTV_SEC, final_cpu_ms);
 	if (final_err) {
 	    diag("File %s, line %d, Error: '%s'", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
 		return idle_err;
@@ -100,12 +102,6 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return exit_status();
-	}
 
 	plan(6);
 
@@ -123,7 +119,7 @@ int main(int argc, char** argv) {
 	mysql_close(proxysql_admin);
 
 	diag("Testing regular connections...");
-	int ret_cpu_usage = get_idle_conns_cpu_usage(cl, 0, idle_cpu_ms, final_cpu_ms);
+	int ret_cpu_usage = get_idle_conns_cpu_usage(0, idle_cpu_ms, final_cpu_ms);
 	if (ret_cpu_usage != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	ok(
@@ -139,7 +135,7 @@ int main(int argc, char** argv) {
 	);
 
 	diag("Testing SSL connections...");
-	ret_cpu_usage = get_idle_conns_cpu_usage(cl, CLIENT_SSL, idle_cpu_ms, final_cpu_ms);
+	ret_cpu_usage = get_idle_conns_cpu_usage(CLIENT_SSL, idle_cpu_ms, final_cpu_ms);
 	if (ret_cpu_usage != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	ok(
@@ -155,7 +151,7 @@ int main(int argc, char** argv) {
 	);
 
 	diag("Testing SSL and compressed connections...");
-	ret_cpu_usage = get_idle_conns_cpu_usage(cl, CLIENT_SSL|CLIENT_COMPRESS, idle_cpu_ms, final_cpu_ms);
+	ret_cpu_usage = get_idle_conns_cpu_usage(CLIENT_SSL|CLIENT_COMPRESS, idle_cpu_ms, final_cpu_ms);
 	if (ret_cpu_usage != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	ok(

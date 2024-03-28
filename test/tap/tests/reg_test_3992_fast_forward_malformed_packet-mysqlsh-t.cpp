@@ -17,14 +17,10 @@
 #include "command_line.h"
 #include "utils.h"
 
-int main(int argc, char** argv) {
-	CommandLine cl;
+CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-	
+int main(int argc, char** argv) {
+
 	const std::vector<std::pair<std::string, std::string>> users { {"mariadbuserff", "mariadbuserff"},
 											   {"mariadbuser", "mariadbuser"} };
 

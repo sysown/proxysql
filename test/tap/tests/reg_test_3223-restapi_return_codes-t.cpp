@@ -31,6 +31,8 @@ using std::vector;
 using hrc = std::chrono::high_resolution_clock;
 using nlohmann::json;
 
+CommandLine cl;
+
 const string base_address { "http://localhost:6070/sync/" };
 
 const vector<honest_req_t> honest_requests {
@@ -119,12 +121,6 @@ int count_exp_tests(const vector<honest_req_t>& v1, const vector<faulty_req_t>& 
 const uint32_t PROXY_GRACE_PERIOD = 1000 + 3000;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	plan(count_exp_tests(honest_requests, invalid_requests));
 

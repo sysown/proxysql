@@ -16,6 +16,8 @@
 
 using query_spec = std::tuple<std::string, int>;
 
+CommandLine cl;
+
 const int sqlite3_port = 0;
 
 // because the test itself is a benchmark that uses a lot of TCP ports,
@@ -30,7 +32,7 @@ inline unsigned long long monotonic_time() {
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
-int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, MYSQL* proxysql_mysql) {
+int benchmark_query_rules_fast_routing(MYSQL* proxysql_admin, MYSQL* proxysql_mysql) {
 	std::string s;
 	std::pair<std::string, int> host_port {};
 
@@ -74,13 +76,6 @@ int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, M
 	diag("Executing: %s", s.c_str());
 	MYSQL_QUERY(proxysql_admin, s.c_str());
 
-	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_mysql)
-		);
-		return EXIT_FAILURE;
-	}
 	{
 		unsigned long long begin;
 		for (int i=0; i<10001; i++) {
@@ -214,47 +209,70 @@ int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, M
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	MYSQL * proxysql_mysql = mysql_init(NULL);
-	MYSQL* proxysql_admin = mysql_init(NULL);
 
 	diag("This TAP test has several sleep() to give enough time to release TCP ports");
 
-	plan(2);
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		goto cleanup;
-	}
+	plan(2+2+2 + 2);
 
 	// Connect to ProxySQL Admin and check current SQLite3 configuration
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username, cl.admin_password,
-			NULL, cl.admin_port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
-		goto cleanup;
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
+	}
+
+	MYSQL* proxysql_mysql = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
 	}
 
 	MYSQL_QUERY(proxysql_admin, "SET mysql-query_rules_fast_routing_algorithm=1");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	diag("Sleeping %d seconds at line %d", ST, __LINE__);
-	benchmark_query_rules_fast_routing(cl, proxysql_admin, proxysql_mysql);
+	benchmark_query_rules_fast_routing(proxysql_admin, proxysql_mysql);
 	diag("Sleeping %d seconds at line %d", ST, __LINE__);
 
 	MYSQL_QUERY(proxysql_admin, "SET mysql-query_rules_fast_routing_algorithm=2");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	mysql_close(proxysql_mysql);
-	proxysql_mysql = mysql_init(NULL);
 
-	benchmark_query_rules_fast_routing(cl, proxysql_admin, proxysql_mysql);
+	proxysql_mysql = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
+	}
+
+	benchmark_query_rules_fast_routing(proxysql_admin, proxysql_mysql);
 	diag("Sleeping %d seconds at line %d", ST, __LINE__);
 
 cleanup:

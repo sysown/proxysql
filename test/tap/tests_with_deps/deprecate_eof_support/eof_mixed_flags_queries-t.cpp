@@ -28,6 +28,8 @@
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 vector<vector<bool>> get_all_bin_vec(size_t tg_size) {
 	vector<vector<bool>> all_bin_strs {};
 	vector<bool> bin_vec(tg_size, 0);
@@ -63,12 +65,6 @@ vector<conn_cnf_t> gen_all_configs(const string& ff_user) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	const string FF_USER { cl.username };
 
@@ -82,7 +78,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	const auto execute_target_test = [&cl, &admin, &FF_USER] (const string test_file, bool clear_conns) -> int {
+	const auto execute_target_test = [&admin, &FF_USER] (const string test_file, bool clear_conns) -> int {
 		vector<conn_cnf_t> all_test_confs { gen_all_configs(FF_USER) };
 
 		for (const conn_cnf_t& cnf : all_test_confs) {
