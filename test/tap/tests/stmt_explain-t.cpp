@@ -37,8 +37,8 @@ int main(int argc, char** argv) {
 	}
 
 	// Connecting to ProxySQL
-	diag("Connecting to '%s@%s:%d'", cl.mysql_username, cl.mysql_host, cl.port);
-	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.port, NULL, 0)) {
+	diag("Connecting to '%s@%s:%d'", cl.mysql_username, cl.host, cl.port);
+	if (!mysql_real_connect(mysql, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
