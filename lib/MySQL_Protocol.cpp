@@ -35,7 +35,7 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 #include "proxysql_find_charset.h"
 
 
-char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);
+extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);
 
 static const char *plugins[3] = {
 	"mysql_native_password",

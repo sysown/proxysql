@@ -60,6 +60,15 @@ endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 
+# NOTE-LWGCOV (LinkWithGCOV):
+# Linking against GCOV is required when ProxySQL is build with support for it. This is because
+# 'sha256crypt.oo' is being used for 'libtap.a'. This requisite is imposed due to 'sha256_crypt_r'
+# being used inside ProxySQL linked 'SQLite3', which is also used by `libtap.so`.
+LWGCOV :=
+ifeq ($(WITHGCOV),1)
+	LWGCOV := -lgcov
+endif
+
 
 ### main targets
 
@@ -85,10 +94,10 @@ tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so
 	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
 libtap.a: tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
+	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap.so: libtap.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive
+	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive $(LWGCOV)
 
 
 ### tap deps targets

@@ -497,6 +497,63 @@ std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res) {
 	return result;
 };
 
+pair<uint32_t,vector<mysql_res_row>> mysql_query_ext_rows(MYSQL* mysql, const string& query) {
+	int rc = mysql_query(mysql, query.c_str());
+	if (rc != EXIT_SUCCESS) {
+		return { mysql_errno(mysql), {} };
+	}
+
+	MYSQL_RES* myres = mysql_store_result(mysql);
+	if (myres == nullptr) {
+		return { mysql_errno(mysql), {} };
+	}
+
+	const vector<mysql_res_row> rows { extract_mysql_rows(myres) };
+	mysql_free_result(myres);
+
+	return { EXIT_SUCCESS, rows };
+}
+
+ext_val_t<string> ext_single_row_val(const mysql_res_row& row, const string& def_val) {
+	if (row.empty() || row.front().empty()) {
+		return { -1, def_val, {} };
+	} else {
+		return { EXIT_SUCCESS, string { row[0] }, string { row[0] } };
+	}
+}
+
+ext_val_t<int64_t> ext_single_row_val(const mysql_res_row& row, const int64_t& def_val) {
+	if (row.empty() || row.front().empty()) {
+		return { -1, def_val, {} };
+	} else {
+        errno = 0;
+        char* p_end {};
+        const int64_t val = std::strtoll(row.front().c_str(), &p_end, 10);
+
+		if (row[0] == p_end || errno == ERANGE) {
+			return { -2, def_val, string { row[0] } };
+		} else {
+			return { EXIT_SUCCESS, val, string { row[0] } };
+		}
+	}
+}
+
+ext_val_t<uint64_t> ext_single_row_val(const mysql_res_row& row, const uint64_t& def_val) {
+	if (row.empty() || row.front().empty()) {
+		return { -1, def_val, {} };
+	} else {
+        errno = 0;
+        char* p_end {};
+        const uint64_t val = std::strtoll(row.front().c_str(), &p_end, 10);
+
+		if (row[0] == p_end || errno == ERANGE) {
+			return { -2, def_val, string { row[0] } };
+		} else {
+			return { EXIT_SUCCESS, val, string { row[0] } };
+		}
+	}
+}
+
 struct memory {
 	char* data;
 	size_t size;
@@ -1078,51 +1135,19 @@ cleanup:
 }
 
 int get_cur_backend_conns(MYSQL* proxy_admin, const string& conn_type, uint32_t& found_conn_num) {
-	MYSQL_QUERY(proxy_admin, string {"SELECT " + conn_type + " FROM stats_mysql_connection_pool"}.c_str());
+	MYSQL_QUERY(proxy_admin, string {"SELECT SUM(" + conn_type + ") FROM stats_mysql_connection_pool"}.c_str());
 
 	MYSQL_ROW row = nullptr;
-	MYSQL_RES* my_res = mysql_store_result(proxy_admin);
-	uint32_t field_num = mysql_num_fields(my_res);
-	vector<uint32_t> connfree_vals {};
+	MYSQL_RES* myres = mysql_store_result(proxy_admin);
+	uint32_t field_num = mysql_num_fields(myres);
 
 	if (field_num != 1) {
 		diag("Invalid number of columns in resulset from 'stats_mysql_connection_pool': %d", field_num);
-	}
-
-	if (my_res != nullptr) {
-		while ((row = mysql_fetch_row(my_res))) {
-			connfree_vals.push_back(std::strtol(row[0], NULL, 10));
-		}
-	}
-	mysql_free_result(my_res);
-
-	found_conn_num = std::accumulate(connfree_vals.begin(), connfree_vals.end(), 0, std::plus<uint32_t>());
-	return EXIT_SUCCESS;
-}
-
-int wait_for_backend_conns(
-	MYSQL* proxy_admin, const string& conn_type, uint32_t exp_conn_num, uint32_t timeout
-) {
-	uint32_t total_conn_num = 0;
-	uint32_t waited = 0;
-
-	while (waited < timeout) {
-		int get_err = get_cur_backend_conns(proxy_admin, conn_type, total_conn_num);
-		if (get_err != EXIT_SUCCESS) { return EXIT_FAILURE; }
-
-		if (total_conn_num == exp_conn_num) {
-			break;
-		} else {
-			sleep(1);
-			waited += 1;
-		}
-	}
-
-	if (waited >= timeout) {
-		return EXIT_FAILURE;
 	} else {
-		return EXIT_SUCCESS;
+		found_conn_num = std::strtol(row[0], NULL, 10);
 	}
+
+	return EXIT_SUCCESS;
 }
 
 string join_path(const string& p1, const string& p2) {
