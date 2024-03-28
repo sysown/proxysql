@@ -2261,6 +2261,7 @@ bool MySQL_HostGroups_Manager::commit(
 	// fill Hostgroup_Manager_Mapping with latest records
 	update_hostgroup_manager_mappings();
 
+
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
@@ -8564,6 +8565,119 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(MySrvC* srv)
 	proxy_warning("Removed server at address %p, hostgroup %d, address %s port %d. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", (void*)srv, srv->myhgc->hid, srv->address, srv->port);
 	srv->status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 	srv->ConnectionsFree->drop_all_connections();
+}
+
+/**
+* @brief Updates replication hostgroups by adding autodiscovered mysql servers.
+* @details Adds each server from 'new_servers' to the 'runtime_mysql_servers' table.
+* We then rebuild the 'mysql_servers' table as well as the internal 'hostname_hostgroup_mapping'.
+* @param new_servers A vector of tuples where each tuple contains the values needed to add each new server.
+*
+* @return Returns EXIT_FAILURE code on failure and EXIT_SUCCESS code on success.
+*/
+int MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(vector<tuple<string, int, int>> new_servers) {
+	int exit_code = EXIT_SUCCESS;
+	bool added_new_server = false;
+	wrlock();
+
+	try {
+		for (tuple<string, int, int> s : new_servers) {
+			string host = std::get<0>(s);
+			uint16_t port = std::get<1>(s);
+			long int hostgroup_id = std::get<2>(s);
+
+			// Add the discovered server with default values
+			MySrvC* mysrvc = new MySrvC(
+				const_cast<char*>(host.c_str()), port, 0, 1, MYSQL_SERVER_STATUS_ONLINE, 0, -1, 0, -1, 0, const_cast<char*>("Discovered endpoint")
+			);
+			add(mysrvc, hostgroup_id);
+
+			proxy_info(
+				"Adding new discovered server %s:%d with: hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",
+				host.c_str(), port, hostgroup_id, mysrvc->weight, mysrvc->max_connections, mysrvc->use_ssl
+			);
+
+			added_new_server = true;
+		}
+
+		if (added_new_server) {
+			purge_mysql_servers_table();
+			mydb->execute("DELETE FROM mysql_servers");
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+			generate_mysql_servers_table();
+			update_table_mysql_servers_for_monitor(false);
+			rebuild_hostname_hostgroup_mapping();
+		}
+	} catch (...) {
+		exit_code = EXIT_FAILURE;
+	}
+
+	wrunlock();
+	return exit_code;
+}
+
+/**
+* @brief Rebuilds the 'hostname_hostgroup_mapping'
+* @details Rebuilds the internal 'hostname_hostgroup_mapping' assuming new data has been entered
+* and calculates new checksums for 'mysql_servers' and 'mysql_replication_hostgroups'.
+*/
+void MySQL_HostGroups_Manager::rebuild_hostname_hostgroup_mapping() {
+	proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - mysql_servers { old: 0x%lX, new: 0x%lX }, mysql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
+		hgsm_mysql_servers_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS],
+		hgsm_mysql_replication_hostgroups_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
+
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+
+	const char* query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 \
+						UNION \
+						SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 \
+						ORDER BY hostname, port";
+
+	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+
+	hostgroup_server_mapping.clear();
+
+	if (resultset && resultset->rows_count) {
+		std::string fetched_server_id;
+		HostGroup_Server_Mapping* fetched_server_mapping = NULL;
+
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); it++) {
+			SQLite3_row *r = *it;
+
+			const std::string& server_id = std::string(r->fields[0]) + ":::" + r->fields[1];
+
+			if (fetched_server_mapping == NULL || server_id != fetched_server_id) {
+				auto itr = hostgroup_server_mapping.find(server_id);
+
+				if (itr == hostgroup_server_mapping.end()) {
+					std::unique_ptr<HostGroup_Server_Mapping> server_mapping(new HostGroup_Server_Mapping(this));
+					fetched_server_mapping = server_mapping.get();
+					hostgroup_server_mapping.insert( std::pair<std::string,std::unique_ptr<MySQL_HostGroups_Manager::HostGroup_Server_Mapping>> {
+														server_id, std::move(server_mapping)
+														} );
+				} else {
+					fetched_server_mapping = itr->second.get();
+				}
+
+				fetched_server_id = server_id;
+			}
+
+			HostGroup_Server_Mapping::Node node;
+			node.reader_hostgroup_id = atoi(r->fields[4]);
+			node.writer_hostgroup_id = atoi(r->fields[5]);
+			node.srv = reinterpret_cast<MySrvC*>(atoll(r->fields[6]));
+
+			HostGroup_Server_Mapping::Type type = (r->fields[2] && r->fields[2][0] == '1') ? HostGroup_Server_Mapping::Type::WRITER : HostGroup_Server_Mapping::Type::READER;
+			fetched_server_mapping->add(type, node);
+		}
+	}
+	delete resultset;
+
+	hgsm_mysql_servers_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
+	hgsm_mysql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS];
 }
 
 MySQLServers_SslParams * MySQL_HostGroups_Manager::get_Server_SSL_Params(char *hostname, int port, char *username) {
