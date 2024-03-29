@@ -132,6 +132,18 @@ Installing:
 yum install proxysql OR yum install proxysql-version
 ```
 
+#### FreeBSD:
+
+Installing (via pkg):
+```bash
+pkg install proxysql
+```
+
+Installing (via ports):
+```bash
+cd /usr/ports/databases/proxysql/ && make install clean
+```
+
 ### Service management
 Once the software is installed, you can use the `service` command to control the process:  
 
