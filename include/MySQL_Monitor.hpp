@@ -447,7 +447,7 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
-	void process_discovered_topology(const std::string& originating_server_hostname, vector<MYSQL_ROW> discovered_servers, int reader_hostgroup);
+	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;

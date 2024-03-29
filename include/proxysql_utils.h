@@ -258,6 +258,4 @@ void close_all_non_term_fd(std::vector<int> excludeFDs);
  */
 std::pair<int,const char*> get_dollar_quote_error(const char* version);
 
-long parseLong(const char* s);
-
 #endif

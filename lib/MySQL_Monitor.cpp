@@ -3295,7 +3295,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 * @param discovered_servers A vector of servers discovered when querying the cluster's topology.
 * @param reader_hostgroup Reader hostgroup to which we will add the discovered servers.
 */
-void MySQL_Monitor::process_discovered_topology(const std::string& originating_server_hostname, vector<MYSQL_ROW> discovered_servers, int reader_hostgroup) {
+void MySQL_Monitor::process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup) {
 	char *error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -3323,10 +3323,18 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 		// Loop through discovered servers and process the ones we haven't saved yet
 		for (MYSQL_ROW s : discovered_servers) {
 			string current_discovered_hostname = s[2];
-			string current_discovered_port = s[3];
+			string current_discovered_port_string = s[3];
+			int current_discovered_port_int;
+
+			try {
+				current_discovered_port_int = stoi(s[3]);
+			} catch (...) {
+				proxy_error("Unable to parse the port value during topology discovery: [%s]. Terminating discovery early.", current_discovered_port_string);
+				return;
+			}
 
 			if (find(saved_hostnames.begin(), saved_hostnames.end(), current_discovered_hostname) == saved_hostnames.end()) {
-				tuple<string, int, int> new_server(current_discovered_hostname, parseLong(current_discovered_port.c_str()), reader_hostgroup);
+				tuple<string, int, int> new_server(current_discovered_hostname, current_discovered_port_int, reader_hostgroup);
 				new_servers.push_back(new_server);
 				saved_hostnames.push_back(current_discovered_hostname);
 			}
@@ -3334,13 +3342,7 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 
 		// Add the new servers if any
 		if (!new_servers.empty()) {
-			int successfully_added_all_servers = MyHGM->add_discovered_servers_to_mysql_servers_and_replication_hostgroups(new_servers);
-
-			if (successfully_added_all_servers == EXIT_FAILURE) {
-				proxy_info("Inserting auto-discovered servers failed.\n");
-			} else {
-				proxy_info("Inserting auto-discovered servers succeeded.\n");
-			}
+			MyHGM->add_discovered_servers_to_mysql_servers_and_replication_hostgroups(new_servers);
 		}
 	}
 }
@@ -7372,13 +7374,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 				// Process the discovered servers and add them to 'runtime_mysql_servers'
 				if (!discovered_servers.empty()) {
-					try {
-						process_discovered_topology(originating_server_hostname, discovered_servers, mmsd->reader_hostgroup);
-					} catch (std::runtime_error &e) {
-						proxy_error("Error during topology auto-discovery: %s\n", e.what());
-					} catch (...) {
-						proxy_error("Unknown error during topology auto-discovery.\n");
-					}
+					process_discovered_topology(originating_server_hostname, discovered_servers, mmsd->reader_hostgroup);
 				}
 			} else {
 				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
