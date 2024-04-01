@@ -8598,7 +8598,7 @@ void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_repli
 	wrlock();
 
 	// Add the discovered server with default values
-	for (tuple<string, int, int> s : new_servers) {
+	for (const tuple<string, int, int>& s : new_servers) {
 		string host = std::get<0>(s);
 		uint16_t port = std::get<1>(s);
 		long int hostgroup_id = std::get<2>(s);
