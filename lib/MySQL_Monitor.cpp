@@ -3331,7 +3331,7 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 			try {
 				current_discovered_port_int = stoi(s[3]);
 			} catch (...) {
-				proxy_error("Unable to parse the port value during topology discovery: [%s]. Terminating discovery early.", current_discovered_port_string);
+				proxy_error("Unable to parse the port value during topology discovery: [%s]. Terminating discovery early.\n", current_discovered_port_string.c_str());
 				return;
 			}
 
