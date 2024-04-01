@@ -745,9 +745,48 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->flagOUT_weights_total = 0;
 	newQR->flagOUT_ids = NULL;
 	newQR->flagOUT_weights = NULL;
+	newQR->switch_to_fast_forward = false;
 	if (newQR->attributes != NULL) {
 		if (strlen(newQR->attributes)) {
-		nlohmann::json j_attributes = nlohmann::json::parse(newQR->attributes);
+			nlohmann::json j_attributes = nlohmann::json::parse(newQR->attributes);
+			if ( j_attributes.find("switch_to_fast_forward") != j_attributes.end() ) {
+				bool parsed = false;
+				const nlohmann::json& j = j_attributes;
+				if (j["switch_to_fast_forward"].type() == nlohmann::json::value_t::number_unsigned) {
+					if (j["switch_to_fast_forward"] == 0 || j["switch_to_fast_forward"] == 1) {
+						if (j["switch_to_fast_forward"] == 1) {
+							newQR->switch_to_fast_forward = true;
+						}
+						parsed = true;
+					}
+				}
+				if (parsed == false) {
+					if (j["switch_to_fast_forward"].type() == nlohmann::json::value_t::boolean) {
+						if (j["switch_to_fast_forward"] == true) {
+							newQR->switch_to_fast_forward = true;
+						}
+						parsed = true;
+					}
+				}
+				if (parsed == false) {
+					if (j["switch_to_fast_forward"].type() == nlohmann::json::value_t::string) {
+						string s = j["switch_to_fast_forward"];
+						const char *a = s.c_str();
+						if (
+							(strcasecmp(a,"yes") == 0) || (strcasecmp(a,"true") == 0)  || (strcasecmp(a,"1") == 0)
+							||
+							(strcasecmp(a,"no") == 0)  || (strcasecmp(a,"false") == 0) || (strcasecmp(a,"0") == 0)
+						) {
+							if (
+								(strcasecmp(a,"yes") == 0) || (strcasecmp(a,"true") == 0)  || (strcasecmp(a,"1") == 0)
+							) {
+								newQR->switch_to_fast_forward = true;
+							}
+						}
+						parsed = true;
+					}
+				}
+			}
 			if ( j_attributes.find("flagOUTs") != j_attributes.end() ) {
 				newQR->flagOUT_ids = new vector<int>;
 				newQR->flagOUT_weights = new vector<int>;
@@ -1978,6 +2017,9 @@ __internal_loop:
 		// if we arrived here, we have a match
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 		bool set_flagOUT=false;
+		if (qr->switch_to_fast_forward == true) {
+			ret->switch_to_fast_forward = true;
+		}
 		if (qr->flagOUT_weights_total > 0) {
 			int rnd = random() % qr->flagOUT_weights_total;
 			for (unsigned int i=0; i< qr->flagOUT_weights->size(); i++) {
