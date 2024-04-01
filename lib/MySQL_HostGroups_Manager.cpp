@@ -8594,7 +8594,7 @@ MySQLServers_SslParams * MySQL_HostGroups_Manager::get_Server_SSL_Params(char *h
 void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(
 	const vector<tuple<string, int, int>>& new_servers
 ) {
-	int added_new_server;
+	int added_new_server = -1;
 	wrlock();
 
 	// Add the discovered server with default values
