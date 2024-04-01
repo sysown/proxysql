@@ -1092,7 +1092,7 @@ class MySQL_HostGroups_Manager {
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
 
-	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(vector<tuple<string, int, int>>& new_servers);
+	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);
 
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
