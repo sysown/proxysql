@@ -8595,6 +8595,8 @@ void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_repli
 	const vector<tuple<string, int, int>>& new_servers
 ) {
 	int added_new_server = -1;
+
+	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 
 	// Add the discovered server with default values
@@ -8657,4 +8659,5 @@ void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_repli
 	}
 
 	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
 }
