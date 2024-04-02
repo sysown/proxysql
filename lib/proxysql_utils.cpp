@@ -5,6 +5,7 @@
 #include <functional>
 #include <sstream>
 #include <algorithm>
+#include <climits>
 
 #include <fcntl.h>
 #include <poll.h>

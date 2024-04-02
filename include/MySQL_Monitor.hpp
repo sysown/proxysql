@@ -56,6 +56,9 @@ struct cmp_str {
 
 #define N_L_ASE 16
 
+#define AWS_ENDPOINT_SUFFIX_STRING "rds.amazonaws.com"
+#define QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port from mysql.rds_topology"
+
 /*
 
 Implementation of monitoring in AWS Aurora will be different than previous modules
@@ -197,7 +200,8 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_GROUP_REPLICATION,
 	MON_REPLICATION_LAG,
 	MON_GALERA,
-	MON_AWS_AURORA
+	MON_AWS_AURORA,
+	MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
 };
 
 enum class MySQL_Monitor_State_Data_Task_Result {
@@ -229,6 +233,7 @@ public:
 	char *hostname;
 	int port;
 	int writer_hostgroup; // used only by group replication
+	int reader_hostgroup;
 	bool writer_is_also_reader; // used only by group replication
 	int  max_transactions_behind; // used only by group replication
 	int max_transactions_behind_count; // used only by group replication
@@ -442,6 +447,7 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
+	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
@@ -553,7 +559,7 @@ private:
 	 * Note: Calling init_async is mandatory before executing tasks asynchronously.
 	*/
 	void monitor_ping_async(SQLite3_result* resultset);
-	void monitor_read_only_async(SQLite3_result* resultset);	
+	void monitor_read_only_async(SQLite3_result* resultset, bool do_discovery_check);
 	void monitor_replication_lag_async(SQLite3_result* resultset);
 	void monitor_group_replication_async();
 	void monitor_galera_async();

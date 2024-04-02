@@ -2261,6 +2261,7 @@ bool MySQL_HostGroups_Manager::commit(
 	// fill Hostgroup_Manager_Mapping with latest records
 	update_hostgroup_manager_mappings();
 
+
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
@@ -8582,4 +8583,81 @@ MySQLServers_SslParams * MySQL_HostGroups_Manager::get_Server_SSL_Params(char *h
 		}
 	}
 	return NULL;
+}
+
+/**
+* @brief Updates replication hostgroups by adding autodiscovered mysql servers.
+* @details Adds each server from 'new_servers' to the 'runtime_mysql_servers' table.
+* We then rebuild the 'mysql_servers' table as well as the internal 'hostname_hostgroup_mapping'.
+* @param new_servers A vector of tuples where each tuple contains the values needed to add each new server.
+*/
+void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(
+	const vector<tuple<string, int, int>>& new_servers
+) {
+	int added_new_server = -1;
+
+	GloAdmin->mysql_servers_wrlock();
+	wrlock();
+
+	// Add the discovered server with default values
+	for (const tuple<string, int, int>& s : new_servers) {
+		string host = std::get<0>(s);
+		uint16_t port = std::get<1>(s);
+		long int hostgroup_id = std::get<2>(s);
+			
+		srv_info_t srv_info { host.c_str(), port, "AWS RDS" };
+		srv_opts_t srv_opts { -1, -1, -1 };
+
+		added_new_server = create_new_server_in_hg(hostgroup_id, srv_info, srv_opts);
+	}
+
+	// If servers were added, perform necessary updates to internal structures
+	if (added_new_server > -1) {
+		purge_mysql_servers_table();
+		mydb->execute("DELETE FROM mysql_servers");
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+		generate_mysql_servers_table();
+
+		// Update the global checksums after 'mysql_servers' regeneration
+		{
+			unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+			string mysrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
+			save_runtime_mysql_servers(resultset.release());
+
+			// Update the runtime_mysql_servers checksum with the new checksum
+	    	uint64_t raw_checksum = this->runtime_mysql_servers ? this->runtime_mysql_servers->raw_checksum() : 0;
+	    	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = raw_checksum;
+
+			// This is required for preserving coherence in the checksums, otherwise they would be inconsistent with `commit` generated checksums
+			SpookyHash rep_hgs_hash {};
+			bool init = false;
+			uint64_t servers_v2_hash = table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_V2];
+
+			if (servers_v2_hash) {
+				if (init == false) {
+					init = true;
+					rep_hgs_hash.Init(19, 3);
+				}
+						
+				rep_hgs_hash.Update(&servers_v2_hash, sizeof(servers_v2_hash));
+			}
+
+			CUCFT1(
+				rep_hgs_hash, init, "mysql_replication_hostgroups", "writer_hostgroup",
+				table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]
+			);
+
+			proxy_info("Checksum for table %s is %s\n", "mysql_servers", mysrvs_checksum.c_str());
+
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			update_glovars_mysql_servers_checksum(mysrvs_checksum);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		update_table_mysql_servers_for_monitor(false);
+		update_hostgroup_manager_mappings();
+	}
+
+	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
 }
