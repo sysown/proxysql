@@ -22,6 +22,9 @@ jobs:
         Started : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
         Status : **Build in progress**
+        
+        [![CI-Package-Build](https://github.com/sysown/proxysql/actions/workflows/CI-package-build.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/CI-package-build.yml)
+        
         EOF
 
     - name: Clean repo
@@ -80,6 +83,9 @@ jobs:
         Updated : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
         Status : **Build in progress**
+        
+        [![CI-Package-Build](https://github.com/sysown/proxysql/actions/workflows/CI-package-build.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/CI-package-build.yml)
+        
         EOF
         fi
     
@@ -134,7 +140,7 @@ jobs:
         Finished : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
         Status : **Build is finished**
-
+        
         [![CI-Package-Build](https://github.com/sysown/proxysql/actions/workflows/CI-package-build.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/CI-package-build.yml)
         
         EOF
