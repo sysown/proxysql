@@ -108,7 +108,7 @@ jobs:
       id: build
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
-        ln -s /usr/libexec/docker/cli-plugins/docker-compose /usr/bin/docker-compose
+        sudo ln -s /usr/libexec/docker/cli-plugins/docker-compose /usr/bin/docker-compose
         cd proxysql/
         git fetch --tags --force
         mkdir ci_build_log
