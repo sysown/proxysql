@@ -29,6 +29,7 @@ jobs:
     - name: Make-test
       run: |
         cd proxysql/
+        sed -i 's/docker-compose/docker compose/g' Makefile
         #git fetch --tags --force
         GIT_VERSION=$(git describe --long --abbrev=7)
         echo "GIT_VERSION=${GIT_VERSION}"
