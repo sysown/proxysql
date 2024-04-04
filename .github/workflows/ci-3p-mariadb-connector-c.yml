@@ -84,6 +84,7 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/test_mariadb-connector-c
+        sed -i 's/docker-compose/docker compose/g' run-tests.bash
         ./run-tests.bash
         RC=$?
         
