@@ -64,7 +64,7 @@ OS := $(shell uname -s)
 ifeq ($(OS),Linux)
 	NPROCS := $(shell nproc)
 endif
-ifeq ($(OS),Darwin)
+ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
 export MAKEOPT := -j${NPROCS}
