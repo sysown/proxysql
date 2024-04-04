@@ -131,9 +131,9 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 ### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}')
 ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}')
 ifneq ($(CPLUSPLUS),201103L)
     $(error Compiler must support at least c++11)
 endif
