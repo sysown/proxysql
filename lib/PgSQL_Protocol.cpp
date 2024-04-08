@@ -282,7 +282,7 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 				myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"28000",error);
 			}
 */
-			// see https://www.pgsql.org/docs/current/protocol-message-formats.html
+			// see https://www.postgresql.org/docs/current/protocol-message-formats.html
 		} else {
 			char tmpbuf[128];
 			if (strcmp(buf,"INSERT") == 0) {
@@ -705,7 +705,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		(*myds)->sess->schema_locked = schema_locked;
 		(*myds)->sess->transaction_persistent = transaction_persistent;
 		(*myds)->sess->session_fast_forward = false; // default
-		if ((*myds)->sess->session_type == PROXYSQL_SESSION_POSTGRESQL) {
+		if ((*myds)->sess->session_type == PROXYSQL_SESSION_PGSQL) {
 			(*myds)->sess->session_fast_forward = fast_forward;
 		}
 		(*myds)->sess->user_max_connections = max_connections;
@@ -733,9 +733,11 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		}
 	}
 
-	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%d\n", (*myds), (*myds)->sess, user, (int)(*myds)->auth_method);
-	switch ((*myds)->auth_method) {
-	case AUTHENTICATION_METHOD::CLEAR_TEXT_PASSWORD:
+
+	if (password) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%d\n", (*myds), (*myds)->sess, user, (int)(*myds)->auth_method);
+		switch ((*myds)->auth_method) {
+		case AUTHENTICATION_METHOD::CLEAR_TEXT_PASSWORD:
 		{
 			uint32_t pass_len = hdr.data.size;
 			pass = (char*)malloc(pass_len + 1);
@@ -760,8 +762,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				ret = EXECUTION_STATE::SUCCESSFUL;
 			}
 		}
-			break;
-	case AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256:
+		break;
+		case AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256:
 		{
 			const char* mech;
 			uint32_t length;
@@ -782,8 +784,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL mechanism not found.\n", (*myds), (*myds)->sess, user);
 					break;
 				}
-				
-				read_pos=pos;
+
+				read_pos = pos;
 
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Selected SASL mechanism: %s.\n", (*myds), (*myds)->sess, user, mech);
 				if (strcmp(mech, "SCRAM-SHA-256") != 0) {
@@ -797,7 +799,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					break;
 				}
 
-				read_pos+=4;
+				read_pos += 4;
 
 				if ((hdr.data.size - read_pos) < length) {
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed packet.\n", (*myds), (*myds)->sess, user);
@@ -813,7 +815,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				}
 
 				ret = EXECUTION_STATE::PENDING;
-			} else {
+			}
+			else {
 				/* process as SASLResponse */
 				//length = mbuf_avail_for_read(&pkt->data);
 				//if (!mbuf_get_bytes(&pkt->data, length, &data))
@@ -847,14 +850,14 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 		}
 		break;
-	default:
+		default:
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth method\n", (*myds), (*myds)->sess, user);
 			break;
+		}
+	} else {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. User not found in the database.\n", (*myds), (*myds)->sess, user);
+		generate_error_packet(false, "User not found", NULL, true);
 	}
-	
-	if (ret == EXECUTION_STATE::FAILED)
-		goto __exit_process_pkt_handshake_response;
-	
 	// set the default session charset
 	//(*myds)->sess->default_charset = charset;
 	
@@ -862,9 +865,6 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		ret = true;
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, user);
 	}*/
-
-
-
 
 	assert(sess);
 	assert(sess->client_myds);
@@ -1055,7 +1055,6 @@ bool PgSQL_Protocol::scram_handle_client_final(ScramState* scram_state, PgUser* 
 	const char* client_final_nonce = NULL;
 	char* proof = NULL;
 	char* server_final_message;
-	int res;
 
 	scram_reset_error();
 
@@ -1102,9 +1101,84 @@ bool PgSQL_Protocol::scram_handle_client_final(ScramState* scram_state, PgUser* 
 	free(server_final_message);
 	free(proof);
 	free(ibuf);
-	return res;
+	return true;
 failed:
 	free(proof);
 	free(ibuf);
 	return false;
+}
+
+char* extract_tag_from_query(const char* query) {
+
+	constexpr size_t crete_table_len = sizeof("CREATE TABLE AS") - 1;
+
+	int qtlen = strlen(query);
+	if ((qtlen > crete_table_len) && strncasecmp(query, "CREATE TABLE AS", crete_table_len) == 0) {
+		return strdup("SELECT");
+	}
+	else {
+		const char* fs = strchr(query, ' ');
+
+		if (fs != NULL) {
+			qtlen = (fs - query) + 1;
+		}
+		char buf[qtlen];
+		memcpy(buf, query, qtlen - 1);
+		buf[qtlen - 1] = 0;
+		{
+			char* s = buf;
+			while (*s) {
+				*s = toupper((unsigned char)*s);
+				s++;
+			}
+		}
+
+		return strdup(buf);
+	}
+}
+
+
+bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query) {
+
+	PG_pkt pgpkt{};
+
+	if (send == true) {
+		pgpkt.set_multi_pkt_mode(true);
+	}
+
+	char* tag = extract_tag_from_query(query);
+	assert(tag);
+
+	char tmpbuf[128];
+	if (strcmp(tag, "INSERT") == 0) {
+		sprintf(tmpbuf, "%s 0 %d", tag, rows);
+		pgpkt.write_CommandComplete(tmpbuf);
+	}
+	else if (strcmp(tag, "UPDATE") == 0 ||
+		strcmp(tag, "DELETE") == 0 ||
+		strcmp(tag, "MERGE") == 0 ||
+		strcmp(tag, "MOVE") == 0 ||
+		strcmp(tag, "FETCH") == 0 ||
+		strcmp(tag, "COPY") == 0 ||
+		strcmp(tag, "SELECT") == 0 ||
+		strcmp(tag, "COPY") == 0 ) {
+		sprintf(tmpbuf, "%s %d", tag, rows);
+		pgpkt.write_CommandComplete(tmpbuf);
+	}
+	else {
+		pgpkt.write_CommandComplete(tag);
+	}
+	
+	if (ready == true) {
+		pgpkt.write_ReadyForQuery();
+	}
+
+	if (send == true) {
+		pgpkt.set_multi_pkt_mode(false);
+		auto buff = pgpkt.detach();
+		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
+	}
+
+	free(tag);
+	return true;
 }

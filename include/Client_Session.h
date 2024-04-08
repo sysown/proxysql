@@ -42,12 +42,15 @@ public:
 		return *this;
 	}
 
-	T* operator->()  {
+	T* operator->() {
 		return ptr;
 	}
 	bool operator==(T* _ptr) { return (ptr == _ptr); }
 	T& operator*() const noexcept { return *ptr; }
 	explicit operator bool() { return ptr != nullptr; }
+	operator T* () {
+		return ptr;
+	}
 
 private:
 	T* ptr;
@@ -60,6 +63,11 @@ using Client_Session = TypeSelector<T*>;
 template <class T>
 class Client_Session : public TypeSelector<T> {
 public:
+	//Client_Session(const Client_Session<T>&) = default;
+	//Client_Session(Client_Session<T>&&) = default;
+	//Client_Session& operator=(const Client_Session<T>&) = default;
+	//Client_Session& operator=(Client_Session<T>&&) = default;
+	//~Client_Session() = default;
 	using TypeSelector<T>::TypeSelector;
 };
 #define TO_CLIENT_SESSION(sess) Client_Session<decltype(sess)>(sess)
@@ -104,7 +112,7 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_SQLITE,
 	PROXYSQL_SESSION_CLICKHOUSE,
 	PROXYSQL_SESSION_MYSQL_EMU,
-	PROXYSQL_SESSION_POSTGRESQL,
+	PROXYSQL_SESSION_PGSQL,
 	PROXYSQL_SESSION_NONE
 };
 

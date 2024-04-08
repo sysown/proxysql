@@ -6,15 +6,15 @@
 
 #define PROXYSQL_AUTH_PTHREAD_MUTEX
 
-#ifndef ACCOUNT_DETAILS_T
-#define ACCOUNT_DETAILS_T
+#ifndef PGSQL_ACCOUNT_DETAILS_T
+#define PGSQL_ACCOUNT_DETAILS_T
 
 typedef struct _scram_keys {
 	uint8_t scram_ClientKey[32];
 	uint8_t scram_ServerKey[32];
 };
 
-typedef struct _account_details_t {
+typedef struct _pgsql_account_details_t {
 	char* username;
 	char* password;
 	char* default_schema;
@@ -22,11 +22,11 @@ typedef struct _account_details_t {
 	char* comment;
 	void* sha1_pass;
 	// TODO POSGRESQL: add client and server scram keys
-	_scram_keys* scram_keys;
-	bool use_ssl;
+	//_scram_keys* scram_keys;
 	int default_hostgroup;
 	int max_connections;
 	int num_connections_used;
+	bool use_ssl;
 	bool schema_locked;
 	bool transaction_persistent;
 	bool fast_forward;
@@ -34,10 +34,10 @@ typedef struct _account_details_t {
 	bool __backend;	// this is used only during the dump
 	bool __active;
 
-} account_details_t;
+} pgsql_account_details_t;
 
-typedef std::map<uint64_t, account_details_t *> umap_auth;
-#endif // ACCOUNT_DETAILS_T
+typedef std::map<uint64_t, pgsql_account_details_t*> umap_pgauth;
+#endif // PGSQL_ACCOUNT_DETAILS_T
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -57,7 +57,7 @@ typedef struct _creds_group_t {
 #else
 	rwlock_t lock;
 #endif
-	umap_auth bt_map;
+	umap_pgauth bt_map;
 	PtrArray *cred_array;
 } creds_group_t;
 #endif // CREDS_GROUPS_T
@@ -82,7 +82,7 @@ class PgSQL_Authentication {
 	void print_version();
 	bool exists(char *username);
 	char * lookup(char *username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes);
-	int dump_all_users(account_details_t ***, bool _complete=true);
+	int dump_all_users(pgsql_account_details_t***, bool _complete=true);
 	int increase_frontend_user_connections(char *username, int *mc=NULL);
 	void decrease_frontend_user_connections(char *username);
 	void set_all_inactive(enum cred_username_type usertype);

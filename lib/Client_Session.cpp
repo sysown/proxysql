@@ -51,6 +51,8 @@ std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 		return "PROXYSQL_SESSION_CLICKHOUSE";
 	} else if (session_type == PROXYSQL_SESSION_MYSQL_EMU) {
 		return "PROXYSQL_SESSION_MYSQL_EMU";
+	} else if (session_type == PROXYSQL_SESSION_PGSQL) {
+		return "PROXYSQL_SESSION_PGSQL";
 	} else {
 		return "PROXYSQL_SESSION_NONE";
 	}

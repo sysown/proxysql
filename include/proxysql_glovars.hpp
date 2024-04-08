@@ -1,7 +1,7 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
 
-#define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port')"
+#define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port','admin-pgsql_ifaces')"
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
 
 #include <memory>
@@ -159,6 +159,11 @@ class ProxySQL_GlobalVariables {
 		ProxySQL_Checksum_Value ldap_variables;
 		ProxySQL_Checksum_Value proxysql_servers;
 		ProxySQL_Checksum_Value mysql_servers_v2;
+		ProxySQL_Checksum_Value pgsql_query_rules;
+		ProxySQL_Checksum_Value pgsql_servers;
+		ProxySQL_Checksum_Value pgsql_users;
+		ProxySQL_Checksum_Value pgsql_variables;
+		ProxySQL_Checksum_Value pgsql_servers_v2;
 		uint64_t global_checksum;
 		unsigned long long updates_cnt;
 		unsigned long long dumped_at;

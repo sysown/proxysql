@@ -916,7 +916,7 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 		/*
 				if (!SSL_is_init_finished(ssl)) {
 					proxy_info("SSL_is_init_finished completed: NO!\n");
-					if (fd>0 && sess->session_type == PROXYSQL_SESSION_MYSQL) {
+					if (fd>0 && sess->session_type == PROXYSQL_SESSION_PGSQL) {
 						set_pollout();
 						return 0;
 					}
@@ -971,7 +971,7 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 		}
 	}
 	if (call_write_to_net) {
-		if (sess->session_type == PROXYSQL_SESSION_MYSQL) {
+		if (sess->session_type == PROXYSQL_SESSION_PGSQL) {
 			if (poll_fds_idx > -1) { // NOTE: attempt to force writes
 				if (net_failure == false)
 					rc += write_to_net();
@@ -981,8 +981,8 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 			rc += write_to_net();
 		}
 	}
-	if (fd > 0 && sess->session_type == PROXYSQL_SESSION_MYSQL) {
-		// PROXYSQL_SESSION_MYSQL is a requirement, because it uses threads pool
+	if (fd > 0 && sess->session_type == PROXYSQL_SESSION_PGSQL) {
+		// PROXYSQL_SESSION_PGSQL is a requirement, because it uses threads pool
 		// the other session types do not
 		set_pollout();
 	}
@@ -1307,7 +1307,7 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		detach_connection();
 		unplug_backend();
 #ifdef STRESSTEST_POOL
-		PgSQL_HGM->push_MyConn_to_pool(mc);  // #644
+		PgHGM->push_MyConn_to_pool(mc);  // #644
 #else
 		sess->thread->push_MyConn_local(mc);
 #endif
@@ -1331,7 +1331,7 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	detach_connection();
 	unplug_backend();
 	mc->send_quit = sq;
-	PgSQL_HGM->destroy_MyConn_from_pool(mc);
+	PgHGM->destroy_MyConn_from_pool(mc);
 }
 
 bool PgSQL_Data_Stream::data_in_rbio() {

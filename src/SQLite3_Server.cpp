@@ -357,7 +357,7 @@ vector<aurora_hg_info_t> get_hgs_info(SQLite3DB* db) {
 
 #endif
 
-void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
+void SQLite3_Server_session_handler(Client_Session<MySQL_Session*> sess, void *_pa, PtrSize_t *pkt) {
 
 	char *error=NULL;
 	int cols;

@@ -92,7 +92,7 @@ mythr_st_vars_t PgSQL_Thread_status_variables_counter_array[]{
 	{ st_var_backend_offline_during_query,p_th_counter::backend_offline_during_query,     (char*)"backend_offline_during_query" },
 	{ st_var_aws_aurora_replicas_skipped_during_query , p_th_counter::aws_aurora_replicas_skipped_during_query,  (char*)"get_aws_aurora_replicas_skipped_during_query" },
 	{ st_var_automatic_detected_sqli,     p_th_counter::automatic_detected_sql_injection,  (char*)"automatic_detected_sql_injection" },
-	{ st_var_whitelisted_sqli_fingerprint,p_th_counter::whitelisted_sqli_fingerprint,     (char*)"whitelisted_sqli_fingerprint" },
+	{ st_var_mysql_whitelisted_sqli_fingerprint,p_th_counter::mysql_whitelisted_sqli_fingerprint,     (char*)"mysql_whitelisted_sqli_fingerprint" },
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char*)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char*)"generated_error_packets" },
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char*)"client_host_error_killed_connections" },*/
@@ -709,8 +709,8 @@ th_metrics_map = std::make_tuple(
 		metric_tags {}
 	),
 	std::make_tuple(
-		p_th_counter::whitelisted_sqli_fingerprint,
-		"proxysql_whitelisted_sqli_fingerprint_total",
+		p_th_counter::mysql_whitelisted_sqli_fingerprint,
+		"proxysql_mysql_whitelisted_sqli_fingerprint_total",
 		"Detected a whitelisted 'sql injection' fingerprint.",
 		metric_tags {}
 	),
@@ -894,8 +894,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	// Zero initialize all variables
 	memset(&variables, 0, sizeof(variables));
 
-	variables.authentication_method = 3;
-	variables.server_version = strdup((char*)"16.1 (Debian 16.1-1.pgdg120+1)"); 
+	variables.authentication_method = (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256; //SCRAM Authentication method
+	variables.server_version = strdup((char*)"16.1"); 
 
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
@@ -1000,7 +1000,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.default_schema = strdup((char*)"information_schema");
 	variables.handle_unknown_charset = 1;
 	variables.interfaces = strdup((char*)"");
-	variables.server_version = strdup((char*)"8.0.11"); // changed in 2.6.0 , was 5.5.30
 	variables.eventslog_filename = strdup((char*)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize = 100 * 1024 * 1024;
 	variables.eventslog_default_log = 0;
@@ -1697,12 +1696,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	if (!strcasecmp(name, "server_version")) {
 		if (vallen) {
 			free(variables.server_version);
-			if (strcmp(value, (const char*)"5.1.30") == 0) { // per issue #632 , the default 5.1.30 is replaced with 5.5.30
-				variables.server_version = strdup((char*)"5.5.30");
-			}
-			else {
-				variables.server_version = strdup(value);
-			}
+			variables.server_version = strdup(value);
 			return true;
 		}
 		else {
@@ -2348,7 +2342,7 @@ void PgSQL_Threads_Handler::start_listeners() {
 	_tmp = GloPTH->get_variable((char*)"interfaces");
 	if (strlen(_tmp) == 0) {
 		//GloPTH->set_variable((char *)"interfaces", (char *)"0.0.0.0:6033;/tmp/proxysql.sock"); // set default
-		GloPTH->set_variable((char*)"interfaces", (char*)"0.0.0.0:6033"); // changed. See isseu #1104
+		GloPTH->set_variable((char*)"interfaces", (char*)"0.0.0.0:6035"); // changed. See isseu #1104
 	}
 	free(_tmp);
 	tokenizer_t tok;
@@ -2719,7 +2713,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 		mysql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
 	}
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema = NULL; }
-	if (mysql_thread___server_version) { free(pgsql_thread___server_version); pgsql_thread___server_version = NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables = NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg = NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect = NULL; }
@@ -2727,6 +2720,8 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment = NULL; }
 	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation = NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
+	
+	if (pgsql_thread___server_version) { free(pgsql_thread___server_version); pgsql_thread___server_version = NULL; }
 
 	for (int i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_thread___default_variables[i]) {
@@ -2937,7 +2932,7 @@ void PgSQL_Thread::unregister_session(int idx) {
 // this function was inline in PgSQL_Thread::run()
 void PgSQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 	int i;
-	num_idles = PgSQL_HGM->get_multiple_idle_connections(-1, curtime - mysql_thread___ping_interval_server_msec * 1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
+	num_idles = PgHGM->get_multiple_idle_connections(-1, curtime - mysql_thread___ping_interval_server_msec * 1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 	for (i = 0; i < num_idles; i++) {
 		PgSQL_Data_Stream* myds;
 		PgSQL_Connection* mc = my_idle_conns[i];
@@ -3228,9 +3223,9 @@ void PgSQL_Thread::run() {
 			last_maintenance_time = curtime;
 			maintenance_loop = true;
 			servers_table_version_previous = servers_table_version_current;
-			servers_table_version_current = PgSQL_HGM->get_servers_table_version();
-			// during a maintenance loop (every 1 second) we read has_gtid_port from PgSQL_HGM
-			retrieve_gtids_required = PgSQL_HGM->has_gtid_port;
+			servers_table_version_current = PgHGM->get_servers_table_version();
+			// during a maintenance loop (every 1 second) we read has_gtid_port from PgHGM
+			retrieve_gtids_required = PgHGM->has_gtid_port;
 		}
 		else {
 			maintenance_loop = false;
@@ -4068,6 +4063,7 @@ void PgSQL_Thread::refresh_variables() {
 
 	if (pgsql_thread___server_version) free(pgsql_thread___server_version);
 	pgsql_thread___server_version = GloPTH->get_variable_string((char*)"server_version");
+
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
 	mysql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
 	mysql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
@@ -4253,8 +4249,8 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 		// create a new client connection
 		mypolls.fds[n].revents = 0;
 		PgSQL_Session* sess = create_new_session_and_client_data_stream(c);
-		__sync_add_and_fetch(&PgSQL_HGM->status.client_connections_created, 1);
-		if (__sync_add_and_fetch(&PgSQL_HGM->status.client_connections, 1) > mysql_thread___max_connections) {
+		__sync_add_and_fetch(&PgHGM->status.client_connections_created, 1);
+		if (__sync_add_and_fetch(&PgHGM->status.client_connections, 1) > mysql_thread___max_connections) {
 			sess->max_connections_reached = true;
 		}
 		sess->client_myds->client_addrlen = addrlen;
@@ -4288,7 +4284,11 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 			sess->client_myds->proxy_addr.addr = strdup(ifi->address);
 			sess->client_myds->proxy_addr.port = ifi->port;
 		}
-		sess->client_myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL, &sess->thread_session_id, true);
+		//sess->client_myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL, &sess->thread_session_id, true);
+
+		sess->client_myds->DSS = STATE_SERVER_HANDSHAKE;
+		sess->status = CONNECTING_CLIENT;
+
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET, 1, "Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
@@ -4297,7 +4297,7 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 		// is done to prevent situations in which a client sends a packet *before* receiving
 		// this 'initial handshake', leading to invalid state in dataflow, since it will be
 		// data in both ends of the datastream. For more details see #3342.
-		sess->writeout();
+		//sess->writeout();
 	}
 	else {
 		free(addr);
@@ -4333,47 +4333,47 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Connections created
 		pta[0] = (char*)"Client_Connections_aborted";
-		sprintf(buf, "%lu", PgSQL_HGM->status.client_connections_aborted);
+		sprintf(buf, "%lu", PgHGM->status.client_connections_aborted);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Connections
 		pta[0] = (char*)"Client_Connections_connected";
-		sprintf(buf, "%d", PgSQL_HGM->status.client_connections);
+		sprintf(buf, "%d", PgHGM->status.client_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Connections created
 		pta[0] = (char*)"Client_Connections_created";
-		sprintf(buf, "%lu", PgSQL_HGM->status.client_connections_created);
+		sprintf(buf, "%lu", PgHGM->status.client_connections_created);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_aborted";
-		sprintf(buf, "%lu", PgSQL_HGM->status.server_connections_aborted);
+		sprintf(buf, "%lu", PgHGM->status.server_connections_aborted);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_connected";
-		sprintf(buf, "%lu", PgSQL_HGM->status.server_connections_connected);
+		sprintf(buf, "%lu", PgHGM->status.server_connections_connected);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_created";
-		sprintf(buf, "%lu", PgSQL_HGM->status.server_connections_created);
+		sprintf(buf, "%lu", PgHGM->status.server_connections_created);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections delayed
 		pta[0] = (char*)"Server_Connections_delayed";
-		sprintf(buf, "%lu", PgSQL_HGM->status.server_connections_delayed);
+		sprintf(buf, "%lu", PgHGM->status.server_connections_delayed);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4405,73 +4405,73 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Queries autocommit
 		pta[0] = (char*)"Com_autocommit";
-		sprintf(buf, "%llu", PgSQL_HGM->status.autocommit_cnt);
+		sprintf(buf, "%llu", PgHGM->status.autocommit_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered autocommit
 		pta[0] = (char*)"Com_autocommit_filtered";
-		sprintf(buf, "%llu", PgSQL_HGM->status.autocommit_cnt_filtered);
+		sprintf(buf, "%llu", PgHGM->status.autocommit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries commit
 		pta[0] = (char*)"Com_commit";
-		sprintf(buf, "%llu", PgSQL_HGM->status.commit_cnt);
+		sprintf(buf, "%llu", PgHGM->status.commit_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered commit
 		pta[0] = (char*)"Com_commit_filtered";
-		sprintf(buf, "%llu", PgSQL_HGM->status.commit_cnt_filtered);
+		sprintf(buf, "%llu", PgHGM->status.commit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries rollback
 		pta[0] = (char*)"Com_rollback";
-		sprintf(buf, "%llu", PgSQL_HGM->status.rollback_cnt);
+		sprintf(buf, "%llu", PgHGM->status.rollback_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered rollback
 		pta[0] = (char*)"Com_rollback_filtered";
-		sprintf(buf, "%llu", PgSQL_HGM->status.rollback_cnt_filtered);
+		sprintf(buf, "%llu", PgHGM->status.rollback_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend CHANGE_USER
 		pta[0] = (char*)"Com_backend_change_user";
-		sprintf(buf, "%llu", PgSQL_HGM->status.backend_change_user);
+		sprintf(buf, "%llu", PgHGM->status.backend_change_user);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend INIT DB
 		pta[0] = (char*)"Com_backend_init_db";
-		sprintf(buf, "%llu", PgSQL_HGM->status.backend_init_db);
+		sprintf(buf, "%llu", PgHGM->status.backend_init_db);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend SET NAMES
 		pta[0] = (char*)"Com_backend_set_names";
-		sprintf(buf, "%llu", PgSQL_HGM->status.backend_set_names);
+		sprintf(buf, "%llu", PgHGM->status.backend_set_names);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries frontend INIT DB
 		pta[0] = (char*)"Com_frontend_init_db";
-		sprintf(buf, "%llu", PgSQL_HGM->status.frontend_init_db);
+		sprintf(buf, "%llu", PgHGM->status.frontend_init_db);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries frontend SET NAMES
 		pta[0] = (char*)"Com_frontend_set_names";
-		sprintf(buf, "%llu", PgSQL_HGM->status.frontend_set_names);
+		sprintf(buf, "%llu", PgHGM->status.frontend_set_names);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries frontend USE DB
 		pta[0] = (char*)"Com_frontend_use_db";
-		sprintf(buf, "%llu", PgSQL_HGM->status.frontend_use_db);
+		sprintf(buf, "%llu", PgHGM->status.frontend_use_db);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4522,13 +4522,13 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Queries that are SELECT for update or equivalent
 		pta[0] = (char*)"Selects_for_update__autocommit0";
-		sprintf(buf, "%llu", PgSQL_HGM->status.select_for_update_or_equivalent);
+		sprintf(buf, "%llu", PgHGM->status.select_for_update_or_equivalent);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Servers_table_version
 		pta[0] = (char*)"Servers_table_version";
-		sprintf(buf, "%u", PgSQL_HGM->get_servers_table_version());
+		sprintf(buf, "%u", PgHGM->get_servers_table_version());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4540,19 +4540,19 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Access_Denied_Wrong_Password
 		pta[0] = (char*)"Access_Denied_Wrong_Password";
-		sprintf(buf, "%llu", PgSQL_HGM->status.access_denied_wrong_password);
+		sprintf(buf, "%llu", PgHGM->status.access_denied_wrong_password);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_Connections
 		pta[0] = (char*)"Access_Denied_Max_Connections";
-		sprintf(buf, "%llu", PgSQL_HGM->status.access_denied_max_connections);
+		sprintf(buf, "%llu", PgHGM->status.access_denied_max_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_User_Connections
 		pta[0] = (char*)"Access_Denied_Max_User_Connections";
-		sprintf(buf, "%llu", PgSQL_HGM->status.access_denied_max_user_connections);
+		sprintf(buf, "%llu", PgHGM->status.access_denied_max_user_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -5379,7 +5379,7 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 								if (it != parents.end()) {
 									// we didn't exclude this server (yet?)
 									bool gtid_found = false;
-									gtid_found = PgSQL_HGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
+									gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
 									if (gtid_found) { // this server has the correct GTID
 										c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
 										return c;
@@ -5420,7 +5420,7 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 			return; // all went well
 		}
 	}
-	PgSQL_HGM->push_MyConn_to_pool(c);
+	PgHGM->push_MyConn_to_pool(c);
 }
 
 void PgSQL_Thread::return_local_connections() {
@@ -5432,7 +5432,7 @@ void PgSQL_Thread::return_local_connections() {
 		unsigned int i=0;
 	*/
 	//	ca[i]=NULL;
-	PgSQL_HGM->push_MyConn_to_pool_array((PgSQL_Connection**)cached_connections->pdata, cached_connections->len);
+	PgHGM->push_MyConn_to_pool_array((PgSQL_Connection**)cached_connections->pdata, cached_connections->len);
 	//	free(ca);
 	while (cached_connections->len) {
 		cached_connections->remove_index_fast(0);

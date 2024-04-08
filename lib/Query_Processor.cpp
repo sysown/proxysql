@@ -478,13 +478,21 @@ Query_Processor::Query_Processor() {
 
 	// firewall
 	pthread_mutex_init(&global_mysql_firewall_whitelist_mutex, NULL);
+	pthread_mutex_init(&global_pgsql_firewall_whitelist_mutex, NULL);
 	global_mysql_firewall_whitelist_users_runtime = NULL;
 	global_mysql_firewall_whitelist_rules_runtime = NULL;
 	global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
+	global_pgsql_firewall_whitelist_users_runtime = NULL;
+	global_pgsql_firewall_whitelist_rules_runtime = NULL;
+	global_pgsql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
 	global_mysql_firewall_whitelist_users_map___size = 0;
 	global_mysql_firewall_whitelist_users_result___size = 0;
 	global_mysql_firewall_whitelist_rules_map___size = 0;
 	global_mysql_firewall_whitelist_rules_result___size = 0;
+	global_pgsql_firewall_whitelist_users_map___size = 0;
+	global_pgsql_firewall_whitelist_users_result___size = 0;
+	global_pgsql_firewall_whitelist_rules_map___size = 0;
+	global_pgsql_firewall_whitelist_rules_result___size = 0;
 
 	pthread_rwlock_init(&rwlock, NULL);
 	pthread_rwlock_init(&digest_rwlock, NULL);
@@ -611,6 +619,18 @@ Query_Processor::~Query_Processor() {
 	if (global_mysql_firewall_whitelist_sqli_fingerprints_runtime) {
 		delete global_mysql_firewall_whitelist_sqli_fingerprints_runtime;
 		global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
+	}
+	if (global_pgsql_firewall_whitelist_users_runtime) {
+		delete global_pgsql_firewall_whitelist_users_runtime;
+		global_pgsql_firewall_whitelist_users_runtime = NULL;
+	}
+	if (global_pgsql_firewall_whitelist_rules_runtime) {
+		delete global_pgsql_firewall_whitelist_rules_runtime;
+		global_pgsql_firewall_whitelist_rules_runtime = NULL;
+	}
+	if (global_pgsql_firewall_whitelist_sqli_fingerprints_runtime) {
+		delete global_pgsql_firewall_whitelist_sqli_fingerprints_runtime;
+		global_pgsql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
 	}
 };
 
@@ -2170,10 +2190,10 @@ __exit_process_mysql_query:
 					pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 					// FIXME
 					// for now this function search for either username@ip or username@''
-					int wus_status = find_firewall_whitelist_user(username, client_address);
+					int wus_status = find_mysql_firewall_whitelist_user(username, client_address);
 					if (wus_status == WUS_NOT_FOUND) {
 						client_address = (char *)"";
-						wus_status = find_firewall_whitelist_user(username, client_address);
+						wus_status = find_mysql_firewall_whitelist_user(username, client_address);
 					}
 					if (wus_status == WUS_NOT_FOUND) {
 						wus_status = WUS_PROTECTING; // by default, everything should be blocked!
@@ -2183,7 +2203,7 @@ __exit_process_mysql_query:
 						bool allowed_query = false;
 						char * schemaname = sess->client_myds->myconn->userinfo->schemaname;
 						if (qp && qp->digest) {
-							allowed_query = find_firewall_whitelist_rule(username, client_address, schemaname, flagIN, qp->digest);
+							allowed_query = find_mysql_firewall_whitelist_rule(username, client_address, schemaname, flagIN, qp->digest);
 						}
 						if (allowed_query == false) {
 							if (wus_status == WUS_PROTECTING) {
@@ -2226,7 +2246,7 @@ __exit_process_mysql_query:
 	return ret;
 };
 
-int Query_Processor::find_firewall_whitelist_user(char *username, char *client) {
+int Query_Processor::find_mysql_firewall_whitelist_user(char *username, char *client) {
 	int ret = WUS_NOT_FOUND;
 	string s = username;
 	s += rand_del;
@@ -2241,7 +2261,7 @@ int Query_Processor::find_firewall_whitelist_user(char *username, char *client) 
 	return ret;
 }
 
-bool Query_Processor::find_firewall_whitelist_rule(char *username, char *client_address, char *schemaname, int flagIN, uint64_t digest) {
+bool Query_Processor::find_mysql_firewall_whitelist_rule(char *username, char *client_address, char *schemaname, int flagIN, uint64_t digest) {
 	bool ret = false;
 	string s = username;
 	s += rand_del;
@@ -2989,7 +3009,7 @@ void Query_Processor::query_parser_free(SQP_par_t *qp) {
 	}
 };
 
-bool Query_Processor::whitelisted_sqli_fingerprint(char *_s) {
+bool Query_Processor::mysql_whitelisted_sqli_fingerprint(char *_s) {
 	bool ret = false;
 	string s = _s;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
@@ -3358,6 +3378,300 @@ SQLite3_result * Query_Processor::get_mysql_firewall_whitelist_users() {
 		ret = new SQLite3_result(global_mysql_firewall_whitelist_users_runtime);
 	}
 	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+void Query_Processor::load_pgsql_firewall_users(SQLite3_result* resultset) {
+	unsigned long long tot_size = 0;
+	std::unordered_map<std::string, int>::iterator it;
+	for (it = global_pgsql_firewall_whitelist_users.begin(); it != global_pgsql_firewall_whitelist_users.end(); ++it) {
+		it->second = WUS_NOT_FOUND;
+	}
+	// perform the inserts/updates
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int active = atoi(r->fields[0]);
+		if (active == 0) {
+			continue;
+		}
+		char* username = r->fields[1];
+		char* client_address = r->fields[2];
+		char* mode = r->fields[3];
+		string s = username;
+		s += rand_del;
+		s += client_address;
+		std::unordered_map<std::string, int>::iterator it2;
+		it2 = global_pgsql_firewall_whitelist_users.find(s);
+		if (it2 != global_pgsql_firewall_whitelist_users.end()) {
+			if (strcmp(mode, (char*)"DETECTING") == 0) {
+				it2->second = WUS_DETECTING;
+			}
+			else if (strcmp(mode, (char*)"PROTECTING") == 0) {
+				it2->second = WUS_PROTECTING;
+			}
+			else if (strcmp(mode, (char*)"OFF") == 0) {
+				it2->second = WUS_OFF;
+			}
+		}
+		else {
+			//whitelist_user_setting *wus = (whitelist_user_setting *)malloc(sizeof(whitelist_user_setting));
+			int m = WUS_OFF;
+			if (strcmp(mode, (char*)"DETECTING") == 0) {
+				m = WUS_DETECTING;
+			}
+			else if (strcmp(mode, (char*)"PROTECTING") == 0) {
+				m = WUS_PROTECTING;
+			}
+			//wus->myptrarray = new PtrArray();
+			global_pgsql_firewall_whitelist_users[s] = m;
+		}
+	}
+	// cleanup
+	it = global_pgsql_firewall_whitelist_users.begin();
+	while (it != global_pgsql_firewall_whitelist_users.end()) {
+		int m = it->second;
+		if (m != WUS_NOT_FOUND) {
+			tot_size += it->first.capacity();
+			tot_size += sizeof(m);
+			it++;
+		}
+		else {
+			// remove the entry
+			it = global_pgsql_firewall_whitelist_users.erase(it);
+		}
+	}
+	global_pgsql_firewall_whitelist_users_map___size = tot_size;
+}
+
+void Query_Processor::load_pgsql_firewall(SQLite3_result* u, SQLite3_result* r, SQLite3_result* sf) {
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	if (global_pgsql_firewall_whitelist_rules_runtime) {
+		delete global_pgsql_firewall_whitelist_rules_runtime;
+		global_pgsql_firewall_whitelist_rules_runtime = NULL;
+	}
+	global_pgsql_firewall_whitelist_rules_runtime = r;
+	global_pgsql_firewall_whitelist_rules_result___size = r->get_size();
+	if (global_pgsql_firewall_whitelist_users_runtime) {
+		delete global_pgsql_firewall_whitelist_users_runtime;
+		global_pgsql_firewall_whitelist_users_runtime = NULL;
+	}
+	global_pgsql_firewall_whitelist_users_runtime = u;
+	if (global_pgsql_firewall_whitelist_sqli_fingerprints_runtime) {
+		delete global_pgsql_firewall_whitelist_sqli_fingerprints_runtime;
+		global_pgsql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
+	}
+	global_pgsql_firewall_whitelist_sqli_fingerprints_runtime = sf;
+	load_pgsql_firewall_users(global_pgsql_firewall_whitelist_users_runtime);
+	load_pgsql_firewall_rules(global_pgsql_firewall_whitelist_rules_runtime);
+	load_pgsql_firewall_sqli_fingerprints(global_pgsql_firewall_whitelist_sqli_fingerprints_runtime);
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+	return;
+}
+
+void Query_Processor::load_pgsql_firewall_rules(SQLite3_result* resultset) {
+	unsigned long long tot_size = 0;
+	global_pgsql_firewall_whitelist_rules_map___size = 0;
+	//size_t rand_del_size = strlen(rand_del);
+	int num_rows = resultset->rows_count;
+	std::unordered_map<std::string, void*>::iterator it;
+	if (num_rows == 0) {
+		// we must clean it completely
+		for (it = global_pgsql_firewall_whitelist_rules.begin(); it != global_pgsql_firewall_whitelist_rules.end(); ++it) {
+			PtrArray* myptrarray = (PtrArray*)it->second;
+			delete myptrarray;
+		}
+		global_pgsql_firewall_whitelist_rules.clear();
+		return;
+	}
+	// remove all the pointer array
+	for (it = global_pgsql_firewall_whitelist_rules.begin(); it != global_pgsql_firewall_whitelist_rules.end(); ++it) {
+		PtrArray* myptrarray = (PtrArray*)it->second;
+		myptrarray->reset();
+	}
+	// perform the inserts
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int active = atoi(r->fields[0]);
+		if (active == 0) {
+			continue;
+		}
+		char* username = r->fields[1];
+		char* client_address = r->fields[2];
+		char* schemaname = r->fields[3];
+		char* flagIN = r->fields[4];
+		char* digest_hex = r->fields[5];
+		unsigned long long digest_num = strtoull(digest_hex, NULL, 0);
+		string s = username;
+		s += rand_del;
+		s += client_address;
+		s += rand_del;
+		s += schemaname;
+		s += rand_del;
+		s += flagIN;
+		std::unordered_map<std::string, void*>::iterator it2;
+		it2 = global_pgsql_firewall_whitelist_rules.find(s);
+		if (it2 != global_pgsql_firewall_whitelist_rules.end()) {
+			PtrArray* myptrarray = (PtrArray*)it2->second;
+			myptrarray->add((void*)digest_num);
+		}
+		else {
+			PtrArray* myptrarray = new PtrArray();
+			myptrarray->add((void*)digest_num);
+			global_pgsql_firewall_whitelist_rules[s] = (void*)myptrarray;
+		}
+	}
+	// perform ordering and cleanup
+	it = global_pgsql_firewall_whitelist_rules.begin();
+	while (it != global_pgsql_firewall_whitelist_rules.end()) {
+		PtrArray* myptrarray = (PtrArray*)it->second;
+		if (myptrarray->len) {
+			// there are digests, sort them
+			qsort(myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+			tot_size += it->first.capacity();
+			unsigned long long a = (myptrarray->size * sizeof(void*));
+			tot_size += a;
+			it++;
+		}
+		else {
+			// remove the entry
+			delete myptrarray;
+			it = global_pgsql_firewall_whitelist_rules.erase(it);
+		}
+	}
+	unsigned long long nsize = global_pgsql_firewall_whitelist_rules.size();
+	unsigned long long oh = sizeof(std::string) + sizeof(PtrArray) + sizeof(PtrArray*);
+	nsize *= oh;
+	tot_size += nsize;
+	global_pgsql_firewall_whitelist_rules_map___size = tot_size;
+}
+
+void Query_Processor::load_pgsql_firewall_sqli_fingerprints(SQLite3_result* resultset) {
+	global_pgsql_firewall_whitelist_sqli_fingerprints.erase(global_pgsql_firewall_whitelist_sqli_fingerprints.begin(), global_pgsql_firewall_whitelist_sqli_fingerprints.end());
+	// perform the inserts
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int active = atoi(r->fields[0]);
+		if (active == 0) {
+			continue;
+		}
+		char* fingerprint = r->fields[1];
+		string s = fingerprint;
+		global_pgsql_firewall_whitelist_sqli_fingerprints.push_back(s);
+	}
+}
+
+void Query_Processor::get_current_pgsql_firewall_whitelist(SQLite3_result** u, SQLite3_result** r, SQLite3_result** sf) {
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	if (global_pgsql_firewall_whitelist_rules_runtime) {
+		*r = new SQLite3_result(global_pgsql_firewall_whitelist_rules_runtime);
+	}
+	if (global_pgsql_firewall_whitelist_users_runtime) {
+		*u = new SQLite3_result(global_pgsql_firewall_whitelist_users_runtime);
+	}
+	if (global_pgsql_firewall_whitelist_sqli_fingerprints_runtime) {
+		*sf = new SQLite3_result(global_pgsql_firewall_whitelist_sqli_fingerprints_runtime);
+	}
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+}
+
+unsigned long long Query_Processor::get_pgsql_firewall_memory_users_table() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	ret = global_pgsql_firewall_whitelist_users_map___size;
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+	return ret;
+}
+
+unsigned long long Query_Processor::get_pgsql_firewall_memory_users_config() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	ret = global_pgsql_firewall_whitelist_users_result___size;
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+	return ret;
+}
+
+unsigned long long Query_Processor::get_pgsql_firewall_memory_rules_table() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	ret = global_pgsql_firewall_whitelist_rules_map___size;
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+	return ret;
+}
+
+unsigned long long Query_Processor::get_pgsql_firewall_memory_rules_config() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	ret = global_pgsql_firewall_whitelist_rules_result___size;
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+	return ret;
+}
+
+SQLite3_result* Query_Processor::get_pgsql_firewall_whitelist_rules() {
+	SQLite3_result* ret = NULL;
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	if (global_pgsql_firewall_whitelist_rules_runtime) {
+		ret = new SQLite3_result(global_pgsql_firewall_whitelist_rules_runtime);
+	}
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+	return ret;
+}
+
+SQLite3_result* Query_Processor::get_pgsql_firewall_whitelist_users() {
+	SQLite3_result* ret = NULL;
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	if (global_pgsql_firewall_whitelist_users_runtime) {
+		ret = new SQLite3_result(global_pgsql_firewall_whitelist_users_runtime);
+	}
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
+	return ret;
+}
+
+int Query_Processor::find_pgsql_firewall_whitelist_user(char* username, char* client) {
+	int ret = WUS_NOT_FOUND;
+	string s = username;
+	s += rand_del;
+	s += client;
+	std::unordered_map<std::string, int>::iterator it2;
+	it2 = global_pgsql_firewall_whitelist_users.find(s);
+	if (it2 != global_pgsql_firewall_whitelist_users.end()) {
+		ret = it2->second;
+		return ret;
+	}
+	s = username;
+	return ret;
+}
+
+bool Query_Processor::find_pgsql_firewall_whitelist_rule(char* username, char* client_address, char* schemaname, int flagIN, uint64_t digest) {
+	bool ret = false;
+	string s = username;
+	s += rand_del;
+	s += client_address;
+	s += rand_del;
+	s += schemaname;
+	s += rand_del;
+	s += to_string(flagIN);
+	std::unordered_map<std::string, void*>::iterator it;
+	it = global_pgsql_firewall_whitelist_rules.find(s);
+	if (it != global_pgsql_firewall_whitelist_rules.end()) {
+		PtrArray* myptrarray = (PtrArray*)it->second;
+		void* found = bsearch(&digest, myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+		if (found) {
+			ret = true;
+		}
+	}
+	return ret;
+}
+
+bool Query_Processor::pgsql_whitelisted_sqli_fingerprint(char* _s) {
+	bool ret = false;
+	string s = _s;
+	pthread_mutex_lock(&global_pgsql_firewall_whitelist_mutex);
+	for (std::vector<std::string>::iterator it = global_pgsql_firewall_whitelist_sqli_fingerprints.begin(); ret == false && it != global_pgsql_firewall_whitelist_sqli_fingerprints.end(); ++it) {
+		if (s == *it) {
+			ret = true;
+		}
+	}
+	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
 	return ret;
 }
 

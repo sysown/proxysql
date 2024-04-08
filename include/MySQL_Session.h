@@ -341,7 +341,7 @@ class MySQL_Session
 	void set_status(enum session_status e);
 	int handler();
 
-	void (*handler_function) (MySQL_Session *arg, void *, PtrSize_t *pkt);
+	void (*handler_function) (Client_Session<MySQL_Session*> arg, void *, PtrSize_t *pkt);
 	MySQL_Backend * find_backend(int);
 	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
@@ -393,7 +393,7 @@ class MySQL_Session
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
-	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
+	friend void SQLite3_Server_session_handler(Client_Session<MySQL_Session*>, void *_pa, PtrSize_t *pkt);
 };
 
 #define KILL_QUERY       1

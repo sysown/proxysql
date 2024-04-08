@@ -47,6 +47,7 @@
 /* new style V3 packet header len - type:1b, len:4b */
 #define NEW_HEADER_LEN  5
 
+class ProxySQL_Admin;
 struct PgUser;
 struct ScramState;
 
@@ -172,7 +173,7 @@ public:
 	void welcome_client();
 
 	void generate_error_packet(bool send_ready, const char* msg, const char* code, bool fatal);
-
+	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query);
 private:
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
 	void load_conn_parameters(pgsql_hdr* pkt, bool startup);
@@ -182,6 +183,9 @@ private:
 	PgSQL_Data_Stream** myds;
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Session* sess;
+	
+	template<class T>
+	friend void admin_session_handler(Client_Session<T> sess, void* _pa, PtrSize_t* pkt);
 };
 
 void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type);

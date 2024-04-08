@@ -175,7 +175,6 @@ class MySQL_Data_Stream
 
 	MySQL_Data_Stream();
 	virtual ~MySQL_Data_Stream();
-	bool is_postgres = false;
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments

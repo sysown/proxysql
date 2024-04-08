@@ -19,9 +19,9 @@ typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
 class ProxySQL_Restapi;
 
-enum PROTOCOL_TYPE {
-	PROTOCOL_TYPE_MYSQL,
-	PROTOCOL_TYPE_POSTGRESQL
+enum SERVER_TYPE {
+	SERVER_TYPE_MYSQL,
+	SERVER_TYPE_PGSQL
 };
 
 class Scheduler_Row {
@@ -189,6 +189,55 @@ struct peer_mysql_servers_v2_t {
 	peer_mysql_servers_v2_t(SQLite3_result*, const mysql_servers_v2_checksum_t&);
 };
 
+
+struct incoming_pgsql_servers_t {
+	SQLite3_result* incoming_pgsql_servers_v2 = NULL;
+	SQLite3_result* runtime_pgsql_servers = NULL;
+	SQLite3_result* incoming_replication_hostgroups = NULL;
+	SQLite3_result* incoming_group_replication_hostgroups = NULL;
+	SQLite3_result* incoming_galera_hostgroups = NULL;
+	SQLite3_result* incoming_aurora_hostgroups = NULL;
+	SQLite3_result* incoming_hostgroup_attributes = NULL;
+
+	incoming_pgsql_servers_t();
+	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+};
+
+// Separate structs for runtime pgsql server and pgsql server v2 to avoid human error
+struct runtime_pgsql_servers_checksum_t {
+	std::string value;
+	time_t epoch;
+
+	runtime_pgsql_servers_checksum_t();
+	runtime_pgsql_servers_checksum_t(const std::string& value, time_t epoch);
+};
+
+struct pgsql_servers_v2_checksum_t {
+	std::string value;
+	time_t epoch;
+
+	pgsql_servers_v2_checksum_t();
+	pgsql_servers_v2_checksum_t(const std::string& value, time_t epoch);
+};
+//
+
+struct peer_runtime_pgsql_servers_t {
+	SQLite3_result* resultset{ nullptr };
+	runtime_pgsql_servers_checksum_t checksum{};
+
+	peer_runtime_pgsql_servers_t();
+	peer_runtime_pgsql_servers_t(SQLite3_result*, const runtime_pgsql_servers_checksum_t&);
+};
+
+struct peer_pgsql_servers_v2_t {
+	SQLite3_result* resultset{ nullptr };
+	pgsql_servers_v2_checksum_t checksum{};
+
+	peer_pgsql_servers_v2_t();
+	peer_pgsql_servers_v2_t(SQLite3_result*, const pgsql_servers_v2_checksum_t&);
+};
+
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -217,6 +266,12 @@ class ProxySQL_Admin {
 	rwlock_t mysql_servers_rwlock;
 #endif
 
+#ifdef PA_PTHREAD_MUTEX
+	pthread_mutex_t pgsql_servers_lock;
+#else
+	rwlock_t pgsql_servers_rwlock;
+#endif
+
 	prometheus::SerialExposer serial_exposer;
 
 	std::mutex proxysql_servers_mutex;
@@ -229,6 +284,7 @@ class ProxySQL_Admin {
 		char *stats_credentials;
 		int refresh_interval;
 		char *mysql_ifaces;
+		char *pgsql_ifaces;
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
@@ -335,11 +391,11 @@ class ProxySQL_Admin {
 	 *  param 'resultset' is supplied, it will match it's value, otherwise it will be a locally created
 	 *  'SQLite3_result*' that should be freed.
 	 */
-	template<enum PROTOCOL_TYPE>
+	template<enum SERVER_TYPE>
 	SQLite3_result* __add_active_users(enum cred_username_type usertype, char *user=NULL, SQLite3_result* resultset = nullptr);
-	template<enum PROTOCOL_TYPE>
+	template<enum SERVER_TYPE>
 	void __delete_inactive_users(enum cred_username_type usertype);
-	template<enum PROTOCOL_TYPE>
+	template<enum SERVER_TYPE>
 	void add_admin_users();
 	void __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void __add_active_users_ldap();
@@ -358,14 +414,14 @@ class ProxySQL_Admin {
 	void disk_upgrade_rest_api_routes();
 
 #ifdef DEBUG
-	template<enum PROTOCOL_TYPE>
+	template<enum SERVER_TYPE>
 	void add_credentials(char *type, char *credentials, int hostgroup_id);
-	template<enum PROTOCOL_TYPE>
+	template<enum SERVER_TYPE>
 	void delete_credentials(char *type, char *credentials);
 #else
-	template<enum PROTOCOL_TYPE>
+	template<enum SERVER_TYPE>
 	void add_credentials(char *credentials, int hostgroup_id);
-	template<enum PROTOCOL_TYPE>
+	template<enum SERVER_TYPE>
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 
@@ -379,7 +435,7 @@ class ProxySQL_Admin {
 #endif /* PROXYSQLCLICKHOUSE */
 
 	// PostgreSQL
-	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	//void __add_active_pgsql_users(char* user = NULL);
 	//void __delete_inactive_pgsql_users();
 	void flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
@@ -412,7 +468,7 @@ class ProxySQL_Admin {
 		bool checksum_admin_variables;
 		bool checksum_ldap_variables;
 	} checksum_variables;
-	template<enum PROTOCOL_TYPE pt>
+	template<enum SERVER_TYPE pt>
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
 		__add_active_users<pt>(usertype, user);
 	}
@@ -474,8 +530,11 @@ class ProxySQL_Admin {
 	void save_mysql_servers_runtime_to_database(bool _runtime);
 	void admin_shutdown();
 	bool is_command(std::string);
-	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
-	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg, uint32_t code=1045);
+
+	template <class T>
+	void send_ok_msg_to_client(Client_Session<T>& sess, const char *msg, int rows, const char* query);
+	template <class T>
+	void send_error_msg_to_client(Client_Session<T>& sess, const char *msg, uint16_t mysql_err_code=1045);
 #ifdef DEBUG
 	// these two following functions used to just call and return one function each
 	// this approach was replaced when we introduced debug filters
@@ -525,11 +584,13 @@ class ProxySQL_Admin {
 	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0);
 	void save_mysql_query_rules_from_runtime(bool);
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
-	char * load_mysql_firewall_to_runtime();
+	char* load_mysql_firewall_to_runtime();
 	void save_mysql_firewall_from_runtime(bool);
 	void save_mysql_firewall_whitelist_users_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result *);
+
+	char* load_pgsql_firewall_to_runtime();
 
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
@@ -585,6 +646,9 @@ class ProxySQL_Admin {
 	void mysql_servers_wrlock();
 	void mysql_servers_wrunlock();
 
+	void pgsql_servers_wrlock();
+	void pgsql_servers_wrunlock();
+
 	char *get_variable(char *name);
 
 	// wrapper to call a private function
@@ -623,18 +687,40 @@ class ProxySQL_Admin {
 #endif /* PROXYSQLCLICKHOUSE */
 
 	//PostgreSQL
+	void init_pgsql_servers();
+	void init_pgsql_query_rules();
+	void init_pgsql_firewall();
+
 	void init_pgsql_variables();
 	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
-	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
 	void stats___pgsql_processlist();
 
 	void save_pgsql_users_runtime_to_database(bool _runtime);
+
+	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
+		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
+
+	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
+		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
+
+	void save_pgsql_servers_runtime_to_database(bool _runtime);
+	void save_pgsql_firewall_from_runtime(bool);
+	void save_pgsql_query_rules_from_runtime(bool);
+	void save_pgsql_query_rules_fast_routing_from_runtime(bool);
+	void save_pgsql_firewall_whitelist_users_from_runtime(bool, SQLite3_result*);
+	void save_pgsql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result*);
+	void save_pgsql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result*);
+
+	void save_pgsql_ldap_mapping_runtime_to_database(bool);
 	//
 
 	void vacuum_stats(bool);
+
+	template <enum SERVER_TYPE pt>
 	int FlushDigestTableToDisk(SQLite3DB *);
 
 	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
@@ -670,7 +756,7 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 #endif
-	friend void admin_mysql_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
-	friend void admin_pgsql_session_handler(PgSQL_Session* sess, void* _pa, PtrSize_t* pkt);
+	template<class T>
+	friend void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

@@ -96,6 +96,7 @@ void ProxySQL_Statistics::init() {
 	insert_into_tables_defs(tables_defs_statsdb_disk,"myhgm_connections_day", STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY);
 
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_digest", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_query_digest", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST);
 
 	disk_upgrade_mysql_connections();
 
@@ -110,6 +111,10 @@ void ProxySQL_Statistics::init() {
 //	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_last_seen ON history_mysql_query_digest (last_seen)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_dump_time ON history_mysql_query_digest (dump_time)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_status_variable_id_timestamp ON history_mysql_status_variables(variable_id,timestamp)");
+
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_digest_first_seen ON history_pgsql_query_digest (first_seen)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_digest_dump_time ON history_pgsql_query_digest (dump_time)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_status_variable_id_timestamp ON history_pgsql_status_variables(variable_id,timestamp)");
 }
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {

@@ -102,6 +102,10 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	checksums_values.mysql_variables.in_shutdown = true;
 	checksums_values.ldap_variables.in_shutdown = true;
 	checksums_values.proxysql_servers.in_shutdown = true;
+	checksums_values.pgsql_query_rules.in_shutdown = true;
+	checksums_values.pgsql_servers.in_shutdown = true;
+	checksums_values.pgsql_users.in_shutdown = true;
+	checksums_values.pgsql_variables.in_shutdown = true;
 	if (global.gr_bootstrap_uri) {
 		free(global.gr_bootstrap_uri);
 		global.gr_bootstrap_uri = nullptr;
@@ -563,6 +567,31 @@ uint64_t ProxySQL_GlobalVariables::generate_global_checksum() {
 	if (v->version) {
 		myhash.Update(v->checksum,strlen(v->checksum));
 		myhash.Update(&v->version,sizeof(v->version));
+	}
+	v = &checksums_values.pgsql_query_rules;
+	if (v->version) {
+		myhash.Update(v->checksum, strlen(v->checksum));
+		myhash.Update(&v->version, sizeof(v->version));
+	}
+	v = &checksums_values.pgsql_servers;
+	if (v->version) {
+		myhash.Update(v->checksum, strlen(v->checksum));
+		myhash.Update(&v->version, sizeof(v->version));
+	}
+	v = &checksums_values.pgsql_servers_v2;
+	if (v->version) {
+		myhash.Update(v->checksum, strlen(v->checksum));
+		myhash.Update(&v->version, sizeof(v->version));
+	}
+	v = &checksums_values.pgsql_users;
+	if (v->version) {
+		myhash.Update(v->checksum, strlen(v->checksum));
+		myhash.Update(&v->version, sizeof(v->version));
+	}
+	v = &checksums_values.pgsql_variables;
+	if (v->version) {
+		myhash.Update(v->checksum, strlen(v->checksum));
+		myhash.Update(&v->version, sizeof(v->version));
 	}
 	v = &checksums_values.proxysql_servers;
 	if (v->version) {

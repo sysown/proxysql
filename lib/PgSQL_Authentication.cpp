@@ -49,7 +49,7 @@ void PgSQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 #endif
 	unsigned int i;
 	for (i=0; i<cg.cred_array->len; i++) {
-		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
+		pgsql_account_details_t *ado=(pgsql_account_details_t *)cg.cred_array->index(i);
 		ado->__active=false;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
@@ -69,7 +69,7 @@ void PgSQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 	unsigned int i;
 __loop_remove_inactives:
 	for (i=0; i<cg.cred_array->len; i++) {
-		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
+		pgsql_account_details_t *ado=(pgsql_account_details_t *)cg.cred_array->index(i);
 		if (ado->__active==false) {
 			del(ado->username,usertype,false);
 			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
@@ -96,10 +96,10 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	// few changes will follow, due to issue #802
-	account_details_t *ad=NULL;
+	pgsql_account_details_t *ad=NULL;
 	bool new_ad=false;
 	if (lookup != cg.bt_map.end()) {
 		ad=lookup->second;
@@ -174,7 +174,7 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 			}
 		}
   } else {
-		ad=(account_details_t *)malloc(sizeof(account_details_t));
+		ad=(pgsql_account_details_t *)malloc(sizeof(pgsql_account_details_t ));
 		ad->username=strdup(username);
 		ad->default_schema=strdup(default_schema);
 		ad->comment=strdup(comment);
@@ -228,8 +228,8 @@ unsigned int PgSQL_Authentication::memory_usage() {
 #endif
 	unsigned i=0;
 	for (i=0; i<creds_frontends.cred_array->len; i++) {
-		account_details_t *ado=(account_details_t *)creds_frontends.cred_array->index(i);
-		ret += sizeof(account_details_t);
+		pgsql_account_details_t *ado=(pgsql_account_details_t *)creds_frontends.cred_array->index(i);
+		ret += sizeof(pgsql_account_details_t );
 		if (ado->username) ret += strlen(ado->username) + 1;
 		if (ado->password) ret += strlen(ado->password) + 1;
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
@@ -241,8 +241,8 @@ unsigned int PgSQL_Authentication::memory_usage() {
 	ret += sizeof(PtrArray);
 	ret += (creds_frontends.cred_array->size * sizeof(void *));
 	for (i=0; i<creds_backends.cred_array->len; i++) {
-		account_details_t *ado=(account_details_t *)creds_backends.cred_array->index(i);
-		ret += sizeof(account_details_t);
+		pgsql_account_details_t *ado=(pgsql_account_details_t *)creds_backends.cred_array->index(i);
+		ret += sizeof(pgsql_account_details_t);
 		if (ado->username) ret += strlen(ado->username) + 1;
 		if (ado->password) ret += strlen(ado->password) + 1;
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
@@ -263,7 +263,7 @@ unsigned int PgSQL_Authentication::memory_usage() {
 	return ret;
 }
 
-int PgSQL_Authentication::dump_all_users(account_details_t ***ads, bool _complete) {
+int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _complete) {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&creds_frontends.lock);
 	pthread_rwlock_rdlock(&creds_backends.lock);
@@ -274,16 +274,16 @@ int PgSQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 	int total_size;
 	int idx_=0;
 	unsigned i=0;
-	account_details_t **_ads;
+	pgsql_account_details_t** _ads;
 	total_size=creds_frontends.cred_array->len;
 	if (_complete) {
 		total_size+=creds_backends.cred_array->len;
 	}
 	if (!total_size) goto __exit_dump_all_users;
-	_ads=(account_details_t **)malloc(sizeof(account_details_t *)*total_size);
+	_ads=(pgsql_account_details_t**)malloc(sizeof(pgsql_account_details_t*)*total_size);
 	for (i=0; i<creds_frontends.cred_array->len; i++) {
-		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
-		account_details_t *ado=(account_details_t *)creds_frontends.cred_array->index(i);
+		pgsql_account_details_t *ad=(pgsql_account_details_t*)malloc(sizeof(pgsql_account_details_t));
+		pgsql_account_details_t *ado=(pgsql_account_details_t*)creds_frontends.cred_array->index(i);
 		ad->username=strdup(ado->username);
 		ad->max_connections=ado->max_connections;
 		ad->default_hostgroup=ado->default_hostgroup;
@@ -312,8 +312,8 @@ int PgSQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 	}
 	if (_complete==true) {
 	for (i=0; i<creds_backends.cred_array->len; i++) {
-		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
-		account_details_t *ado=(account_details_t *)creds_backends.cred_array->index(i);
+		pgsql_account_details_t *ad=(pgsql_account_details_t *)malloc(sizeof(pgsql_account_details_t));
+		pgsql_account_details_t *ado=(pgsql_account_details_t *)creds_backends.cred_array->index(i);
 		ad->num_connections_used=0;
 		ad->username=strdup(ado->username);
 		ad->password=strdup(ado->password);
@@ -360,10 +360,10 @@ int PgSQL_Authentication::increase_frontend_user_connections(char *username, int
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator it;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
-		account_details_t *ad=it->second;
+		pgsql_account_details_t *ad=it->second;
 		if (ad->max_connections > ad->num_connections_used) {
 			ret=ad->max_connections-ad->num_connections_used;
 			ad->num_connections_used++;
@@ -393,10 +393,10 @@ void PgSQL_Authentication::decrease_frontend_user_connections(char *username) {
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator it;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
-		account_details_t *ad=it->second;
+		pgsql_account_details_t *ad=it->second;
 		if (ad->num_connections_used > 0) {
 			ad->num_connections_used--;
 		}
@@ -425,10 +425,10 @@ bool PgSQL_Authentication::del(char * username, enum cred_username_type usertype
 #else
 		spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
-		account_details_t *ad=lookup->second;
+		pgsql_account_details_t *ad=lookup->second;
 		cg.cred_array->remove_fast(ad);
 		cg.bt_map.erase(lookup);
 		free(ad->username);
@@ -465,10 +465,10 @@ bool PgSQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
-		account_details_t *ad=lookup->second;
+		pgsql_account_details_t *ad=lookup->second;
 		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
 		if (sha_pass) {
 			ad->sha1_pass=malloc(SHA_DIGEST_LENGTH);
@@ -494,7 +494,7 @@ bool PgSQL_Authentication::exists(char * username) {
 
 	creds_group_t &cg = creds_frontends ;
 	pthread_rwlock_rdlock(&cg.lock);
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		ret = true;
@@ -518,10 +518,10 @@ char * PgSQL_Authentication::lookup(char * username, enum cred_username_type use
 #else
 	spin_rdlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
-		account_details_t *ad=lookup->second;
+		pgsql_account_details_t *ad=lookup->second;
 		ret=l_strdup(ad->password);
 		if (use_ssl) *use_ssl=ad->use_ssl;
 		if (default_hostgroup) *default_hostgroup=ad->default_hostgroup;
@@ -555,12 +555,12 @@ bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, pgsql_account_details_t *>::iterator lookup;
 
 	while (cg.bt_map.size()) {
 		lookup = cg.bt_map.begin();
 		if ( lookup != cg.bt_map.end() ) {
-			account_details_t *ad=lookup->second;
+			pgsql_account_details_t *ad=lookup->second;
 			cg.bt_map.erase(lookup);
 			free(ad->username);
 			free(ad->password);
@@ -568,7 +568,7 @@ bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {
 			free(ad->default_schema);
 			free(ad->comment);
 			free(ad->attributes);
-			free(ad->scram_keys);
+			//free(ad->scram_keys);
 			free(ad);
 		}
 	}
@@ -591,7 +591,7 @@ bool PgSQL_Authentication::reset() {
 
 using std::map;
 
-static uint64_t compute_accounts_hash(const umap_auth& accs_map) {
+static uint64_t compute_accounts_hash(const umap_pgauth& accs_map) {
 	if (accs_map.size() == 0) {
 		return 0;
 	}
@@ -599,8 +599,8 @@ static uint64_t compute_accounts_hash(const umap_auth& accs_map) {
 	SpookyHash acc_map_hash;
 	acc_map_hash.Init(13,4);
 
-	for (const pair<const uint64_t, account_details_t*>& map_entry : accs_map) {
-		const account_details_t* ad = map_entry.second;
+	for (const pair<const uint64_t, pgsql_account_details_t*>& map_entry : accs_map) {
+		const pgsql_account_details_t* ad = map_entry.second;
 
 		if (ad->default_hostgroup >= 0) {
 			foundany = true;
@@ -645,14 +645,14 @@ uint64_t PgSQL_Authentication::get_runtime_checksum() {
 	return hashB+hashF;
 }
 
-static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
-	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
+static pair<umap_pgauth, umap_pgauth> extract_accounts_details(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
+	if (resultset == nullptr) { return { umap_pgauth {}, umap_pgauth {} }; }
 
 	// The following order is assumed for the resulset received fields:
 	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, 
 	// 	  transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment.
-	umap_auth f_accs_map {};
-	umap_auth b_accs_map {};
+	umap_pgauth f_accs_map {};
+	umap_pgauth b_accs_map {};
 
 	// Create the SQLite3 resultsets for 'frontend' and 'backend' users
 	uint32_t num_fields = mysql_num_fields(resultset);
@@ -664,8 +664,8 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 		_all_users->add_column_definition(SQLITE_TEXT, fields[i].name);
 	}
 
-	const auto create_account_details = [] (MYSQL_ROW row) -> account_details_t* {
-		account_details_t* acc_details { new account_details_t {} };
+	const auto create_account_details = [] (MYSQL_ROW row) -> pgsql_account_details_t* {
+		pgsql_account_details_t* acc_details { new pgsql_account_details_t {} };
 
 		acc_details->username = row[0];
 		acc_details->password = row[1] ? row[1] : const_cast<char*>("");
@@ -696,12 +696,12 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 
 		// is backend
 		if (strcmp(row[8], "1") == 0) {
-			account_details_t* acc_details = create_account_details(row);
+			pgsql_account_details_t* acc_details = create_account_details(row);
 			b_accs_map.insert({u_hash, acc_details});
 		}
 		// is frontend
 		if (strcmp(row[9], "1") == 0) {
-			account_details_t* acc_details = create_account_details(row);
+			pgsql_account_details_t* acc_details = create_account_details(row);
 			f_accs_map.insert({u_hash, acc_details});
 		}
 
@@ -723,15 +723,15 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 uint64_t PgSQL_Authentication::get_runtime_checksum(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
 	if (resultset == NULL) { return 0; }
 
-	pair<umap_auth, umap_auth> acc_maps { extract_accounts_details(resultset, all_users) };
+	pair<umap_pgauth, umap_pgauth> acc_maps { extract_accounts_details(resultset, all_users) };
 
 	uint64_t b_acc_hash = compute_accounts_hash(acc_maps.first);
 	uint64_t f_acc_hash = compute_accounts_hash(acc_maps.second);
 
-	for (pair<const uint64_t, account_details_t*>& map_entry : acc_maps.first) {
+	for (pair<const uint64_t, pgsql_account_details_t*>& map_entry : acc_maps.first) {
 		delete map_entry.second;
 	}
-	for (pair<const uint64_t, account_details_t*>& map_entry : acc_maps.second) {
+	for (pair<const uint64_t, pgsql_account_details_t*>& map_entry : acc_maps.second) {
 		delete map_entry.second;
 	}
 

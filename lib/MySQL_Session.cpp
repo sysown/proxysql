@@ -3585,16 +3585,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		case PROXYSQL_SESSION_ADMIN:
 		case PROXYSQL_SESSION_STATS:
 		// this is processed by the admin module
-			handler_function(this, (void *)GloAdmin, &pkt);
+			handler_function(TO_CLIENT_SESSION(this), (void *)GloAdmin, &pkt);
 			l_free(pkt.size,pkt.ptr);
 			break;
 		case PROXYSQL_SESSION_SQLITE:
-			handler_function(this, (void *)GloSQLite3Server, &pkt);
+			handler_function(TO_CLIENT_SESSION(this), (void *)GloSQLite3Server, &pkt);
 			l_free(pkt.size,pkt.ptr);
 			break;
 #ifdef PROXYSQLCLICKHOUSE
 		case PROXYSQL_SESSION_CLICKHOUSE:
-			handler_function(this, (void *)GloClickHouseServer, &pkt);
+			handler_function(TO_CLIENT_SESSION(this), (void *)GloClickHouseServer, &pkt);
 			l_free(pkt.size,pkt.ptr);
 			break;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -3624,9 +3624,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			issqli = libinjection_is_sqli(&state);
 			if (issqli) {
 				bool allow_sqli = false;
-				allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
+				allow_sqli = GloQPro->mysql_whitelisted_sqli_fingerprint(state.fingerprint);
 				if (allow_sqli) {
-					thread->status_variables.stvar[st_var_whitelisted_sqli_fingerprint]++;
+					thread->status_variables.stvar[st_var_mysql_whitelisted_sqli_fingerprint]++;
 				} else {
 					thread->status_variables.stvar[st_var_automatic_detected_sqli]++;
 					char * username = client_myds->myconn->userinfo->username;

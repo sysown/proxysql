@@ -309,10 +309,25 @@ class Query_Processor {
 	SQLite3_result * global_mysql_firewall_whitelist_users_runtime;
 	SQLite3_result * global_mysql_firewall_whitelist_rules_runtime;
 	SQLite3_result * global_mysql_firewall_whitelist_sqli_fingerprints_runtime;
+
+	pthread_mutex_t global_pgsql_firewall_whitelist_mutex;
+	std::unordered_map<std::string, int> global_pgsql_firewall_whitelist_users;
+	std::unordered_map<std::string, void*> global_pgsql_firewall_whitelist_rules;
+	std::vector<std::string> global_pgsql_firewall_whitelist_sqli_fingerprints;
+	SQLite3_result* global_pgsql_firewall_whitelist_users_runtime;
+	SQLite3_result* global_pgsql_firewall_whitelist_rules_runtime;
+	SQLite3_result* global_pgsql_firewall_whitelist_sqli_fingerprints_runtime;
+
 	unsigned long long global_mysql_firewall_whitelist_users_map___size;
 	unsigned long long global_mysql_firewall_whitelist_users_result___size;
 	unsigned long long global_mysql_firewall_whitelist_rules_map___size;
 	unsigned long long global_mysql_firewall_whitelist_rules_result___size;
+
+	unsigned long long global_pgsql_firewall_whitelist_users_map___size;
+	unsigned long long global_pgsql_firewall_whitelist_users_result___size;
+	unsigned long long global_pgsql_firewall_whitelist_rules_map___size;
+	unsigned long long global_pgsql_firewall_whitelist_rules_result___size;
+
 	volatile unsigned int version;
 	unsigned long long rules_mem_used;
 	unsigned long long new_req_conns_count;
@@ -415,17 +430,37 @@ class Query_Processor {
 	void load_mysql_firewall_users(SQLite3_result *);
 	void load_mysql_firewall_rules(SQLite3_result *);
 	void load_mysql_firewall_sqli_fingerprints(SQLite3_result *);
+
+	void load_pgsql_firewall(SQLite3_result* u, SQLite3_result* r, SQLite3_result* sf);
+	void load_pgsql_firewall_users(SQLite3_result*);
+	void load_pgsql_firewall_rules(SQLite3_result*);
+	void load_pgsql_firewall_sqli_fingerprints(SQLite3_result*);
+
 	unsigned long long get_mysql_firewall_memory_users_table();
 	unsigned long long get_mysql_firewall_memory_users_config();
 	unsigned long long get_mysql_firewall_memory_rules_table();
 	unsigned long long get_mysql_firewall_memory_rules_config();
 	void get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r, SQLite3_result **sf);
-	int find_firewall_whitelist_user(char *username, char *client);
-	bool find_firewall_whitelist_rule(char *username, char *client_address, char *schemaname, int flagIN, uint64_t digest);
+	int find_mysql_firewall_whitelist_user(char *username, char *client);
+	bool find_mysql_firewall_whitelist_rule(char *username, char *client_address, char *schemaname, int flagIN, uint64_t digest);
+
+	unsigned long long get_pgsql_firewall_memory_users_table();
+	unsigned long long get_pgsql_firewall_memory_users_config();
+	unsigned long long get_pgsql_firewall_memory_rules_table();
+	unsigned long long get_pgsql_firewall_memory_rules_config();
+	void get_current_pgsql_firewall_whitelist(SQLite3_result** u, SQLite3_result** r, SQLite3_result** sf);
+	int find_pgsql_firewall_whitelist_user(char* username, char* client);
+	bool find_pgsql_firewall_whitelist_rule(char* username, char* client_address, char* schemaname, int flagIN, uint64_t digest);
+
 	SQLite3_result * get_mysql_firewall_whitelist_users();
 	SQLite3_result * get_mysql_firewall_whitelist_rules();
 	SQLite3_result * get_mysql_firewall_whitelist_sqli_fingerprints();
-	bool whitelisted_sqli_fingerprint(char *);
+	bool mysql_whitelisted_sqli_fingerprint(char *);
+
+	SQLite3_result* get_pgsql_firewall_whitelist_users();
+	SQLite3_result* get_pgsql_firewall_whitelist_rules();
+	bool pgsql_whitelisted_sqli_fingerprint(char*);
+
 	friend Web_Interface_plugin;
 };
 

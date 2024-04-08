@@ -173,7 +173,6 @@ public:
 
 	PgSQL_Data_Stream();
 	virtual ~PgSQL_Data_Stream();
-	bool is_postgres = true;
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, PgSQL_Session*, int); // initialize with arguments

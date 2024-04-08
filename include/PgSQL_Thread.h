@@ -104,7 +104,7 @@ enum PgSQL_Thread_status_variable {
 	st_var_hostgroup_locked_queries,
 	st_var_aws_aurora_replicas_skipped_during_query,
 	st_var_automatic_detected_sqli,
-	st_var_whitelisted_sqli_fingerprint,
+	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
 	st_var_END*/
 };
@@ -289,7 +289,7 @@ public:
 		mysql_unexpected_frontend_packets,
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
-		whitelisted_sqli_fingerprint,
+		mysql_whitelisted_sqli_fingerprint,
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,

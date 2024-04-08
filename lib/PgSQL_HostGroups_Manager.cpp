@@ -73,8 +73,8 @@ static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int re
 		ev_break(loop);
 	}
 	pthread_mutex_lock(&ev_loop_mutex);
-	PgSQL_HGM->gtid_missing_nodes = false;
-	PgSQL_HGM->generate_pgsql_gtid_executed_tables();
+	PgHGM->gtid_missing_nodes = false;
+	PgHGM->generate_pgsql_gtid_executed_tables();
 	pthread_mutex_unlock(&ev_loop_mutex);
 	return;
 }
@@ -86,10 +86,10 @@ static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int rev
 	if (glovars.shutdown) {
 		ev_break(loop);
 	}
-	if (PgSQL_HGM->gtid_missing_nodes) {
+	if (PgHGM->gtid_missing_nodes) {
 		pthread_mutex_lock(&ev_loop_mutex);
-		PgSQL_HGM->gtid_missing_nodes = false;
-		PgSQL_HGM->generate_pgsql_gtid_executed_tables();
+		PgHGM->gtid_missing_nodes = false;
+		PgHGM->generate_pgsql_gtid_executed_tables();
 		pthread_mutex_unlock(&ev_loop_mutex);
 	}
 	ev_timer_start(loop, timer);
@@ -131,16 +131,16 @@ static void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 			std::string s1 = sd->address;
 			s1.append(":");
 			s1.append(std::to_string(sd->pgsql_port));
-			PgSQL_HGM->gtid_missing_nodes = true;
+			PgHGM->gtid_missing_nodes = true;
 			proxy_warning("GTID: failed to connect to ProxySQL binlog reader on port %d for server %s:%d\n", sd->port, sd->address, sd->pgsql_port);
 			std::unordered_map <string, PgSQL_GTID_Server_Data *>::iterator it2;
-			it2 = PgSQL_HGM->gtid_map.find(s1);
-			if (it2 != PgSQL_HGM->gtid_map.end()) {
-				//PgSQL_HGM->gtid_map.erase(it2);
+			it2 = PgHGM->gtid_map.find(s1);
+			if (it2 != PgHGM->gtid_map.end()) {
+				//PgHGM->gtid_map.erase(it2);
 				it2->second = NULL;
 				delete sd;
 			}
-			ev_io_stop(PgSQL_HGM->gtid_ev_loop, w);
+			ev_io_stop(PgHGM->gtid_ev_loop, w);
 			free(w);
 		} else {
 			sd->dump();
@@ -159,9 +159,9 @@ static void connect_cb(EV_P_ ev_io *w, int revents) {
 			(optval != 0)) {
 			/* Connection failed; try the next address in the list. */
 			//int errnum = optval ? optval : errno;
-			ev_io_stop(PgSQL_HGM->gtid_ev_loop, w);
+			ev_io_stop(PgHGM->gtid_ev_loop, w);
 			close(w->fd);
-			PgSQL_HGM->gtid_missing_nodes = true;
+			PgHGM->gtid_missing_nodes = true;
 			PgSQL_GTID_Server_Data * custom_data = (PgSQL_GTID_Server_Data *)w->data;
 			PgSQL_GTID_Server_Data *sd = custom_data;
 			std::string s1 = sd->address;
@@ -169,16 +169,16 @@ static void connect_cb(EV_P_ ev_io *w, int revents) {
 			s1.append(std::to_string(sd->pgsql_port));
 			proxy_warning("GTID: failed to connect to ProxySQL binlog reader on port %d for server %s:%d\n", sd->port, sd->address, sd->pgsql_port);
 			std::unordered_map <string, PgSQL_GTID_Server_Data *>::iterator it2;
-			it2 = PgSQL_HGM->gtid_map.find(s1);
-			if (it2 != PgSQL_HGM->gtid_map.end()) {
-				//PgSQL_HGM->gtid_map.erase(it2);
+			it2 = PgHGM->gtid_map.find(s1);
+			if (it2 != PgHGM->gtid_map.end()) {
+				//PgHGM->gtid_map.erase(it2);
 				it2->second = NULL;
 				delete sd;
 			}
 			//delete custom_data;
 			free(c);
 		} else {
-			ev_io_stop(PgSQL_HGM->gtid_ev_loop, w);
+			ev_io_stop(PgHGM->gtid_ev_loop, w);
 			int fd=w->fd;
 			struct ev_io * new_w = (struct ev_io*) malloc(sizeof(struct ev_io));
 			new_w->data = w->data;
@@ -186,7 +186,7 @@ static void connect_cb(EV_P_ ev_io *w, int revents) {
 			custom_data->w = new_w;
 			free(w);
 			ev_io_init(new_w, reader_cb, fd, EV_READ);
-			ev_io_start(PgSQL_HGM->gtid_ev_loop, new_w);
+			ev_io_start(PgHGM->gtid_ev_loop, new_w);
 		}
 	}
 	pthread_mutex_unlock(&ev_loop_mutex);
@@ -528,21 +528,21 @@ static void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
 static void * GTID_syncer_run() {
 	//struct ev_loop * gtid_ev_loop;
 	//gtid_ev_loop = NULL;
-	PgSQL_HGM->gtid_ev_loop = ev_loop_new (EVBACKEND_POLL | EVFLAG_NOENV);
-	if (PgSQL_HGM->gtid_ev_loop == NULL) {
+	PgHGM->gtid_ev_loop = ev_loop_new (EVBACKEND_POLL | EVFLAG_NOENV);
+	if (PgHGM->gtid_ev_loop == NULL) {
 		proxy_error("could not initialise GTID sync loop\n");
 		exit(EXIT_FAILURE);
 	}
 	//ev_async_init(gtid_ev_async, gtid_async_cb);
 	//ev_async_start(gtid_ev_loop, gtid_ev_async);
-	PgSQL_HGM->gtid_ev_timer = (struct ev_timer *)malloc(sizeof(struct ev_timer));
-	ev_async_init(PgSQL_HGM->gtid_ev_async, gtid_async_cb);
-	ev_async_start(PgSQL_HGM->gtid_ev_loop, PgSQL_HGM->gtid_ev_async);
-	//ev_timer_init(PgSQL_HGM->gtid_ev_timer, gtid_timer_cb, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
-	ev_timer_init(PgSQL_HGM->gtid_ev_timer, gtid_timer_cb, 3, 0);
-	ev_timer_start(PgSQL_HGM->gtid_ev_loop, PgSQL_HGM->gtid_ev_timer);
+	PgHGM->gtid_ev_timer = (struct ev_timer *)malloc(sizeof(struct ev_timer));
+	ev_async_init(PgHGM->gtid_ev_async, gtid_async_cb);
+	ev_async_start(PgHGM->gtid_ev_loop, PgHGM->gtid_ev_async);
+	//ev_timer_init(PgHGM->gtid_ev_timer, gtid_timer_cb, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
+	ev_timer_init(PgHGM->gtid_ev_timer, gtid_timer_cb, 3, 0);
+	ev_timer_start(PgHGM->gtid_ev_loop, PgHGM->gtid_ev_timer);
 	//ev_ref(gtid_ev_loop);
-	ev_run(PgSQL_HGM->gtid_ev_loop, 0);
+	ev_run(PgHGM->gtid_ev_loop, 0);
 	//sleep(1000);
 	return NULL;
 }
@@ -552,15 +552,15 @@ static void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
 	while(1) {
 		PgSQL_Connection *myconn= NULL;
-		myconn = (PgSQL_Connection *)PgSQL_HGM->queue.remove();
+		myconn = (PgSQL_Connection *)PgHGM->queue.remove();
 		if (myconn==NULL) {
 			// intentionally exit immediately
 			delete conn_array;
 			return NULL;
 		}
 		conn_array->add(myconn);
-		while (PgSQL_HGM->queue.size()) {
-			myconn=(PgSQL_Connection *)PgSQL_HGM->queue.remove();
+		while (PgHGM->queue.size()) {
+			myconn=(PgSQL_Connection *)PgHGM->queue.remove();
 			if (myconn==NULL) {
 				delete conn_array;
 				return NULL;
@@ -574,7 +574,7 @@ static void * HGCU_thread_run() {
 		int i;
 		for (i=0;i<(int)l;i++) {
 			myconn->reset();
-			PgSQL_HGM->increase_reset_counter();
+			PgHGM->increase_reset_counter();
 			myconn=(PgSQL_Connection *)conn_array->index(i);
 			if (myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
 				PgSQL_Connection_userinfo *userinfo = myconn->userinfo;
@@ -605,10 +605,10 @@ static void * HGCU_thread_run() {
 			if (statuses[i]==0) {
 				myconn=(PgSQL_Connection *)conn_array->remove_index_fast(i);
 				if (!ret[i]) {
-					PgSQL_HGM->push_MyConn_to_pool(myconn);
+					PgHGM->push_MyConn_to_pool(myconn);
 				} else {
 					myconn->send_quit=false;
-					PgSQL_HGM->destroy_MyConn_from_pool(myconn);
+					PgHGM->destroy_MyConn_from_pool(myconn);
 				}
 				statuses[i]=statuses[conn_array->len];
 				ret[i]=ret[conn_array->len];
@@ -641,10 +641,10 @@ static void * HGCU_thread_run() {
 					myconn=(PgSQL_Connection *)conn_array->remove_index_fast(i);
 					if (!ret[i]) {
 						myconn->reset();
-						PgSQL_HGM->push_MyConn_to_pool(myconn);
+						PgHGM->push_MyConn_to_pool(myconn);
 					} else {
 						myconn->send_quit=false;
-						PgSQL_HGM->destroy_MyConn_from_pool(myconn);
+						PgHGM->destroy_MyConn_from_pool(myconn);
 					}
 					statuses[i]=statuses[conn_array->len];
 					ret[i]=ret[conn_array->len];
@@ -656,7 +656,7 @@ static void * HGCU_thread_run() {
 			// we reached here, and there are still connections
 			myconn=(PgSQL_Connection *)conn_array->remove_index_fast(0);
 			myconn->send_quit=false;
-			PgSQL_HGM->destroy_MyConn_from_pool(myconn);
+			PgHGM->destroy_MyConn_from_pool(myconn);
 		}
 		free(statuses);
 		free(errs);
@@ -778,7 +778,7 @@ void PgSQL_SrvC::connect_error(int err_num, bool get_mutex) {
 	// as a single connection failure won't make a significant difference
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Connect failed with code '%d'\n", err_num);
 	__sync_fetch_and_add(&connect_ERR,1);
-	__sync_fetch_and_add(&PgSQL_HGM->status.server_connections_aborted,1);
+	__sync_fetch_and_add(&PgHGM->status.server_connections_aborted,1);
 	if (err_num >= 1048 && err_num <= 1052)
 		return;
 	if (err_num >= 1054 && err_num <= 1075)
@@ -843,7 +843,7 @@ void PgSQL_SrvC::connect_error(int err_num, bool get_mutex) {
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
 			bool _shu=false;
 			if (get_mutex==true)
-				PgSQL_HGM->wrlock(); // to prevent race conditions, lock here. See #627
+				PgHGM->wrlock(); // to prevent race conditions, lock here. See #627
 			if (status==MYSQL_SERVER_STATUS_ONLINE) {
 				status=MYSQL_SERVER_STATUS_SHUNNED;
 				shunned_automatic=true;
@@ -852,7 +852,7 @@ void PgSQL_SrvC::connect_error(int err_num, bool get_mutex) {
 				_shu=false;
 			}
 			if (get_mutex==true)
-				PgSQL_HGM->wrunlock();
+				PgHGM->wrunlock();
 			if (_shu) {
 			proxy_error("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			}
@@ -1789,15 +1789,15 @@ static void update_glovars_checksum_with_peers(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-static void update_glovars_mysql_servers_checksum(
+static void update_glovars_pgsql_servers_checksum(
 	const string& new_checksum,
-	const runtime_mysql_servers_checksum_t& peer_checksum = {},
+	const runtime_pgsql_servers_checksum_t& peer_checksum = {},
 	bool update_version = false
 ) {
 	time_t new_epoch = time(NULL);
 
 	update_glovars_checksum_with_peers(
-		GloVars.checksums_values.mysql_servers,
+		GloVars.checksums_values.pgsql_servers,
 		new_checksum,
 		peer_checksum.value,
 		new_epoch,
@@ -1812,7 +1812,7 @@ static void update_glovars_mysql_servers_checksum(
 
 /**
  * @brief Updates the global 'pgsql_servers_v2' module checksum.
- * @details Unlike 'update_glovars_mysql_servers_checksum' this function doesn't generate a new
+ * @details Unlike 'update_glovars_pgsql_servers_checksum' this function doesn't generate a new
  *  'global_checksum'. It's caller responsibility to ensure that 'global_checksum' is updated. 
  * @param new_checksum The new computed checksum for 'pgsql_servers_v2'.
  * @param peer_checksum A checksum fetched from another ProxySQL cluster node, holds the checksum value
@@ -1820,15 +1820,15 @@ static void update_glovars_mysql_servers_checksum(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-static void update_glovars_mysql_servers_v2_checksum(
+static void update_glovars_pgsql_servers_v2_checksum(
 	const string& new_checksum,
-	const mysql_servers_v2_checksum_t& peer_checksum = {},
+	const pgsql_servers_v2_checksum_t& peer_checksum = {},
 	bool update_version = false
 ) {
 	time_t new_epoch = time(NULL);
 
 	update_glovars_checksum_with_peers(
-		GloVars.checksums_values.mysql_servers_v2,
+		GloVars.checksums_values.pgsql_servers_v2,
 		new_checksum,
 		peer_checksum.value,
 		new_epoch,
@@ -1893,8 +1893,8 @@ std::string PgSQL_HostGroups_Manager::gen_global_pgsql_servers_v2_checksum(uint6
 }
 
 bool PgSQL_HostGroups_Manager::commit(
-	const peer_runtime_mysql_servers_t& peer_runtime_pgsql_servers,
-	const peer_mysql_servers_v2_t& peer_pgsql_servers_v2,
+	const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
+	const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
 	bool only_commit_runtime_pgsql_servers,
 	bool update_version
 ) {
@@ -2169,9 +2169,9 @@ bool PgSQL_HostGroups_Manager::commit(
 
 		pthread_mutex_lock(&GloVars.checksum_mutex);
 		if (only_commit_runtime_pgsql_servers == false) {
-			update_glovars_mysql_servers_v2_checksum(global_checksum_v2, peer_pgsql_servers_v2.checksum, true);
+			update_glovars_pgsql_servers_v2_checksum(global_checksum_v2, peer_pgsql_servers_v2.checksum, true);
 		}
-		update_glovars_mysql_servers_checksum(new_checksum, peer_runtime_pgsql_servers.checksum, update_version);
+		update_glovars_pgsql_servers_checksum(new_checksum, peer_runtime_pgsql_servers.checksum, update_version);
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
 
@@ -2318,7 +2318,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_gtid_executed_tables() {
 						gtid_is = (PgSQL_GTID_Server_Data *)c->data;
 						gtid_map.emplace(s1,gtid_is);
 						//pthread_mutex_lock(&ev_loop_mutex);
-						ev_io_start(PgSQL_HGM->gtid_ev_loop,c);
+						ev_io_start(PgHGM->gtid_ev_loop,c);
 						//pthread_mutex_unlock(&ev_loop_mutex);
 					}
 				}
@@ -2338,7 +2338,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_gtid_executed_tables() {
 	for (std::vector<string>::iterator it3=to_remove.begin(); it3!=to_remove.end(); ++it3) {
 		it = gtid_map.find(*it3);
 		PgSQL_GTID_Server_Data * gtid_si = it->second;
-		ev_io_stop(PgSQL_HGM->gtid_ev_loop, gtid_si->w);
+		ev_io_stop(PgHGM->gtid_ev_loop, gtid_si->w);
 		close(gtid_si->w->fd);
 		free(gtid_si->w);
 		gtid_map.erase(*it3);
@@ -2938,7 +2938,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if (gtid_trxid) {
-							if (PgSQL_HGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+							if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								mysrvcCandidates[num_candidates]=mysrvc;
@@ -3001,12 +3001,12 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 								// If one day we implement a mutex per hostgroup (unlikely,
 								// but possible), this must be taken into consideration
 								if (mysql_thread___unshun_algorithm == 1) {
-									PgSQL_HGM->unshun_server_all_hostgroups(mysrvc->address, mysrvc->port, t, max_wait_sec, &mysrvc->myhgc->hid);
+									PgHGM->unshun_server_all_hostgroups(mysrvc->address, mysrvc->port, t, max_wait_sec, &mysrvc->myhgc->hid);
 								}
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 									if (gtid_trxid) {
-										if (PgSQL_HGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+										if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 											mysrvcCandidates[num_candidates]=mysrvc;
@@ -3091,7 +3091,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 						// if a server is taken back online, consider it immediately
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 							if (gtid_trxid) {
-								if (PgSQL_HGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+								if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									mysrvcCandidates[num_candidates]=mysrvc;
@@ -3392,7 +3392,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
-						__sync_fetch_and_add(&PgSQL_HGM->status.server_connections_created, 1);
+						__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					}
 					break;
@@ -3406,7 +3406,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
-						__sync_fetch_and_add(&PgSQL_HGM->status.server_connections_created, 1);
+						__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					} else {
 						conn=(PgSQL_Connection *)conns->remove_index_fast(conn_found_idx);
@@ -3444,14 +3444,14 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			throttle_connections_per_sec_to_hostgroup = _myhgc->attributes.throttle_connections_per_sec;
 		}
 		if (_myhgc->new_connections_now > (unsigned int) throttle_connections_per_sec_to_hostgroup) {
-			__sync_fetch_and_add(&PgSQL_HGM->status.server_connections_delayed, 1);
+			__sync_fetch_and_add(&PgHGM->status.server_connections_delayed, 1);
 			return NULL;
 		} else {
 			conn = new PgSQL_Connection();
 			conn->parent=mysrvc;
 			// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 			conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
-			__sync_fetch_and_add(&PgSQL_HGM->status.server_connections_created, 1);
+			__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 			return  conn;
 		}
@@ -3854,7 +3854,7 @@ void PgSQL_HostGroups_Manager::group_replication_lag_action(
 			enable
 		) {
 			if (read_only == false) {
-				myhgc = PgSQL_HGM->MyHGC_find(_hid);
+				myhgc = PgHGM->MyHGC_find(_hid);
 				group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 			}
 		}
@@ -3864,7 +3864,7 @@ void PgSQL_HostGroups_Manager::group_replication_lag_action(
 			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
 			enable
 		) {
-			myhgc = PgSQL_HGM->MyHGC_find(reader_hostgroup);
+			myhgc = PgHGM->MyHGC_find(reader_hostgroup);
 			group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 		}
 	}
@@ -4976,7 +4976,7 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 			proxy_info("Checksum for table %s is %s\n", "pgsql_servers", mysrvs_checksum.c_str());
 
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			update_glovars_mysql_servers_checksum(mysrvs_checksum);
+			update_glovars_pgsql_servers_checksum(mysrvs_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
 	}
@@ -5877,7 +5877,7 @@ void PgSQL_HostGroups_Manager::update_group_replication_add_autodiscovered(
 			proxy_info("Checksum for table %s is %s\n", "pgsql_servers", mysrvs_checksum.c_str());
 
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			update_glovars_mysql_servers_checksum(mysrvs_checksum);
+			update_glovars_pgsql_servers_checksum(mysrvs_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
 
@@ -7817,7 +7817,7 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 					proxy_info("Checksum for table %s is %s\n", "pgsql_servers", mysrvs_checksum.c_str());
 
 					pthread_mutex_lock(&GloVars.checksum_mutex);
-					update_glovars_mysql_servers_checksum(mysrvs_checksum);
+					update_glovars_pgsql_servers_checksum(mysrvs_checksum);
 					pthread_mutex_unlock(&GloVars.checksum_mutex);
 				}
 
@@ -7938,7 +7938,7 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 					proxy_info("Checksum for table %s is %s\n", "pgsql_servers", mysrvs_checksum.c_str());
 
 					pthread_mutex_lock(&GloVars.checksum_mutex);
-					update_glovars_mysql_servers_checksum(mysrvs_checksum);
+					update_glovars_pgsql_servers_checksum(mysrvs_checksum);
 					pthread_mutex_unlock(&GloVars.checksum_mutex);
 				}
 

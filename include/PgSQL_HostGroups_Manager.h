@@ -858,9 +858,9 @@ class PgSQL_HostGroups_Manager {
 	 */
 	std::string gen_global_pgsql_servers_v2_checksum(uint64_t servers_v2_hash);
 	bool commit(
-		const peer_runtime_mysql_servers_t& peer_runtime_pgsql_servers = {},
-		const peer_mysql_servers_v2_t& peer_pgsql_servers_v2 = {},
-		bool only_commit_runtime_mysql_servers = true,
+		const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers = {},
+		const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2 = {},
+		bool only_commit_runtime_pgsql_servers = true,
 		bool update_version = false
 	);
 	/**

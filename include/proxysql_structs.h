@@ -797,7 +797,7 @@ ProxySQL_GlobalVariables GloVars {};
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
 MySQL_HostGroups_Manager *MyHGM;
-PgSQL_HostGroups_Manager* PgSQL_HGM;
+PgSQL_HostGroups_Manager* PgHGM;
 
 // PostgreSQL thread variables
 __thread int pgsql_thread___authentication_method;
@@ -974,7 +974,7 @@ __thread unsigned int g_seed;
 #else
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_HostGroups_Manager *MyHGM;
-extern PgSQL_HostGroups_Manager *PgSQL_HGM;
+extern PgSQL_HostGroups_Manager *PgHGM;
 
 //PostgreSQL Thread Variables
 extern __thread int pgsql_thread___authentication_method;

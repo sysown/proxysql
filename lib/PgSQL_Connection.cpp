@@ -468,7 +468,7 @@ PgSQL_Connection::~PgSQL_Connection() {
 	if (pgsql) {
 		// always decrease the counter
 		if (ret_mysql) {
-			__sync_fetch_and_sub(&PgSQL_HGM->status.server_connections_connected,1);
+			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected,1);
 			if (query.stmt_result) {
 				if (query.stmt_result->handle) {
 					query.stmt_result->handle->status = MYSQL_STATUS_READY; // avoid calling mthd_my_skip_result()
@@ -1174,7 +1174,7 @@ handler_again:
 								}
 							}
 			}
-			__sync_fetch_and_add(&PgSQL_HGM->status.server_connections_connected,1);
+			__sync_fetch_and_add(&PgHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
 			options.client_flag = pgsql->client_flag;
 			//assert(pgsql->net.vio->async_context);
@@ -1201,13 +1201,13 @@ handler_again:
 			MySQL_Monitor::update_dns_cache_from_mysql_conn(pgsql);
 			break;
 		case ASYNC_CONNECT_FAILED:
-			PgSQL_HGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 			parent->connect_error(mysql_errno(pgsql));
 			break;
 		case ASYNC_CONNECT_TIMEOUT:
 			//proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
-			PgSQL_HGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 			parent->connect_error(mysql_errno(pgsql));
 			break;
 		case ASYNC_CHANGE_USER_START:
@@ -1740,7 +1740,7 @@ handler_again:
 		case ASYNC_SET_AUTOCOMMIT_FAILED:
 			//fprintf(stderr,"%s\n",mysql_error(pgsql));
 			proxy_error("Failed SET AUTOCOMMIT: %s\n",mysql_error(pgsql));
-			PgSQL_HGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 			break;
 		case ASYNC_SET_NAMES_START:
 			set_names_start();
@@ -1770,7 +1770,7 @@ handler_again:
 		case ASYNC_SET_NAMES_FAILED:
 			//fprintf(stderr,"%s\n",mysql_error(pgsql));
 			proxy_error("Failed SET NAMES: %s\n",mysql_error(pgsql));
-			PgSQL_HGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 			break;
 		case ASYNC_INITDB_START:
 			initdb_start();
@@ -1799,7 +1799,7 @@ handler_again:
 			break;
 		case ASYNC_INITDB_FAILED:
 			proxy_error("Failed INITDB: %s\n",mysql_error(pgsql));
-			PgSQL_HGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 			//fprintf(stderr,"%s\n",mysql_error(pgsql));
 			break;
 		case ASYNC_SET_OPTION_START:
@@ -1829,7 +1829,7 @@ handler_again:
 			break;
 		case ASYNC_SET_OPTION_FAILED:
 			proxy_error("Error setting MYSQL_OPTION_MULTI_STATEMENTS : %s\n", mysql_error(pgsql));
-			PgSQL_HGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 			break;
 
 		default:

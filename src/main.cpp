@@ -773,8 +773,8 @@ void ProxySQL_Main_init_main_modules() {
 	GloPgSQL_Logger->print_version();
 	GloMyStmt=new MySQL_STMT_Manager_v14();
 
-	PgSQL_HGM = new PgSQL_HostGroups_Manager();
-	PgSQL_HGM->init();
+	PgHGM = new PgSQL_HostGroups_Manager();
+	PgHGM->init();
 	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;
 	_tmp_GloPTH = new PgSQL_Threads_Handler();
 	GloPTH = _tmp_GloPTH;
@@ -1244,6 +1244,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 	{
 		cpu_timer t;
 		GloAdmin->init_mysql_servers();
+		GloAdmin->init_pgsql_servers();
 		GloAdmin->init_proxysql_servers();
 		GloAdmin->load_scheduler_to_runtime();
 		GloAdmin->proxysql_restapi().load_restapi_to_runtime();
