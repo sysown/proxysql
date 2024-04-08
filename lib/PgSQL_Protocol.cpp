@@ -384,12 +384,18 @@ void PG_pkt::to_PtrSizeArray(PtrSizeArray *psa, unsigned c) {
 	}
 }
 
-bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsigned int* len, uint32_t* thread_id, bool deprecate_eof_active) {
+bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsigned int* len, uint32_t* _thread_id, bool deprecate_eof_active) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
 
 	PG_pkt pgpkt{};
 
 	const int type = 'R';
+
+	uint32_t thread_id = __sync_fetch_and_add(&glovars.thread_id, 1);
+	if (thread_id == 0) {
+		thread_id = __sync_fetch_and_add(&glovars.thread_id, 1); // again!
+	}
+	*_thread_id = thread_id;
 
 	switch ((AUTHENTICATION_METHOD)pgsql_thread___authentication_method) {
 
