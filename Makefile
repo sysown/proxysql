@@ -66,6 +66,9 @@ ifeq ($(OS),Linux)
 endif
 ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	NPROCS := $(shell sysctl -n hw.ncpu)
+	LEGACY_BUILD := 1
+    export CC=gcc
+    export CXX=g++
 endif
 export MAKEOPT := -j${NPROCS}
 
