@@ -1087,6 +1087,59 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
 			rows++;
 		}
 	}
+	if (root.exists("mysql_servers_ssl_params")==true) { // mysql_servers_ssl_params
+		const Setting &mysql_servers_ssl_params = root["mysql_servers_ssl_params"];
+		int count = mysql_servers_ssl_params.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
+		for (i=0; i< count; i++) {
+			const Setting &line = mysql_servers_ssl_params[i];
+			string hostname = "";
+			int port = 3306;
+			string username = "";
+			string ssl_ca = "";
+			string ssl_cert = "";
+			string ssl_key = "";
+			string ssl_capath = "";
+			string ssl_crl = "";
+			string ssl_crlpath = "";
+			string ssl_cipher = "";
+			string tls_version = "";
+			std::string comment="";
+			if (line.lookupValue("hostname", hostname)==false) {
+				proxy_error("Admin: detected a mysql_servers_ssl_params in config file without a mandatory hostname\n");
+				continue;
+			}
+			line.lookupValue("port", port);
+			line.lookupValue("username", username);
+			line.lookupValue("ssl_ca", ssl_ca);
+			line.lookupValue("ssl_cert", ssl_cert);
+			line.lookupValue("ssl_key", ssl_key);
+			line.lookupValue("ssl_capath", ssl_capath);
+			line.lookupValue("ssl_crl", ssl_crl);
+			line.lookupValue("ssl_crlpath", ssl_crlpath);
+			line.lookupValue("ssl_cipher", ssl_cipher);
+			line.lookupValue("tls_version", tls_version);
+			line.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			char *query=(char *)malloc(
+				strlen(q)
+				+ hostname.length() + username.length()
+				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length() + ssl_capath.length()
+				+ ssl_crl.length() + ssl_crlpath.length() + ssl_cipher.length() + tls_version.length()
+				+ strlen(o) + 32);
+			sprintf(query, q,
+				hostname.c_str() , port , username.c_str() ,
+				ssl_ca.c_str() , ssl_cert.c_str() , ssl_key.c_str() , ssl_capath.c_str() ,
+				ssl_crl.c_str() , ssl_crlpath.c_str() , ssl_cipher.c_str() , tls_version.c_str() ,
+				o);
+			admindb->execute(query);
+			if (o!=o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
         if (root.exists("mysql_group_replication_hostgroups")==true) {
                 const Setting &mysql_group_replication_hostgroups = root["mysql_group_replication_hostgroups"];
                 int count = mysql_group_replication_hostgroups.getLength();

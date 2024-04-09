@@ -32,7 +32,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-	$(error Compiler must support at least c++11)
+    $(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -245,6 +245,7 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
 	cd sqlite3/sqlite3 && patch -p1 < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
+	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 

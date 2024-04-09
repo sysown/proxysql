@@ -14,9 +14,14 @@ using json = nlohmann::json;
 class MySQL_Session;
 class PgSQL_Session;
 
-// these structs will be used for various regex hardcoded
-// their initial use will be for sql_log_bin , sql_mode and time_zone
-// issues #509 , #815 and #816
+/**
+ * @class Session_Regex
+ * @brief Encapsulates regex operations for session handling.
+ *
+ * This class is used for matching patterns in SQL queries, specifically for
+ * settings like sql_log_bin, sql_mode, and time_zone.
+ * See issues #509 , #815 and #816
+ */
 class Session_Regex {
 private:
 	void* opt;

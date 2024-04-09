@@ -104,12 +104,18 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	if (lookup != cg.bt_map.end()) {
 		ad=lookup->second;
 		if (strcmp(ad->password,password)) {
+			// the password has changed
 			free(ad->password);
 			ad->password=strdup(password);
 			if (ad->sha1_pass) {
 				free(ad->sha1_pass);
 				ad->sha1_pass=NULL;
 			}
+			if (ad->clear_text_password) {
+				free(ad->clear_text_password);
+				ad->clear_text_password=NULL;
+			}
+			// FIXME: if the password is a clear text password, automatically generate sha1_pass and clear_text_password
 		}
 		if (strcmp(ad->default_schema,default_schema)) {
 			free(ad->default_schema);
@@ -195,6 +201,8 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		new_ad=true;
 		ad->sha1_pass=NULL;
 		ad->num_connections_used=0;
+		ad->clear_text_password = NULL;
+		// FIXME: if the password is a clear text password, automatically generate sha1_pass and clear_text_password
 	}
 
 	ad->use_ssl=use_ssl;
@@ -233,6 +241,7 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->username) ret += strlen(ado->username) + 1;
 		if (ado->password) ret += strlen(ado->password) + 1;
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
+		if (ado->clear_text_password) ret += strlen(ado->clear_text_password) + 1;
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
@@ -246,6 +255,7 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->username) ret += strlen(ado->username) + 1;
 		if (ado->password) ret += strlen(ado->password) + 1;
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
+		if (ado->clear_text_password) ret += strlen(ado->clear_text_password) + 1;
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
@@ -297,6 +307,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 			ad->num_connections_used=ado->num_connections_used;
 			ad->password=strdup(ado->password);
 			ad->sha1_pass=NULL;
+			ad->clear_text_password = NULL;
 			ad->use_ssl=ado->use_ssl;
 			ad->default_schema=strdup(ado->default_schema);
 			ad->attributes=strdup(ado->attributes);
@@ -318,6 +329,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		ad->username=strdup(ado->username);
 		ad->password=strdup(ado->password);
 		ad->sha1_pass=NULL;
+		ad->clear_text_password = NULL;
 		ad->use_ssl=ado->use_ssl;
 		ad->default_hostgroup=ado->default_hostgroup;
 		ad->default_schema=strdup(ado->default_schema);
@@ -434,6 +446,7 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 		free(ad->username);
 		free(ad->password);
 		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
+		if (ad->clear_text_password) { free(ad->clear_text_password); ad->clear_text_password=NULL; }
 		free(ad->default_schema);
 		free(ad->attributes);
 		free(ad->comment);
@@ -484,6 +497,40 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 	return ret;
 };
 
+bool MySQL_Authentication::set_clear_text_password(char * username, enum cred_username_type usertype, const char *clear_text_password) {
+	bool ret=false;
+	uint64_t hash1, hash2;
+	SpookyHash *myhash=new SpookyHash();
+	myhash->Init(1,2);
+	myhash->Update(username,strlen(username));
+	myhash->Final(&hash1,&hash2);
+	delete myhash;
+
+	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
+	spin_wrlock(&cg.lock);
+#endif
+	std::map<uint64_t, account_details_t *>::iterator lookup;
+	lookup = cg.bt_map.find(hash1);
+	if (lookup != cg.bt_map.end()) {
+		account_details_t *ad=lookup->second;
+		if (ad->clear_text_password) { free(ad->clear_text_password); ad->clear_text_password=NULL; }
+		if (clear_text_password) {
+			ad->clear_text_password = strdup(clear_text_password);
+		}
+		ret=true;
+	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
+   spin_wrunlock(&cg.lock);
+#endif
+	return ret;
+};
+
 bool MySQL_Authentication::exists(char * username) {
 	bool ret = false;
 	uint64_t hash1, hash2;
@@ -522,7 +569,13 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
-		ret=l_strdup(ad->password);
+		if (ad->clear_text_password == NULL) {
+			ret=strdup(ad->password);
+		} else {
+			// we return the best password we have
+			// if we were able to derive the clear text password, we provide that
+			ret=strdup(ad->clear_text_password);
+		}
 		if (use_ssl) *use_ssl=ad->use_ssl;
 		if (default_hostgroup) *default_hostgroup=ad->default_hostgroup;
 		if (default_schema) *default_schema=l_strdup(ad->default_schema);
@@ -565,6 +618,7 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 			free(ad->username);
 			free(ad->password);
 			if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
+			if (ad->clear_text_password) { free(ad->clear_text_password); ad->clear_text_password=NULL; }
 			free(ad->default_schema);
 			free(ad->comment);
 			free(ad->attributes);

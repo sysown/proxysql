@@ -137,6 +137,11 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
 
+/**
+ * @brief Converts session type to a human-readable string.
+ * @param session_type The session type to convert.
+ * @return A string representing the session type.
+ */
 /*
 std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
@@ -170,6 +175,7 @@ KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid,
 		}
 	}
 }
+
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread *_mt, char *ip) {
 	username=strdup(u);
 	password=strdup(p);
@@ -202,31 +208,48 @@ const char* KillArgs::get_host_address() const {
 	return host_address;
 }
 
+
+/**
+ * @brief Thread function to kill a query or connection on a MySQL server.
+ * 
+ * This function is executed in a separate thread to kill a query or connection on a MySQL server.
+ * It establishes a connection to the MySQL server and sends a kill command to terminate the specified query or connection.
+ * 
+ * @param[in] arg A pointer to a KillArgs structure containing the necessary parameters for killing the query or connection.
+ * @return nullptr.
+ */
 void* kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
+	//! It initializes a new MySQL_Thread object to handle MySQL-related operations.
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
+	//! Retrieves the current time and refreshes thread variables.
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
+
+	//! Initializes ssl_params to NULL, which holds SSL parameters for the MySQL connection.
+	MySQLServers_SslParams * ssl_params = NULL;
+
+	//! Initializes a new MySQL connection using mysql_init(NULL).
 	MYSQL *mysql=mysql_init(NULL);
-	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
-	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
-
-	if (ka->use_ssl && ka->port) {
-		mysql_ssl_set(mysql, 
-			mysql_thread___ssl_p2s_key,
-			mysql_thread___ssl_p2s_cert,
-			mysql_thread___ssl_p2s_ca,
-			mysql_thread___ssl_p2s_capath,
-			mysql_thread___ssl_p2s_cipher);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
-		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
-	}
-
 	if (!mysql) {
 		goto __exit_kill_query_thread;
 	}
+
+	//! Sets specific connection attributes such as program_name and _server_host using mysql_options4().
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
+
+
+	//! If SSL is enabled and port information is available, it retrieves SSL parameters for the server from MyHGM and configures the MySQL connection accordingly.
+	if (ka->use_ssl && ka->port) {
+		ssl_params = MyHGM->get_Server_SSL_Params(ka->hostname, ka->port, ka->username);
+		MySQL_Connection::set_ssl_params(mysql,ssl_params);
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+	}
+
 	MYSQL *ret;
+
+	//! Depending on the type of operation (kill_type), constructs a KILL command string (buf) to terminate the specified query or connection.
 	if (ka->port) {
 		switch (ka->kill_type) {
 			case KILL_QUERY:
@@ -259,7 +282,16 @@ void* kill_query_thread(void *arg) {
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
-		proxy_error("Failed to connect to server %s:%d to run KILL %s %lu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
+		int myerr = mysql_errno(mysql);
+		if (ssl_params != NULL && myerr == 2026) {
+			proxy_error("Failed to connect to server %s:%d to run KILL %s %lu.  SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
+				ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id,
+				ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
+				ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
+			);
+		} else {
+			proxy_error("Failed to connect to server %s:%d to run KILL %s %lu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
+		}
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, ka->hid, ka->hostname, ka->port, mysql_errno(mysql));
 		goto __exit_kill_query_thread;
 	}
@@ -278,12 +310,18 @@ void* kill_query_thread(void *arg) {
 			sprintf(buf,"KILL %lu", ka->id);
 			break;
 	}
+	//! Executes the KILL command using mysql_query() on the established MySQL connection. Note that this call is blocking.
 	// FIXME: these 2 calls are blocking, fortunately on their own thread
 	mysql_query(mysql,buf);
 __exit_kill_query_thread:
+	//! clean-up
 	if (mysql)
 		mysql_close(mysql);
 	delete ka;
+	if (ssl_params != NULL) {
+		delete ssl_params;
+		ssl_params = NULL;
+	}
 	return NULL;
 }
 
@@ -292,6 +330,11 @@ extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 
+
+/**
+ * @brief Default constructor.
+ * Initializes all member variables to their default values.
+ */
 Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
@@ -311,6 +354,10 @@ Query_Info::Query_Info() {
 	stmt_client_id=0;
 }
 
+/**
+ * @brief Destructor.
+ * Frees resources associated with QueryParserArgs and stmt_info.
+ */
 Query_Info::~Query_Info() {
 	GloQPro->query_parser_free(&QueryParserArgs);
 	if (stmt_info) {
@@ -318,6 +365,12 @@ Query_Info::~Query_Info() {
 	}
 }
 
+/**
+ * @brief Initializes query information.
+ * @param _p Pointer to the query data.
+ * @param len Length of the query data.
+ * @param mysql_header Flag indicating whether MySQL header is present.
+ */
 void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
@@ -344,6 +397,11 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	stmt_client_id=0;
 }
 
+
+/**
+ * @brief Finalizes query information.
+ * Updates query counters and performs clean-up.
+ */
 void Query_Info::end() {
 	query_parser_update_counters();
 	query_parser_free();
@@ -369,6 +427,12 @@ void Query_Info::end() {
 	}
 }
 
+/**
+ * @brief Initializes query information with the given parameters.
+ * @param _p Pointer to the query data.
+ * @param len Length of the query data.
+ * @param mysql_header Flag indicating whether MySQL header is present.
+ */
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=(mysql_header ? len-5 : len);
 	QueryPointer=(mysql_header ? _p+5 : _p);
@@ -382,19 +446,33 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	rows_sent=0;
 }
 
+/**
+ * @brief Initializes the query parser.
+ */
 void Query_Info::query_parser_init() {
 	GloQPro->query_parser_init(&QueryParserArgs,(char *)QueryPointer,QueryLength,0);
 }
 
+/**
+ * @brief Retrieves the command type of the query from the query parser.
+ * @return The command type of the query.
+ */
 enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
 	MyComQueryCmd=GloQPro->query_parser_command_type(&QueryParserArgs);
 	return MyComQueryCmd;
 }
 
+/**
+ * @brief Frees resources associated with the query parser.
+ */
 void Query_Info::query_parser_free() {
 	GloQPro->query_parser_free(&QueryParserArgs);
 }
 
+/**
+ * @brief Updates query counters and resets member variables.
+ * @return The number of rows affected by the query.
+ */
 unsigned long long Query_Info::query_parser_update_counters() {
 	if (stmt_info) {
 		MyComQueryCmd=stmt_info->MyComQueryCmd;
@@ -408,10 +486,18 @@ unsigned long long Query_Info::query_parser_update_counters() {
 	return ret;
 }
 
+/**
+ * @brief Retrieves the digest text of the query from the query parser.
+ * @return The digest text of the query.
+ */
 char * Query_Info::get_digest_text() {
 	return GloQPro->get_digest_text(&QueryParserArgs);
 }
 
+/**
+ * @brief Checks if the query is a SELECT statement with the NOT FOR UPDATE clause.
+ * @return True if the query is a SELECT statement with the NOT FOR UPDATE clause, false otherwise.
+ */
 bool Query_Info::is_select_NOT_for_update() {
 	if (stmt_info) { // we are processing a prepared statement. We already have the information
 		return stmt_info->is_select_NOT_for_update;
@@ -520,7 +606,9 @@ void MySQL_Session::set_status(enum session_status e) {
 	status=e;
 }
 
-
+/**
+ * @brief Constructs a new MySQL session object.
+ */
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	//handler_ret = 0;
@@ -593,6 +681,9 @@ MySQL_Session::MySQL_Session() {
 	use_ldap_auth = false;
 }
 
+/**
+ * @brief Initializes the MySQL session.
+ */
 void MySQL_Session::init() {
 	transaction_persistent_hostgroup=-1;
 	transaction_persistent=false;
@@ -601,6 +692,9 @@ void MySQL_Session::init() {
 	SLDH=new StmtLongDataHandler();
 }
 
+/**
+ * @brief Resets the MySQL session to its initial state.
+ */
 void MySQL_Session::reset() {
 	autocommit=true;
 	autocommit_handled=false;
@@ -647,6 +741,9 @@ void MySQL_Session::reset() {
 	}
 }
 
+/**
+ * @brief Destructor for the MySQL session.
+ */
 MySQL_Session::~MySQL_Session() {
 
 	reset(); // we moved this out to allow CHANGE_USER
@@ -700,7 +797,12 @@ MySQL_Session::~MySQL_Session() {
 }
 
 
-// scan the pointer array of mysql backends (mybes) looking for a backend for the specified hostgroup_id
+/**
+ * @brief Find a backend associated with the specified hostgroup ID.
+ * 
+ * @param hostgroup_id The ID of the hostgroup to search for.
+ * @return A pointer to the MySQL backend associated with the specified hostgroup ID, or nullptr if not found.
+ */
 MySQL_Backend * MySQL_Session::find_backend(int hostgroup_id) {
 	MySQL_Backend *_mybe;
 	unsigned int i;
@@ -713,12 +815,23 @@ MySQL_Backend * MySQL_Session::find_backend(int hostgroup_id) {
 	return NULL; // NULL = backend not found
 };
 
+/**
+ * @brief Update expired connections based on specified checks.
+ * 
+ * This function iterates through the list of backends and their connections
+ * to determine if any connections have expired based on the provided checks.
+ * If a connection is found to be expired, its hostgroup ID is added to the
+ * list of expired connections for further processing.
+ * 
+ * @param checks A vector of function objects representing checks to determine if a connection has expired.
+ */
 void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connection*)>>& checks) {
-	for (uint32_t i = 0; i < mybes->len; i++) {
+	for (uint32_t i = 0; i < mybes->len; i++) { // iterate through the list of backends 
 		MySQL_Backend* mybe = static_cast<MySQL_Backend*>(mybes->index(i));
 		MySQL_Data_Stream* myds = mybe != nullptr ? mybe->server_myds : nullptr;
 		MySQL_Connection* myconn = myds != nullptr ? myds->myconn : nullptr;
 
+		//!  it performs a series of checks to determine if it has expired
 		if (myconn != nullptr) {
 			const bool is_active_transaction = myconn->IsActiveTransaction();
 			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
@@ -728,6 +841,9 @@ void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connec
 			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false && is_idle) {
 				for (const function<bool(MySQL_Connection*)>& check : checks) {
 					if (check(myconn)) {
+						// If a connection is found to be expired based on the provided checks,
+						// its hostgroup ID is added to the list of expired connections (hgs_expired_conns)
+						// for further processing.
 						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
 						break;
 					}
@@ -737,6 +853,17 @@ void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connec
 	}
 }
 
+/**
+ * @brief Create a new MySQL backend associated with the specified hostgroup ID and data stream.
+ * 
+ * This function creates a new MySQL backend object and associates it with the provided hostgroup ID
+ * and data stream. If the data stream is not provided (_myds is nullptr), a new MySQL_Data_Stream
+ * object is created and initialized.
+ * 
+ * @param hostgroup_id The ID of the hostgroup to which the backend belongs.
+ * @param _myds The MySQL data stream associated with the backend.
+ * @return A pointer to the newly created MySQL_Backend object.
+ */
 MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=new MySQL_Backend();
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
@@ -748,16 +875,37 @@ MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Strea
 		_mybe->server_myds->DSS=STATE_NOT_INITIALIZED;
 		_mybe->server_myds->init(MYDS_BACKEND_NOT_CONNECTED, this, 0);
 	}
+	// the newly created backend is added to the session's list of backends (mybes) and a pointer to it is returned.
 	mybes->add(_mybe);
 	return _mybe;
 };
 
+/**
+ * @brief Find or create a MySQL backend associated with the specified hostgroup ID and data stream.
+ * 
+ * This function first attempts to find an existing MySQL backend associated with the provided
+ * hostgroup ID. If a backend is found, its pointer is returned. Otherwise, a new MySQL backend
+ * is created and associated with the hostgroup ID and data stream. If the data stream is not provided
+ * (_myds is nullptr), a new MySQL_Data_Stream object is created and initialized for the new backend.
+ * 
+ * @param hostgroup_id The ID of the hostgroup to which the backend belongs.
+ * @param _myds The MySQL data stream associated with the backend.
+ * @return A pointer to the MySQL_Backend object found or created.
+ */
 MySQL_Backend * MySQL_Session::find_or_create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=find_backend(hostgroup_id);
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
+	// The pointer to the found or newly created backend is returned.
 	return ( _mybe ? _mybe : create_backend(hostgroup_id, _myds) );
 };
 
+/**
+ * @brief Reset all MySQL backends associated with this session.
+ * 
+ * This function resets all MySQL backends associated with the current session.
+ * It iterates over all backends stored in the session, resets each backend, and then deletes it.
+ * 
+ */
 void MySQL_Session::reset_all_backends() {
 	MySQL_Backend *mybe;
 	while(mybes->len) {
@@ -767,6 +915,35 @@ void MySQL_Session::reset_all_backends() {
 	}
 };
 
+/**
+ * @brief Writes data from the session to the network with optional throttling and flow control.
+ *
+ * The writeout() function in the MySQL_Session class is responsible for writing data from the session to the network.
+ * It supports throttling, which limits the rate at which data is sent to the client. Throttling is controlled by the
+ * mysql_thread___throttle_max_bytes_per_second_to_client configuration parameter. If throttling is disabled (the parameter
+ * is set to 0), the function bypasses throttling.
+ *
+ * This function first ensures that any pending data in the session's data stream (client_myds) is written to the network.
+ * This ensures that the network buffers are emptied, allowing new data to be sent.
+ *
+ * After writing data to the network, the function checks if flow control is necessary. If the total amount of data written
+ * exceeds the maximum allowed per call (mwpl), or if the data is sent too quickly, the function pauses writing for a brief
+ * period to control the flow of data.
+ *
+ * If throttling is enabled, the function adjusts the throttle based on the amount of data written and the configured maximum
+ * bytes per second. If the current throughput exceeds the configured limit, the function increases the pause duration to
+ * regulate the flow of data.
+ *
+ * Finally, if the session has a backend associated with it (mybe), and the backend has a server data stream (server_myds),
+ * the function also writes data from the server data stream to the network.
+ *
+ * @note This function assumes that necessary session and network structures are properly initialized.
+ *
+ * @see mysql_thread___throttle_max_bytes_per_second_to_client
+ * @see MySQL_Session::client_myds
+ * @see MySQL_Session::mybe
+ * @see MySQL_Backend::server_myds
+ */
 void MySQL_Session::writeout() {
 	int tps = 10; // throttling per second , by default every 100ms
 	int total_written = 0;
@@ -856,6 +1033,30 @@ void MySQL_Session::writeout() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
 
+/**
+ * @brief Handles COMMIT or ROLLBACK commands received from the client.
+ *
+ * The handler_CommitRollback() function processes COMMIT or ROLLBACK commands received from the client. It checks
+ * the command type and verifies if the command matches the expected syntax for COMMIT or ROLLBACK. If the command
+ * matches, it updates the respective commit or rollback count in the global monitor's status. Additionally, it
+ * checks for the presence of an active transaction to determine whether to forward the command or reply with an OK
+ * status.
+ *
+ * If there is an active transaction, the function sets the current hostgroup to the hostgroup of the active transaction
+ * and returns false, indicating that the command should be forwarded. If there are no active transactions, the function
+ * replies with an OK status and updates the client data stream accordingly.
+ *
+ * @param pkt Pointer to the packet containing the COMMIT or ROLLBACK command.
+ * @return True if the command is successfully handled and replied to, false otherwise.
+ *
+ * @see MySQL_Session::FindOneActiveTransaction()
+ * @see MySQL_Session::current_hostgroup
+ * @see MySQL_Session::autocommit
+ * @see MySQL_Session::client_myds
+ * @see MySQL_Data_Stream::DSS
+ * @see MySQL_Protocol::generate_pkt_OK()
+ * @see MySQL_Session::RequestEnd()
+ */
 bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	if (pkt->size <= 5) { return false; }
 	char c=((char *)pkt->ptr)[5];
@@ -918,7 +1119,27 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	return false;
 }
 
-
+/**
+ * @brief Handles the SET AUTOCOMMIT command received from the client.
+ *
+ * The handler_SetAutocommit() function processes the SET AUTOCOMMIT command received from the client.
+ * It parses the command to determine the new autocommit value and updates the autocommit status accordingly.
+ * Additionally, it checks for the presence of active transactions and handles the forwarding of the command if needed.
+ * The function also replies with an OK status to the client after processing the command.
+ *
+ * @param pkt Pointer to the packet containing the SET AUTOCOMMIT command.
+ * @return True if the command is successfully handled and replied to, false otherwise.
+ *
+ * @see MySQL_Session::autocommit_handled
+ * @see MySQL_Session::sending_set_autocommit
+ * @see MySQL_Session::current_hostgroup
+ * @see MySQL_Session::autocommit
+ * @see MySQL_Session::client_myds
+ * @see MySQL_Session::NumActiveTransactions()
+ * @see MySQL_Data_Stream::DSS
+ * @see MySQL_Protocol::generate_pkt_OK()
+ * @see MySQL_Session::RequestEnd()
+ */
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
@@ -1131,7 +1352,23 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			}
 		}
 		j["client"]["DSS"] = client_myds->DSS;
+		j["client"]["switching_auth_sent"] = client_myds->switching_auth_sent;
 		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
+		j["client"]["prot"]["sent_auth_plugin_id"] = client_myds->myprot.sent_auth_plugin_id;
+		j["client"]["prot"]["auth_plugin_id"] = client_myds->myprot.auth_plugin_id;
+		switch (client_myds->myprot.auth_plugin_id) {
+			case AUTH_MYSQL_NATIVE_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "mysql_native_password";
+				break;
+			case AUTH_MYSQL_CLEAR_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "mysql_clear_password";
+				break;
+			case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "caching_sha2_password";
+				break;
+			default:
+				break;
+		}
 		if (client_myds->myconn != NULL) { // only if myconn is defined
 			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
 				j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
@@ -1760,6 +1997,27 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+/**
+ * @brief Handles the process of pinging the server again in the PINGING_SERVER status.
+ *
+ * The handler_again___status_PINGING_SERVER() function is responsible for managing the re-pinging process
+ * when the session status is set to PINGING_SERVER. It asserts the existence of the server connection's data stream
+ * and connection. It then performs an asynchronous ping operation on the server connection and processes the result.
+ * Depending on the ping result, it either returns -1 to indicate a termination or continues with further actions.
+ *
+ * @return -1 if the session should be terminated, 0 otherwise.
+ *
+ * @see MySQL_Session::mybe
+ * @see MySQL_Backend::server_myds
+ * @see MySQL_Data_Stream
+ * @see MySQL_Connection
+ * @see MySQL_Connection::async_ping()
+ * @see MySQL_Connection::compute_unknown_transaction_status()
+ * @see MySQL_Data_Stream::return_MySQL_Connection_To_Pool()
+ * @see MySQL_Data_Stream::destroy_MySQL_Connection_From_Pool()
+ * @see MySQL_Session::set_status()
+ * @see ProxySQL_MySQL_Error_Counter::p_update_mysql_error_counter()
+ */
 int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -1807,6 +2065,25 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	return 0;
 }
 
+/**
+ * @brief Handles the process of resetting the connection in the RESETTING_CONNECTION status.
+ *
+ * The handler_again___status_RESETTING_CONNECTION() function manages the resetting of the connection when
+ * the session status is set to RESETTING_CONNECTION. It asserts the existence of the server connection's data stream
+ * and connection. It then performs an asynchronous change user operation on the server connection and processes the result.
+ * Depending on the result of the change user operation, it either returns -1 to indicate termination or continues with further actions.
+ *
+ * @return -1 if the session should be terminated, 0 otherwise.
+ *
+ * @see MySQL_Session::mybe
+ * @see MySQL_Backend::server_myds
+ * @see MySQL_Data_Stream
+ * @see MySQL_Connection
+ * @see MySQL_Connection::async_change_user()
+ * @see MySQL_Data_Stream::return_MySQL_Connection_To_Pool()
+ * @see MySQL_Session::set_status()
+ * @see ProxySQL_MySQL_Error_Counter::p_update_mysql_error_counter()
+ */
 int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -1879,7 +2156,26 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	return 0;
 }
 
-
+/**
+ * @brief Initiates a new thread to kill the connection associated with the session.
+ *
+ * The handler_again___new_thread_to_kill_connection() function creates a new thread to execute the query
+ * needed to kill the connection associated with the session. It first retrieves the data stream of the server connection.
+ * If the connection exists and is associated with a MySQL instance, and if it has not been marked for killing before,
+ * the function prepares the necessary information for the kill operation and spawns a new thread to execute it.
+ * The kill operation is performed asynchronously in the new thread.
+ *
+ * @note This function is used to handle the situation where the session is in the process of resetting the connection,
+ * and the connection needs to be forcibly terminated.
+ *
+ * @see MySQL_Session::mybe
+ * @see MySQL_Backend::server_myds
+ * @see MySQL_Data_Stream
+ * @see MySQL_Connection
+ * @see MySQL_Connection_userinfo
+ * @see KillArgs
+ * @see kill_query_thread
+ */
 void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	if (myds->myconn && myds->myconn->mysql) {
@@ -1921,6 +2217,20 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 // true should jump to handler_again
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
+/**
+ * @brief Verifies and synchronizes the multi-statement capability between client and server connections.
+ *
+ * The handler_again___verify_backend_multi_statement() function verifies whether the multi-statement capability
+ * of the client connection matches that of the server connection. If there is a mismatch, it synchronizes the
+ * capability by updating the server connection's options accordingly.
+ *
+ * @return Always returns false.
+ *
+ * @see MySQL_Session::client_myds
+ * @see MySQL_Session::mybe
+ * @see MySQL_Data_Stream
+ * @see MySQL_Connection
+ */
 bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 	if ((client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)) {
 
@@ -1929,27 +2239,73 @@ bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 		else
 			mybe->server_myds->myconn->options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
 
-		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-				case PROCESSING_STMT_PREPARE:
-			previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-				case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		NEXT_IMMEDIATE_NEW(SETTING_MULTI_STMT);
 	}
 	return false;
 }
 
+/**
+ * @brief Sets the previous status of the MySQL session according to the current status, with an option to allow EXECUTE statements.
+ *
+ * This method updates the previous status of the MySQL session based on its current status. It employs a switch statement
+ * to determine the current status and then pushes the corresponding status value onto the `previous_status` stack. If the
+ * `allow_execute` parameter is set to true and the current status is `PROCESSING_STMT_EXECUTE`, the method pushes this status
+ * onto the stack; otherwise, it skips pushing the status for EXECUTE statements. If the current status does not match any known
+ * status value (which should not occur under normal circumstances), the method asserts to indicate a programming error.
+ * It currently works with only 3 possible status:
+ * - PROCESSING_QUERY
+ * - PROCESSING_STMT_PREPARE
+ * - PROCESSING_STMT_EXECUTE
+ *
+ * @param allow_execute A boolean value indicating whether to allow the status of EXECUTE statements to be pushed onto the
+ * `previous_status` stack. If set to true, the method will include EXECUTE statements in the session's status history.
+ *
+ * @return void.
+ * @note This method assumes that the `status` member variable has been properly initialized with one of the predefined
+ * status values.
+ * @note This method is primarily used to maintain a history of the session's previous states for later reference or
+ * recovery purposes.
+ * @note The LCOV_EXCL_START and LCOV_EXCL_STOP directives are used to exclude the assert statement from code coverage
+ * analysis because the condition should not occur during normal execution and is included as a safeguard against
+ * programming errors.
+ */
+void MySQL_Session::set_previous_status_mode3(bool allow_execute) {
+	switch(status) {
+		case PROCESSING_QUERY:
+			previous_status.push(PROCESSING_QUERY);
+			break;
+		case PROCESSING_STMT_PREPARE:
+			previous_status.push(PROCESSING_STMT_PREPARE);
+			break;
+		case PROCESSING_STMT_EXECUTE:
+			if (allow_execute == true) {
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			}
+		default:
+			// LCOV_EXCL_START
+			assert(0); // Assert to indicate an unexpected status value
+			break;
+			// LCOV_EXCL_STOP
+	}
+}
+
+/**
+ * @brief Verifies and sets the init_connect option for the server connection.
+ *
+ * The handler_again___verify_init_connect() function checks if the init_connect option has been sent
+ * to the server connection. If not, it sets the option to true and sets the init_connect queries
+ * based on the attributes defined for the hostgroup. It then updates the status for handling the
+ * init_connect setting.
+ *
+ * @return Always returns false.
+ *
+ * @see MySQL_Session::mybe
+ * @see MySQL_Data_Stream
+ * @see MySQL_Connection
+ */
 bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
@@ -1963,28 +2319,31 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect=strdup(tmp_init_connect);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
 	}
 	return false;
 }
 
+/**
+ * @brief Verifies and sets the session_track_gtids option for the backend connection.
+ *
+ * The handler_again___verify_backend_session_track_gtids() function verifies whether the backend
+ * connection supports session_track_gtids and sets the option accordingly based on the client's
+ * request. If the backend does not support session_track_gtids, the function returns false.
+ * If the backend supports session_track_gtids, it sets the option to OWN_GTID if the client
+ * requests GTIDs or if the option is not configured yet. Otherwise, it sets the option to OFF.
+ * The function then updates the backend's session_track_gtids setting and switches the status
+ * to handle the session_track_gtids setting.
+ *
+ * @return True if the session_track_gtids option is set for the backend connection, false otherwise.
+ *
+ * @see MySQL_Session::mybe
+ * @see MySQL_Data_Stream
+ * @see MySQL_Connection
+ */
 bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.session_track_gtids, mybe->server_myds->myconn->options.session_track_gtids);
@@ -2032,23 +2391,30 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 		mybe->server_myds->myconn->options.session_track_gtids_int =
 			SpookyHash::Hash32((char *)"OWN_GTID", strlen((char *)"OWN_GTID"), 10);
 		// we now switch status to set session_track_gtids
-		switch(status) {
-			case PROCESSING_QUERY:
-			case PROCESSING_STMT_PREPARE:
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(status);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
 	}
 	return ret;
 }
 
+/**
+ * @brief Verifies and sets the ldap_user_variable option for the backend connection.
+ *
+ * The handler_again___verify_ldap_user_variable() function verifies whether the ldap_user_variable
+ * option needs to be set for the backend connection. If the ldap_user_variable_sent flag is false
+ * or if ldap_user_variable_value is NULL, the function sets the option to true. If the backend
+ * connection already has ldap_user_variable_sent set to true and the ldap_user_variable_value
+ * differs from the client's frontend username, the function resets the ldap_user_variable settings
+ * and sets the option to true. Finally, if the option needs to be set, the function updates the
+ * backend's ldap_user_variable settings and switches the status to handle the ldap_user_variable setting.
+ *
+ * @return Always returns false.
+ *
+ * @see MySQL_Session::mybe
+ * @see MySQL_Data_Stream
+ * @see MySQL_Connection
+ */
 bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 	bool ret = false;
 	if (mybe->server_myds->myconn->options.ldap_user_variable_sent==false) {
@@ -2081,22 +2447,8 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 		if (mysql_thread___ldap_user_variable) {
 			// we send ldap user variable  query only if set
 			mybe->server_myds->myconn->options.ldap_user_variable=strdup(mysql_thread___ldap_user_variable);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(SETTING_LDAP_USER_VARIABLE);
 		}
 	}
@@ -2131,44 +2483,14 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 			// enforce_autocommit_on_reads is disabled
 			// we need to check if it is a SELECT not FOR UPDATE
 			if (CurrentQuery.is_select_NOT_for_update()==false) {
-				//previous_status.push(PROCESSING_QUERY);
-				switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-					case PROCESSING_QUERY:
-						previous_status.push(PROCESSING_QUERY);
-						break;
-					case PROCESSING_STMT_PREPARE:
-						previous_status.push(PROCESSING_STMT_PREPARE);
-						break;
-					case PROCESSING_STMT_EXECUTE:
-						previous_status.push(PROCESSING_STMT_EXECUTE);
-						break;
-					default:
-						// LCOV_EXCL_START
-						assert(0);
-						break;
-						// LCOV_EXCL_STOP
-				}
+				// Sets the previous status of the MySQL session according to the current status.
+				set_previous_status_mode3();
 				NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 			}
 		} else {
 			// in every other cases, enforce autocommit
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 		}
 	} else {
@@ -2215,44 +2537,14 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
 	if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
 		if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 			NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
 		}
 		if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
 		}
 	}
@@ -2262,18 +2554,9 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 		// the backend connection has some session variable set
 		// that the client never asked for
 		// because we can't unset variables, we will reset the connection
-		switch(status) {
-			case PROCESSING_QUERY:
-			case PROCESSING_STMT_PREPARE:
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(status);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 		NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
 	}
@@ -3447,10 +3730,13 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		CurrentQuery.stmt_client_id=client_stmt_id;
 		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
 		if (stmt_global_id == 0) {
-			// FIXME: add error handling
-			// LCOV_EXCL_START
-			assert(0);
-			// LCOV_EXCL_STOP
+			l_free(pkt.size,pkt.ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			string err_msg = "Unknown prepared statement handler (" + to_string(client_stmt_id) + ") given to mysql_stmt_precheck";
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1243,(char *)"HY000", err_msg.c_str());
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			return;
 		}
 		CurrentQuery.stmt_global_id=stmt_global_id;
 		// now we get the statement information
@@ -3460,7 +3746,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// we couldn't find it
 			l_free(pkt.size,pkt.ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Prepared statement doesn't exist", true);
+			string err_msg = "Unknown prepared statement handler (" + to_string(client_stmt_id) + ") given to mysql_stmt_precheck";
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1243,(char *)"HY000", err_msg.c_str());
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
 			return;
@@ -4343,11 +4630,11 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 		bool retry_conn=false;
 		if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 			thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
-			proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+			proxy_error("Detected a lagging server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_LAGGING_SRV);
 		} else {
 			thread->status_variables.stvar[st_var_backend_offline_during_query]++;
-			proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+			proxy_error("Detected an offline server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 		}
 		if (myds->query_retries_on_failure > 0) {
@@ -4365,23 +4652,8 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 		myds->fd=0;
 		if (retry_conn) {
 			myds->DSS=STATE_NOT_INITIALIZED;
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			return 1;
 		}
 		return -1;
@@ -4549,23 +4821,8 @@ bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, i
 	myds->fd=0;
 	if (retry_conn) {
 		myds->DSS=STATE_NOT_INITIALIZED;
-		//previous_status.push(PROCESSING_QUERY);
-		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		if (*errmsg) {
 			free(*errmsg);
 			*errmsg = NULL;
@@ -4639,20 +4896,8 @@ bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int
 			myds->fd=0;
 			if (retry_conn) {
 				myds->DSS=STATE_NOT_INITIALIZED;
-				//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-				}
+				// Sets the previous status of the MySQL session according to the current status.
+				set_previous_status_mode3(false);
 				if (*errmsg) {
 					free(*errmsg);
 					*errmsg = NULL;
@@ -4802,6 +5047,20 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 */
 }
 
+/**
+ * @brief Perform housekeeping tasks before processing packets.
+ *
+ * This function is responsible for performing necessary housekeeping tasks
+ * before processing packets. These tasks include handling expired connections
+ * for multiplexing scenarios. If multiplexing is enabled, it iterates over
+ * the list of expired backend connections and either returns them to the connection pool
+ * or destroys them based on certain conditions.
+ *
+ * @note This function assumes that the `hgs_expired_conns` vector contains the IDs
+ *       of the backend connections that have expired.
+ *
+ * @return None.
+ */
 void MySQL_Session::housekeeping_before_pkts() {
 	if (mysql_thread___multiplexing) {
 		for (const int hg_id : hgs_expired_conns) {
@@ -4830,6 +5089,19 @@ void MySQL_Session::housekeeping_before_pkts() {
 }
 
 // this function was inline
+/**
+ * @brief Process the GTID received from the MySQL connection when the handler return code is 0.
+ *
+ * This function is responsible for processing the GTID (Global Transaction Identifier)
+ * received from the MySQL connection when the handler return code is 0. It extracts
+ * the GTID and transaction ID from the MySQL connection and performs additional
+ * actions if necessary based on the configuration.
+ *
+ * @param myconn A pointer to the MySQL_Connection object from which to extract the GTID.
+ *               This object contains the necessary information about the connection.
+ *
+ * @return None.
+ */
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 		if (mysql_thread___client_session_track_gtid) {
@@ -4873,8 +5145,12 @@ int MySQL_Session::handler() {
 	}
 	}
 
-	housekeeping_before_pkts();
+	// housekeeping_before_pkts() performs tasks only if hgs_expired_conns.size() is not 0
+	if (hgs_expired_conns.size() != 0)
+		housekeeping_before_pkts();
+	// The function get_pkts_from_client() is called to retrieve packets from the client, passing a reference to wrong_pass and the pkt variable.
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
+	// If get_pkts_from_client() returns a non-zero value, indicating an error, the function returns that value immediately.
 	if (handler_ret != 0) {
 		return handler_ret;
 	}
@@ -4922,22 +5198,30 @@ handler_again:
 		case PROCESSING_STMT_EXECUTE:
 		case PROCESSING_QUERY:
 			//fprintf(stderr,"PROCESSING_QUERY\n");
+			// Pause Check
+			// It checks if pause_until is greater than the current time (thread->curtime).
+			// If so, it returns handler_ret immediately, indicating that processing should be paused until a later time.
 			if (pause_until > thread->curtime) {
 				handler_ret = 0;
 				return handler_ret;
 			}
 			if (mysql_thread___connect_timeout_server_max) {
-				if (mybe->server_myds->max_connect_time==0)
+				if (mybe->server_myds->max_connect_time==0) {
+					// set max_connect_time to the current time plus the specified timeout value
 					mybe->server_myds->max_connect_time=thread->curtime+(long long)mysql_thread___connect_timeout_server_max*1000;
+				}
 			} else {
+				// set max_connect_time to zero, indicating no timeout
 				mybe->server_myds->max_connect_time=0;
 			}
-			if (
+			if ( // two conditions
+				// If the server connection is in a non-idle state (ASYNC_IDLE), and the current time is greater than or equal to mybe->server_myds->wait_until
+				// This indicates that the server is taking too long to respond.
 				(mybe->server_myds->myconn && mybe->server_myds->myconn->async_state_machine!=ASYNC_IDLE && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
-				// query timed out
 				||
-				(killed==true) // session was killed by admin
-			) {
+				// If the session has been marked as killed by an admin.
+				(killed==true)
+			) { // Logging and Action
 				// we only log in case on timing out here. Logging for 'killed' is done in the places that hold that contextual information.
 				if (mybe->server_myds->myconn && (mybe->server_myds->myconn->async_state_machine != ASYNC_IDLE) && mybe->server_myds->wait_until && (thread->curtime >= mybe->server_myds->wait_until)) {
 					std::string query {};
@@ -4955,7 +5239,7 @@ handler_again:
 						client_addr = client_myds->addr.addr ? client_myds->addr.addr : "";
 						client_port = client_myds->addr.port;
 					}
-
+					// it logs a warning message indicating the query that caused the timeout, along with client details.
 					proxy_warning(
 						"Killing connection %s:%d because query '%s' from client '%s':%d timed out.\n",
 						mybe->server_myds->myconn->parent->address,
@@ -4965,26 +5249,16 @@ handler_again:
 						client_port
 					);
 				}
+				// it calls handler_again___new_thread_to_kill_connection() to initiate the killing of the connection associated with the session that timed out.
 				handler_again___new_thread_to_kill_connection();
 			}
+			// checks if the backend MySQL server associated with the session has been initialized (STATE_NOT_INITIALIZED)
 			if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
 				// we don't have a backend yet
-				switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-					case PROCESSING_QUERY:
-						previous_status.push(PROCESSING_QUERY);
-						break;
-					case PROCESSING_STMT_PREPARE:
-						previous_status.push(PROCESSING_STMT_PREPARE);
-						break;
-					case PROCESSING_STMT_EXECUTE:
-						previous_status.push(PROCESSING_STMT_EXECUTE);
-						break;
-					default:
-						// LCOV_EXCL_START
-						assert(0);
-						break;
-						// LCOV_EXCL_STOP
-				}
+				// It saves the current processing status of the session (status) onto the previous_status stack
+				// Sets the previous status of the MySQL session according to the current status.
+				set_previous_status_mode3();
+				// It transitions the session to the CONNECTING_SERVER state immediately.
 				NEXT_IMMEDIATE(CONNECTING_SERVER);
 			} else {
 				MySQL_Data_Stream *myds=mybe->server_myds;
@@ -5076,25 +5350,33 @@ handler_again:
 							}
 						}
 						if (status==PROCESSING_STMT_EXECUTE) {
+							// It attempts to find the backend statement associated with the current global statement ID (stmt_global_id) in the local statement cache of the connection (myconn).
 							CurrentQuery.mysql_stmt=myconn->local_stmts->find_backend_stmt_by_global_id(CurrentQuery.stmt_global_id);
 							if (CurrentQuery.mysql_stmt==NULL) {
+								// the connection does not have the prepared statement metadata
 								MySQL_STMT_Global_info *stmt_info=NULL;
 								// the connection we too doesn't have the prepared statements prepared
 								// we try to create it now
+								// In this case, it proceeds to create the prepared statement based on the global statement ID (stmt_global_id).
+								// It retrieves the prepared statement information (stmt_info) from a global prepared statement cache (GloMyStmt) using the statement ID.
 								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
+								// It updates the CurrentQuery structure with the query information from the prepared statement (stmt_info).
 								CurrentQuery.QueryLength=stmt_info->query_length;
 								CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
 								// NOTE: Update 'first_comment' with the 'first_comment' from the retrieved
 								// 'stmt_info' from the found prepared statement. 'CurrentQuery' requires its
 								// own copy of 'first_comment' because it will later be free by 'QueryInfo::end'.
 								if (stmt_info->first_comment) {
+									// If the prepared statement contains a first_comment, it updates the first_comment field of CurrentQuery.
 									CurrentQuery.QueryParserArgs.first_comment=strdup(stmt_info->first_comment);
 								}
+								// It pushes the current processing status (PROCESSING_STMT_EXECUTE) onto the previous_status stack to track the previous state transition.
 								previous_status.push(PROCESSING_STMT_EXECUTE);
+								// It transitions the processing status to PROCESSING_STMT_PREPARE immediately using the NEXT_IMMEDIATE macro.
 								NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
-								if (CurrentQuery.stmt_global_id!=stmt_info->statement_id) {
-									PROXY_TRACE();
-								}
+								//if (CurrentQuery.stmt_global_id!=stmt_info->statement_id) {
+								//	PROXY_TRACE();
+								//}
 							}
 						}
 					}
@@ -5104,14 +5386,22 @@ handler_again:
 					SetQueryTimeout();
 				}
 				int rc;
+				// declares two timespec variables begint and endt to store the start and end times of the query execution.
 				timespec begint;
+				timespec endt;
+				// If the stats_time_backend_query flag in the thread's variables is set,
+				// it records the start time of the query execution using clock_gettime with CLOCK_THREAD_CPUTIME_ID.
 				if (thread->variables.stats_time_backend_query) {
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 				}
+				// It calls the RunQuery function to execute the query on the backend.
 				rc = RunQuery(myds, myconn);
-				timespec endt;
+				// If the stats_time_backend_query flag is set, it records the end time
+				// of the query execution using clock_gettime with CLOCK_THREAD_CPUTIME_ID.
 				if (thread->variables.stats_time_backend_query) {
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+					// It calculates the duration of the query execution by subtracting the start time (begint) from the end time (endt)
+					// and adds it to the stvar_backend_query_time status variable in the thread's status variables.
 					thread->status_variables.stvar[st_var_backend_query_time] = thread->status_variables.stvar[st_var_backend_query_time] +
 						(endt.tv_sec*1000000000+endt.tv_nsec) -
 						(begint.tv_sec*1000000000+begint.tv_nsec);
@@ -5362,15 +5652,15 @@ handler_again:
 __exit_DSS__STATE_NOT_INITIALIZED:
 
 
-	if (mybe && mybe->server_myds) {
-	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
 #ifdef DEBUG
-		MySQL_Data_Stream *myds=mybe->server_myds;
-		MySQL_Connection *myconn=mybe->server_myds->myconn;
+	if (mybe && mybe->server_myds) {
+		if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
+			MySQL_Data_Stream *myds=mybe->server_myds;
+			MySQL_Connection *myconn=mybe->server_myds->myconn;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
+		}
+	}
 #endif /* DEBUG */
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
-	}
-	}
 
 	writeout();
 
@@ -5385,7 +5675,17 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 }
 // end ::handler()
 
-
+/**
+ * @brief Handle multiple session statuses.
+ *
+ * This function handles multiple session statuses by invoking specific handler
+ * functions corresponding to each status. It checks the current session status
+ * and delegates the handling to the appropriate handler function.
+ *
+ * @param[out] rc Pointer to an integer variable where the return code from the handler function will be stored.
+ *
+ * @return True if the handling was successful and false otherwise.
+ */
 bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	bool ret = false;
 	switch(status) {
@@ -5419,105 +5719,35 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	return ret;
 }
 
-/*
-void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
-	// FIXME: no support for SSL yet
-	if (
-		client_myds->myprot.process_pkt_auth_swich_response((unsigned char *)pkt->ptr,pkt->size)==true
-	) {
-		l_free(pkt->size,pkt->ptr);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Successful connection\n", this, client_myds);
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
-		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_CHANGE_USER_OK, this, NULL);
-		status=WAITING_CLIENT_DATA;
-		client_myds->DSS=STATE_SLEEP;
-	} else {
-		l_free(pkt->size,pkt->ptr);
-		*wrong_pass=true;
-		// FIXME: this should become close connection
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		char *client_addr=NULL;
-		if (client_myds->client_addr) {
-			char buf[512];
-			switch (client_myds->client_addr->sa_family) {
-				case AF_INET: {
-					struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
-					if (ipv4->sin_port) {
-						inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-						client_addr = strdup(buf);
-					} else {
-						client_addr = strdup((char *)"localhost");
-					}
-					break;
-				}
-				case AF_INET6: {
-					struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
-					inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-					client_addr = strdup(buf);
-					break;
-				}
-				default:
-					client_addr = strdup((char *)"localhost");
-					break;
-			}
-		} else {
-			client_addr = strdup((char *)"");
-		}
-		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
-#ifdef DEBUG
-		if (client_myds->myconn->userinfo->password) {
-			char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
-			int lpass = strlen(tmp_pass);
-			for (int i=2; i<lpass-1; i++) {
-				tmp_pass[i]='*';
-			}
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Wrong credentials for frontend: %s:%s . Password=%s . Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr, tmp_pass);
-			free(tmp_pass);
-		} else {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Wrong credentials for frontend: %s:%s . No password. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr);
-		}
-#endif //DEBUG
-		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_CHANGE_USER_ERR, this, NULL);
-		free(_s);
-		__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
-	}
-}
-*/
-
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
 	bool handshake_err = true;
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , handshake_response=%d , switching_auth_stage=%d , is_encrypted=%d , client_encrypted=%d\n", this, client_myds, handshake_response_return, client_myds->switching_auth_stage, is_encrypted, client_myds->encrypted);
-	if (
-		(handshake_response_return == false) && (client_myds->switching_auth_stage == 1)
-	) {
-		l_free(pkt->size,pkt->ptr);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
-		return;
-	}
-
-	if (
-		(is_encrypted == false) && // the connection was encrypted
-		(handshake_response_return == false) && // the authentication didn't complete
-		(client_myds->encrypted == true) // client is asking for encryption
-	) {
-		// use SSL
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
-		client_myds->DSS=STATE_SSL_INIT;
-		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_new();
-		SSL_set_fd(client_myds->ssl, client_myds->fd);
-		SSL_set_accept_state(client_myds->ssl);
-		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
-		l_free(pkt->size,pkt->ptr);
-		proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
-		return;
+	if (handshake_response_return == false) {
+		if (client_myds->auth_in_progress != 0) {
+			l_free(pkt->size,pkt->ptr);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
+			return;
+		}
+		if (
+			(is_encrypted == false) && // the connection was encrypted
+			(client_myds->encrypted == true) // client is asking for encryption
+		) {
+			// use SSL
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
+			client_myds->DSS=STATE_SSL_INIT;
+			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->ssl = GloVars.get_SSL_new();
+			SSL_set_fd(client_myds->ssl, client_myds->fd);
+			SSL_set_accept_state(client_myds->ssl);
+			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+			l_free(pkt->size,pkt->ptr);
+			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+			return;
+		}
 	}
 
 	if (
@@ -5605,8 +5835,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=false;
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
-				uint8_t _pid = 2;
-				if (client_myds->switching_auth_stage) _pid+=2;
+				//uint8_t _pid = 2;
+				//if (client_myds->switching_auth_stage) _pid+=2;
+				uint8_t _pid = client_myds->pkt_sid; _pid++;
 				if (max_connections_reached==true) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p , Too many connections\n", this, client_myds);
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,_pid,1040,(char *)"08004", (char *)"Too many connections", true);
@@ -5666,9 +5897,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					} else {
 						client_addr = strdup((char *)"");
 					}
-					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//uint8_t _pid = 2;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					uint8_t _pid = client_myds->pkt_sid; _pid++;
 					if (
 						(strcmp(client_addr,(char *)"127.0.0.1")==0)
 						||
@@ -5694,8 +5926,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					free(client_addr);
 				} else {
 					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					_pid = client_myds->pkt_sid; _pid++;
 					// If this condition is met, it means that the
 					// 'STATE_SERVER_HANDSHAKE' being performed isn't from the start of a
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
@@ -5765,9 +5998,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		if (client_myds->myconn->userinfo->username) {
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-			uint8_t _pid = 2;
-			if (client_myds->switching_auth_stage) _pid+=2;
-			if (is_encrypted) _pid++;
+			//uint8_t _pid = 2;
+			//if (client_myds->switching_auth_stage) _pid+=2;
+			//if (is_encrypted) _pid++;
+			uint8_t _pid = client_myds->pkt_sid; _pid++;
 #ifdef DEBUG
 		if (client_myds->myconn->userinfo->password) {
 			char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
@@ -5934,6 +6168,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 // this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
+/**
+ * @brief Rewrite the query packet and update the session state accordingly.
+ *
+ * This function is responsible for rewriting the query packet and updating the session state
+ * based on the rewritten query. It frees the old packet, allocates memory for the new packet,
+ * copies the header and query information, and updates the session state to reflect the new query.
+ *
+ * @param[in,out] pkt Pointer to the packet data structure containing the original query packet.
+ */
 void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
 	// the query was rewritten
 	l_free(pkt->size,pkt->ptr);	// free old pkt
@@ -5963,7 +6206,15 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
 	}
 }
 
-// this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
+/**
+ * @brief Handle the generation and sending of an OK message packet in response to a successful query execution.
+ *
+ * This (formely inline) function is responsible for setting up and sending an OK message packet to the client in response
+ * to a successful query execution. It updates the session state, generates the OK message packet using the 
+ * appropriate protocol functions, and frees the memory occupied by the original packet.
+ *
+ * @param[in,out] pkt Pointer to the packet data structure containing the original packet.
+ */
 void MySQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
 	gtid_hid = -1;
 	client_myds->DSS=STATE_QUERY_SENT_NET;
@@ -5975,7 +6226,15 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-// this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
+/**
+ * @brief Handle the generation and sending of an error message packet in response to a query execution error.
+ *
+ * This (formely inline) function is responsible for setting up and sending an error message packet to the client in response
+ * to a query execution error. It updates the session state, generates the error message packet using the appropriate
+ * protocol functions, and frees the memory occupied by the original packet.
+ *
+ * @param[in,out] pkt Pointer to the packet data structure containing the original packet.
+ */
 void MySQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
@@ -5983,7 +6242,16 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-// this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
+/**
+ * @brief Handle the generation and sending of an error message packet for a large packet size.
+ *
+ * This (formely inline) function is responsible for setting up and sending an error message packet to the client
+ * in response to receiving a packet larger than the 'max_allowed_packet' size. It updates the session state,
+ * generates the error message packet using the appropriate protocol functions, and frees the memory
+ * occupied by the original packet.
+ *
+ * @param[in,out] pkt Pointer to the packet data structure containing the original packet.
+ */
 void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	// ER_NET_PACKET_TOO_LARGE
 	client_myds->DSS=STATE_QUERY_SENT_NET;
@@ -8137,6 +8405,14 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	}
 }
 
+/**
+ * @brief Check if any backend has an active MySQL connection.
+ *
+ * This function iterates through all backends associated with the session and checks if any backend has an
+ * active MySQL connection. If any backend has an active connection, it returns true; otherwise, it returns false.
+ *
+ * @return true if any backend has an active MySQL connection, otherwise false.
+ */
 bool MySQL_Session::has_any_backend() {
 	for (unsigned int j=0;j < mybes->len;j++) {
 		MySQL_Backend *tmp_mybe=(MySQL_Backend *)mybes->index(j);
@@ -8148,6 +8424,15 @@ bool MySQL_Session::has_any_backend() {
 	return false;
 }
 
+/**
+ * @brief Handler for MYSQL_COM_STMT_RESET command in WAITING_CLIENT_DATA state with STATE_SLEEP.
+ *
+ * This function handles the MYSQL_COM_STMT_RESET command when the session is in the WAITING_CLIENT_DATA state
+ * and the data stream state is STATE_SLEEP. It resets the statement with the given statement global ID,
+ * frees the memory allocated for the packet, generates an OK packet, and sets the session state back to WAITING_CLIENT_DATA.
+ *
+ * @param pkt Reference to the packet containing the command and associated data.
+ */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
@@ -8162,6 +8447,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	status=WAITING_CLIENT_DATA;
 }
 
+/**
+ * @brief Handler for MYSQL_COM_STMT_CLOSE command in WAITING_CLIENT_DATA state with STATE_SLEEP.
+ *
+ * This function handles the MYSQL_COM_STMT_CLOSE command when the session is in the WAITING_CLIENT_DATA state
+ * and the data stream state is STATE_SLEEP. It closes the statement with the given client global ID, frees
+ * associated resources, updates counters, and sets the session state back to WAITING_CLIENT_DATA.
+ *
+ * @param pkt Reference to the packet containing the command and associated data.
+ */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
 	uint32_t client_global_id=0;
 	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
@@ -8232,8 +8526,15 @@ void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 	delete resultset;
 }
 
-void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection()
-{
+/**
+ * @brief Reset the warning hostgroup flag and release the MySQL connection back to the connection pool.
+ *
+ * This function resets the warning hostgroup flag and releases the MySQL connection back to the connection pool
+ * if necessary. If a warning was found in the previous query execution but the current executed query is not
+ * 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', it means that the warning has been handled, and the connection
+ * can be safely returned to the connection pool.
+ */
+void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection() {
 	if (warning_in_hg > -1) {
 		// if we've reached this point, it means that warning was found in the previous query, but the
 		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and 

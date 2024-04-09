@@ -289,6 +289,15 @@ void MySQL_Connection::compute_unknown_transaction_status() {
 	}
 }
 
+/**
+ * Computes a unique hash value for a user connection.
+ * 
+ * This function generates a hash based on the concatenation of username, password, and schema name,
+ * interspersed with two predefined delimiters. It leverages the SpookyHash algorithm for hashing.
+ * The purpose of this hash could be for identifying unique user connections or sessions within ProxySQL.
+ * 
+ * @return Returns the computed hash value.
+ */
 uint64_t MySQL_Connection_userinfo::compute_hash() {
 	int l=0;
 	if (username)
@@ -364,6 +373,17 @@ void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
 }
 
 
+/**
+ * Sets the schema name for the current connection.
+ * 
+ * This function updates the schema name for a connection. If the new schema name differs
+ * from the current one, it updates the internal representation and recalculates any related hash or identifier
+ * for the session. This is typically used to switch contexts or databases within the same connection.
+ * 
+ * @param _new The new schema name to be set.
+ * @param l Length of the schema name string.
+ * @return Returns true if the schema name was changed, false otherwise.
+ */
 bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 	int _l=0;
 	if (schemaname) {
@@ -391,7 +411,13 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 }
 
 
-
+/**
+ * Constructor for MySQL_Connection.
+ * 
+ * Initializes a new MySQL connection object. Sets up the initial state, allocates necessary resources, 
+ * and prepares the connection for use. It initializes member variables to their default values, including
+ * setting up default options for the MySQL client library, and prepares the connection for database operations.
+ */
 MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
 	async_state_machine=ASYNC_CONNECT_START;
@@ -514,6 +540,11 @@ MySQL_Connection::~MySQL_Connection() {
 
 	if (connected_host_details.ip)
 		free(connected_host_details.ip);
+
+	if (ssl_params != NULL) {
+		delete ssl_params;
+		ssl_params = NULL;
+	}
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -740,14 +771,12 @@ void MySQL_Connection::connect_start() {
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
 	if (parent->use_ssl) {
-		mysql_ssl_set(mysql,
-				mysql_thread___ssl_p2s_key,
-				mysql_thread___ssl_p2s_cert,
-				mysql_thread___ssl_p2s_ca,
-				mysql_thread___ssl_p2s_capath,
-				mysql_thread___ssl_p2s_cipher);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		if (ssl_params != NULL) {
+			delete ssl_params;
+			ssl_params = NULL;
+		}
+		ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
+		MySQL_Connection::set_ssl_params(mysql, ssl_params);
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;
@@ -1137,13 +1166,29 @@ handler_again:
 				}
 			}
 			if (!ret_mysql) {
-				// always increase the counter
-				proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
-    		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
+				int myerr = mysql_errno(mysql);
+				if (ssl_params != NULL && myerr == 2026) {
+					proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s. SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
+						parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql),
+						ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
+						ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
+					);
+				} else {
+					proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
+				}
+				if (ssl_params != NULL) {
+					delete ssl_params;
+					ssl_params = NULL;
+				}
+				NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
-    		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
+				if (ssl_params != NULL) {
+					delete ssl_params;
+					ssl_params = NULL;
+				}
+				NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
 			}
-    	break;
+			break;
 		case ASYNC_CONNECT_SUCCESSFUL:
 			if (mysql && ret_mysql) {
 				// PMC-10005
@@ -2937,4 +2982,29 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 		}
 	}
 	return ret;
+}
+
+void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params) {
+	if (ssl_params == NULL) {
+		mysql_ssl_set(mysql,
+				mysql_thread___ssl_p2s_key,
+				mysql_thread___ssl_p2s_cert,
+				mysql_thread___ssl_p2s_ca,
+				mysql_thread___ssl_p2s_capath,
+				mysql_thread___ssl_p2s_cipher);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+	} else {
+		mysql_ssl_set(mysql,
+				( ssl_params->ssl_key.length()    > 0 ? ssl_params->ssl_key.c_str()    : NULL ) ,
+				( ssl_params->ssl_cert.length()   > 0 ? ssl_params->ssl_cert.c_str()   : NULL ) ,
+				( ssl_params->ssl_ca.length()     > 0 ? ssl_params->ssl_ca.c_str()     : NULL ) ,
+				( ssl_params->ssl_capath.length() > 0 ? ssl_params->ssl_capath.c_str() : NULL ) ,
+				( ssl_params->ssl_cipher.length() > 0 ? ssl_params->ssl_cipher.c_str() : NULL )
+		);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRL,
+			( ssl_params->ssl_crl.length() > 0 ? ssl_params->ssl_crl.c_str() : NULL ) );
+		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH,
+			( ssl_params->ssl_crlpath.length() > 0 ? ssl_params->ssl_crlpath.c_str() : NULL ) );
+	}
 }

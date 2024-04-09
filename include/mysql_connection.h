@@ -21,6 +21,8 @@ using json = nlohmann::json;
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
+class MySQLServers_SslParams;
+
 class Variable {
 public:
 	char *value = (char*)"";
@@ -151,6 +153,9 @@ class MySQL_Connection {
 	bool unknown_transaction_status;
 	void compute_unknown_transaction_status();
 	char gtid_uuid[128];
+
+	MySQLServers_SslParams * ssl_params = NULL;
+
 	MySQL_Connection();
 	~MySQL_Connection();
 	bool set_autocommit(bool);
@@ -248,5 +253,6 @@ class MySQL_Connection {
 	bool requires_CHANGE_USER(const MySQL_Connection *client_conn);
 	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
+	static void set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params);
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

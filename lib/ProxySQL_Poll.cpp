@@ -9,7 +9,22 @@
 #include <poll.h>
 #include "cpp.h"
 
-template<class T>
+/**
+ * @file ProxySQL_Poll.cpp
+ *
+ * These functions provide functionality for managing file descriptors (FDs) and associated data streams in the ProxySQL_Poll class.
+ * They handle memory allocation, addition, removal, and searching of FDs within the poll object.
+ * Additionally, they ensure that memory is managed efficiently by dynamically resizing the internal arrays as needed.
+*/
+
+
+/**
+ * @brief Shrinks the ProxySQL_Poll object by reallocating memory to fit the current number of elements.
+ * 
+ * This function reduces the size of the ProxySQL_Poll object by reallocating memory to fit the current number of elements.
+ * It adjusts the size of internal arrays to a size that is a power of two near the current number of elements.
+ */
+ template<class T>
 void ProxySQL_Poll<T>::shrink() {
 	unsigned int new_size=l_near_pow_2(len+1);
 	fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
@@ -19,7 +34,15 @@ void ProxySQL_Poll<T>::shrink() {
 	size=new_size;
 }
 
-template<class T>
+/**
+ * @brief Expands the ProxySQL_Poll object to accommodate additional elements.
+ * 
+ * This function expands the ProxySQL_Poll object to accommodate the specified number of additional elements.
+ * If the resulting size after expansion exceeds the current size, it reallocates memory to fit the expanded size.
+ * 
+ * @param more The number of additional elements to accommodate.
+ */
+ template<class T>
 void ProxySQL_Poll<T>::expand(unsigned int more) {
 	if ( (len+more) > size ) {
 		unsigned int new_size=l_near_pow_2(len+more);
@@ -31,6 +54,12 @@ void ProxySQL_Poll<T>::expand(unsigned int more) {
 	}
 }
 
+
+/**
+ * @brief Constructs a new ProxySQL_Poll object.
+ * 
+ * This constructor initializes a new ProxySQL_Poll object with default values and allocates memory for internal arrays.
+ */
 template<class T>
 ProxySQL_Poll<T>::ProxySQL_Poll() {
 	loop_counters=new StatCounters(15,10);
@@ -47,6 +76,11 @@ ProxySQL_Poll<T>::ProxySQL_Poll() {
 	last_sent=(unsigned long long *)malloc(size*sizeof(unsigned long long));
 }
 
+/**
+ * @brief Destroys the ProxySQL_Poll object and frees allocated memory.
+ * 
+ * This destructor deallocates memory for internal arrays and releases resources associated with the ProxySQL_Poll object.
+ */
 template<class T>
 ProxySQL_Poll<T>::~ProxySQL_Poll() {
 	unsigned int i;
@@ -64,6 +98,17 @@ ProxySQL_Poll<T>::~ProxySQL_Poll() {
 	delete loop_counters;
 }
 
+/**
+ * @brief Adds a new file descriptor (FD) and its associated MySQL_Data_Stream to the ProxySQL_Poll object.
+ * 
+ * This function adds a new file descriptor (FD) along with its associated MySQL_Data_Stream and relevant metadata
+ * to the ProxySQL_Poll object. It automatically expands the internal arrays if needed.
+ * 
+ * @param _events The events to monitor for the FD.
+ * @param _fd The file descriptor (FD) to add.
+ * @param _myds The MySQL_Data_Stream associated with the FD.
+ * @param sent_time The time when data was last sent on the FD.
+ */
 template<class T>
 void ProxySQL_Poll<T>::add(uint32_t _events, int _fd, T *_myds, unsigned long long sent_time) {
 	if (len==size) {
@@ -82,6 +127,14 @@ void ProxySQL_Poll<T>::add(uint32_t _events, int _fd, T *_myds, unsigned long lo
 	len++;
 }
 
+/**
+ * @brief Removes a file descriptor (FD) and its associated MySQL_Data_Stream from the ProxySQL_Poll object.
+ * 
+ * This function removes a file descriptor (FD) along with its associated MySQL_Data_Stream from the ProxySQL_Poll object.
+ * It also adjusts internal arrays and may shrink the ProxySQL_Poll object if necessary.
+ * 
+ * @param i The index of the file descriptor (FD) to remove.
+ */
 template<class T>
 void ProxySQL_Poll<T>::remove_index_fast(unsigned int i) {
 	if ((int)i==-1) return;
@@ -101,6 +154,15 @@ void ProxySQL_Poll<T>::remove_index_fast(unsigned int i) {
 	}
 }
 
+/**
+ * @brief Finds the index of a file descriptor (FD) in the ProxySQL_Poll object.
+ * 
+ * This function searches for a file descriptor (FD) in the ProxySQL_Poll object and returns its index if found.
+ * If the FD is not found, it returns -1.
+ * 
+ * @param fd The file descriptor (FD) to search for.
+ * @return The index of the file descriptor (FD) if found, otherwise -1.
+ */
 template<class T>
 int ProxySQL_Poll<T>::find_index(int fd) {
 	unsigned int i;

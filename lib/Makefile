@@ -3,7 +3,7 @@
 
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-	$(error GIT_VERSION is not set)
+    $(error GIT_VERSION is not set)
 endif
 
 DEPS_PATH := ../deps
@@ -84,6 +84,10 @@ ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address
 	# Force the disable of JEMALLOC, since ASAN isn't compatible.
 	export NOJEMALLOC=1
+	# workaroud ASAN limitation ASLR > 28bits
+	# https://github.com/google/sanitizers/issues/1716
+	# sudo sysctl vm.mmap_rnd_bits=28
+    $(warning ASAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
 endif
 
 NOJEM :=
@@ -102,7 +106,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-$(error Compiler must support at least c++11)
+    $(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -129,7 +133,8 @@ default: libproxysql.a
 .PHONY: default
 
 _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo set_parser.oo MySQL_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo \
-  proxysql_find_charset.oo ProxySQL_Poll.oo PgSQL_Protocol.oo PgSQL_Thread.oo Client_Session.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo
+  proxysql_find_charset.oo ProxySQL_Poll.oo sha256crypt.oo PgSQL_Protocol.oo PgSQL_Thread.oo Client_Session.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo
+
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp ../include/common/*.h
 

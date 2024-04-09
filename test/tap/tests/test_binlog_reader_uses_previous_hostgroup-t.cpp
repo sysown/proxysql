@@ -113,7 +113,9 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	int wait_res = wait_for_backend_conns(proxy_admin, "ConnUsed", 0, 5);
+	int wait_res = wait_for_cond(proxy_admin,
+		"SELECT IIF((SELECT SUM(ConnUsed) FROM stats_mysql_connection_pool)=0, 'TRUE', 'FALSE')", 5
+	);
 	if (wait_res != EXIT_SUCCESS) {
 		diag("Error waiting for ProxySQL to close backend connection.");
 		return EXIT_FAILURE;

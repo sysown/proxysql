@@ -117,7 +117,6 @@ mysql_variables =
 	default_sql_select_limit="mysql"
 	default_time_zone="mysql"
 	default_transaction_read="mysql"
-	default_tx_isolation="mysql"
 	default_wsrep_sync_wait="mysql"
 	enforce_autocommit_on_reads="mysql"
 	eventslog_default_log="mysql"

@@ -27,7 +27,6 @@
 #define SQLITE_HOSTGROUP -4
 
 
-#define MYSQL_DEFAULT_TX_ISOLATION	"READ-COMMITTED"
 #define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
@@ -308,6 +307,7 @@ struct p_th_gauge {
 		mysql_monitor_ping_interval,
 		mysql_monitor_ping_timeout,
 		mysql_monitor_ping_max_failures,
+		mysql_monitor_aws_rds_topology_discovery_interval,
 		mysql_monitor_read_only_interval,
 		mysql_monitor_read_only_timeout,
 		mysql_monitor_writer_is_also_reader,
@@ -389,6 +389,8 @@ class MySQL_Threads_Handler
 		int monitor_ping_max_failures;
 		//! Monitor ping timeout. Unit: 'ms'.
 		int monitor_ping_timeout;
+		//! Monitor aws rds topology discovery interval. Unit: 'one discovery check per X monitor_read_only checks'.
+		int monitor_aws_rds_topology_discovery_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
@@ -451,8 +453,10 @@ class MySQL_Threads_Handler
 		char *interfaces;
 		char *server_version;
 		char *keep_multiplexing_variables;
+		char *default_authentication_plugin;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 		int handle_unknown_charset;
+		int default_authentication_plugin_int;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -512,7 +516,6 @@ class MySQL_Threads_Handler
 		char *init_connect;
 		char *ldap_user_variable;
 		char *add_ldap_user_comment;
-		char *default_tx_isolation;
 		char *default_session_track_gtids;
 		char *default_variables[SQL_NAME_LAST_LOW_WM];
 		char *firewall_whitelist_errormsg;
@@ -553,6 +556,7 @@ class MySQL_Threads_Handler
 		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
 		int handle_warnings;
+		int evaluate_replication_lag_on_servers_load;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

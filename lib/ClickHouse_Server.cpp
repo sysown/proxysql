@@ -840,9 +840,8 @@ void ClickHouse_Server_session_handler(Client_Session<MySQL_Session*> sess, void
 		}
 
 		if (
-			(
-				(query_no_space_length > 40) &&
-				strncasecmp("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SC",query_no_space,strlen("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SC") == 0))
+			(query_no_space_length > 40) &&
+			(strncasecmp("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SC", query_no_space, strlen("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SC")) == 0)
 		) {
 			l_free(query_length,query);
 			query=l_strdup("SELECT 'utf8_general_ci' AS DEFAULT_COLLATION_NAME");

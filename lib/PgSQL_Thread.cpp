@@ -310,6 +310,7 @@ static char* mysql_thread_variables_names[] = {
 	(char*)"monitor_ping_interval",
 	(char*)"monitor_ping_max_failures",
 	(char*)"monitor_ping_timeout",
+	(char*)"monitor_aws_rds_topology_discovery_interval",
 	(char*)"monitor_read_only_interval",
 	(char*)"monitor_read_only_timeout",
 	(char*)"monitor_read_only_max_timeout_count",
@@ -426,7 +427,6 @@ static char* mysql_thread_variables_names[] = {
 	(char*)"init_connect",
 	(char*)"ldap_user_variable",
 	(char*)"add_ldap_user_comment",
-	(char*)"default_tx_isolation",
 	(char*)"default_session_track_gtids",
 	(char*)"connpoll_reset_queue_length",
 	(char*)"min_num_servers_lantency_awareness",
@@ -825,6 +825,12 @@ th_metrics_map = std::make_tuple(
 		"Reached maximum ping attempts from monitor.",
 		metric_tags {}
 	),
+	std::make_tuple (
+		p_th_gauge::mysql_monitor_aws_rds_topology_discovery_interval,
+		"proxysql_mysql_monitor_aws_rds_topology_discovery_interval",
+		"How frequently a topology discovery is performed, e.g. a value of 500 means one topology discovery every 500 read-only checks ",
+		metric_tags {}
+	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_read_only_interval,
 		"proxysql_mysql_monitor_read_only_interval_seconds",
@@ -919,6 +925,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_ping_interval = 8000;
 	variables.monitor_ping_max_failures = 3;
 	variables.monitor_ping_timeout = 1000;
+    variables.monitor_aws_rds_topology_discovery_interval=1000;
 	variables.monitor_read_only_interval = 1000;
 	variables.monitor_read_only_timeout = 800;
 	variables.monitor_read_only_max_timeout_count = 3;
@@ -993,7 +1000,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	for (int i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		variables.default_variables[i] = strdup(mysql_tracked_variables[i].default_value);
 	}
-	variables.default_tx_isolation = strdup((char*)MYSQL_DEFAULT_TX_ISOLATION);
 	variables.default_session_track_gtids = strdup((char*)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
 	variables.ping_interval_server_msec = 10000;
 	variables.ping_timeout_server = 200;
@@ -1266,12 +1272,6 @@ char* PgSQL_Threads_Handler::get_variable_string(char* name) {
 				return strdup(variables.default_variables[i]);
 			}
 		}
-		if (!strcmp(name, "default_tx_isolation")) {
-			if (variables.default_tx_isolation == NULL) {
-				variables.default_tx_isolation = strdup((char*)MYSQL_DEFAULT_TX_ISOLATION);
-			}
-			return strdup(variables.default_tx_isolation);
-		}
 		if (!strcmp(name, "default_session_track_gtids")) {
 			if (variables.default_session_track_gtids == NULL) {
 				variables.default_session_track_gtids = strdup((char*)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
@@ -1390,12 +1390,6 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		else {
 			return strdup(variables.add_ldap_user_comment);
 		}
-	}
-	if (!strcasecmp(name, "default_tx_isolation")) {
-		if (variables.default_tx_isolation == NULL) {
-			variables.default_tx_isolation = strdup((char*)MYSQL_DEFAULT_TX_ISOLATION);
-		}
-		return strdup(variables.default_tx_isolation);
 	}
 	if (!strcasecmp(name, "default_session_track_gtids")) {
 		if (variables.default_session_track_gtids == NULL) {
@@ -1741,19 +1735,6 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		return true;
 	}
 
-	if (!strcasecmp(name, "default_tx_isolation")) {
-		if (variables.default_tx_isolation) free(variables.default_tx_isolation);
-		variables.default_tx_isolation = NULL;
-		if (vallen) {
-			if (strcmp(value, "(null)"))
-				variables.default_tx_isolation = strdup(value);
-		}
-		if (variables.default_tx_isolation == NULL) {
-			variables.default_tx_isolation = strdup((char*)MYSQL_DEFAULT_TX_ISOLATION); // default
-		}
-		return true;
-	}
-
 	if (!strcasecmp(name, "default_session_track_gtids")) {
 		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 		variables.default_session_track_gtids = NULL;
@@ -2075,6 +2056,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_ping_timeout"] = make_tuple(&variables.monitor_ping_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_ping_max_failures"] = make_tuple(&variables.monitor_ping_max_failures, 1, 1000 * 1000, false);
 
+        VariablesPointers_int["monitor_aws_rds_topology_discovery_interval"] = make_tuple(&variables.monitor_aws_rds_topology_discovery_interval, 1, 100000, false);
 		VariablesPointers_int["monitor_read_only_interval"] = make_tuple(&variables.monitor_read_only_interval, 100, 7 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["monitor_read_only_timeout"] = make_tuple(&variables.monitor_read_only_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_read_only_max_timeout_count"] = make_tuple(&variables.monitor_read_only_max_timeout_count, 1, 1000 * 1000, false);
@@ -2588,7 +2570,6 @@ PgSQL_Threads_Handler::~PgSQL_Threads_Handler() {
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
-	if (variables.default_tx_isolation) free(variables.default_tx_isolation);
 	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
@@ -2718,7 +2699,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect = NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable = NULL; }
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment = NULL; }
-	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation = NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
 	
 	if (pgsql_thread___server_version) { free(pgsql_thread___server_version); pgsql_thread___server_version = NULL; }
@@ -4011,6 +3991,7 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_ping_interval = GloPTH->get_variable_int((char*)"monitor_ping_interval");
 	mysql_thread___monitor_ping_max_failures = GloPTH->get_variable_int((char*)"monitor_ping_max_failures");
 	mysql_thread___monitor_ping_timeout = GloPTH->get_variable_int((char*)"monitor_ping_timeout");
+    mysql_thread___monitor_aws_rds_topology_discovery_interval = GloPTH->get_variable_int((char *)"monitor_aws_rds_topology_discovery_interval");
 	mysql_thread___monitor_read_only_interval = GloPTH->get_variable_int((char*)"monitor_read_only_interval");
 	mysql_thread___monitor_read_only_timeout = GloPTH->get_variable_int((char*)"monitor_read_only_timeout");
 	mysql_thread___monitor_read_only_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_read_only_max_timeout_count");
@@ -4044,8 +4025,6 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___ldap_user_variable = GloPTH->get_variable_string((char*)"ldap_user_variable");
 	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
 	mysql_thread___add_ldap_user_comment = GloPTH->get_variable_string((char*)"add_ldap_user_comment");
-	if (mysql_thread___default_tx_isolation) free(mysql_thread___default_tx_isolation);
-	mysql_thread___default_tx_isolation = GloPTH->get_variable_string((char*)"default_tx_isolation");
 	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
 	mysql_thread___default_session_track_gtids = GloPTH->get_variable_string((char*)"default_session_track_gtids");
 
@@ -5313,8 +5292,9 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_enabled]->Set(this->variables.monitor_enabled);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_timeout]->Set(this->variables.monitor_ping_timeout / 1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_max_failures]->Set(this->variables.monitor_ping_max_failures);
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval / 1000.0);
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_timeout]->Set(this->variables.monitor_read_only_timeout / 1000.0);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_aws_rds_topology_discovery_interval]->Set(this->variables.monitor_aws_rds_topology_discovery_interval);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval/1000.0);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_timeout]->Set(this->variables.monitor_read_only_timeout/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_writer_is_also_reader]->Set(this->variables.monitor_writer_is_also_reader);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_group_by_host]->Set(this->variables.monitor_replication_lag_group_by_host);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval / 1000.0);

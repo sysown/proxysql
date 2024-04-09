@@ -19,13 +19,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
 
 jobs:
-  cache:
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
-    secrets: inherit
-
   run:
-    if: ${{ always() }}
-    needs: [ "cache" ]
     uses: sysown/proxysql/.github/workflows/ci-3p-php-pdo-mysql.yml@GH-Actions
     secrets: inherit
     

@@ -307,6 +307,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_ping_interval",
 	(char *)"monitor_ping_max_failures",
 	(char *)"monitor_ping_timeout",
+	(char *)"monitor_aws_rds_topology_discovery_interval",
 	(char *)"monitor_read_only_interval",
 	(char *)"monitor_read_only_timeout",
 	(char *)"monitor_read_only_max_timeout_count",
@@ -390,6 +391,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"keep_multiplexing_variables",
+	(char *)"default_authentication_plugin",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
 	(char *)"sessions_sort",
@@ -423,7 +425,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"init_connect",
 	(char *)"ldap_user_variable",
 	(char *)"add_ldap_user_comment",
-	(char *)"default_tx_isolation",
 	(char *)"default_session_track_gtids",
 	(char *)"connpoll_reset_queue_length",
 	(char *)"min_num_servers_lantency_awareness",
@@ -433,6 +434,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_cache_stores_empty_result",
 	(char *)"data_packets_history_size",
 	(char *)"handle_warnings",
+	(char *)"evaluate_replication_lag_on_servers_load",
 	NULL
 };
 
@@ -823,6 +825,12 @@ th_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
+			p_th_gauge::mysql_monitor_aws_rds_topology_discovery_interval,
+			"proxysql_mysql_monitor_aws_rds_topology_discovery_interval",
+			"How frequently a topology discovery is performed, e.g. a value of 500 means one topology discovery every 500 read-only checks ",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_th_gauge::mysql_monitor_read_only_interval,
 			"proxysql_mysql_monitor_read_only_interval_seconds",
 			"How frequently a read only check is performed, in seconds.",
@@ -897,6 +905,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_host_cache_size=0;
 	variables.client_host_error_counts=0;
 	variables.handle_warnings=1;
+	variables.evaluate_replication_lag_on_servers_load=1;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -912,6 +921,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_ping_interval=8000;
 	variables.monitor_ping_max_failures=3;
 	variables.monitor_ping_timeout=1000;
+	variables.monitor_aws_rds_topology_discovery_interval=1000;
 	variables.monitor_read_only_interval=1000;
 	variables.monitor_read_only_timeout=800;
 	variables.monitor_read_only_max_timeout_count=3;
@@ -986,7 +996,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
 	}
-	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
@@ -1046,6 +1055,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_crl=NULL;
 	variables.ssl_p2s_crlpath=NULL;
 	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,transaction_isolation,version");
+	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
+	variables.default_authentication_plugin_int = 0; // mysql_native_password
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -1150,6 +1161,19 @@ void MySQL_Threads_Handler::commit() {
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
 }
 
+
+/**
+ * Retrieves the string value of a specified global variable.
+ *
+ * This method searches for a global variable by name and returns its current
+ * string value. It's used to access configuration settings that are stored
+ * as strings within the MySQL Threads Handler. If the variable is not found,
+ * or if it is not a string type, a default or NULL value may be returned.
+ *
+ * @param name The name of the variable to retrieve.
+ * @return A pointer to the string value of the variable, or NULL if the
+ * variable does not exist or is not of string type.
+ */
 char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strncmp(name,"monitor_",8)) {
 		if (!strcmp(name,"monitor_username")) return strdup(variables.monitor_username);
@@ -1248,12 +1272,6 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 				return strdup(variables.default_variables[i]);
 			}
 		}
-		if (!strcmp(name,"default_tx_isolation")) {
-			if (variables.default_tx_isolation==NULL) {
-				variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
-			}
-			return strdup(variables.default_tx_isolation);
-		}
 		if (!strcmp(name,"default_session_track_gtids")) {
 			if (variables.default_session_track_gtids==NULL) {
 				variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
@@ -1267,6 +1285,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
@@ -1281,6 +1300,21 @@ uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	// LCOV_EXCL_STOP
 }
 
+
+/**
+ * Retrieves the integer value of a specified global variable.
+ *
+ * This method is responsible for fetching the value of a global configuration
+ * variable that is stored as an integer. It looks up the variable by its name
+ * and returns the integer value associated with it. This is useful for obtaining
+ * configuration settings that are expected to be numerical values. If the variable
+ * cannot be found or is not an integer type, a default value may be returned,
+ * typically indicating an error or not set state.
+ *
+ * @param name The name of the variable to retrieve.
+ * @return The integer value of the variable if found and valid, otherwise a
+ * default or error-indicating value.
+ */
 int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	// convert name to string, and lowercase
 	std::string nameS = string(name);
@@ -1313,6 +1347,17 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 //VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
+/**
+ * Retrieves the value of a specified configuration variable.
+ *
+ * This method looks up a global configuration variable by its name and returns its value as a char pointer.
+ * It's designed to access various types of configuration settings within the MySQL Threads Handler context.
+ * The function can return values for variables of different types, but the caller must ensure proper type handling.
+ * If the variable is not found, a NULL pointer is returned.
+ *
+ * @param name The name of the variable to retrieve.
+ * @return The value of the variable as a char pointer, or NULL if the variable does not exist.
+ */
 char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
 //VALGRIND_DISABLE_ERROR_REPORTING;
 #define INTBUFSIZE	4096
@@ -1369,12 +1414,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			return strdup(variables.add_ldap_user_comment);
 		}
 	}
-	if (!strcasecmp(name,"default_tx_isolation")) {
-		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
-		}
-		return strdup(variables.default_tx_isolation);
-	}
 	if (!strcasecmp(name,"default_session_track_gtids")) {
 		if (variables.default_session_track_gtids==NULL) {
 			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
@@ -1401,6 +1440,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
@@ -1479,19 +1519,22 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 }
 
 
-
+/**
+ * Sets the value of a specified global variable.
+ *
+ * This method allows for the modification of global variables within the MySQL Threads Handler
+ * by specifying the variable's name and the desired new value. It supports changing the values
+ * of variables across various types, though the input is accepted as a string. Proper conversion
+ * to the variable's actual type is performed internally. This function is key for dynamic configuration
+ * updates and runtime adjustments of the proxy's behavior.
+ *
+ * @param name The name of the variable to set.
+ * @param value The new value for the variable, passed as a const char pointer.
+ * @return True if the variable was successfully updated, false otherwise.
+ */
 bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// this is the public function, accessible from admin
-	// IN:
-	// name: variable name
-	// value: variable value
-	//
-	// OUT:
-	// false: unable to change the variable value, either because doesn't exist, or because out of range, or read only
-	// true: variable value changed
-	//
 	if (!value) return false;
 	size_t vallen=strlen(value);
-
 
 	// convert name to string, and lowercase
 	std::string nameS = string(name);
@@ -1704,19 +1747,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		return true;
 	}
 
-	if (!strcasecmp(name,"default_tx_isolation")) {
-		if (variables.default_tx_isolation) free(variables.default_tx_isolation);
-		variables.default_tx_isolation=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_tx_isolation=strdup(value);
-		}
-		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION); // default
-		}
-		return true;
-	}
-
 	if (!strcasecmp(name,"default_session_track_gtids")) {
 		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 		variables.default_session_track_gtids=NULL;
@@ -1751,6 +1781,25 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				if (variables.default_variables[i] == NULL)
 					variables.default_variables[i] = strdup(mysql_tracked_variables[i].default_value);
 				return true;
+			}
+		}
+		if (!strcasecmp(name,"default_authentication_plugin")) {
+			if (vallen) {
+				const char * valids[2] = { "mysql_native_password", "caching_sha2_password" };
+				for (long unsigned int i=0; i < sizeof(valids)/sizeof(char *) ; i++) {
+					if (strcmp(valids[i],value)==0) {
+						free(variables.default_authentication_plugin);
+						variables.default_authentication_plugin=strdup(value);
+						if (i==0) variables.default_authentication_plugin_int = 0;
+						if (i==1) variables.default_authentication_plugin_int = 2;
+						return true;
+					}
+				}
+				// not found
+				proxy_error("%s is an invalid value for default_authentication_plugin\n", value);
+				return false;
+			} else {
+				return false;
 			}
 		}
 	}
@@ -1846,6 +1895,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				return true;
 			} else {
 				proxy_error("%s is an invalid value for auditlog_filename path, the directory cannot be accessed\n", eval_dirname);
+				free(full_path);
 				return false;
 			}
 		} else {
@@ -1870,6 +1920,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				return true;
 			} else {
 				proxy_error("%s is an invalid value for eventslog_filename path, the directory cannot be accessed\n", eval_dirname);
+				free(full_path);
 				return false;
 			}
 		} else {
@@ -1957,7 +2008,18 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 }
 
 
-// return variables from both mysql_thread_variables_names AND mysql_tracked_variables
+/**
+ * Retrieves a list of all global configuration variables' names.
+ *
+ * This method returns an array of strings, each representing the name of a global configuration
+ * variable managed by the MySQL Threads Handler. It's utilized to enumerate all available configuration
+ * settings, facilitating dynamic inspection or modification of the proxy's configuration. The list
+ * includes variables of all types and categories, providing a comprehensive overview of the proxy's
+ * configurable parameters.
+ *
+ * @return A null-terminated array of char pointers, where each entry is the name of a global variable.
+ * The last element of the array is NULL to indicate the end of the list.
+ */
 char ** MySQL_Threads_Handler::get_variables_list() {
 
 
@@ -2025,6 +2087,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_ping_timeout"]      = make_tuple(&variables.monitor_ping_timeout,      100,       600*1000, false);
 		VariablesPointers_int["monitor_ping_max_failures"] = make_tuple(&variables.monitor_ping_max_failures,   1,      1000*1000, false);
 
+		VariablesPointers_int["monitor_aws_rds_topology_discovery_interval"] = make_tuple(&variables.monitor_aws_rds_topology_discovery_interval, 1, 100000, false);
 		VariablesPointers_int["monitor_read_only_interval"]          = make_tuple(&variables.monitor_read_only_interval,        100, 7*24*3600*1000, false);
 		VariablesPointers_int["monitor_read_only_timeout"]           = make_tuple(&variables.monitor_read_only_timeout,         100,       600*1000, false);
 		VariablesPointers_int["monitor_read_only_max_timeout_count"] = make_tuple(&variables.monitor_read_only_max_timeout_count, 1,      1000*1000, false);
@@ -2106,6 +2169,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
+		VariablesPointers_int["evaluate_replication_lag_on_servers_load"] = make_tuple(&variables.evaluate_replication_lag_on_servers_load, 0, 1, false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
@@ -2166,8 +2230,17 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	return ret;
 }
 
-// Returns true if the given name is the name of an existing mysql variable
-// scan both mysql_thread_variables_names AND mysql_tracked_variables
+/**
+ * @brief Checks whether the MySQL Threads Handler has a specific variable.
+ * 
+ * This function checks if the MySQL Threads Handler contains a variable with the given name.
+ * It first checks if the name starts with "default_" and matches the internal variable names 
+ * stored in the MySQL tracked variables. If not found, it then checks against the list of 
+ * thread variables.
+ * 
+ * @param name The name of the variable to check.
+ * @return true if the variable is found, false otherwise.
+ */
 bool MySQL_Threads_Handler::has_variable(const char *name) {
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
@@ -2197,6 +2270,18 @@ void MySQL_Threads_Handler::print_version() {
 	fprintf(stderr,"Standard MySQL Threads Handler rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 }
 
+/**
+ * @brief Initializes the MySQL Threads Handler with the given number of threads and stack size.
+ * 
+ * This function initializes the MySQL Threads Handler with the specified number of threads and 
+ * stack size. If the stack size is not provided (or is 0), it defaults to DEFAULT_STACK_SIZE. 
+ * If the number of threads is not provided (or is 0), it defaults to DEFAULT_NUM_THREADS. 
+ * After initialization, it sets the stack size using pthread_attr_setstacksize, allocates memory 
+ * for the MySQL threads, and initializes status variables accordingly.
+ * 
+ * @param num The number of threads to initialize. If 0, defaults to DEFAULT_NUM_THREADS.
+ * @param stack The size of the stack for each thread. If 0, defaults to DEFAULT_STACK_SIZE.
+ */
 void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	if (stack) {
 		stacksize=stack;
@@ -2221,6 +2306,19 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 #endif // IDLE_THREADS
 }
 
+/**
+ * @brief Creates a new MySQL thread and starts its execution.
+ * 
+ * This function creates a new MySQL thread with the specified thread number, start routine, 
+ * and whether it's an idle thread or not. If idles is set to false, a regular MySQL thread 
+ * is created using pthread_create. If idles is true and idle_threads are enabled, an idle 
+ * MySQL thread is created. After creating the thread, it returns NULL.
+ * 
+ * @param tn The thread number to assign to the created thread.
+ * @param start_routine The function the new thread should start executing.
+ * @param idles A boolean indicating whether the created thread is an idle thread or not.
+ * @return A pointer to the created MySQL thread.
+ */
 proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
 	if (idles==false) {
 		if (pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]) != 0 ) {
@@ -2512,6 +2610,15 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 	}
 }
 
+/**
+ * @brief Flushes the client host cache.
+ * 
+ * This function locks the mutex associated with the client host cache, clears the cache,
+ * and then unlocks the mutex. It is used to remove all entries from the client host cache.
+ * 
+ * @note This function assumes that the mutex_client_host_cache has been initialized 
+ * and is accessible within the MySQL Threads Handler.
+ */
 void MySQL_Threads_Handler::flush_client_host_cache() {
 	pthread_mutex_lock(&mutex_client_host_cache);
 	client_host_cache.clear();
@@ -2529,11 +2636,11 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
+	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
-	if (variables.default_tx_isolation) free(variables.default_tx_isolation);
 	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
@@ -2660,11 +2767,11 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
+	if (mysql_thread___default_authentication_plugin) { free(mysql_thread___default_authentication_plugin); mysql_thread___default_authentication_plugin=NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
-	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation=NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
 
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
@@ -2874,6 +2981,18 @@ void MySQL_Thread::unregister_session(int idx) {
 
 
 // this function was inline in MySQL_Thread::run()
+/**
+ * @brief Retrieves multiple idle connections and processes them.
+ * 
+ * This method retrieves multiple idle connections from the MySQL Hostgroup Manager (MyHGM) and processes them.
+ * It updates the number of idle connections (num_idles) based on the retrieved connections. For each idle connection,
+ * it creates a new MySQL session, attaches the connection to the appropriate backend, assigns a file descriptor,
+ * sets necessary parameters, registers the session with the connection handler, and initiates handling.
+ * 
+ * @param num_idles Reference to an integer to store the number of idle connections retrieved.
+ * 
+ * @note This method assumes that MyHGM, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER, curtime, and relevant MySQL thread variables have been properly initialized and are accessible.
+ */
 void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 	int i;
 	num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server_msec*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
@@ -2954,6 +3073,17 @@ void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
 
 
 // this function was inline in MySQL_Thread::run()
+/**
+ * @brief Processes all MySQL Data Streams after polling.
+ * 
+ * This function iterates through all MySQL polls and processes the associated data streams.
+ * For each poll, it prints debug information about the file descriptor and its events.
+ * If a MySQL Data Stream is associated with the poll, it checks for events on the file descriptor.
+ * If there are no events and a poll timeout is enabled, it checks for sessions timing out.
+ * If there are events, it checks for invalid file descriptors and handles new connections 
+ * for listener type data streams. For other types of data streams, it processes data and 
+ * handles any potential errors.
+ */
 void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
 	for (unsigned int n = 0; n < mypolls.len; n++) {
 		proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
@@ -2990,6 +3120,14 @@ void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
 
 
 // this function was inline in MySQL_Thread::run()
+/**
+ * @brief Cleans up the mirror queue by removing excess sessions.
+ * 
+ * This function checks if the length of the mirror queue exceeds the maximum concurrency limit.
+ * If it does, it iteratively removes sessions from the mirror queue until its length matches 
+ * the maximum concurrency limit or falls below it. For each removed session, it updates 
+ * the mirror sessions current count and increments the mirror concurrency gauge accordingly.
+ */
 void MySQL_Thread::run___cleanup_mirror_queue() {
 	unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
 	if (mirror_queue_mysql_sessions_cache->len > l) {
@@ -3003,6 +3141,14 @@ void MySQL_Thread::run___cleanup_mirror_queue() {
 }
 
 // main loop
+/**
+ * @brief Main loop for the MySQL thread.
+ * 
+ * This method represents the main loop executed by the MySQL thread. It performs various tasks including handling idle connections,
+ * processing sessions, performing maintenance, and updating variables. The loop continues executing until shutdown is initiated.
+ * 
+ * @note This method assumes that relevant variables, mutexes, and objects have been properly initialized.
+ */
 void MySQL_Thread::run() {
 	unsigned int n;
 	int rc;
@@ -3057,6 +3203,20 @@ __run_skip_1:
 		ProcessAllMyDS_BeforePoll();
 
 #ifdef IDLE_THREADS
+		/**
+		 * @brief Handles session assignment and retrieval between worker and idle threads.
+		 * 
+		 * This block of code checks if the global configuration allows idle threads and if the current thread
+		 * is not an idle maintenance thread. If both conditions are met, it randomly selects an idle worker thread
+		 * and assigns sessions to it. Then, it retrieves sessions from the idle thread.
+		 * 
+		 * @note This functionality is part of the management of worker and idle threads in the MySQL thread pool.
+		 * It facilitates the distribution of sessions between active worker threads and idle threads to optimize resource utilization.
+		 * 
+		 * @param idle_maintenance_thread Flag indicating whether the current thread is an idle maintenance thread.
+		 * @param GloVars Global configuration variables for the MySQL thread.
+		 * @param GloMTH Global MySQL thread handlers object.
+		 */
 		if (GloVars.global.idle_threads) {
 			if (idle_maintenance_thread==false) {
 				int r=rand()%(GloMTH->num_threads);
@@ -3285,6 +3445,20 @@ unsigned int MySQL_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *ses
 }
 
 #ifdef IDLE_THREADS
+
+/**
+ * @brief Moves idle threads to kill idle sessions.
+ * 
+ * This function iterates through a portion of MySQL sessions to scan for idle sessions.
+ * If the current time exceeds the wait timeout threshold, it marks sessions idle for longer
+ * than the timeout as killed. It then removes the killed sessions from the session map,
+ * adjusts the map if necessary, unregisters the sessions, and adds them to the list of
+ * sessions to be resumed. Additionally, it removes associated data streams from the poll list
+ * and epoll control, updating relevant indices and pointers.
+ * 
+ * @note This function assumes that MySQL sessions and related data structures have been
+ * initialized and are accessible within the MySQL Thread.
+ */
 void MySQL_Thread::idle_thread_to_kill_idle_sessions() {
 #define	SESS_TO_SCAN	128
 	if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
@@ -3360,6 +3534,17 @@ void MySQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sess
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
 }
 
+/**
+ * @brief Assigns idle sessions to a worker thread for processing.
+ * 
+ * This function is executed by an idle thread to assign idle sessions to a specified worker thread
+ * for processing. It locks the mutex associated with the worker thread's session exchange mechanism,
+ * checks if there are sessions to resume, and if so, transfers them to the worker thread's list
+ * of sessions to resume. After transferring sessions, it determines whether to send a signal to the
+ * worker thread to inform it of the presence of new sessions.
+ * 
+ * @param thr The worker thread to which idle sessions will be assigned.
+ */
 void MySQL_Thread::idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr) {
 	bool send_signal = false;
 	// send_signal variable will control if we need to signal or not
@@ -3385,6 +3570,18 @@ void MySQL_Thread::idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *t
 	}
 }
 
+/**
+ * @brief Assigns idle sessions to an idle thread for processing.
+ * 
+ * This function is executed by a worker thread to assign idle sessions to a specified idle thread
+ * for processing. It checks if both the current thread and the idle thread are not in shutdown mode,
+ * and if there are idle sessions to assign. If conditions are met, it locks the mutex associated with
+ * the idle thread's session exchange mechanism, transfers idle sessions to the idle thread's list of
+ * sessions to process, and sends a signal to the idle thread if its session queue was empty before
+ * transferring sessions.
+ * 
+ * @param thr The idle thread to which idle sessions will be assigned.
+ */
 void MySQL_Thread::worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr) {
 	if (shutdown==0 && thr->shutdown==0 && idle_mysql_sessions->len) {
 		pthread_mutex_lock(&thr->myexchange.mutex_idles);
@@ -3408,18 +3605,31 @@ void MySQL_Thread::worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *t
 	}
 }
 
+/**
+ * @brief Worker thread retrieves sessions from the idle thread for processing.
+ * 
+ * This function is executed by a worker thread to retrieve sessions from the idle thread
+ * for processing. It locks the mutex associated with the session exchange mechanism,
+ * checks if there are sessions to resume, and if so, retrieves them from the idle thread's
+ * list of sessions to be resumed. For each retrieved session, it registers the session,
+ * adds its associated data stream to the poll list for monitoring read events, and updates
+ * the poll timestamp. After processing all available sessions, it unlocks the mutex.
+ * 
+ * @note This function assumes that the worker thread's session exchange mechanism has been
+ * initialized and is accessible within the MySQL Thread.
+ */
 void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
-				pthread_mutex_lock(&myexchange.mutex_resumes);
-				if (myexchange.resume_mysql_sessions->len) {
-					//unsigned int maxsess=GloMTH->resume_mysql_sessions->len;
-					while (myexchange.resume_mysql_sessions->len) {
-						MySQL_Session *mysess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
-						register_session(mysess, false);
-						MySQL_Data_Stream *myds=mysess->client_myds;
-						mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
-					}
-				}
-				pthread_mutex_unlock(&myexchange.mutex_resumes);
+	pthread_mutex_lock(&myexchange.mutex_resumes);
+	if (myexchange.resume_mysql_sessions->len) {
+		//unsigned int maxsess=GloMTH->resume_mysql_sessions->len;
+		while (myexchange.resume_mysql_sessions->len) {
+			MySQL_Session *mysess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
+			register_session(mysess, false);
+			MySQL_Data_Stream *myds=mysess->client_myds;
+			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
+		}
+	}
+	pthread_mutex_unlock(&myexchange.mutex_resumes);
 }
 #endif // IDLE_THREADS
 
@@ -3584,6 +3794,16 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 
 
 // this function was inline in  MySQL_Thread::process_all_sessions()
+/**
+ * @brief Sort all sessions based on maximum connection time.
+ * 
+ * This function iterates through all MySQL sessions and sorts them based on their maximum connection time.
+ * Sessions with a valid maximum connection time are compared, and if one session has a greater maximum connection
+ * time than another, their positions in the session list are swapped. The sorting is performed in-place.
+ * 
+ * @note This function assumes that MySQL sessions and their associated data structures have been initialized
+ * and are accessible within the MySQL Thread.
+ */
 void MySQL_Thread::ProcessAllSessions_SortingSessions() {
 	unsigned int a=0;
 	for (unsigned int n=0; n<mysql_sessions->len; n++) {
@@ -3631,10 +3851,39 @@ void MySQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, My
 
 
 // this function was inline in MySQL_Thread::process_all_sessions()
+/**
+ * @brief Processes a session in the maintenance loop.
+ * 
+ * This function performs maintenance tasks for a session within the maintenance loop. It handles checks related to session
+ * timeouts, active transactions, and server table version changes. Depending on the conditions, it may kill the session,
+ * simulate data in failed backend connections, or update expired connections if multiplexing is enabled.
+ * 
+ * @param sess The MySQL session to process.
+ * @param sess_time The time elapsed since the session started, in milliseconds.
+ * @param total_active_transactions_ Reference to the total number of active transactions across all sessions.
+ */
 void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_) {
 	unsigned int numTrx=0;
 	total_active_transactions_ += sess->active_transactions;
 	sess->to_process=1;
+	/**
+	 * @brief Handles session timeout conditions and associated actions.
+	 * 
+	 * This block of code evaluates whether the session has exceeded either the maximum transaction idle time
+	 * or the wait timeout duration. If either condition is met, it takes appropriate action:
+	 * 
+	 * - If the session has active transactions, it checks if the maximum transaction time has been exceeded
+	 *   and kills the session if necessary.
+	 * - If the session does not have active transactions, it kills the session if it has been inactive for longer
+	 *   than the wait timeout duration.
+	 * 
+	 * If none of the timeout conditions are met, it continues to evaluate the session's active transactions
+	 * against the maximum transaction time criteria and kills the session if necessary.
+	 * 
+	 * @param sess_time The time elapsed since the session started, in milliseconds.
+	 * @param curtime The current time, in milliseconds.
+	 * @param sess The MySQL session to handle.
+	 */
 	if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_idle_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 		//numTrx = sess->NumActiveTransactions();
 		numTrx = sess->active_transactions;
@@ -3671,6 +3920,18 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 			}
 		}
 	}
+	/**
+	 * @brief Handles server table version change and its associated actions.
+	 * 
+	 * This block of code checks if the current server table version differs from the previous version,
+	 * indicating a change in server configurations. If there is a change, it performs the following actions:
+	 * 
+	 * - If the session is in fast forward mode and has offline backends, it immediately kills the client connection.
+	 * - If the session is not in fast forward mode, it searches for connections that should be terminated,
+	 *   and simulates data in them by failing the backend connections instead of killing the sessions.
+	 * 
+	 * This block also addresses bug fix #1085 related to handling client connections using an OFFLINE node.
+	 */
 	if (servers_table_version_current != servers_table_version_previous) { // bug fix for #1085
 		// Immediatelly kill all client connections using an OFFLINE node when session_fast_forward == true
 		if (sess->session_fast_forward) {
@@ -3689,6 +3950,14 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 	}
 
 	// Perform the maintenance for expired connections on the session
+
+	/**
+	 * @brief Checks for expired connections and updates them if multiplexing is enabled.
+	 * 
+	 * If multiplexing is enabled, this block of code defines lambda functions to check for expired connections
+	 * based on auto-increment delay and connection delay multiplexing criteria. It then creates a vector of these
+	 * functions and passes it to the `update_expired_conns` method of the session object to update expired connections.
+	 */
 	if (mysql_thread___multiplexing) {
 		const auto auto_incr_delay_multiplex_check = [curtime=this->curtime] (MySQL_Connection* myconn) -> bool {
 			const uint64_t multiplex_timeout_ms = mysql_thread___auto_increment_delay_multiplex_timeout_ms;
@@ -3712,6 +3981,34 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 	}
 }
 
+
+/**
+ * @brief Processes all active sessions within the MySQL thread.
+ * 
+ * This function iterates through all active sessions within the MySQL thread and performs various actions based on the session state and conditions.
+ * 
+ * If the session sorting flag is enabled and there are more than three sessions, it sorts the sessions.
+ * 
+ * For each session, it performs the following tasks:
+ * - Checks if the session is a mirror session and handles completed mirror sessions accordingly.
+ * - Handles client connection establishment timeout if the session is in the CONNECTING_CLIENT state.
+ * - Executes maintenance tasks on sessions if the MySQL thread is in maintenance mode.
+ * - Handles unhealthy sessions by closing them and logging audit entries.
+ * - Executes the session handler if it needs processing and is not paused, handling session termination if needed.
+ * 
+ * After processing all sessions, if the MySQL thread is in maintenance mode, it updates the total active transactions.
+ * 
+ * @param sess_sort Flag indicating whether session sorting is enabled.
+ * @param mysql_sessions Pointer to the list of MySQL sessions.
+ * @param mysql_thread___connect_timeout_client Timeout value for establishing client connections.
+ * @param mysql_thread___wait_timeout Timeout value for inactive sessions.
+ * @param mysql_thread___log_unhealthy_connections Flag indicating whether to log unhealthy connections.
+ * @param curtime Current timestamp.
+ * @param maintenance_loop Flag indicating whether the MySQL thread is in maintenance mode.
+ * @param status_variables Struct containing status variables for the MySQL thread.
+ * @param total_active_transactions_ Reference variable to store the total active transactions.
+ * @param rc Variable to store the return code of session handlers.
+ */
 void MySQL_Thread::process_all_sessions() {
 	unsigned int n;
 	unsigned int total_active_transactions_=0;
@@ -3835,6 +4132,20 @@ void MySQL_Thread::process_all_sessions() {
 	}
 }
 
+
+/**
+ * @brief Refreshes MySQL thread variables from global MySQL thread handler.
+ * 
+ * This method locks the global MySQL thread handler mutex and refreshes various MySQL thread variables
+ * from the global MySQL thread handler. It retrieves values for variables such as maximum allowed packet size,
+ * automatic SQL injection detection, firewall whitelist status, TCP keepalive usage, TCP keepalive time,
+ * connection throttling per second to host groups, maximum transaction idle time, maximum transaction time,
+ * threshold query length, threshold result set size, maximum query digest length, maximum query length for digests,
+ * wait timeout, default variables, replication lag evaluation on server load, and session debugging mode.
+ * 
+ * @note This method assumes that the global MySQL thread handler (GloMTH) and relevant variables such as
+ * mysql_thread___default_variables have been properly initialized and are accessible.
+ */
 void MySQL_Thread::refresh_variables() {
 	pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
 	if (GloMTH==NULL) {
@@ -3926,6 +4237,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_ping_interval=GloMTH->get_variable_int((char *)"monitor_ping_interval");
 	mysql_thread___monitor_ping_max_failures=GloMTH->get_variable_int((char *)"monitor_ping_max_failures");
 	mysql_thread___monitor_ping_timeout=GloMTH->get_variable_int((char *)"monitor_ping_timeout");
+	mysql_thread___monitor_aws_rds_topology_discovery_interval=GloMTH->get_variable_int((char *)"monitor_aws_rds_topology_discovery_interval");
 	mysql_thread___monitor_read_only_interval=GloMTH->get_variable_int((char *)"monitor_read_only_interval");
 	mysql_thread___monitor_read_only_timeout=GloMTH->get_variable_int((char *)"monitor_read_only_timeout");
 	mysql_thread___monitor_read_only_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_read_only_max_timeout_count");
@@ -3959,8 +4271,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ldap_user_variable=GloMTH->get_variable_string((char *)"ldap_user_variable");
 	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
 	mysql_thread___add_ldap_user_comment=GloMTH->get_variable_string((char *)"add_ldap_user_comment");
-	if (mysql_thread___default_tx_isolation) free(mysql_thread___default_tx_isolation);
-	mysql_thread___default_tx_isolation=GloMTH->get_variable_string((char *)"default_tx_isolation");
 	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
 	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
 
@@ -3992,6 +4302,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
 	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
+	if (mysql_thread___default_authentication_plugin) free(mysql_thread___default_authentication_plugin);
+	mysql_thread___default_authentication_plugin=GloMTH->get_variable_string((char *)"default_authentication_plugin");
+	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___handle_unknown_charset=GloMTH->get_variable_int((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
@@ -4038,6 +4351,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___client_host_cache_size=GloMTH->get_variable_int((char *)"client_host_cache_size");
 	mysql_thread___client_host_error_counts=GloMTH->get_variable_int((char *)"client_host_error_counts");
 	mysql_thread___handle_warnings=GloMTH->get_variable_int((char*)"handle_warnings");
+	mysql_thread___evaluate_replication_lag_on_servers_load=GloMTH->get_variable_int((char*)"evaluate_replication_lag_on_servers_load");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
@@ -4108,6 +4422,18 @@ MySQL_Thread::MySQL_Thread() {
 	thr_SetParser = NULL;
 }
 
+/**
+ * @brief Registers a session with the connection handler.
+ * 
+ * This method registers a session with the connection handler of the MySQL thread. It sets the thread pointer
+ * of the session to the current MySQL thread, marks the session as being handled by the connections handler,
+ * and adds the session to the MySQL sessions list.
+ * 
+ * @param _sess Pointer to the MySQL_Session object to register.
+ * @param _new Boolean flag indicating whether the session is new.
+ * 
+ * @note This method assumes that the MySQL sessions list (mysql_sessions) has been properly initialized and is accessible.
+ */
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
 	_sess->thread=this;
 	_sess->connections_handler=true;
@@ -4115,6 +4441,18 @@ void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, boo
 	mysql_sessions->add(_sess);
 }
 
+
+/**
+ * @brief Unregisters a session from the connection handler.
+ * 
+ * This method unregisters a session from the connection handler of the MySQL thread. It removes the session
+ * from the MySQL sessions list based on the provided index.
+ * 
+ * @param idx Index of the session in the MySQL sessions list to unregister.
+ * @param _new Boolean flag indicating whether the session is new.
+ * 
+ * @note This method assumes that the MySQL sessions list (mysql_sessions) has been properly initialized and is accessible.
+ */
 void MySQL_Thread::unregister_session_connection_handler(int idx, bool _new) {
 	assert(_new);
 	mysql_sessions->remove_index_fast(idx);
@@ -4556,6 +4894,26 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 }
 
 
+/**
+ * @brief Retrieves memory statistics from all MySQL threads.
+ * 
+ * This function iterates through all MySQL threads, including both active worker threads and idle maintenance threads if enabled,
+ * to retrieve memory statistics using the `Get_Memory_Stats()` function for each thread.
+ * 
+ * It first determines the total number of threads to iterate based on the number of active worker threads (`num_threads`) and
+ * whether idle threads are enabled (`GloVars.global.idle_threads`). If idle threads are enabled, it doubles the count to include
+ * both active worker threads and idle maintenance threads.
+ * 
+ * For each thread, it acquires a lock on the thread mutex to safely retrieve memory statistics and then releases the lock.
+ * If any thread is found to be NULL during iteration, indicating that it is not ready, the function exits early.
+ * 
+ * @note This function assumes that the `Get_Memory_Stats()` function is implemented for MySQL_Thread objects to retrieve memory statistics.
+ * 
+ * @param num_threads Number of active worker threads.
+ * @param mysql_threads Array of active worker threads.
+ * @param mysql_threads_idles Array of idle maintenance threads.
+ * @param GloVars Struct containing global variables.
+ */
 void MySQL_Threads_Handler::Get_Memory_Stats() {
 	unsigned int i;
 	unsigned int j;
@@ -5205,6 +5563,7 @@ void MySQL_Threads_Handler::p_update_metrics() {
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_enabled]->Set(this->variables.monitor_enabled);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_timeout]->Set(this->variables.monitor_ping_timeout/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_max_failures]->Set(this->variables.monitor_ping_max_failures);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_aws_rds_topology_discovery_interval]->Set(this->variables.monitor_aws_rds_topology_discovery_interval);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_timeout]->Set(this->variables.monitor_read_only_timeout/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_writer_is_also_reader]->Set(this->variables.monitor_writer_is_also_reader);
@@ -5214,6 +5573,19 @@ void MySQL_Threads_Handler::p_update_metrics() {
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_history]->Set(this->variables.monitor_history/1000.0);
 }
 
+/**
+ * @brief Retrieves memory statistics for the MySQL thread.
+ * 
+ * This function calculates memory statistics for the MySQL thread, including backend and frontend buffers,
+ * as well as memory usage for internal session structures.
+ * 
+ * Memory statistics are stored in the `status_variables` object, particularly in the `stvar` array.
+ * 
+ * If there are active MySQL sessions associated with the thread, additional memory statistics are computed
+ * based on session-related data structures and buffers.
+ * 
+ * @note This function assumes that the `Memory_Stats()` function is implemented for MySQL_Session objects to retrieve session memory statistics.
+ */
 void MySQL_Thread::Get_Memory_Stats() {
 	unsigned int i;
 	status_variables.stvar[st_var_mysql_backend_buffers_bytes]=0;
@@ -5239,6 +5611,21 @@ void MySQL_Thread::Get_Memory_Stats() {
 }
 
 
+/**
+ * @brief Retrieves a MySQL connection from the local cache based on specified criteria.
+ * 
+ * This function retrieves a MySQL connection from the local cache managed by the MySQL_Thread instance.
+ * It searches for a suitable connection based on the provided parameters such as host group ID, session information,
+ * GTID UUID, GTID transaction ID, and maximum lag time. If a matching connection is found, it is removed from the
+ * cache and returned to the caller.
+ * 
+ * @param _hid The host group ID to which the connection belongs.
+ * @param sess The MySQL session associated with the connection.
+ * @param gtid_uuid The GTID UUID used for replication, or NULL if not used.
+ * @param gtid_trxid The GTID transaction ID.
+ * @param max_lag_ms The maximum lag time allowed for the connection in milliseconds.
+ * @return A pointer to the retrieved MySQL connection if found; otherwise, NULL.
+ */
 MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	// some sanity check
 	if (sess == NULL) return NULL;
@@ -5298,6 +5685,20 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	return NULL;
 }
 
+
+/**
+ * @brief Pushes a MySQL connection to the local connection pool.
+ * 
+ * This function is responsible for adding a MySQL connection to the local connection pool.
+ * It resets the insert_id and checks if the associated server is online and the connection is idle
+ * before adding it to the pool.
+ * 
+ * If the server is online and the connection is idle, the connection is added to the cached connections pool.
+ * Otherwise, if the server is not online or the connection is not idle, the connection is pushed to the
+ * global connection pool managed by MySQL_Host_Group_Manager.
+ * 
+ * @param c Pointer to the MySQL_Connection object to be pushed to the local connection pool.
+ */
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	MySrvC *mysrvc=NULL;
 	mysrvc=(MySrvC *)c->parent;
@@ -5312,22 +5713,37 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	MyHGM->push_MyConn_to_pool(c);
 }
 
+
+/**
+ * @brief Returns all locally cached MySQL connections to the global connection pool.
+ * 
+ * This function is responsible for returning all locally cached MySQL connections to the global connection pool.
+ * It checks if there are any cached connections available, and if so, it pushes them back to the global connection pool
+ * managed by MySQL_Host_Group_Manager. After returning the connections, it clears the local cached connections pool.
+ */
 void MySQL_Thread::return_local_connections() {
 	if (cached_connections->len==0) {
 		return;
 	}
-/*
-	MySQL_Connection **ca=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*(cached_connections->len+1));
-	unsigned int i=0;
-*/
-//	ca[i]=NULL;
 	MyHGM->push_MyConn_to_pool_array((MySQL_Connection **)cached_connections->pdata, cached_connections->len);
-//	free(ca);
 	while (cached_connections->len) {
 		cached_connections->remove_index_fast(0);
 	}
 }
 
+/**
+ * @brief Scans sessions to kill based on connection and query IDs stored in the kill queue.
+ * 
+ * This function scans sessions to kill based on the connection and query IDs stored in the kill queue.
+ * It iterates over the MySQL sessions and checks if any session matches the IDs stored in the kill queue.
+ * If a session matches, it is marked for termination.
+ * 
+ * For idle threads, it also scans sessions in the idle and resume sessions queues maintained by the session exchange.
+ * 
+ * @note This function assumes that the kill queue (kq) contains connection and query IDs to be scanned.
+ * 
+ * @see MySQL_Thread::Scan_Sessions_to_Kill
+ */
 void MySQL_Thread::Scan_Sessions_to_Kill_All() {
 	if (kq.conn_ids.size() + kq.query_ids.size()) {
 		Scan_Sessions_to_Kill(mysql_sessions);
@@ -5366,6 +5782,17 @@ void MySQL_Thread::Scan_Sessions_to_Kill_All() {
 	kq.query_ids.clear();
 }
 
+
+/**
+ * @brief Scans sessions in the provided session array to mark sessions for termination based on kill queue IDs.
+ * 
+ * This function scans sessions in the provided session array (mysess) to identify sessions that match the connection
+ * and query IDs stored in the kill queue (kq). If a session matches a connection or query ID, it is marked for termination.
+ * 
+ * @param mysess Pointer to the session array to be scanned.
+ * 
+ * @note This function assumes that the kill queue (kq) contains connection and query IDs to be scanned.
+ */
 void MySQL_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
 			for (unsigned int n=0; n<mysess->len && ( kq.conn_ids.size() + kq.query_ids.size() ) ; n++) {
 				MySQL_Session *_sess=(MySQL_Session *)mysess->index(n);
@@ -5408,6 +5835,16 @@ void MySQL_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
 }
 
 #ifdef IDLE_THREADS
+/**
+ * @brief Moves a session to the idle session array if it meets the idle criteria.
+ * 
+ * This function checks if a session should be moved to the idle session array based on its idle time
+ * and other conditions. If the session meets the idle criteria, it is moved to the idle session array.
+ * 
+ * @param myds Pointer to the MySQL data stream associated with the session.
+ * @param n The index of the session in the poll array.
+ * @return True if the session is moved to the idle session array, false otherwise.
+ */
 bool MySQL_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n) {
 	unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
 	if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
@@ -5416,15 +5853,6 @@ bool MySQL_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, 
 		if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
 			//unsigned int j;
 			bool has_backends = myds->sess->has_any_backend();
-/*
-			for (j=0;j<myds->sess->mybes->len;j++) {
-				MySQL_Backend *tmp_mybe=(MySQL_Backend *)myds->sess->mybes->index(j);
-				MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
-				if (__myds->myconn) {
-					conns++;
-				}
-			}
-*/
 			if (has_backends==false) {
 				unsigned long long idle_since = curtime - myds->sess->IdleTime();
 				mypolls.remove_index_fast(n);
@@ -5459,6 +5887,15 @@ bool MySQL_Thread::set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stre
 }
 
 #ifdef IDLE_THREADS
+/**
+ * @brief Moves sessions from the idle thread's session array to the worker thread's session array.
+ * 
+ * This function is called by the idle maintenance thread to transfer sessions from the idle session array
+ * managed by the exchange structure to the worker thread's session array. It locks the mutex associated
+ * with the idle session array, iterates through the sessions, registers each session, adds it to the worker
+ * thread's poll array, and adds it to the epoll set for monitoring read events. Finally, it updates the session
+ * map to map thread IDs to the positions in the worker thread's session array.
+ */
 void MySQL_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	pthread_mutex_lock(&myexchange.mutex_idles);
 	while (myexchange.idle_mysql_sessions->len) {
@@ -5518,6 +5955,14 @@ void MySQL_Thread::handle_mirror_queue_mysql_sessions() {
 	}
 }
 
+
+/**
+ * @brief Handles the kill queues by scanning sessions to kill and setting the maintenance loop flag.
+ * 
+ * This function is responsible for handling the kill queues. It locks the mutex associated with the kill queues,
+ * scans the sessions to kill if there are pending connections or queries in the kill queues, and sets the maintenance
+ * loop flag to true to initiate maintenance tasks. After processing the kill queues, it releases the mutex.
+ */
 void MySQL_Thread::handle_kill_queues() {
 	pthread_mutex_lock(&kq.m);
 	if (kq.conn_ids.size() + kq.query_ids.size()) {
@@ -5527,6 +5972,16 @@ void MySQL_Thread::handle_kill_queues() {
 	pthread_mutex_unlock(&kq.m);
 }
 
+
+/**
+ * @brief Checks for timing out session and marks them for processing.
+ * 
+ * This function checks for timing out sessions and marks them for processing. Although the logic for managing connection timeout
+ * was removed due to the addition of the MariaDB client library, this function remains as a placeholder. It checks if the session
+ * has reached its wait_until or pause_until time, and if so, marks the session for processing.
+ * 
+ * @param n The index of the session in the MySQL_Data_Stream array.
+ */
 void MySQL_Thread::check_timing_out_session(unsigned int n) {
 	// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
 	// check for timeout
@@ -5545,6 +6000,15 @@ void MySQL_Thread::check_timing_out_session(unsigned int n) {
 	}
 }
 
+
+/**
+ * @brief Checks for an invalid file descriptor (FD) and raises an error if found.
+ * 
+ * This function checks if the file descriptor (FD) at the specified index in the `mypolls.fds` array is invalid (`POLLNVAL`).
+ * If an invalid FD is found, it raises an error and asserts to ensure that the program does not proceed with an invalid FD.
+ * 
+ * @param n The index of the file descriptor in the `mypolls.fds` array.
+ */
 void MySQL_Thread::check_for_invalid_fd(unsigned int n) {
 	// check if the FD is valid
 	if (mypolls.fds[n].revents==POLLNVAL) {

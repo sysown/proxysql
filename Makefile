@@ -11,7 +11,7 @@
 
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-$(error GIT_VERSION is not set)
+    $(error GIT_VERSION is not set)
 endif
 
 ### NOTES:
@@ -35,7 +35,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 2.6.0
+CURVER ?= 2.6.3
 #export DEBUG
 #export EXTRALINK
 export MAKE
@@ -47,7 +47,7 @@ ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 	LEGACY_BUILD := 1
 ifneq ($(CPLUSPLUS),201103L)
-	$(error Compiler must support at least c++11)
+    $(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -303,17 +303,17 @@ ubuntu: $(REL_ARCH)-ubuntu ;
 
 amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
-amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang centos8-dbg centos9 centos9-clang centos9-dbg
-amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
-amd64-fedora: fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg fedora36 fedora36-clang fedora36-dbg fedora37 fedora37-clang fedora37-dbg fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg
+amd64-centos: centos7 centos7-dbg centos8 centos8-clang centos8-dbg centos9 centos9-clang centos9-dbg
+amd64-debian: debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
+amd64-fedora: fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
-amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
+amd64-ubuntu: ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
 
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
 arm64-almalinux: almalinux8 almalinux9
-arm64-centos: centos7 centos8
-arm64-debian: debian9 debian10 debian11 debian12
-arm64-fedora: fedora33 fedora34 fedora36 fedora37 fedora38 fedora39
+arm64-centos: centos7 centos8 centos9
+arm64-debian: debian10 debian11 debian12
+arm64-fedora: fedora38 fedora39
 arm64-opensuse: opensuse15
 arm64-ubuntu: ubuntu16 ubuntu18 ubuntu20 ubuntu22
 
@@ -341,8 +341,9 @@ build-%:
 
 .NOTPARALLEL: binaries/proxysql%
 binaries/proxysql%:
-	@docker-compose -p $(IMG_NAME) down -v --remove-orphans
-	@docker-compose -p $(IMG_NAME) up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
+	@docker-compose -p proxysql down -v --remove-orphans
+	@docker-compose -p proxysql up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
+	@docker-compose -p proxysql down -v --remove-orphans
 
 
 ### clean targets

@@ -67,6 +67,17 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name_) {
 	return charset_collation;
 }
 
+/**
+ * @brief Find charset and collation information based on the given charset name and collation name.
+ *
+ * This function searches for charset and collation information in the compiled charsets based on the provided
+ * charset name and collation name. It performs case-insensitive comparisons to find a match.
+ *
+ * @param csname_ The name of the charset.
+ * @param collatename_ The name of the collation.
+ * @return A pointer to the MARIADB_CHARSET_INFO structure representing the charset and collation information
+ *         if a match is found. If no matching charset and collation are found, it returns NULL.
+ */
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, const char *collatename_) {
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	char buf[64];
@@ -93,6 +104,16 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, 
 	return NULL;
 }
 
+/**
+ * @brief Find charset and collation information based on the given collation name.
+ *
+ * This function searches for charset and collation information in the compiled charsets based on the provided
+ * collation name. It performs case-insensitive comparisons to find a match.
+ *
+ * @param collatename The name of the collation to search for.
+ * @return A pointer to the MARIADB_CHARSET_INFO structure representing the charset and collation information
+ *         if a match is found. If no matching collation is found, it returns NULL.
+ */
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {

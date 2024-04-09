@@ -860,8 +860,8 @@ class btree : public Params::key_compare {
   typedef typename node_type::root_fields root_fields;
   typedef typename Params::is_key_compare_to is_key_compare_to;
 
-  friend class btree_internal_locate_plain_compare;
-  friend class btree_internal_locate_compare_to;
+  friend struct btree_internal_locate_plain_compare;
+  friend struct btree_internal_locate_compare_to;
   typedef typename if_<
     is_key_compare_to::value,
     btree_internal_locate_compare_to,

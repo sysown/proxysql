@@ -217,7 +217,10 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	int wait_res = wait_for_backend_conns(admin, "ConnFree", 0, 5);
+	int wait_res = wait_for_cond(admin,
+		"SELECT IIF((SELECT SUM(ConnFree) FROM stats_mysql_connection_pool)=0, 'TRUE', 'FALSE')",
+		5
+	);
 	if (wait_res != EXIT_SUCCESS) {
 		diag("Error waiting for ProxySQL to close backend connection.");
 		return EXIT_FAILURE;
@@ -242,23 +245,29 @@ int main(int argc, char** argv) {
 	}
 
 	// Create new backend connections (without DEPRECATE_EOF support)
-	uint32_t num_new_connections = 50;
+	uint32_t new_conns = 50;
 	uint32_t cur_used_conns = 0;
 
-	for (uint32_t i = 0; i < num_new_connections; i++) {
+	for (uint32_t i = 0; i < new_conns; i++) {
 		MYSQL_QUERY(proxy, "/* create_new_connection=1 */ DO 1");
 	}
 
 	// Impose a timeout to avoid race conditions
-	wait_for_backend_conns(admin, "ConnFree", 50, 1);
+	const string COND_FREE_CONNS {
+		"(SELECT SUM(ConnFree) FROM stats_mysql_connection_pool)=" + std::to_string(new_conns)
+	};
+	const string EXP_FREE_CONNS { "SELECT IIF(" + COND_FREE_CONNS + ", 'TRUE', 'FALSE')" };
+
+	wait_for_cond(admin, EXP_FREE_CONNS, 2);
 
 	// Check there are 'N' backend connections
-	uint32_t cur_free_conns = 0;
-	int get_conns_err = get_cur_backend_conns(admin, "ConnFree", cur_free_conns);
+	const string SEL_FREE_CONNS { "SELECT SUM(ConnFree) FROM stats_mysql_connection_pool" };
+	ext_val_t<uint64_t> ext_free_conns { mysql_query_ext_val(admin, SEL_FREE_CONNS, uint64_t(-1)) };
+
 	ok(
-		get_conns_err == EXIT_SUCCESS && cur_free_conns == 50,
-		"Backend connection preparation, cur_backend_conn_num: %d",
-		cur_free_conns
+		ext_free_conns.err == EXIT_SUCCESS && ext_free_conns.val == 50,
+		"Backend connection preparation, cur_backend_conn_num: %lu",
+		ext_free_conns.val
 	);
 
 	// Use the connections
@@ -286,17 +295,29 @@ int main(int argc, char** argv) {
 
 	// Issue a single query to check that a new backend connection has been created
 	MYSQL_QUERY(proxy, "BEGIN");
-	int wait_conns_err = wait_for_backend_conns(admin, "ConnFree", 50, 10);
-	get_conns_err = get_cur_backend_conns(admin, "ConnFree", cur_free_conns);
-	if (get_conns_err != EXIT_SUCCESS) { return EXIT_FAILURE; }
+	wait_for_cond(admin, EXP_FREE_CONNS, 10);
 
-	get_conns_err = get_cur_backend_conns(admin, "ConnUsed", cur_used_conns);
-	if (get_conns_err != EXIT_SUCCESS) { return EXIT_FAILURE; }
+	ext_free_conns = mysql_query_ext_val(admin, SEL_FREE_CONNS, uint64_t(-1));
+
+	if (ext_free_conns.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_free_conns) };
+		diag("Failed getting stats 'ConnFree'   query:`%s`, err:`%s`", SEL_FREE_CONNS.c_str(), err.c_str());
+		return EXIT_FAILURE;
+	}
+
+	const string SEL_USED_CONNS { "SELECT SUM(ConnUsed) FROM stats_mysql_connection_pool" };
+	ext_val_t<uint64_t> ext_used_conns { mysql_query_ext_val(admin, SEL_USED_CONNS, uint64_t(-1)) };
+
+	if (ext_used_conns.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_used_conns) };
+		diag("Failed getting stats 'ConnUsed'   query:`%s`, err:`%s`", SEL_USED_CONNS.c_str(), err.c_str());
+		return EXIT_FAILURE;
+	}
 
 	ok(
-		get_conns_err == EXIT_SUCCESS && cur_free_conns == 50 && cur_used_conns == 1,
-		"New backend connection should have been created - { cur_free_conns: %d, cur_used_conns: %d }",
-		cur_free_conns, cur_used_conns
+		ext_free_conns.val == 50 && ext_used_conns.val  == 1,
+		"New backend connection should have been created - { cur_free_conns: %lu, cur_used_conns: %lu }",
+		ext_free_conns.val, ext_used_conns.val
 	);
 
 	// Use the new connection

@@ -16,6 +16,14 @@ extern MySQL_Variables mysql_variables;
 #define CLIENT_DEPRECATE_EOF     (1UL << 24)
 #endif
 
+
+enum proxysql_auth_plugins {
+	AUTH_UNKNOWN_PLUGIN = -1,
+	AUTH_MYSQL_NATIVE_PASSWORD = 0,
+	AUTH_MYSQL_CLEAR_PASSWORD,
+	AUTH_MYSQL_CACHING_SHA2_PASSWORD
+};
+
 class MySQL_ResultSet {
 	private:
 	bool deprecate_eof_active;
@@ -91,6 +99,36 @@ uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
  */
 my_bool proxy_mysql_stmt_close(MYSQL_STMT* mysql_stmt);
 
+class MyProt_tmp_auth_vars {
+	public:
+	unsigned char *user = NULL;
+	char *db = NULL;
+	char *db_tmp = NULL;
+	unsigned char *pass = NULL;
+	char *password = NULL;
+	unsigned char *auth_plugin = NULL;
+	void *sha1_pass=NULL;
+	unsigned char *_ptr = NULL;;
+	unsigned int charset;
+	uint32_t  capabilities = 0;
+	uint32_t  max_pkt;
+	uint32_t  pass_len;
+	bool use_ssl = false;
+	enum proxysql_session_type session_type;
+};
+
+class MyProt_tmp_auth_attrs {
+	public:
+	char *default_schema = NULL;
+	char *attributes = NULL;
+	int default_hostgroup=-1;
+	int max_connections;
+	bool schema_locked;
+	bool transaction_persistent = true;
+	bool fast_forward = false;
+	bool _ret_use_ssl = false;
+};
+
 class MySQL_Protocol {
 	private:
 	MySQL_Connection_userinfo *userinfo;
@@ -101,10 +139,16 @@ class MySQL_Protocol {
 	bool dump_pkt;
 #endif
 	MySQL_Prepared_Stmt_info *current_PreStmt;
+	enum proxysql_auth_plugins sent_auth_plugin_id;
+	enum proxysql_auth_plugins auth_plugin_id;
 	uint16_t prot_status;
+	bool more_data_needed;
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol() {
+		sent_auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
+		auth_plugin_id = AUTH_UNKNOWN_PLUGIN;
 		prot_status=0;
+		more_data_needed = false;
 	}
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
 
@@ -139,6 +183,24 @@ class MySQL_Protocol {
 	// - pointer to the packet
 	// - size of the packet 
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
+
+	// all the following functions were inline inside process_pkt_handshake_response() , but it was split for readibility
+	int PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
+	bool PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
+	void PPHR_3(MyProt_tmp_auth_vars& vars1);
+	bool PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
+	bool PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
+	void PPHR_5passwordTrue(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1);
+	void PPHR_5passwordFalse_0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1);
+	void PPHR_5passwordFalse_auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
+	void PPHR_6auth2(bool& ret, MyProt_tmp_auth_vars& vars1);
+	void PPHR_sha2full(bool& ret, MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat);
+	void PPHR_7auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
+	void PPHR_7auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
+	void PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, MyProt_tmp_auth_attrs& attr1);
+
+	void generate_one_byte_pkt(unsigned char b);
+
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
 	/**

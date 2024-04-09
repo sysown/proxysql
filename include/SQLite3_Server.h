@@ -35,7 +35,7 @@ class SQLite3_Server {
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool read_only;
-		bool hash_passwords;
+//		bool hash_passwords;
 		char * admin_version;
 #ifdef DEBUG
 		bool debug;

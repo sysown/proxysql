@@ -137,6 +137,95 @@ using mysql_res_row = std::vector<std::string>;
  * @return The extracted values of all the rows present in the resultset.
  */
 std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res);
+/**
+ * @brief Executes the given query and returns the received resultset, if any.
+ * @param mysql Already oppened MYSQL connection.
+ * @param query The query to be executed.
+ * @return A pair of kind {err_code, results}; 'results' is left empty if either:
+ *   * Query produces no resulset.
+ *   * An error takes place during query execution or resultset retrieval.
+ */
+std::pair<uint32_t,std::vector<mysql_res_row>> mysql_query_ext_rows(MYSQL* mysql, const std::string& query);
+
+/**
+ * @brief Holds the result of an `mysql_query_ext_val` operation.
+ */
+template <typename T>
+struct ext_val_t {
+	// @brief Error that took place during query exuction or value extraction.
+	int err;
+	// @brief Final value extracted from resultset and parsed.
+	// @details In case of error filled with 'def_val' param for 'mysql_query_ext_val'.
+	T val;
+	// @brief String representation of the received value.
+	// @details Useful in case of parsing error.
+	std::string str;
+};
+
+/**
+ * @brief Specifications of function 'ext_single_row_val' for different types.
+ * @details These functions serve as the extension point for `mysql_query_ext_val`. A new specialization of
+ *  the function is required for each type that `mysql_query_ext_val` should support for the default value.
+ * @param row The row from which the first value is going to be extracted and parsed.
+ * @param def_val The default value to use in case of failure to extract.
+ * @return An `ext_val_t<T>` where T is the type of the provided default value.
+ */
+ext_val_t<std::string> ext_single_row_val(const mysql_res_row& row, const std::string& def_val);
+ext_val_t<int64_t> ext_single_row_val(const mysql_res_row& row, const int64_t& def_val);
+ext_val_t<uint64_t> ext_single_row_val(const mysql_res_row& row, const uint64_t& def_val);
+
+/**
+ * @brief Helper function that executed a query and extracts a single value from the resultset.
+ * @details Example use case:
+ *  ```
+ *  ext_val_t<uint64_t> cur_conns {
+ *      mysql_query_ext_val(admin,
+ *          "SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool", uint64_t(0)
+ *      )
+ *  };
+ *
+ *  if (cur_conns.err) {
+ *      const string err { get_ext_val_err(admin, cur_conns) };
+ *      diag("Fetching conn count from pool failed   err:'%s'", err.c_str());
+ *  }
+ *  ```
+ *  Provides a single line way of handling a value extraction + boilerplate error handling. The casting of the
+ *  second supplied integer isn't optional, this way there can be disambiguation based on parameter type.
+ *
+ * @param mysql Already oppened MYSQL connection.
+ * @param query The query to be executed.
+ * @param def_val Default value to be used in case of extraction failure.
+ * @return An `ext_val_t<T>` where T is the type of the provided default value.
+ */
+template <typename T>
+ext_val_t<T> mysql_query_ext_val(MYSQL* mysql, const std::string& query, const T& def_val) {
+	 const auto rows { mysql_query_ext_rows(mysql, query) };
+
+	 if (rows.first) {
+		return { static_cast<int>(rows.first), def_val };
+	 } else if (rows.second.empty()) {
+		return { -1, def_val };
+	 } else {
+		 return ext_single_row_val(rows.second.front(), def_val);
+	 }
+}
+
+/**
+ * @brief Extract the error from a `ext_val_t<T>`.
+ * @param mysql Already oppened MYSQL connection.
+ * @param res A value extraction result that failed.
+ * @return The string message for the error hold in the supplied `ext_val_t`.
+ */
+template <typename T>
+std::string get_ext_val_err(MYSQL* mysql, const ext_val_t<T>& ext_val) {
+	if (ext_val.err == -1) {
+		return "Received invalid empty resultset/row";
+	} else if (ext_val.err == -2) {
+		return "Failed to parse response value '" + ext_val.str + "'";
+	} else {
+		return "Query failed with error '" + std::string { mysql_error(mysql) } + "'";
+	}
+}
 
 /**
  * @brief Waits until the provided endpoint is ready to be used or the
@@ -376,22 +465,6 @@ int execute_eof_test(
 	const CommandLine& cl, MYSQL* mysql, const std::string& test, bool cl_depr_eof, bool srv_depr_eof
 );
 int execute_eof_test(const CommandLine& cl, MYSQL* mysql, const std::string& test, const conn_cnf_t&);
-
-/**
- * @brief Waits until either the number of backend connections of the expected type is reached, or the
- *   timeout expires.
- *
- * @param proxy_admin An already oppened connection to ProxySQL Admin.
- * @param conn_type The type of backend connections to filter from 'stats_mysql_connection' pool. Possible
- *   values are: 'ConnUsed', 'ConnFree', 'ConnOK', 'ConnERR'.
- * @param exp_conn_num The target number of connections to reach to end the wait.
- * @param timeout Maximum waiting time for the connections to reach the expected value.
- *
- * @return EXIT_SUCCESS if the target number of connections was reached before timeout, EXIT_FAILURE otherwise.
- */
-int wait_for_backend_conns(
-	MYSQL* proxy_admin, const std::string& conn_type, uint32_t exp_conn_num, uint32_t timeout
-);
 
 /**
  * @brief Queries 'stats_mysql_connection_pool' and retrieves the number of connections of the specified type.
@@ -642,5 +715,16 @@ int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout);
 void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
 void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
 void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
+
+/**
+ * @brief fetches and converts env var value to str/int/bool if possible otherwise uses default
+ * @details helper function for fetching str/int/bool from env
+ * @param envname - name for the env variable
+ * @param envdefault - default value to use
+ * @return str/int/bool value or default
+ */
+const char* get_env_str(const char* envname, const char* envdefault);
+int get_env_int(const char* envname, int envdefault);
+bool get_env_bool(const char* envname, bool envdefault);
 
 #endif // #define UTILS_H

@@ -6,9 +6,8 @@ Summary: A high-performance MySQL proxy
 Name: proxysql
 Version: %{version}
 Release: 1
-License: GPL+
-Group: Development/Tools
-SOURCE0 : %{name}-%{version}.tar.gz
+License: GPL-3.0-only
+Source: %{name}-%{version}.tar.gz
 URL: https://proxysql.com/
 Requires: gnutls
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root

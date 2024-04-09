@@ -35,7 +35,6 @@ enum class AUTHENTICATION_METHOD {
 #define SQLITE_HOSTGROUP -4
 
 
-#define MYSQL_DEFAULT_TX_ISOLATION	"READ-COMMITTED"
 #define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
@@ -315,6 +314,7 @@ struct p_th_gauge {
 		mysql_monitor_ping_interval,
 		mysql_monitor_ping_timeout,
 		mysql_monitor_ping_max_failures,
+		mysql_monitor_aws_rds_topology_discovery_interval,
 		mysql_monitor_read_only_interval,
 		mysql_monitor_read_only_timeout,
 		mysql_monitor_writer_is_also_reader,
@@ -399,6 +399,8 @@ public:
 		int monitor_ping_max_failures;
 		//! Monitor ping timeout. Unit: 'ms'.
 		int monitor_ping_timeout;
+		//! Monitor aws rds topology discovery interval. Unit: 'one discovery check per X monitor_read_only checks'.
+		int monitor_aws_rds_topology_discovery_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
@@ -521,7 +523,6 @@ public:
 		char* init_connect;
 		char* ldap_user_variable;
 		char* add_ldap_user_comment;
-		char* default_tx_isolation;
 		char* default_session_track_gtids;
 		char* default_variables[SQL_NAME_LAST_LOW_WM];
 		char* firewall_whitelist_errormsg;

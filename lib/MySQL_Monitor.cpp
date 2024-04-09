@@ -616,6 +616,12 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
+	case MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
+		query_ = QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY;
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
 #else // TEST_READONLY
 	case MON_READ_ONLY:
 	case MON_INNODB_READ_ONLY:
@@ -1525,15 +1531,10 @@ __exit_set_wait_timeout:
 bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql=mysql_init(NULL);
 		assert(mysql);
-		if (use_ssl) {
-			mysql_ssl_set(mysql,
-					mysql_thread___ssl_p2s_key,
-					mysql_thread___ssl_p2s_cert,
-					mysql_thread___ssl_p2s_ca,
-					mysql_thread___ssl_p2s_capath,
-					mysql_thread___ssl_p2s_cipher);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		MySQLServers_SslParams * ssl_params = NULL;
+		if (use_ssl && port) {
+			ssl_params = MyHGM->get_Server_SSL_Params(hostname, port, mysql_thread___monitor_username);
+			MySQL_Connection::set_ssl_params(mysql,ssl_params);
 			mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
@@ -1551,6 +1552,13 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
+			if (ssl_params != NULL && myerrno == 2026) {
+				proxy_error("Failed to connect to server %s:%d . SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
+					( port ? hostname : "localhost" ) , port ,
+					ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
+					ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
+				);
+			}
 			if (myerrno < 2000) {
 				mysql_close(mysql);
 			} else {
@@ -1621,6 +1629,8 @@ void * monitor_read_only_thread(void *arg) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only&@@global.innodb_read_only read_only");
 	} else if (mmsd->get_task_type() == MON_READ_ONLY__OR__INNODB_READ_ONLY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only|@@global.innodb_read_only read_only");
+	} else if (mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql, QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY);
 	} else { // default
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only read_only");
 	}
@@ -3280,6 +3290,68 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	return ret;
 }
 
+/**
+* @brief Processes the discovered servers to eventually add them to 'runtime_mysql_servers'.
+* @details This method takes a vector of discovered servers, compares them against the existing servers, and adds the new servers to 'runtime_mysql_servers'.
+* @param originating_server_hostname A string which denotes the hostname of the originating server, from which the discovered servers were queried and found.
+* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
+* @param reader_hostgroup Reader hostgroup to which we will add the discovered servers.
+*/
+void MySQL_Monitor::process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup) {
+	char *error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *runtime_mysql_servers = NULL;
+
+	char *query=(char *)"SELECT DISTINCT hostname FROM monitor_internal.mysql_servers ORDER BY hostname";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	monitordb->execute_statement(query, &error, &cols, &affected_rows, &runtime_mysql_servers);
+
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		vector<tuple<string, int, int>> new_servers;
+		vector<string> saved_hostnames;
+		saved_hostnames.push_back(originating_server_hostname);
+
+		// Do an initial loop through the query results to save existing runtime server hostnames
+		for (std::vector<SQLite3_row *>::iterator it = runtime_mysql_servers->rows.begin(); it != runtime_mysql_servers->rows.end(); it++) {
+			SQLite3_row *r1 = *it;
+			string current_runtime_hostname = r1->fields[0];
+
+			saved_hostnames.push_back(current_runtime_hostname);
+		}
+
+		// Loop through discovered servers and process the ones we haven't saved yet
+		for (MYSQL_ROW s : discovered_servers) {
+			string current_discovered_hostname = s[2];
+			string current_discovered_port_string = s[3];
+			int current_discovered_port_int;
+
+			try {
+				current_discovered_port_int = stoi(s[3]);
+			} catch (...) {
+				proxy_error(
+					"Unable to parse port value coming from '%s' during topology discovery ('%s':%s). Terminating discovery early.\n",
+					originating_server_hostname.c_str(), current_discovered_hostname.c_str(), current_discovered_port_string.c_str()
+				);
+				return;
+			}
+
+			if (find(saved_hostnames.begin(), saved_hostnames.end(), current_discovered_hostname) == saved_hostnames.end()) {
+				tuple<string, int, int> new_server(current_discovered_hostname, current_discovered_port_int, reader_hostgroup);
+				new_servers.push_back(new_server);
+				saved_hostnames.push_back(current_discovered_hostname);
+			}
+		}
+
+		// Add the new servers if any
+		if (!new_servers.empty()) {
+			MyHGM->add_discovered_servers_to_mysql_servers_and_replication_hostgroups(new_servers);
+		}
+	}
+}
+
 void * MySQL_Monitor::monitor_read_only() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3293,14 +3365,17 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t1;
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
+	int topology_loop = 0;
+	int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
+		bool do_discovery_check = false;
 
 		unsigned int glover;
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -3310,6 +3385,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
+
 
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_read_only;
@@ -3327,8 +3403,14 @@ void * MySQL_Monitor::monitor_read_only() {
 			goto __end_monitor_read_only_loop;
 		}
 
+		if (topology_loop >= topology_loop_max) {
+			do_discovery_check = true;
+			topology_loop = 0;
+		}
+		topology_loop += 1;
+
 		// resultset must be initialized before calling monitor_read_only_async
-		monitor_read_only_async(resultset);
+		monitor_read_only_async(resultset, do_discovery_check);
 		if (shutdown) return NULL;
 
 __end_monitor_read_only_loop:
@@ -7197,7 +7279,7 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 	std::list<read_only_server_t> mysql_servers;
 
 	for (auto& mmsd : mmsds) {
-
+		string originating_server_hostname = mmsd->hostname;
 		const auto task_result = mmsd->get_task_result();
 
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
@@ -7267,6 +7349,38 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				}
 
 				rc = (*proxy_sqlite3_bind_int64)(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			} else if (fields && mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
+				// Process the read_only field as above and store the first server
+				vector<MYSQL_ROW> discovered_servers;
+				for (k = 0; k < num_fields; k++) {
+					if (strcmp((char*)"read_only", (char*)fields[k].name) == 0) {
+						j = k;
+					}
+				}
+				if (j > -1) {
+					MYSQL_ROW row = mysql_fetch_row(mmsd->result);
+					if (row) {
+						discovered_servers.push_back(row);
+VALGRIND_DISABLE_ERROR_REPORTING;
+						if (row[j]) {
+							if (!strcmp(row[j], "0") || !strcasecmp(row[j], "OFF"))
+								read_only = 0;
+						}
+VALGRIND_ENABLE_ERROR_REPORTING;
+					}
+				}
+
+				// Store the remaining servers
+				int num_rows = mysql_num_rows(mmsd->result);
+				for (int i = 1; i < num_rows; i++) {
+					MYSQL_ROW row = mysql_fetch_row(mmsd->result);
+					discovered_servers.push_back(row);
+				}
+
+				// Process the discovered servers and add them to 'runtime_mysql_servers'
+				if (!discovered_servers.empty()) {
+					process_discovered_topology(originating_server_hostname, discovered_servers, mmsd->reader_hostgroup);
+				}
 			} else {
 				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
 				rc = (*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -7327,7 +7441,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	return true;
 }
 
-void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
+void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_discovery_check) {
 	assert(resultset);
 
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
@@ -7350,11 +7464,18 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
 				} else if (strcasecmp(r->fields[3], (char*)"read_only|innodb_read_only") == 0) {
 					task_type = MON_READ_ONLY__OR__INNODB_READ_ONLY;
 				}
+
+				// Change task type if it's time to do discovery check. Only for aws rds endpoints
+				string hostname = r->fields[0];
+				if (do_discovery_check && hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
+					task_type = MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY;
+				}
 			}
 
 			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(
 				new MySQL_Monitor_State_Data(task_type, r->fields[0], atoi(r->fields[1]), atoi(r->fields[2])));
 
+			mmsd->reader_hostgroup = atoi(r->fields[4]); // set reader_hostgroup
 			mmsd->mondb = monitordb;
 			mmsd->mysql = My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
 
