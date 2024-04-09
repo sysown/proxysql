@@ -15,6 +15,16 @@
 #include "MySQL_LDAP_Authentication.hpp"
 
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
+extern bool admin_handler_command_proxysql(char* query_no_space, unsigned int query_no_spcae_lenght, MySQL_Session *sess, ProxySQL_Admin *pa);
+extern ProxySQL_Admin *GloAdmin;
+
+static void log_handler(int sig) {
+	proxy_warning("Received SIGUSR1 signal: PROXYSQL FLUSH LOGS; in progress...\n");
+/*
+Support system logging facilities sending SIGUSR1 to do log rotation
+*/
+	admin_handler_command_proxysql("PROXYSQL FLUSH LOGS", 19, NULL, GloAdmin);
+}
 
 static void term_handler(int sig) {
 	proxy_warning("Received TERM signal: shutdown in progress...\n");
@@ -299,6 +309,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 };
 
 void ProxySQL_GlobalVariables::install_signal_handler() {
+	signal(SIGUSR1, log_handler);
 	signal(SIGTERM, term_handler);
 	signal(SIGSEGV, crash_handler);
 	signal(SIGABRT, crash_handler);

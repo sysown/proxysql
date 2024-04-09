@@ -1837,7 +1837,9 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			}
 			free(ssl_keylog_file);
 		}	
-		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		if (sess != NULL) {
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		}
 		return false;
 	}
 
