@@ -9459,7 +9459,11 @@ void ProxySQL_Admin::p_update_metrics() {
  * @return On success, the number of currently opened file descriptors, '-1' otherwise.
  */
 int32_t get_open_fds() {
+#if defined(__FreeBSD__) || defined(__APPLE__)
+	DIR* dir = opendir("/dev/fd");
+#else
 	DIR* dir = opendir("/proc/self/fd");
+#endif
 	if (dir == NULL) {
 		proxy_error("'opendir()' failed with error: '%d'\n", errno);
 		return -1;
