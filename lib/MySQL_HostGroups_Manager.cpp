@@ -7663,6 +7663,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		}
 	}
 
+	(*proxy_sqlite3_finalize)(statement);
 	delete incoming_hostgroup_attributes;
 	incoming_hostgroup_attributes=NULL;
 }
@@ -7717,6 +7718,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_ssl_params_table() {
 		string MapKey = MSSP.getMapKey(rand_del);
 		Servers_SSL_Params_map.emplace(MapKey, MSSP);
 	}
+	(*proxy_sqlite3_finalize)(statement);
 	delete incoming_mysql_servers_ssl_params;
 	incoming_mysql_servers_ssl_params=NULL;
 }
