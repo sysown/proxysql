@@ -1859,7 +1859,7 @@ void handleProcessRestart() {
 				// Calculate wait time using exponential backoff
 				int waitTime = 1 << restartAttempts;
 				parent_open_error_log();
-				proxy_info("ProxySQL exited after only %d seconds , below the %d seconds threshold. Restarting attempt %d\n", elapsed_seconds, EXECUTION_THRESHOLD, restartAttempts);
+				proxy_info("ProxySQL exited after only %ld seconds , below the %d seconds threshold. Restarting attempt %d\n", elapsed_seconds, EXECUTION_THRESHOLD, restartAttempts);
 				proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", waitTime);
 				parent_close_error_log();
 
