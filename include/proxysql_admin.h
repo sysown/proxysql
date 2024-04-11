@@ -640,7 +640,6 @@ class ProxySQL_Admin {
 	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 
 	// FLUSH LOGS
-	void install_signal_handler();
-	bool flush_logs();
+	void flush_logs();
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

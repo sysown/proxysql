@@ -301,6 +301,8 @@ extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 
+extern void (*flush_logs_function)();
+
 extern Web_Interface *GloWebInterface;
 
 extern ProxySQL_Cluster *GloProxyCluster;
@@ -1552,19 +1554,11 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
 	return false;
 }
 
-static void flush_logs_handler(int sig) {
-	proxy_info("Received SIGUSR1 signal: flushing logs...\n");
-/*
-Support system logging facilities sending SIGUSR1 to do log rotation
-*/
+static void flush_logs_handler() {
 	GloAdmin->flush_logs();
 }
 
-void ProxySQL_Admin::install_signal_handler() {
-	signal(SIGUSR1, flush_logs_handler);
-}
-
-bool ProxySQL_Admin::flush_logs() {
+void ProxySQL_Admin::flush_logs() {
 	if (GloMyLogger) {
 		GloMyLogger->flush_log();
 	}
@@ -1581,7 +1575,6 @@ bool ProxySQL_Admin::flush_logs() {
 		}
 		free(ssl_keylog_file);
 	}
-	return false;
 }
 
 /*
@@ -6396,6 +6389,10 @@ int check_if_user_config(SQLite3DB* admindb, const char* query) {
 
 bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	cpu_timer cpt;
+
+	if (flush_logs_function == NULL) {
+		flush_logs_function = flush_logs_handler;
+	}
 
 	Admin_HTTP_Server = NULL;
 	AdminHTTPServer = new ProxySQL_HTTP_Server();
