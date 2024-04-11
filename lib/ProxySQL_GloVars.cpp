@@ -16,6 +16,18 @@
 
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
+void (*flush_logs_function)() = NULL;
+
+/*
+Support system logging facilities sending SIGUSR1 to do log rotation
+*/
+static void log_handler(int sig) {
+	proxy_info("Received SIGUSR1 signal: flushing logs...\n");
+	if (flush_logs_function != NULL) {
+		flush_logs_function();
+	}
+}
+
 static void term_handler(int sig) {
 	proxy_warning("Received TERM signal: shutdown in progress...\n");
 /*
@@ -299,6 +311,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 };
 
 void ProxySQL_GlobalVariables::install_signal_handler() {
+	signal(SIGUSR1, log_handler);
 	signal(SIGTERM, term_handler);
 	signal(SIGSEGV, crash_handler);
 	signal(SIGABRT, crash_handler);
