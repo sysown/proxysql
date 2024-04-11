@@ -1898,6 +1898,7 @@ void handleProcessRestart() {
 			parent_open_error_log();
 			GloVars.global.start_time=monotonic_time();
 			GloVars.install_signal_handler();
+			GloAdmin->install_signal_handler();
 		}
 	} while (pid > 0);
 }
@@ -2305,6 +2306,7 @@ int main(int argc, const char * argv[]) {
 			cpu_timer t;
 			GloVars.global.start_time=monotonic_time();
 			GloVars.install_signal_handler();
+			GloAdmin->install_signal_handler();
 			if (ProxySQL_daemonize_phase2()==false) {
 				goto finish;
 			}
@@ -2321,6 +2323,7 @@ int main(int argc, const char * argv[]) {
 	} else {
 		GloAdmin->flush_error_log();
 		GloVars.install_signal_handler();
+		GloAdmin->install_signal_handler();
 	}
 
 __start_label:

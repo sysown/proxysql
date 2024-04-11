@@ -1552,6 +1552,38 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
 	return false;
 }
 
+static void flush_logs_handler(int sig) {
+	proxy_info("Received SIGUSR1 signal: flushing logs...\n");
+/*
+Support system logging facilities sending SIGUSR1 to do log rotation
+*/
+	GloAdmin->flush_logs();
+}
+
+void ProxySQL_Admin::install_signal_handler() {
+	signal(SIGUSR1, flush_logs_handler);
+}
+
+bool ProxySQL_Admin::flush_logs() {
+	if (GloMyLogger) {
+		GloMyLogger->flush_log();
+	}
+	this->flush_error_log();
+	proxysql_keylog_close();
+	char* ssl_keylog_file = this->get_variable((char*)"ssl_keylog_file");
+	if (ssl_keylog_file != NULL) {
+		if (strlen(ssl_keylog_file) > 0) {
+			if (proxysql_keylog_open(ssl_keylog_file) == false) {
+				// re-opening file failed, setting ssl_keylog_enabled to false
+				GloVars.global.ssl_keylog_enabled = false;
+				proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", ssl_keylog_file);
+			}
+		}
+		free(ssl_keylog_file);
+	}
+	return false;
+}
+
 /*
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
@@ -1821,25 +1853,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL FLUSH LOGS") && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH LOGS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (GloMyLogger) {
-			GloMyLogger->flush_log();
-		}
-		SPA->flush_error_log();
-		proxysql_keylog_close();
-		char* ssl_keylog_file = SPA->get_variable((char*)"ssl_keylog_file");
-		if (ssl_keylog_file != NULL) {
-			if (strlen(ssl_keylog_file) > 0) {
-				if (proxysql_keylog_open(ssl_keylog_file) == false) {
-					// re-opening file failed, setting ssl_keylog_enabled to false
-					GloVars.global.ssl_keylog_enabled = false;
-					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", ssl_keylog_file);
-				}
-			}
-			free(ssl_keylog_file);
-		}	
-		if (sess != NULL) {
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-		}
+		SPA->flush_logs();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
 
