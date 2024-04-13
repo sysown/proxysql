@@ -4042,6 +4042,7 @@ void PgSQL_Thread::refresh_variables() {
 
 	if (pgsql_thread___server_version) free(pgsql_thread___server_version);
 	pgsql_thread___server_version = GloPTH->get_variable_string((char*)"server_version");
+	pgsql_thread___have_ssl = (bool)GloPTH->get_variable_int((char*)"have_ssl");
 
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
 	mysql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
@@ -4062,7 +4063,7 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___poll_timeout = GloPTH->get_variable_int((char*)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure = GloPTH->get_variable_int((char*)"poll_timeout_on_failure");
 	mysql_thread___have_compress = (bool)GloPTH->get_variable_int((char*)"have_compress");
-	mysql_thread___have_ssl = (bool)GloPTH->get_variable_int((char*)"have_ssl");
+	
 	mysql_thread___multiplexing = (bool)GloPTH->get_variable_int((char*)"multiplexing");
 	mysql_thread___log_unhealthy_connections = (bool)GloPTH->get_variable_int((char*)"log_unhealthy_connections");
 	mysql_thread___connection_warming = (bool)GloPTH->get_variable_int((char*)"connection_warming");
@@ -4130,6 +4131,7 @@ PgSQL_Thread::PgSQL_Thread() {
 	last_processing_idles = 0;
 	__thread_PgSQL_Thread_Variables_version = 0;
 	pgsql_thread___server_version = NULL;
+	pgsql_thread___have_ssl = true;
 	mysql_thread___init_connect = NULL;
 	mysql_thread___ldap_user_variable = NULL;
 	mysql_thread___add_ldap_user_comment = NULL;

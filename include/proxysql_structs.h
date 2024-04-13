@@ -803,6 +803,7 @@ PgSQL_HostGroups_Manager* PgHGM;
 __thread int pgsql_thread___authentication_method;
 __thread int pgsql_thread___show_processlist_extended;
 __thread char *pgsql_thread___server_version;
+__thread bool pgsql_thread___have_ssl;
 //---------------------------
 
 __thread char *mysql_thread___default_schema;
@@ -983,6 +984,7 @@ extern PgSQL_HostGroups_Manager *PgHGM;
 extern __thread int pgsql_thread___authentication_method;
 extern __thread int pgsql_thread___show_processlist_extended;
 extern __thread char *pgsql_thread___server_version;
+extern __thread bool pgsql_thread___have_ssl;
 //---------------------------
 
 extern __thread char *mysql_thread___default_schema;

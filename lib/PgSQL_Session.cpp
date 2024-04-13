@@ -3930,10 +3930,8 @@ __get_pkts_from_client:
 
 		case CONNECTING_CLIENT:
 			switch (client_myds->DSS) {
-			case STATE_SERVER_HANDSHAKE:
-				handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
-				break;
 			case STATE_SSL_INIT:
+			case STATE_SERVER_HANDSHAKE:
 				handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
 				break;
 			default:
@@ -5642,21 +5640,32 @@ void PgSQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 
 void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t* pkt, bool* wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
-
-	//bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char*)pkt->ptr, pkt->size);
 	bool handshake_response_return = false;
+	bool ssl_request = false;
 	
 	if (client_myds->auth_received_startup == false) {
-		if (client_myds->myprot.process_startup_packet((unsigned char*)pkt->ptr, pkt->size) == true &&
-			client_myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL, &thread_session_id, true) == true) {
-			client_myds->auth_received_startup = true;
-			l_free(pkt->size, pkt->ptr);
-			return;
+		if (client_myds->myprot.process_startup_packet((unsigned char*)pkt->ptr, pkt->size, ssl_request) == true ) {
+			if (ssl_request) {
+				if (is_encrypted == false && client_myds->encrypted == true) {
+					// switch to SSL...
+				} else {
+					// if sslmode is prefer, same connection will be used for plain text
+					l_free(pkt->size, pkt->ptr);
+					return;
+				}
+			} else if (client_myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL, &thread_session_id, true) == true) {
+				client_myds->auth_received_startup = true;
+				l_free(pkt->size, pkt->ptr);
+				return;
+			} else {
+				assert(0); // this should never happen
+			}
 		} else {
-			//send error packet here
+			*wrong_pass = true; //to forcefully close the connection. Is there a better way to do it?
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			l_free(pkt->size, pkt->ptr);
 			return;
-		} 
+		}
 	} 
 	
 	bool handshake_err = true;
@@ -5687,18 +5696,18 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		(handshake_response_return == false) && // the authentication didn't complete
 		(client_myds->encrypted == true) // client is asking for encryption
 		) {
-		// use SSL
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
-		client_myds->DSS = STATE_SSL_INIT;
-		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_new();
-		SSL_set_fd(client_myds->ssl, client_myds->fd);
-		SSL_set_accept_state(client_myds->ssl);
-		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
-		l_free(pkt->size, pkt->ptr);
-		proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
-		return;
+			// use SSL
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
+			client_myds->DSS = STATE_SSL_INIT;
+			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->ssl = GloVars.get_SSL_new();
+			SSL_set_fd(client_myds->ssl, client_myds->fd);
+			SSL_set_accept_state(client_myds->ssl);
+			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+			l_free(pkt->size, pkt->ptr);
+			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+			return;
 	}
 
 	if (

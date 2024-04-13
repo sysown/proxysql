@@ -623,15 +623,27 @@ void PgSQL_Protocol::load_conn_parameters(pgsql_hdr* pkt, bool startup)
 	}
 }
 
-bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len) {
-
+bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len, bool& ssl_request) {
+	
+	ssl_request = false;
 	pgsql_hdr hdr{};
 	if (!get_header(pkt, len, &hdr)) {
 		return false;
 	}
 
-	//PG_PKT_STARTUP_V2 not supported
+	if (hdr.type == PG_PKT_SSLREQ) {
+		const bool have_ssl = pgsql_thread___have_ssl;
+		char* ssl_supported = (char*)malloc(1);
+		*ssl_supported = have_ssl ? 'S' : 'N';
+		(*myds)->PSarrayOUT->add((void*)ssl_supported, 1);
+		(*myds)->sess->writeout();
+		(*myds)->encrypted = have_ssl;
+		ssl_request = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. SSL_REQUEST:'%c'\n", (*myds)->sess, (*myds), *ssl_supported);
+		return true;
+	}
 
+	//PG_PKT_STARTUP_V2 not supported
 	if (hdr.type != PG_PKT_STARTUP) {
 		return false;
 	}

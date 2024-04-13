@@ -168,7 +168,7 @@ public:
 	}
 
 	bool generate_pkt_initial_handshake(bool send, void** ptr, unsigned int* len, uint32_t* thread_id, bool deprecate_eof_active) override;
-	bool process_startup_packet(unsigned char* pkt, unsigned int len);
+	bool process_startup_packet(unsigned char* pkt, unsigned int len, bool& ssl_request);
 	EXECUTION_STATE process_handshake_response_packet(unsigned char* pkt, unsigned int len);
 	void welcome_client();
 

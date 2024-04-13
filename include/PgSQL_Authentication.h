@@ -9,7 +9,7 @@
 #ifndef PGSQL_ACCOUNT_DETAILS_T
 #define PGSQL_ACCOUNT_DETAILS_T
 
-typedef struct _scram_keys {
+struct _scram_keys {
 	uint8_t scram_ClientKey[32];
 	uint8_t scram_ServerKey[32];
 };
