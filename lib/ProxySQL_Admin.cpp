@@ -2098,7 +2098,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE STOP") && !strncasecmp("PROXYSQL MEMPROFILE STOP",query_no_space, query_no_space_length)) {
 		bool en=false;
 		mallctl("prof.active", NULL, NULL, &en, sizeof(bool));
-		SPA->generate_ok_packet(sess, NULL, 0, query_no_space);
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
 #endif
@@ -2107,7 +2107,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL GCOV DUMP") && !strncasecmp("PROXYSQL GCOV DUMP",query_no_space, query_no_space_length)) {
 		proxy_info("Received %s command\n", query_no_space);
 		__gcov_dump();
-		SPA->generate_ok_packet(sess, NULL, 0, query_no_space);
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
 	if (query_no_space_length==strlen("PROXYSQL GCOV RESET") && !strncasecmp("PROXYSQL GCOV RESET",query_no_space, query_no_space_length)) {
