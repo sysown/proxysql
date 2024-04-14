@@ -2098,7 +2098,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE STOP") && !strncasecmp("PROXYSQL MEMPROFILE STOP",query_no_space, query_no_space_length)) {
 		bool en=false;
 		mallctl("prof.active", NULL, NULL, &en, sizeof(bool));
-		SPA->generate_ok_packet(sess, NULL, 0, query_no_space);
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
 #endif
@@ -2107,7 +2107,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL GCOV DUMP") && !strncasecmp("PROXYSQL GCOV DUMP",query_no_space, query_no_space_length)) {
 		proxy_info("Received %s command\n", query_no_space);
 		__gcov_dump();
-		SPA->generate_ok_packet(sess, NULL, 0, query_no_space);
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
 	if (query_no_space_length==strlen("PROXYSQL GCOV RESET") && !strncasecmp("PROXYSQL GCOV RESET",query_no_space, query_no_space_length)) {
@@ -13531,15 +13531,30 @@ void ProxySQL_Admin::__refresh_pgsql_users(
 	);
 }
 
+/*
+ * @brief Sends an OK message to a client based on the connection type.
+ *
+ * This function is used to send an OK message and some additional data
+ * (number of rows or query) to the client depending on its database
+ * management system (MySQL or PostgreSQL).
+ *
+ * @tparam T The type of the Client_Session object passed as argument.
+ * @param[in, out] sess A reference to a valid Client_Session object.
+ * @param msg An OK message string that will be sent to the client.
+ * @param rows The number of rows affected by the query for MySQL clients.
+ * @param query The query executed for PostgreSQL clients.
+ */
 template <class T>
 void ProxySQL_Admin::send_ok_msg_to_client(Client_Session<T>& sess, const char* msg, int rows, const char* query) {
 	assert(sess->client_myds);
 	if constexpr (std::is_same<T, MySQL_Session*>::value) {
+		 // Code for MySQL clients
 		MySQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
 		myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, rows, 0, 2, 0, (char*)msg, false); 
 		myds->DSS = STATE_SLEEP;
 	} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+		// Code for PostgreSQL clients
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
 		myds->myprot.generate_ok_packet(true, true, msg, rows, query);
@@ -13549,11 +13564,25 @@ void ProxySQL_Admin::send_ok_msg_to_client(Client_Session<T>& sess, const char* 
 		assert(0);
 }
 
+/*
+ * @brief Sends an error message to a client based on its database management system.
+ *
+ * This function is used to send an error message with a given code and message
+ * (if applicable) to the client depending on its database management system
+ * (MySQL or PostgreSQL).
+ *
+ * @tparam T The type of the Client_Session object passed as argument.
+ * @param[in, out] sess A reference to a valid Client_Session object.
+ * @param msg An error message that will be sent to the client.
+ * @param mysqlerrcode (For MySQL clients) The error code associated with this
+ * error message.
+*/
 template <class T>
 void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const char *msg, uint16_t mysql_err_code /*, bool fatal*/ ) {
 	assert(sess->client_myds);
 	const char prefix_msg[] = "ProxySQL Admin Error: ";
 	if constexpr (std::is_same<T, MySQL_Session*>::value) {
+		 // Code for MySQL clients
 		MySQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
@@ -13563,6 +13592,7 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		myds->DSS = STATE_SLEEP;
 	}
 	else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+		// Code for PostgreSQL clients
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
 		sprintf(new_msg, "%s%s", prefix_msg, msg);
