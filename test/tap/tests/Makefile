@@ -175,6 +175,7 @@ debug: tests
 tests: tests-cpp \
 	tests-php \
 	tests-py \
+	tests-sh \
 	setparser_test \
 	reg_test_3504-change_user_libmariadb_helper \
 	reg_test_3504-change_user_libmysql_helper \
@@ -191,6 +192,7 @@ tests: tests-cpp \
 tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
+tests-sh: $(patsubst %,sh-%,$(wildcard *-t.sh))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -221,6 +223,10 @@ php-%:
 py-%:
 	cp $(patsubst py-%,%,$@) $(patsubst py-%.py,%,$@)
 	chmod +x $(patsubst py-%.py,%,$@)
+
+sh-%:
+	cp $(patsubst sh-%,%,$@) $(patsubst sh-%.sh,%,$@)
+	chmod +x $(patsubst sh-%.sh,%,$@)
 
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
