@@ -130,6 +130,9 @@ class MyHGC;
 std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
 void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
 
+#include "GTID_Server_Data.h"
+
+/*
 class GTID_Server_Data {
 	public:
 	char *address;
@@ -154,7 +157,7 @@ class GTID_Server_Data {
 	void read_all_gtids();
 	void dump();
 };
-
+*/
 
 
 class MySrvConnList {
