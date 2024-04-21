@@ -16,9 +16,7 @@
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
 
-typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
-typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
-
+#include "proxysql_typedefs.h"
 
 #define WUS_NOT_FOUND   0	// couldn't find any filter
 #define WUS_OFF         1	// allow the query

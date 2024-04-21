@@ -15,6 +15,8 @@
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 
+#include "proxysql_typedefs.h"
+
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
 class ProxySQL_Restapi;
