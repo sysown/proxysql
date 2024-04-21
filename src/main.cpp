@@ -409,7 +409,7 @@ static volatile int load_;
 //#else
 //const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay";
 #ifndef __FreeBSD__
-const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,prof:true,prof_leak:true,lg_prof_sample:20,lg_prof_interval:30,prof_active:false";
+const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,prof:true,prof_accum:true,prof_leak:true,lg_prof_sample:20,lg_prof_interval:30,prof_active:false";
 #endif
 //#endif /* DEBUG */
 //const char *malloc_conf = "prof_leak:true,lg_prof_sample:0,prof_final:true,xmalloc:true,lg_tcache_max:16";
@@ -1859,7 +1859,7 @@ void handleProcessRestart() {
 				// Calculate wait time using exponential backoff
 				int waitTime = 1 << restartAttempts;
 				parent_open_error_log();
-				proxy_info("ProxySQL exited after only %d seconds , below the %d seconds threshold. Restarting attempt %d\n", elapsed_seconds, EXECUTION_THRESHOLD, restartAttempts);
+				proxy_info("ProxySQL exited after only %ld seconds , below the %d seconds threshold. Restarting attempt %d\n", elapsed_seconds, EXECUTION_THRESHOLD, restartAttempts);
 				proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", waitTime);
 				parent_close_error_log();
 
@@ -1902,7 +1902,61 @@ void handleProcessRestart() {
 	} while (pid > 0);
 }
 
+#ifndef NOJEM
+int print_jemalloc_conf() {
+	int rc = 0;
+
+	bool xmalloc = 0;
+	bool prof_accum = 0;
+	bool prof_leak = 0;
+
+	size_t lg_cache_max = 0;
+	size_t lg_prof_sample = 0;
+	size_t lg_prof_interval = 0;
+
+	size_t bool_sz = sizeof(bool);
+	size_t size_sz = sizeof(size_t);
+	size_t ssize_sz = sizeof(ssize_t);
+
+	rc = mallctl("config.xmalloc", &xmalloc, &bool_sz, NULL, 0);
+	if (rc) { proxy_error("Failed to fetch 'config.xmalloc' with error %d", rc); return rc; }
+
+	rc = mallctl("opt.lg_tcache_max", &lg_cache_max, &size_sz, NULL, 0);
+	if (rc) { proxy_error("Failed to fetch 'opt.lg_tcache_max' with error %d", rc);  return rc; }
+
+	rc = mallctl("opt.prof_accum", &prof_accum, &bool_sz, NULL, 0);
+	if (rc) { proxy_error("Failed to fetch 'opt.prof_accum' with error %d", rc); return rc; }
+
+	rc = mallctl("opt.prof_leak", &prof_leak, &bool_sz, NULL, 0);
+	if (rc) { proxy_error("Failed to fetch 'opt.prof_leak' with error %d", rc);  return rc; }
+
+	rc = mallctl("opt.lg_prof_sample", &lg_prof_sample, &size_sz, NULL, 0);
+	if (rc) { proxy_error("Failed to fetch 'opt.lg_prof_sample' with error %d", rc);  return rc; }
+
+	rc = mallctl("opt.lg_prof_interval", &lg_prof_interval, &ssize_sz, NULL, 0);
+	if (rc) { proxy_error("Failed to fetch 'opt.lg_prof_interval' with error %d", rc);  return rc; }
+
+	proxy_info(
+		"Using jemalloc with MALLOC_CONF:"
+			" config.xmalloc:%d, lg_tcache_max:%lu, opt.prof_accum:%d, opt.prof_leak:%d,"
+			" opt.lg_prof_sample:%lu, opt.lg_prof_interval:%lu, rc:%d\n",
+		xmalloc, lg_cache_max, prof_accum, prof_leak, lg_prof_sample, lg_prof_interval, rc
+	);
+
+	return 0;
+}
+#else
+int print_jemalloc_conf() {
+	return 0;
+}
+#endif
+
 int main(int argc, const char * argv[]) {
+	// Output current jemalloc conf; no action taken when disabled
+	{
+		int rc = print_jemalloc_conf();
+		if (rc) { exit(EXIT_FAILURE); }
+	}
 
 	{
 		MYSQL *my = mysql_init(NULL);
