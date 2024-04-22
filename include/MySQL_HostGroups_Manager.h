@@ -186,6 +186,7 @@ class MySrvConnList {
 	MySQL_Connection * get_random_MyConn(MySQL_Session *sess, bool ff);
 	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn);
 	unsigned int conns_length() { return conns->len; }
+	unsigned int conns_with_multiplexing_disabled();
 	void drop_all_connections();
 	MySQL_Connection *index(unsigned int);
 };
@@ -509,6 +510,7 @@ struct p_hg_dyn_gauge {
 	enum metric {
 		connection_pool_conn_free = 0,
 		connection_pool_conn_used,
+		connection_pool_conn_demuxed,
 		connection_pool_latency_us,
 		connection_pool_status,
 		__size
@@ -888,6 +890,7 @@ class MySQL_HostGroups_Manager {
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_conn_free_map {};
 		std::map<std::string, prometheus::Counter*> p_connection_pool_conn_ok_map {};
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_conn_used_map {};
+		std::map<std::string, prometheus::Gauge*> p_connection_pool_conn_demuxed_map {};
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_latency_us_map {};
 		std::map<std::string, prometheus::Counter*> p_connection_pool_queries_map {};
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_status_map {};
