@@ -272,7 +272,8 @@ jobs:
         exit $RC
 
     - name: Cleanup
-      if: ${{ failure() && !cancelled() }}
+#      if: ${{ failure() && !cancelled() }}
+      if: ${{ failure() }}
       run: |
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
@@ -293,7 +294,8 @@ jobs:
         echo "${{ matrix.testgroup }}" | tr -d '*|' | sed 's|.*/||' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
           
     - name: Archive artifacts logs
-      if: ${{ failure() && !cancelled() }}
+#      if: ${{ failure() && !cancelled() }}
+      if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
@@ -301,7 +303,8 @@ jobs:
           proxysql/ci_*_logs/
 
     - name: Archive artifacts bins
-      if: ${{ failure() && !cancelled() }}
+#      if: ${{ failure() && !cancelled() }}
+      if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
@@ -312,7 +315,8 @@ jobs:
 #          proxysql/deps/
 
     - name: Archive artifacts tests
-      if: ${{ failure() && !cancelled() }}
+#      if: ${{ failure() && !cancelled() }}
+      if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
