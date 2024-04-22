@@ -725,6 +725,10 @@ class ProxySQL_Admin {
 	int FlushDigestTableToDisk(SQLite3DB *);
 
 	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
+	void map_test_mysql_firewall_whitelist_rules_cleanup();
+
+	template<class T>
+	void ProxySQL_Test_Handler(ProxySQL_Admin *SPA, Client_Session<T>& sess, char *query_no_space, bool& run_query);
 
 
 #ifdef TEST_AURORA
