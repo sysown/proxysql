@@ -415,6 +415,10 @@ int tests_failed() {
   return g_test.failed;
 }
 
+int tests_last() {
+  return g_test.last;
+}
+
 /**
    @mainpage Testing C and C++ using MyTAP
 

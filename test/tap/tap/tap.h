@@ -311,6 +311,12 @@ void todo_end();
 
 int tests_failed();
 
+/**
+ * @brief Return the number of tests that have passed.
+ */
+
+int tests_last();
+
 /** @} */
 
 #ifdef __cplusplus
