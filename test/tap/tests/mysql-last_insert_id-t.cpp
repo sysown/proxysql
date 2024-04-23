@@ -18,8 +18,9 @@ inline unsigned long long monotonic_time() {
 }
 
 
-std::string queries[4] = {
+std::string queries[5] = {
 	"SELECT LAST_INSERT_ID() LIMIT 1",
+	"SELECT LAST_INSERT_ID() FROM DUAL",
 	"SELECT LAST_INSERT_ID()",
 	"SELECT @@IDENTITY LIMIT 1",
 	"SELECT @@IDENTITY"
