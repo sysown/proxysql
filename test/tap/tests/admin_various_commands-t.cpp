@@ -86,8 +86,9 @@ int main() {
 		{ 10, "SHOW MYSQL STATUS" },
 		{ 1, "SELECT DATABASE()" },
 		{ 1, "SELECT DATABASE() AS name" },
+		{ 1, "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='ssl_ciphers'" },
+		{ 30, "SELECT * FROM ssl_ciphers" },
 /*
-		{  , "" },
 		{  , "" },
 		{  , "" },
 */
