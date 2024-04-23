@@ -2041,7 +2041,9 @@ bool MySQL_Connection::IsServerOffline() {
 		||
 		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
+		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
+		||
+		(parent->myhgc->online_servers_within_threshold() == false) // number of online servers in a hostgroup exceeds the configured maximum servers
 	) {
 		ret=true;
 	}

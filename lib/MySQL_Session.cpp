@@ -4649,16 +4649,20 @@ __get_pkts_from_client:
 // 0 : no action
 // -1 : the calling function will return
 // 1 : call to NEXT_IMMEDIATE
-int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds) {
-	MySQL_Connection *myconn = myds->myconn;
+int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream* myds) {
+	MySQL_Connection* myconn = myds->myconn;
+
+	const bool online_servers_within_threshold = myconn->parent->myhgc->online_servers_within_threshold();
 	// the query failed
 	if (
 		// due to #774 , we now read myconn->server_status instead of myconn->parent->status
-		(myconn->server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
+		(myconn->server_status == MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
 		||
-		(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+		(myconn->server_status == MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic == true && myconn->parent->shunned_and_kill_all_connections == true) // the query failed because the server is shunned due to a serious failure
 		||
-		(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
+		(myconn->server_status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
+		||
+		(online_servers_within_threshold == false) // number of online servers in a hostgroup exceeds the configured maximum servers
 	) {
 		if (mysql_thread___connect_timeout_server_max) {
 			myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
@@ -4668,6 +4672,10 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 			thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
 			proxy_error("Detected a lagging server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_LAGGING_SRV);
+		} else if (myconn->server_status == MYSQL_SERVER_STATUS_ONLINE && online_servers_within_threshold == false) {
+			//proxy_error("Number of online servers detected in a hostgroup exceeds the configured maximum online servers. %s, %d, hostgroup:%u, num_online_servers:%u, max_online_servers:%u, session_id:%u\n", 
+			//	myconn->parent->address, myconn->parent->port, myconn->parent->myhgc->hid, num_online_servers, myconn->parent->myhgc->attributes.max_num_online_servers, this->thread_session_id);
+			myconn->parent->myhgc->log_num_online_server_count_error();
 		} else {
 			thread->status_variables.stvar[st_var_backend_offline_during_query]++;
 			proxy_error("Detected an offline server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);

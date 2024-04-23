@@ -703,6 +703,7 @@ void MySrvList::add(MySrvC *s) {
 		s->myhgc=myhgc;
 	}
 	servers->add(s);
+	myhgc->refresh_online_server_count();
 }
 
 
@@ -720,6 +721,7 @@ void MySrvList::remove(MySrvC *s) {
 	int i=find_idx(s);
 	assert(i>=0);
 	servers->remove_index_fast((unsigned int)i);
+	myhgc->refresh_online_server_count();
 }
 
 void MySrvConnList::drop_all_connections() {
@@ -735,12 +737,11 @@ MySrvC::MySrvC(
 	char* add, uint16_t p, uint16_t gp, int64_t _weight, enum MySerStatus _status, unsigned int _compression,
 	int64_t _max_connections, unsigned int _max_replication_lag, int32_t _use_ssl, unsigned int _max_latency_ms,
 	char* _comment
-) {
+) : status(this) {
 	address=strdup(add);
 	port=p;
 	gtid_port=gp;
 	weight=_weight;
-	status=_status;
 	compression=_compression;
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
@@ -766,6 +767,7 @@ MySrvC::MySrvC(
 	comment=strdup(_comment);
 	ConnectionsUsed=new MySrvConnList(this);
 	ConnectionsFree=new MySrvConnList(this);
+	status=_status;
 }
 
 void MySrvC::connect_error(int err_num, bool get_mutex) {
@@ -879,6 +881,17 @@ MySrvList::~MySrvList() {
 }
 
 
+MySrvStatus::MySrvStatus(MySrvC* _mysrvc) : mysrvc(_mysrvc) {}
+
+MySrvStatus::~MySrvStatus() { mysrvc->myhgc->refresh_online_server_count(); }
+
+enum MySerStatus MySrvStatus::operator=(enum MySerStatus _status) {
+	status = _status;
+	if (mysrvc->myhgc)
+		mysrvc->myhgc->refresh_online_server_count();
+}
+
+
 MyHGC::MyHGC(int _hid) {
 	hid=_hid;
 	mysrvs=new MySrvList(this);
@@ -890,6 +903,8 @@ MyHGC::MyHGC(int _hid) {
 	servers_defaults.weight = -1;
 	servers_defaults.max_connections = -1;
 	servers_defaults.use_ssl = -1;
+	num_online_servers.store(0, std::memory_order_relaxed);;
+	last_log_time_num_online_servers = 0;
 }
 
 void MyHGC::reset_attributes() {
@@ -919,6 +934,31 @@ void MyHGC::reset_attributes() {
 MyHGC::~MyHGC() {
 	reset_attributes(); // free all memory
 	delete mysrvs;
+}
+
+void MyHGC::refresh_online_server_count() {
+	assert(MyHGM->is_locked);
+
+	unsigned int online_servers_count = 0;
+	for (unsigned int i=0; i<mysrvs->servers->len; i++) {
+		MySrvC *mysrvc=(MySrvC *)mysrvs->servers->index(i);
+		if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
+			online_servers_count++;
+		}
+	}
+	num_online_servers.store(online_servers_count, std::memory_order_relaxed);
+}
+
+void MyHGC::log_num_online_server_count_error() {
+	const unsigned long long curtime = monotonic_time();
+	// if this is the first time the method is called or if more than 10 seconds have passed since the last log
+	if (last_log_time_num_online_servers == 0 ||
+		(curtime-last_log_time_num_online_servers > 10*1000*1000)) {
+		last_log_time_num_online_servers = curtime;
+		proxy_error(
+			"Number of online servers detected in a hostgroup exceeds the configured maximum online servers. hostgroup:%u, num_online_servers:%u, max_online_servers:%u\n",
+			hid, num_online_servers.load(std::memory_order_relaxed), attributes.max_num_online_servers);
+	}
 }
 
 using metric_name = std::string;
@@ -1441,6 +1481,7 @@ void MySQL_HostGroups_Manager::wrlock() {
 #else
 	spin_wrlock(&rwlock);
 #endif
+	is_locked = true;
 }
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
@@ -1480,6 +1521,7 @@ void MySQL_HostGroups_Manager::wrunlock() {
 #else
 	spin_wrunlock(&rwlock);
 #endif
+	is_locked = false;
 }
 
 
@@ -2464,6 +2506,8 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 				if (mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) {
 					// no more connections for OFFLINE_HARD server, removing it
 					mysrvc=(MySrvC *)myhgc->mysrvs->servers->remove_index_fast(j);
+					// already being refreshed in MySrvC destructor
+					//myhgc->refresh_online_server_count(); 
 					j--;
 					delete mysrvc;
 				}
@@ -3075,8 +3119,9 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			if (GloMTH == NULL) { goto __exit_push_MyConn_to_pool; }
-			// Check if the connection has too many prepared statements
-			if (c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {
+			const bool online_servers_within_threshold = c->parent->myhgc->online_servers_within_threshold();
+			if (/*online_servers_within_threshold == true &&*/  // if online servers in a hostgroup surpass the configured maximum, add connection to ConnectionFree pool
+				c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {  // Check if the connection has too many prepared statements
 				// Log debug information about destroying the connection due to too many prepared statements
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 //				delete c;
@@ -3085,6 +3130,9 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 			} else {
 				c->optimize(); // Optimize the connection
 				mysrvc->ConnectionsFree->add(c); // Add the connection to the list of free connections
+				if (online_servers_within_threshold == false) {
+					mysrvc->myhgc->log_num_online_server_count_error();
+				}
 			}
 		} else {
 			// Log debug information about destroying the connection
@@ -3164,35 +3212,43 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if (gtid_trxid) {
-							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-								mysrvcCandidates[num_candidates]=mysrvc;
-								num_candidates++;
-							}
-						} else {
-							if (max_lag_ms >= 0) {
-								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-									mysrvcCandidates[num_candidates]=mysrvc;
+				if (mysrvc->myhgc->num_online_servers.load(std::memory_order_relaxed) <= mysrvc->myhgc->attributes.max_num_online_servers) { // number of online servers in HG is within configured range
+					if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+						if (mysrvc->current_latency_us < (mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms * 1000)) { // consider the host only if not too far
+							if (gtid_trxid) {
+								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+									sum += mysrvc->weight;
+									TotalUsedConn += mysrvc->ConnectionsUsed->conns_length();
+									mysrvcCandidates[num_candidates] = mysrvc;
 									num_candidates++;
-								} else {
-									sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
 								}
-							} else {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-								mysrvcCandidates[num_candidates]=mysrvc;
-								num_candidates++;
+							}
+							else {
+								if (max_lag_ms >= 0) {
+									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us / 1000) {
+										sum += mysrvc->weight;
+										TotalUsedConn += mysrvc->ConnectionsUsed->conns_length();
+										mysrvcCandidates[num_candidates] = mysrvc;
+										num_candidates++;
+									}
+									else {
+										sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
+									}
+								}
+								else {
+									sum += mysrvc->weight;
+									TotalUsedConn += mysrvc->ConnectionsUsed->conns_length();
+									mysrvcCandidates[num_candidates] = mysrvc;
+									num_candidates++;
+								}
 							}
 						}
 					}
+					else {
+						max_connections_reached = true;
+					}
 				} else {
-					max_connections_reached = true;
+					mysrvc->myhgc->log_num_online_server_count_error();
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
