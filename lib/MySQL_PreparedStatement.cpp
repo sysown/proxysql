@@ -738,53 +738,16 @@ MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 			GloMyStmt->ref_count_server(global_stmt_id, -1);
 		}
 	}
-/*
-	for (std::map<uint32_t, MYSQL_STMT *>::iterator it = m.begin();
-	     it != m.end(); ++it) {
-		uint32_t stmt_id = it->first;
-		MYSQL_STMT *stmt = it->second;
-		if (stmt) {  // is a server
-			if (stmt->mysql) {
-				stmt->mysql->stmts =
-				    list_delete(stmt->mysql->stmts, &stmt->list);
-			}
-			// we do a hack here: we pretend there is no server associate
-			// the connection will be dropped anyway immediately after
-			stmt->mysql = NULL;
-			mysql_stmt_close(stmt);
-			GloMyStmt->ref_count(stmt_id, -1, true, false);
-		} else {  // is a client
-			GloMyStmt->ref_count(stmt_id, -1, true, true);
-		}
-	}
-	m.erase(m.begin(), m.end());
-*/
 }
 
 
 MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_hash(
     uint64_t hash) {
-    //uint64_t hash, bool lock) { // removed in 2.3
 	MySQL_STMT_Global_info *ret = NULL;  // assume we do not find it
-/* removed in 2.3
-	if (lock) {
-		pthread_rwlock_wrlock(&rwlock_);
-	}
-*/
 	auto s = map_stmt_hash_to_info.find(hash);
 	if (s != map_stmt_hash_to_info.end()) {
 		ret = s->second;
-		//__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference
-		//count
-//		__sync_fetch_and_add(&find_prepared_statement_by_hash_calls, 1);
-//		__sync_fetch_and_add(&ret->ref_count_client, 1);
 	}
-
-/* removed in 2.3
-	if (lock) {
-		pthread_rwlock_unlock(&rwlock_);
-	}
-*/
 	return ret;
 }
 
@@ -808,15 +771,6 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_stmt_
 
 uint32_t MySQL_STMTs_local_v14::generate_new_client_stmt_id(uint64_t global_statement_id) {
 	uint32_t ret=0;
-/*
-	//auto s2 = global_stmt_to_client_ids.find(global_statement_id);
-	std::pair<std::multimap<uint64_t,uint32_t>::iterator, std::multimap<uint64_t,uint32_t>::iterator> itret;
-	itret = global_stmt_to_client_ids.equal_range(global_statement_id);
-	for (std::multimap<uint64_t,uint32_t>::iterator it=itret.first; it!=itret.second; ++it) {
-		ret = it->second;
-		return ret;
-	}
-*/
 	if (free_client_ids.size()) {
 		ret=free_client_ids.top();
 		free_client_ids.pop();
@@ -893,7 +847,6 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 		} else {
 			next_id = next_statement_id;
 			next_statement_id++;
-			//__sync_fetch_and_add(&next_statement_id, 1);
 		}
 
 		//next_statement_id++;
@@ -902,14 +855,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 		// insert it in both maps
 		map_stmt_id_to_info.insert(std::make_pair(a->statement_id, a));
 		map_stmt_hash_to_info.insert(std::make_pair(a->hash, a));
-		// ret=a->statement_id;
 		ret = a;
-		// next_statement_id++;	// increment it
-		//__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference
-		//count
-//		__sync_fetch_and_add(&ret->ref_count_client,
-//		                     1);  // increase reference count
-//		*is_new = true;
 		__sync_add_and_fetch(&num_stmt_with_ref_client_count_zero,1);
 		__sync_add_and_fetch(&num_stmt_with_ref_server_count_zero,1);
 	}
@@ -918,9 +864,6 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 	}
 	ret->ref_count_server++;
 	statuses.s_total++;
-//	__sync_fetch_and_add(&add_prepared_statement_calls, 1);
-//	__sync_fetch_and_add(&ret->ref_count_server,
-//	                     1);  // increase reference count
 	if (lock) {
 		pthread_rwlock_unlock(&rwlock_);
 	}
@@ -1101,14 +1044,6 @@ SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() 
 			pgs->free_row(pta);
 			delete pgs;
 	}
-/*
-	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-		char **pta=qds->get_row();
-		result->add_row(pta);
-		qds->free_row(pta);
-	}
-*/
 	unlock();
 	return result;
 }

@@ -89,11 +89,15 @@ uint64_t benchmark_parsing(const vector<string>& queries, int mode, uint32_t ite
 
 			char* c_res = NULL;
 			if (mode == 0) {
+				diag("Invalid test. mysql_query_digest_and_first_comment() was deprecated in 2.4.0");
+				exit(EXIT_FAILURE);
+/*
 				c_res =
 					mysql_query_digest_and_first_comment(
 						const_cast<char*>(query.c_str()), query.length(), &first_comment,
 						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL)
 					);
+*/
 			} else if (mode == 1) {
 				c_res =
 					mysql_query_digest_and_first_comment_one_it(
