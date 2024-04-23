@@ -2362,9 +2362,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			if (GloMTH == NULL) { goto __exit_push_MyConn_to_pool; }
-			const bool online_servers_within_threshold = c->parent->myhgc->online_servers_within_threshold();
-			if (/*online_servers_within_threshold == true &&*/  // if online servers in a hostgroup surpass the configured maximum, add connection to ConnectionFree pool
-				c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {  // Check if the connection has too many prepared statements
+			if (c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {  // Check if the connection has too many prepared statements
 				// Log debug information about destroying the connection due to too many prepared statements
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 //				delete c;
@@ -2373,9 +2371,6 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 			} else {
 				c->optimize(); // Optimize the connection
 				mysrvc->ConnectionsFree->add(c); // Add the connection to the list of free connections
-				if (online_servers_within_threshold == false) {
-					mysrvc->myhgc->log_num_online_server_count_error();
-				}
 			}
 		} else {
 			// Log debug information about destroying the connection
