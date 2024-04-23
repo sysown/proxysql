@@ -442,6 +442,8 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
+#define ADMIN_SQLITE_TABLE_SSL_CIPHERS "CREATE TABLE ssl_ciphers (cipher_name VARCHAR NOT NULL, cipher_description VARCHAR NOT NULL)"
+
 #define ADMIN_SQLITE_TABLE_RESTAPI_ROUTES_V2_0_15 "CREATE TABLE restapi_routes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , method VARCHAR NOT NULL CHECK (UPPER(method) IN ('GET','POST')) , uri VARCHAR NOT NULL , script VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '')"
 
 #define ADMIN_SQLITE_TABLE_RESTAPI_ROUTES_v2_1_0 "CREATE TABLE restapi_routes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , timeout_ms INTEGER CHECK (timeout_ms>=100 AND timeout_ms<=100000000) NOT NULL , method VARCHAR NOT NULL CHECK (UPPER(method) IN ('GET','POST')) , uri VARCHAR NOT NULL , script VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '')"
@@ -6474,6 +6476,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_global_variables", ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
+	insert_into_tables_defs(tables_defs_admin,"ssl_ciphers", ADMIN_SQLITE_TABLE_SSL_CIPHERS);
 	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"runtime_scheduler", ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
@@ -6588,6 +6591,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
 
 	dump_mysql_collations();
+	dump_ssl_ciphers();
 
 #ifdef DEBUG
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
@@ -7039,6 +7043,30 @@ void ProxySQL_Admin::dump_mysql_collations() {
 	// the table is not required to be present on disk. Removing it due to #1055
 //	admindb->execute("DELETE FROM disk.mysql_collations");
 //	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
+}
+
+void ProxySQL_Admin::dump_ssl_ciphers() {
+	const char insert_t[] { "INSERT OR REPLACE INTO ssl_ciphers VALUES (\"%s\", \"%s\")" };
+
+	STACK_OF(SSL_CIPHER)* ciphers = nullptr;
+	ciphers = SSL_CTX_get_ciphers(GloVars.global.ssl_ctx);
+	admindb->execute("DELETE FROM ssl_ciphers");
+
+	if (ciphers) {
+		int num = sk_SSL_CIPHER_num(ciphers);
+
+		for(int i = 0; i < num; i++){
+			char buf[128] = { 0 };
+			const SSL_CIPHER* cipher = sk_SSL_CIPHER_value(ciphers, i);
+
+			SSL_CIPHER_description(cipher, buf, sizeof(buf));
+			char* fst_newline = strchr(buf, '\n');
+			if (fst_newline) { *fst_newline = '\0'; }
+			const string insert { cstr_format(insert_t, SSL_CIPHER_get_name(cipher), buf).str };
+
+			admindb->execute(insert.c_str());
+		}
+	}
 }
 
 void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
