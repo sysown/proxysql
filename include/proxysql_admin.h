@@ -394,6 +394,8 @@ class ProxySQL_Admin {
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
 		__add_active_users(usertype, user);
 	}
+	// @brief True if all ProxySQL modules have been already started. End of 'phase3'.
+	bool all_modules_started;
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
 	SQLite3DB *admindb;	// in memory
@@ -416,6 +418,18 @@ class ProxySQL_Admin {
 	 */
 	bool init(const bootstrap_info_t& bootstrap_info);
 	void init_ldap();
+	/** @brief Initializes the HTTP server. For safety should be called after 'phase3'. */
+	void init_http_server();
+	/**
+	 * @brief Loads the HTTP server config to runtime if all modules are ready, no-op otherwise.
+	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
+	 */
+	void load_http_server();
+	/**
+	 * @brief Loads the RESTAPI server config to runtime if all modules are ready, no-op otherwise.
+	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
+	 */
+	void load_restapi_server();
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);

@@ -1145,7 +1145,6 @@ void ProxySQL_Main_init_phase3___start_all() {
 		GloAdmin->init_mysql_servers();
 		GloAdmin->init_proxysql_servers();
 		GloAdmin->load_scheduler_to_runtime();
-		GloAdmin->proxysql_restapi().load_restapi_to_runtime();
 #ifdef DEBUG
 		std::cerr << "Main phase3 : GloAdmin initialized in ";
 #endif
@@ -1217,6 +1216,17 @@ void ProxySQL_Main_init_phase3___start_all() {
 	if (GloMyLdapAuth) {
 		GloAdmin->init_ldap_variables();
 	}
+
+	// HTTP Server should be initialized after other modules. See #4510
+	GloAdmin->init_http_server();
+	GloAdmin->proxysql_restapi().load_restapi_to_runtime();
+
+	// Signal ProxySQL_Admin that all modules have been started
+	GloAdmin->all_modules_started = true;
+
+	// Load the config not previously loaded for these modules
+	GloAdmin->load_http_server();
+	GloAdmin->load_restapi_server();
 }
 
 
