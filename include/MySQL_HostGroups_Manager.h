@@ -199,7 +199,7 @@ public:
 	MySrvStatus(MySrvC* _mysrvc);
 	~MySrvStatus();
 	
-	enum MySerStatus operator=(enum MySerStatus _status);
+	MySrvStatus& operator=(enum MySerStatus _status);
 
 	inline
 	operator enum MySerStatus() const {
@@ -209,6 +209,11 @@ public:
 	inline
 	bool operator==(enum MySerStatus _status) const {
 		return status == _status;
+	}
+
+	inline
+	bool operator==(const MySrvStatus& _status) const {
+		return status == _status.status;
 	}
 
 private:

@@ -199,10 +199,10 @@ MySrvC::~MySrvC() {
 
 MySrvStatus::MySrvStatus(MySrvC* _mysrvc) : mysrvc(_mysrvc) {}
 
-MySrvStatus::~MySrvStatus() { mysrvc->myhgc->refresh_online_server_count(); }
+MySrvStatus::~MySrvStatus() { if (mysrvc->myhgc) mysrvc->myhgc->refresh_online_server_count(); }
 
-enum MySerStatus MySrvStatus::operator=(enum MySerStatus _status) {
+MySrvStatus& MySrvStatus::operator=(enum MySerStatus _status) {
 	status = _status;
-	if (mysrvc->myhgc)
-		mysrvc->myhgc->refresh_online_server_count();
+	if (mysrvc->myhgc) mysrvc->myhgc->refresh_online_server_count();
+	return *this;
 }
