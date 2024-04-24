@@ -724,7 +724,9 @@ void MySQL_HostGroups_Manager::wrlock() {
 #else
 	spin_wrlock(&rwlock);
 #endif
+#ifdef DEBUG
 	is_locked = true;
+#endif
 }
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
@@ -759,7 +761,9 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 }
 
 void MySQL_HostGroups_Manager::wrunlock() {
+#ifdef DEBUG
 	is_locked = false;
+#endif
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_unlock(&lock);
 #else

@@ -972,7 +972,9 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
-	bool is_locked = false; // will be removed after testing
+#ifdef DEBUG
+	bool is_locked = false;
+#endif
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.

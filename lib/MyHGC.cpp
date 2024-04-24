@@ -392,9 +392,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 void MyHGC::refresh_online_server_count() {
 	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0)
 		return;
-
+#ifdef DEBUG
 	assert(MyHGM->is_locked);
-
+#endif
 	unsigned int online_servers_count = 0;
 	for (unsigned int i = 0; i < mysrvs->servers->len; i++) {
 		MySrvC* mysrvc = (MySrvC*)mysrvs->servers->index(i);
