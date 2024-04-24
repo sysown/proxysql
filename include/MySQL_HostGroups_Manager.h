@@ -196,24 +196,29 @@ class MySrvConnList {
 class MySrvC;
 class MySrvStatus {
 public:
-	MySrvStatus(MySrvC* _mysrvc);
+	explicit MySrvStatus(MySrvC* _mysrvc);
 	~MySrvStatus();
 	
-	MySrvStatus& operator=(enum MySerStatus _status);
+	MySrvStatus& operator=(MySerStatus _status);
 
 	inline
-	operator enum MySerStatus() const {
-		return status;
-	}
-
-	inline
-	bool operator==(enum MySerStatus _status) const {
+	bool operator==(MySerStatus _status) const {
 		return status == _status;
 	}
 
 	inline
-	bool operator==(const MySrvStatus& _status) const {
-		return status == _status.status;
+	bool operator!=(MySerStatus _status) const {
+		return status!=_status;
+	}
+	
+	inline
+	explicit operator MySerStatus() const {
+		return status;
+	}
+
+	inline
+	explicit operator int() const {
+		return (int)status;
 	}
 
 private:

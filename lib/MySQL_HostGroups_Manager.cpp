@@ -759,12 +759,12 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 }
 
 void MySQL_HostGroups_Manager::wrunlock() {
+	is_locked = false;
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_unlock(&lock);
 #else
 	spin_wrunlock(&rwlock);
 #endif
-	is_locked = false;
 }
 
 
@@ -1392,7 +1392,7 @@ bool MySQL_HostGroups_Manager::commit(
 					}
 					if (change_server_status == true) {
 						if (GloMTH->variables.hostgroup_manager_verbose)
-							proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]), mysrvc->status, atoi(r->fields[15]));
+							proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]), (int)mysrvc->status, atoi(r->fields[15]));
 						mysrvc->status = (MySerStatus)atoi(r->fields[15]);
 					}
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -1440,7 +1440,7 @@ bool MySQL_HostGroups_Manager::commit(
 				}
 				if (run_update) {
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 1, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement2, 2, mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 2, (int)mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 3, mysrvc->compression); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 4, mysrvc->max_connections); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 5, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
@@ -1800,7 +1800,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			if (mysql_thread___hostgroup_manager_verbose) {
 				char *st;
-				switch (mysrvc->status) {
+				switch ((int)mysrvc->status) {
 					case 0:
 						st=(char *)"ONLINE";
 						break;
@@ -1830,7 +1830,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+3, mysrvc->port); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+4, mysrvc->gtid_port); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+5, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+6, mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+6, (int)mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+7, mysrvc->compression); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+8, mysrvc->max_connections); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+9, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
@@ -1853,7 +1853,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, mysrvc->port); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 4, mysrvc->gtid_port); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 5, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 6, mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 6, (int)mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 7, mysrvc->compression); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 8, mysrvc->max_connections); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 9, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
@@ -2341,7 +2341,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 	mysrvc = static_cast<MySrvC *>(c->parent);
 
 	// Log debug information about the connection being returned to the pool
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, (int)mysrvc->status);
 
 	// Remove the connection from the list of used connections for the parent server
 	mysrvc->ConnectionsUsed->remove(c);
@@ -2353,7 +2353,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 
 	// If the largest query length exceeds the threshold, destroy the connection
 	if (c->largest_query_length > (unsigned int)GloMTH->variables.threshold_query_length) {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d . largest_query_length = %lu\n", c, mysrvc->address, mysrvc->port, mysrvc->status, c->largest_query_length);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d . largest_query_length = %lu\n", c, mysrvc->address, mysrvc->port, (int)mysrvc->status, c->largest_query_length);
 		delete c;
 		goto __exit_push_MyConn_to_pool;
 	}	
@@ -2364,7 +2364,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 			if (GloMTH == NULL) { goto __exit_push_MyConn_to_pool; }
 			if (c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {  // Check if the connection has too many prepared statements
 				// Log debug information about destroying the connection due to too many prepared statements
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, (int)mysrvc->status);
 //				delete c;
 				mysrvc->ConnectionsUsed->add(c); // Add the connection back to the list of used connections
 				destroy_MyConn_from_pool(c, false); // Destroy the connection from the pool
@@ -2374,12 +2374,12 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 			}
 		} else {
 			// Log debug information about destroying the connection
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, (int)mysrvc->status);
 			delete c; // Destroy the connection
 		}
 	} else {
 		// Log debug information about destroying the connection
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, (int)mysrvc->status);
 		delete c; // Destroy the connection
 	}
 
@@ -2808,7 +2808,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(My
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 		proxy_debug(
 			PROXY_DEBUG_MONITOR, 6, "Server 'MySrvC' - address: %s, port: %d, status: %d\n", mysrvc->address,
-			mysrvc->port, mysrvc->status
+			mysrvc->port, (int)mysrvc->status
 		);
 
 		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
@@ -3386,7 +3386,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 
 			// proxysql_connection_pool_status metric
 			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
-				status.p_connection_pool_status_map, mysrvc->status + 1, p_hg_dyn_gauge::connection_pool_status);
+				status.p_connection_pool_status_map, ((int)mysrvc->status) + 1, p_hg_dyn_gauge::connection_pool_status);
 		}
 	}
 
@@ -3469,7 +3469,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 			pta[1]=strdup(mysrvc->address);
 			sprintf(buf,"%d", mysrvc->port);
 			pta[2]=strdup(buf);
-			switch (mysrvc->status) {
+			switch ((int)mysrvc->status) {
 				case 0:
 					pta[3]=strdup("ONLINE");
 					break;
@@ -4057,7 +4057,7 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 			for (j=0; j<l; j++) {
 				mysrvc=myhgc->mysrvs->idx(j);
 				if (mysrvc->port==port && strcmp(mysrvc->address,hostname)==0) {
-					switch (mysrvc->status) {
+					switch ((MySerStatus)mysrvc->status) {
 						case MYSQL_SERVER_STATUS_SHUNNED:
 							if (mysrvc->shunned_automatic==false) {
 								break;
@@ -7284,12 +7284,12 @@ MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned 
 	
 	if (!ret_srv) {
 		if (GloMTH->variables.hostgroup_manager_verbose) {
-			proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%ld, status=%d\n", hostgroup_id, srv->address, srv->port, srv->gtid_port, srv->weight, srv->status);
+			proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%ld, status=%d\n", hostgroup_id, srv->address, srv->port, srv->gtid_port, srv->weight, (int)srv->status);
 		}
 
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%ld, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%ld, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, (int)srv->status, srv, hostgroup_id);
 
-		ret_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
+		ret_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, (MySerStatus)srv->status, srv->compression,
 			srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us / 1000), srv->comment);
 
 		myhgc->mysrvs->add(ret_srv);

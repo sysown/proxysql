@@ -2035,7 +2035,7 @@ bool MySQL_Connection::IsServerOffline() {
 	bool ret=false;
 	if (parent==NULL)
 		return ret;
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (
 		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
@@ -2059,7 +2059,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	PROXY_TRACE2();
 	assert(mysql);
 	assert(ret_mysql);
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
 		return -1;
 
@@ -2198,7 +2198,7 @@ int MySQL_Connection::async_change_user(short event) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
 		return -1;
 
@@ -2245,7 +2245,7 @@ int MySQL_Connection::async_select_db(short event) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
 		return -1;
 
@@ -2286,7 +2286,7 @@ int MySQL_Connection::async_set_autocommit(short event, bool ac) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
 		return -1;
 
@@ -2329,7 +2329,7 @@ int MySQL_Connection::async_set_names(short event, unsigned int c) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
 		return -1;
 
@@ -2372,7 +2372,7 @@ int MySQL_Connection::async_set_option(short event, bool mask) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
 		return -1;
 
@@ -2854,7 +2854,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	server_status=(MySerStatus)parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (
 		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
