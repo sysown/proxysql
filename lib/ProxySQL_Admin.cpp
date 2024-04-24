@@ -6088,6 +6088,12 @@ void ProxySQL_Admin::init_ldap() {
 	}
 }
 
+void ProxySQL_Admin::init_http_server() {
+	AdminHTTPServer = new ProxySQL_HTTP_Server();
+	AdminHTTPServer->init();
+	AdminHTTPServer->print_version();
+}
+
 struct boot_srv_info_t {
 	string member_id;
 	string member_host;
@@ -6354,10 +6360,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	cpu_timer cpt;
 
 	Admin_HTTP_Server = NULL;
-	AdminHTTPServer = new ProxySQL_HTTP_Server();
-	AdminHTTPServer->init();
-	AdminHTTPServer->print_version();
-
 	AdminRestApiServer = NULL;
 /*
 	AdminRestApiServer = new ProxySQL_RESTAPI_Server();
@@ -7240,6 +7242,167 @@ void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
 	}
 }
 
+void ProxySQL_Admin::load_restapi_server() {
+	if (!all_modules_started) { return; }
+
+	std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
+		[this](const httpserver::http_request& request) {
+			auto headers = request_headers(request);
+			auto serial_response = this->serial_exposer(headers);
+			auto http_response = make_response(serial_response);
+
+			return http_response;
+		}
+	};
+
+	bool free_restapi_port = false;
+
+	// Helper lambda taking a boolean reference as a parameter to check if 'restapi_port' is available.
+	// In case of port not being free or error, logs an error 'ProxySQL_RestAPI_Server' isn't able to be started.
+	const auto check_restapi_port = [&](bool& restapi_port_free) -> void {
+		int e_port_check = check_port_availability(variables.restapi_port, &restapi_port_free);
+
+		if (restapi_port_free == false) {
+			if (e_port_check == -1) {
+				proxy_error("Unable to start 'ProxySQL_RestAPI_Server', failed to set 'SO_REUSEADDR' to check port availability.\n");
+			} else {
+				proxy_error(
+					"Unable to start 'ProxySQL_RestAPI_Server', port '%d' already in use.\n",
+					variables.restapi_port
+				);
+			}
+		}
+	};
+
+	if (variables.restapi_enabled != variables.restapi_enabled_old) {
+		if (variables.restapi_enabled) {
+			check_restapi_port(free_restapi_port);
+		}
+
+		if (variables.restapi_enabled && free_restapi_port) {
+			AdminRestApiServer = new ProxySQL_RESTAPI_Server(
+				variables.restapi_port, {{"/metrics", prometheus_callback}}
+			);
+		} else {
+			delete AdminRestApiServer;
+			AdminRestApiServer = NULL;
+		}
+		variables.restapi_enabled_old = variables.restapi_enabled;
+	} else {
+		if (variables.restapi_port != variables.restapi_port_old) {
+			if (AdminRestApiServer) {
+				delete AdminRestApiServer;
+				AdminRestApiServer = NULL;
+			}
+
+			if (variables.restapi_enabled) {
+				check_restapi_port(free_restapi_port);
+			}
+
+			if (variables.restapi_enabled && free_restapi_port) {
+				AdminRestApiServer = new ProxySQL_RESTAPI_Server(
+					variables.restapi_port, {{"/metrics", prometheus_callback}}
+				);
+			}
+			variables.restapi_port_old = variables.restapi_port;
+		}
+	}
+}
+
+void ProxySQL_Admin::load_http_server() {
+	if (!all_modules_started) { return; }
+
+	if (variables.web_enabled != variables.web_enabled_old) {
+		if (variables.web_enabled) {
+			if (GloVars.web_interface_plugin == NULL) {
+				char *key_pem;
+				char *cert_pem;
+				GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
+				Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
+					variables.web_port,
+					NULL, NULL, http_handler, NULL,
+					MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
+					MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
+					MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
+					MHD_OPTION_HTTPS_MEM_KEY, key_pem,
+					MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
+					MHD_OPTION_END);
+					free(key_pem);
+					free(cert_pem);
+			} else {
+				if (GloWebInterface) {
+					int sfd = 0;
+					int reuseaddr = 1;
+					struct sockaddr_in tmp_addr;
+
+					sfd = socket(AF_INET, SOCK_STREAM, 0);
+					memset(&tmp_addr, 0, sizeof(tmp_addr));
+					tmp_addr.sin_family = AF_INET;
+					tmp_addr.sin_port = htons(variables.web_port);
+					tmp_addr.sin_addr.s_addr = INADDR_ANY;
+
+					if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuseaddr, sizeof(reuseaddr)) == -1) {
+						close(sfd);
+						proxy_error(
+							"Unable to start WebInterfacePlugin, failed to set 'SO_REUSEADDR' to check port '%d' availability.\n",
+							variables.web_port
+						);
+					} else {
+						if (::bind(sfd, (struct sockaddr*)&tmp_addr, (socklen_t)sizeof(tmp_addr)) == -1) {
+							close(sfd);
+							proxy_error(
+								"Unable to start WebInterfacePlugin, port '%d' already in use.\n",
+								variables.web_port
+							);
+						} else {
+							close(sfd);
+							GloWebInterface->start(variables.web_port);
+						}
+					}
+				}
+			}
+		} else {
+			if (GloVars.web_interface_plugin == NULL) {
+				MHD_stop_daemon(Admin_HTTP_Server);
+				Admin_HTTP_Server = NULL;
+			} else {
+				if (GloWebInterface) {
+					GloWebInterface->stop();
+				}
+			}
+		}
+		variables.web_enabled_old = variables.web_enabled;
+	} else {
+		if (variables.web_port != variables.web_port_old) {
+			if (variables.web_enabled) {
+				if (GloVars.web_interface_plugin == NULL) {
+					MHD_stop_daemon(Admin_HTTP_Server);
+					Admin_HTTP_Server = NULL;
+					char *key_pem;
+					char *cert_pem;
+					GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
+					Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
+						variables.web_port,
+						NULL, NULL, http_handler, NULL,
+						MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
+						MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
+						MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
+						MHD_OPTION_HTTPS_MEM_KEY, key_pem,
+						MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
+						MHD_OPTION_END);
+					free(key_pem);
+					free(cert_pem);
+				} else {
+					if (GloWebInterface) {
+						GloWebInterface->start(variables.web_port);
+					}
+				}
+			}
+			variables.web_port_old = variables.web_port;
+		}
+	}
+}
+
 void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 	SQLite3DB *db, bool replace, const string& checksum, const time_t epoch, bool lock
 ) {
@@ -7328,157 +7491,8 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 		}
 		wrunlock();
 		{
-			std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
-				[this](const httpserver::http_request& request) {
-					auto headers = request_headers(request);
-					auto serial_response = this->serial_exposer(headers);
-					auto http_response = make_response(serial_response);
-
-					return http_response;
-				}
-			};
-
-			bool free_restapi_port = false;
-
-			// Helper lambda taking a boolean reference as a parameter to check if 'restapi_port' is available.
-			// In case of port not being free or error, logs an error 'ProxySQL_RestAPI_Server' isn't able to be started.
-			const auto check_restapi_port = [&](bool& restapi_port_free) -> void {
-				int e_port_check = check_port_availability(variables.restapi_port, &restapi_port_free);
-
-				if (restapi_port_free == false) {
-					if (e_port_check == -1) {
-						proxy_error("Unable to start 'ProxySQL_RestAPI_Server', failed to set 'SO_REUSEADDR' to check port availability.\n");
-					} else {
-						proxy_error(
-							"Unable to start 'ProxySQL_RestAPI_Server', port '%d' already in use.\n",
-							variables.restapi_port
-						);
-					}
-				}
-			};
-
-			if (variables.restapi_enabled != variables.restapi_enabled_old) {
-				if (variables.restapi_enabled) {
-					check_restapi_port(free_restapi_port);
-				}
-
-				if (variables.restapi_enabled && free_restapi_port) {
-					AdminRestApiServer = new ProxySQL_RESTAPI_Server(
-						variables.restapi_port, {{"/metrics", prometheus_callback}}
-					);
-				} else {
-					delete AdminRestApiServer;
-					AdminRestApiServer = NULL;
-				}
-				variables.restapi_enabled_old = variables.restapi_enabled;
-			} else {
-				if (variables.restapi_port != variables.restapi_port_old) {
-					if (AdminRestApiServer) {
-						delete AdminRestApiServer;
-						AdminRestApiServer = NULL;
-					}
-
-					if (variables.restapi_enabled) {
-						check_restapi_port(free_restapi_port);
-					}
-
-					if (variables.restapi_enabled && free_restapi_port) {
-						AdminRestApiServer = new ProxySQL_RESTAPI_Server(
-							variables.restapi_port, {{"/metrics", prometheus_callback}}
-						);
-					}
-					variables.restapi_port_old = variables.restapi_port;
-				}
-			}
-			if (variables.web_enabled != variables.web_enabled_old) {
-				if (variables.web_enabled) {
-					if (GloVars.web_interface_plugin == NULL) {
-						char *key_pem;
-						char *cert_pem;
-						GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
-						Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
-							variables.web_port,
-							NULL, NULL, http_handler, NULL,
-							MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
-							MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
-							MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
-							MHD_OPTION_HTTPS_MEM_KEY, key_pem,
-							MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
-							MHD_OPTION_END);
-							free(key_pem);
-							free(cert_pem);
-					} else {
-						if (GloWebInterface) {
-							int sfd = 0;
-							int reuseaddr = 1;
-							struct sockaddr_in tmp_addr;
-
-							sfd = socket(AF_INET, SOCK_STREAM, 0);
-							memset(&tmp_addr, 0, sizeof(tmp_addr));
-							tmp_addr.sin_family = AF_INET;
-							tmp_addr.sin_port = htons(variables.web_port);
-							tmp_addr.sin_addr.s_addr = INADDR_ANY;
-
-							if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuseaddr, sizeof(reuseaddr)) == -1) {
-								close(sfd);
-								proxy_error(
-									"Unable to start WebInterfacePlugin, failed to set 'SO_REUSEADDR' to check port '%d' availability.\n",
-									variables.web_port
-								);
-							} else {
-								if (::bind(sfd, (struct sockaddr*)&tmp_addr, (socklen_t)sizeof(tmp_addr)) == -1) {
-									close(sfd);
-									proxy_error(
-										"Unable to start WebInterfacePlugin, port '%d' already in use.\n",
-										variables.web_port
-									);
-								} else {
-									close(sfd);
-									GloWebInterface->start(variables.web_port);
-								}
-							}
-						}
-					}
-				} else {
-					if (GloVars.web_interface_plugin == NULL) {
-						MHD_stop_daemon(Admin_HTTP_Server);
-						Admin_HTTP_Server = NULL;
-					} else {
-						if (GloWebInterface) {
-							GloWebInterface->stop();
-						}
-					}
-				}
-				variables.web_enabled_old = variables.web_enabled;
-			} else {
-				if (variables.web_port != variables.web_port_old) {
-					if (variables.web_enabled) {
-						if (GloVars.web_interface_plugin == NULL) {
-							MHD_stop_daemon(Admin_HTTP_Server);
-							Admin_HTTP_Server = NULL;
-							char *key_pem;
-							char *cert_pem;
-							GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
-							Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
-								variables.web_port,
-								NULL, NULL, http_handler, NULL,
-								MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
-								MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
-								MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
-								MHD_OPTION_HTTPS_MEM_KEY, key_pem,
-								MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
-								MHD_OPTION_END);
-							free(key_pem);
-							free(cert_pem);
-						} else {
-							if (GloWebInterface) {
-								GloWebInterface->start(variables.web_port);
-							}
-						}
-					}
-					variables.web_port_old = variables.web_port;
-				}
-			}
+			load_http_server();
+			load_restapi_server();
 			// Update the admin variable for 'web_verbosity'
 			admin___web_verbosity = variables.web_verbosity;
 		}

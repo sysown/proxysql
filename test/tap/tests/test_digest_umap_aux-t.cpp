@@ -178,7 +178,8 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(1 + DUMMY_QUERIES.size() * 5); // always specify the number of tests that are going to be performed
+	int nplan = (1 + DUMMY_QUERIES.size() * 5); // always specify the number of tests that are going to be performed
+	plan(nplan);
 
 	MYSQL *proxy_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -312,6 +313,12 @@ int main(int argc, char** argv) {
 			"'last_seen' within required time range - min: %ld, max: %ld, last_seen: %ld",
 			init_time - 1, final_time + 1, bf_last_seen
 		);
+	}
+
+	if (tests_last() == nplan && tests_failed == 0) {
+		string q = "TRUNCATE TABLE stats.stats_mysql_query_digest";
+		diag("Running %s", q.c_str());
+		MYSQL_QUERY(proxy_admin, q.c_str());
 	}
 
 	mysql_close(proxy_admin);

@@ -4,6 +4,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
+#include "MySQL_Prepared_Stmt_info.h"
 
 #define RESULTSET_BUFLEN 16300
 
@@ -70,16 +71,6 @@ class MySQL_ResultSet {
 	unsigned long long current_size();
 };
 
-class MySQL_Prepared_Stmt_info {
-	public:
-	uint32_t statement_id;
-	uint16_t num_columns;
-	uint16_t num_params;
-	uint16_t warning_count;
-	uint16_t pending_num_columns;
-	uint16_t pending_num_params;
-	MySQL_Prepared_Stmt_info(unsigned char *, unsigned int);
-};
 
 uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
 

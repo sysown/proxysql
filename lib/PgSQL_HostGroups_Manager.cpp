@@ -65,6 +65,7 @@ static pthread_mutex_t ev_loop_mutex;
 
 const int PgSQL_ERRORS_STATS_FIELD_NUM = 11;
 
+#if 0
 static std::string gtid_executed_to_string(gtid_set_t & gtid_executed);
 static void addGtid(const gtid_t & gtid, gtid_set_t & gtid_executed);
 
@@ -95,6 +96,7 @@ static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int rev
 	ev_timer_start(loop, timer);
 	return;
 }
+#endif // 0
 
 static int wait_for_pgsql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
@@ -120,6 +122,7 @@ static int wait_for_pgsql(MYSQL *mysql, int status) {
 	}
 }
 
+#if 0
 static void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 	pthread_mutex_lock(&ev_loop_mutex);
 	if (revents & EV_READ) {
@@ -546,6 +549,7 @@ static void * GTID_syncer_run() {
 	//sleep(1000);
 	return NULL;
 }
+#endif // 0
 
 //static void * HGCU_thread_run() {
 static void * HGCU_thread_run() {
@@ -1400,7 +1404,8 @@ void PgSQL_HostGroups_Manager::init() {
 	//pthread_create(&HGCU_thread_id, NULL, HGCU_thread_run , NULL);
 
 	// gtid initialization;
-	GTID_syncer_thread = new std::thread(&GTID_syncer_run);
+	//GTID_syncer_thread = new std::thread(&GTID_syncer_run);
+	GTID_syncer_thread = nullptr;
 
 	//pthread_create(&GTID_syncer_thread_id, NULL, GTID_syncer_run , NULL);
 }
@@ -2250,6 +2255,7 @@ uint64_t PgSQL_HostGroups_Manager::get_pgsql_servers_checksum(SQLite3_result* ru
 
 bool PgSQL_HostGroups_Manager::gtid_exists(PgSQL_SrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
 	bool ret = false;
+#if 0
 	pthread_rwlock_rdlock(&gtid_rwlock);
 	std::string s1 = mysrvc->address;
 	s1.append(":");
@@ -2267,10 +2273,12 @@ bool PgSQL_HostGroups_Manager::gtid_exists(PgSQL_SrvC *mysrvc, char * gtid_uuid,
 	}
 	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
 	pthread_rwlock_unlock(&gtid_rwlock);
+#endif // 0
 	return ret;
 }
 
 void PgSQL_HostGroups_Manager::generate_pgsql_gtid_executed_tables() {
+#if 0
 	pthread_rwlock_wrlock(&gtid_rwlock);
 	// first, set them all as active = false
 	std::unordered_map<string, PgSQL_GTID_Server_Data *>::iterator it = gtid_map.begin();
@@ -2344,6 +2352,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_gtid_executed_tables() {
 		gtid_map.erase(*it3);
 	}
 	pthread_rwlock_unlock(&gtid_rwlock);
+#endif // 0
 }
 
 void PgSQL_HostGroups_Manager::purge_pgsql_servers_table() {
