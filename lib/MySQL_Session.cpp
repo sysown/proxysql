@@ -44,6 +44,8 @@
 #define SELECT_CONNECTION_ID_LEN 22
 #define SELECT_LAST_INSERT_ID "SELECT LAST_INSERT_ID()"
 #define SELECT_LAST_INSERT_ID_LEN 23
+#define SELECT_LAST_INSERT_ID_FROM_DUAL "SELECT LAST_INSERT_ID() FROM DUAL"
+#define SELECT_LAST_INSERT_ID_FROM_DUAL_LEN 33
 #define SELECT_LAST_INSERT_ID_LIMIT1 "SELECT LAST_INSERT_ID() LIMIT 1"
 #define SELECT_LAST_INSERT_ID_LIMIT1_LEN 31
 #define SELECT_VARIABLE_IDENTITY "SELECT @@IDENTITY"
@@ -7274,6 +7276,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			//handle 2564
 			if (
 				(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
+				||
+				(pkt->size==SELECT_LAST_INSERT_ID_FROM_DUAL_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID_FROM_DUAL,(char *)pkt->ptr+5,pkt->size-5)==0)
 				||
 				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
                 ||

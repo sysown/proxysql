@@ -31,10 +31,6 @@
 
 using std::function;
 
-#ifdef TEST_AURORA
-static unsigned long long array_mysrvc_total = 0;
-static unsigned long long array_mysrvc_cands = 0;
-#endif // TEST_AURORA
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
