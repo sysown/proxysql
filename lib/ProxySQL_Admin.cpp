@@ -442,7 +442,7 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
-#define ADMIN_SQLITE_TABLE_SSL_CIPHERS "CREATE TABLE ssl_ciphers (cipher_name VARCHAR NOT NULL, cipher_description VARCHAR NOT NULL)"
+#define ADMIN_SQLITE_TABLE_SSL_CIPHERS "CREATE TABLE ssl_ciphers (cipher_name VARCHAR NOT NULL PRIMARY KEY , cipher_description VARCHAR NOT NULL)"
 
 #define ADMIN_SQLITE_TABLE_RESTAPI_ROUTES_V2_0_15 "CREATE TABLE restapi_routes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , method VARCHAR NOT NULL CHECK (UPPER(method) IN ('GET','POST')) , uri VARCHAR NOT NULL , script VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '')"
 
