@@ -341,9 +341,9 @@ build-%:
 
 .NOTPARALLEL: binaries/proxysql%
 binaries/proxysql%:
-	@docker-compose -p proxysql down -v --remove-orphans
-	@docker-compose -p proxysql up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
-	@docker-compose -p proxysql down -v --remove-orphans
+	@docker compose -p proxysql down -v --remove-orphans
+	@docker compose -p proxysql up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
+	@docker compose -p proxysql down -v --remove-orphans
 
 
 ### clean targets
