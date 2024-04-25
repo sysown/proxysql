@@ -291,6 +291,7 @@ class MyHGC {	// MySQL Host Group Container
 		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
 		uint32_t max_num_online_servers;
 		uint32_t throttle_connections_per_sec;
+		int32_t monitor_slave_lag_when_null;
 		int8_t autocommit;
 		int8_t free_connections_pct;
 		int8_t handle_warnings;
@@ -309,6 +310,10 @@ class MyHGC {	// MySQL Host Group Container
 	inline
 	bool handle_warnings_enabled() const {
 		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
+	}
+	inline
+	int32_t get_monitor_slave_lag_when_null() const {
+		return attributes.configured == true && attributes.monitor_slave_lag_when_null != -1 ? attributes.monitor_slave_lag_when_null : mysql_thread___monitor_slave_lag_when_null;
 	}
 	MyHGC(int);
 	~MyHGC();

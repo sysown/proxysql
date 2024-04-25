@@ -2792,11 +2792,9 @@ __exit_monitor_replication_lag_thread:
 							MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 							if (row) {
 								repl_lag=-1; // this is old behavior
-							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
 								if (row[j]) { // if Seconds_Behind_Master is not NULL
 									repl_lag=atoi(row[j]);
 								} else {
-									proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
 									MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
 								}
 							}
@@ -7820,11 +7818,9 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 					MYSQL_ROW row = mysql_fetch_row(mmsd->result);
 					if (row) {
 						repl_lag = -1; // this is old behavior
-						repl_lag = mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
 						if (row[j]) { // if Seconds_Behind_Master is not NULL
 							repl_lag = atoi(row[j]);
 						} else {
-							proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
 							MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
 						}
 					}
