@@ -60,11 +60,7 @@ ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
 	cd libinjection/libinjection && patch -p1 < ../libinjection_sqli.c.patch
 endif
-ifeq ($(SYS_KERN),Darwin)
-	sed -i '' 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
-else
 	sed -i -e 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
-endif
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 
 libinjection: libinjection/libinjection/src/libinjection.a
@@ -94,6 +90,9 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 	cd libhttpserver/libhttpserver && patch -p0 < ../replace_static_global_strings.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
+endif
+ifeq ($(SYS_KERN),Darwin)
+	sed -i -e 's/glibtoolize/libtoolize/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
@@ -245,7 +244,8 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
 	cd sqlite3/sqlite3 && patch -p1 < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
-	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
+# FIX ME
+#	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 
@@ -280,13 +280,8 @@ re2/re2/obj/libre2.a:
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
-ifeq ($(SYS_KERN),Darwin)
-	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
-#	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
-else
 	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g ${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 #	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
-endif
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
 
 re2: re2/re2/obj/libre2.a
@@ -331,4 +326,3 @@ cleanall:
 	cd cityhash && rm -rf cityhash-*/ || true
 	cd coredumper && rm -rf coredumper-*/ || true
 .PHONY: cleanall
-

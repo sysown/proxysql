@@ -1,18 +1,23 @@
-@@ -34014,7 +34014,7 @@
- else $as_nop
-   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: failed" >&5
+@@ -34590,7 +34590,7 @@
+ else case e in #(
+   e) { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: failed" >&5
  printf "%s\n" "failed" >&6; }
 -    as_fn_error $? "one or more libs available at link-time are not available run-time. Libs used at link-time: $LIBS" "$LINENO" 5
-+#    as_fn_error $? "one or more libs available at link-time are not available run-time. Libs used at link-time: $LIBS" "$LINENO" 5
- 
++    #as_fn_error $? "one or more libs available at link-time are not available run-time. Libs used at link-time: $LIBS" "$LINENO" 5
+      ;;
+ esac
  fi
- rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
-@@ -34049,7 +34049,7 @@
- else $as_nop
-   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: failed" >&5
+@@ -34629,7 +34629,7 @@
+ else case e in #(
+   e) { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: failed" >&5
  printf "%s\n" "failed" >&6; }
 -    as_fn_error $? "one or more libs available at link-time are not available run-time. Libs used at link-time: $LIBS" "$LINENO" 5
-+#    as_fn_error $? "one or more libs available at link-time are not available run-time. Libs used at link-time: $LIBS" "$LINENO" 5
- 
++    #as_fn_error $? "one or more libs available at link-time are not available run-time. Libs used at link-time: $LIBS" "$LINENO" 5
+      ;;
+ esac
  fi
- rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
+@@ -49329,4 +49329,3 @@
+   WARNING: $experimental enabled but marked EXPERIMENTAL. Use with caution!
+ _EOF
+ fi
+-
