@@ -319,9 +319,9 @@ void update_string_var_if_set(char** cur_val, ez::ezOptionParser* opt, const cha
 	}
 }
 
-void update_ulong_var_if_set(uint64_t& cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
+void update_ulong_var_if_set(unsigned long& cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
 	if (opt->isSet(cmd_opt)) {
-		//opt->get(cmd_opt)->getULong(cur_val);
+		opt->get(cmd_opt)->getULong(cur_val);
 	}
 }
 
