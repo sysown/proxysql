@@ -26,7 +26,7 @@ The list of currently supported operating systems for native packaging is:
   - Fedora 33,24
   - OpenSUSE 15
   - AlmaLinux 8,9
- 
+
 Download a __deb__ or __rpm__ installer file for your OS and architecture from:
 
 https://github.com/sysown/proxysql/releases
@@ -111,7 +111,7 @@ https://github.com/ProxySQL/docker-images/tree/main/build-clang-images
 On modern Mac OSX, ProxySQL's dependencies are not fully satisfied by the tools included with the XCode/clang toolkit. Using the [Homebrew](https://brew.sh/) OSX package manager, dependencies can be installed and located on OSX like this:
 
 ```bash
-brew install automake bzip2 cmake make git gpatch gnutls ossp-uuid
+brew install automake bzip2 cmake make git gpatch gnutls ossp-uuid libtool
 ```
 
 Go to the directory where you cloned the repo (or unpacked the tarball) and run:
