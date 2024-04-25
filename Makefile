@@ -42,9 +42,9 @@ export MAKE
 export CURVER
 
 ### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | cut -d' ' -f3)
 ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | cut -d' ' -f3)
 	LEGACY_BUILD := 1
 ifneq ($(CPLUSPLUS),201103L)
     $(error Compiler must support at least c++11)
@@ -235,7 +235,7 @@ build_tap_test_debug: build_tap_tests_debug
 build_tap_tests_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
-# ClickHouse build targets are now default build targets. 
+# ClickHouse build targets are now default build targets.
 # To maintain backward compatibility, ClickHouse targets are still available.
 .PHONY: build_deps_clickhouse
 build_deps_clickhouse: build_deps_default
@@ -289,7 +289,7 @@ SYS_ARCH := $(shell uname -m)
 REL_ARCH := $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH := .$(SYS_ARCH)
 DEB_ARCH := _$(REL_ARCH)
-REL_VERS := $(shell echo ${GIT_VERSION} | grep -Po '(?<=^v|^)[\d\.]+')
+REL_VERS := $(shell echo ${GIT_VERSION} | awk -F'[.-]' '{print $1"."$2"."$3}')
 RPM_VERS := -$(REL_VERS)-1
 DEB_VERS := _$(REL_VERS)
 

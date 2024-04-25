@@ -28,9 +28,9 @@ endif
 
 
 ### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | cut -d' ' -f3)
 ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | cut -d' ' -f3)
 ifneq ($(CPLUSPLUS),201103L)
     $(error Compiler must support at least c++11)
 endif
@@ -74,7 +74,7 @@ libssl/openssl/libssl.a:
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
-	cd libssl/openssl && ln -fsT . lib # curl wants this path
+	cd libssl/openssl && ln -fs . lib # curl wants this path
 
 libssl: libssl/openssl/libssl.a
 
@@ -92,7 +92,9 @@ ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 ifeq ($(SYS_KERN),Darwin)
-	sed -i -e 's/glibtoolize/libtoolize/' libhttpserver/libhttpserver/bootstrap
+ifeq (, $(shell which glibtoolize))
+	   sed -i -e 's/glibtoolize/libtoolize/' libhttpserver/libhttpserver/bootstrap
+endif
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
@@ -159,7 +161,7 @@ lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-	cd clickhouse-cpp && ln -fsT clickhouse-cpp-2.3.0 clickhouse-cpp
+	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
