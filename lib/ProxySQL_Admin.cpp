@@ -7413,8 +7413,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 			rc = GloMTH->set_variable(r->fields[0],r->fields[1]);
 		} else if (modname == "sqliteserver") {
 			rc = GloSQLite3Server->set_variable(r->fields[0],r->fields[1]);
+#ifdef PROXYSQLCLICKHOUSE
 		} else if (modname == "clickhouse") {
 			rc = GloClickHouseServer->set_variable(r->fields[0],r->fields[1]);
+#endif // PROXYSQLCLICKHOUSE
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
 		}
@@ -7429,8 +7431,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 					val = GloMTH->get_variable(r->fields[0]);
 				} else if (modname == "sqliteserver") {
 					val = GloSQLite3Server->get_variable(r->fields[0]);
+#ifdef PROXYSQLCLICKHOUSE
 				} else if (modname == "clickhouse") {
 					val = GloClickHouseServer->get_variable(r->fields[0]);
+#endif // PROXYSQLCLICKHOUSE
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
 				}
