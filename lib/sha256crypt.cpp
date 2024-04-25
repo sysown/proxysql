@@ -1,7 +1,16 @@
 /* SHA256-based Unix crypt implementation.
    Released into the Public Domain by Ulrich Drepper <drepper@redhat.com>.  */
 
-#include <endian.h>
+#include <cstring>
+#if defined __APPLE__
+    #include <machine/endian.h>
+    #include <libkern/OSByteOrder.h>
+
+    // define 64 bit macros
+    #define htole64(x) OSSwapHostToLittleInt64(x)
+#else
+    #include <endian.h>
+#endif
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -424,7 +433,7 @@ extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffe
   /* Create byte sequence P.  */
   cp = p_bytes = (char *)alloca (key_len);
   for (cnt = key_len; cnt >= 32; cnt -= 32)
-    cp = (char *)mempcpy (cp, temp_result, 32);
+    cp = (char *)memcpy (cp, temp_result, 32);
   memcpy (cp, temp_result, cnt);
 
   /* Start computation of S byte sequence.  */
@@ -440,7 +449,7 @@ extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffe
   /* Create byte sequence S.  */
   cp = s_bytes = (char *)alloca (salt_len);
   for (cnt = salt_len; cnt >= 32; cnt -= 32)
-    cp = (char *) mempcpy (cp, temp_result, 32);
+    cp = (char *) memcpy (cp, temp_result, 32);
   memcpy (cp, temp_result, cnt);
 
   /* Repeatedly run the collected hash value through SHA256 to burn

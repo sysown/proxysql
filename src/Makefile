@@ -158,7 +158,7 @@ endif
 
 MYCXXFLAGS := $(STDCPP)
 ifeq ($(CXX),clang++)
-	MYCXXFLAGS += -fuse-ld=lld
+	#MYCXXFLAGS += -fuse-ld=lld
 endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
@@ -243,4 +243,3 @@ default: $(EXECUTABLE)
 
 clean:
 	rm -rf *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1 $(ODIR)
-
