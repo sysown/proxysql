@@ -3,7 +3,7 @@
 @@ -25168,6 +25168,183 @@
    sqlite3ResultStrAccum(context, &sRes);
  }
- 
+
 +#define DEF_SALT_SIZE 20
 +#define SHA_DIGEST_LENGTH 20
 +
@@ -11,7 +11,7 @@
 +////////////////////////////////////////////////////////////////////////////////
 +
 +// ctype.h
-+extern int toupper (int __c) __THROW;
++extern int toupper (int __c);
 +
 +// SHA256_crypt
 +char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);

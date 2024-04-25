@@ -239,17 +239,16 @@ endif
 mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
 
 
-sqlite3/sqlite3/sqlite3.o:
+sqlite3/sqlite3/libsqlite3.so:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
 	cd sqlite3/sqlite3 && patch -p1 < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
-# FIX ME
-#	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
+	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
-	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
+	cd sqlite3/sqlite3 && ${CC} -shared -Wl,-U,_ERR_error_string -Wl,-U,_RAND_bytes -Wl,-U,_SHA1 -Wl,-U,_sha256_crypt_r -Wl,-U,_ERR_get_error -o libsqlite3.so sqlite3.o
 
-sqlite3: sqlite3/sqlite3/sqlite3.o
+sqlite3: sqlite3/sqlite3/libsqlite3.so
 
 
 libconfig/libconfig/lib/.libs/libconfig++.a:
