@@ -4,10 +4,6 @@
 #include <cstring>
 #if defined __APPLE__
     #include <machine/endian.h>
-    #include <libkern/OSByteOrder.h>
-
-    // define 64 bit macros
-    #define htole64(x) OSSwapHostToLittleInt64(x)
 #else
     #include <endian.h>
 #endif
