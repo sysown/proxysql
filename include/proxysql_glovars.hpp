@@ -106,7 +106,7 @@ class ProxySQL_GlobalVariables {
 		bool restart_on_error;
 		int restart_delay;
 		std::mutex ssl_mutex;
-		SSL_CTX *ssl_ctx;	
+		SSL_CTX *ssl_ctx;
 		SSL_CTX *tmp_ssl_ctx;
 		// these two buffers are used for the web interface
 		char * ssl_key_pem_mem;
@@ -121,9 +121,9 @@ class ProxySQL_GlobalVariables {
 		char* gr_bootstrap_account;
 		char* gr_bootstrap_account_create;
 		char* gr_bootstrap_account_host;
-		uint64_t gr_bootstrap_password_retries;
+		unsigned long gr_bootstrap_password_retries;
 		char* gr_bootstrap_conf_bind_address;
-		uint64_t gr_bootstrap_conf_base_port;
+		unsigned long gr_bootstrap_conf_base_port;
 		bool gr_bootstrap_conf_use_sockets;
 		bool gr_bootstrap_conf_skip_tcp;
 		char* gr_bootstrap_ssl_ca;
