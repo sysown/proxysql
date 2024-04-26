@@ -4288,7 +4288,7 @@ __get_pkts_from_client:
 					// In this switch we handle commands that download binlog events from MySQL
 					// servers. For these commands a lot of the features provided by ProxySQL
 					// aren't useful, like multiplexing, query parsing, etc. For this reason,
-					// ProxySQL enables fast_forward when it receives these commands. 
+					// ProxySQL enables fast_forward when it receives these commands.Â 
 				{
 					// we use a switch to write the command in the info message
 					std::string q = "Received command ";
