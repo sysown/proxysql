@@ -5674,7 +5674,7 @@ handler_again:
 					}
 				}
 
-				goto __exit_DSS__STATE_NOT_INITIALIZED;
+				//goto __exit_DSS__STATE_NOT_INITIALIZED;
 
 
 			}
@@ -5711,8 +5711,8 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_CONNECTING_SERVER(&rc))
 					goto handler_again;	// we changed status
-				if (rc==1) //handler_again___status_CONNECTING_SERVER returns 1
-					goto __exit_DSS__STATE_NOT_INITIALIZED;
+				//if (rc==1) //handler_again___status_CONNECTING_SERVER returns 1
+				//	goto __exit_DSS__STATE_NOT_INITIALIZED;
 			}
 			break;
 		case session_status___NONE:
@@ -5731,7 +5731,7 @@ handler_again:
 	}
 
 
-__exit_DSS__STATE_NOT_INITIALIZED:
+//__exit_DSS__STATE_NOT_INITIALIZED:
 
 
 #ifdef DEBUG
