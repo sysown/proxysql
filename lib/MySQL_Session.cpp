@@ -2460,6 +2460,54 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	return ret;
 }
 
+
+bool MySQL_Session::handler_again___verify_multiple_variables(MySQL_Connection* myconn) {
+	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
+		auto client_hash = client_myds->myconn->var_hash[i];
+#ifdef DEBUG
+		if (GloVars.global.gdbg) {
+			switch (i) {
+				case SQL_CHARACTER_SET:
+				case SQL_SET_NAMES:
+				case SQL_CHARACTER_SET_RESULTS:
+				case SQL_CHARACTER_SET_CONNECTION:
+				case SQL_CHARACTER_SET_CLIENT:
+				case SQL_COLLATION_CONNECTION:
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session %p , variable %s has value %s\n" , this, mysql_tracked_variables[i].set_variable_name , client_myds->myconn->variables[i].value);
+				default:
+					break;
+			}
+		}
+#endif // DEBUG
+		if (client_hash) {
+			auto server_hash = myconn->var_hash[i];
+			if (client_hash != server_hash) {
+				if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
+					return true;
+				}
+			}
+		}
+	}
+	MySQL_Connection *c_con = client_myds->myconn;
+	vector<uint32_t>::const_iterator it_c = c_con->dynamic_variables_idx.begin();  // client connection iterator
+	for ( ; it_c != c_con->dynamic_variables_idx.end() ; it_c++) {
+		auto i = *it_c;
+		auto client_hash = c_con->var_hash[i];
+		auto server_hash = myconn->var_hash[i];
+		if (client_hash != server_hash) {
+			if(
+				!myconn->var_absent[i]
+				&&
+				mysql_variables.verify_variable(this, i)
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+
 /**
  * @brief Verifies and sets the ldap_user_variable option for the backend connection.
  *
@@ -5209,6 +5257,55 @@ void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	}
 }
 
+void MySQL_Session::handler_KillConnectionIfNeeded() {
+	if ( // two conditions
+		// If the server connection is in a non-idle state (ASYNC_IDLE), and the current time is greater than or equal to mybe->server_myds->wait_until
+		// This indicates that the server is taking too long to respond.
+		(mybe->server_myds->myconn && mybe->server_myds->myconn->async_state_machine!=ASYNC_IDLE && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
+		||
+		// If the session has been marked as killed by an admin.
+		(killed==true)
+	) { // Logging and Action
+		// we only log in case on timing out here. Logging for 'killed' is done in the places that hold that contextual information.
+		if (mybe->server_myds->myconn && (mybe->server_myds->myconn->async_state_machine != ASYNC_IDLE) && mybe->server_myds->wait_until && (thread->curtime >= mybe->server_myds->wait_until)) {
+			std::string query {};
+
+			if (CurrentQuery.stmt_info == NULL) { // text protocol
+				query = std::string { mybe->server_myds->myconn->query.ptr, mybe->server_myds->myconn->query.length };
+			} else { // prepared statement
+				query = std::string { CurrentQuery.stmt_info->query, CurrentQuery.stmt_info->query_length };
+			}
+
+			std::string client_addr { "" };
+			int client_port = 0;
+
+			if (client_myds) {
+				client_addr = client_myds->addr.addr ? client_myds->addr.addr : "";
+				client_port = client_myds->addr.port;
+			}
+			// it logs a warning message indicating the query that caused the timeout, along with client details.
+			proxy_warning(
+				"Killing connection %s:%d because query '%s' from client '%s':%d timed out.\n",
+				mybe->server_myds->myconn->parent->address,
+				mybe->server_myds->myconn->parent->port,
+				query.c_str(),
+				client_addr.c_str(),
+				client_port
+			);
+		}
+		// it calls handler_again___new_thread_to_kill_connection() to initiate the killing of the connection associated with the session that timed out.
+		handler_again___new_thread_to_kill_connection();
+	}
+}
+
+void MySQL_Session::handler_rc0_RefreshActiveTransactions(MySQL_Connection* myconn) {
+	if ((myconn->mysql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
+		active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
+		if (active_transactions == 0)
+			transaction_started_at = 0; // reset it
+	}
+}
+
 int MySQL_Session::handler() {
 	int handler_ret = 0;
 	bool prepared_stmt_with_no_params = false;
@@ -5312,44 +5409,8 @@ handler_again:
 				// set max_connect_time to zero, indicating no timeout
 				mybe->server_myds->max_connect_time=0;
 			}
-			if ( // two conditions
-				// If the server connection is in a non-idle state (ASYNC_IDLE), and the current time is greater than or equal to mybe->server_myds->wait_until
-				// This indicates that the server is taking too long to respond.
-				(mybe->server_myds->myconn && mybe->server_myds->myconn->async_state_machine!=ASYNC_IDLE && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
-				||
-				// If the session has been marked as killed by an admin.
-				(killed==true)
-			) { // Logging and Action
-				// we only log in case on timing out here. Logging for 'killed' is done in the places that hold that contextual information.
-				if (mybe->server_myds->myconn && (mybe->server_myds->myconn->async_state_machine != ASYNC_IDLE) && mybe->server_myds->wait_until && (thread->curtime >= mybe->server_myds->wait_until)) {
-					std::string query {};
+			handler_KillConnectionIfNeeded();
 
-					if (CurrentQuery.stmt_info == NULL) { // text protocol
-						query = std::string { mybe->server_myds->myconn->query.ptr, mybe->server_myds->myconn->query.length };
-					} else { // prepared statement
-						query = std::string { CurrentQuery.stmt_info->query, CurrentQuery.stmt_info->query_length };
-					}
-
-					std::string client_addr { "" };
-					int client_port = 0;
-
-					if (client_myds) {
-						client_addr = client_myds->addr.addr ? client_myds->addr.addr : "";
-						client_port = client_myds->addr.port;
-					}
-					// it logs a warning message indicating the query that caused the timeout, along with client details.
-					proxy_warning(
-						"Killing connection %s:%d because query '%s' from client '%s':%d timed out.\n",
-						mybe->server_myds->myconn->parent->address,
-						mybe->server_myds->myconn->parent->port,
-						query.c_str(),
-						client_addr.c_str(),
-						client_port
-					);
-				}
-				// it calls handler_again___new_thread_to_kill_connection() to initiate the killing of the connection associated with the session that timed out.
-				handler_again___new_thread_to_kill_connection();
-			}
 			// checks if the backend MySQL server associated with the session has been initialized (STATE_NOT_INITIALIZED)
 			if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
 				// we don't have a backend yet
@@ -5399,47 +5460,8 @@ handler_again:
 									goto handler_again;
 								}
 
-								for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
-									auto client_hash = client_myds->myconn->var_hash[i];
-#ifdef DEBUG
-									if (GloVars.global.gdbg) {
-										switch (i) {
-											case SQL_CHARACTER_SET:
-											case SQL_SET_NAMES:
-											case SQL_CHARACTER_SET_RESULTS:
-											case SQL_CHARACTER_SET_CONNECTION:
-											case SQL_CHARACTER_SET_CLIENT:
-											case SQL_COLLATION_CONNECTION:
-												proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session %p , variable %s has value %s\n" , this, mysql_tracked_variables[i].set_variable_name , client_myds->myconn->variables[i].value);
-											default:
-												break;
-										}
-									}
-#endif // DEBUG
-									if (client_hash) {
-										auto server_hash = myconn->var_hash[i];
-										if (client_hash != server_hash) {
-											if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
-												goto handler_again;
-											}
-										}
-									}
-								}
-								MySQL_Connection *c_con = client_myds->myconn;
-								vector<uint32_t>::const_iterator it_c = c_con->dynamic_variables_idx.begin();  // client connection iterator
-								for ( ; it_c != c_con->dynamic_variables_idx.end() ; it_c++) {
-									auto i = *it_c;
-									auto client_hash = c_con->var_hash[i];
-									auto server_hash = myconn->var_hash[i];
-									if (client_hash != server_hash) {
-										if(
-											!myconn->var_absent[i]
-											&&
-											mysql_variables.verify_variable(this, i)
-										) {
-											goto handler_again;
-										}
-									}
+								if (handler_again___verify_multiple_variables(myconn) == true) {
+									goto handler_again;
 								}
 
 								if (locked_on_hostgroup != -1) {
@@ -5508,11 +5530,7 @@ handler_again:
 				if (rc==0) {
 
 					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
-						if ((myconn->mysql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
-							active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
-							if (active_transactions == 0)
-								transaction_started_at = 0; // reset it
-						}
+						handler_rc0_RefreshActiveTransactions(myconn);
 					}
 
 					handler_rc0_Process_GTID(myconn);
@@ -5681,44 +5699,10 @@ handler_again:
 			break;
 
 		case SHOW_WARNINGS:
-			// Performs a 'SHOW WARNINGS' query over the current backend connection and returns the connection back
-			// to the connection pool when finished. Actual logging of received warnings is performed in
-			// 'MySQL_Connection' while processing 'ASYNC_USE_RESULT_CONT'.
-			{
-				MySQL_Data_Stream *myds=mybe->server_myds;
-				MySQL_Connection *myconn=myds->myconn;
-
-				// Setting POLLOUT is required just in case this state has been reached when 'RunQuery' from
-				// 'PROCESSING_QUERY' state has immediately return. This is because in case 'mysql_real_query_start'
-				// immediately returns with '0' the session is never processed again by 'MySQL_Thread', and 'revents' is
-				// never updated with the result of polling through the 'MySQL_Thread::mypolls'.
-				myds->revents |= POLLOUT;
-
-				int rc = myconn->async_query(
-					mybe->server_myds->revents,(char *)"SHOW WARNINGS", strlen((char *)"SHOW WARNINGS")
-				);
-				if (rc == 0 || rc == -1) {
-					// Cleanup the connection resulset from 'SHOW WARNINGS' for the next query.
-					if (myconn->MyRS != NULL) {
-						delete myconn->MyRS;
-						myconn->MyRS = NULL;
-					}
-
-					if (rc == -1) {
-						int myerr = mysql_errno(myconn->mysql);
-						proxy_error(
-							"'SHOW WARNINGS' failed to be executed over backend connection with error: '%d'\n", myerr
-						);
-					}
-
-					RequestEnd(myds);
-					finishQuery(myds,myconn,prepared_stmt_with_no_params);
-
-					handler_ret = 0;
-					return handler_ret;
-				} else {
-					goto handler_again;
-				}
+			if (handler_again___status_SHOW_WARNINGS(mybe->server_myds, prepared_stmt_with_no_params) == true) {
+				goto handler_again;
+			} else {
+				handler_ret = 0; return handler_ret;
 			}
 			break;
 
@@ -5772,6 +5756,46 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	return handler_ret;
 }
 // end ::handler()
+
+
+bool MySQL_Session::handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream* myds, bool prepared_stmt_with_no_params) {
+	// Performs a 'SHOW WARNINGS' query over the current backend connection and returns the connection back
+	// to the connection pool when finished. Actual logging of received warnings is performed in
+	// 'MySQL_Connection' while processing 'ASYNC_USE_RESULT_CONT'.
+	MySQL_Connection *myconn=myds->myconn;
+
+	// Setting POLLOUT is required just in case this state has been reached when 'RunQuery' from
+	// 'PROCESSING_QUERY' state has immediately return. This is because in case 'mysql_real_query_start'
+	// immediately returns with '0' the session is never processed again by 'MySQL_Thread', and 'revents' is
+	// never updated with the result of polling through the 'MySQL_Thread::mypolls'.
+	myds->revents |= POLLOUT;
+
+	int rc = myconn->async_query(
+		myds->revents,(char *)"SHOW WARNINGS", strlen((char *)"SHOW WARNINGS")
+	);
+	if (rc == 0 || rc == -1) {
+		// Cleanup the connection resulset from 'SHOW WARNINGS' for the next query.
+		if (myconn->MyRS != NULL) {
+			delete myconn->MyRS;
+			myconn->MyRS = NULL;
+		}
+
+		if (rc == -1) {
+			int myerr = mysql_errno(myconn->mysql);
+			proxy_error(
+				"'SHOW WARNINGS' failed to be executed over backend connection with error: '%d'\n", myerr
+			);
+		}
+
+		RequestEnd(myds);
+		finishQuery(myds,myconn,prepared_stmt_with_no_params);
+
+		return false;
+	} else {
+		return true; // goto handler_again
+	}
+	return false; // default
+}
 
 /**
  * @brief Handle multiple session statuses.

@@ -202,7 +202,9 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
+	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
+	void handler_KillConnectionIfNeeded();
 
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_ldap_user_variable();
@@ -210,6 +212,7 @@ class MySQL_Session
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
+	bool handler_again___verify_multiple_variables(MySQL_Connection *);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
@@ -221,6 +224,7 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___multiple_statuses(int *rc);
+
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
@@ -259,6 +263,7 @@ class MySQL_Session
 	int RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
+	void handler_rc0_RefreshActiveTransactions(MySQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
