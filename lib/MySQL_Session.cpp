@@ -4145,6 +4145,293 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 	}
 }
 
+int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
+	int handler_ret = 0;
+	switch (status) {
+		case WAITING_CLIENT_DATA:
+			// this case should handled directly into get_pkts_from_client()
+			assert(0);
+			break;
+		case CONNECTING_CLIENT:
+			switch (client_myds->DSS) {
+				case STATE_SERVER_HANDSHAKE:
+					handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
+					break;
+				case STATE_SSL_INIT:
+					handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
+					break;
+				default:
+					proxy_error("Detected not valid state client state: %d\n", client_myds->DSS);
+					handler_ret = -1; //close connection
+					return handler_ret;
+					break;
+			}
+			break;
+		case FAST_FORWARD:
+			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+			break;
+		// This state is required because it covers the following situation:
+		//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.
+		//  2. The first packet received for this connection isn't a whole packet, i.e, it's either
+		//     split into multiple packets, or it doesn't fit 'queueIN' size (typically
+		//     QUEUE_T_DEFAULT_SIZE).
+		//  3. Session is still in 'CONNECTING_SERVER' state, BUT further packets remain to be received
+		//     from the initial split packet.
+		//
+		//  Because of this, packets received during 'CONNECTING_SERVER' when the previous state is
+		//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
+		case CONNECTING_SERVER:
+			if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
+				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+				break;
+			}
+		case session_status___NONE:
+		default:
+			handler___status_NONE_or_default(pkt);
+			handler_ret = -1;
+			return handler_ret;
+			break;
+	}
+	return handler_ret;
+}
+
+void MySQL_Session::GPFC_DetectedMultiPacket_SetDDS() {
+	// this is handled only for real traffic, not mirror
+	switch (client_myds->DSS) { // real traffic only
+		case STATE_SLEEP:
+			client_myds->DSS=STATE_SLEEP_MULTI_PACKET;
+			break;
+		case STATE_SLEEP_MULTI_PACKET:
+			break;
+		default:
+			// LCOV_EXCL_START
+			assert(0);
+			break;
+			// LCOV_EXCL_STOP
+	}
+}
+
+int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
+	int handler_ret = 0;
+	// If this is a 'fast_forward' session that hasn't yet received a backend connection, we don't
+	// forward 'COM_QUIT' packets, since this will make the act of obtaining a connection pointless.
+	// Instead, we intercept the 'COM_QUIT' packet and end the 'MySQL_Session'.
+	unsigned char command = *(static_cast<unsigned char*>(pkt.ptr)+sizeof(mysql_hdr));
+	if (command == _MYSQL_COM_QUIT) {
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+		if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
+		l_free(pkt.size,pkt.ptr);
+		handler_ret = -1;
+		return handler_ret;
+	}
+
+	mybe=find_or_create_backend(current_hostgroup); // set a backend
+	mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
+	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
+	previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
+
+	// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
+	// connection from the 'connection_pool'. This is used to ensure that we kill the session if
+	// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
+	// is reached for the target hostgroup.
+	if (mybe->server_myds->max_connect_time == 0) {
+		uint64_t connect_timeout =
+			mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
+				mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
+		mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
+	}
+	// Impose the same connection retrying policy as done for regular connections during
+	// 'MYSQL_CON_QUERY'.
+	mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
+	// 'CurrentQuery' isn't used for 'FAST_FORWARD' but we update it for using it as a session
+	// startup time for when a fast_forward session has attempted to obtain a connection.
+	CurrentQuery.start_time=thread->curtime;
+
+	//NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
+	// we can't use NEXT_IMMEDIATE() inside get_pkts_from_client()
+	// instead we set status to CONNECTING_SERVER and return 0
+	// when we exit from get_pkts_from_client() we expect the label "handler_again"
+	set_status(CONNECTING_SERVER);
+
+	return handler_ret;
+}
+
+
+void MySQL_Session::GPFC_PreparedStatements(PtrSize_t& pkt, unsigned char c) {
+	switch ((enum_mysql_command)c) {
+		case _MYSQL_COM_STMT_PREPARE:
+			if (GloMyLdapAuth) {
+				if (session_type==PROXYSQL_SESSION_MYSQL) {
+					if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
+						add_ldap_comment_to_pkt(&pkt);
+					}
+				}
+			}
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
+			break;
+		case _MYSQL_COM_STMT_EXECUTE:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(pkt);
+			break;
+		case _MYSQL_COM_STMT_RESET:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(pkt);
+			break;
+		case _MYSQL_COM_STMT_CLOSE:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(pkt);
+			break;
+		case _MYSQL_COM_STMT_SEND_LONG_DATA:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
+			break;
+		default:
+			// LCOV_EXCL_START
+			assert(0);
+			break;
+			// LCOV_EXCL_STOP
+	}
+}
+
+void MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned char c) {
+	// In this switch we handle commands that download binlog events from MySQL
+	// servers. For these commands a lot of the features provided by ProxySQL
+	// aren't useful, like multiplexing, query parsing, etc. For this reason,
+	// ProxySQL enables fast_forward when it receives these commands. 
+	{
+		// we use a switch to write the command in the info message
+		std::string q = "Received command ";
+		switch ((enum_mysql_command)c) {
+			case _MYSQL_COM_BINLOG_DUMP:
+				q += "MYSQL_COM_BINLOG_DUMP";
+				break;
+			case _MYSQL_COM_BINLOG_DUMP_GTID:
+				q += "MYSQL_COM_BINLOG_DUMP_GTID";
+				break;
+			case _MYSQL_COM_REGISTER_SLAVE:
+				q += "MYSQL_COM_REGISTER_SLAVE";
+				break;
+			default:
+				assert(0);
+				break;
+		};
+		// we add the client details in the info message
+		if (client_myds && client_myds->addr.addr) {
+			q += " from client " + std::string(client_myds->addr.addr) + ":" + std::to_string(client_myds->addr.port);
+		}
+		q += " . Changing session fast_forward to true";
+		proxy_info("%s\n", q.c_str());
+	}
+	session_fast_forward = true;
+
+	if (client_myds->PSarrayIN->len) {
+		proxy_error("UNEXPECTED PACKET FROM CLIENT -- PLEASE REPORT A BUG\n");
+		assert(0);
+	}
+	client_myds->PSarrayIN->add(pkt.ptr, pkt.size);
+
+	// The following code prepares the session as if it was configured with fast
+	// forward before receiving the command. This way the state machine will
+	// handle the command automatically.
+	current_hostgroup = previous_hostgroup;
+	mybe = find_or_create_backend(current_hostgroup); // set a backend
+	mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
+	// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
+	// we are now transitioning to 'FAST_FORWARD'.
+	mybe->server_myds->wait_until = 0;
+	if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
+		// NOTE: This section is entirely borrowed from 'STATE_SLEEP' for 'session_fast_forward'.
+		// Check comments there for extra information.
+		// =============================================================================
+		if (mybe->server_myds->max_connect_time == 0) {
+			uint64_t connect_timeout =
+				mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
+					mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
+			mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
+		}
+		mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
+		CurrentQuery.start_time=thread->curtime;
+		// =============================================================================
+
+		// we don't have a connection
+		previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD
+		set_status(CONNECTING_SERVER); // now we need a connection
+	} else {
+		// In case of having a connection, we need to make user to reset the state machine
+		// for current server 'MySQL_Data_Stream', setting it outside of any state handled
+		// by 'mariadb' library. Otherwise 'MySQL_Thread' will threat this
+		// 'MySQL_Data_Stream' as library handled.
+		mybe->server_myds->DSS = STATE_READY;
+		// myds needs to have encrypted value set correctly
+		{
+			MySQL_Data_Stream * myds = mybe->server_myds;
+			MySQL_Connection * myconn = myds->myconn;
+			assert(myconn != NULL);
+			// PMC-10005
+			// if backend connection uses SSL we will set
+			// encrypted = true and we will start using the SSL structure
+			// directly from P_MARIADB_TLS structure.
+			MYSQL *mysql = myconn->mysql;
+			if (mysql && myconn->ret_mysql) {
+				if (mysql->options.use_ssl == 1) {
+					P_MARIADB_TLS * matls = (P_MARIADB_TLS *)mysql->net.pvio->ctls;
+					if (matls != NULL) {
+						myds->encrypted = true;
+						myds->ssl = (SSL *)matls->ssl;
+						myds->rbio_ssl = BIO_new(BIO_s_mem());
+						myds->wbio_ssl = BIO_new(BIO_s_mem());
+						SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+					} else {
+						// if mysql->options.use_ssl == 1 but matls == NULL
+						// it means that ProxySQL tried to use SSL to connect to the backend
+						// but the backend didn't support SSL
+					}
+				}
+			}
+		}
+		set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
+	}	
+}
+
+bool MySQL_Session::GPFC_QueryUSE(PtrSize_t& pkt, int& handler_ret) {
+	bool need_break = false;
+	// This block was moved from 'handler_special_queries' to support
+	// handling of 'USE' statements which are preceded by a comment.
+	// For more context check issue: #3493.
+	if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
+		const char *qd = CurrentQuery.get_digest_text();
+		bool use_db_query = false;
+
+		if (qd != NULL) {
+			if (
+				(strncasecmp((char *)"USE",qd,3)==0)
+				&&
+				(
+					(strncasecmp((char *)"USE ",qd,4)==0)
+					||
+					(strncasecmp((char *)"USE`",qd,4)==0)
+				)
+			) {
+				use_db_query = true;
+			}
+		} else {
+			if (pkt.size > (5+4) && strncasecmp((char *)"USE ", (char *)pkt.ptr+5, 4) == 0) {
+				use_db_query = true;
+			}
+		}
+
+		if (use_db_query) {
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt);
+
+			if (mirror == false) {
+				need_break = true;
+				return need_break;
+			} else {
+				handler_ret = -1;
+				return need_break;
+			}
+		}
+	}
+
+	return need_break;
+}
+
 int MySQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 	int handler_ret = 0;
 	unsigned char c;
@@ -4160,39 +4447,9 @@ __get_pkts_from_client:
 			client_myds->PSarrayIN->remove_index(0,&pkt);
 		}
 		switch (status) {
-
-			case CONNECTING_CLIENT:
-				switch (client_myds->DSS) {
-					case STATE_SERVER_HANDSHAKE:
-						handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
-						break;
-					case STATE_SSL_INIT:
-						handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
-						break;
-					default:
-						proxy_error("Detected not valid state client state: %d\n", client_myds->DSS);
-						handler_ret = -1; //close connection
-						return handler_ret;
-						break;
-				}
-				break;
-
 			case WAITING_CLIENT_DATA:
-				// this is handled only for real traffic, not mirror
-				if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) {
-					// we are handling a multi-packet
-					switch (client_myds->DSS) { // real traffic only
-						case STATE_SLEEP:
-							client_myds->DSS=STATE_SLEEP_MULTI_PACKET;
-							break;
-						case STATE_SLEEP_MULTI_PACKET:
-							break;
-						default:
-							// LCOV_EXCL_START
-							assert(0);
-							break;
-							// LCOV_EXCL_STOP
-					}
+				if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // we are handling a multi-packet
+					GPFC_DetectedMultiPacket_SetDDS();
 				}
 				switch (client_myds->DSS) {
 					case STATE_SLEEP_MULTI_PACKET:
@@ -4219,51 +4476,13 @@ __get_pkts_from_client:
 							}
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , client_myds=%p . Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n", this, client_myds);
+
 						if (session_fast_forward==true) { // if it is fast forward
-							// If this is a 'fast_forward' session that hasn't yet received a backend connection, we don't
-							// forward 'COM_QUIT' packets, since this will make the act of obtaining a connection pointless.
-							// Instead, we intercept the 'COM_QUIT' packet and end the 'MySQL_Session'.
-							unsigned char command = *(static_cast<unsigned char*>(pkt.ptr)+sizeof(mysql_hdr));
-							if (command == _MYSQL_COM_QUIT) {
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
-								if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
-								l_free(pkt.size,pkt.ptr);
-								handler_ret = -1;
-								return handler_ret;
-							}
-
-							mybe=find_or_create_backend(current_hostgroup); // set a backend
-							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
-							mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
-							previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
-
-							// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
-							// connection from the 'connection_pool'. This is used to ensure that we kill the session if
-							// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
-							// is reached for the target hostgroup.
-							if (mybe->server_myds->max_connect_time == 0) {
-								uint64_t connect_timeout =
-									mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
-										mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
-								mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
-							}
-							// Impose the same connection retrying policy as done for regular connections during
-							// 'MYSQL_CON_QUERY'.
-							mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
-							// 'CurrentQuery' isn't used for 'FAST_FORWARD' but we update it for using it as a session
-							// startup time for when a fast_forward session has attempted to obtain a connection.
-							CurrentQuery.start_time=thread->curtime;
-
-							{
-								//NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
-								// we can't use NEXT_IMMEDIATE() inside get_pkts_from_client()
-								// instead we set status to CONNECTING_SERVER and return 0
-								// when we exit from get_pkts_from_client() we expect the label "handler_again"
-								set_status(CONNECTING_SERVER);
-								return 0;
-							}
+							handler_ret = GPFC_WaitingClientData_FastForwardSession(pkt);
+							return handler_ret;
 						}
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+
 						if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 							if ((enum_mysql_command)c == _MYSQL_COM_INIT_DB) {
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(pkt);
@@ -4321,44 +4540,16 @@ __get_pkts_from_client:
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
-									// This block was moved from 'handler_special_queries' to support
-									// handling of 'USE' statements which are preceded by a comment.
-									// For more context check issue: #3493.
-									// ===================================================
-									if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
-										const char *qd = CurrentQuery.get_digest_text();
-										bool use_db_query = false;
 
-										if (qd != NULL) {
-											if (
-												(strncasecmp((char *)"USE",qd,3)==0)
-												&&
-												(
-													(strncasecmp((char *)"USE ",qd,4)==0)
-													||
-													(strncasecmp((char *)"USE`",qd,4)==0)
-												)
-											) {
-												use_db_query = true;
-											}
-										} else {
-											if (pkt.size > (5+4) && strncasecmp((char *)"USE ", (char *)pkt.ptr+5, 4) == 0) {
-												use_db_query = true;
-											}
-										}
-
-										if (use_db_query) {
-											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt);
-
-											if (mirror == false) {
-												break;
-											} else {
-												handler_ret = -1;
-												return handler_ret;
-											}
+									{
+										bool need_break = GPFC_QueryUSE(pkt, handler_ret);
+										if (handler_ret == -1) {
+											return handler_ret;
+										} else if (need_break == true) {
+											break;
 										}
 									}
-									// ===================================================
+
 									if (qpo->max_lag_ms >= 0) {
 										thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 									}
@@ -4464,128 +4655,16 @@ __get_pkts_from_client:
 								}
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
-								if (GloMyLdapAuth) {
-									if (session_type==PROXYSQL_SESSION_MYSQL) {
-										if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
-											add_ldap_comment_to_pkt(&pkt);
-										}
-									}
-								}
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
-								break;
 							case _MYSQL_COM_STMT_EXECUTE:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(pkt);
-								break;
 							case _MYSQL_COM_STMT_RESET:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(pkt);
-								break;
 							case _MYSQL_COM_STMT_CLOSE:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(pkt);
-								break;
 							case _MYSQL_COM_STMT_SEND_LONG_DATA:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
+								GPFC_PreparedStatements(pkt, c);
 								break;
 							case _MYSQL_COM_BINLOG_DUMP:
 							case _MYSQL_COM_BINLOG_DUMP_GTID:
 							case _MYSQL_COM_REGISTER_SLAVE:
-								// In this switch we handle commands that download binlog events from MySQL
-								// servers. For these commands a lot of the features provided by ProxySQL
-								// aren't useful, like multiplexing, query parsing, etc. For this reason,
-								// ProxySQL enables fast_forward when it receives these commands. 
-								{
-									// we use a switch to write the command in the info message
-									std::string q = "Received command ";
-									switch ((enum_mysql_command)c) {
-										case _MYSQL_COM_BINLOG_DUMP:
-											q += "MYSQL_COM_BINLOG_DUMP";
-											break;
-										case _MYSQL_COM_BINLOG_DUMP_GTID:
-											q += "MYSQL_COM_BINLOG_DUMP_GTID";
-											break;
-										case _MYSQL_COM_REGISTER_SLAVE:
-											q += "MYSQL_COM_REGISTER_SLAVE";
-											break;
-										default:
-											assert(0);
-											break;
-									};
-									// we add the client details in the info message
-									if (client_myds && client_myds->addr.addr) {
-										q += " from client " + std::string(client_myds->addr.addr) + ":" + std::to_string(client_myds->addr.port);
-									}
-									q += " . Changing session fast_forward to true";
-									proxy_info("%s\n", q.c_str());
-								}
-								session_fast_forward = true;
-
-								if (client_myds->PSarrayIN->len) {
-									proxy_error("UNEXPECTED PACKET FROM CLIENT -- PLEASE REPORT A BUG\n");
-									assert(0);
-								}
-								client_myds->PSarrayIN->add(pkt.ptr, pkt.size);
-
-								// The following code prepares the session as if it was configured with fast
-								// forward before receiving the command. This way the state machine will
-								// handle the command automatically.
-								current_hostgroup = previous_hostgroup;
-								mybe = find_or_create_backend(current_hostgroup); // set a backend
-								mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
-								// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
-								// we are now transitioning to 'FAST_FORWARD'.
-								mybe->server_myds->wait_until = 0;
-								if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
-									// NOTE: This section is entirely borrowed from 'STATE_SLEEP' for 'session_fast_forward'.
-									// Check comments there for extra information.
-									// =============================================================================
-									if (mybe->server_myds->max_connect_time == 0) {
-										uint64_t connect_timeout =
-											mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
-												mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
-										mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
-									}
-									mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
-									CurrentQuery.start_time=thread->curtime;
-									// =============================================================================
-
-									// we don't have a connection
-									previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD
-									set_status(CONNECTING_SERVER); // now we need a connection
-								} else {
-									// In case of having a connection, we need to make user to reset the state machine
-									// for current server 'MySQL_Data_Stream', setting it outside of any state handled
-									// by 'mariadb' library. Otherwise 'MySQL_Thread' will threat this
-									// 'MySQL_Data_Stream' as library handled.
-									mybe->server_myds->DSS = STATE_READY;
-									// myds needs to have encrypted value set correctly
-									{
-										MySQL_Data_Stream * myds = mybe->server_myds;
-										MySQL_Connection * myconn = myds->myconn;
-										assert(myconn != NULL);
-										// PMC-10005
-										// if backend connection uses SSL we will set
-										// encrypted = true and we will start using the SSL structure
-										// directly from P_MARIADB_TLS structure.
-										MYSQL *mysql = myconn->mysql;
-										if (mysql && myconn->ret_mysql) {
-											if (mysql->options.use_ssl == 1) {
-												P_MARIADB_TLS * matls = (P_MARIADB_TLS *)mysql->net.pvio->ctls;
-												if (matls != NULL) {
-													myds->encrypted = true;
-													myds->ssl = (SSL *)matls->ssl;
-													myds->rbio_ssl = BIO_new(BIO_s_mem());
-													myds->wbio_ssl = BIO_new(BIO_s_mem());
-													SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
-												} else {
-													// if mysql->options.use_ssl == 1 but matls == NULL
-													// it means that ProxySQL tried to use SSL to connect to the backend
-													// but the backend didn't support SSL
-												}
-											}
-										}
-									}
-									set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
-								}
-
+								GPFC_Replication_SwitchToFastForward(pkt, c);
 								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
@@ -4616,30 +4695,11 @@ __get_pkts_from_client:
 						break;
 				}
 				break;
-			case FAST_FORWARD:
-				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-				break;
-			// This state is required because it covers the following situation:
-			//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.
-			//  2. The first packet received for this connection isn't a whole packet, i.e, it's either
-			//     split into multiple packets, or it doesn't fit 'queueIN' size (typically
-			//     QUEUE_T_DEFAULT_SIZE).
-			//  3. Session is still in 'CONNECTING_SERVER' state, BUT further packets remain to be received
-			//     from the initial split packet.
-			//
-			//  Because of this, packets received during 'CONNECTING_SERVER' when the previous state is
-			//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
-			case CONNECTING_SERVER:
-				if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
-					mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-					break;
-				}
-			case session_status___NONE:
 			default:
-				handler___status_NONE_or_default(pkt);
-				handler_ret = -1;
-				return handler_ret;
-				break;
+				handler_ret = GPFC_Statuses2(wrong_pass, pkt);
+				if (handler_ret != 0) {
+					return handler_ret;
+				}
 		}
 	}
 	return handler_ret;

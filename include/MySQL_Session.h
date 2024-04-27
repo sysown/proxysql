@@ -229,7 +229,17 @@ class MySQL_Session
 	 *  performing any processing on received client packets.
 	 */
 	void housekeeping_before_pkts();
+
 	int get_pkts_from_client(bool&, PtrSize_t&);
+
+	// GPFC_ functions are subfunctions of get_pkts_from_client()
+	int GPFC_Statuses2(bool&, PtrSize_t&);
+	void GPFC_DetectedMultiPacket_SetDDS();
+	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
+	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
+	void GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
+	bool GPFC_QueryUSE(PtrSize_t&, int&);
+
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
