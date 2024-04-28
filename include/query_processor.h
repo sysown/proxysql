@@ -10,7 +10,7 @@
 #define DIGEST_STATS_FAST_MINSIZE   100000
 #define DIGEST_STATS_FAST_THREADS   4
 
-
+#include "../deps/json/json.hpp"
 
 
 #include "khash.h"
@@ -203,6 +203,20 @@ class Query_Processor_Output {
 		if (comment) { // #643
 			free(comment);
 		}
+	}
+	void get_info_json(nlohmann::json& j) {
+		j["create_new_connection"] = create_new_conn;
+		j["reconnect"] = reconnect;
+		j["sticky_conn"] = sticky_conn;
+		j["cache_timeout"] = cache_timeout;
+		j["cache_ttl"] = cache_ttl;
+		j["delay"] = delay;
+		j["destination_hostgroup"] = destination_hostgroup;
+		j["firewall_whitelist_mode"] = firewall_whitelist_mode;
+		j["multiplex"] = multiplex;
+		j["timeout"] = timeout;
+		j["retries"] = retries;
+		j["max_lag_ms"] = max_lag_ms;
 	}
 };
 

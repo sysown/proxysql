@@ -1549,3 +1549,72 @@ bool MySQL_Data_Stream::data_in_rbio() {
 	}
 	return false;
 }
+
+void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
+	j["stream"]["pkts_recv"] = pkts_recv;
+	j["stream"]["pkts_sent"] = pkts_sent;
+	j["stream"]["bytes_recv"] = bytes_info.bytes_recv;
+	j["stream"]["bytes_sent"] = bytes_info.bytes_sent;
+	j["client_addr"]["address"] = ( addr.addr ? addr.addr : "" );
+	j["client_addr"]["port"] = addr.port;
+	j["proxy_addr"]["address"] = ( proxy_addr.addr ? proxy_addr.addr : "" );
+	j["proxy_addr"]["port"] = proxy_addr.port;
+	j["encrypted"] = encrypted;
+	if (encrypted) {
+		const SSL_CIPHER *cipher = SSL_get_current_cipher(ssl);
+		if (cipher) {
+			const char * name = SSL_CIPHER_get_name(cipher);
+			if (name) {
+				j["ssl_cipher"] = name;
+			}
+		}
+	}
+	j["DSS"] = DSS;
+	j["switching_auth_sent"] = switching_auth_sent;
+	j["switching_auth_type"] = switching_auth_type;
+	j["prot"]["sent_auth_plugin_id"] = myprot.sent_auth_plugin_id;
+	j["prot"]["auth_plugin_id"] = myprot.auth_plugin_id;
+
+	switch (myprot.auth_plugin_id) {
+		case AUTH_MYSQL_NATIVE_PASSWORD:
+			j["prot"]["auth_plugin"] = "mysql_native_password";
+			break;
+		case AUTH_MYSQL_CLEAR_PASSWORD:
+			j["prot"]["auth_plugin"] = "mysql_clear_password";
+			break;
+		case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+			j["prot"]["auth_plugin"] = "caching_sha2_password";
+			break;
+		default:
+			break;
+	}
+	if (myconn != NULL) { // only if myconn is defined
+		json& jc = j["conn"];
+		if (myconn->userinfo != NULL) { // only if userinfo is defined
+			j["userinfo"]["username"]   = ( myconn->userinfo->username   ? myconn->userinfo->username   : "" );
+			j["userinfo"]["schemaname"] = ( myconn->userinfo->schemaname ? myconn->userinfo->schemaname : "" );
+#ifdef DEBUG
+			j["userinfo"]["password"]   = ( myconn->userinfo->password   ? myconn->userinfo->password   : "" );
+#endif
+		}
+		jc["session_track_gtids"] = ( myconn->options.session_track_gtids ? myconn->options.session_track_gtids : "") ;
+		for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
+			myconn->variables[idx].fill_client_internal_session(jc, idx);
+		}
+		{
+			for (std::vector<uint32_t>::const_iterator it_c = myconn->dynamic_variables_idx.begin(); it_c != myconn->dynamic_variables_idx.end(); it_c++) {
+				myconn->variables[*it_c].fill_client_internal_session(jc, *it_c);
+			}
+		}
+
+		jc["autocommit"] = ( myconn->options.autocommit ? "ON" : "OFF" );
+		jc["client_flag"]["value"] = myconn->options.client_flag;
+		jc["client_flag"]["client_found_rows"] = (myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+		jc["client_flag"]["client_multi_statements"] = (myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+		jc["client_flag"]["client_multi_results"] = (myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
+		jc["client_flag"]["client_deprecate_eof"] = (myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+		jc["no_backslash_escapes"] = myconn->options.no_backslash_escapes;
+		jc["status"]["compression"] = myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+		jc["ps"]["client_stmt_to_global_ids"] = myconn->local_stmts->client_stmt_to_global_ids;
+	}
+}

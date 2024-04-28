@@ -1379,6 +1379,9 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["warning_in_hg"] = warning_in_hg;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
+	json& jqpo = j["qpo"];
+	qpo->get_info_json(jqpo);
+/*
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
 	j["qpo"]["reconnect"] = qpo->reconnect;
 	j["qpo"]["sticky_conn"] = qpo->sticky_conn;
@@ -1391,80 +1394,19 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["qpo"]["timeout"] = qpo->timeout;
 	j["qpo"]["retries"] = qpo->retries;
 	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
+*/
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
 	if (client_myds != NULL) { // only if client_myds is defined
-		j["client"]["stream"]["pkts_recv"] = client_myds->pkts_recv;
-		j["client"]["stream"]["pkts_sent"] = client_myds->pkts_sent;
-		j["client"]["stream"]["bytes_recv"] = client_myds->bytes_info.bytes_recv;
-		j["client"]["stream"]["bytes_sent"] = client_myds->bytes_info.bytes_sent;
-		j["client"]["client_addr"]["address"] = ( client_myds->addr.addr ? client_myds->addr.addr : "" );
-		j["client"]["client_addr"]["port"] = client_myds->addr.port;
-		j["client"]["proxy_addr"]["address"] = ( client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "" );
-		j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
-		j["client"]["encrypted"] = client_myds->encrypted;
-		if (client_myds->encrypted) {
-			const SSL_CIPHER *cipher = SSL_get_current_cipher(client_myds->ssl);
-			if (cipher) {
-				const char * name = SSL_CIPHER_get_name(cipher);
-				if (name) {
-					j["client"]["ssl_cipher"] = name;
-				}
-			}
-		}
-		j["client"]["DSS"] = client_myds->DSS;
-		j["client"]["switching_auth_sent"] = client_myds->switching_auth_sent;
-		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
-		j["client"]["prot"]["sent_auth_plugin_id"] = client_myds->myprot.sent_auth_plugin_id;
-		j["client"]["prot"]["auth_plugin_id"] = client_myds->myprot.auth_plugin_id;
-		switch (client_myds->myprot.auth_plugin_id) {
-			case AUTH_MYSQL_NATIVE_PASSWORD:
-				j["client"]["prot"]["auth_plugin"] = "mysql_native_password";
-				break;
-			case AUTH_MYSQL_CLEAR_PASSWORD:
-				j["client"]["prot"]["auth_plugin"] = "mysql_clear_password";
-				break;
-			case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
-				j["client"]["prot"]["auth_plugin"] = "caching_sha2_password";
-				break;
-			default:
-				break;
-		}
-		if (client_myds->myconn != NULL) { // only if myconn is defined
-			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
-				j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
-				j["client"]["userinfo"]["schemaname"] = ( client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "" );
-#ifdef DEBUG
-				j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
-#endif
-			}
-			j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
-			for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
-				client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
-			}
-			{
-				MySQL_Connection *c = client_myds->myconn;
-				for (std::vector<uint32_t>::const_iterator it_c = c->dynamic_variables_idx.begin(); it_c != c->dynamic_variables_idx.end(); it_c++) {
-					c->variables[*it_c].fill_client_internal_session(j, *it_c);
-				}
-			}
-
-			j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
-			j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
-			j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-			j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-			j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
-			j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-			j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
-			j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
-		}
+		json& jclient = j["client"];
+		client_myds->get_client_myds_info_json(jclient);
 	}
 	for (unsigned int i=0; i<mybes->len; i++) {
 		MySQL_Backend *_mybe = NULL;
 		_mybe=(MySQL_Backend *)mybes->index(i);
 		//unsigned int i = _mybe->hostgroup_id;
+		j["backends"][i] = {};
 		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
 		j["backends"][i]["gtid"] = ( strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "" );
 		if (_mybe->server_myds) {
@@ -1482,86 +1424,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["backends"][i]["stream"]["bytes_sent"] = _myds->bytes_info.bytes_sent;
 			j["backends"][i]["stream"]["DSS"] = _myds->DSS;
 			if (_myds->myconn) {
-				MySQL_Connection * _myconn = _myds->myconn;
-				for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
-					_myconn->variables[idx].fill_server_internal_session(j, i, idx);
-				}
-				for (std::vector<uint32_t>::const_iterator it_c = _myconn->dynamic_variables_idx.begin(); it_c != _myconn->dynamic_variables_idx.end(); it_c++) {
-					_myconn->variables[*it_c].fill_server_internal_session(j, i, *it_c);
-				}
-				sprintf(buff,"%p",_myconn);
-				j["backends"][i]["conn"]["address"] = buff;
-				j["backends"][i]["conn"]["auto_increment_delay_token"] = _myconn->auto_increment_delay_token;
-				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
-				j["backends"][i]["conn"]["bytes_sent"] = _myconn->bytes_info.bytes_sent;
-				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
-				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
-				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
-				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
-				j["backends"][i]["conn"]["session_track_gtids"] = ( _myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "") ;
-				j["backends"][i]["conn"]["init_connect"] = ( _myconn->options.init_connect ? _myconn->options.init_connect : "");
-				j["backends"][i]["conn"]["init_connect_sent"] = _myds->myconn->options.init_connect_sent;
-				j["backends"][i]["conn"]["autocommit"] = ( _myds->myconn->options.autocommit ? "ON" : "OFF" );
-				j["backends"][i]["conn"]["last_set_autocommit"] = _myds->myconn->options.last_set_autocommit;
-				j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
-				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
-				j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
-				j["backends"][i]["conn"]["status"]["has_savepoint"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
-				j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
-				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE);
-				j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS);
-				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
-				j["backends"][i]["conn"]["status"]["no_multiplex_HG"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
-				j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
-				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
-				j["backends"][i]["conn"]["warning_count"] = _myconn->warning_count;
-				{
-					// MultiplexDisabled : status returned by MySQL_Connection::MultiplexDisabled();
-					// MultiplexDisabled_ext : status returned by MySQL_Connection::MultiplexDisabled() || MySQL_Connection::isActiveTransaction()
-					bool multiplex_disabled = _myconn->MultiplexDisabled();
-					j["backends"][i]["conn"]["MultiplexDisabled"] = multiplex_disabled;
-					if (multiplex_disabled == false) {
-						if (_myconn->IsActiveTransaction() == true) {
-							multiplex_disabled = true;
-						}
-					}
-					j["backends"][i]["conn"]["MultiplexDisabled_ext"] = multiplex_disabled;
-				}
-				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
-				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
-				j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
-				j["backends"][i]["conn"]["client_flag"]["client_found_rows"] = (_myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-				j["backends"][i]["conn"]["client_flag"]["client_multi_statements"] = (_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-				j["backends"][i]["conn"]["client_flag"]["client_deprecate_eof"] = (_myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-				if (_myconn->mysql && _myconn->ret_mysql) {
-					MYSQL * _my = _myconn->mysql;
-					sprintf(buff,"%p",_my);
-					j["backends"][i]["conn"]["mysql"]["address"] = buff;
-					j["backends"][i]["conn"]["mysql"]["host"] = ( _my->host ? _my->host : "" );
-					j["backends"][i]["conn"]["mysql"]["host_info"] = ( _my->host_info ? _my->host_info : "" );
-					j["backends"][i]["conn"]["mysql"]["port"] = _my->port;
-					j["backends"][i]["conn"]["mysql"]["server_version"] = ( _my->server_version ? _my->server_version : "" );
-					j["backends"][i]["conn"]["mysql"]["user"] = ( _my->user ? _my->user : "" );
-					j["backends"][i]["conn"]["mysql"]["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
-					j["backends"][i]["conn"]["mysql"]["db"] = (_my->db ? _my->db : "");
-					j["backends"][i]["conn"]["mysql"]["affected_rows"] = _my->affected_rows;
-					j["backends"][i]["conn"]["mysql"]["insert_id"] = _my->insert_id;
-					j["backends"][i]["conn"]["mysql"]["thread_id"] = _my->thread_id;
-					j["backends"][i]["conn"]["mysql"]["server_status"] = _my->server_status;
-					j["backends"][i]["conn"]["mysql"]["charset"] = _my->charset->nr;
-					j["backends"][i]["conn"]["mysql"]["charset_name"] = _my->charset->csname;
-					//j["backends"][i]["conn"]["mysql"][""] = _my->;
-					//j["backends"][i]["conn"]["mysql"][""] = _my->;
-					j["backends"][i]["conn"]["mysql"]["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );
-					j["backends"][i]["conn"]["mysql"]["options"]["use_ssl"] = _my->options.use_ssl;
-					j["backends"][i]["conn"]["mysql"]["net"]["last_errno"] = _my->net.last_errno;
-					j["backends"][i]["conn"]["mysql"]["net"]["fd"] = _my->net.fd;
-					j["backends"][i]["conn"]["mysql"]["net"]["max_packet_size"] = _my->net.max_packet_size;
-					j["backends"][i]["conn"]["mysql"]["net"]["sqlstate"] = _my->net.sqlstate;
-					//j["backends"][i]["conn"]["mysql"]["net"][""] = _my->net.;
-					//j["backends"][i]["conn"]["mysql"]["net"][""] = _my->net.;
-				}
+				json& jc = j["backends"][i]["conn"];
+				_myds->myconn->get_backend_conn_info_json(jc);
 			}
 		}
 	}
@@ -1635,17 +1499,18 @@ bool MySQL_Session::handler_special_queries_STATUS(PtrSize_t *pkt) {
 
 			string vals[4];
 			json j = {};
+			json& jc = j["conn"];
 			MySQL_Connection *conn = client_myds->myconn;
 			// here we do a bit back and forth to and from JSON to reuse existing code instead of writing new code.
 			// This is not great for performance, but this query is rarely executed.
-			conn->variables[SQL_CHARACTER_SET_CLIENT].fill_client_internal_session(j, SQL_CHARACTER_SET_CLIENT);
-			conn->variables[SQL_CHARACTER_SET_CONNECTION].fill_client_internal_session(j, SQL_CHARACTER_SET_CONNECTION);
-			conn->variables[SQL_CHARACTER_SET_DATABASE].fill_client_internal_session(j, SQL_CHARACTER_SET_DATABASE);
+			conn->variables[SQL_CHARACTER_SET_CLIENT].fill_client_internal_session(jc, SQL_CHARACTER_SET_CLIENT);
+			conn->variables[SQL_CHARACTER_SET_CONNECTION].fill_client_internal_session(jc, SQL_CHARACTER_SET_CONNECTION);
+			conn->variables[SQL_CHARACTER_SET_DATABASE].fill_client_internal_session(jc, SQL_CHARACTER_SET_DATABASE);
 
-			vals[0] = j["conn"][mysql_tracked_variables[SQL_CHARACTER_SET_CLIENT].internal_variable_name];
-			vals[1] = j["conn"][mysql_tracked_variables[SQL_CHARACTER_SET_CONNECTION].internal_variable_name];
+			vals[0] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_CLIENT].internal_variable_name];
+			vals[1] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_CONNECTION].internal_variable_name];
 			vals[2] = string(mysql_thread___default_variables[SQL_CHARACTER_SET]);
-			vals[3] = j["conn"][mysql_tracked_variables[SQL_CHARACTER_SET_DATABASE].internal_variable_name];
+			vals[3] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_DATABASE].internal_variable_name];
 
 			const char *pta[4];
 			for (int i=0; i<4; i++) {
