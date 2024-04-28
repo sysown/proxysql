@@ -427,10 +427,13 @@ extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffe
   sha256_finish_ctx (&alt_ctx, temp_result);
 
   /* Create byte sequence P.  */
-  cp = p_bytes = (char *)alloca (key_len);
-  for (cnt = key_len; cnt >= 32; cnt -= 32)
-    cp = (char *)memcpy (cp, temp_result, 32);
-  memcpy (cp, temp_result, cnt);
+  cp = p_bytes = (char *)alloca(key_len);
+  char *p_copy = cp;
+  for (cnt = key_len; cnt >= 32; cnt -= 32) {
+      memcpy(cp, temp_result, 32);
+      cp += 32;
+  }
+  memcpy(cp, temp_result, cnt);
 
   /* Start computation of S byte sequence.  */
   sha256_init_ctx (&alt_ctx);
@@ -443,10 +446,15 @@ extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffe
   sha256_finish_ctx (&alt_ctx, temp_result);
 
   /* Create byte sequence S.  */
-  cp = s_bytes = (char *)alloca (salt_len);
-  for (cnt = salt_len; cnt >= 32; cnt -= 32)
-    cp = (char *) memcpy (cp, temp_result, 32);
-  memcpy (cp, temp_result, cnt);
+  cp = s_bytes = (char *)alloca(salt_len);
+  char *cp_end = cp + salt_len;
+  for (cnt = salt_len; cnt >= 32; cnt -= 32) {
+    memcpy(cp, temp_result, 32);
+    cp += 32;
+  }
+  if (cnt > 0) {
+    memcpy(cp, temp_result, cnt);
+  }
 
   /* Repeatedly run the collected hash value through SHA256 to burn
      CPU cycles.  */
