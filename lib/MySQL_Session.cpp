@@ -1381,26 +1381,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	json& jqpo = j["qpo"];
 	qpo->get_info_json(jqpo);
-/*
-	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
-	j["qpo"]["reconnect"] = qpo->reconnect;
-	j["qpo"]["sticky_conn"] = qpo->sticky_conn;
-	j["qpo"]["cache_timeout"] = qpo->cache_timeout;
-	j["qpo"]["cache_ttl"] = qpo->cache_ttl;
-	j["qpo"]["delay"] = qpo->delay;
-	j["qpo"]["destination_hostgroup"] = qpo->destination_hostgroup;
-	j["qpo"]["firewall_whitelist_mode"] = qpo->firewall_whitelist_mode;
-	j["qpo"]["multiplex"] = qpo->multiplex;
-	j["qpo"]["timeout"] = qpo->timeout;
-	j["qpo"]["retries"] = qpo->retries;
-	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
-*/
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
 	if (client_myds != NULL) { // only if client_myds is defined
-		json& jclient = j["client"];
-		client_myds->get_client_myds_info_json(jclient);
+		client_myds->get_client_myds_info_json(j);
 	}
 	for (unsigned int i=0; i<mybes->len; i++) {
 		MySQL_Backend *_mybe = NULL;
