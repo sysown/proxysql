@@ -193,39 +193,6 @@ class MySrvConnList {
 	MySQL_Connection *index(unsigned int);
 };
 
-class MySrvC;
-class MySrvStatus {
-public:
-	explicit MySrvStatus(MySrvC* _mysrvc);
-	~MySrvStatus();
-	
-	MySrvStatus& operator=(MySerStatus _status);
-
-	inline
-	bool operator==(MySerStatus _status) const {
-		return status == _status;
-	}
-
-	inline
-	bool operator!=(MySerStatus _status) const {
-		return status!=_status;
-	}
-	
-	inline
-	explicit operator MySerStatus() const {
-		return status;
-	}
-
-	inline
-	explicit operator int() const {
-		return (int)status;
-	}
-
-private:
-	MySrvC *mysrvc;
-	enum MySerStatus status;
-};
-
 class MySrvC {	// MySQL Server Container
 	public:
 	MyHGC *myhgc;
@@ -234,7 +201,6 @@ class MySrvC {	// MySQL Server Container
 	uint16_t gtid_port;
 	uint16_t flags;
 	int64_t weight;
-	MySrvStatus status;
 	unsigned int compression;
 	int64_t max_connections;
 	unsigned int aws_aurora_current_lag_us;
@@ -296,6 +262,11 @@ class MySrvC {	// MySQL Server Container
 			max_connections_used = connections_used;
 		return max_connections_used;
 	}
+	void set_status(MySerStatus _status);
+	inline
+	MySerStatus get_status() const { return status; }
+private:
+	enum MySerStatus status;
 };
 
 class MySrvList {	// MySQL Server List

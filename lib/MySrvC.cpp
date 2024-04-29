@@ -9,11 +9,12 @@ MySrvC::MySrvC(
 	char* add, uint16_t p, uint16_t gp, int64_t _weight, enum MySerStatus _status, unsigned int _compression,
 	int64_t _max_connections, unsigned int _max_replication_lag, int32_t _use_ssl, unsigned int _max_latency_ms,
 	char* _comment
-) : status(this) {
+) {
 	address=strdup(add);
 	port=p;
 	gtid_port=gp;
 	weight=_weight;
+	status = _status;
 	compression=_compression;
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
@@ -39,7 +40,6 @@ MySrvC::MySrvC(
 	comment=strdup(_comment);
 	ConnectionsUsed=new MySrvConnList(this);
 	ConnectionsFree=new MySrvConnList(this);
-	status = _status;
 }
 
 void MySrvC::connect_error(int err_num, bool get_mutex) {
@@ -143,12 +143,7 @@ MySrvC::~MySrvC() {
 	delete ConnectionsFree;
 }
 
-MySrvStatus::MySrvStatus(MySrvC* _mysrvc) : mysrvc(_mysrvc) {}
-
-MySrvStatus::~MySrvStatus() { if (mysrvc->myhgc) mysrvc->myhgc->refresh_online_server_count(); }
-
-MySrvStatus& MySrvStatus::operator=(MySerStatus _status) {
+void MySrvC::set_status(MySerStatus _status) {
 	status = _status;
-	if (mysrvc->myhgc) mysrvc->myhgc->refresh_online_server_count();
-	return *this;
+	if (myhgc)myhgc->refresh_online_server_count();
 }

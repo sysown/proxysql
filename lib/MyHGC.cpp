@@ -77,7 +77,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		//int j=0;
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
-			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+			if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->myhgc->num_online_servers.load(std::memory_order_relaxed) <= mysrvc->myhgc->attributes.max_num_online_servers) { // number of online servers in HG is within configured range
 					if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 						if (mysrvc->current_latency_us < (mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000)) { // consider the host only if not too far
@@ -113,7 +113,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 					mysrvc->myhgc->log_num_online_server_count_error();
 				}
 			} else {
-				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED) {
 					// try to recover shunned servers
 					if (mysrvc->shunned_automatic && mysql_thread___shun_recovery_time_sec) {
 						time_t t;
@@ -138,7 +138,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 									proxy_info("Unshunning server %s:%d.\n", mysrvc->address, mysrvc->port);
 								}
 #endif
-								mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+								mysrvc->set_status(MYSQL_SERVER_STATUS_ONLINE);
 								mysrvc->shunned_automatic=false;
 								mysrvc->shunned_and_kill_all_connections=false;
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
@@ -229,9 +229,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
-				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
+				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic == true) {
 					if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
-						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+						mysrvc->set_status(MYSQL_SERVER_STATUS_ONLINE);
 						mysrvc->shunned_automatic=false;
 						mysrvc->connect_ERR_at_time_last_detected_error=0;
 						mysrvc->time_last_detected_error=0;
@@ -402,7 +402,7 @@ void MyHGC::refresh_online_server_count() {
 	unsigned int online_servers_count = 0;
 	for (unsigned int i = 0; i < mysrvs->servers->len; i++) {
 		MySrvC* mysrvc = (MySrvC*)mysrvs->servers->index(i);
-		if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
+		if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
 			online_servers_count++;
 		}
 	}
