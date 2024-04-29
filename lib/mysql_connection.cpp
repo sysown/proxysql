@@ -1721,7 +1721,7 @@ handler_again:
 					// since 'add_eof' utilizes 'warning_count,' we are setting the 'warning_count' here
 					update_warning_count_from_connection();
 					// we reach here if there was no error
-					// exclude warning_count from the OK/EOF packet for the ‘SHOW WARNINGS’ statement
+					// exclude warning_count from the OK/EOF packet for the Â‘SHOW WARNINGSÂ’ statement
 					MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
