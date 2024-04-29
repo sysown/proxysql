@@ -410,10 +410,10 @@ void MyHGC::refresh_online_server_count() {
 }
 
 void MyHGC::log_num_online_server_count_error() {
-	const unsigned long long curtime = monotonic_time();
+	const time_t curtime = time(NULL);
 	// if this is the first time the method is called or if more than 10 seconds have passed since the last log
 	if (last_log_time_num_online_servers == 0 ||
-		(curtime - last_log_time_num_online_servers > 10 * 1000 * 1000)) {
+		((curtime - last_log_time_num_online_servers) > 10)) {
 		last_log_time_num_online_servers = curtime;
 		proxy_error(
 			"Number of online servers detected in a hostgroup exceeds the configured maximum online servers. hostgroup:%u, num_online_servers:%u, max_online_servers:%u\n",

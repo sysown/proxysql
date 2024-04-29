@@ -316,7 +316,7 @@ class MyHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
 	std::atomic<uint32_t> num_online_servers;
-	unsigned long long last_log_time_num_online_servers;
+	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
 	MySrvList *mysrvs;
