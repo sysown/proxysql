@@ -2074,24 +2074,48 @@ bool MySQL_Connection::IsServerOffline() {
 	return ret;
 }
 
-// Returns:
-// 0 when the query is completed
-// 1 when the query is not completed
-// the calling function should check mysql error in mysql struct
+/**
+ * @brief Asynchronously execute a query on the MySQL connection.
+ *
+ * This function asynchronously executes a query on the MySQL connection.
+ * It handles various states of the asynchronous query execution process
+ * and returns appropriate status codes indicating the result of the execution.
+ *
+ * @param event The event associated with the query execution.
+ * @param stmt The query statement to be executed.
+ * @param length The length of the query statement.
+ * @param _stmt Pointer to the MySQL statement handle.
+ * @param stmt_meta Metadata associated with the statement execution.
+ *
+ * @return Returns an integer status code indicating the result of the query execution:
+ * - 0: Query execution completed successfully.
+ * - -1: Query execution failed.
+ * - 1: Query execution in progress.
+ * - 2: Processing a multi-statement query, control needs to be transferred to MySQL_Session.
+ * - 3: In the middle of processing a multi-statement query.
+ */
 int MySQL_Connection::async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt, stmt_execute_metadata_t *stmt_meta) {
+	// Trace the entry of the function
 	PROXY_TRACE();
 	PROXY_TRACE2();
+
+	// Ensure MySQL connection is valid
 	assert(mysql);
 	assert(ret_mysql);
 	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+
+	// Check if server is offline
 	if (IsServerOffline())
 		return -1;
 
+	// Update DSS state if myds is available
 	if (myds) {
 		if (myds->DSS != STATE_MARIADB_QUERY) {
 			myds->DSS = STATE_MARIADB_QUERY;
 		}
 	}
+
+	// Handle different states of async query execution
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
 			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end
@@ -2125,6 +2149,8 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 			break;
 	}
 	
+	// Handle different states after async query execution.
+	// That means after hander() was executed.
 	if (async_state_machine==ASYNC_QUERY_END) {
 		PROXY_TRACE2();
 		compute_unknown_transaction_status();
