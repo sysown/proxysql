@@ -740,12 +740,7 @@ bool MySQL_Connection::match_tracked_options(const MySQL_Connection *c) {
 	return false;
 }
 
-// non blocking API
-void MySQL_Connection::connect_start() {
-	PROXY_TRACE();
-	mysql=mysql_init(NULL);
-	assert(mysql);
-	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+void MySQL_Connection::connect_start_SetAttributes() {
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", parent->address);
 	{
@@ -770,18 +765,10 @@ void MySQL_Connection::connect_start() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
-	if (parent->use_ssl) {
-		if (ssl_params != NULL) {
-			delete ssl_params;
-			ssl_params = NULL;
-		}
-		ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
-		MySQL_Connection::set_ssl_params(mysql, ssl_params);
-		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
-	}
-	unsigned int timeout= 1;
+}
+
+void MySQL_Connection::connect_start_SetCharset() {
 	const char *csname = NULL;
-	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
 	/* Take client character set and use it to connect to backend */
 	if (myds && myds->sess) {
 		csname = mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET);
@@ -815,7 +802,10 @@ void MySQL_Connection::connect_start() {
 	}
 	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	mysql->charset = c;
-	unsigned long client_flags = 0;
+}
+
+void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) {
+	client_flags = 0;
 	if (parent->compression)
 		client_flags |= CLIENT_COMPRESS;
 
@@ -874,6 +864,72 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 
+}
+
+char * MySQL_Connection::connect_start_DNS_lookup() {
+	char* host_ip = NULL;
+	const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
+
+	if (!res_ip.empty()) {
+		if (connected_host_details.hostname) {
+			if (strcmp(connected_host_details.hostname, parent->address) != 0) {
+				free(connected_host_details.hostname);
+				connected_host_details.hostname = strdup(parent->address);
+			}
+		}
+		else {
+			connected_host_details.hostname = strdup(parent->address);
+		}
+
+		if (connected_host_details.ip) {
+			if (strcmp(connected_host_details.ip, res_ip.c_str()) != 0) {
+				free(connected_host_details.ip);
+				connected_host_details.ip = strdup(res_ip.c_str());
+			}
+		}
+		else {
+			connected_host_details.ip = strdup(res_ip.c_str());
+		}
+
+		host_ip = connected_host_details.ip;
+	}
+	else {
+		host_ip = parent->address;
+	}
+	return host_ip;
+}
+
+void MySQL_Connection::connect_start_SetSslSettings() {
+	if (parent->use_ssl) {
+		if (ssl_params != NULL) {
+			delete ssl_params;
+			ssl_params = NULL;
+		}
+		ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
+		MySQL_Connection::set_ssl_params(mysql, ssl_params);
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+	}
+}
+
+// non blocking API
+void MySQL_Connection::connect_start() {
+	PROXY_TRACE();
+	mysql=mysql_init(NULL);
+	assert(mysql);
+	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+
+	connect_start_SetAttributes();
+
+	connect_start_SetSslSettings();
+
+	unsigned int timeout= 1;
+	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
+
+	connect_start_SetCharset();
+
+	unsigned long client_flags = 0;
+	connect_start_SetClientFlag(client_flags);
+
 	char *auth_password=NULL;
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
@@ -883,37 +939,7 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 	if (parent->port) {
-
-		char* host_ip = NULL;
-		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
-
-		if (!res_ip.empty()) {
-			if (connected_host_details.hostname) {
-				if (strcmp(connected_host_details.hostname, parent->address) != 0) {
-					free(connected_host_details.hostname);
-					connected_host_details.hostname = strdup(parent->address);
-				}
-			}
-			else {
-				connected_host_details.hostname = strdup(parent->address);
-			}
-
-			if (connected_host_details.ip) {
-				if (strcmp(connected_host_details.ip, res_ip.c_str()) != 0) {
-					free(connected_host_details.ip);
-					connected_host_details.ip = strdup(res_ip.c_str());
-				}
-			}
-			else {
-				connected_host_details.ip = strdup(res_ip.c_str());
-			}
-
-			host_ip = connected_host_details.ip;
-		}
-		else {
-			host_ip = parent->address;
-		}
-
+		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
 		client_flags &= ~(CLIENT_COMPRESS); // disabling compression for connections made via Unix socket
