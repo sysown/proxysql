@@ -3142,6 +3142,134 @@ void MySQL_Thread::run___cleanup_mirror_queue() {
 	}
 }
 
+
+#ifdef IDLE_THREADS
+/**
+ * @brief Handles session assignment and retrieval between worker and idle threads.
+ * 
+ * This block of code checks if the global configuration allows idle threads and if the current thread
+ * is not an idle maintenance thread. If both conditions are met, it randomly selects an idle worker thread
+ * and assigns sessions to it. Then, it retrieves sessions from the idle thread.
+ * 
+ * @note This functionality is part of the management of worker and idle threads in the MySQL thread pool.
+ * It facilitates the distribution of sessions between active worker threads and idle threads to optimize resource utilization.
+ * 
+ * @param idle_maintenance_thread Flag indicating whether the current thread is an idle maintenance thread.
+ * @param GloVars Global configuration variables for the MySQL thread.
+ * @param GloMTH Global MySQL thread handlers object.
+ */
+void MySQL_Thread::run_MoveSessionsBetweenThreads() {
+	if (GloVars.global.idle_threads) {
+		int r=rand()%(GloMTH->num_threads);
+		MySQL_Thread *thr=GloMTH->mysql_threads_idles[r].worker;
+		worker_thread_assigns_sessions_to_idle_thread(thr);
+		worker_thread_gets_sessions_from_idle_thread();
+	}
+}
+
+void MySQL_Thread::run_Handle_epoll_wait(int rc) {
+	if (rc) {
+		int i;
+		for (i=0; i<rc; i++) {
+			if (events[i].data.u32) {
+				idle_thread_prepares_session_to_send_to_worker_thread(i);
+			}
+		}
+		// FIXME: this loop seems suboptimal, it can be combined with the previous one
+		for (i=0; i<rc; i++) {
+			if (events[i].events == EPOLLIN && events[i].data.u32==0) {
+				unsigned char c;
+				int fd=pipefd[0];
+				if (read(fd, &c, 1)<=0) {
+				} else {
+					//i=rc;
+					maintenance_loop=true;
+				}
+			}
+		}
+	}
+	if (mysql_sessions->len && maintenance_loop) {
+		if (curtime == last_maintenance_time) {
+			idle_thread_to_kill_idle_sessions();
+		}
+	}
+}
+#endif // IDLE_THREADS
+
+
+void MySQL_Thread::run_BootstrapListener() {
+	unsigned int n;
+	while ( // spin here if ...
+		(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
+		||
+		(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
+	) {
+		if (n) {
+			poll_listener_add(n);
+			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+		} else {
+			if (GloMTH->bootstrapping_listeners == false) {
+				// we stop looping
+				mypolls.bootstrapping_listeners = false;
+			}
+		}
+#ifdef DEBUG
+		usleep(5+rand()%10);
+#endif
+	}
+}
+
+int MySQL_Thread::run_ComputePollTimeout() {
+	proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
+	if (mysql_thread___wait_timeout==0) {
+		// we should be going into PAUSE mode
+		if (mypolls.poll_timeout==0 || mypolls.poll_timeout > 100000) {
+			mypolls.poll_timeout=100000;
+		}
+	}
+	proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
+
+
+	pre_poll_time=curtime;
+	int ttw = ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout );
+	return ttw;
+}
+
+
+void MySQL_Thread::run_StopListener() {
+	unsigned int n;
+	while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
+		if (static_cast<int>(n) == -1) {
+			for (unsigned int i = 0; i < mypolls.len; i++) {
+				if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
+					poll_listener_del(mypolls.myds[i]->fd);
+				}
+			}
+		} else {
+			poll_listener_del(n);
+		}
+		assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
+	}
+}
+
+
+void MySQL_Thread::run_SetAllSession_ToProcess0() {
+	unsigned int n;
+#ifdef IDLE_THREADS
+	// @note: in MySQL_Thread::run we have:  bool idle_maintenance_thread=epoll_thread;
+	// Thus idle_maintenance_thread and epoll_thread are equivalent.
+	if (epoll_thread==false) {
+#endif // IDLE_THREADS
+		for (n=0; n<mysql_sessions->len; n++) {
+			MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
+			_sess->to_process=0;
+		}
+#ifdef IDLE_THREADS
+	}
+#endif // IDLE_THREADS
+}
+
+
 // main loop
 /**
  * @brief Main loop for the MySQL thread.
@@ -3152,7 +3280,6 @@ void MySQL_Thread::run___cleanup_mirror_queue() {
  * @note This method assumes that relevant variables, mutexes, and objects have been properly initialized.
  */
 void MySQL_Thread::run() {
-	unsigned int n;
 	int rc;
 
 #ifdef IDLE_THREADS
@@ -3196,79 +3323,28 @@ __run_skip_1:
 
 		if (idle_maintenance_thread) {
 			idle_thread_gets_sessions_from_worker_thread();
-			goto __run_skip_1a;
-		}
+		} else {
 #endif // IDLE_THREADS
 
-		handle_mirror_queue_mysql_sessions();
+			handle_mirror_queue_mysql_sessions();
 
-		ProcessAllMyDS_BeforePoll();
+			ProcessAllMyDS_BeforePoll();
 
 #ifdef IDLE_THREADS
-		/**
-		 * @brief Handles session assignment and retrieval between worker and idle threads.
-		 * 
-		 * This block of code checks if the global configuration allows idle threads and if the current thread
-		 * is not an idle maintenance thread. If both conditions are met, it randomly selects an idle worker thread
-		 * and assigns sessions to it. Then, it retrieves sessions from the idle thread.
-		 * 
-		 * @note This functionality is part of the management of worker and idle threads in the MySQL thread pool.
-		 * It facilitates the distribution of sessions between active worker threads and idle threads to optimize resource utilization.
-		 * 
-		 * @param idle_maintenance_thread Flag indicating whether the current thread is an idle maintenance thread.
-		 * @param GloVars Global configuration variables for the MySQL thread.
-		 * @param GloMTH Global MySQL thread handlers object.
-		 */
-		if (GloVars.global.idle_threads) {
-			if (idle_maintenance_thread==false) {
-				int r=rand()%(GloMTH->num_threads);
-				MySQL_Thread *thr=GloMTH->mysql_threads_idles[r].worker;
-				worker_thread_assigns_sessions_to_idle_thread(thr);
-				worker_thread_gets_sessions_from_idle_thread();
-			}
+			run_MoveSessionsBetweenThreads();
 		}
-
-
-__run_skip_1a:
 #endif // IDLE_THREADS
 
 		pthread_mutex_unlock(&thread_mutex);
 		if (unlikely(mypolls.bootstrapping_listeners == true)) {
-			while ( // spin here if ...
-				(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
-				||
-				(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
-			) {
-				if (n) {
-					poll_listener_add(n);
-					assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
-				} else {
-					if (GloMTH->bootstrapping_listeners == false) {
-						// we stop looping
-						mypolls.bootstrapping_listeners = false;
-					}
-				}
-#ifdef DEBUG
-				usleep(5+rand()%10);
-#endif
-			}
+			run_BootstrapListener();
 		}
-
-		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
-		if (mysql_thread___wait_timeout==0) {
-			// we should be going into PAUSE mode
-			if (mypolls.poll_timeout==0 || mypolls.poll_timeout > 100000) {
-				mypolls.poll_timeout=100000;
-			}
-		}
-		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
-
 
 		// flush mysql log file
 		GloMyLogger->flush();
 
-		pre_poll_time=curtime;
-		int ttw = ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout );
+		int ttw = run_ComputePollTimeout();
+
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events,0,sizeof(struct epoll_event)*MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -3286,17 +3362,8 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		if (unlikely(maintenance_loop == true)) {
-			while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
-				if (static_cast<int>(n) == -1) {
-					for (unsigned int i = 0; i < mypolls.len; i++) {
-						if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
-							poll_listener_del(mypolls.myds[i]->fd);
-						}
-					}
-				} else {
-					poll_listener_del(n);
-				}
-				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
+			if (unlikely(__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {
+				run_StopListener();
 			}
 		}
 
@@ -3366,55 +3433,12 @@ __run_skip_1a:
 			refresh_variables();
 		}
 
-#ifdef IDLE_THREADS
-		if (idle_maintenance_thread==false) {
-#endif // IDLE_THREADS
-			for (n=0; n<mysql_sessions->len; n++) {
-				MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
-				_sess->to_process=0;
-			}
-#ifdef IDLE_THREADS
-		}
-#endif // IDLE_THREADS
+		run_SetAllSession_ToProcess0();
 
 #ifdef IDLE_THREADS
 		// here we handle epoll_wait()
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
-			if (rc) {
-				int i;
-				for (i=0; i<rc; i++) {
-					if (events[i].data.u32) {
-						idle_thread_prepares_session_to_send_to_worker_thread(i);
-					}
-				}
-				// FIXME: this loop seems suboptimal, it can be combined with the previous one
-				for (i=0; i<rc; i++) {
-					if (events[i].events == EPOLLIN && events[i].data.u32==0) {
-						unsigned char c;
-						int fd=pipefd[0];
-						if (read(fd, &c, 1)<=0) {
-						} else {
-							//i=rc;
-							maintenance_loop=true;
-						}
-					}
-				}
-			}
-			if (mysql_sessions->len && maintenance_loop) {
-				if (curtime == last_maintenance_time) {
-					idle_thread_to_kill_idle_sessions();
-				}
-			}
-			goto __run_skip_2;
-		}
-#endif // IDLE_THREADS
-
-		ProcessAllMyDS_AfterPoll();
-
-#ifdef IDLE_THREADS
-__run_skip_2:
-		if (GloVars.global.idle_threads && idle_maintenance_thread) {
-			// this is an idle thread
+			run_Handle_epoll_wait(rc);
 			unsigned int w=rand()%(GloMTH->num_threads);
 			MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
@@ -3424,13 +3448,14 @@ __run_skip_2:
 			}
 		} else {
 #endif // IDLE_THREADS
+			ProcessAllMyDS_AfterPoll();
 			// iterate through all sessions and process the session logic
 			process_all_sessions();
-
 			return_local_connections();
 #ifdef IDLE_THREADS
 		}
 #endif // IDLE_THREADS
+
 	}
 }
 // end of ::run()
@@ -3984,6 +4009,30 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 }
 
 
+void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int& n) {
+	char _buf[1024];
+	if (sess->client_myds) {
+		if (mysql_thread___log_unhealthy_connections) {
+			if (sess->session_fast_forward == false) {
+				proxy_warning(
+					"Closing unhealthy client connection %s:%d\n", sess->client_myds->addr.addr,
+					sess->client_myds->addr.port
+				);
+			} else {
+				proxy_warning(
+					"Closing 'fast_forward' client connection %s:%d\n", sess->client_myds->addr.addr,
+					sess->client_myds->addr.port
+				);
+			}
+		}
+	}
+	sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+	GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
+	unregister_session(n);
+	n--;
+	delete sess;
+}
+
 /**
  * @brief Processes all active sessions within the MySQL thread.
  * 
@@ -4073,28 +4122,8 @@ void MySQL_Thread::process_all_sessions() {
 			// removing this logic in 2.0.15
 			//sess->active_transactions = -1;
 		}
-		if (sess->healthy==0) {
-			char _buf[1024];
-			if (sess->client_myds) {
-				if (mysql_thread___log_unhealthy_connections) {
-					if (sess->session_fast_forward == false) {
-						proxy_warning(
-							"Closing unhealthy client connection %s:%d\n", sess->client_myds->addr.addr,
-							sess->client_myds->addr.port
-						);
-					} else {
-						proxy_warning(
-							"Closing 'fast_forward' client connection %s:%d\n", sess->client_myds->addr.addr,
-							sess->client_myds->addr.port
-						);
-					}
-				}
-			}
-			sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
-			GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
-			unregister_session(n);
-			n--;
-			delete sess;
+		if (unlikely(sess->healthy==0)) {
+			ProcessAllSessions_Healthy0(sess, n);
 		} else {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
@@ -4112,7 +4141,7 @@ void MySQL_Thread::process_all_sessions() {
 					}
 				}
 			} else {
-				if (sess->killed==true) {
+				if (unlikely(sess->killed==true)) {
 					// this is a special cause, if killed the session needs to be executed no matter if paused
 					sess->handler();
 					char _buf[1024];
