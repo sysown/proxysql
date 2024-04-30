@@ -2669,24 +2669,7 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	return true;
 }
 
-void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
-	if (query_digest_text==NULL) return;
-	// unknown what to do with multiplex
-	int mul=-1;
-	if (myds) {
-		if (myds->sess) {
-			if (myds->sess->qpo) {
-				mul=myds->sess->qpo->multiplex;
-				if (mul==0) {
-					set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
-				} else {
-					if (mul==1) {
-						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
-					}
-				}
-			}
-		}
-	}
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_Warnings(char *query_digest_text) {
 	// checking warnings and disabling multiplexing will be effective only when the mysql-query_digests is enabled
 	if (get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS) == false) {
 		if (warning_count > 0) {
@@ -2712,7 +2695,10 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 		}
 	}
-	
+}
+
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_UserVariables(char *query_digest_text, int mul) {
 	if (get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE)==false) { // we search for variables only if not already set
 //			if (
 //				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
@@ -2757,6 +2743,77 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			}
 		}
 	}
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_Savepoint(char *query_digest_text) {
+	if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)==false) {
+		if (mysql) {
+			if (
+				(mysql->server_status & SERVER_STATUS_IN_TRANS)
+				||
+				((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) == 0)
+			) {
+				if (!strncasecmp(query_digest_text,"SAVEPOINT ", strlen("SAVEPOINT "))) {
+					set_status(true, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+				}
+			}
+		}
+	} else {
+		if ( // get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) == true
+			(
+				// make sure we don't have a transaction running
+				// checking just for COMMIT and ROLLBACK is not enough, because `SET autocommit=1` can commit too
+				(mysql->server_status & SERVER_STATUS_AUTOCOMMIT)
+				&&
+				( (mysql->server_status & SERVER_STATUS_IN_TRANS) == 0 )
+			)
+			||
+			(strcasecmp(query_digest_text,"COMMIT") == 0)
+			||
+			(strcasecmp(query_digest_text,"ROLLBACK") == 0)
+		) {
+			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+		}
+	}
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_SetBackslashEscapes() {
+	if (mysql) {
+		if (myds && myds->sess) {
+			if (myds->sess->client_myds && myds->sess->client_myds->myconn) {
+				// if SERVER_STATUS_NO_BACKSLASH_ESCAPES is changed it is likely
+				// because of sql_mode was changed
+				// we set the same on the client connection
+				unsigned int ss = mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				myds->sess->client_myds->myconn->set_no_backslash_escapes(ss);
+			}
+		}
+	}
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
+	if (query_digest_text==NULL) return;
+	// unknown what to do with multiplex
+	int mul=-1;
+	if (myds) {
+		if (myds->sess) {
+			if (myds->sess->qpo) {
+				mul=myds->sess->qpo->multiplex;
+				if (mul==0) {
+					set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
+				} else {
+					if (mul==1) {
+						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
+					}
+				}
+			}
+		}
+	}
+
+	ProcessQueryAndSetStatusFlags_Warnings(query_digest_text);
+
+	ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+
 	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {
 			set_status(true, STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
@@ -2792,46 +2849,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			set_status(true, STATUS_MYSQL_CONNECTION_FOUND_ROWS);
 		}
 	}
-	if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)==false) {
-		if (mysql) {
-			if (
-				(mysql->server_status & SERVER_STATUS_IN_TRANS)
-				||
-				((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) == 0)
-			) {
-				if (!strncasecmp(query_digest_text,"SAVEPOINT ", strlen("SAVEPOINT "))) {
-					set_status(true, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
-				}
-			}
-		}
-	} else {
-		if ( // get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) == true
-			(
-				// make sure we don't have a transaction running
-				// checking just for COMMIT and ROLLBACK is not enough, because `SET autocommit=1` can commit too
-				(mysql->server_status & SERVER_STATUS_AUTOCOMMIT)
-				&&
-				( (mysql->server_status & SERVER_STATUS_IN_TRANS) == 0 )
-			)
-			||
-			(strcasecmp(query_digest_text,"COMMIT") == 0)
-			||
-			(strcasecmp(query_digest_text,"ROLLBACK") == 0)
-		) {
-			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
-		}
-	}
-	if (mysql) {
-		if (myds && myds->sess) {
-			if (myds->sess->client_myds && myds->sess->client_myds->myconn) {
-				// if SERVER_STATUS_NO_BACKSLASH_ESCAPES is changed it is likely
-				// because of sql_mode was changed
-				// we set the same on the client connection
-				unsigned int ss = mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES;
-				myds->sess->client_myds->myconn->set_no_backslash_escapes(ss);
-			}
-		}
-	}
+
+	ProcessQueryAndSetStatusFlags_Savepoint(query_digest_text);
+
+	ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
+
 }
 
 void MySQL_Connection::optimize() {

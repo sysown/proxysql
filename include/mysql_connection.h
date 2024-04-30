@@ -65,6 +65,10 @@ class MySQL_Connection {
 	void connect_start_SetClientFlag(unsigned long&);
 	char * connect_start_DNS_lookup();
 	void connect_start_SetSslSettings();
+	void ProcessQueryAndSetStatusFlags_Warnings(char *);
+	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
+	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
+	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
 	public:
 	struct {
 		char *server_version;
