@@ -42,9 +42,12 @@ inline unsigned long long monotonic_time() {
 	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
+#define NTHREADS 5
 #define NCONNS 6
 #define NPREP 15000
 #define PROGRESS 2000
+
+pthread_mutex_t mtx[NCONNS];
 MYSQL* conns[NCONNS];
 int ids[NCONNS*NPREP];
 MYSQL_STMT * stmts[NCONNS*NPREP];
@@ -125,6 +128,163 @@ int execute_stmt(int idx) {
 	return 0;
 }
 
+void * prepare_thread(void *arg) {
+	int thread_id = *(int *)arg;
+	for (int i=0; i<NCONNS; i++) {
+		for (int j=0; j<NPREP; j++) {
+			int idx=i*NPREP+j;
+			if (idx%NTHREADS == thread_id) {
+				if (idx%PROGRESS==(PROGRESS-1)) diag("Preparing statements. Progress: %d", idx+1);
+				pthread_mutex_lock(&mtx[i]);
+				if (prepare_stmt(idx,i)) exit(EXIT_FAILURE);
+				// excute every 7 stmt
+				if (idx%7==0) {
+					if (execute_stmt(idx)) exit(EXIT_FAILURE);
+				}
+				pthread_mutex_unlock(&mtx[i]);
+			}
+		}
+	}
+	return NULL;
+}
+
+void * execute1_thread(void *arg) {
+	int thread_id = *(int *)arg;
+	for (int i=0; i<NCONNS; i++) {
+		for (int j=0; j<NPREP; j++) {
+			int idx=i*NPREP+j;
+			if (idx%NTHREADS == thread_id) {
+				if (idx%PROGRESS==(PROGRESS-1)) diag("Executing statements in order 1. Progress: %d", idx+1);
+				pthread_mutex_lock(&mtx[i]);
+				if (execute_stmt(idx)) exit(EXIT_FAILURE);
+				pthread_mutex_unlock(&mtx[i]);
+			}
+		}
+	}
+	return NULL;
+}
+void * execute2_thread(void *arg) {
+	int thread_id = *(int *)arg;
+	int p=0; // we need a new counter because of the out of order
+	for (int j=0; j<NPREP; j++) {
+		for (int i=0; i<NCONNS; i++) {
+			int idx=i*NPREP+j;
+			if (idx%NTHREADS == thread_id) {
+				if (p%PROGRESS==(PROGRESS-1)) diag("Executing statements in order 2. Progress: %d", p+1);
+				pthread_mutex_lock(&mtx[i]);
+				if (execute_stmt(idx)) exit(EXIT_FAILURE);
+				pthread_mutex_unlock(&mtx[i]);
+			}
+			p++;
+		}
+	}
+	return NULL;
+}
+
+void * execute3_thread(void *arg) {
+	int thread_id = *(int *)arg;
+	for (int i=0; i<NCONNS; i++) {
+		for (int j=0; j<NPREP; j++) {
+			int idx=i*NPREP+j;
+			if (idx%NTHREADS == thread_id) {
+				if (idx%PROGRESS==(PROGRESS-1)) diag("Closing or executing statements, loop 1. Progress: %d", idx+1);
+				pthread_mutex_lock(&mtx[i]);
+				if (idx%4==3) {
+					int rc = mysql_stmt_close(stmts[idx]);
+					if (rc) {
+						diag("Failed to close stmt %d", idx);
+						exit(EXIT_FAILURE);
+					}
+					stmts[idx] = NULL;
+				} else {
+					if (execute_stmt(idx)) exit(EXIT_FAILURE);
+				}
+				pthread_mutex_unlock(&mtx[i]);
+			}
+		}
+	}
+	return NULL;
+}
+
+void * execute4_thread(void *arg) {
+	int thread_id = *(int *)arg;
+	for (int i=0; i<NCONNS; i++) {
+		for (int j=0; j<NPREP; j++) {
+			int idx=i*NPREP+j;
+			if (idx%NTHREADS == thread_id) {
+				if (idx%PROGRESS==(PROGRESS-1)) diag("Closing or executing statements, loop 2. Progress: %d", idx+1);
+				pthread_mutex_lock(&mtx[i]);
+				if (idx%4==3) {
+					// skip, already closed
+				} else if (idx%4==2) {
+					int rc = mysql_stmt_close(stmts[idx]);
+					if (rc) {
+						diag("Failed to close stmt %d", idx);
+						exit(EXIT_FAILURE);
+					}
+					stmts[idx] = NULL;
+				} else {
+					if (execute_stmt(idx)) exit(EXIT_FAILURE);
+				}
+				pthread_mutex_unlock(&mtx[i]);
+			}
+		}
+	}
+	return NULL;
+}
+
+void *execute5_thread(void *arg) {
+	int thread_id = *(int *)arg;
+	for (int i=0; i<NCONNS; i++) {
+		for (int j=0; j<NPREP; j++) {
+			int idx=i*NPREP+j;
+			if (idx%NTHREADS == thread_id) {
+				if (idx%PROGRESS==(PROGRESS-1)) diag("Execute and close the prepared statements left, loop 1. Progress: %d", idx+1);
+				pthread_mutex_lock(&mtx[i]);
+				if (stmts[idx] != NULL) {
+					if (idx%2==1) {
+						if (execute_stmt(idx)) exit(EXIT_FAILURE);
+						int rc = mysql_stmt_close(stmts[idx]);
+						if (rc) {
+							diag("Failed to close stmt %d", idx);
+							exit(EXIT_FAILURE);
+						}
+						stmts[idx] = NULL;
+					}
+				}
+				pthread_mutex_unlock(&mtx[i]);
+			}
+		}
+	}
+	return NULL;
+}
+
+void *execute6_thread(void *arg) {
+	int thread_id = *(int *)arg;
+	for (int i=0; i<NCONNS; i++) {
+		for (int j=0; j<NPREP; j++) {
+			int idx=i*NPREP+j;
+			if (idx%NTHREADS == thread_id) {
+				if (idx%PROGRESS==(PROGRESS-1)) diag("Execute and close the prepared statements left, loop 2. Progress: %d", idx+1);
+				pthread_mutex_lock(&mtx[i]);
+				if (stmts[idx] != NULL) {
+					if (idx%2==0) {
+						if (execute_stmt(idx)) exit(EXIT_FAILURE);
+						int rc = mysql_stmt_close(stmts[idx]);
+						if (rc) {
+							diag("Failed to close stmt %d", idx);
+							exit(EXIT_FAILURE);
+						}
+						stmts[idx] = NULL;
+					}
+				}
+				pthread_mutex_unlock(&mtx[i]);
+			}
+		}
+	}
+	return NULL;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -147,6 +307,10 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	for (int i=0; i<NCONNS; i++) {
+		pthread_mutex_init(&mtx[i], NULL);
+	}
+
 	// ceating "random" ids in within a range 0..NPREP
 	diag("Creating IDs");
 	for (int i=0; i<NCONNS*NPREP; i++) {
@@ -158,16 +322,17 @@ int main(int argc, char** argv) {
 	}
 
 	diag("Preparing statements");
-	for (int i=0; i<NCONNS; i++) {
-		for (int j=0; j<NPREP; j++) {
-			int idx=i*NPREP+j;
-			if (idx%PROGRESS==(PROGRESS-1)) diag("Preparing statements. Progress: %d", idx+1);
-			if (prepare_stmt(idx,i)) return EXIT_FAILURE;
-			// excute every 7 stmt
-			if (idx%7==0) {
-				if (execute_stmt(idx)) return EXIT_FAILURE;
-			}
+	pthread_t thi[NTHREADS];
+	int tid[NTHREADS];
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		tid[i] = i;
+		if ( pthread_create(&thi[i], NULL, prepare_thread , &tid[i]) != 0 ) {
+			perror("Thread creation");
+			return EXIT_FAILURE;
 		}
+	}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		pthread_join(thi[i], NULL);
 	}
 
 	{
@@ -177,56 +342,50 @@ int main(int argc, char** argv) {
 
 	// excute statements in order
 	diag("Executing statements in order");
-	for (int i=0; i<NCONNS; i++) {
-		for (int j=0; j<NPREP; j++) {
-			int idx=i*NPREP+j;
-			if (idx%PROGRESS==(PROGRESS-1)) diag("Executing statements in order 1. Progress: %d", idx+1);
-			if (execute_stmt(idx)) return EXIT_FAILURE;
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		if ( pthread_create(&thi[i], NULL, execute1_thread , &tid[i]) != 0 ) {
+			perror("Thread creation");
+			return EXIT_FAILURE;
 		}
+	}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		pthread_join(thi[i], NULL);
 	}
 
 	// excute statements in different order
 	diag("Executing statements in different order");
-	int p=0; // we need a new counter because of the out of order
-	for (int j=0; j<NPREP; j++) {
-		for (int i=0; i<NCONNS; i++) {
-			int idx=i*NPREP+j;
-			if (p%PROGRESS==(PROGRESS-1)) diag("Executing statements in order 2. Progress: %d", p+1);
-			if (execute_stmt(idx)) return EXIT_FAILURE;
-			p++;
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		if ( pthread_create(&thi[i], NULL, execute2_thread , &tid[i]) != 0 ) {
+			perror("Thread creation");
+			return EXIT_FAILURE;
 		}
+	}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		pthread_join(thi[i], NULL);
 	}
 
 	// close 1 of 4 prepared statements, execute the rest
-	for (int i=0; i<NCONNS*NPREP; i++) {
-		if (i%PROGRESS==(PROGRESS-1)) diag("Closing or executing statements, loop 1. Progress: %d", i+1);
-		if (i%4==3) {
-			int rc = mysql_stmt_close(stmts[i]);
-			if (rc) {
-				diag("Failed to close stmt %d", i);
-				return EXIT_FAILURE;
-			}
-			stmts[i] = NULL;
-		} else {
-			if (execute_stmt(i)) return EXIT_FAILURE;
+	diag("Executing statements in different order");
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		if ( pthread_create(&thi[i], NULL, execute3_thread , &tid[i]) != 0 ) {
+			perror("Thread creation");
+			return EXIT_FAILURE;
 		}
+	}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		pthread_join(thi[i], NULL);
 	}
 
 	// close 1 of 4 prepared statements, skip 1 in 4, execute the rest
-	for (int i=0; i<NCONNS*NPREP; i++) {
-		if (i%PROGRESS==(PROGRESS-1)) diag("Closing or executing statements, loop 2. Progress: %d", i+1);
-		if (i%4==3) {
-			// skip, already closed
-		} else if (i%4==2) {
-			int rc = mysql_stmt_close(stmts[i]);
-			if (rc) {
-				diag("Failed to close stmt %d", i);
-				return EXIT_FAILURE;
-			}
-			stmts[i] = NULL;
-		} else {
-			if (execute_stmt(i)) return EXIT_FAILURE;
+	diag("Executing statements in different order");
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		if ( pthread_create(&thi[i], NULL, execute4_thread , &tid[i]) != 0 ) {
+			perror("Thread creation");
+			return EXIT_FAILURE;
 		}
+	}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		pthread_join(thi[i], NULL);
 	}
 
 	// close half the connections without closing the prepared statements
@@ -240,33 +399,27 @@ int main(int argc, char** argv) {
 	}
 
 	// execute and close the prepared statements left, loop 1
-	for (int i=0; i<NCONNS*NPREP; i++) {
-		if (stmts[i] != NULL) {
-			if (i%2==1) {
-				if (execute_stmt(i)) return EXIT_FAILURE;
-				int rc = mysql_stmt_close(stmts[i]);
-				if (rc) {
-					diag("Failed to close stmt %d", i);
-					return EXIT_FAILURE;
-				}
-				stmts[i] = NULL;
-			}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		if ( pthread_create(&thi[i], NULL, execute5_thread , &tid[i]) != 0 ) {
+			perror("Thread creation");
+			return EXIT_FAILURE;
 		}
 	}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		pthread_join(thi[i], NULL);
+	}
+
+
 
 	// execute and close the prepared statements left, loop 2
-	for (int i=0; i<NCONNS*NPREP; i++) {
-		if (stmts[i] != NULL) {
-			if (i%2==0) {
-				if (execute_stmt(i)) return EXIT_FAILURE;
-				int rc = mysql_stmt_close(stmts[i]);
-				if (rc) {
-					diag("Failed to close stmt %d", i);
-					return EXIT_FAILURE;
-				}
-				stmts[i] = NULL;
-			}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		if ( pthread_create(&thi[i], NULL, execute6_thread , &tid[i]) != 0 ) {
+			perror("Thread creation");
+			return EXIT_FAILURE;
 		}
+	}
+	for (unsigned int i=0; i<NTHREADS; i++) {
+		pthread_join(thi[i], NULL);
 	}
 
 	// Half of the connections were freed earlier. We only iterate the other
