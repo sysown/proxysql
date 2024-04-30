@@ -4992,6 +4992,24 @@ void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *my
 }
 
 // this function was inline
+/**
+ * @brief Run a MySQL query on the current session.
+ *
+ * This function executes a MySQL query on the current session based on its status.
+ * The query execution is asynchronous and handled by the specified MySQL connection.
+ * It returns the result code of the asynchronous query execution.
+ *
+ * @param myds Pointer to the MySQL data stream associated with the session.
+ * @param myconn Pointer to the MySQL connection used to execute the query.
+ *
+ * @return Returns an integer status code indicating the result of the query execution,
+ * as returned by async_query():
+ * - 0: Query execution completed successfully.
+ * - -1: Query execution failed.
+ * - 1: Query execution in progress.
+ * - 2: Processing a multi-statement query, control needs to be transferred to MySQL_Session.
+ * - 3: In the middle of processing a multi-statement query.
+ */
 int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	PROXY_TRACE2();
 	int rc = 0;
