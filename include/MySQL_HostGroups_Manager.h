@@ -541,9 +541,10 @@ using address_t = std::string;
 using port_t = unsigned int;
 using read_only_t = int;
 using current_replication_lag = int;
+using replace_current_replication_lag = bool;
 
 using read_only_server_t = std::tuple<hostname_t,port_t,read_only_t>;
-using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag>;
+using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag,replace_current_replication_lag>;
 
 enum READ_ONLY_SERVER_T {
 	ROS_HOSTNAME = 0,
@@ -557,6 +558,7 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS_ADDRESS,
 	RLS_PORT,
 	RLS_CURRENT_REPLICATION_LAG,
+	RLS_OVERRIDE_REPLICATION_LAG,
 	RLS__SIZE
 };
 
@@ -1090,7 +1092,7 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
-	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int);
+	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
 	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);

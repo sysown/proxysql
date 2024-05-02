@@ -2685,9 +2685,10 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	myhgc->mysrvs->add(mysrvc);
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const char *address, unsigned int port, int current_replication_lag) {
+void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const char *address, unsigned int port, 
+	int current_replication_lag, bool override_repl_lag) {
 	
-	if (current_replication_lag == -1) {
+	if (current_replication_lag == -1 && override_repl_lag == true) {
 		current_replication_lag = myhgc->get_monitor_slave_lag_when_null();
 		proxy_error("Replication lag on server %s:%d is NULL, using value %d\n", address, port, current_replication_lag);
 	}
@@ -2730,7 +2731,7 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 					if (
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
 						||
-						(current_replication_lag==-2) // see issue 959
+						(current_replication_lag==-2 && override_repl_lag == true) // see issue 959
 					) {
 						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 						proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
@@ -2756,18 +2757,19 @@ void MySQL_HostGroups_Manager::replication_lag_action(const std::list<replicatio
 		const std::string& address = std::get<REPLICATION_LAG_SERVER_T::RLS_ADDRESS>(server);
 		const unsigned int port = std::get<REPLICATION_LAG_SERVER_T::RLS_PORT>(server);
 		const int current_replication_lag = std::get<REPLICATION_LAG_SERVER_T::RLS_CURRENT_REPLICATION_LAG>(server);
+		const bool override_repl_lag = std::get<REPLICATION_LAG_SERVER_T::RLS_OVERRIDE_REPLICATION_LAG>(server);
 
 		if (mysql_thread___monitor_replication_lag_group_by_host == false) {
 			// legacy check. 1 check per server per hostgroup
 			MyHGC *myhgc = MyHGC_find(hid);
-			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag,override_repl_lag);
 		}
 		else {
 			// only 1 check per server, no matter the hostgroup
 			// all hostgroups must be searched
 			for (unsigned int i=0; i<MyHostGroups->len; i++) {
 				MyHGC*myhgc=(MyHGC*)MyHostGroups->index(i);
-				replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+				replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag,override_repl_lag);
 			}
 		}
 	}
