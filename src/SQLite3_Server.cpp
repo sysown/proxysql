@@ -2026,8 +2026,7 @@ void SQLite3_Server::load_replicationlag_table(MySQL_Session* sess) {
 			if (r->fields[2] == nullptr) {
 				replicationlag_map[s] = nullptr;
 			} else {
-				int* repl_lag = new int;
-				*repl_lag = atoi(r->fields[2]);
+				int* repl_lag = new int(atoi(r->fields[2]));
 				replicationlag_map[s] = std::unique_ptr<int>(repl_lag);
 			}
 		}

@@ -541,10 +541,10 @@ using address_t = std::string;
 using port_t = unsigned int;
 using read_only_t = int;
 using current_replication_lag = int;
-using replace_current_replication_lag = bool;
+using override_replication_lag = bool;
 
 using read_only_server_t = std::tuple<hostname_t,port_t,read_only_t>;
-using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag,replace_current_replication_lag>;
+using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag,override_replication_lag>;
 
 enum READ_ONLY_SERVER_T {
 	ROS_HOSTNAME = 0,
