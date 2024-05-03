@@ -38,9 +38,10 @@ using nlohmann::json;
 #define STMT_VECTOR_PTR(mysql)			(static_cast<std::vector<MYSQL_STMT*>*>(mysql->unused_3))
 #define STMT_EXECUTED_VECTOR_PTR(mysql)	(static_cast<std::vector<std::unique_ptr<char,decltype(&free)>>*>(mysql->unused_4))
 
-#define STMT_FIND_INDEX(stmt,idx)		const std::vector<MYSQL_STMT*>& vec_stmt = STMT_VECTOR(stmt); \
-										for (size_t i = 0; i < vec_stmt.size(); i++) {\
-											if (vec_stmt[i] == stmt) {\
+#define STMT_FIND_INDEX(stmt,idx)		const std::vector<MYSQL_STMT*>* vec_stmt = STMT_VECTOR_PTR(stmt->mysql);\
+										size_t vec_size = vec_stmt ? vec_stmt->size() : 0;\
+										for (size_t i = 0; i < vec_size; i++) {\
+											if ((*vec_stmt)[i] == stmt) {\
 												idx = i; \
 												break; \
 											}\
@@ -88,7 +89,9 @@ MYSQL* mysql_init_override(MYSQL* mysql, const char* file, int line) {
 int mysql_query_override(MYSQL* mysql, const char* query, const char* file, int line) {
 	const int result = (*real_mysql_query)(mysql, query);
 	if (result == 0) {
-		LAST_QUERY_EXECUTED_STR(mysql) = query;
+		if (LAST_QUERY_EXECUTED_PTR(mysql)) {
+			LAST_QUERY_EXECUTED_STR(mysql) = query;
+		}
 		if (mysql_errno(mysql) == 0 && mysql_field_count(mysql) == 0 && mysql_warning_count(mysql) > 0) {
 			fprintf(stdout, "File %s, Line %d, [mysql_query] A warning was generated during the execution of the query:'%s', warning count:%d\n",
 				file, line, query, mysql_warning_count(mysql));
@@ -99,7 +102,7 @@ int mysql_query_override(MYSQL* mysql, const char* query, const char* file, int 
 
 MYSQL_RES* mysql_store_result_override(MYSQL* mysql, const char* file, int line) {
 	MYSQL_RES* result = (*real_mysql_store_result)(mysql);
-	if (mysql_errno(mysql) == 0 && mysql_warning_count(mysql) > 0) {
+	if (mysql_errno(mysql) == 0 && mysql_warning_count(mysql) > 0 && LAST_QUERY_EXECUTED_PTR(mysql)) {
 		fprintf(stdout, "File %s, Line %d, [mysql_store_result] A warning was generated during the execution of the query:'%s', warning count:%d\n",
 			file, line, LAST_QUERY_EXECUTED_STR(mysql).c_str(), mysql_warning_count(mysql));
 	}
@@ -107,7 +110,9 @@ MYSQL_RES* mysql_store_result_override(MYSQL* mysql, const char* file, int line)
 }
 
 void mysql_close_override(MYSQL* mysql, const char* file, int line) {
-	delete LAST_QUERY_EXECUTED_PTR(mysql);
+	if (LAST_QUERY_EXECUTED_PTR(mysql)) {
+		delete LAST_QUERY_EXECUTED_PTR(mysql);
+	}
 	if (STMT_VECTOR_PTR(mysql)) {
 		delete STMT_VECTOR_PTR(mysql);
 		delete STMT_EXECUTED_VECTOR_PTR(mysql);
