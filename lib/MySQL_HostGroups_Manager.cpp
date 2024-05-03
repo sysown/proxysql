@@ -2690,6 +2690,7 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 	
 	if (current_replication_lag == -1 && override_repl_lag == true) {
 		current_replication_lag = myhgc->get_monitor_slave_lag_when_null();
+		override_repl_lag = false;
 		proxy_error("Replication lag on server %s:%d is NULL, using value %d\n", address, port, current_replication_lag);
 	}
 
@@ -2702,9 +2703,9 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 //					(current_replication_lag==-1 )
 //					||
 					(
-						current_replication_lag>=0 &&
+						current_replication_lag >= 0 &&
 						mysrvc->max_replication_lag > 0 && // see issue #4018
-						((unsigned int)current_replication_lag > mysrvc->max_replication_lag)
+						(current_replication_lag > (int)mysrvc->max_replication_lag)
 					)
 				) {
 					// always increase the counter
@@ -2729,7 +2730,8 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 					if (
-						(current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
+						(/*current_replication_lag >= 0 &&*/override_repl_lag == false &&
+						(current_replication_lag <= (int)mysrvc->max_replication_lag))
 						||
 						(current_replication_lag==-2 && override_repl_lag == true) // see issue 959
 					) {
