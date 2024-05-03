@@ -23,12 +23,12 @@ See note on wait_timeout
 #include <vector>
 #include <map>
 #include <utility>
-#include <iostream>
 
 #include <unistd.h>
 #include <string.h>
 #include <sys/resource.h>
 
+#include "mysql.h"
 #include "tap.h"
 #include "utils.h"
 #include "json.hpp"

@@ -9,17 +9,15 @@
  *   5. Repeat the previous 3 points for several values.
  */
 
-#include <algorithm>
 #include <chrono>
+#include <math.h>
 #include <string>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <vector>
-#include <tuple>
 
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "tap.h"
 #include "command_line.h"

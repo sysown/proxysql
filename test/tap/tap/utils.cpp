@@ -1,30 +1,28 @@
 #include <algorithm>
 #include <chrono>
-#include <string>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <numeric>
-#include <memory>
 #include <string>
-#include <unistd.h>
+#include <sstream>
+#include <random>
 #include <sys/wait.h>
-
-#include "mysql.h"
-
-#include "tap.h"
-#include "utils.h"
-
 #include <unistd.h>
 #include <utility>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <iostream>
+
+#include "json.hpp"
+#include "re2/re2.h"
 
 #include "proxysql_utils.h"
 
+#include "mysql.h"
+#include "utils.h"
+#include "tap.h"
+
 using std::pair;
 using std::map;
+using std::fstream;
 using std::string;
 using std::vector;
 
@@ -72,6 +70,10 @@ using nlohmann::json;
 											vec_stmt.pop_back();\
 											vec_query.pop_back();\
 										}
+
+#ifndef DISABLE_WARNING_COUNT_LOGGING
+
+extern "C" {
 
 MYSQL* mysql_init_override(MYSQL* mysql, const char* file, int line) {
 	static bool init = false;
@@ -180,6 +182,10 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line) 
 	STMT_REMOVE(stmt)
 	return (*real_mysql_stmt_close)(stmt);
 }
+
+}
+
+#endif
 
 std::size_t count_matches(const string& str, const string& substr) {
 	std::size_t result = 0;
@@ -1319,24 +1325,27 @@ int open_file_and_seek_end(const string& f_path, std::fstream& f_stream) {
 	return EXIT_SUCCESS;
 }
 
-std::vector<line_match_t> get_matching_lines(std::fstream& f_stream, const std::string& regex) {
-	std::vector<line_match_t> found_matches {};
+vector<line_match_t> get_matching_lines(fstream& f_stream, const string& s_regex, bool get_matches) {
+	vector<line_match_t> found_matches {};
 
-	std::string next_line {};
-	std::fstream::pos_type init_pos { f_stream.tellg() };
+	string next_line {};
+	fstream::pos_type init_pos { f_stream.tellg() };
 
-	while (std::getline(f_stream, next_line)) {
-		std::regex regex_err_line { regex };
-		std::smatch match_results {};
+	while (getline(f_stream, next_line)) {
+		re2::RE2 regex { s_regex };
+		re2::StringPiece match;
 
-		if (std::regex_search(next_line, match_results, regex_err_line)) {
-			found_matches.push_back({ f_stream.tellg(), next_line, match_results });
+		if (get_matches && RE2::PartialMatch(next_line, regex, &match)) {
+			found_matches.push_back({ f_stream.tellg(), next_line, match.ToString() });
+		}
+		if (!get_matches && RE2::PartialMatch(next_line, regex)) {
+			found_matches.push_back({ f_stream.tellg(), next_line, match.ToString() });
 		}
 	}
 
 	if (found_matches.empty() == false) {
-		const std::string& last_match { std::get<LINE_MATCH_T::LINE>(found_matches.back()) };
-		const std::fstream::pos_type last_match_pos { std::get<LINE_MATCH_T::POS>(found_matches.back()) };
+		const string& last_match { std::get<LINE_MATCH_T::LINE>(found_matches.back()) };
+		const fstream::pos_type last_match_pos { std::get<LINE_MATCH_T::POS>(found_matches.back()) };
 
 		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
 		f_stream.seekg(last_match_pos);

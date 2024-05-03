@@ -25,20 +25,18 @@
  *
  *   By default all types of tests are executed.
  */
-#include <utility>
+#include <cstring>
+#include <iostream>
+#include <fstream>
+#include <chrono>
+#include <random>
 #include <vector>
 #include <string>
-#include <cstring>
-#include <algorithm>
-#include <iostream>
-#include <chrono>
-#include <ctype.h>
 #include <regex>
 
 #include "json.hpp"
 #include "proxysql.h"
 #include "proxysql_utils.h"
-#include "utils.h"
 #include "command_line.h"
 #include "tap.h"
 

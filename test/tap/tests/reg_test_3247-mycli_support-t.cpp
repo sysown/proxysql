@@ -4,30 +4,15 @@
 */
 
 #include <strings.h>
-#include <vector>
 #include <string>
-#include <sstream>
 #include <stdio.h>
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
 
 using std::string;
-
-std::vector<std::string> split(const std::string& s, char delimiter)
-{
-	std::vector<std::string> tokens;
-	std::string token;
-	std::istringstream tokenStream(s);
-	while (std::getline(tokenStream, token, delimiter))
-	{
-		tokens.push_back(token);
-	}
-	return tokens;
-}
 
 int main(int argc, char** argv) {
 	CommandLine cl;

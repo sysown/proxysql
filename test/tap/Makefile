@@ -25,6 +25,11 @@ tests_with_deps: tap test_deps
 	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 
+.PHONY: clean_utils
+.SILENT: clean_utils
+clean_utils:
+	cd tap && ${MAKE} -s clean_utils
+
 .PHONY: clean
 .SILENT: clean
 clean:
