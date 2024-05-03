@@ -28,6 +28,13 @@ tests_with_deps: tap test_deps
 .PHONY: clean
 .SILENT: clean
 clean:
+	cd tap && ${MAKE} -s clean
+	cd tests && ${MAKE} -s clean
+	cd tests_with_deps && ${MAKE} -s clean
+
+.PHONY: cleanall
+.SILENT: cleanall
+cleanall:
 	cd ../deps && ${MAKE} -s clean
 	cd tap && ${MAKE} -s clean
 	cd tests && ${MAKE} -s clean
