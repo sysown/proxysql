@@ -13,7 +13,7 @@ test_deps:
 	cd ../deps && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tap
-tap:
+tap: test_deps
 	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tests
