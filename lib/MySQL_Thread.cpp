@@ -38,6 +38,70 @@ MySQL_Session *sess_stopat;
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
 
+/**
+ * @brief Helper macro to stringify a macro argument.
+ * 
+ * This macro takes a single argument 'x' and converts it into a string literal.
+ * It is a helper macro used by the STRINGIFY macro.
+ * 
+ * @param x The macro argument to be converted into a string.
+ * @return The string representation of the macro argument.
+ */
+#define STRINGIFY_HELPER(x) #x
+
+/**
+ * @brief Macro to stringify a macro argument.
+ * 
+ * This macro takes a single argument 'x' and converts it into a string literal
+ * using the STRINGIFY_HELPER macro.
+ * 
+ * @param x The macro argument to be converted into a string.
+ * @return The string representation of the macro argument.
+ */
+#define STRINGIFY(x) STRINGIFY_HELPER(x)
+
+/**
+ * @brief Refreshes a boolean variable from the MySQL thread.
+ * 
+ * This macro updates the value of a boolean variable named 'name' from
+ * the MySQL thread. It retrieves the value using the 'get_variable_int' function
+ * from the 'GloMTH' object and assigns it to the variable 'mysql_thread___name'.
+ * The retrieved integer value is cast to a boolean before assignment.
+ * 
+ * @param name The name of the boolean variable to be refreshed.
+ */
+#define REFRESH_VARIABLE_BOOL(name) \
+	mysql_thread___ ## name = (bool)GloMTH->get_variable_int((char *)STRINGIFY(name))
+
+/**
+ * @brief Refreshes an integer variable from the MySQL thread.
+ * 
+ * This macro updates the value of an integer variable named 'name' from
+ * the MySQL thread. It retrieves the value using the 'get_variable_int' function
+ * from the 'GloMTH' object and assigns it to the variable 'mysql_thread___name'.
+ * 
+ * @param name The name of the integer variable to be refreshed.
+ */
+#define REFRESH_VARIABLE_INT(name) \
+	mysql_thread___ ## name = GloMTH->get_variable_int((char *)STRINGIFY(name))
+
+/**
+ * @brief Refreshes a character variable from the MySQL thread.
+ * 
+ * This macro updates the value of a character variable named 'name' from
+ * the MySQL thread. It retrieves the value using the 'get_variable_string' function
+ * from the 'GloMTH' object and assigns it to the variable 'mysql_thread___name'.
+ * If the variable 'mysql_thread___name' was previously allocated memory,
+ * it frees that memory before assigning the new value.
+ * 
+ * @param name The name of the character variable to be refreshed.
+ */
+#define REFRESH_VARIABLE_CHAR(name) \
+	do { \
+		if (mysql_thread___ ## name) free(mysql_thread___ ## name); \
+		mysql_thread___ ## name =       GloMTH->get_variable_string((char *)STRINGIFY(name)); \
+	} while (0)
+
 extern Query_Processor *GloQPro;
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
@@ -4184,126 +4248,111 @@ void MySQL_Thread::refresh_variables() {
 	}
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
-	mysql_thread___max_allowed_packet=GloMTH->get_variable_int((char *)"max_allowed_packet");
-	mysql_thread___automatic_detect_sqli=(bool)GloMTH->get_variable_int((char *)"automatic_detect_sqli");
-	mysql_thread___firewall_whitelist_enabled=(bool)GloMTH->get_variable_int((char *)"firewall_whitelist_enabled");
-	mysql_thread___use_tcp_keepalive=(bool)GloMTH->get_variable_int((char *)"use_tcp_keepalive");
-	mysql_thread___tcp_keepalive_time=GloMTH->get_variable_int((char *)"tcp_keepalive_time");
-	mysql_thread___throttle_connections_per_sec_to_hostgroup=GloMTH->get_variable_int((char *)"throttle_connections_per_sec_to_hostgroup");
-	mysql_thread___max_transaction_idle_time=GloMTH->get_variable_int((char *)"max_transaction_idle_time");
-	mysql_thread___max_transaction_time=GloMTH->get_variable_int((char *)"max_transaction_time");
-	mysql_thread___threshold_query_length=GloMTH->get_variable_int((char *)"threshold_query_length");
-	mysql_thread___threshold_resultset_size=GloMTH->get_variable_int((char *)"threshold_resultset_size");
-	mysql_thread___query_digests_max_digest_length=GloMTH->get_variable_int((char *)"query_digests_max_digest_length");
-	mysql_thread___query_digests_max_query_length=GloMTH->get_variable_int((char *)"query_digests_max_query_length");
-	mysql_thread___wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
-	mysql_thread___throttle_max_bytes_per_second_to_client=GloMTH->get_variable_int((char *)"throttle_max_bytes_per_second_to_client");
-	mysql_thread___throttle_ratio_server_to_client=GloMTH->get_variable_int((char *)"throttle_ratio_server_to_client");
-	mysql_thread___max_connections=GloMTH->get_variable_int((char *)"max_connections");
-	mysql_thread___max_stmts_per_connection=GloMTH->get_variable_int((char *)"max_stmts_per_connection");
-	mysql_thread___max_stmts_cache=GloMTH->get_variable_int((char *)"max_stmts_cache");
-	mysql_thread___mirror_max_concurrency=GloMTH->get_variable_int((char *)"mirror_max_concurrency");
-	mysql_thread___mirror_max_queue_length=GloMTH->get_variable_int((char *)"mirror_max_queue_length");
-	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");
-	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
-	mysql_thread___query_processor_iterations=GloMTH->get_variable_int((char *)"query_processor_iterations");
-	mysql_thread___query_processor_regex=GloMTH->get_variable_int((char *)"query_processor_regex");
-	mysql_thread___set_query_lock_on_hostgroup=GloMTH->get_variable_int((char *)"set_query_lock_on_hostgroup");
-	mysql_thread___set_parser_algorithm=GloMTH->get_variable_int((char *)"set_parser_algorithm");
-	mysql_thread___reset_connection_algorithm=GloMTH->get_variable_int((char *)"reset_connection_algorithm");
-	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
-	mysql_thread___auto_increment_delay_multiplex_timeout_ms=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex_timeout_ms");
-	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
-	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
-	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");
-	mysql_thread___query_cache_soft_ttl_pct=GloMTH->get_variable_int((char *)"query_cache_soft_ttl_pct");
-	mysql_thread___query_cache_handle_warnings =GloMTH->get_variable_int((char*)"query_cache_handle_warnings");
-	mysql_thread___ping_interval_server_msec=GloMTH->get_variable_int((char *)"ping_interval_server_msec");
-	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
-	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");
-	mysql_thread___shun_recovery_time_sec=GloMTH->get_variable_int((char *)"shun_recovery_time_sec");
-	mysql_thread___unshun_algorithm=GloMTH->get_variable_int((char *)"unshun_algorithm");
-	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
-	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
-	mysql_thread___connection_delay_multiplex_ms=GloMTH->get_variable_int((char *)"connection_delay_multiplex_ms");
-	mysql_thread___connection_max_age_ms=GloMTH->get_variable_int((char *)"connection_max_age_ms");
-	mysql_thread___connect_timeout_client=GloMTH->get_variable_int((char *)"connect_timeout_client");
-	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
-	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");
-	mysql_thread___free_connections_pct=GloMTH->get_variable_int((char *)"free_connections_pct");
+	REFRESH_VARIABLE_INT (max_allowed_packet);
+	REFRESH_VARIABLE_BOOL(automatic_detect_sqli);
+	REFRESH_VARIABLE_BOOL(firewall_whitelist_enabled);
+	REFRESH_VARIABLE_BOOL(use_tcp_keepalive);
+	REFRESH_VARIABLE_INT(tcp_keepalive_time);
+	REFRESH_VARIABLE_INT(throttle_connections_per_sec_to_hostgroup);
+	REFRESH_VARIABLE_INT(max_transaction_idle_time);
+	REFRESH_VARIABLE_INT(max_transaction_time);
+	REFRESH_VARIABLE_INT(threshold_query_length);
+	REFRESH_VARIABLE_INT(threshold_resultset_size);
+	REFRESH_VARIABLE_INT(query_digests_max_digest_length);
+	REFRESH_VARIABLE_INT(query_digests_max_query_length);
+	REFRESH_VARIABLE_INT(wait_timeout);
+	REFRESH_VARIABLE_INT(throttle_max_bytes_per_second_to_client);
+	REFRESH_VARIABLE_INT(throttle_ratio_server_to_client);
+	REFRESH_VARIABLE_INT(max_connections);
+	REFRESH_VARIABLE_INT(max_stmts_per_connection);
+	REFRESH_VARIABLE_INT(max_stmts_cache);
+	REFRESH_VARIABLE_INT(mirror_max_concurrency);
+	REFRESH_VARIABLE_INT(mirror_max_queue_length);
+	REFRESH_VARIABLE_INT(default_query_delay);
+	REFRESH_VARIABLE_INT(default_query_timeout);
+	REFRESH_VARIABLE_INT(query_processor_iterations);
+	REFRESH_VARIABLE_INT(query_processor_regex);
+	REFRESH_VARIABLE_INT(set_query_lock_on_hostgroup);
+	REFRESH_VARIABLE_INT(set_parser_algorithm);
+	REFRESH_VARIABLE_INT(reset_connection_algorithm);
+	REFRESH_VARIABLE_INT(auto_increment_delay_multiplex);
+	REFRESH_VARIABLE_INT(auto_increment_delay_multiplex_timeout_ms);
+	REFRESH_VARIABLE_INT(default_max_latency_ms);
+	REFRESH_VARIABLE_INT(long_query_time);
+	REFRESH_VARIABLE_INT(query_cache_size_MB);
+	REFRESH_VARIABLE_INT(query_cache_soft_ttl_pct);
+	REFRESH_VARIABLE_INT(query_cache_handle_warnings);
+	REFRESH_VARIABLE_INT(ping_interval_server_msec);
+	REFRESH_VARIABLE_INT(ping_timeout_server);
+	REFRESH_VARIABLE_INT(shun_on_failures);
+	REFRESH_VARIABLE_INT(shun_recovery_time_sec);
+	REFRESH_VARIABLE_INT(unshun_algorithm);
+	REFRESH_VARIABLE_INT(query_retries_on_failure);
+	REFRESH_VARIABLE_INT(connect_retries_on_failure);
+	REFRESH_VARIABLE_INT(connection_delay_multiplex_ms);
+	REFRESH_VARIABLE_INT(connection_max_age_ms);
+	REFRESH_VARIABLE_INT(connect_timeout_client);
+	REFRESH_VARIABLE_INT(connect_timeout_server);
+	REFRESH_VARIABLE_INT(connect_timeout_server_max);
+	REFRESH_VARIABLE_INT(free_connections_pct);
 #ifdef IDLE_THREADS
-	mysql_thread___session_idle_ms=GloMTH->get_variable_int((char *)"session_idle_ms");
+	REFRESH_VARIABLE_INT(session_idle_ms);
 #endif // IDLE_THREADS
-	mysql_thread___connect_retries_delay=GloMTH->get_variable_int((char *)"connect_retries_delay");
+	REFRESH_VARIABLE_INT(connect_retries_delay);
 
-	if (mysql_thread___monitor_username) free(mysql_thread___monitor_username);
-	mysql_thread___monitor_username=GloMTH->get_variable_string((char *)"monitor_username");
-	if (mysql_thread___monitor_password) free(mysql_thread___monitor_password);
-	mysql_thread___monitor_password=GloMTH->get_variable_string((char *)"monitor_password");
-	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
-	mysql_thread___monitor_replication_lag_use_percona_heartbeat=GloMTH->get_variable_string((char *)"monitor_replication_lag_use_percona_heartbeat");
+	REFRESH_VARIABLE_CHAR(monitor_username);
+	REFRESH_VARIABLE_CHAR(monitor_password);
+	REFRESH_VARIABLE_CHAR(monitor_replication_lag_use_percona_heartbeat);
 
 	// SSL proxy to server
-	if (mysql_thread___ssl_p2s_ca) free(mysql_thread___ssl_p2s_ca);
-	mysql_thread___ssl_p2s_ca=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
-	if (mysql_thread___ssl_p2s_capath) free(mysql_thread___ssl_p2s_capath);
-	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_capath");
-	if (mysql_thread___ssl_p2s_cert) free(mysql_thread___ssl_p2s_cert);
-	mysql_thread___ssl_p2s_cert=GloMTH->get_variable_string((char *)"ssl_p2s_cert");
-	if (mysql_thread___ssl_p2s_key) free(mysql_thread___ssl_p2s_key);
-	mysql_thread___ssl_p2s_key=GloMTH->get_variable_string((char *)"ssl_p2s_key");
-	if (mysql_thread___ssl_p2s_cipher) free(mysql_thread___ssl_p2s_cipher);
-	mysql_thread___ssl_p2s_cipher=GloMTH->get_variable_string((char *)"ssl_p2s_cipher");
-	if (mysql_thread___ssl_p2s_crl) free(mysql_thread___ssl_p2s_crl);
-	mysql_thread___ssl_p2s_crl=GloMTH->get_variable_string((char *)"ssl_p2s_crl");
-	if (mysql_thread___ssl_p2s_crlpath) free(mysql_thread___ssl_p2s_crlpath);
-	mysql_thread___ssl_p2s_crlpath=GloMTH->get_variable_string((char *)"ssl_p2s_crlpath");
+	REFRESH_VARIABLE_CHAR(ssl_p2s_ca);
+	REFRESH_VARIABLE_CHAR(ssl_p2s_capath);
+	REFRESH_VARIABLE_CHAR(ssl_p2s_cert);
+	REFRESH_VARIABLE_CHAR(ssl_p2s_key);
+	REFRESH_VARIABLE_CHAR(ssl_p2s_cipher);
+	REFRESH_VARIABLE_CHAR(ssl_p2s_crl);
+	REFRESH_VARIABLE_CHAR(ssl_p2s_crlpath);
 
-	mysql_thread___monitor_wait_timeout=(bool)GloMTH->get_variable_int((char *)"monitor_wait_timeout");
-	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");
-	mysql_thread___monitor_enabled=(bool)GloMTH->get_variable_int((char *)"monitor_enabled");
-	mysql_thread___monitor_history=GloMTH->get_variable_int((char *)"monitor_history");
-	mysql_thread___monitor_connect_interval=GloMTH->get_variable_int((char *)"monitor_connect_interval");
-	mysql_thread___monitor_connect_timeout=GloMTH->get_variable_int((char *)"monitor_connect_timeout");
-	mysql_thread___monitor_ping_interval=GloMTH->get_variable_int((char *)"monitor_ping_interval");
-	mysql_thread___monitor_ping_max_failures=GloMTH->get_variable_int((char *)"monitor_ping_max_failures");
-	mysql_thread___monitor_ping_timeout=GloMTH->get_variable_int((char *)"monitor_ping_timeout");
-	mysql_thread___monitor_aws_rds_topology_discovery_interval=GloMTH->get_variable_int((char *)"monitor_aws_rds_topology_discovery_interval");
-	mysql_thread___monitor_read_only_interval=GloMTH->get_variable_int((char *)"monitor_read_only_interval");
-	mysql_thread___monitor_read_only_timeout=GloMTH->get_variable_int((char *)"monitor_read_only_timeout");
-	mysql_thread___monitor_read_only_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_read_only_max_timeout_count");
-	mysql_thread___monitor_replication_lag_group_by_host=(bool)GloMTH->get_variable_int((char *)"monitor_replication_lag_group_by_host");
-	mysql_thread___monitor_replication_lag_interval=GloMTH->get_variable_int((char *)"monitor_replication_lag_interval");
-	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
-	mysql_thread___monitor_replication_lag_count=GloMTH->get_variable_int((char *)"monitor_replication_lag_count");
-	mysql_thread___monitor_groupreplication_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_interval");
-	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
-	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_max_timeout_count");
-	mysql_thread___monitor_groupreplication_max_transactions_behind_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_max_transactions_behind_count");
-	mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only=GloMTH->get_variable_int((char *)"monitor_groupreplication_max_transactions_behind_for_read_only");
-	mysql_thread___monitor_galera_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_interval");
-	mysql_thread___monitor_galera_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_timeout");
-	mysql_thread___monitor_galera_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_max_timeout_count");
-	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
-	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
-	mysql_thread___monitor_slave_lag_when_null=GloMTH->get_variable_int((char *)"monitor_slave_lag_when_null");
-	mysql_thread___monitor_threads_min = GloMTH->get_variable_int((char *)"monitor_threads_min");
-	mysql_thread___monitor_threads_max = GloMTH->get_variable_int((char *)"monitor_threads_max");
-	mysql_thread___monitor_threads_queue_maxsize = GloMTH->get_variable_int((char *)"monitor_threads_queue_maxsize");
-	mysql_thread___monitor_local_dns_cache_ttl = GloMTH->get_variable_int((char*)"monitor_local_dns_cache_ttl");
-	mysql_thread___monitor_local_dns_cache_refresh_interval = GloMTH->get_variable_int((char*)"monitor_local_dns_cache_refresh_interval");
-	mysql_thread___monitor_local_dns_resolver_queue_maxsize = GloMTH->get_variable_int((char*)"monitor_local_dns_resolver_queue_maxsize");
+	REFRESH_VARIABLE_BOOL(monitor_wait_timeout);
+	REFRESH_VARIABLE_BOOL(monitor_writer_is_also_reader);
+	REFRESH_VARIABLE_BOOL(monitor_enabled);
+	REFRESH_VARIABLE_INT(monitor_history);
+	REFRESH_VARIABLE_INT(monitor_connect_interval);
+	REFRESH_VARIABLE_INT(monitor_connect_timeout);
+	REFRESH_VARIABLE_INT(monitor_ping_interval);
+	REFRESH_VARIABLE_INT(monitor_ping_max_failures);
+	REFRESH_VARIABLE_INT(monitor_ping_timeout);
+	REFRESH_VARIABLE_INT(monitor_aws_rds_topology_discovery_interval);
+	REFRESH_VARIABLE_INT(monitor_read_only_interval);
+	REFRESH_VARIABLE_INT(monitor_read_only_timeout);
+	REFRESH_VARIABLE_INT(monitor_read_only_max_timeout_count);
+	REFRESH_VARIABLE_BOOL(monitor_replication_lag_group_by_host);
+	REFRESH_VARIABLE_INT(monitor_replication_lag_interval);
+	REFRESH_VARIABLE_INT(monitor_replication_lag_timeout);
+	REFRESH_VARIABLE_INT(monitor_replication_lag_count);
+	REFRESH_VARIABLE_INT(monitor_groupreplication_healthcheck_interval);
+	REFRESH_VARIABLE_INT(monitor_groupreplication_healthcheck_timeout);
+	REFRESH_VARIABLE_INT(monitor_groupreplication_healthcheck_max_timeout_count);
+	REFRESH_VARIABLE_INT(monitor_groupreplication_max_transactions_behind_count);
+	REFRESH_VARIABLE_INT(monitor_groupreplication_max_transactions_behind_for_read_only);
+	REFRESH_VARIABLE_INT(monitor_galera_healthcheck_interval);
+	REFRESH_VARIABLE_INT(monitor_galera_healthcheck_timeout);
+	REFRESH_VARIABLE_INT(monitor_galera_healthcheck_max_timeout_count);
+	REFRESH_VARIABLE_INT(monitor_query_interval);
+	REFRESH_VARIABLE_INT(monitor_query_timeout);
+	REFRESH_VARIABLE_INT(monitor_slave_lag_when_null);
+	REFRESH_VARIABLE_INT(monitor_threads_min);
+	REFRESH_VARIABLE_INT(monitor_threads_max);
+	REFRESH_VARIABLE_INT(monitor_threads_queue_maxsize);
+	REFRESH_VARIABLE_INT(monitor_local_dns_cache_ttl);
+	REFRESH_VARIABLE_INT(monitor_local_dns_cache_refresh_interval);
+	REFRESH_VARIABLE_INT(monitor_local_dns_resolver_queue_maxsize);
 
-	if (mysql_thread___firewall_whitelist_errormsg) free(mysql_thread___firewall_whitelist_errormsg);
-	mysql_thread___firewall_whitelist_errormsg=GloMTH->get_variable_string((char *)"firewall_whitelist_errormsg");
-	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
-	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");
-	if (mysql_thread___ldap_user_variable) free(mysql_thread___ldap_user_variable);
-	mysql_thread___ldap_user_variable=GloMTH->get_variable_string((char *)"ldap_user_variable");
-	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
-	mysql_thread___add_ldap_user_comment=GloMTH->get_variable_string((char *)"add_ldap_user_comment");
-	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
-	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
+	REFRESH_VARIABLE_CHAR(firewall_whitelist_errormsg);
+	REFRESH_VARIABLE_CHAR(init_connect);
+	REFRESH_VARIABLE_CHAR(ldap_user_variable);
+	REFRESH_VARIABLE_CHAR(add_ldap_user_comment);
+	REFRESH_VARIABLE_CHAR(default_session_track_gtids);
 
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_thread___default_variables[i]) {
@@ -4317,74 +4366,68 @@ void MySQL_Thread::refresh_variables() {
 		}
 	}
 
-	if (mysql_thread___server_version) free(mysql_thread___server_version);
-	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
-	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
-	mysql_thread___eventslog_filesize=GloMTH->get_variable_int((char *)"eventslog_filesize");
-	mysql_thread___eventslog_default_log=GloMTH->get_variable_int((char *)"eventslog_default_log");
-	mysql_thread___eventslog_format=GloMTH->get_variable_int((char *)"eventslog_format");
-	mysql_thread___eventslog_filename=GloMTH->get_variable_string((char *)"eventslog_filename");
-	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
-	mysql_thread___auditlog_filesize=GloMTH->get_variable_int((char *)"auditlog_filesize");
-	mysql_thread___auditlog_filename=GloMTH->get_variable_string((char *)"auditlog_filename");
+	REFRESH_VARIABLE_CHAR(server_version);
+	REFRESH_VARIABLE_INT(eventslog_filesize);
+	REFRESH_VARIABLE_INT(eventslog_default_log);
+	REFRESH_VARIABLE_INT(eventslog_format);
+	REFRESH_VARIABLE_CHAR(eventslog_filename);
+	REFRESH_VARIABLE_INT(auditlog_filesize);
+	REFRESH_VARIABLE_CHAR(auditlog_filename);
 	GloMyLogger->events_set_base_filename(); // both filename and filesize are set here
 	GloMyLogger->audit_set_base_filename(); // both filename and filesize are set here
-	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
-	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
-	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
-	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
-	if (mysql_thread___default_authentication_plugin) free(mysql_thread___default_authentication_plugin);
-	mysql_thread___default_authentication_plugin=GloMTH->get_variable_string((char *)"default_authentication_plugin");
+	REFRESH_VARIABLE_CHAR(default_schema);
+	REFRESH_VARIABLE_CHAR(keep_multiplexing_variables);
+	REFRESH_VARIABLE_CHAR(default_authentication_plugin);
 	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
-	mysql_thread___handle_unknown_charset=GloMTH->get_variable_int((char *)"handle_unknown_charset");
-	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
-	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
-	mysql_thread___have_ssl=(bool)GloMTH->get_variable_int((char *)"have_ssl");
-	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
-	mysql_thread___log_unhealthy_connections=(bool)GloMTH->get_variable_int((char *)"log_unhealthy_connections");
-	mysql_thread___connection_warming=(bool)GloMTH->get_variable_int((char*)"connection_warming");
-	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
-	mysql_thread___autocommit_false_not_reusable=(bool)GloMTH->get_variable_int((char *)"autocommit_false_not_reusable");
-	mysql_thread___autocommit_false_is_transaction=(bool)GloMTH->get_variable_int((char *)"autocommit_false_is_transaction");
-	mysql_thread___verbose_query_error=(bool)GloMTH->get_variable_int((char *)"verbose_query_error");
-	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
-	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
-	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
-	mysql_thread___query_digests_replace_null=(bool)GloMTH->get_variable_int((char *)"query_digests_replace_null");
-	mysql_thread___query_digests_no_digits=(bool)GloMTH->get_variable_int((char *)"query_digests_no_digits");
-	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
-	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
-	mysql_thread___query_digests_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_grouping_limit");
-	mysql_thread___query_digests_groups_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_groups_grouping_limit");
-	mysql_thread___query_digests_keep_comment=(bool)GloMTH->get_variable_int((char *)"query_digests_keep_comment");
-	mysql_thread___parse_failure_logs_digest=(bool)GloMTH->get_variable_int((char *)"parse_failure_logs_digest");
+	REFRESH_VARIABLE_INT(handle_unknown_charset);
+	REFRESH_VARIABLE_INT(poll_timeout);
+	REFRESH_VARIABLE_INT(poll_timeout_on_failure);
+	REFRESH_VARIABLE_BOOL(have_compress);
+	REFRESH_VARIABLE_BOOL(have_ssl);
+	REFRESH_VARIABLE_BOOL(multiplexing);
+	REFRESH_VARIABLE_BOOL(log_unhealthy_connections);
+	REFRESH_VARIABLE_BOOL(connection_warming);
+	REFRESH_VARIABLE_BOOL(enforce_autocommit_on_reads);
+	REFRESH_VARIABLE_BOOL(autocommit_false_not_reusable);
+	REFRESH_VARIABLE_BOOL(autocommit_false_is_transaction);
+	REFRESH_VARIABLE_BOOL(verbose_query_error);
+	REFRESH_VARIABLE_BOOL(commands_stats);
+	REFRESH_VARIABLE_BOOL(query_digests);
+	REFRESH_VARIABLE_BOOL(query_digests_lowercase);
+	REFRESH_VARIABLE_BOOL(query_digests_replace_null);
+	REFRESH_VARIABLE_BOOL(query_digests_no_digits);
+	REFRESH_VARIABLE_BOOL(query_digests_normalize_digest_text);
+	REFRESH_VARIABLE_BOOL(query_digests_track_hostname);
+	REFRESH_VARIABLE_INT(query_digests_grouping_limit);
+	REFRESH_VARIABLE_INT(query_digests_groups_grouping_limit);
+	REFRESH_VARIABLE_BOOL(query_digests_keep_comment);
+	REFRESH_VARIABLE_BOOL(parse_failure_logs_digest);
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
 	variables.query_cache_stores_empty_result=(bool)GloMTH->get_variable_int((char *)"query_cache_stores_empty_result");
-	mysql_thread___hostgroup_manager_verbose = GloMTH->get_variable_int((char *)"hostgroup_manager_verbose");
-	mysql_thread___kill_backend_connection_when_disconnect=(bool)GloMTH->get_variable_int((char *)"kill_backend_connection_when_disconnect");
-	mysql_thread___client_session_track_gtid=(bool)GloMTH->get_variable_int((char *)"client_session_track_gtid");
-	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
+	REFRESH_VARIABLE_INT(hostgroup_manager_verbose);
+	REFRESH_VARIABLE_BOOL(kill_backend_connection_when_disconnect);
+	REFRESH_VARIABLE_BOOL(client_session_track_gtid);
+	REFRESH_VARIABLE_BOOL(sessions_sort);
 #ifdef IDLE_THREADS
-	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
+	REFRESH_VARIABLE_BOOL(session_idle_show_processlist);
 #endif // IDLE_THREADS
-	mysql_thread___show_processlist_extended=GloMTH->get_variable_int((char *)"show_processlist_extended");
-	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
-	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
-	mysql_thread___enable_client_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
-	mysql_thread___enable_server_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
-	mysql_thread___enable_load_data_local_infile=(bool)GloMTH->get_variable_int((char *)"enable_load_data_local_infile");
-	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
-	mysql_thread___client_host_cache_size=GloMTH->get_variable_int((char *)"client_host_cache_size");
-	mysql_thread___client_host_error_counts=GloMTH->get_variable_int((char *)"client_host_error_counts");
-	mysql_thread___handle_warnings=GloMTH->get_variable_int((char*)"handle_warnings");
-	mysql_thread___evaluate_replication_lag_on_servers_load=GloMTH->get_variable_int((char*)"evaluate_replication_lag_on_servers_load");
+	REFRESH_VARIABLE_INT(show_processlist_extended);
+	REFRESH_VARIABLE_BOOL(servers_stats);
+	REFRESH_VARIABLE_BOOL(default_reconnect);
+	REFRESH_VARIABLE_BOOL(enable_client_deprecate_eof);
+	REFRESH_VARIABLE_BOOL(enable_server_deprecate_eof);
+	REFRESH_VARIABLE_BOOL(enable_load_data_local_infile);
+	REFRESH_VARIABLE_BOOL(log_mysql_warnings_enabled);
+	REFRESH_VARIABLE_INT(client_host_cache_size);
+	REFRESH_VARIABLE_INT(client_host_error_counts);
+	REFRESH_VARIABLE_INT(handle_warnings);
+	REFRESH_VARIABLE_INT(evaluate_replication_lag_on_servers_load);
 #ifdef DEBUG
-	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
+	REFRESH_VARIABLE_BOOL(session_debug);
 #endif /* DEBUG */
 	GloMTH->wrunlock();
 	pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
