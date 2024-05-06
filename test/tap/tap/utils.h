@@ -425,6 +425,13 @@ std::vector<std::vector<T>> get_permutations(const std::vector<T>& elem_set) {
 }
 
 /**
+ * @brief Generates permutations of binary vectors of the specified size.
+ * @param tg_size The target size of the binary vectors.
+ * @return The generated permutations.
+ */
+std::vector<std::vector<bool>> get_all_bin_vec(size_t tg_size);
+
+/**
  * @brief Struct holding options on how to performs connections for 'EOF' tests.
  */
 struct conn_cnf_t {

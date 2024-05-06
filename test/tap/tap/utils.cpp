@@ -1033,6 +1033,27 @@ cleanup:
 	return res;
 }
 
+vector<vector<bool>> get_all_bin_vec(size_t tg_size) {
+	vector<vector<bool>> all_bin_strs {};
+	vector<bool> bin_vec(tg_size, 0);
+
+	for (size_t i = 0; i < tg_size; i++) {
+		if (i == 0) {
+			bin_vec[i] = 0;
+			for (const vector<bool> p : get_permutations(bin_vec)) {
+				all_bin_strs.push_back(p);
+			}
+		}
+
+		bin_vec[i] = 1;
+		for (const vector<bool> p : get_permutations(bin_vec)) {
+			all_bin_strs.push_back(p);
+		}
+	}
+
+	return all_bin_strs;
+}
+
 string to_string(const conn_cnf_t& cnf) {
 	return string {
 		string { "{" }
