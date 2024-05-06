@@ -4609,20 +4609,32 @@ __get_pkts_from_client:
 // 0 : no action
 // -1 : the calling function will return
 // 1 : call to NEXT_IMMEDIATE
+
+
+/**
+ * @brief Handler for processing query errors and checking backend connection status.
+ *
+ * This function handles query errors and checks the status of the backend connection.
+ * It evaluates the server status and takes appropriate actions based on specific conditions.
+ *
+ * @param myds Pointer to the MySQL data stream associated with the session.
+ *
+ * @return Returns an integer status code indicating the result of the error handling:
+ * - 0: No action required, query processing can continue.
+ * - 1: Retry required due to backend connection status, query processing needs to be retried.
+ * - -1: Error encountered, query processing cannot continue.
+ */
+
 int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds) {
 	MySQL_Connection *myconn = myds->myconn;
 	// the query failed
-	if (
-		// due to #774 , we now read myconn->server_status instead of myconn->parent->status
-		(myconn->server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
-		||
-		(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
-		||
-		(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
-	) {
+	if (myconn->IsServerOffline()) {
+		// Set maximum connect time if connect timeout is configured
 		if (mysql_thread___connect_timeout_server_max) {
 			myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
 		}
+
+		// Variables to track retry and error conditions
 		bool retry_conn=false;
 		if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 			thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
@@ -4633,6 +4645,8 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 			proxy_error("Detected an offline server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 		}
+
+		// Retry the query if retries are allowed and conditions permit
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
 			if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -4644,6 +4658,8 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 				}
 			}
 		}
+
+		// Destroy MySQL connection from pool and reset file descriptor
 		myds->destroy_MySQL_Connection_From_Pool(false);
 		myds->fd=0;
 		if (retry_conn) {
@@ -4992,6 +5008,24 @@ void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *my
 }
 
 // this function was inline
+/**
+ * @brief Run a MySQL query on the current session.
+ *
+ * This function executes a MySQL query on the current session based on its status.
+ * The query execution is asynchronous and handled by the specified MySQL connection.
+ * It returns the result code of the asynchronous query execution.
+ *
+ * @param myds Pointer to the MySQL data stream associated with the session.
+ * @param myconn Pointer to the MySQL connection used to execute the query.
+ *
+ * @return Returns an integer status code indicating the result of the query execution,
+ * as returned by async_query():
+ * - 0: Query execution completed successfully.
+ * - -1: Query execution failed.
+ * - 1: Query execution in progress.
+ * - 2: Processing a multi-statement query, control needs to be transferred to MySQL_Session.
+ * - 3: In the middle of processing a multi-statement query.
+ */
 int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	PROXY_TRACE2();
 	int rc = 0;

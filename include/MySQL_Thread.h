@@ -129,6 +129,7 @@ class __attribute__((aligned(64))) MySQL_Thread
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();
 	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
+	void run_Handle_epoll_wait(int);
 #endif // IDLE_THREADS
 
 	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
@@ -141,6 +142,13 @@ class __attribute__((aligned(64))) MySQL_Thread
 	void tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds);
 	void tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds);
 	void configure_pollout(MySQL_Data_Stream *myds, unsigned int n);
+
+	void run_MoveSessionsBetweenThreads();
+	void run_BootstrapListener();
+	int run_ComputePollTimeout();
+	void run_StopListener();
+	void run_SetAllSession_ToProcess0();
+
 
 	protected:
 	int nfds;
@@ -212,6 +220,7 @@ class __attribute__((aligned(64))) MySQL_Thread
 	void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess);
 	void ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
+	void ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int& n);
 	void process_all_sessions();
   void refresh_variables();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);

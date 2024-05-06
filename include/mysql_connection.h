@@ -60,6 +60,15 @@ class MySQL_Connection {
 	void update_warning_count_from_statement();
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
+	void connect_start_SetAttributes();
+	void connect_start_SetCharset();
+	void connect_start_SetClientFlag(unsigned long&);
+	char * connect_start_DNS_lookup();
+	void connect_start_SetSslSettings();
+	void ProcessQueryAndSetStatusFlags_Warnings(char *);
+	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
+	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
+	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
 	public:
 	struct {
 		char *server_version;
