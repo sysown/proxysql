@@ -406,6 +406,18 @@ class ProxySQL_Admin {
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
+	void flush_GENERIC_variables__checksum__database_to_runtime(const std::string& modname, const std::string& checksum, const time_t epoch);
+	bool flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset);
+	void flush_GENERIC_variables__process__database_to_runtime(
+		const std::string& modname, SQLite3DB *db, SQLite3_result* resultset,
+		const bool& lock, const bool& replace,
+		const std::unordered_set<std::string>& variables_read_only,
+		const std::unordered_set<std::string>& variables_to_delete_silently,
+		const std::unordered_set<std::string>& variables_deprecated,
+		const std::unordered_set<std::string>& variables_special_values,
+		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr
+	);
+
 	char **get_variables_list();
 	bool set_variable(char *name, char *value, bool lock = true);
 	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);

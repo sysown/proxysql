@@ -274,5 +274,6 @@ class MySQL_Data_Stream
 
 	void reset_connection();
 
+	void get_client_myds_info_json(json&);
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

@@ -3907,6 +3907,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___authentication_method = GloPTH->get_variable_int((char*)"authentication_method");
 	pgsql_thread___show_processlist_extended = GloPTH->get_variable_int((char*)"show_processlist_extended");
 
+/*
 	mysql_thread___max_allowed_packet = GloPTH->get_variable_int((char*)"max_allowed_packet");
 	mysql_thread___automatic_detect_sqli = (bool)GloPTH->get_variable_int((char*)"automatic_detect_sqli");
 	mysql_thread___firewall_whitelist_enabled = (bool)GloPTH->get_variable_int((char*)"firewall_whitelist_enabled");
@@ -4039,11 +4040,13 @@ void PgSQL_Thread::refresh_variables() {
 			mysql_thread___default_variables[i] = GloPTH->get_variable_string(buf);
 		}
 	}
+*/
 
 	if (pgsql_thread___server_version) free(pgsql_thread___server_version);
 	pgsql_thread___server_version = GloPTH->get_variable_string((char*)"server_version");
 	pgsql_thread___have_ssl = (bool)GloPTH->get_variable_int((char*)"have_ssl");
 
+/*
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
 	mysql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
 	mysql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
@@ -4052,8 +4055,10 @@ void PgSQL_Thread::refresh_variables() {
 	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
 	mysql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
 	mysql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
+*/
 	GloPgSQL_Logger->events_set_base_filename(); // both filename and filesize are set here
 	GloPgSQL_Logger->audit_set_base_filename(); // both filename and filesize are set here
+/*
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
 	mysql_thread___default_schema = GloPTH->get_variable_string((char*)"default_schema");
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
@@ -4106,7 +4111,8 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___handle_warnings = GloPTH->get_variable_int((char*)"handle_warnings");
 #ifdef DEBUG
 	mysql_thread___session_debug = (bool)GloPTH->get_variable_int((char*)"session_debug");
-#endif /* DEBUG */
+#endif // DEBUG
+*/
 	GloPTH->wrunlock();
 	pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 }

@@ -7403,6 +7403,97 @@ void ProxySQL_Admin::load_http_server() {
 	}
 }
 
+
+bool ProxySQL_Admin::flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset) {
+	string q = "SELECT substr(variable_name," + to_string(modname.length()+2) + ") vn, variable_value FROM global_variables WHERE variable_name LIKE '" + modname + "-%'";
+	admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q.c_str(), error);
+		free(error);
+		return false;
+	}
+	return true;
+}
+
+void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
+	const string& modname, SQLite3DB *db, SQLite3_result* resultset,
+	const bool& lock, const bool& replace,
+	const std::unordered_set<std::string>& variables_read_only,
+	const std::unordered_set<std::string>& variables_to_delete_silently,
+	const std::unordered_set<std::string>& variables_deprecated,
+	const std::unordered_set<std::string>& variables_special_values,
+	std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action
+) {
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		bool rc = false;
+		if (modname == "admin") {
+			rc = set_variable(r->fields[0],r->fields[1], lock);
+		} else if (modname == "mysql") {
+			rc = GloMTH->set_variable(r->fields[0],r->fields[1]);
+		} else if (modname == "sqliteserver") {
+			rc = GloSQLite3Server->set_variable(r->fields[0],r->fields[1]);
+#ifdef PROXYSQLCLICKHOUSE
+		} else if (modname == "clickhouse") {
+			rc = GloClickHouseServer->set_variable(r->fields[0],r->fields[1]);
+#endif // PROXYSQLCLICKHOUSE
+		} else if (modname == "ldap") {
+			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
+		}
+		const string v = string(r->fields[0]);
+		if (rc==false) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+			if (replace) {
+				char *val = NULL;
+				if (modname == "admin") {
+					val = get_variable(r->fields[0]);
+				} else if (modname == "mysql") {
+					val = GloMTH->get_variable(r->fields[0]);
+				} else if (modname == "sqliteserver") {
+					val = GloSQLite3Server->get_variable(r->fields[0]);
+#ifdef PROXYSQLCLICKHOUSE
+				} else if (modname == "clickhouse") {
+					val = GloClickHouseServer->get_variable(r->fields[0]);
+#endif // PROXYSQLCLICKHOUSE
+				} else if (modname == "ldap") {
+					val = GloMyLdapAuth->get_variable(r->fields[0]);
+				}
+				char q[1000];
+				if (val) {
+					if (variables_read_only.count(v) > 0) {
+						proxy_warning("Impossible to set read-only variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+					} else {
+						proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+					}
+					sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"%s-%s\",\"%s\")", modname.c_str(), r->fields[0],val);
+					db->execute(q);
+					free(val);
+				} else {
+					if (variables_to_delete_silently.count(v) > 0) {
+						sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
+						db->execute(q);
+					} else if (variables_deprecated.count(v) > 0) {
+						proxy_error("Global variable %s-%s is deprecated.\n", modname.c_str(), r->fields[0]);
+						sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
+						db->execute(q);
+					} else {
+						proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+					}
+					sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"%s-%s\"", modname.c_str(), r->fields[0]);
+					db->execute(q);
+				}
+			}
+		} else {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+			if (variables_special_values.count(v) > 0) {
+				if (special_variable_action != nullptr) {
+					special_variable_action(v, r->fields[1], db);
+				}
+			}
+		}
+	}
+}
+
 void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 	SQLite3DB *db, bool replace, const string& checksum, const time_t epoch, bool lock
 ) {
@@ -7411,83 +7502,19 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *q=(char *)"SELECT substr(variable_name,7) vn, variable_value FROM global_variables WHERE variable_name LIKE 'admin-%'";
-	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		return;
-	} else {
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("admin", error, cols, affected_rows, resultset) == true) {
 		wrlock();
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			bool rc=set_variable(r->fields[0],r->fields[1], lock);
-			if (rc==false) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-				if (replace) {
-					char *val=get_variable(r->fields[0]);
-					char q[1000];
-					if (val) {
-						if (strcmp(r->fields[0],(char *)"version")) {
-							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-						}
-						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"admin-%s\",\"%s\")",r->fields[0],val);
-						db->execute(q);
-					} else {
-						if (strcmp(r->fields[0],(char *)"debug")==0) {
-							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"admin-%s\"",r->fields[0]);
-							db->execute(q);
-						} else {
-							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
-						}
-						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"admin-%s\"",r->fields[0]);
-						db->execute(q);
-					}
-					free(val);
-				}
-			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-			}
-		}
+		flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, lock, replace, {"version"}, {"debug"}, {}, {});
 		//commit(); NOT IMPLEMENTED
 
 		// Checksums are always generated - 'admin-checksum_*' deprecated
+
 		{
-			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
+			pthread_mutex_lock(&GloVars.checksum_mutex);
 			flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			std::string q;
-			if (GloVars.cluster_sync_interfaces) {
-				q="SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name";
-			} else {
-				q="SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN) + " ORDER BY variable_name";
-			}
-			admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
-			uint64_t hash1 = resultset->raw_checksum();
-			uint32_t d32[2];
-			char buf[20];
-			memcpy(&d32, &hash1, sizeof(hash1));
-			sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
-			GloVars.checksums_values.admin_variables.set_checksum(buf);
-			GloVars.checksums_values.admin_variables.version++;
-			time_t t = time(NULL);
-			if (epoch != 0 && checksum != "" && GloVars.checksums_values.admin_variables.checksum == checksum) {
-				GloVars.checksums_values.admin_variables.epoch = epoch;
-			} else {
-				GloVars.checksums_values.admin_variables.epoch = t;
-			}
-			GloVars.epoch_version = t;
-			GloVars.generate_global_checksum();
-			GloVars.checksums_values.updates_cnt++;
+			flush_GENERIC_variables__checksum__database_to_runtime("admin", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
-			proxy_info(
-				"Computed checksum for 'LOAD ADMIN VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
-				GloVars.checksums_values.admin_variables.checksum, GloVars.checksums_values.admin_variables.epoch
-			);
-			delete resultset;
 		}
 		wrunlock();
 		{
@@ -7590,82 +7617,88 @@ void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, 
 	free(varnames);
 }
 
+void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(const string& modname, const string& checksum, const time_t epoch) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	std::string q;
+	q="SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE '" + modname + "-\%' ";
+	if (modname == "mysql") {
+		q += " AND variable_name NOT IN ('mysql-threads')";
+		if (GloVars.cluster_sync_interfaces == false) {
+			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+		}
+	} else if (modname == "admin") {
+		if (GloVars.cluster_sync_interfaces == false) {
+			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
+		}
+	}
+	q += " ORDER BY variable_name";
+	admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
+	uint64_t hash1 = resultset->raw_checksum();
+	uint32_t d32[2];
+	char buf[20];
+	memcpy(&d32, &hash1, sizeof(hash1));
+	sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+	ProxySQL_Checksum_Value *checkvar = NULL;
+	if (modname == "admin") {
+		checkvar = &GloVars.checksums_values.admin_variables;
+	} else if (modname == "mysql") {
+		checkvar = &GloVars.checksums_values.mysql_variables;
+	}
+	assert(checkvar != NULL);
+	checkvar->set_checksum(buf);
+	checkvar->version++;
+	time_t t = time(NULL);
+	if (epoch != 0 && checksum != "" && checkvar->checksum == checksum) {
+		checkvar->epoch = epoch;
+	} else {
+		checkvar->epoch = t;
+	}
+	GloVars.epoch_version = t;
+	GloVars.generate_global_checksum();
+	GloVars.checksums_values.updates_cnt++;
+	string modnameupper = modname;
+	for (char &c : modnameupper) { c = std::toupper(c); }
+	proxy_info(
+		"Computed checksum for 'LOAD %s VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
+		modnameupper.c_str(), checkvar->checksum, checkvar->epoch
+	);
+	delete resultset;
+}
+
 void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d\n", replace);
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *q=(char *)"SELECT substr(variable_name,7) vn, variable_value FROM global_variables WHERE variable_name LIKE 'mysql-%'";
-	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		return;
-	} else {
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("mysql", error, cols, affected_rows, resultset) == true) {
 		GloMTH->wrlock();
 		char * previous_default_charset = GloMTH->get_variable_string((char *)"default_charset");
 		char * previous_default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
 		assert(previous_default_charset);
 		assert(previous_default_collation_connection);
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			const char *value = r->fields[1];
-				bool rc=GloMTH->set_variable(r->fields[0],value);
-				if (rc==false) {
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],value);
-					if (replace) {
-						char *val=GloMTH->get_variable(r->fields[0]);
-						char q[1000];
-						if (val) {
-							if (strcmp(val,value)) {
-								proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],value, val);
-								sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
-								db->execute(q);
-							}
-							free(val);
-						} else {
-							if (strcmp(r->fields[0],(char *)"session_debug")==0) {
-								sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
-								db->execute(q);
-							} else {
-								if (strcmp(r->fields[0],(char *)"forward_autocommit")==0) {
-									if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-										proxy_error("Global variable mysql-forward_autocommit is deprecated. See issue #3253\n");
-									}
-									sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
-									db->execute(q);
-								} else {
-									proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
-								}
-							}
-							sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
+		flush_GENERIC_variables__process__database_to_runtime("mysql", db, resultset, false, replace, {}, {"session_debug"}, {"forward_autocommit"},
+			{"default_collation_connection", "default_charset", "show_processlist_extended"},
+			[](const std::string& varname, const char *varvalue, SQLite3DB* db) {
+				if (varname == "default_collation_connection" || varname == "default_charset") {
+					char *val=GloMTH->get_variable((char *)varname.c_str());
+					if (val) {
+						if (strcmp(val,varvalue)) {
+							char q[1000];
+							proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", varname.c_str(), varvalue, val);
+							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")", varname.c_str() ,val);
 							db->execute(q);
 						}
+						free(val);
 					}
-				} else {
-					if (
-						(strcmp(r->fields[0],"default_collation_connection")==0)
-						|| (strcmp(r->fields[0],"default_charset")==0)
-					) {
-						char *val=GloMTH->get_variable(r->fields[0]);
-						char q[1000];
-						if (val) {
-							if (strcmp(val,value)) {
-								proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", r->fields[0],value, val);
-								sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
-								db->execute(q);
-							}
-							free(val);
-						}
-					}
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],value);
-					if (strcmp(r->fields[0],(char *)"show_processlist_extended")==0) {
-						variables.mysql_show_processlist_extended = atoi(value);
-					}
+				} else if (varname == "show_processlist_extended") {
+					GloAdmin->variables.mysql_show_processlist_extended = atoi(varvalue);
 				}
-//			}
-		}
-
+			}
+			);
 		char q[1000];
 		char * default_charset = GloMTH->get_variable_string((char *)"default_charset");
 		char * default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
@@ -7740,47 +7773,15 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		GloMTH->commit();
 		GloMTH->wrunlock();
 
-		// Checksums are always generated - 'admin-checksum_*' deprecated
 		{
 			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible
 			// deadlocks. See issue #3847.
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
 			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			std::string q;
-			q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN ('mysql-threads')";
-			if (GloVars.cluster_sync_interfaces == false) {
-				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
-			}
-			q += " ORDER BY variable_name";
-			admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
-			uint64_t hash1 = resultset->raw_checksum();
-			uint32_t d32[2];
-			char buf[20];
-			memcpy(&d32, &hash1, sizeof(hash1));
-			sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
-			GloVars.checksums_values.mysql_variables.set_checksum(buf);
-			GloVars.checksums_values.mysql_variables.version++;
-			time_t t = time(NULL);
-			if (epoch != 0 && checksum != "" && GloVars.checksums_values.mysql_variables.checksum == checksum) {
-				GloVars.checksums_values.mysql_variables.epoch = epoch;
-			} else {
-				GloVars.checksums_values.mysql_variables.epoch = t;
-			}
-			GloVars.epoch_version = t;
-			GloVars.generate_global_checksum();
-			GloVars.checksums_values.updates_cnt++;
+			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
-			delete resultset;
 		}
-		proxy_info(
-			"Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
-			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
-		);
 	}
 	if (resultset) delete resultset;
 }
@@ -7798,43 +7799,9 @@ void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3D
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *q=(char *)"SELECT substr(variable_name,14) vn, variable_value FROM global_variables WHERE variable_name LIKE 'sqliteserver-%'";
-	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		return;
-	} else {
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("sqliteserver", error, cols, affected_rows, resultset) == true) {
 		GloSQLite3Server->wrlock();
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			bool rc=GloSQLite3Server->set_variable(r->fields[0],r->fields[1]);
-			if (rc==false) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-				if (replace) {
-					char *val=GloSQLite3Server->get_variable(r->fields[0]);
-					char q[1000];
-					if (val) {
-						if (strcmp(val,r->fields[1])) {
-							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"sqliteserver-%s\",\"%s\")",r->fields[0],val);
-							db->execute(q);
-						}
-						free(val);
-					} else {
-						if (strcmp(r->fields[0],(char *)"session_debug")==0) {
-							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"sqliteserver-%s\"",r->fields[0]);
-							db->execute(q);
-						} else {
-							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
-						}
-						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"sqliteserver-%s\"",r->fields[0]);
-						db->execute(q);
-					}
-				}
-			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-			}
-		}
+		flush_GENERIC_variables__process__database_to_runtime("sqliteserver", db, resultset, false, replace, {}, {"session_debug"}, {}, {});
 		//GloClickHouse->commit();
 		GloSQLite3Server->wrunlock();
 	}
@@ -7923,43 +7890,9 @@ void ProxySQL_Admin::flush_clickhouse_variables___database_to_runtime(SQLite3DB 
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *q=(char *)"SELECT substr(variable_name,12) vn, variable_value FROM global_variables WHERE variable_name LIKE 'clickhouse-%'";
-	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		return;
-	} else {
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("clickhouse", error, cols, affected_rows, resultset) == true) {
 		GloClickHouseServer->wrlock();
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			bool rc=GloClickHouseServer->set_variable(r->fields[0],r->fields[1]);
-			if (rc==false) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-				if (replace) {
-					char *val=GloClickHouseServer->get_variable(r->fields[0]);
-					char q[1000];
-					if (val) {
-						if (strcmp(val,r->fields[1])) {
-							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"clickhouse-%s\",\"%s\")",r->fields[0],val);
-							db->execute(q);
-						}
-						free(val);
-					} else {
-						if (strcmp(r->fields[0],(char *)"session_debug")==0) {
-							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"clickhouse-%s\"",r->fields[0]);
-							db->execute(q);
-						} else {
-							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
-						}
-						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"clickhouse-%s\"",r->fields[0]);
-						db->execute(q);
-					}
-				}
-			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-			}
-		}
+		flush_GENERIC_variables__process__database_to_runtime("clickhouse", db, resultset, false, replace, {}, {"session_debug"}, {}, {});
 		//GloClickHouse->commit();
 		GloClickHouseServer->wrunlock();
 	}
@@ -8342,44 +8275,9 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *q=(char *)"SELECT substr(variable_name,6) vn, variable_value FROM global_variables WHERE variable_name LIKE 'ldap-%'";
-	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		free(error); //fix a memory leak when call admindb->execute_statement function
-		return;
-	} else {
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("ldap", error, cols, affected_rows, resultset) == true) {
 		GloMyLdapAuth->wrlock();
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			bool rc=GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
-			if (rc==false) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-				if (replace) {
-					char *val=GloMyLdapAuth->get_variable(r->fields[0]);
-					char q[1000];
-					if (val) {
-						if (strcmp(val,r->fields[1])) {
-							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"ldap-%s\",\"%s\")",r->fields[0],val);
-							db->execute(q);
-						}
-						free(val);
-					} else {
-						if (strcmp(r->fields[0],(char *)"session_debug")==0) {
-							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"ldap-%s\"",r->fields[0]);
-							db->execute(q);
-						} else {
-							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
-						}
-						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"ldap-%s\"",r->fields[0]);
-						db->execute(q);
-					}
-				}
-			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-			}
-		}
+		flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, false, replace, {}, {}, {}, {});
 		GloMyLdapAuth->wrunlock();
 
 		// Checksums are always generated - 'admin-checksum_*' deprecated
@@ -8387,35 +8285,9 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
 			flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'ldap-\%' ORDER BY variable_name";
-			admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-			uint64_t hash1 = resultset->raw_checksum();
-			uint32_t d32[2];
-			char buf[20];
-			memcpy(&d32, &hash1, sizeof(hash1));
-			sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
-			GloVars.checksums_values.ldap_variables.set_checksum(buf);
-			GloVars.checksums_values.ldap_variables.version++;
-			time_t t = time(NULL);
-			if (epoch != 0 && checksum != "" && GloVars.checksums_values.ldap_variables.checksum == checksum) {
-				GloVars.checksums_values.ldap_variables.epoch = epoch;
-			} else {
-				GloVars.checksums_values.ldap_variables.epoch = t;
-			}
-			GloVars.epoch_version = t;
-			GloVars.generate_global_checksum();
-			GloVars.checksums_values.updates_cnt++;
+			flush_GENERIC_variables__checksum__database_to_runtime("ldap", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
-			delete resultset;
 		}
-		proxy_info(
-			"Computed checksum for 'LOAD LDAP VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
-			GloVars.checksums_values.ldap_variables.checksum, GloVars.checksums_values.ldap_variables.epoch
-		);
 	}
 	if (resultset) delete resultset;
 }

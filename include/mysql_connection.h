@@ -26,7 +26,7 @@ class MySQLServers_SslParams;
 class Variable {
 public:
 	char *value = (char*)"";
-	void fill_server_internal_session(json &j, int conn_num, int idx);
+	void fill_server_internal_session(json &j, int idx);
 	void fill_client_internal_session(json &j, int idx);
 };
 
@@ -60,6 +60,15 @@ class MySQL_Connection {
 	void update_warning_count_from_statement();
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
+	void connect_start_SetAttributes();
+	void connect_start_SetCharset();
+	void connect_start_SetClientFlag(unsigned long&);
+	char * connect_start_DNS_lookup();
+	void connect_start_SetSslSettings();
+	void ProcessQueryAndSetStatusFlags_Warnings(char *);
+	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
+	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
+	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
 	public:
 	struct {
 		char *server_version;
@@ -254,5 +263,8 @@ class MySQL_Connection {
 	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
 	static void set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params);
+
+	void get_mysql_info_json(json&);
+	void get_backend_conn_info_json(json&);
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

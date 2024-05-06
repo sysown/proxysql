@@ -3858,8 +3858,8 @@ void PgSQL_HostGroups_Manager::group_replication_lag_action(
 		PgSQL_HGC* myhgc = nullptr;
 
 		if (
-			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 0 ||
-			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
+			mysql_thread___monitor_groupreplication_max_transactions_behind_for_read_only == 0 ||
+			mysql_thread___monitor_groupreplication_max_transactions_behind_for_read_only == 2 ||
 			enable
 		) {
 			if (read_only == false) {
@@ -3869,8 +3869,8 @@ void PgSQL_HostGroups_Manager::group_replication_lag_action(
 		}
 
 		if (
-			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 1 ||
-			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
+			mysql_thread___monitor_groupreplication_max_transactions_behind_for_read_only == 1 ||
+			mysql_thread___monitor_groupreplication_max_transactions_behind_for_read_only == 2 ||
 			enable
 		) {
 			myhgc = PgHGM->MyHGC_find(reader_hostgroup);
