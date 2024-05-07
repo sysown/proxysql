@@ -116,8 +116,8 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 MYLIBS := -Wl,--export-dynamic
-MYLIBS += -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto
-MYLIBS += -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
+MYLIBS += -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
+MYLIBS += -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS += -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 #MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBSJEMALLOC := -Wl,-Bstatic -ljemalloc
