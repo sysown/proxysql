@@ -4046,7 +4046,6 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___server_version = GloPTH->get_variable_string((char*)"server_version");
 	pgsql_thread___have_ssl = (bool)GloPTH->get_variable_int((char*)"have_ssl");
 
-/*
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
 	mysql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
 	mysql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
@@ -4055,7 +4054,7 @@ void PgSQL_Thread::refresh_variables() {
 	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
 	mysql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
 	mysql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
-*/
+
 	GloPgSQL_Logger->events_set_base_filename(); // both filename and filesize are set here
 	GloPgSQL_Logger->audit_set_base_filename(); // both filename and filesize are set here
 /*

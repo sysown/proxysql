@@ -2183,7 +2183,7 @@ bool PgSQL_HostGroups_Manager::commit(
 	// fill Hostgroup_Manager_Mapping with latest records
 	update_hostgroup_manager_mappings();
 
-	ev_async_send(gtid_ev_loop, gtid_ev_async);
+	//ev_async_send(gtid_ev_loop, gtid_ev_async);
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
 
