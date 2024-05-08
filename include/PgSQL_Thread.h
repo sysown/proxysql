@@ -119,7 +119,7 @@ private:
 	unsigned long long last_processing_idles;
 	PgSQL_Connection** my_idle_conns;
 	bool processing_idles;
-	bool maintenance_loop;
+	//bool maintenance_loop;
 	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray* cached_connections;
@@ -145,15 +145,15 @@ private:
 #endif // IDLE_THREADS
 
 	unsigned int find_session_idx_in_mysql_sessions(PgSQL_Session * sess);
-	bool set_backend_to_be_skipped_if_frontend_is_slow(PgSQL_Data_Stream * myds, unsigned int n);
+	//bool set_backend_to_be_skipped_if_frontend_is_slow(PgSQL_Data_Stream * myds, unsigned int n);
 	void handle_mirror_queue_mysql_sessions();
 	void handle_kill_queues();
 	//void check_timing_out_session(unsigned int n);
 	//void check_for_invalid_fd(unsigned int n);
-	void read_one_byte_from_pipe(unsigned int n);
-	void tune_timeout_for_myds_needs_pause(PgSQL_Data_Stream * myds);
-	void tune_timeout_for_session_needs_pause(PgSQL_Data_Stream * myds);
-	void configure_pollout(PgSQL_Data_Stream * myds, unsigned int n);
+	//void read_one_byte_from_pipe(unsigned int n);
+	//void tune_timeout_for_myds_needs_pause(PgSQL_Data_Stream * myds);
+	//void tune_timeout_for_session_needs_pause(PgSQL_Data_Stream * myds);
+	//void configure_pollout(PgSQL_Data_Stream * myds, unsigned int n);
 
 protected:
 	int nfds;
@@ -212,7 +212,7 @@ public:
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();
 	void ProcessAllMyDS_BeforePoll();
-	void ProcessAllMyDS_AfterPoll();
+	//void ProcessAllMyDS_AfterPoll();
 	void run();
 	void poll_listener_add(int sock);
 	void poll_listener_del(int sock);

@@ -37,6 +37,8 @@ class MySQL_Thread;
 class PgSQL_Thread;
 
 class Base_Thread {
+	private:
+	bool maintenance_loop;
 	public:
 	unsigned long long curtime;
 	int shutdown;
@@ -54,6 +56,21 @@ class Base_Thread {
 	void check_for_invalid_fd(unsigned int n);
 	template<typename S>
 	void ProcessAllSessions_SortingSessions();
+	template<typename T>
+	void ProcessAllMyDS_AfterPoll();
+	template<typename T>
+	void read_one_byte_from_pipe(unsigned int n);
+	template<typename T, typename DS>
+	void tune_timeout_for_myds_needs_pause(DS * myds);
+	template<typename T, typename DS>
+	void tune_timeout_for_session_needs_pause(DS * myds);
+	template<typename T, typename DS>
+	void configure_pollout(DS * myds, unsigned int n);
+	template<typename T, typename DS>
+	bool set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsigned int n);
+
+	friend class MySQL_Thread;
+	friend class PgSQL_Thread;
 };
 
 #endif // CLASS_BASE_THREAD_H

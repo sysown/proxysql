@@ -17,6 +17,16 @@ template void Base_Thread::check_for_invalid_fd<MySQL_Thread>(unsigned int);
 template void Base_Thread::check_for_invalid_fd<PgSQL_Thread>(unsigned int);
 template void Base_Thread::ProcessAllSessions_SortingSessions<MySQL_Session>();
 template void Base_Thread::ProcessAllSessions_SortingSessions<PgSQL_Session>();
+template void Base_Thread::ProcessAllMyDS_AfterPoll<MySQL_Thread>();
+template void Base_Thread::ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+template void Base_Thread::read_one_byte_from_pipe<MySQL_Thread>(unsigned int n);
+template void Base_Thread::read_one_byte_from_pipe<PgSQL_Thread>(unsigned int n);
+template void Base_Thread::tune_timeout_for_myds_needs_pause<MySQL_Thread>(MySQL_Data_Stream *);
+template void Base_Thread::tune_timeout_for_myds_needs_pause<PgSQL_Thread>(PgSQL_Data_Stream *);
+template void Base_Thread::tune_timeout_for_session_needs_pause<MySQL_Thread>(MySQL_Data_Stream *);
+template void Base_Thread::tune_timeout_for_session_needs_pause<PgSQL_Thread>(PgSQL_Data_Stream *);
+template void Base_Thread::configure_pollout<MySQL_Thread>(MySQL_Data_Stream *, unsigned int);
+template void Base_Thread::configure_pollout<PgSQL_Thread>(PgSQL_Data_Stream *, unsigned int);
 
 
 Base_Thread::Base_Thread() {
@@ -230,5 +240,143 @@ void Base_Thread::ProcessAllSessions_SortingSessions() {
 			}
 		}
 	}
+}
+
+// this function was inline in MySQL_Thread::run()
+/**
+ * @brief Processes all MySQL Data Streams after polling.
+ * 
+ * This function iterates through all MySQL polls and processes the associated data streams.
+ * For each poll, it prints debug information about the file descriptor and its events.
+ * If a MySQL Data Stream is associated with the poll, it checks for events on the file descriptor.
+ * If there are no events and a poll timeout is enabled, it checks for sessions timing out.
+ * If there are events, it checks for invalid file descriptors and handles new connections 
+ * for listener type data streams. For other types of data streams, it processes data and 
+ * handles any potential errors.
+ */
+template<typename T>
+void Base_Thread::ProcessAllMyDS_AfterPoll() {
+	T* thr = static_cast<T*>(this);
+	for (unsigned int n = 0; n < thr->mypolls.len; n++) {
+		proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", thr->mypolls.fds[n].fd , thr->mypolls.fds[n].events, thr->mypolls.fds[n].revents);
+
+		auto * myds = thr->mypolls.myds[n];
+		if (myds==NULL) {
+			read_one_byte_from_pipe<T>(n);
+			continue;
+		}
+		if (thr->mypolls.fds[n].revents==0) {
+			if (thr->poll_timeout_bool) {
+				check_timing_out_session<T>(n);
+			}
+		} else {
+			check_for_invalid_fd<T>(n); // this is designed to assert in case of failure
+			switch(myds->myds_type) {
+				// Note: this logic that was here was removed completely because we added mariadb client library.
+				case MYDS_LISTENER:
+					// we got a new connection!
+					thr->listener_handle_new_connection(myds,n);
+					continue;
+					break;
+				default:
+					break;
+			}
+			// data on exiting connection
+			bool rc = thr->process_data_on_data_stream(myds, n);
+			if (rc==false) {
+				n--;
+			}
+		}
+	}
+}
+
+
+template<typename T>
+void Base_Thread::read_one_byte_from_pipe(unsigned int n) {
+	T* thr = static_cast<T*>(this);
+	if (thr->mypolls.fds[n].revents) {
+		unsigned char c;
+		if (read(thr->mypolls.fds[n].fd, &c, 1)==-1) {// read just one byte
+			proxy_error("Error during read from signal_all_threads()\n");
+		}
+		proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
+		//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the skeleton for issue #253
+		if (c) {
+			// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
+			pthread_mutex_unlock(&thr->thread_mutex);
+			usleep(c*1000);
+			pthread_mutex_lock(&thr->thread_mutex);
+			// we enter in maintenance loop only if c is set
+			// when threads are signaling each other, there is no need to set maintenance_loop
+			maintenance_loop=true;
+		}
+	}
+}
+
+template<typename T, typename DS>
+void Base_Thread::tune_timeout_for_myds_needs_pause(DS * myds) {
+	T* thr = static_cast<T*>(this);
+	if (myds->wait_until > curtime) {
+		if (thr->mypolls.poll_timeout==0 || (myds->wait_until - curtime < thr->mypolls.poll_timeout) ) {
+			thr->mypolls.poll_timeout= myds->wait_until - curtime;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , wait_until=%llu , curtime=%llu\n", myds->sess, thr->mypolls.poll_timeout, myds->wait_until, curtime);
+		}
+	}
+}
+
+template<typename T, typename DS>
+void Base_Thread::tune_timeout_for_session_needs_pause(DS * myds) {
+	T* thr = static_cast<T*>(this);
+	if (thr->mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < thr->mypolls.poll_timeout) ) {
+		thr->mypolls.poll_timeout= myds->sess->pause_until - curtime;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, thr->mypolls.poll_timeout, myds->sess->pause_until, curtime);
+	}
+}
+
+template<typename T, typename DS>
+void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
+	T* thr = static_cast<T*>(this);
+	if (myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
+		myds->set_pollout();
+	} else {
+		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END) {
+			thr->mypolls.fds[n].events = POLLIN;
+			if (thr->mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
+				thr->mypolls.fds[n].events |= POLLOUT;
+		} else {
+			myds->set_pollout();
+		}
+	}
+	if (unlikely(myds->sess->pause_until > curtime)) {
+		if (myds->myds_type==MYDS_FRONTEND) {
+			myds->remove_pollout();
+		}
+		if (myds->myds_type==MYDS_BACKEND) {
+			if (mysql_thread___throttle_ratio_server_to_client) {
+				thr->mypolls.fds[n].events = 0;
+			}
+		}
+	}
+	if (myds->myds_type==MYDS_BACKEND) {
+		set_backend_to_be_skipped_if_frontend_is_slow<T>(myds, n);
+	}
+}
+
+template<typename T, typename DS>
+bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsigned int n) {
+	T* thr = static_cast<T*>(this);
+	if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
+		unsigned int buffered_data=0;
+		buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
+		buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+		// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
+		// but assuming that client isn't completely blocked, we will stop checking for data
+		// only at mysql_thread___threshold_resultset_size * 4
+		if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*4) {
+			thr->mypolls.fds[n].events = 0;
+			return true;
+		}
+	}
+	return false;
 }
 
