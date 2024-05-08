@@ -5,7 +5,7 @@
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
-#include "query_processor.h"
+//#include "query_processor.h"
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"

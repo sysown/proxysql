@@ -24,7 +24,6 @@
 #endif /* PROXYSQLCLICKHOUSE */
 #include "fileutils.hpp"
 #include "configfile.hpp"
-//#include "query_processor.h"
 
 //#include "SQLite3_Server.h"
 #ifdef PROXYSQLCLICKHOUSE
