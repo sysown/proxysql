@@ -362,6 +362,36 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		k++;
 		New_sum=0;
 
+		// This is promoting the stickyness value in the query hint to be a session variable
+		if (sess->qpo->sticky_backend != -1 && 0 <= sess->qpo->sticky_backend && sess->qpo->sticky_backend <= 2) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "promoting sticky_backend with value %d\n", sess->qpo->sticky_backend);
+			sess->sticky_backend = sess->qpo->sticky_backend;
+		}
+
+		if (sess->sticky_backend > 0) {
+			if (auto my_srv_hint = sess->sticky_backend_hint.find(this->hid); my_srv_hint != sess->sticky_backend_hint.end()) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "found prefered sticky backend\n");
+				for (j=0; j<num_candidates; j++) {
+					mysrvc = mysrvcCandidates[j];
+					if(mysrvc == my_srv_hint->second) {
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "matched prefered sticky backend\n");
+						return mysrvc;
+					}
+				}
+
+				//Abort if we can't find the backend in candidates and we are in strict mode.
+				if (sess->sticky_backend==2) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "didn't match prefered sticky backend in strict mode\n");
+					return NULL;
+				}
+
+				// We are clearing the server because .insert doesn't replace...
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "clearing prefered sticky backend in strict mode\n");
+				sess->sticky_backend_hint.erase(this->hid);
+			}
+		}
+
+
 		for (j=0; j<num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
 			New_sum+=mysrvc->weight;
@@ -373,6 +403,14 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #ifdef TEST_AURORA
 				array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
+				if (sess->sticky_backend > 0) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "insert prefered sticky backend\n");
+					sess->sticky_backend_hint.insert({this->hid, mysrvc});
+				} else {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "erase prefered sticky backend\n");
+					sess->sticky_backend_hint.erase(this->hid);
+				}
+
 				return mysrvc;
 			}
 		}
