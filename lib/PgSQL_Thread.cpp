@@ -2741,6 +2741,7 @@ PgSQL_Thread::~PgSQL_Thread() {
 
 }
 
+/*
 PgSQL_Session* PgSQL_Thread::create_new_session_and_client_data_stream(int _fd) {
 	int arg_on = 1;
 	PgSQL_Session* sess = new PgSQL_Session;
@@ -2812,6 +2813,8 @@ PgSQL_Session* PgSQL_Thread::create_new_session_and_client_data_stream(int _fd) 
 
 	return sess;
 }
+*/
+
 
 bool PgSQL_Thread::init() {
 	int i;
@@ -4234,7 +4237,7 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 
 		// create a new client connection
 		mypolls.fds[n].revents = 0;
-		PgSQL_Session* sess = create_new_session_and_client_data_stream(c);
+		PgSQL_Session* sess = create_new_session_and_client_data_stream<PgSQL_Thread,PgSQL_Session*>(c);
 		__sync_add_and_fetch(&PgHGM->status.client_connections_created, 1);
 		if (__sync_add_and_fetch(&PgHGM->status.client_connections, 1) > mysql_thread___max_connections) {
 			sess->max_connections_reached = true;

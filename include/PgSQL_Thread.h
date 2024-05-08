@@ -5,6 +5,7 @@
 #include <prometheus/gauge.h>
 
 #include "proxysql.h"
+#include "Base_Thread.h"
 #include "cpp.h"
 #include "PgSQL_Variables.h"
 #ifdef IDLE_THREADS
@@ -108,7 +109,7 @@ enum PgSQL_Thread_status_variable {
 	st_var_END*/
 };
 
-class __attribute__((aligned(64))) PgSQL_Thread
+class __attribute__((aligned(64))) PgSQL_Thread : public Base_Thread
 {
 private:
 	unsigned int servers_table_version_previous;
@@ -161,7 +162,6 @@ public:
 
 	ProxySQL_Poll<PgSQL_Data_Stream> mypolls;
 	pthread_t thread_id;
-	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
 	unsigned long long last_move_to_idle_thread_time;
@@ -177,7 +177,6 @@ public:
 #endif // IDLE_THREADS
 
 	int pipefd[2];
-	int shutdown;
 	kill_queue_t kq;
 
 	bool epoll_thread;
@@ -206,7 +205,7 @@ public:
 
 	PgSQL_Thread();
 	~PgSQL_Thread();
-	PgSQL_Session* create_new_session_and_client_data_stream(int _fd);
+//	PgSQL_Session* create_new_session_and_client_data_stream(int _fd);
 	bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();

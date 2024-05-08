@@ -100,7 +100,7 @@ enum MySQL_Thread_status_variable {
 	st_var_END
 };
 
-class __attribute__((aligned(64))) MySQL_Thread
+class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 {
 	friend class PgSQL_Thread;
 	private:
@@ -162,7 +162,7 @@ class __attribute__((aligned(64))) MySQL_Thread
 
 	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
 	pthread_t thread_id;
-	unsigned long long curtime;
+//	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
 	unsigned long long last_move_to_idle_thread_time;
@@ -178,7 +178,7 @@ class __attribute__((aligned(64))) MySQL_Thread
 #endif // IDLE_THREADS
 
 	int pipefd[2];
-	int shutdown;
+//	int shutdown;
 	kill_queue_t kq;
 
 	bool epoll_thread;
@@ -207,7 +207,7 @@ class __attribute__((aligned(64))) MySQL_Thread
 
 	MySQL_Thread();
 	~MySQL_Thread();
-	MySQL_Session * create_new_session_and_client_data_stream(int _fd);
+	//MySQL_Session * create_new_session_and_client_data_stream(int _fd);
 	bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();

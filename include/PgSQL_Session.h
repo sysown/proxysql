@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "proxysql.h"
+#include "Base_Session.h"
 #include "cpp.h"
 #include "PgSQL_Variables.h"
 
@@ -89,8 +90,7 @@ public:
 	bool is_select_NOT_for_update();
 };
 
-class PgSQL_Session
-{
+class PgSQL_Session : public Base_Session {
 private:
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);

@@ -9,6 +9,9 @@
 #include <prometheus/counter.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+
+#include "Base_Thread.h"
+
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
@@ -5304,7 +5307,7 @@ void *child_mysql(void *arg) {
 	mysql_thr->curtime=monotonic_time();
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler<MySQL_Session*>;
@@ -5424,7 +5427,7 @@ void* child_postgres(void* arg) {
 	pgsql_thr->curtime = monotonic_time();
 	GloQPro->init_thread();
 	pgsql_thr->refresh_variables();
-	PgSQL_Session* sess = pgsql_thr->create_new_session_and_client_data_stream(client);
+	PgSQL_Session* sess = pgsql_thr->create_new_session_and_client_data_stream<PgSQL_Thread, PgSQL_Session*>(client);
 	sess->thread = pgsql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler<PgSQL_Session*>;

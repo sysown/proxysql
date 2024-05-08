@@ -1,6 +1,7 @@
 #include "gen_utils.h"
 #include "PgSQL_Thread.h"
 #include "MySQL_Thread.h"
+#include "Base_Session.h"
 #include "MySQL_Session.h"
 #include "PgSQL_Session.h"
 #include "Client_Session.h"

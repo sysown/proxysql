@@ -2876,6 +2876,7 @@ MySQL_Thread::~MySQL_Thread() {
 
 }
 
+/*
 MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd) {
 	int arg_on=1;
 	MySQL_Session *sess=new MySQL_Session;
@@ -2947,6 +2948,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	return sess;
 }
+*/
 
 bool MySQL_Thread::init() {
 	int i;
@@ -4572,7 +4574,7 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 
 		// create a new client connection
 		mypolls.fds[n].revents=0;
-		MySQL_Session *sess=create_new_session_and_client_data_stream(c);
+		MySQL_Session *sess=create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(c);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_created,1);
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
