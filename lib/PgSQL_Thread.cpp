@@ -3550,29 +3550,6 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 }
 
 
-
-// this function was inline in  PgSQL_Thread::process_all_sessions()
-void PgSQL_Thread::ProcessAllSessions_SortingSessions() {
-	unsigned int a = 0;
-	for (unsigned int n = 0; n < mysql_sessions->len; n++) {
-		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
-		if (sess->mybe && sess->mybe->server_myds) {
-			if (sess->mybe->server_myds->max_connect_time) {
-				PgSQL_Session* sess2 = (PgSQL_Session*)mysql_sessions->index(a);
-				if (sess2->mybe && sess2->mybe->server_myds && sess2->mybe->server_myds->max_connect_time && sess2->mybe->server_myds->max_connect_time <= sess->mybe->server_myds->max_connect_time) {
-					// do nothing
-				}
-				else {
-					void* p = mysql_sessions->pdata[a];
-					mysql_sessions->pdata[a] = mysql_sessions->pdata[n];
-					mysql_sessions->pdata[n] = p;
-					a++;
-				}
-			}
-		}
-	}
-}
-
 // this function was inline in PgSQL_Thread::process_all_sessions()
 void PgSQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, PgSQL_Session * sess) {
 	unregister_session(n);
@@ -3700,7 +3677,7 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #endif // IDLE_THREADS
 	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions();
+		ProcessAllSessions_SortingSessions<PgSQL_Session>();
 	}
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);

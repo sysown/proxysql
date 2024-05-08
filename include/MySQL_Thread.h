@@ -209,7 +209,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
   bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
-	void ProcessAllSessions_SortingSessions();
+	//void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess);
 	void ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
 	void ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int& n);

@@ -220,7 +220,7 @@ public:
 	void unregister_session(int);
 	struct pollfd* get_pollfd(unsigned int i);
 	bool process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n);
-	void ProcessAllSessions_SortingSessions();
+	//void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, PgSQL_Session * sess);
 	void ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
 	void process_all_sessions();

@@ -52,6 +52,8 @@ class Base_Thread {
 	void check_timing_out_session(unsigned int n);
 	template<typename T>
 	void check_for_invalid_fd(unsigned int n);
+	template<typename S>
+	void ProcessAllSessions_SortingSessions();
 };
 
 #endif // CLASS_BASE_THREAD_H

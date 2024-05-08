@@ -3797,38 +3797,6 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 }
 
 
-
-// this function was inline in  MySQL_Thread::process_all_sessions()
-/**
- * @brief Sort all sessions based on maximum connection time.
- * 
- * This function iterates through all MySQL sessions and sorts them based on their maximum connection time.
- * Sessions with a valid maximum connection time are compared, and if one session has a greater maximum connection
- * time than another, their positions in the session list are swapped. The sorting is performed in-place.
- * 
- * @note This function assumes that MySQL sessions and their associated data structures have been initialized
- * and are accessible within the MySQL Thread.
- */
-void MySQL_Thread::ProcessAllSessions_SortingSessions() {
-	unsigned int a=0;
-	for (unsigned int n=0; n<mysql_sessions->len; n++) {
-		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
-		if (sess->mybe && sess->mybe->server_myds) {
-			if (sess->mybe->server_myds->max_connect_time) {
-				MySQL_Session *sess2=(MySQL_Session *)mysql_sessions->index(a);
-				if (sess2->mybe && sess2->mybe->server_myds && sess2->mybe->server_myds->max_connect_time && sess2->mybe->server_myds->max_connect_time <= sess->mybe->server_myds->max_connect_time) {
-					// do nothing
-				} else {
-					void *p=mysql_sessions->pdata[a];
-					mysql_sessions->pdata[a]=mysql_sessions->pdata[n];
-					mysql_sessions->pdata[n]=p;
-					a++;
-				}
-			}
-		}
-	}
-}
-
 // this function was inline in MySQL_Thread::process_all_sessions()
 void MySQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess) {
 	unregister_session(n);
@@ -4052,7 +4020,7 @@ void MySQL_Thread::process_all_sessions() {
 	}
 #endif // IDLE_THREADS
 	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions();
+		ProcessAllSessions_SortingSessions<MySQL_Session>();
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
