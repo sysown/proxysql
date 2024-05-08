@@ -23,8 +23,10 @@
 #define SPOOKYV2
 #endif
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
 
 #ifdef DEBUG
 /* */
@@ -300,7 +302,7 @@ class MyHGC {	// MySQL Host Group Container
 		bool connection_warming;
 		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
 		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
-		json ignore_session_variables_json; // the JSON format of ignore_session_variables
+		nlohmann::json * ignore_session_variables_json = NULL; // the JSON format of ignore_session_variables
 	} attributes;
 	struct {
 		int64_t weight;
@@ -1204,47 +1206,5 @@ private:
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };
 
-/**
- * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
- *
- * @param j JSON object constructed from 'servers_defaults' field.
- * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
- *  error logging.
- * @param key The key for the value to be extracted.
- * @param val_check A validation function, checks if the value is within a expected range.
- *
- * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
- */
-template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
-T j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
-) {
-	if (j.find(key) != j.end()) {
-		const json::value_t val_type = j[key].type();
-		const char* type_name = j[key].type_name();
-
-		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
-			T val = j[key].get<T>();
-
-			if (val_check(val)) {
-				return val;
-			} else {
-				proxy_error(
-					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
-						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
-				);
-			}
-		} else {
-			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
-					" Value NOT UPDATED.\n",
-				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
-			);
-		}
-	}
-
-	return static_cast<T>(-1);
-}
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

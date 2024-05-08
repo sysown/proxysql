@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "httpserver.hpp"
@@ -17,7 +21,7 @@
 extern ProxySQL_Admin *GloAdmin;
 
 using namespace httpserver;
-using nlohmann::json;
+//using nlohmann::json;
 
 class sync_resource : public http_resource {
 private:

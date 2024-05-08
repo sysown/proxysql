@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
 #include "proxysql.h"

@@ -10,8 +10,13 @@
 #include "cpp.h"
 #include "PgSQL_Variables.h"
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
+//#include "../deps/json/json.hpp"
+//using json = nlohmann::json;
+
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
 
 extern class PgSQL_Variables pgsql_variables;
 
@@ -399,7 +404,7 @@ public:
 	 *   params.
 	 */
 	void finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool);
-	void generate_proxysql_internal_session_json(json&);
+	void generate_proxysql_internal_session_json(nlohmann::json&);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool*);
 	bool has_any_backend();

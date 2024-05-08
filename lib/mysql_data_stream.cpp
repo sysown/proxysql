@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "proxysql.h"
 #include "cpp.h"
 #include <zlib.h>

@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 
 #include <functional>

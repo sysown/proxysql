@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <iostream>     // std::cout
 #include <sstream>      // std::stringstream
 #include <fstream>
@@ -119,6 +123,10 @@ int admin___web_verbosity = 0;
 char * proxysql_version = NULL;
 
 #include "proxysql_find_charset.h"
+
+template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
+T j_get_srv_default_int_val(
+const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check);
 
 
 static const vector<string> mysql_servers_tablenames = {

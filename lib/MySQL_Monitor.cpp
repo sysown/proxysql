@@ -7,6 +7,11 @@
 	0.2.0902
 		* original implementation
 */
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <map>
 #include <memory>
 #include <mutex>

@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <fstream>
 #include "proxysql.h"
 #include "cpp.h"
@@ -10,8 +14,6 @@
 #include <dirent.h>
 #include <libgen.h>
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
