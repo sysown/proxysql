@@ -3866,7 +3866,9 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___keep_multiplexing_variables = GloPTH->get_variable_string((char*)"keep_multiplexing_variables");
 	mysql_thread___server_capabilities = GloPTH->get_variable_uint16((char*)"server_capabilities");
 	mysql_thread___handle_unknown_charset = GloPTH->get_variable_int((char*)"handle_unknown_charset");
+*/
 	mysql_thread___poll_timeout = GloPTH->get_variable_int((char*)"poll_timeout");
+/*
 	mysql_thread___poll_timeout_on_failure = GloPTH->get_variable_int((char*)"poll_timeout_on_failure");
 	mysql_thread___have_compress = (bool)GloPTH->get_variable_int((char*)"have_compress");
 	
