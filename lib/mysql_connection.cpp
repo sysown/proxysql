@@ -109,7 +109,7 @@ extern char * binary_sha1;
 
 #include "proxysql_find_charset.h"
 
-void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
+void Variable::fill_server_internal_session(json &j, int idx) {
 	if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		if (!value) {
@@ -120,9 +120,9 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 		if (!ci) {
 			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
 				if (!strcasecmp("NULL", value)) {
-					j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = "";
+					j[mysql_tracked_variables[idx].internal_variable_name] = "";
 				} else {
-					j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
+					j[mysql_tracked_variables[idx].internal_variable_name] = value;
 				}
 			} else {
 				// LCOV_EXCL_START
@@ -131,7 +131,7 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 				// LCOV_EXCL_STOP
 			}
 		} else {
-			j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
+			j[mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
 		}
 	} else if (idx == SQL_CHARACTER_SET_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
@@ -140,7 +140,7 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 		else
 			ci = proxysql_find_charset_nr(atoi(value));
 
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
+		j[mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
 	} else if (idx == SQL_COLLATION_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		if (!value)
@@ -148,7 +148,7 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 		else
 			ci = proxysql_find_charset_nr(atoi(value));
 
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->name)?ci->name:"");
+		j[mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->name)?ci->name:"");
 /*
 //	NOTE: it seems we treat SQL_LOG_BIN in a special way
 //	it doesn't seem necessary
@@ -159,7 +159,7 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 			j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(!strcmp("1",value)?"ON":"OFF");
 */
 	} else {
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value?value:"");
+		j[mysql_tracked_variables[idx].internal_variable_name] = std::string(value?value:"");
 	}
 }
 
@@ -174,9 +174,9 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 		if (!ci) {
 			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
 				if (!strcasecmp("NULL", value)) {
-					j["conn"][mysql_tracked_variables[idx].internal_variable_name] = "";
+					j[mysql_tracked_variables[idx].internal_variable_name] = "";
 				} else {
-					j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
+					j[mysql_tracked_variables[idx].internal_variable_name] = value;
 				}
 			} else {
 				// LCOV_EXCL_START
@@ -185,7 +185,7 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 				// LCOV_EXCL_STOP
 			}
 		} else {
-			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
+			j[mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
 		}
 	} else if (idx == SQL_CHARACTER_SET_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
@@ -193,14 +193,14 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 			ci = proxysql_find_charset_collate(mysql_tracked_variables[idx].default_value);
 		else
 			ci = proxysql_find_charset_nr(atoi(value));
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
+		j[mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
 	} else if (idx == SQL_COLLATION_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		if (!value)
 			ci = proxysql_find_charset_collate(mysql_tracked_variables[idx].default_value);
 		else
 			ci = proxysql_find_charset_nr(atoi(value));
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
+		j[mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
 /*
 //	NOTE: it seems we treat SQL_LOG_BIN in a special way
 //	it doesn't seem necessary
@@ -211,7 +211,7 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = !strcmp("1", value)?"ON":"OFF";
 */
 	} else {
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value?value:"";
+		j[mysql_tracked_variables[idx].internal_variable_name] = value?value:"";
 	}
 }
 
@@ -740,12 +740,7 @@ bool MySQL_Connection::match_tracked_options(const MySQL_Connection *c) {
 	return false;
 }
 
-// non blocking API
-void MySQL_Connection::connect_start() {
-	PROXY_TRACE();
-	mysql=mysql_init(NULL);
-	assert(mysql);
-	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+void MySQL_Connection::connect_start_SetAttributes() {
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", parent->address);
 	{
@@ -770,18 +765,10 @@ void MySQL_Connection::connect_start() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
-	if (parent->use_ssl) {
-		if (ssl_params != NULL) {
-			delete ssl_params;
-			ssl_params = NULL;
-		}
-		ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
-		MySQL_Connection::set_ssl_params(mysql, ssl_params);
-		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
-	}
-	unsigned int timeout= 1;
+}
+
+void MySQL_Connection::connect_start_SetCharset() {
 	const char *csname = NULL;
-	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
 	/* Take client character set and use it to connect to backend */
 	if (myds && myds->sess) {
 		csname = mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET);
@@ -815,7 +802,10 @@ void MySQL_Connection::connect_start() {
 	}
 	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	mysql->charset = c;
-	unsigned long client_flags = 0;
+}
+
+void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) {
+	client_flags = 0;
 	if (parent->compression)
 		client_flags |= CLIENT_COMPRESS;
 
@@ -874,6 +864,72 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 
+}
+
+char * MySQL_Connection::connect_start_DNS_lookup() {
+	char* host_ip = NULL;
+	const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
+
+	if (!res_ip.empty()) {
+		if (connected_host_details.hostname) {
+			if (strcmp(connected_host_details.hostname, parent->address) != 0) {
+				free(connected_host_details.hostname);
+				connected_host_details.hostname = strdup(parent->address);
+			}
+		}
+		else {
+			connected_host_details.hostname = strdup(parent->address);
+		}
+
+		if (connected_host_details.ip) {
+			if (strcmp(connected_host_details.ip, res_ip.c_str()) != 0) {
+				free(connected_host_details.ip);
+				connected_host_details.ip = strdup(res_ip.c_str());
+			}
+		}
+		else {
+			connected_host_details.ip = strdup(res_ip.c_str());
+		}
+
+		host_ip = connected_host_details.ip;
+	}
+	else {
+		host_ip = parent->address;
+	}
+	return host_ip;
+}
+
+void MySQL_Connection::connect_start_SetSslSettings() {
+	if (parent->use_ssl) {
+		if (ssl_params != NULL) {
+			delete ssl_params;
+			ssl_params = NULL;
+		}
+		ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
+		MySQL_Connection::set_ssl_params(mysql, ssl_params);
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+	}
+}
+
+// non blocking API
+void MySQL_Connection::connect_start() {
+	PROXY_TRACE();
+	mysql=mysql_init(NULL);
+	assert(mysql);
+	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+
+	connect_start_SetAttributes();
+
+	connect_start_SetSslSettings();
+
+	unsigned int timeout= 1;
+	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
+
+	connect_start_SetCharset();
+
+	unsigned long client_flags = 0;
+	connect_start_SetClientFlag(client_flags);
+
 	char *auth_password=NULL;
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
@@ -883,37 +939,7 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 	if (parent->port) {
-
-		char* host_ip = NULL;
-		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
-
-		if (!res_ip.empty()) {
-			if (connected_host_details.hostname) {
-				if (strcmp(connected_host_details.hostname, parent->address) != 0) {
-					free(connected_host_details.hostname);
-					connected_host_details.hostname = strdup(parent->address);
-				}
-			}
-			else {
-				connected_host_details.hostname = strdup(parent->address);
-			}
-
-			if (connected_host_details.ip) {
-				if (strcmp(connected_host_details.ip, res_ip.c_str()) != 0) {
-					free(connected_host_details.ip);
-					connected_host_details.ip = strdup(res_ip.c_str());
-				}
-			}
-			else {
-				connected_host_details.ip = strdup(res_ip.c_str());
-			}
-
-			host_ip = connected_host_details.ip;
-		}
-		else {
-			host_ip = parent->address;
-		}
-
+		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
 		client_flags &= ~(CLIENT_COMPRESS); // disabling compression for connections made via Unix socket
@@ -1721,7 +1747,7 @@ handler_again:
 					// since 'add_eof' utilizes 'warning_count,' we are setting the 'warning_count' here
 					update_warning_count_from_connection();
 					// we reach here if there was no error
-					// exclude warning_count from the OK/EOF packet for the ‘SHOW WARNINGS’ statement
+					// exclude warning_count from the OK/EOF packet for the Â‘SHOW WARNINGSÂ’ statement
 					MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
@@ -2050,24 +2076,48 @@ bool MySQL_Connection::IsServerOffline() {
 	return ret;
 }
 
-// Returns:
-// 0 when the query is completed
-// 1 when the query is not completed
-// the calling function should check mysql error in mysql struct
+/**
+ * @brief Asynchronously execute a query on the MySQL connection.
+ *
+ * This function asynchronously executes a query on the MySQL connection.
+ * It handles various states of the asynchronous query execution process
+ * and returns appropriate status codes indicating the result of the execution.
+ *
+ * @param event The event associated with the query execution.
+ * @param stmt The query statement to be executed.
+ * @param length The length of the query statement.
+ * @param _stmt Pointer to the MySQL statement handle.
+ * @param stmt_meta Metadata associated with the statement execution.
+ *
+ * @return Returns an integer status code indicating the result of the query execution:
+ * - 0: Query execution completed successfully.
+ * - -1: Query execution failed.
+ * - 1: Query execution in progress.
+ * - 2: Processing a multi-statement query, control needs to be transferred to MySQL_Session.
+ * - 3: In the middle of processing a multi-statement query.
+ */
 int MySQL_Connection::async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt, stmt_execute_metadata_t *stmt_meta) {
+	// Trace the entry of the function
 	PROXY_TRACE();
 	PROXY_TRACE2();
+
+	// Ensure MySQL connection is valid
 	assert(mysql);
 	assert(ret_mysql);
 	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+
+	// Check if server is offline
 	if (IsServerOffline())
 		return -1;
 
+	// Update DSS state if myds is available
 	if (myds) {
 		if (myds->DSS != STATE_MARIADB_QUERY) {
 			myds->DSS = STATE_MARIADB_QUERY;
 		}
 	}
+
+	// Handle different states of async query execution
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
 			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end
@@ -2101,6 +2151,8 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 			break;
 	}
 	
+	// Handle different states after async query execution.
+	// That means after hander() was executed.
 	if (async_state_machine==ASYNC_QUERY_END) {
 		PROXY_TRACE2();
 		compute_unknown_transaction_status();
@@ -2645,24 +2697,7 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	return true;
 }
 
-void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
-	if (query_digest_text==NULL) return;
-	// unknown what to do with multiplex
-	int mul=-1;
-	if (myds) {
-		if (myds->sess) {
-			if (myds->sess->qpo) {
-				mul=myds->sess->qpo->multiplex;
-				if (mul==0) {
-					set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
-				} else {
-					if (mul==1) {
-						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
-					}
-				}
-			}
-		}
-	}
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_Warnings(char *query_digest_text) {
 	// checking warnings and disabling multiplexing will be effective only when the mysql-query_digests is enabled
 	if (get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS) == false) {
 		if (warning_count > 0) {
@@ -2688,7 +2723,10 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 		}
 	}
-	
+}
+
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_UserVariables(char *query_digest_text, int mul) {
 	if (get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE)==false) { // we search for variables only if not already set
 //			if (
 //				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
@@ -2733,6 +2771,77 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			}
 		}
 	}
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_Savepoint(char *query_digest_text) {
+	if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)==false) {
+		if (mysql) {
+			if (
+				(mysql->server_status & SERVER_STATUS_IN_TRANS)
+				||
+				((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) == 0)
+			) {
+				if (!strncasecmp(query_digest_text,"SAVEPOINT ", strlen("SAVEPOINT "))) {
+					set_status(true, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+				}
+			}
+		}
+	} else {
+		if ( // get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) == true
+			(
+				// make sure we don't have a transaction running
+				// checking just for COMMIT and ROLLBACK is not enough, because `SET autocommit=1` can commit too
+				(mysql->server_status & SERVER_STATUS_AUTOCOMMIT)
+				&&
+				( (mysql->server_status & SERVER_STATUS_IN_TRANS) == 0 )
+			)
+			||
+			(strcasecmp(query_digest_text,"COMMIT") == 0)
+			||
+			(strcasecmp(query_digest_text,"ROLLBACK") == 0)
+		) {
+			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+		}
+	}
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_SetBackslashEscapes() {
+	if (mysql) {
+		if (myds && myds->sess) {
+			if (myds->sess->client_myds && myds->sess->client_myds->myconn) {
+				// if SERVER_STATUS_NO_BACKSLASH_ESCAPES is changed it is likely
+				// because of sql_mode was changed
+				// we set the same on the client connection
+				unsigned int ss = mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				myds->sess->client_myds->myconn->set_no_backslash_escapes(ss);
+			}
+		}
+	}
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
+	if (query_digest_text==NULL) return;
+	// unknown what to do with multiplex
+	int mul=-1;
+	if (myds) {
+		if (myds->sess) {
+			if (myds->sess->qpo) {
+				mul=myds->sess->qpo->multiplex;
+				if (mul==0) {
+					set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
+				} else {
+					if (mul==1) {
+						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
+					}
+				}
+			}
+		}
+	}
+
+	ProcessQueryAndSetStatusFlags_Warnings(query_digest_text);
+
+	ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+
 	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {
 			set_status(true, STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
@@ -2768,46 +2877,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			set_status(true, STATUS_MYSQL_CONNECTION_FOUND_ROWS);
 		}
 	}
-	if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)==false) {
-		if (mysql) {
-			if (
-				(mysql->server_status & SERVER_STATUS_IN_TRANS)
-				||
-				((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) == 0)
-			) {
-				if (!strncasecmp(query_digest_text,"SAVEPOINT ", strlen("SAVEPOINT "))) {
-					set_status(true, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
-				}
-			}
-		}
-	} else {
-		if ( // get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) == true
-			(
-				// make sure we don't have a transaction running
-				// checking just for COMMIT and ROLLBACK is not enough, because `SET autocommit=1` can commit too
-				(mysql->server_status & SERVER_STATUS_AUTOCOMMIT)
-				&&
-				( (mysql->server_status & SERVER_STATUS_IN_TRANS) == 0 )
-			)
-			||
-			(strcasecmp(query_digest_text,"COMMIT") == 0)
-			||
-			(strcasecmp(query_digest_text,"ROLLBACK") == 0)
-		) {
-			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
-		}
-	}
-	if (mysql) {
-		if (myds && myds->sess) {
-			if (myds->sess->client_myds && myds->sess->client_myds->myconn) {
-				// if SERVER_STATUS_NO_BACKSLASH_ESCAPES is changed it is likely
-				// because of sql_mode was changed
-				// we set the same on the client connection
-				unsigned int ss = mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES;
-				myds->sess->client_myds->myconn->set_no_backslash_escapes(ss);
-			}
-		}
-	}
+
+	ProcessQueryAndSetStatusFlags_Savepoint(query_digest_text);
+
+	ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
+
 }
 
 void MySQL_Connection::optimize() {
@@ -3008,5 +3082,89 @@ void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_
 			( ssl_params->ssl_crl.length() > 0 ? ssl_params->ssl_crl.c_str() : NULL ) );
 		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH,
 			( ssl_params->ssl_crlpath.length() > 0 ? ssl_params->ssl_crlpath.c_str() : NULL ) );
+	}
+}
+
+void MySQL_Connection::get_mysql_info_json(json& j) {
+	char buff[32];
+	sprintf(buff,"%p",mysql);
+	j["address"] = buff;
+	j["host"] = ( mysql->host ? mysql->host : "" );
+	j["host_info"] = ( mysql->host_info ? mysql->host_info : "" );
+	j["port"] = mysql->port;
+	j["server_version"] = ( mysql->server_version ? mysql->server_version : "" );
+	j["user"] = ( mysql->user ? mysql->user : "" );
+	j["unix_socket"] = (mysql->unix_socket ? mysql->unix_socket : "");
+	j["db"] = (mysql->db ? mysql->db : "");
+	j["affected_rows"] = mysql->affected_rows;
+	j["insert_id"] = mysql->insert_id;
+	j["thread_id"] = mysql->thread_id;
+	j["server_status"] = mysql->server_status;
+	j["charset"] = mysql->charset->nr;
+	j["charset_name"] = mysql->charset->csname;
+	j["options"]["charset_name"] = ( mysql->options.charset_name ? mysql->options.charset_name : "" );
+	j["options"]["use_ssl"] = mysql->options.use_ssl;
+	j["net"]["last_errno"] = mysql->net.last_errno;
+	j["net"]["fd"] = mysql->net.fd;
+	j["net"]["max_packet_size"] = mysql->net.max_packet_size;
+	j["net"]["sqlstate"] = mysql->net.sqlstate;
+}
+
+void MySQL_Connection::get_backend_conn_info_json(json& j) {
+	for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
+		variables[idx].fill_server_internal_session(j, idx);
+	}
+	for (std::vector<uint32_t>::const_iterator it_c = dynamic_variables_idx.begin(); it_c != dynamic_variables_idx.end(); it_c++) {
+		variables[*it_c].fill_server_internal_session(j, *it_c);
+	}
+	char buff[32];
+	sprintf(buff,"%p", this);
+	j["address"] = buff;
+	j["auto_increment_delay_token"] = auto_increment_delay_token;
+	j["bytes_recv"] = bytes_info.bytes_recv;
+	j["bytes_sent"] = bytes_info.bytes_sent;
+	j["questions"] = statuses.questions;
+	j["myconnpoll_get"] = statuses.myconnpoll_get;
+	j["myconnpoll_put"] = statuses.myconnpoll_put;
+	j["session_track_gtids"] = ( options.session_track_gtids ? options.session_track_gtids : "") ;
+	j["init_connect"] = ( options.init_connect ? options.init_connect : "");
+	j["init_connect_sent"] = options.init_connect_sent;
+	j["autocommit"] = ( options.autocommit ? "ON" : "OFF" );
+	j["last_set_autocommit"] = options.last_set_autocommit;
+	j["no_backslash_escapes"] = options.no_backslash_escapes;
+	j["warning_count"] = warning_count;
+	json& js = j["status"];
+	js["get_lock"] = get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
+	js["lock_tables"] = get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
+	js["has_savepoint"] = get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+	js["temporary_table"] = get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
+	js["user_variable"] = get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+	js["found_rows"] = get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS);
+	js["no_multiplex"] = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
+	js["no_multiplex_HG"] = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
+	js["compression"] = get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+	js["prepared_statement"] = get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
+	js["has_warnings"] = get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+	{
+		// MultiplexDisabled : status returned by MySQL_Connection::MultiplexDisabled();
+		// MultiplexDisabled_ext : status returned by MySQL_Connection::MultiplexDisabled() || MySQL_Connection::isActiveTransaction()
+		bool multiplex_disabled = MultiplexDisabled();
+		j["MultiplexDisabled"] = multiplex_disabled;
+		if (multiplex_disabled == false) {
+			if (IsActiveTransaction() == true) {
+				multiplex_disabled = true;
+			}
+		}
+		j["MultiplexDisabled_ext"] = multiplex_disabled;
+	}
+	j["ps"]["backend_stmt_to_global_ids"] = local_stmts->backend_stmt_to_global_ids;
+	j["ps"]["global_stmt_to_backend_ids"] = local_stmts->global_stmt_to_backend_ids;
+	j["client_flag"]["value"] = options.client_flag;
+	j["client_flag"]["client_found_rows"] = (options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+	j["client_flag"]["client_multi_statements"] = (options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+	j["client_flag"]["client_deprecate_eof"] = (options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+	if (mysql && ret_mysql) {
+		json& jcm = j["mysql"];
+		get_mysql_info_json(jcm);
 	}
 }

@@ -272,5 +272,7 @@ class MySQL_Data_Stream
 	void destroy_queues();
 
 	bool data_in_rbio();
+
+	void get_client_myds_info_json(json&);
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */
