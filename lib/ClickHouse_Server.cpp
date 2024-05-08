@@ -5,6 +5,7 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
+#include "clickhouse/client.h"
 #include "cpp.h"
 
 #include "MySQL_Logger.hpp"
@@ -1340,6 +1341,7 @@ bool ClickHouse_Session::init() {
 	hostname = GloClickHouseServer->get_variable((char *)"hostname");
 	port = GloClickHouseServer->get_variable((char *)"port");
 	try {
+		clickhouse::ClientOptions co;
 		co.SetHost(hostname);
 		co.SetPort(atoi(port));
 		co.SetCompressionMethod(CompressionMethod::None);
