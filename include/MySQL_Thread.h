@@ -121,7 +121,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	std::map<unsigned int, unsigned int> sessmap;
 #endif // IDLE_THREADS
 
-	Session_Regex **match_regexes;
+	//Session_Regex **match_regexes;
 
 #ifdef IDLE_THREADS
 	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
@@ -167,7 +167,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	unsigned long long last_maintenance_time;
 	unsigned long long last_move_to_idle_thread_time;
 	std::atomic<unsigned long long> atomic_curtime;
-	PtrArray *mysql_sessions;
+	//PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions_cache;
 #ifdef IDLE_THREADS
@@ -216,7 +216,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	void run();
   void poll_listener_add(int sock);
   void poll_listener_del(int sock);
-  void register_session(MySQL_Session*, bool up_start=true);
+  //void register_session(MySQL_Session *, bool up_start=true);
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
   bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);

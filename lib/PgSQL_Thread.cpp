@@ -2741,81 +2741,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 
 }
 
-/*
-PgSQL_Session* PgSQL_Thread::create_new_session_and_client_data_stream(int _fd) {
-	int arg_on = 1;
-	PgSQL_Session* sess = new PgSQL_Session;
-	register_session(sess); // register session
-	sess->client_myds = new PgSQL_Data_Stream();
-	sess->client_myds->fd = _fd;
-
-	// set not blocking for client connections too!
-	{
-		// PMC-10004
-		// While implementing SSL and fast_forward it was noticed that all frontend connections
-		// are in blocking, although this was never a problem because we call poll() before reading.
-		// Although it became a problem with fast_forward, SSL and large packets because SSL handled
-		// data in chunks of 16KB and there may be data inside SSL even when there is no data
-		// received from the network.
-		// The only modules that seems to be affected by this issue are Admin, SQLite3 Server
-		// and Clickhouse Server
-		int prevflags = fcntl(_fd, F_GETFL, 0);
-		if (prevflags == -1) {
-			proxy_error("For FD %d fcntl() returned -1 errno %d\n", _fd, errno);
-			if (shutdown == 0)
-				assert(prevflags != -1);
-		}
-		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
-		if (nb == -1) {
-			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
-			// previously we were asserting here. But it is possible that this->shutdown is still 0 during the
-			// shutdown itself:
-			// - the current thread is processing connections
-			// - the signal handler thread is still setting shutdown = 0
-			//if (shutdown == 0)
-			//	assert (nb != -1);
-		}
-	}
-	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char*)&arg_on, sizeof(arg_on));
-
-	if (mysql_thread___use_tcp_keepalive) {
-		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&arg_on, sizeof(arg_on));
-#ifdef TCP_KEEPIDLE
-		if (mysql_thread___tcp_keepalive_time > 0) {
-			int keepalive_time = mysql_thread___tcp_keepalive_time;
-			setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&keepalive_time, sizeof(keepalive_time));
-		}
-#endif
-	}
-
-#ifdef __APPLE__
-	setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_NOSIGPIPE, (char*)&arg_on, sizeof(int));
-#endif
-	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
-	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
-#ifdef DEBUG
-	sess->client_myds->myprot.dump_pkt = true;
-#endif
-	PgSQL_Connection* myconn = new PgSQL_Connection();
-	sess->client_myds->attach_connection(myconn);
-	myconn->set_is_client(); // this is used for prepared statements
-	myconn->last_time_used = curtime;
-	myconn->myds = sess->client_myds; // 20141011
-	myconn->fd = sess->client_myds->fd; // 20141011
-
-	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
-	uint32_t session_track_gtids_int = SpookyHash::Hash32(mysql_thread___default_session_track_gtids, strlen(mysql_thread___default_session_track_gtids), 10);
-	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
-	if (sess->client_myds->myconn->options.session_track_gtids) {
-		free(sess->client_myds->myconn->options.session_track_gtids);
-	}
-	sess->client_myds->myconn->options.session_track_gtids = strdup(mysql_thread___default_session_track_gtids);
-
-	return sess;
-}
-*/
-
-
 bool PgSQL_Thread::init() {
 	int i;
 	mysql_sessions = new PtrArray();
@@ -2891,18 +2816,6 @@ void PgSQL_Thread::poll_listener_del(int sock) {
 #endif
 		delete myds;
 	}
-}
-
-void PgSQL_Thread::register_session(PgSQL_Session * _sess, bool up_start) {
-	if (mysql_sessions == NULL) {
-		mysql_sessions = new PtrArray();
-	}
-	mysql_sessions->add(_sess);
-	_sess->thread = this;
-	_sess->match_regexes = match_regexes;
-	if (up_start)
-		_sess->start_time = curtime;
-	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
 }
 
 void PgSQL_Thread::unregister_session(int idx) {
@@ -3461,7 +3374,7 @@ void PgSQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 		//unsigned int maxsess=GloPTH->resume_mysql_sessions->len;
 		while (myexchange.resume_mysql_sessions->len) {
 			PgSQL_Session* mysess = (PgSQL_Session*)myexchange.resume_mysql_sessions->remove_index_fast(0);
-			register_session(mysess, false);
+			register_session(this, mysess, false);
 			PgSQL_Data_Stream* myds = mysess->client_myds;
 			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		}
@@ -5564,7 +5477,7 @@ void PgSQL_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	pthread_mutex_lock(&myexchange.mutex_idles);
 	while (myexchange.idle_mysql_sessions->len) {
 		PgSQL_Session* mysess = (PgSQL_Session*)myexchange.idle_mysql_sessions->remove_index_fast(0);
-		register_session(mysess, false);
+		register_session(this, mysess, false);
 		PgSQL_Data_Stream* myds = mysess->client_myds;
 		mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		// add in epoll()
@@ -5592,7 +5505,7 @@ void PgSQL_Thread::handle_mirror_queue_mysql_sessions() {
 			int idx;
 			idx = fastrand() % (mirror_queue_mysql_sessions->len);
 			PgSQL_Session* newsess = (PgSQL_Session*)mirror_queue_mysql_sessions->remove_index_fast(idx);
-			register_session(newsess);
+			register_session(this, newsess);
 			newsess->handler(); // execute immediately
 			if (newsess->status == WAITING_CLIENT_DATA) { // the mirror session has completed
 				unregister_session(mysql_sessions->len - 1);

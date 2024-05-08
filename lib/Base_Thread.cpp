@@ -19,6 +19,26 @@ Base_Thread::~Base_Thread() {
 };
 
 template<typename T, typename S>
+void Base_Thread::register_session(T thr, S _sess, bool up_start) {
+	if (mysql_sessions==NULL) {
+		mysql_sessions = new PtrArray();
+	}
+	mysql_sessions->add(_sess);
+
+	_sess->thread = thr;
+//	if (T a = dynamic_cast<T>(thr)) {
+//		_sess->thread = a;
+//	} else {
+//		assert(0);
+//	}
+	_sess->match_regexes=match_regexes;
+	if (up_start)
+		_sess->start_time=curtime;
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
+}
+
+
+template<typename T, typename S>
 S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	int arg_on = 1;
 	S sess = NULL;
@@ -29,7 +49,7 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	} else {
 		assert(0);
 	}
-// TODO	register_session(sess); // register session
+	register_session(static_cast<T*>(this), sess);
 	if constexpr (std::is_same<T, PgSQL_Thread>::value) {
 		sess->client_myds = new PgSQL_Data_Stream();
 	} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
