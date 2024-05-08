@@ -39,6 +39,15 @@ using json = nlohmann::json;
 #endif /* DEBUG */
 #define MYSQL_MONITOR_VERSION "2.0.1226" DEB
 
+#ifdef DEBUG
+//#define VALGRIND_ENABLE_ERROR_REPORTING
+//#define VALGRIND_DISABLE_ERROR_REPORTING
+#include "valgrind.h"
+#else
+#define VALGRIND_ENABLE_ERROR_REPORTING
+#define VALGRIND_DISABLE_ERROR_REPORTING
+#endif // DEBUG
+
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Cluster* GloProxyCluster;
