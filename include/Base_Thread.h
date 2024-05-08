@@ -48,6 +48,10 @@ class Base_Thread {
 	S create_new_session_and_client_data_stream(int _fd);
 	template<typename T, typename S>
 	void register_session(T, S, bool up_start = true);
+	template<typename T>
+	void check_timing_out_session(unsigned int n);
+	template<typename T>
+	void check_for_invalid_fd(unsigned int n);
 };
 
 #endif // CLASS_BASE_THREAD_H

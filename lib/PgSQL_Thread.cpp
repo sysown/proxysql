@@ -2917,11 +2917,11 @@ void PgSQL_Thread::ProcessAllMyDS_AfterPoll() {
 		}
 		if (mypolls.fds[n].revents == 0) {
 			if (poll_timeout_bool) {
-				check_timing_out_session(n);
+				check_timing_out_session<PgSQL_Thread>(n);
 			}
 		}
 		else {
-			check_for_invalid_fd(n); // this is designed to assert in case of failure
+			check_for_invalid_fd<PgSQL_Thread>(n); // this is designed to assert in case of failure
 			switch (myds->myds_type) {
 				// Note: this logic that was here was removed completely because we added mariadb client library.
 			case MYDS_LISTENER:
@@ -5551,42 +5551,6 @@ void PgSQL_Thread::handle_kill_queues() {
 		maintenance_loop = true;
 	}
 	pthread_mutex_unlock(&kq.m);
-}
-
-void PgSQL_Thread::check_timing_out_session(unsigned int n) {
-	// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
-	// check for timeout
-	// no events. This section is copied from process_data_on_data_stream()
-	PgSQL_Data_Stream* _myds = mypolls.myds[n];
-	if (_myds && _myds->sess) {
-		if (_myds->wait_until && curtime > _myds->wait_until) {
-			// timeout
-			_myds->sess->to_process = 1;
-		}
-		else {
-			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
-				// timeout
-				_myds->sess->to_process = 1;
-			}
-		}
-	}
-}
-
-void PgSQL_Thread::check_for_invalid_fd(unsigned int n) {
-	// check if the FD is valid
-	if (mypolls.fds[n].revents == POLLNVAL) {
-		// debugging output before assert
-		PgSQL_Data_Stream* _myds = mypolls.myds[n];
-		if (_myds) {
-			if (_myds->myconn) {
-				proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd, _myds->myconn->fd);
-				assert(mypolls.fds[n].revents != POLLNVAL);
-			}
-		}
-		// if we reached her, we didn't assert() yet
-		proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd);
-		assert(mypolls.fds[n].revents != POLLNVAL);
-	}
 }
 
 void PgSQL_Thread::read_one_byte_from_pipe(unsigned int n) {

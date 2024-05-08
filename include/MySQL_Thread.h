@@ -128,8 +128,8 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
 	void handle_mirror_queue_mysql_sessions();
 	void handle_kill_queues();
-	void check_timing_out_session(unsigned int n);
-	void check_for_invalid_fd(unsigned int n);
+	//void check_timing_out_session(unsigned int n);
+	//void check_for_invalid_fd(unsigned int n);
 	void read_one_byte_from_pipe(unsigned int n);
 	void tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds);
 	void tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds);

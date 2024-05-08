@@ -11,6 +11,10 @@
 // Explicitly instantiate the required template class and member functions
 template MySQL_Session* Base_Thread::create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(int);
 template PgSQL_Session* Base_Thread::create_new_session_and_client_data_stream<PgSQL_Thread, PgSQL_Session*>(int);
+template void Base_Thread::check_timing_out_session<MySQL_Thread>(unsigned int);
+template void Base_Thread::check_timing_out_session<PgSQL_Thread>(unsigned int);
+template void Base_Thread::check_for_invalid_fd<MySQL_Thread>(unsigned int);
+template void Base_Thread::check_for_invalid_fd<PgSQL_Thread>(unsigned int);
 
 Base_Thread::Base_Thread() {
 };
@@ -132,3 +136,64 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	}
 	return sess;
 }
+
+
+/**
+ * @brief Checks for timing out session and marks them for processing.
+ * 
+ * This function checks for timing out sessions and marks them for processing. Although the logic for managing connection timeout
+ * was removed due to the addition of the MariaDB client library, this function remains as a placeholder. It checks if the session
+ * has reached its wait_until or pause_until time, and if so, marks the session for processing.
+ * 
+ * @param n The index of the session in the MySQL_Data_Stream array.
+ */
+template<typename T>
+void Base_Thread::check_timing_out_session(unsigned int n) {
+	// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
+	// check for timeout
+	// no events. This section is copied from process_data_on_data_stream()
+	T* thr = static_cast<T*>(this);
+	auto * _myds = thr->mypolls.myds[n];
+	if (_myds && _myds->sess) {
+		if (_myds->wait_until && curtime > _myds->wait_until) {
+			// timeout
+			_myds->sess->to_process=1;
+		} else {
+			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
+				// timeout
+				_myds->sess->to_process=1;
+			}
+		}
+	}
+}
+
+
+
+
+/**
+ * @brief Checks for an invalid file descriptor (FD) and raises an error if found.
+ * 
+ * This function checks if the file descriptor (FD) at the specified index in the `mypolls.fds` array is invalid (`POLLNVAL`).
+ * If an invalid FD is found, it raises an error and asserts to ensure that the program does not proceed with an invalid FD.
+ * 
+ * @param n The index of the file descriptor in the `mypolls.fds` array.
+ */
+template<typename T>
+void Base_Thread::check_for_invalid_fd(unsigned int n) {
+	// check if the FD is valid
+	T* thr = static_cast<T*>(this);
+	if (thr->mypolls.fds[n].revents==POLLNVAL) {
+		// debugging output before assert
+		auto *_myds=thr->mypolls.myds[n];
+		if (_myds) {
+			if (_myds->myconn) {
+				proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", thr->mypolls.fds[n].fd, thr->mypolls.fds[n].events, _myds->fd, _myds->myconn->fd);
+				assert(thr->mypolls.fds[n].revents!=POLLNVAL);
+			}
+		}
+		// if we reached her, we didn't assert() yet
+		proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d\n", thr->mypolls.fds[n].fd, thr->mypolls.fds[n].events, _myds->fd);
+		assert(thr->mypolls.fds[n].revents!=POLLNVAL);
+	}
+}
+

@@ -3075,10 +3075,10 @@ void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
 		}
 		if (mypolls.fds[n].revents==0) {
 			if (poll_timeout_bool) {
-				check_timing_out_session(n);
+				check_timing_out_session<MySQL_Thread>(n);
 			}
 		} else {
-			check_for_invalid_fd(n); // this is designed to assert in case of failure
+			check_for_invalid_fd<MySQL_Thread>(n); // this is designed to assert in case of failure
 			switch(myds->myds_type) {
 				// Note: this logic that was here was removed completely because we added mariadb client library.
 				case MYDS_LISTENER:
@@ -5960,59 +5960,6 @@ void MySQL_Thread::handle_kill_queues() {
 	pthread_mutex_unlock(&kq.m);
 }
 
-
-/**
- * @brief Checks for timing out session and marks them for processing.
- * 
- * This function checks for timing out sessions and marks them for processing. Although the logic for managing connection timeout
- * was removed due to the addition of the MariaDB client library, this function remains as a placeholder. It checks if the session
- * has reached its wait_until or pause_until time, and if so, marks the session for processing.
- * 
- * @param n The index of the session in the MySQL_Data_Stream array.
- */
-void MySQL_Thread::check_timing_out_session(unsigned int n) {
-	// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
-	// check for timeout
-	// no events. This section is copied from process_data_on_data_stream()
-	MySQL_Data_Stream *_myds=mypolls.myds[n];
-	if (_myds && _myds->sess) {
-		if (_myds->wait_until && curtime > _myds->wait_until) {
-			// timeout
-			_myds->sess->to_process=1;
-		} else {
-			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
-				// timeout
-				_myds->sess->to_process=1;
-			}
-		}
-	}
-}
-
-
-/**
- * @brief Checks for an invalid file descriptor (FD) and raises an error if found.
- * 
- * This function checks if the file descriptor (FD) at the specified index in the `mypolls.fds` array is invalid (`POLLNVAL`).
- * If an invalid FD is found, it raises an error and asserts to ensure that the program does not proceed with an invalid FD.
- * 
- * @param n The index of the file descriptor in the `mypolls.fds` array.
- */
-void MySQL_Thread::check_for_invalid_fd(unsigned int n) {
-	// check if the FD is valid
-	if (mypolls.fds[n].revents==POLLNVAL) {
-		// debugging output before assert
-		MySQL_Data_Stream *_myds=mypolls.myds[n];
-		if (_myds) {
-			if (_myds->myconn) {
-				proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd, _myds->myconn->fd);
-				assert(mypolls.fds[n].revents!=POLLNVAL);
-			}
-		}
-		// if we reached her, we didn't assert() yet
-		proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd);
-		assert(mypolls.fds[n].revents!=POLLNVAL);
-	}
-}
 
 void MySQL_Thread::read_one_byte_from_pipe(unsigned int n) {
 	if (mypolls.fds[n].revents) {
