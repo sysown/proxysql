@@ -11,22 +11,12 @@
 // Explicitly instantiate the required template class and member functions
 template MySQL_Session* Base_Thread::create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(int);
 template PgSQL_Session* Base_Thread::create_new_session_and_client_data_stream<PgSQL_Thread, PgSQL_Session*>(int);
-template void Base_Thread::check_timing_out_session<MySQL_Thread>(unsigned int);
-template void Base_Thread::check_timing_out_session<PgSQL_Thread>(unsigned int);
-template void Base_Thread::check_for_invalid_fd<MySQL_Thread>(unsigned int);
-template void Base_Thread::check_for_invalid_fd<PgSQL_Thread>(unsigned int);
 template void Base_Thread::ProcessAllSessions_SortingSessions<MySQL_Session>();
 template void Base_Thread::ProcessAllSessions_SortingSessions<PgSQL_Session>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
-template void Base_Thread::read_one_byte_from_pipe<MySQL_Thread>(unsigned int n);
-template void Base_Thread::read_one_byte_from_pipe<PgSQL_Thread>(unsigned int n);
-template void Base_Thread::tune_timeout_for_myds_needs_pause<MySQL_Thread>(MySQL_Data_Stream *);
-template void Base_Thread::tune_timeout_for_myds_needs_pause<PgSQL_Thread>(PgSQL_Data_Stream *);
-template void Base_Thread::tune_timeout_for_session_needs_pause<MySQL_Thread>(MySQL_Data_Stream *);
-template void Base_Thread::tune_timeout_for_session_needs_pause<PgSQL_Thread>(PgSQL_Data_Stream *);
-template void Base_Thread::configure_pollout<MySQL_Thread>(MySQL_Data_Stream *, unsigned int);
-template void Base_Thread::configure_pollout<PgSQL_Thread>(PgSQL_Data_Stream *, unsigned int);
+template void Base_Thread::ProcessAllMyDS_BeforePoll<MySQL_Thread>();
+template void Base_Thread::ProcessAllMyDS_BeforePoll<PgSQL_Thread>();
 
 
 Base_Thread::Base_Thread() {
@@ -378,5 +368,102 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 		}
 	}
 	return false;
+}
+
+#ifdef IDLE_THREADS
+/**
+ * @brief Moves a session to the idle session array if it meets the idle criteria.
+ * 
+ * This function checks if a session should be moved to the idle session array based on its idle time
+ * and other conditions. If the session meets the idle criteria, it is moved to the idle session array.
+ * 
+ * @param myds Pointer to the MySQL data stream associated with the session.
+ * @param n The index of the session in the poll array.
+ * @return True if the session is moved to the idle session array, false otherwise.
+ */
+template<typename T, typename DS>
+bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n) {
+	T* thr = static_cast<T*>(this);
+	unsigned long long _tmp_idle = thr->mypolls.last_recv[n] > thr->mypolls.last_sent[n] ? thr->mypolls.last_recv[n] : thr->mypolls.last_sent[n] ;
+	if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
+		// make sure data stream has no pending data out and session is not throttled (#1939)
+		// because epoll thread does not handle data stream with data out
+		if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
+			//unsigned int j;
+			bool has_backends = myds->sess->has_any_backend();
+			if (has_backends==false) {
+				unsigned long long idle_since = curtime - myds->sess->IdleTime();
+				thr->mypolls.remove_index_fast(n);
+				myds->mypolls=NULL;
+				unsigned int i = find_session_idx_in_mysql_sessions<T>(myds->sess);
+				myds->sess->thread=NULL;
+				thr->unregister_session(i);
+				myds->sess->idle_since = idle_since;
+				thr->idle_mysql_sessions->add(myds->sess);
+				return true;
+			}
+		}
+	}
+	return false;
+}
+#endif // IDLE_THREADS
+
+template<typename T, typename S>
+unsigned int Base_Thread::find_session_idx_in_mysql_sessions(S * sess) {
+	T* thr = static_cast<T*>(this);
+	unsigned int i=0;
+	for (i=0;i<mysql_sessions->len;i++) {
+		S *mysess=(S *)thr->mysql_sessions->index(i);
+		if (mysess==sess) {
+			return i;
+		}
+	}
+	return i;
+}
+
+template<typename T>
+void Base_Thread::ProcessAllMyDS_BeforePoll() {
+	T* thr = static_cast<T*>(this);
+	bool check_if_move_to_idle_thread = false;
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
+			last_move_to_idle_thread_time=curtime;
+			check_if_move_to_idle_thread=true;
+		}
+	}
+#endif
+	for (unsigned int n = 0; n < thr->mypolls.len; n++) {
+		auto * myds=thr->mypolls.myds[n];
+		thr->mypolls.fds[n].revents=0;
+		if (myds) {
+#ifdef IDLE_THREADS
+			if (check_if_move_to_idle_thread == true) {
+				// here we try to move it to the maintenance thread
+				if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
+					if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
+						if (move_session_to_idle_mysql_sessions<T>(myds, n)) {
+							n--;  // compensate mypolls.remove_index_fast(n) and n++ of loop
+							continue;
+						}
+					}
+				}
+			}
+#endif // IDLE_THREADS
+			if (unlikely(myds->wait_until)) {
+				tune_timeout_for_myds_needs_pause<T>(myds);
+			}
+			if (myds->sess) {
+				if (unlikely(myds->sess->pause_until > 0)) {
+					tune_timeout_for_session_needs_pause<T>(myds);
+				}
+			}
+			myds->revents=0;
+			if (myds->myds_type!=MYDS_LISTENER) {
+				configure_pollout<T>(myds, n);
+			}
+		}
+		proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", thr->mypolls.myds[n], thr->mypolls.fds[n].fd, thr->mypolls.fds[n].events);
+	}
 }
 

@@ -3006,52 +3006,6 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 }
 
 // this function was inline in MySQL_Thread::run()
-void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
-	bool check_if_move_to_idle_thread = false;
-#ifdef IDLE_THREADS
-	if (GloVars.global.idle_threads) {
-		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
-			last_move_to_idle_thread_time=curtime;
-			check_if_move_to_idle_thread=true;
-		}
-	}
-#endif
-	for (unsigned int n = 0; n < mypolls.len; n++) {
-		MySQL_Data_Stream *myds=NULL;
-		myds=mypolls.myds[n];
-		mypolls.fds[n].revents=0;
-		if (myds) {
-#ifdef IDLE_THREADS
-			if (check_if_move_to_idle_thread == true) {
-				// here we try to move it to the maintenance thread
-				if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
-					if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
-						if (move_session_to_idle_mysql_sessions(myds, n)) {
-							n--;  // compensate mypolls.remove_index_fast(n) and n++ of loop
-							continue;
-						}
-					}
-				}
-			}
-#endif // IDLE_THREADS
-			if (unlikely(myds->wait_until)) {
-				tune_timeout_for_myds_needs_pause<MySQL_Thread>(myds);
-			}
-			if (myds->sess) {
-				if (unlikely(myds->sess->pause_until > 0)) {
-					tune_timeout_for_session_needs_pause<MySQL_Thread>(myds);
-				}
-			}
-			myds->revents=0;
-			if (myds->myds_type!=MYDS_LISTENER) {
-				configure_pollout<MySQL_Thread>(myds, n);
-			}
-		}
-		proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
-	}
-}
-
-// this function was inline in MySQL_Thread::run()
 /**
  * @brief Cleans up the mirror queue by removing excess sessions.
  * 
@@ -3258,7 +3212,7 @@ __run_skip_1:
 
 			handle_mirror_queue_mysql_sessions();
 
-			ProcessAllMyDS_BeforePoll();
+			ProcessAllMyDS_BeforePoll<MySQL_Thread>();
 
 #ifdef IDLE_THREADS
 			run_MoveSessionsBetweenThreads();
@@ -3389,17 +3343,6 @@ __run_skip_1:
 	}
 }
 // end of ::run()
-
-unsigned int MySQL_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *sess) {
-	unsigned int i=0;
-	for (i=0;i<mysql_sessions->len;i++) {
-		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
-		if (mysess==sess) {
-			return i;
-		}
-	}
-	return i;
-}
 
 #ifdef IDLE_THREADS
 
@@ -5741,42 +5684,6 @@ void MySQL_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
 				}
 			}
 }
-
-#ifdef IDLE_THREADS
-/**
- * @brief Moves a session to the idle session array if it meets the idle criteria.
- * 
- * This function checks if a session should be moved to the idle session array based on its idle time
- * and other conditions. If the session meets the idle criteria, it is moved to the idle session array.
- * 
- * @param myds Pointer to the MySQL data stream associated with the session.
- * @param n The index of the session in the poll array.
- * @return True if the session is moved to the idle session array, false otherwise.
- */
-bool MySQL_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n) {
-	unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
-	if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
-		// make sure data stream has no pending data out and session is not throttled (#1939)
-		// because epoll thread does not handle data stream with data out
-		if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
-			//unsigned int j;
-			bool has_backends = myds->sess->has_any_backend();
-			if (has_backends==false) {
-				unsigned long long idle_since = curtime - myds->sess->IdleTime();
-				mypolls.remove_index_fast(n);
-				myds->mypolls=NULL;
-				unsigned int i = find_session_idx_in_mysql_sessions(myds->sess);
-				myds->sess->thread=NULL;
-				unregister_session(i);
-				myds->sess->idle_since = idle_since;
-				idle_mysql_sessions->add(myds->sess);
-				return true;
-			}
-		}
-	}
-	return false;
-}
-#endif // IDLE_THREADS
 
 #ifdef IDLE_THREADS
 /**

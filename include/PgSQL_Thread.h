@@ -141,10 +141,10 @@ private:
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(PgSQL_Thread * thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();
-	bool move_session_to_idle_mysql_sessions(PgSQL_Data_Stream * myds, unsigned int n);
+	//bool move_session_to_idle_mysql_sessions(PgSQL_Data_Stream * myds, unsigned int n);
 #endif // IDLE_THREADS
 
-	unsigned int find_session_idx_in_mysql_sessions(PgSQL_Session * sess);
+	//unsigned int find_session_idx_in_mysql_sessions(PgSQL_Session * sess);
 	//bool set_backend_to_be_skipped_if_frontend_is_slow(PgSQL_Data_Stream * myds, unsigned int n);
 	void handle_mirror_queue_mysql_sessions();
 	void handle_kill_queues();
@@ -166,7 +166,7 @@ public:
 	pthread_t thread_id;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
-	unsigned long long last_move_to_idle_thread_time;
+	//unsigned long long last_move_to_idle_thread_time;
 	std::atomic<unsigned long long> atomic_curtime;
 	//PtrArray* mysql_sessions;
 	PtrArray* mirror_queue_mysql_sessions;
@@ -211,7 +211,7 @@ public:
 	bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();
-	void ProcessAllMyDS_BeforePoll();
+	//void ProcessAllMyDS_BeforePoll();
 	//void ProcessAllMyDS_AfterPoll();
 	void run();
 	void poll_listener_add(int sock);

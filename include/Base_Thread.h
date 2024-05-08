@@ -41,6 +41,7 @@ class Base_Thread {
 	bool maintenance_loop;
 	public:
 	unsigned long long curtime;
+	unsigned long long last_move_to_idle_thread_time;
 	int shutdown;
 	PtrArray *mysql_sessions;
 	Session_Regex **match_regexes;
@@ -68,6 +69,11 @@ class Base_Thread {
 	void configure_pollout(DS * myds, unsigned int n);
 	template<typename T, typename DS>
 	bool set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsigned int n);
+#ifdef IDLE_THREADS
+	template<typename T, typename DS> bool move_session_to_idle_mysql_sessions(DS * myds, unsigned int n);
+#endif // IDLE_THREADS
+	template<typename T, typename S> unsigned int find_session_idx_in_mysql_sessions(S * sess);
+	template<typename T> void ProcessAllMyDS_BeforePoll();
 
 	friend class MySQL_Thread;
 	friend class PgSQL_Thread;
