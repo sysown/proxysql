@@ -320,6 +320,33 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  ubuntu24_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-ubuntu24
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=ubuntu24
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  ubuntu24_clang_build:
+    extends:
+      service: ubuntu24_build
+    image: proxysql/packaging:build-clang-ubuntu24
+    environment:
+      - PKG_RELEASE=ubuntu24-clang
+
+  ubuntu24_dbg_build:
+    extends:
+      service: ubuntu24_build
+    environment:
+      - PKG_RELEASE=dbg-ubuntu24
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   opensuse15_build:
     extends:
