@@ -1,3 +1,5 @@
+#ifndef PROXYSQL_CPP_H
+#define PROXYSQL_CPP_H
 #include "gen_utils.h"
 #include "PgSQL_Thread.h"
 #include "MySQL_Thread.h"
@@ -44,3 +46,4 @@
 #include <stdio.h>
 #include <map>
 #include <unordered_map>
+#endif // PROXYSQL_CPP_H

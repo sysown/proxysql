@@ -6,6 +6,7 @@
 
 #include "proxysql.h"
 #include "Base_Session.h"
+#include "Client_Session.h"
 #include "cpp.h"
 #include "PgSQL_Variables.h"
 

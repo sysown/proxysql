@@ -1074,8 +1074,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	MLM = new PgSQL_Listeners_Manager();
 
 	// Initialize prometheus metrics
-	init_prometheus_counter_array<th_metrics_map_idx, p_th_counter>(th_metrics_map, this->status_variables.p_counter_array);
-	init_prometheus_gauge_array<th_metrics_map_idx, p_th_gauge>(th_metrics_map, this->status_variables.p_gauge_array);
+	//init_prometheus_counter_array<th_metrics_map_idx, p_th_counter>(th_metrics_map, this->status_variables.p_counter_array);
+	//init_prometheus_gauge_array<th_metrics_map_idx, p_th_gauge>(th_metrics_map, this->status_variables.p_gauge_array);
 
 	// Init client_host_cache mutex
 	pthread_mutex_init(&mutex_client_host_cache, NULL);
@@ -1932,7 +1932,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		unsigned int intv = atoi(value);
 		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && intv > 0 && intv < 256) {
 			num_threads = intv;
-			this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
+			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
 			return true;
 		}
 		else {
@@ -2238,12 +2238,12 @@ void PgSQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	}
 	if (num) {
 		num_threads = num;
-		this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num);
+		//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num);
 	}
 	else {
 		if (num_threads == 0) {
 			num_threads = DEFAULT_NUM_THREADS; //default
-			this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(DEFAULT_NUM_THREADS);
+			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(DEFAULT_NUM_THREADS);
 		}
 	}
 	int rc = pthread_attr_setstacksize(&attr, stacksize);
@@ -2949,7 +2949,7 @@ void PgSQL_Thread::run___cleanup_mirror_queue() {
 		while (mirror_queue_mysql_sessions_cache->len > mirror_queue_mysql_sessions->len && mirror_queue_mysql_sessions_cache->len > l) {
 			PgSQL_Session* newsess = (PgSQL_Session*)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
 			__sync_add_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-			GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
+			//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
 			delete newsess;
 		}
 	}
@@ -3588,7 +3588,7 @@ void PgSQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, Pg
 		}
 		if (to_cache) {
 			__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-			GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+			//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 			mirror_queue_mysql_sessions_cache->add(sess);
 		}
 		else {
@@ -4078,7 +4078,7 @@ PgSQL_Thread::PgSQL_Thread() {
 
 	status_variables.active_transactions = 0;
 
-	for (unsigned int i = 0; i < st_var_END; i++) {
+	for (unsigned int i = 0; i < PG_st_var_END; i++) {
 		status_variables.stvar[i] = 0;
 	}
 	match_regexes = NULL;
@@ -4377,6 +4377,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1] = buf;
 		result->add_row(pta);
 	}
+/*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
 			if (strlen(PgSQL_Thread_status_variables_counter_array[i].name)) {
@@ -4410,6 +4411,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			}
 		}
 	}
+*/
 	{	// Mirror current concurrency
 		pta[0] = (char*)"Mirror_concurrency";
 		sprintf(buf, "%u", status_variables.mirror_sessions_current);
@@ -5011,12 +5013,13 @@ unsigned long long PgSQL_Threads_Handler::get_total_mirror_queue() {
 				q += thr->mirror_queue_mysql_sessions->len; // this is a dirty read
 		}
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::mirror_queue_lengths]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::mirror_queue_lengths]->Set(q);
 
 	return q;
 }
 
 
+/*
 unsigned long long PgSQL_Threads_Handler::get_status_variable(
 	enum PgSQL_Thread_status_variable v_idx,
 	p_th_counter::metric m_idx,
@@ -5046,9 +5049,10 @@ unsigned long long PgSQL_Threads_Handler::get_status_variable(
 		status_variables.p_counter_array[m_idx]->Increment(final_val);
 	}
 	return q;
-
 }
+*/
 
+/*
 unsigned long long PgSQL_Threads_Handler::get_status_variable(
 	enum PgSQL_Thread_status_variable v_idx,
 	p_th_gauge::metric m_idx,
@@ -5079,6 +5083,7 @@ unsigned long long PgSQL_Threads_Handler::get_status_variable(
 	return q;
 
 }
+*/
 
 unsigned int PgSQL_Threads_Handler::get_active_transations() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
@@ -5091,7 +5096,7 @@ unsigned int PgSQL_Threads_Handler::get_active_transations() {
 				q += __sync_fetch_and_add(&thr->status_variables.active_transactions, 0);
 		}
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::active_transactions]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::active_transactions]->Set(q);
 
 	return q;
 }
@@ -5108,7 +5113,7 @@ unsigned int PgSQL_Threads_Handler::get_non_idle_client_connections() {
 				q += __sync_fetch_and_add(&thr->mysql_sessions->len, 0);
 		}
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::client_connections_non_idle]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::client_connections_non_idle]->Set(q);
 
 	return q;
 }
@@ -5125,8 +5130,8 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 				q += __sync_fetch_and_add(&thr->status_variables.stvar[st_var_mysql_backend_buffers_bytes], 0);
 		}
 	}
-	const auto& cur_val = this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Value();
-	this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Increment(q - cur_val);
+	//const auto& cur_val = this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Value();
+	//this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Increment(q - cur_val);
 
 	return q;
 }
@@ -5152,7 +5157,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 			}
 		}
 #endif // IDLE_THREADS
-	this->status_variables.p_counter_array[p_th_gauge::mysql_frontend_buffers_bytes]->Increment(q);
+	//this->status_variables.p_counter_array[p_th_gauge::mysql_frontend_buffers_bytes]->Increment(q);
 
 	return q;
 }
@@ -5176,7 +5181,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_session_internal_bytes() {
 			}
 #endif // IDLE_THREADS
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_session_internal_bytes]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::mysql_session_internal_bytes]->Set(q);
 
 	return q;
 }
@@ -5190,6 +5195,7 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 	get_mysql_backend_buffers_bytes();
 	get_mysql_frontend_buffers_bytes();
 	get_mysql_session_internal_bytes();
+/*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
 			get_status_variable(
@@ -5209,6 +5215,8 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 			);
 		}
 	}
+*/
+/*
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_wait_timeout]->Set(this->variables.wait_timeout);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_interval]->Set(this->variables.monitor_ping_interval / 1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_max_connections]->Set(this->variables.max_connections);
@@ -5223,6 +5231,7 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval / 1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_timeout]->Set(this->variables.monitor_replication_lag_timeout / 1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_history]->Set(this->variables.monitor_history / 1000.0);
+*/
 }
 
 void PgSQL_Thread::Get_Memory_Stats() {

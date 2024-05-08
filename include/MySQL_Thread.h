@@ -43,17 +43,6 @@ typedef struct __attribute__((aligned(64))) _conn_exchange_t {
 } conn_exchange_t;
 #endif // IDLE_THREADS
 
-typedef struct _thr_id_username_t {
-	uint32_t id;
-	char *username;
-} thr_id_usr;
-
-typedef struct _kill_queue_t {
-	pthread_mutex_t m;
-	std::vector<thr_id_usr *> conn_ids;
-	std::vector<thr_id_usr *> query_ids;
-} kill_queue_t;
-
 enum MySQL_Thread_status_variable {
 	st_var_backend_stmt_prepare,
 	st_var_backend_stmt_execute,
@@ -97,7 +86,7 @@ enum MySQL_Thread_status_variable {
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
-	st_var_END
+	MY_st_var_END
 };
 
 class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
@@ -188,7 +177,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
 	struct {
-		unsigned long long stvar[st_var_END];
+		unsigned long long stvar[MY_st_var_END];
 		unsigned int active_transactions;
 	} status_variables;
 

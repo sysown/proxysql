@@ -1231,6 +1231,10 @@ std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint6
 	return mysrvs_checksum;
 }
 
+bool MySQL_HostGroups_Manager::commit() {
+	return commit({},{});
+}
+
 bool MySQL_HostGroups_Manager::commit(
 	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,

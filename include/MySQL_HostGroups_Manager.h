@@ -126,6 +126,9 @@ class MySrvC;
 class MySrvList;
 class MyHGC;
 
+struct peer_runtime_mysql_servers_t;
+struct peer_mysql_servers_v2_t;
+
 std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
 void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
 
@@ -936,9 +939,10 @@ class MySQL_HostGroups_Manager {
 	 * @return Checksum computed using the provided hash, and 'mysql_servers' config tables hashes.
 	 */
 	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
+	bool commit();
 	bool commit(
-		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers = {},
-		const peer_mysql_servers_v2_t& peer_mysql_servers_v2 = {},
+		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers = true,
 		bool update_version = false
 	);

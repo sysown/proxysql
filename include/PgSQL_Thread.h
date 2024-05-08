@@ -7,6 +7,7 @@
 #include "proxysql.h"
 #include "Base_Thread.h"
 #include "cpp.h"
+#include "ProxySQL_Poll.h"
 #include "PgSQL_Variables.h"
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
@@ -107,6 +108,7 @@ enum PgSQL_Thread_status_variable {
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
 	st_var_END*/
+	PG_st_var_END
 };
 
 class __attribute__((aligned(64))) PgSQL_Thread : public Base_Thread
@@ -186,7 +188,7 @@ public:
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
 	struct {
-		unsigned long long stvar[st_var_END];
+		unsigned long long stvar[PG_st_var_END];
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -567,8 +569,8 @@ public:
 		unsigned int mirror_sessions_current;
 		int threads_initialized = 0;
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array{};
-		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array{};
+		//std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array{};
+		//std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array{};
 	} status_variables;
 
 	std::atomic<bool> bootstrapping_listeners;
@@ -683,8 +685,8 @@ public:
 	SQLite3_result* SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
-	unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
-	unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
+	//unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
+	//unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();

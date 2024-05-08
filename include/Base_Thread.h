@@ -3,6 +3,17 @@
 
 #include "proxysql.h"
 
+typedef struct _thr_id_username_t {
+	uint32_t id;
+	char *username;
+} thr_id_usr;
+
+typedef struct _kill_queue_t {
+	pthread_mutex_t m;
+	std::vector<thr_id_usr *> conn_ids;
+	std::vector<thr_id_usr *> query_ids;
+} kill_queue_t;
+
 /**
  * @class Session_Regex
  * @brief Encapsulates regex operations for session handling.
