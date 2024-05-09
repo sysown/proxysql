@@ -48,22 +48,6 @@ namespace nlohmann { class json; }
 #endif /* DEBUG */
 #define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
-#define MYHGM_PgSQL_GROUP_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_group_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1,2)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
-
-#define MYHGM_PgSQL_GALERA_HOSTGROUPS "CREATE TABLE pgsql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1,2)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
-
-#define MYHGM_PgSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE pgsql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
-										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL DEFAULT '' , " \
-										  "max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , " \
-										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
-										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , " \
-										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
-										  "new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , " \
-										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , " \
-										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
-										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR ," \
-										  "UNIQUE (reader_hostgroup))"
-
 #define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname, port"
 
 #define MYHGM_PgSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
@@ -641,7 +625,6 @@ class PgSQL_HostGroups_Manager {
 	void purge_pgsql_servers_table();
 	void generate_pgsql_servers_table(int *_onlyhg=NULL);
 	void generate_pgsql_replication_hostgroups_table();
-	PgSQL_Galera_Info *get_galera_node_info(int hostgroup);
 
 	/**
 	 * @brief This resultset holds the current values for 'runtime_pgsql_servers' computed by either latest
@@ -676,35 +659,6 @@ class PgSQL_HostGroups_Manager {
 	 */
 	SQLite3_result *incoming_replication_hostgroups;
 
-	void generate_pgsql_group_replication_hostgroups_table();
-	/**
-	 * @brief Regenerates the resultset used by 'MySQL_Monitor' containing the servers to be monitored.
-	 * @details This function is required to be called after any action that results in the addition of a new
-	 * 	server that 'MySQL_Monitor' should be aware of for 'group_replication', i.e. a server added to the
-	 * 	hostgroups present in any entry of 'pgsql_group_replication_hostgroups'. E.g:
-	 * 	  - Inside 'generate_pgsql_group_replication_hostgroups_table'.
-	 * 	  - Autodiscovery.
-	 *
-	 * 	NOTE: This is a common pattern for all the clusters monitoring.
-	 */
-	void generate_pgsql_group_replication_hostgroups_monitor_resultset();
-	SQLite3_result *incoming_group_replication_hostgroups;
-
-	pthread_mutex_t Group_Replication_Info_mutex;
-	std::map<int , PgSQL_Group_Replication_Info *> Group_Replication_Info_Map;
-
-	void generate_pgsql_galera_hostgroups_table();
-	SQLite3_result *incoming_galera_hostgroups;
-
-	pthread_mutex_t Galera_Info_mutex;
-	std::map<int , PgSQL_Galera_Info *> Galera_Info_Map;
-
-	void generate_pgsql_aws_aurora_hostgroups_table();
-	SQLite3_result *incoming_aws_aurora_hostgroups;
-
-	pthread_mutex_t AWS_Aurora_Info_mutex;
-	std::map<int , PgSQL_AWS_Aurora_Info *> AWS_Aurora_Info_Map;
-
 	void generate_pgsql_hostgroup_attributes_table();
 	SQLite3_result *incoming_hostgroup_attributes;
 
@@ -738,10 +692,7 @@ class PgSQL_HostGroups_Manager {
 		std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, PgSQL_p_hg_dyn_gauge::metric idx
 	);
 
-	void group_replication_lag_action_set_server_status(PgSQL_HGC* myhgc, char* address, int port, int lag_count, bool enable);
-
 	public:
-	std::mutex galera_set_writer_mutex;
 	/**
 	 * @brief Mutex used to guard 'pgsql_servers_to_monitor' resulset.
 	 */
@@ -886,9 +837,6 @@ class PgSQL_HostGroups_Manager {
 	 * @brief Update all HGM_TABLES checksums and uses them to update the supplied SpookyHash.
 	 * @details Checksums are the checksums for the following tables:
 	 *  - pgsql_replication_hostgroups
-	 *  - pgsql_group_replication_hostgroups
-	 *  - pgsql_galera_hostgroups
-	 *  - pgsql_aws_aurora_hostgroups
 	 *  - pgsql_hostgroup_attributes
 	 *
 	 *  These checksums are used to compute the global checksum for 'pgsql_servers_v2'.
@@ -939,9 +887,6 @@ class PgSQL_HostGroups_Manager {
 	/**
 	 * @brief Creates a resultset with the current full content of the target table.
 	 * @param string The target table. Valid values are:
-	 *   - "pgsql_aws_aurora_hostgroups"
-	 *   - "pgsql_galera_hostgroups"
-	 *   - "pgsql_group_replication_hostgroups"
 	 *   - "pgsql_replication_hostgroups"
 	 *   - "pgsql_hostgroup_attributes"
 	 *   - "pgsql_servers"
@@ -1016,88 +961,6 @@ class PgSQL_HostGroups_Manager {
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
-
-	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
-	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
-	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
-	/**
-	 * @brief Tries to add a new server found during GR autodiscovery to the supplied hostgroup.
-	 * @details For adding the new server, several actions are performed:
-	 *  1. Lookup the target server in the corresponding PgSQL_HGC for the supplied hostgroup.
-	 *  2. If server is found, and it's status isn't 'OFFLINE_HARD' do nothing. Otherwise:
-	 *      - If server is found as 'OFFLINE_HARD', reset the internal values corresponding to
-	 *        'servers_defaults' values to '-1', update the defaulted values to the ones in its 'PgSQL_HGC', lastly
-	 *        re-enable the server and log the action.
-	 *      - If server isn't found, create it in the corresponding reader hostgroup of the supplied writer
-	 *        hostgroup, setting all 'servers_defaults' params as '-1', log the action.
-	 *      - After any of the two previous actions, always regenerate servers data structures.
-	 *
-	 *  NOTE: Server data structures regeneration requires:
-	 *   1. Purging the 'pgsql_servers_table' (Lazy removal of 'OFFLINE_HARD' servers.)
-	 *   2. Regenerate the actual 'myhgm::pgsql_servers' table from memory structures.
-	 *   3. Update the 'pgsql_servers' resultset used for monitoring. This resultset is used for general
-	 *      monitoring actions like 'ping', 'connect'.
-	 *   4. Regenerate the specific resultset for 'Group Replication' monitoring. This resultset is the way to
-	 *      communicate back to the main monitoring thread that servers config has changed, and a new thread
-	 *      shall be created with the new servers config. This same principle is used for Aurora.
-	 *
-	 * @param _host Server address.
-	 * @param _port Server port.
-	 * @param _wr_hg Writer hostgroup of the cluster being monitored. Autodiscovered servers are always added
-	 *   to the reader hostgroup by default, later monitoring actions will re-position the server is required.
-	 */
-	void update_group_replication_add_autodiscovered(const std::string& _host, int _port, int _wr_hg);
-	void converge_group_replication_config(int _writer_hostgroup);
-	/**
-	 * @brief Set the supplied server as SHUNNED, this function shall be called
-	 *   to 'SHUNNED' those servers which replication lag is bigger than:
-	 *     - `mysql_thread___monitor_groupreplication_max_transactions_behind_count`
-	 *
-	 * @details The function automatically handles the appropriate operation to
-	 *   perform on the supplied server, based on the supplied 'enable' flag and
-	 *   in 'monitor_groupreplication_max_transaction_behind_for_read_only'
-	 *   variable. In case the value of the variable is:
-	 *
-	 *     * '0' or '2': It's required to search the writer hostgroup for
-	 *       finding the supplied server.
-	 *     * '1' or '2': It's required to search the reader hostgroup for
-	 *       finding the supplied server.
-	 *
-	 * @param _hid The writer hostgroup.
-	 * @param address The server address.
-	 * @param port The server port.
-	 * @param lag_counts The computed lag for the sever.
-	 * @param read_only Boolean specifying the read_only flag value of the server.
-	 * @param enable Boolean specifying if the server needs to be disabled / enabled,
-	 *   'true' for enabling the server if it's 'SHUNNED', 'false' for disabling it.
-	 */
-	void group_replication_lag_action(int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable);
-	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
-	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
-	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);
-	void converge_galera_config(int _writer_hostgroup);
-
-	// FIXME : add action functions for AWS Aurora
-	//void aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, float current_replication_lag, bool enable, bool verbose=true);
-	//bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, unsigned int current_replication_lag_us, bool enable, bool is_writer, bool verbose=true);
-	//void update_aws_aurora_set_writer(int _whid, int _rhid, char *address, unsigned int port, bool verbose=true);
-	//void update_aws_aurora_set_reader(int _whid, int _rhid, char *_hostname, int _port);
-	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
-	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
-	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
-	/**
-	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora.
-	 * @details This is required to be called when:
-	 *   - The 'pgsql_aws_aurora_hostgroups' table is regenerated (via 'commit').
-	 *   - When new servers are discovered, and created in already monitored Aurora clusters.
-	 *
-	 *   The resultset holds the servers that are present in 'pgsql_servers' table, and share hostgroups with
-	 *   the **active** clusters specified in 'pgsql_aws_aurora_hostgroups'. See query
-	 *   'SELECT_AWS_AURORA_SERVERS_FOR_MONITOR'.
-	 * @param lock Wether if both 'AWS_Aurora_Info_mutex' and 'MySQL_Monitor::aws_aurora_mutex' mutexes should
-	 *   be taken or not.
-	 */
-	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
 
 	SQLite3_result * get_stats_pgsql_gtid_executed();
 	void generate_pgsql_gtid_executed_tables();
