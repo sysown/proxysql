@@ -1763,7 +1763,7 @@ unique_ptr<SQLite3_result> get_admin_runtime_pgsql_servers(SQLite3DB* mydb) {
 	int affected_rows = 0;
 	SQLite3_result* resultset = nullptr;
 
-	mydb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
+	mydb->execute_statement(PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
 
 	if (error) {
 		proxy_error("SQLite3 query generating 'runtime_pgsql_servers' resultset failed with error '%s'\n", error);
@@ -1786,7 +1786,7 @@ unique_ptr<SQLite3_result> get_pgsql_servers_v2() {
 
 	if (GloAdmin && GloAdmin->admindb) {
 		GloAdmin->admindb->execute_statement(
-			MYHGM_GEN_CLUSTER_ADMIN_PgSQL_SERVERS, &error, &cols, &affected_rows, &resultset
+			PGHGM_GEN_CLUSTER_ADMIN_PGSQL_SERVERS, &error, &cols, &affected_rows, &resultset
 		);
 	}
 
@@ -2250,7 +2250,7 @@ uint64_t PgSQL_HostGroups_Manager::get_pgsql_servers_checksum(SQLite3_result* ru
 		int cols = 0;
 		int affected_rows = 0;
 
-		mydb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
+		mydb->execute_statement(PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
 
 		if (resultset) {
 			save_runtime_pgsql_servers(resultset);
@@ -2600,9 +2600,9 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	} else if (name == "pgsql_hostgroup_attributes") {
 		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM pgsql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "pgsql_servers") {
-		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;
-	} else if (name == "cluster_pgsql_servers") { // TODO: what is that?
-		query = (char *)MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS;
+		query = (char *)PGHGM_GEN_ADMIN_RUNTIME_SERVERS;
+	} else if (name == "cluster_pgsql_servers") {
+		query = (char *)PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS;
 	} else {
 		assert(0);
 	}

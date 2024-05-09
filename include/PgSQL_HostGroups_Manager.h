@@ -48,7 +48,7 @@ namespace nlohmann { class json; }
 #endif /* DEBUG */
 #define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
-#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname, port"
+#define PGHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname, port"
 
 #define MYHGM_PgSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
@@ -67,7 +67,7 @@ namespace nlohmann { class json; }
  *  sed 's/^\t\+"//g; s/"\s\\$//g; s/\\"/"/g' /tmp/select.sql | paste -sd ''
  *  ```
  */
-#define MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS \
+#define PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS \
 	"SELECT " \
 		"hostgroup_id, hostname, port, gtid_port," \
 		"CASE status" \
@@ -90,7 +90,7 @@ namespace nlohmann { class json; }
  *  filters out any 'OFFLINE_HARD' entries. This is done because none of the statuses are valid configuration
  *  statuses, they are local, transient status that ProxySQL uses during operation.
  */
-#define MYHGM_GEN_CLUSTER_ADMIN_PgSQL_SERVERS \
+#define PGHGM_GEN_CLUSTER_ADMIN_PGSQL_SERVERS \
 	"SELECT " \
 		"hostgroup_id, hostname, port, gtid_port, " \
 		"CASE" \
@@ -806,7 +806,7 @@ class PgSQL_HostGroups_Manager {
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'pgsql_servers_v2' using the provided hash.
-	 * @param servers_v2_hash The 'raw_checksum' from 'MYHGM_GEN_CLUSTER_ADMIN_PgSQL_SERVERS' or peer node.
+	 * @param servers_v2_hash The 'raw_checksum' from 'PGHGM_GEN_CLUSTER_ADMIN_PGSQL_SERVERS' or peer node.
 	 * @return Checksum computed using the provided hash, and 'pgsql_servers' config tables hashes.
 	 */
 	std::string gen_global_pgsql_servers_v2_checksum(uint64_t servers_v2_hash);
@@ -820,7 +820,7 @@ class PgSQL_HostGroups_Manager {
 	 * @brief Extracted from 'commit'. Performs the following actions:
 	 *  1. Re-generates the 'myhgm.pgsql_servers' table.
 	 *  2. If supplied 'runtime_pgsql_servers' is 'nullptr':
-	 *  	1. Gets the contents of the table via 'MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS'.
+	 *  	1. Gets the contents of the table via 'PGHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS'.
 	 *  	2. Save the resultset into 'this->runtime_pgsql_servers'.
 	 *  3. If supplied 'runtime_pgsql_servers' isn't 'nullptr':
 	 *  	1. Updates the 'this->runtime_pgsql_servers' with it.
