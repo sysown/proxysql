@@ -12274,6 +12274,233 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	}
 	if (resultset) delete resultset;
 	resultset = NULL;
+
+	// dump pgsql_replication_hostgroups
+	if (_runtime) {
+		query = (char*)"DELETE FROM main.runtime_pgsql_replication_hostgroups";
+	}
+	else {
+		query = (char*)"DELETE FROM main.pgsql_replication_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset = PgHGM->dump_table_pgsql("pgsql_replication_hostgroups");
+	if (resultset) {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			int l = 0;
+			if (r->fields[3]) l = strlen(r->fields[3]);
+			char* q = NULL;
+			if (_runtime) {
+				q = (char*)"INSERT INTO runtime_pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')";
+			}
+			else {
+				q = (char*)"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')";
+			}
+			char* query = (char*)malloc(strlen(q) + strlen(r->fields[0]) + strlen(r->fields[1]) + strlen(r->fields[2]) + 16 + l);
+			if (r->fields[3]) {
+				char* o = escape_string_single_quotes(r->fields[3], false);
+				sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], o);
+				if (o != r->fields[3]) { // there was a copy
+					free(o);
+				}
+				//} else {
+					//sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
+			}
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+			admindb->execute(query);
+			free(query);
+		}
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
+
+	// dump pgsql_group_replication_hostgroups
+	if (_runtime) {
+		query = (char*)"DELETE FROM main.runtime_pgsql_group_replication_hostgroups";
+	}
+	else {
+		query = (char*)"DELETE FROM main.pgsql_group_replication_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset = PgHGM->dump_table_pgsql("pgsql_group_replication_hostgroups");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt* statement = NULL;
+		//sqlite3 *mydb3=admindb->get_db();
+		char* query = NULL;
+		if (_runtime) {
+			query = (char*)"INSERT INTO runtime_pgsql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		}
+		else {
+			query = (char*)"INSERT INTO pgsql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		}
+		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
+		rc = admindb->prepare_v2(query, &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+		//proxy_info("New pgsql_group_replication_hostgroups table\n");
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
+
+	// dump pgsql_galera_hostgroups
+	if (_runtime) {
+		query = (char*)"DELETE FROM main.runtime_pgsql_galera_hostgroups";
+	}
+	else {
+		query = (char*)"DELETE FROM main.pgsql_galera_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset = PgHGM->dump_table_pgsql("pgsql_galera_hostgroups");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt* statement = NULL;
+		//sqlite3 *mydb3=admindb->get_db();
+		char* query = NULL;
+		if (_runtime) {
+			query = (char*)"INSERT INTO runtime_pgsql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		}
+		else {
+			query = (char*)"INSERT INTO pgsql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		}
+		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
+		rc = admindb->prepare_v2(query, &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+		//proxy_info("New pgsql_galera_hostgroups table\n");
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
+
+	// dump pgsql_aws_aurora_hostgroups
+
+	if (_runtime) {
+		query = (char*)"DELETE FROM main.runtime_pgsql_aws_aurora_hostgroups";
+	}
+	else {
+		query = (char*)"DELETE FROM main.pgsql_aws_aurora_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset = PgHGM->dump_table_pgsql("pgsql_aws_aurora_hostgroups");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt* statement = NULL;
+		//sqlite3 *mydb3=admindb->get_db();
+		char* query = NULL;
+		if (_runtime) {
+			query = (char*)"INSERT INTO runtime_pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		}
+		else {
+			query = (char*)"INSERT INTO pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		}
+		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
+		rc = admindb->prepare_v2(query, &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+		//proxy_info("New pgsql_aws_aurora_hostgroups table\n");
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 11, atoi(r->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 12, atoi(r->fields[11])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 13, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
+
+	// dump pgsql_hostgroup_attributes
+
+	StrQuery = "DELETE FROM main.";
+	if (_runtime)
+		StrQuery += "runtime_";
+	StrQuery += "pgsql_hostgroup_attributes";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", StrQuery.c_str());
+	admindb->execute(StrQuery.c_str());
+	resultset = PgHGM->dump_table_pgsql("pgsql_hostgroup_attributes");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt* statement = NULL;
+		StrQuery = "INSERT INTO ";
+		if (_runtime)
+			StrQuery += "runtime_";
+		StrQuery += "pgsql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+		//proxy_info("New pgsql_aws_aurora_hostgroups table\n");
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atol(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_id
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atol(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb); // max_num_online_servers
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atol(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb); // autocommit
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atol(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb); // free_connections_pct
+			rc = (*proxy_sqlite3_bind_text)(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // variable_name
+			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atol(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb); // multiplex
+			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atol(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb); // connection_warming
+			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atol(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb); // throttle_connections_per_sec
+			rc = (*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ignore_session_variables
+			rc = (*proxy_sqlite3_bind_text)(statement, 10, r->fields[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_settings
+			rc = (*proxy_sqlite3_bind_text)(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // servers_defaults
+			rc = (*proxy_sqlite3_bind_text)(statement, 12, r->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
 }
 
 
