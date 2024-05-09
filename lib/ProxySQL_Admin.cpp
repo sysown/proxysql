@@ -899,17 +899,11 @@ incoming_pgsql_servers_t::incoming_pgsql_servers_t() {}
 incoming_pgsql_servers_t::incoming_pgsql_servers_t(
 	SQLite3_result* incoming_pgsql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
-	SQLite3_result* incoming_group_replication_hostgroups,
-	SQLite3_result* incoming_galera_hostgroups,
-	SQLite3_result* incoming_aurora_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
 	SQLite3_result* runtime_pgsql_servers
 ) :
 	incoming_pgsql_servers_v2(incoming_pgsql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
-	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
-	incoming_galera_hostgroups(incoming_galera_hostgroups),
-	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
 	runtime_pgsql_servers(runtime_pgsql_servers)
 {}
@@ -12623,16 +12617,10 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	SQLite3_result* resultset = NULL;
 	SQLite3_result* resultset_servers = NULL;
 	SQLite3_result* resultset_replication = NULL;
-	SQLite3_result* resultset_group_replication = NULL;
-	SQLite3_result* resultset_galera = NULL;
-	SQLite3_result* resultset_aws_aurora = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
 
 	SQLite3_result* runtime_pgsql_servers = incoming_pgsql_servers.runtime_pgsql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
-	SQLite3_result* incoming_group_replication_hostgroups = incoming_pgsql_servers.incoming_group_replication_hostgroups;
-	SQLite3_result* incoming_galera_hostgroups = incoming_pgsql_servers.incoming_galera_hostgroups;
-	SQLite3_result* incoming_aurora_hostgroups = incoming_pgsql_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_pgsql_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_pgsql_servers_v2 = incoming_pgsql_servers.incoming_pgsql_servers_v2;
 
@@ -12728,18 +12716,6 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (resultset_replication) {
 		delete resultset_replication;
 		resultset_replication = NULL;
-	}
-	if (resultset_group_replication) {
-		//delete resultset_replication; // do not delete, resultset is stored in MyHGM
-		resultset_group_replication = NULL;
-	}
-	if (resultset_galera) {
-		//delete resultset_galera; // do not delete, resultset is stored in MyHGM
-		resultset_galera = NULL;
-	}
-	if (resultset_aws_aurora) {
-		//delete resultset_aws_aurora; // do not delete, resultset is stored in MyHGM
-		resultset_aws_aurora = NULL;
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
