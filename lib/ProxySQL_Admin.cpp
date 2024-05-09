@@ -2659,7 +2659,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->pgsql_servers_wrlock();
 				SPA->save_pgsql_servers_runtime_to_database(false);
 				SPA->pgsql_servers_wrunlock();
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
@@ -6498,6 +6498,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin, "pgsql_hostgroup_attributes", ADMIN_SQLITE_TABLE_PGSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_hostgroup_attributes", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_HOSTGROUP_ATTRIBUTES);
+	insert_into_tables_defs(tables_defs_admin, "pgsql_replication_hostgroups", ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_replication_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_REPLICATION_HOSTGROUPS);
 
 	insert_into_tables_defs(tables_defs_admin, "pgsql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_USERS);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_USERS);
