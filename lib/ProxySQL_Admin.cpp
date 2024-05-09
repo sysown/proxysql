@@ -3112,6 +3112,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	return true;
 }
 
+// Explicitly instantiate the required template class and member functions
+template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, int, char const*);
+template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, int, char const*);
+template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, unsigned short);
+template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, unsigned short);
+template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
+
 void ProxySQL_Admin::flush_configdb() { // see #923
 	wrlock();
 	admindb->execute((char *)"DETACH DATABASE disk");
