@@ -3081,16 +3081,7 @@ void PgSQL_Thread::run() {
 			refresh_variables();
 		}
 
-#ifdef IDLE_THREADS
-		if (idle_maintenance_thread == false) {
-#endif // IDLE_THREADS
-			for (n = 0; n < mysql_sessions->len; n++) {
-				PgSQL_Session* _sess = (PgSQL_Session*)mysql_sessions->index(n);
-				_sess->to_process = 0;
-			}
-#ifdef IDLE_THREADS
-		}
-#endif // IDLE_THREADS
+		run_SetAllSession_ToProcess0<PgSQL_Thread,PgSQL_Session>();
 
 #ifdef IDLE_THREADS
 		// here we handle epoll_wait()

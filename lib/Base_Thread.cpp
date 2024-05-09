@@ -19,6 +19,8 @@ template void Base_Thread::ProcessAllMyDS_BeforePoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_BeforePoll<PgSQL_Thread>();
 template void Base_Thread::register_session(MySQL_Thread*, MySQL_Session*, bool);
 template void Base_Thread::register_session(PgSQL_Thread*, PgSQL_Session*, bool);
+template void Base_Thread::run_SetAllSession_ToProcess0<MySQL_Thread, MySQL_Session>();
+template void Base_Thread::run_SetAllSession_ToProcess0<PgSQL_Thread, PgSQL_Session>();
 
 Base_Thread::Base_Thread() {
 };
@@ -468,3 +470,20 @@ void Base_Thread::ProcessAllMyDS_BeforePoll() {
 	}
 }
 
+template<typename T, typename S>
+void Base_Thread::run_SetAllSession_ToProcess0() {
+	T* thr = static_cast<T*>(this);
+	unsigned int n;
+#ifdef IDLE_THREADS
+	// @note: in MySQL_Thread::run we have:  bool idle_maintenance_thread=epoll_thread;
+	// Thus idle_maintenance_thread and epoll_thread are equivalent.
+	if (epoll_thread==false) {
+#endif // IDLE_THREADS
+		for (n=0; n<mysql_sessions->len; n++) {
+			S *_sess=(S *)mysql_sessions->index(n);
+			_sess->to_process=0;
+		}
+#ifdef IDLE_THREADS
+	}
+#endif // IDLE_THREADS
+}

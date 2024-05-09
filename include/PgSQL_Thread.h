@@ -181,7 +181,7 @@ public:
 	int pipefd[2];
 	kill_queue_t kq;
 
-	bool epoll_thread;
+	//bool epoll_thread;
 	bool poll_timeout_bool;
 
 	// status variables are per thread only

@@ -139,7 +139,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	void run_BootstrapListener();
 	int run_ComputePollTimeout();
 	void run_StopListener();
-	void run_SetAllSession_ToProcess0();
+	//void run_SetAllSession_ToProcess0();
 
 
 	protected:
@@ -170,7 +170,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 //	int shutdown;
 	kill_queue_t kq;
 
-	bool epoll_thread;
+	//bool epoll_thread;
 	bool poll_timeout_bool;
 
 	// status variables are per thread only

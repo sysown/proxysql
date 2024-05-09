@@ -3140,24 +3140,6 @@ void MySQL_Thread::run_StopListener() {
 	}
 }
 
-
-void MySQL_Thread::run_SetAllSession_ToProcess0() {
-	unsigned int n;
-#ifdef IDLE_THREADS
-	// @note: in MySQL_Thread::run we have:  bool idle_maintenance_thread=epoll_thread;
-	// Thus idle_maintenance_thread and epoll_thread are equivalent.
-	if (epoll_thread==false) {
-#endif // IDLE_THREADS
-		for (n=0; n<mysql_sessions->len; n++) {
-			MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
-			_sess->to_process=0;
-		}
-#ifdef IDLE_THREADS
-	}
-#endif // IDLE_THREADS
-}
-
-
 // main loop
 /**
  * @brief Main loop for the MySQL thread.
@@ -3321,7 +3303,7 @@ __run_skip_1:
 			refresh_variables();
 		}
 
-		run_SetAllSession_ToProcess0();
+		run_SetAllSession_ToProcess0<MySQL_Thread,MySQL_Session>();
 
 #ifdef IDLE_THREADS
 		// here we handle epoll_wait()

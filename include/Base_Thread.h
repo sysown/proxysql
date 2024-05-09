@@ -42,6 +42,7 @@ class Base_Thread {
 	public:
 	unsigned long long curtime;
 	unsigned long long last_move_to_idle_thread_time;
+	bool epoll_thread;
 	int shutdown;
 	PtrArray *mysql_sessions;
 	Session_Regex **match_regexes;
@@ -74,6 +75,7 @@ class Base_Thread {
 #endif // IDLE_THREADS
 	template<typename T, typename S> unsigned int find_session_idx_in_mysql_sessions(S * sess);
 	template<typename T> void ProcessAllMyDS_BeforePoll();
+	template<typename T, typename S> void run_SetAllSession_ToProcess0();
 
 	friend class MySQL_Thread;
 	friend class PgSQL_Thread;
