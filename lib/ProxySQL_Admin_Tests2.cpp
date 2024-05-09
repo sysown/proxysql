@@ -6,6 +6,8 @@
 #include <vector>       // std::vector
 #include <unordered_set>
 
+#include "query_processor.h"
+
 #include "MySQL_Data_Stream.h"
 
 static int int_cmp(const void *a, const void *b) {

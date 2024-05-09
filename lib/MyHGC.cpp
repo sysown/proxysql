@@ -41,7 +41,10 @@ void MyHGC::reset_attributes() {
 	attributes.comment = NULL;
 	free(attributes.ignore_session_variables_text);
 	attributes.ignore_session_variables_text = NULL;
-	attributes.ignore_session_variables_json = json();
+	if (attributes.ignore_session_variables_json) {
+		delete attributes.ignore_session_variables_json;
+		attributes.ignore_session_variables_json = NULL;
+	}
 }
 	
 MyHGC::~MyHGC() {

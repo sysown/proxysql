@@ -13,6 +13,8 @@
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 
+#include "query_processor.h"
+
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
     rc=(*proxy_sqlite3_step)(_stmt);\

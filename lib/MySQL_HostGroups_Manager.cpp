@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -81,6 +85,50 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 		return status;
 	}
 }
+
+/**
+ * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
+ *
+ * @param j JSON object constructed from 'servers_defaults' field.
+ * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
+ *  error logging.
+ * @param key The key for the value to be extracted.
+ * @param val_check A validation function, checks if the value is within a expected range.
+ *
+ * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
+ */
+template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
+T j_get_srv_default_int_val(
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+) {
+	if (j.find(key) != j.end()) {
+		const json::value_t val_type = j[key].type();
+		const char* type_name = j[key].type_name();
+
+		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
+			T val = j[key].get<T>();
+
+			if (val_check(val)) {
+				return val;
+			} else {
+				proxy_error(
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+						" Value NOT UPDATED.\n",
+					static_cast<int64_t>(val), key.c_str(), hid
+				);
+			}
+		} else {
+			proxy_error(
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					" Value NOT UPDATED.\n",
+				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+			);
+		}
+	}
+
+	return static_cast<T>(-1);
+}
+
 
 //static void * HGCU_thread_run() {
 static void * HGCU_thread_run() {
@@ -1229,6 +1277,10 @@ std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint6
 
 	string mysrvs_checksum { get_checksum_from_hash(hash_1) };
 	return mysrvs_checksum;
+}
+
+bool MySQL_HostGroups_Manager::commit() {
+	return commit({},{});
 }
 
 bool MySQL_HostGroups_Manager::commit(
@@ -6365,14 +6417,16 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		if (myhgc->attributes.ignore_session_variables_text == NULL) {
 			myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
 			if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
-				myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+				if (myhgc->attributes.ignore_session_variables_json != nullptr) { delete myhgc->attributes.ignore_session_variables_json; }
+				myhgc->attributes.ignore_session_variables_json = new json(json::parse(ignore_session_variables));
 			}
 		} else {
 			if (strcmp(myhgc->attributes.ignore_session_variables_text, ignore_session_variables) != 0) {
 				free(myhgc->attributes.ignore_session_variables_text);
 				myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
 				if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
-					myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+					if (myhgc->attributes.ignore_session_variables_json != nullptr) { delete myhgc->attributes.ignore_session_variables_json; }
+					myhgc->attributes.ignore_session_variables_json = new json(json::parse(ignore_session_variables));
 				}
 				// TODO: assign the variables
 			}

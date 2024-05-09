@@ -43,17 +43,6 @@ typedef struct __attribute__((aligned(64))) _conn_exchange_t {
 } conn_exchange_t;
 #endif // IDLE_THREADS
 
-typedef struct _thr_id_username_t {
-	uint32_t id;
-	char *username;
-} thr_id_usr;
-
-typedef struct _kill_queue_t {
-	pthread_mutex_t m;
-	std::vector<thr_id_usr *> conn_ids;
-	std::vector<thr_id_usr *> query_ids;
-} kill_queue_t;
-
 enum MySQL_Thread_status_variable {
 	st_var_backend_stmt_prepare,
 	st_var_backend_stmt_execute,
@@ -97,10 +86,10 @@ enum MySQL_Thread_status_variable {
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
-	st_var_END
+	MY_st_var_END
 };
 
-class __attribute__((aligned(64))) MySQL_Thread
+class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 {
 	friend class PgSQL_Thread;
 	private:
@@ -109,7 +98,7 @@ class __attribute__((aligned(64))) MySQL_Thread
   unsigned long long last_processing_idles;
 	MySQL_Connection **my_idle_conns;
   bool processing_idles;
-	bool maintenance_loop;
+	//bool maintenance_loop;
 	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray *cached_connections;
@@ -121,7 +110,7 @@ class __attribute__((aligned(64))) MySQL_Thread
 	std::map<unsigned int, unsigned int> sessmap;
 #endif // IDLE_THREADS
 
-	Session_Regex **match_regexes;
+	//Session_Regex **match_regexes;
 
 #ifdef IDLE_THREADS
 	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
@@ -131,26 +120,26 @@ class __attribute__((aligned(64))) MySQL_Thread
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();
-	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
+	//bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
 	void run_Handle_epoll_wait(int);
 #endif // IDLE_THREADS
 
-	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
-	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
+	//unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
+	//bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
 	void handle_mirror_queue_mysql_sessions();
 	void handle_kill_queues();
-	void check_timing_out_session(unsigned int n);
-	void check_for_invalid_fd(unsigned int n);
-	void read_one_byte_from_pipe(unsigned int n);
-	void tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds);
-	void tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds);
-	void configure_pollout(MySQL_Data_Stream *myds, unsigned int n);
+	//void check_timing_out_session(unsigned int n);
+	//void check_for_invalid_fd(unsigned int n);
+	//void read_one_byte_from_pipe(unsigned int n);
+	//void tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds);
+	//void tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds);
+	//void configure_pollout(MySQL_Data_Stream *myds, unsigned int n);
 
 	void run_MoveSessionsBetweenThreads();
 	void run_BootstrapListener();
 	int run_ComputePollTimeout();
 	void run_StopListener();
-	void run_SetAllSession_ToProcess0();
+	//void run_SetAllSession_ToProcess0();
 
 
 	protected:
@@ -162,12 +151,12 @@ class __attribute__((aligned(64))) MySQL_Thread
 
 	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
 	pthread_t thread_id;
-	unsigned long long curtime;
+//	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
-	unsigned long long last_move_to_idle_thread_time;
+	//unsigned long long last_move_to_idle_thread_time;
 	std::atomic<unsigned long long> atomic_curtime;
-	PtrArray *mysql_sessions;
+	//PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions_cache;
 #ifdef IDLE_THREADS
@@ -178,17 +167,17 @@ class __attribute__((aligned(64))) MySQL_Thread
 #endif // IDLE_THREADS
 
 	int pipefd[2];
-	int shutdown;
+//	int shutdown;
 	kill_queue_t kq;
 
-	bool epoll_thread;
+	//bool epoll_thread;
 	bool poll_timeout_bool;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
 	struct {
-		unsigned long long stvar[st_var_END];
+		unsigned long long stvar[MY_st_var_END];
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -207,20 +196,20 @@ class __attribute__((aligned(64))) MySQL_Thread
 
 	MySQL_Thread();
 	~MySQL_Thread();
-	MySQL_Session * create_new_session_and_client_data_stream(int _fd);
+	//MySQL_Session * create_new_session_and_client_data_stream(int _fd);
 	bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();
-  	void ProcessAllMyDS_BeforePoll();
-  	void ProcessAllMyDS_AfterPoll();
+  	//void ProcessAllMyDS_BeforePoll();
+  	//void ProcessAllMyDS_AfterPoll();
 	void run();
   void poll_listener_add(int sock);
   void poll_listener_del(int sock);
-  void register_session(MySQL_Session*, bool up_start=true);
+  //void register_session(MySQL_Session *, bool up_start=true);
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
   bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
-	void ProcessAllSessions_SortingSessions();
+	//void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess);
 	void ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
 	void ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int& n);

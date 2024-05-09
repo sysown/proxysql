@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+//using json = nlohmann::json;
+#define PROXYJSON
+
 //#include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -9,6 +13,7 @@
 #include "SpookyV2.h"
 #define SPOOKYV2
 #endif
+
 
 MySQL_Authentication::MySQL_Authentication() {
 #ifdef DEBUG

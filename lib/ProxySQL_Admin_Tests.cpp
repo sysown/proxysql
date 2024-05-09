@@ -8,6 +8,8 @@
 
 #include "MySQL_Data_Stream.h"
 
+#include "query_processor.h"
+
 extern Query_Processor *GloQPro;
 
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {

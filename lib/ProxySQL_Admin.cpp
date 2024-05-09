@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <iostream>     // std::cout
 #include <sstream>      // std::stringstream
 #include <fstream>
@@ -9,6 +13,9 @@
 #include <prometheus/counter.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+
+#include "Base_Thread.h"
+
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
@@ -117,6 +124,10 @@ char * proxysql_version = NULL;
 
 #include "proxysql_find_charset.h"
 
+template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
+T j_get_srv_default_int_val(
+const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check);
+
 
 static const vector<string> mysql_servers_tablenames = {
 	"mysql_servers",
@@ -131,9 +142,9 @@ static const vector<string> mysql_servers_tablenames = {
 static const vector<string> pgsql_servers_tablenames = {
 	"pgsql_servers",
 	"pgsql_replication_hostgroups",
-	"pgsql_group_replication_hostgroups",
-	"pgsql_galera_hostgroups",
-	"pgsql_aws_aurora_hostgroups",
+//	"pgsql_group_replication_hostgroups",
+//	"pgsql_galera_hostgroups",
+//	"pgsql_aws_aurora_hostgroups",
 	"pgsql_hostgroup_attributes",
 };
 
@@ -888,17 +899,11 @@ incoming_pgsql_servers_t::incoming_pgsql_servers_t() {}
 incoming_pgsql_servers_t::incoming_pgsql_servers_t(
 	SQLite3_result* incoming_pgsql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
-	SQLite3_result* incoming_group_replication_hostgroups,
-	SQLite3_result* incoming_galera_hostgroups,
-	SQLite3_result* incoming_aurora_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
 	SQLite3_result* runtime_pgsql_servers
 ) :
 	incoming_pgsql_servers_v2(incoming_pgsql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
-	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
-	incoming_galera_hostgroups(incoming_galera_hostgroups),
-	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
 	runtime_pgsql_servers(runtime_pgsql_servers)
 {}
@@ -2648,7 +2653,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->pgsql_servers_wrlock();
 				SPA->save_pgsql_servers_runtime_to_database(false);
 				SPA->pgsql_servers_wrunlock();
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
@@ -3101,6 +3106,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	return true;
 }
 
+// Explicitly instantiate the required template class and member functions
+template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, int, char const*);
+template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, int, char const*);
+template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, unsigned short);
+template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, unsigned short);
+template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
+
 void ProxySQL_Admin::flush_configdb() { // see #923
 	wrlock();
 	admindb->execute((char *)"DETACH DATABASE disk");
@@ -3279,12 +3291,6 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space, "runtime_pgsql_servers")
 				||
 				strstr(query_no_space, "runtime_pgsql_replication_hostgroups")
-				||
-				strstr(query_no_space, "runtime_pgsql_group_replication_hostgroups")
-				||
-				strstr(query_no_space, "runtime_pgsql_galera_hostgroups")
-				||
-				strstr(query_no_space, "runtime_pgsql_aws_aurora_hostgroups")
 				||
 				strstr(query_no_space, "runtime_pgsql_hostgroup_attributes")
 				) {
@@ -5304,7 +5310,7 @@ void *child_mysql(void *arg) {
 	mysql_thr->curtime=monotonic_time();
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler<MySQL_Session*>;
@@ -5424,7 +5430,7 @@ void* child_postgres(void* arg) {
 	pgsql_thr->curtime = monotonic_time();
 	GloQPro->init_thread();
 	pgsql_thr->refresh_variables();
-	PgSQL_Session* sess = pgsql_thr->create_new_session_and_client_data_stream(client);
+	PgSQL_Session* sess = pgsql_thr->create_new_session_and_client_data_stream<PgSQL_Thread, PgSQL_Session*>(client);
 	sess->thread = pgsql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler<PgSQL_Session*>;
@@ -6486,6 +6492,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin, "pgsql_hostgroup_attributes", ADMIN_SQLITE_TABLE_PGSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_hostgroup_attributes", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_HOSTGROUP_ATTRIBUTES);
+	insert_into_tables_defs(tables_defs_admin, "pgsql_replication_hostgroups", ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_replication_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_REPLICATION_HOSTGROUPS);
 
 	insert_into_tables_defs(tables_defs_admin, "pgsql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_USERS);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_USERS);
@@ -12297,150 +12305,6 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	if (resultset) delete resultset;
 	resultset = NULL;
 
-	// dump pgsql_group_replication_hostgroups
-	if (_runtime) {
-		query = (char*)"DELETE FROM main.runtime_pgsql_group_replication_hostgroups";
-	}
-	else {
-		query = (char*)"DELETE FROM main.pgsql_group_replication_hostgroups";
-	}
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute(query);
-	resultset = PgHGM->dump_table_pgsql("pgsql_group_replication_hostgroups");
-	if (resultset) {
-		int rc;
-		sqlite3_stmt* statement = NULL;
-		//sqlite3 *mydb3=admindb->get_db();
-		char* query = NULL;
-		if (_runtime) {
-			query = (char*)"INSERT INTO runtime_pgsql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-		}
-		else {
-			query = (char*)"INSERT INTO pgsql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-		}
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-		rc = admindb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, admindb);
-		//proxy_info("New pgsql_group_replication_hostgroups table\n");
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-
-			SAFE_SQLITE3_STEP2(statement);
-			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
-		}
-		(*proxy_sqlite3_finalize)(statement);
-	}
-	if (resultset) delete resultset;
-	resultset = NULL;
-
-	// dump pgsql_galera_hostgroups
-	if (_runtime) {
-		query = (char*)"DELETE FROM main.runtime_pgsql_galera_hostgroups";
-	}
-	else {
-		query = (char*)"DELETE FROM main.pgsql_galera_hostgroups";
-	}
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute(query);
-	resultset = PgHGM->dump_table_pgsql("pgsql_galera_hostgroups");
-	if (resultset) {
-		int rc;
-		sqlite3_stmt* statement = NULL;
-		//sqlite3 *mydb3=admindb->get_db();
-		char* query = NULL;
-		if (_runtime) {
-			query = (char*)"INSERT INTO runtime_pgsql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-		}
-		else {
-			query = (char*)"INSERT INTO pgsql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-		}
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-		rc = admindb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, admindb);
-		//proxy_info("New pgsql_galera_hostgroups table\n");
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-
-			SAFE_SQLITE3_STEP2(statement);
-			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
-		}
-		(*proxy_sqlite3_finalize)(statement);
-	}
-	if (resultset) delete resultset;
-	resultset = NULL;
-
-	// dump pgsql_aws_aurora_hostgroups
-
-	if (_runtime) {
-		query = (char*)"DELETE FROM main.runtime_pgsql_aws_aurora_hostgroups";
-	}
-	else {
-		query = (char*)"DELETE FROM main.pgsql_aws_aurora_hostgroups";
-	}
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute(query);
-	resultset = PgHGM->dump_table_pgsql("pgsql_aws_aurora_hostgroups");
-	if (resultset) {
-		int rc;
-		sqlite3_stmt* statement = NULL;
-		//sqlite3 *mydb3=admindb->get_db();
-		char* query = NULL;
-		if (_runtime) {
-			query = (char*)"INSERT INTO runtime_pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
-		}
-		else {
-			query = (char*)"INSERT INTO pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
-		}
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-		rc = admindb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, admindb);
-		//proxy_info("New pgsql_aws_aurora_hostgroups table\n");
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 11, atoi(r->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 12, atoi(r->fields[11])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement, 13, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-
-			SAFE_SQLITE3_STEP2(statement);
-			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
-		}
-		(*proxy_sqlite3_finalize)(statement);
-	}
-	if (resultset) delete resultset;
-	resultset = NULL;
-
 	// dump pgsql_hostgroup_attributes
 
 	StrQuery = "DELETE FROM main.";
@@ -12753,16 +12617,10 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	SQLite3_result* resultset = NULL;
 	SQLite3_result* resultset_servers = NULL;
 	SQLite3_result* resultset_replication = NULL;
-	SQLite3_result* resultset_group_replication = NULL;
-	SQLite3_result* resultset_galera = NULL;
-	SQLite3_result* resultset_aws_aurora = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
 
 	SQLite3_result* runtime_pgsql_servers = incoming_pgsql_servers.runtime_pgsql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
-	SQLite3_result* incoming_group_replication_hostgroups = incoming_pgsql_servers.incoming_group_replication_hostgroups;
-	SQLite3_result* incoming_galera_hostgroups = incoming_pgsql_servers.incoming_galera_hostgroups;
-	SQLite3_result* incoming_aurora_hostgroups = incoming_pgsql_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_pgsql_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_pgsql_servers_v2 = incoming_pgsql_servers.incoming_pgsql_servers_v2;
 
@@ -12824,112 +12682,6 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	//if (resultset) delete resultset;
 	//resultset=NULL;
 
-	// support for Group Replication, table pgsql_group_replication_hostgroups
-
-	// look for invalid combinations
-	query = (char*)"SELECT a.* FROM pgsql_group_replication_hostgroups a JOIN pgsql_group_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup UNION ALL SELECT a.* FROM pgsql_group_replication_hostgroups a JOIN pgsql_group_replication_hostgroups b ON a.writer_hostgroup=b.backup_writer_hostgroup WHERE b.backup_writer_hostgroup UNION ALL SELECT a.* FROM pgsql_group_replication_hostgroups a JOIN pgsql_group_replication_hostgroups b ON a.writer_hostgroup=b.offline_hostgroup WHERE b.offline_hostgroup";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			proxy_error("Incompatible entry in pgsql_group_replication_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
-		}
-	}
-	if (resultset) delete resultset;
-	resultset = NULL;
-
-	query = (char*)"SELECT a.* FROM pgsql_group_replication_hostgroups a LEFT JOIN pgsql_group_replication_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL ORDER BY writer_hostgroup";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	if (incoming_group_replication_hostgroups == nullptr) {
-		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_group_replication);
-	}
-	else {
-		resultset_group_replication = incoming_group_replication_hostgroups;
-	}
-
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
-		// Pass the resultset to PgHGM
-		PgHGM->save_incoming_pgsql_table(resultset_group_replication, "pgsql_group_replication_hostgroups");
-	}
-
-	// support for Galera, table pgsql_galera_hostgroups
-
-	// look for invalid combinations
-	query = (char*)"SELECT a.* FROM pgsql_galera_hostgroups a JOIN pgsql_galera_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup UNION ALL SELECT a.* FROM pgsql_galera_hostgroups a JOIN pgsql_galera_hostgroups b ON a.writer_hostgroup=b.backup_writer_hostgroup WHERE b.backup_writer_hostgroup UNION ALL SELECT a.* FROM pgsql_galera_hostgroups a JOIN pgsql_galera_hostgroups b ON a.writer_hostgroup=b.offline_hostgroup WHERE b.offline_hostgroup";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			proxy_error("Incompatible entry in pgsql_galera_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
-		}
-	}
-	if (resultset) delete resultset;
-	resultset = NULL;
-
-	query = (char*)"SELECT a.* FROM pgsql_galera_hostgroups a LEFT JOIN pgsql_galera_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL ORDER BY writer_hostgroup";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	if (incoming_galera_hostgroups == nullptr) {
-		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_galera);
-	}
-	else {
-		resultset_galera = incoming_galera_hostgroups;
-	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
-		// Pass the resultset to PgHGM
-		PgHGM->save_incoming_pgsql_table(resultset_galera, "pgsql_galera_hostgroups");
-	}
-
-	// support for AWS Aurora, table pgsql_aws_aurora_hostgroups
-
-	// look for invalid combinations
-	query = (char*)"SELECT a.* FROM pgsql_aws_aurora_hostgroups a JOIN pgsql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			proxy_error("Incompatible entry in pgsql_aws_aurora_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
-		}
-	}
-	if (resultset) delete resultset;
-	resultset = NULL;
-
-	//#ifdef TEST_AURORA // temporary enabled only for testing purpose
-	query = (char*)"SELECT a.* FROM pgsql_aws_aurora_hostgroups a LEFT JOIN pgsql_aws_aurora_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
-	//#else
-	//	query=(char *)"SELECT a.* FROM pgsql_aws_aurora_hostgroups a WHERE 1=0";
-	//#endif
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	if (incoming_aurora_hostgroups == nullptr) {
-		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_aws_aurora);
-	}
-	else {
-		resultset_aws_aurora = incoming_aurora_hostgroups;
-	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
-		// Pass the resultset to PgHGM
-		PgHGM->save_incoming_pgsql_table(resultset_aws_aurora, "pgsql_aws_aurora_hostgroups");
-	}
 
 	// support for hostgroup attributes, table pgsql_hostgroup_attributes
 	query = (char*)"SELECT * FROM pgsql_hostgroup_attributes ORDER BY hostgroup_id";
@@ -12964,18 +12716,6 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (resultset_replication) {
 		delete resultset_replication;
 		resultset_replication = NULL;
-	}
-	if (resultset_group_replication) {
-		//delete resultset_replication; // do not delete, resultset is stored in MyHGM
-		resultset_group_replication = NULL;
-	}
-	if (resultset_galera) {
-		//delete resultset_galera; // do not delete, resultset is stored in MyHGM
-		resultset_galera = NULL;
-	}
-	if (resultset_aws_aurora) {
-		//delete resultset_aws_aurora; // do not delete, resultset is stored in MyHGM
-		resultset_aws_aurora = NULL;
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;

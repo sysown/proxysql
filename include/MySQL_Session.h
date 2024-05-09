@@ -10,12 +10,15 @@
 #include <functional>
 #include <vector>
 
+#include "Client_Session.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
 
 extern class MySQL_Variables mysql_variables;
 
@@ -427,7 +430,7 @@ class MySQL_Session
 	 *   params.
 	 */
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
-	void generate_proxysql_internal_session_json(json &);
+	void generate_proxysql_internal_session_json(nlohmann::json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
 	bool has_any_backend();

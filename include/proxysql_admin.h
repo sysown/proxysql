@@ -5,7 +5,7 @@
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
-#include "query_processor.h"
+//#include "query_processor.h"
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -197,13 +197,10 @@ struct incoming_pgsql_servers_t {
 	SQLite3_result* incoming_pgsql_servers_v2 = NULL;
 	SQLite3_result* runtime_pgsql_servers = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
-	SQLite3_result* incoming_group_replication_hostgroups = NULL;
-	SQLite3_result* incoming_galera_hostgroups = NULL;
-	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
 
 	incoming_pgsql_servers_t();
-	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime pgsql server and pgsql server v2 to avoid human error

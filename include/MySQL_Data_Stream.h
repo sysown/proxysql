@@ -6,6 +6,11 @@
 
 #include "MySQL_Protocol.h"
 
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
+
 #ifndef uchar
 typedef unsigned char uchar;
 #endif
@@ -274,6 +279,6 @@ class MySQL_Data_Stream
 
 	void reset_connection();
 
-	void get_client_myds_info_json(json&);
+	void get_client_myds_info_json(nlohmann::json&);
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

@@ -1,4 +1,9 @@
 #define MAIN_PROXY_SQLITE3
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <iostream>
 #include <thread>
 #include "btree_map.h"

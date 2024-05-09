@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
 #include "proxysql.h"
@@ -1779,7 +1783,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 			else {
 				GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
-				thread->register_session(newsess);
+				thread->register_session(thread,newsess);
 				newsess->handler(); // execute immediately
 				//newsess->to_process=0;
 				if (newsess->status == WAITING_CLIENT_DATA) { // the mirror session has completed
