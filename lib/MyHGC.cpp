@@ -1,5 +1,9 @@
 #include "MySQL_HostGroups_Manager.h"
 
+#ifdef TEST_AURORA
+static unsigned long long array_mysrvc_total = 0;
+static unsigned long long array_mysrvc_cands = 0;
+#endif // TEST_AURORA
 
 extern MySQL_Threads_Handler *GloMTH;
 

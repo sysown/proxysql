@@ -111,7 +111,8 @@ std::unordered_map<std::string,var_counter> vars_counters;
 */
 
 void * my_conn_thread(void *arg) {
-	g_seed = time(NULL) ^ getpid() ^ pthread_self();
+	g_seed = monotonic_time() * pthread_self() + monotonic_time();
+	srand(g_seed);
 	unsigned int select_OK=0;
 	unsigned int select_ERR=0;
 	int i, j;
@@ -163,7 +164,7 @@ void * my_conn_thread(void *arg) {
 		int fr = rand();
 		int r1=fr%count;
 		//int r2=fastrand()%testCases.size();
-		int r2=rand()%testCases.size();
+		int r2=(fastrand() + (RAND_MAX * fastrand())) %testCases.size();
 
 		if (j%queries_per_connections==0) {
 			mysql_idx=r1;

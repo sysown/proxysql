@@ -126,10 +126,10 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 MYLIBS := -Wl,--export-dynamic
-MYLIBS += -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2
+MYLIBS += -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -luuid
 MYLIBS += -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lpcrecpp -lpcre -lmariadbclient -lhttpserver\
 		  -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS += -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK) -luuid
+MYLIBS += -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 
 MYLIBSJEMALLOC := -Wl,-Bstatic -ljemalloc
 STATIC_LIBS := $(CITYHASH_LDIR)/libcityhash.a

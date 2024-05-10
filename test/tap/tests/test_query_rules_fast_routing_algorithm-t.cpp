@@ -215,6 +215,9 @@ int test_fast_routing_algorithm(
 	MYSQL_QUERY_T(admin, "SET admin-debug_output=3");
 	MYSQL_QUERY_T(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 	MYSQL_QUERY_T(admin, "UPDATE debug_levels SET verbosity=7 WHERE module='debug_mysql_query_processor'");
+	// If there is a generic debug filter (line==0) on Query_Processor.cpp , process_mysql_query() , disable it.
+	// If the filter was present it will be automatically recreated by the tester.
+	MYSQL_QUERY_T(admin, "DELETE FROM debug_filters WHERE filename='Query_Processor.cpp' AND line=0 AND funct='process_mysql_query'");
 	MYSQL_QUERY_T(admin, "LOAD DEBUG TO RUNTIME");
 
 	// Open the SQLite3 db for debugging
