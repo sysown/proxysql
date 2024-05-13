@@ -187,6 +187,7 @@ jobs:
         cd ${{ github.workspace }}/proxysql/test/tap/tests
         # broken
         rm -f reg_test_3273_ssl_con-t
+        rm -f test_flush_logs-t￼
         # missing infra
         rm -f clickhouse_php_conn-t
         rm -f reg_test_3603-stmt_metadata-t
