@@ -4,8 +4,11 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
+
 
 class PgSQL_SrvC;
 
@@ -252,8 +255,8 @@ public:
 class PgSQL_Variable {
 public:
 	char *value = (char*)"";
-	void fill_server_internal_session(json &j, int conn_num, int idx);
-	void fill_client_internal_session(json &j, int idx);
+	void fill_server_internal_session(nlohmann::json &j, int conn_num, int idx);
+	void fill_client_internal_session(nlohmann::json &j, int idx);
 };
 
 enum pgsql_charset_action {

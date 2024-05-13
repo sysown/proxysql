@@ -8,12 +8,19 @@
 #include "cpp.h"
 #include "MySQL_Variables.h"
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
+//#include "../deps/json/json.hpp"
+//using json = nlohmann::json;
+
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
 
 class MySQL_Session;
 class PgSQL_Session;
 
+#if 0
+// this code was moved into Base_Session.h
 /**
  * @class Session_Regex
  * @brief Encapsulates regex operations for session handling.
@@ -32,6 +39,7 @@ public:
 	~Session_Regex();
 	bool match(char* m);
 };
+#endif // 0
 
 template <class T>
 class TypeSelector {

@@ -10,15 +10,17 @@
 #define DIGEST_STATS_FAST_MINSIZE   100000
 #define DIGEST_STATS_FAST_THREADS   4
 
+//#include "../deps/json/json.hpp"
 
-
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
 
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
 
-typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
-typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
-
+#include "proxysql_typedefs.h"
 
 #define WUS_NOT_FOUND   0	// couldn't find any filter
 #define WUS_OFF         1	// allow the query
@@ -206,6 +208,7 @@ class Query_Processor_Output {
 			free(comment);
 		}
 	}
+	void get_info_json(nlohmann::json& j);
 };
 
 static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];

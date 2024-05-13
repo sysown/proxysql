@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
@@ -25,12 +29,13 @@
 #endif /* DEBUG */
 #define QUERY_PROCESSOR_VERSION "2.0.6.0805" DEB
 
-#define QP_RE_MOD_CASELESS 1
-#define QP_RE_MOD_GLOBAL 2
 
 
 #include <thread>
 #include <future>
+
+#include "QP_rule_text.h"
+
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
 
@@ -42,279 +47,6 @@ static int int_cmp(const void *a, const void *b) {
 	return 0;
 }
 
-class QP_rule_text_hitsonly {
-	public:
-	char **pta;
-	QP_rule_text_hitsonly(QP_rule_t *QPr) {
-		pta=NULL;
-		pta=(char **)malloc(sizeof(char *)*2);
-		itostr(pta[0], (long long)QPr->rule_id);
-		itostr(pta[1], (long long)QPr->hits);
-	}
-	~QP_rule_text_hitsonly() {
-		for(int i=0; i<2; i++) {
-			free_null(pta[i]);
-		}
-		free(pta);
-	}
-};
-
-class QP_rule_text {
-	public:
-	char **pta;
-	int num_fields;
-	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=36; // this count the number of fields
-		pta=NULL;
-		pta=(char **)malloc(sizeof(char *)*num_fields);
-		itostr(pta[0], (long long)QPr->rule_id);
-		itostr(pta[1], (long long)QPr->active);
-		pta[2]=strdup_null(QPr->username);
-		pta[3]=strdup_null(QPr->schemaname);
-		itostr(pta[4], (long long)QPr->flagIN);
-
-		pta[5]=strdup_null(QPr->client_addr);
-		pta[6]=strdup_null(QPr->proxy_addr);
-		itostr(pta[7], (long long)QPr->proxy_port);
-
-		char buf[20];
-		if (QPr->digest) {
-			sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
-			pta[8]=strdup(buf);
-		} else {
-			pta[8]=NULL;
-		}
-
-		pta[9]=strdup_null(QPr->match_digest);
-		pta[10]=strdup_null(QPr->match_pattern);
-		itostr(pta[11], (long long)QPr->negate_match_pattern);
-		std::string re_mod;
-		re_mod="";
-		if ((QPr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) re_mod = "CASELESS";
-			if ((QPr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-				if (re_mod.length()) {
-					re_mod = re_mod + ",";
-				}
-			re_mod = re_mod + "GLOBAL";
-		}
-		pta[12]=strdup_null((char *)re_mod.c_str()); // re_modifiers
-		itostr(pta[13], (long long)QPr->flagOUT);
-		pta[14]=strdup_null(QPr->replace_pattern);
-		itostr(pta[15], (long long)QPr->destination_hostgroup);
-		itostr(pta[16], (long long)QPr->cache_ttl);
-		itostr(pta[17], (long long)QPr->cache_empty_result);
-		itostr(pta[18], (long long)QPr->cache_timeout);
-		itostr(pta[19], (long long)QPr->reconnect);
-		itostr(pta[20], (long long)QPr->timeout);
-		itostr(pta[21], (long long)QPr->retries);
-		itostr(pta[22], (long long)QPr->delay);
-		itostr(pta[23], (long long)QPr->next_query_flagIN);
-		itostr(pta[24], (long long)QPr->mirror_flagOUT);
-		itostr(pta[25], (long long)QPr->mirror_hostgroup);
-		pta[26]=strdup_null(QPr->error_msg);
-		pta[27]=strdup_null(QPr->OK_msg);
-		itostr(pta[28], (long long)QPr->sticky_conn);
-		itostr(pta[29], (long long)QPr->multiplex);
-		itostr(pta[30], (long long)QPr->gtid_from_hostgroup);
-		itostr(pta[31], (long long)QPr->log);
-		itostr(pta[32], (long long)QPr->apply);
-		pta[33]=strdup_null(QPr->attributes);
-		pta[34]=strdup_null(QPr->comment); // issue #643
-		itostr(pta[35], (long long)QPr->hits);
-	}
-	~QP_rule_text() {
-		for(int i=0; i<num_fields; i++) {
-			free_null(pta[i]);
-		}
-		free(pta);
-	}
-};
-
-/* reverse:  reverse string s in place */
-void reverse(char s[]) {
-	int i, j;
-	char c;
-	int l = strlen(s);
-	for (i = 0, j = l-1; i<j; i++, j--) {
-		c = s[i];
-		s[i] = s[j];
-		s[j] = c;
-	}
-}
-
-/* itoa:  convert n to characters in s */
-void my_itoa(char s[], unsigned long long n)
-{
-	int i;
-     i = 0;
-     do {       /* generate digits in reverse order */
-         s[i++] = n % 10 + '0';   /* get next digit */
-     } while ((n /= 10) > 0);     /* delete it */
-     s[i] = '\0';
-     reverse(s);
-}
-
-QP_query_digest_stats::QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
-	digest=d;
-	digest_text=NULL;
-	if (dt) {
-		digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
-	}
-	if (strlen(u) < sizeof(username_buf)) {
-		strcpy(username_buf,u);
-		username = username_buf;
-	} else {
-		username=strdup(u);
-	}
-	if (strlen(s) < sizeof(schemaname_buf)) {
-		strcpy(schemaname_buf,s);
-		schemaname = schemaname_buf;
-	} else {
-		schemaname=strdup(s);
-	}
-	if (strlen(ca) < sizeof(client_address_buf)) {
-		strcpy(client_address_buf,ca);
-		client_address = client_address_buf;
-	} else {
-		client_address=strdup(ca);
-	}
-	count_star=0;
-	first_seen=0;
-	last_seen=0;
-	sum_time=0;
-	min_time=0;
-	max_time=0;
-	rows_affected=0;
-	rows_sent=0;
-	hid=h;
-}
-void QP_query_digest_stats::add_time(
-	unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
-	unsigned long long cnt
-) {
-	count_star += cnt;
-	sum_time+=t;
-	rows_affected+=ra;
-	rows_sent+=rs;
-	if (t < min_time || min_time==0) {
-		if (t) min_time = t;
-	}
-	if (t > max_time) {
-		max_time = t;
-	}
-	if (first_seen==0) {
-		first_seen=n;
-	}
-	last_seen=n;
-}
-QP_query_digest_stats::~QP_query_digest_stats() {
-	if (digest_text) {
-		free(digest_text);
-		digest_text=NULL;
-	}
-	if (username) {
-		if (username == username_buf) {
-		} else {
-			free(username);
-		}
-		username=NULL;
-	}
-	if (schemaname) {
-		if (schemaname == schemaname_buf) {
-		} else {
-			free(schemaname);
-		}
-		schemaname=NULL;
-	}
-	if (client_address) {
-		if (client_address == client_address_buf) {
-		} else {
-			free(client_address);
-		}
-		client_address=NULL;
-	}
-}
-
-// Funtion to get the digest text associated to a QP_query_digest_stats.
-// QP_query_digest_stats member type "char *digest_text" may by NULL, so we
-// have to get the digest text from "digest_text_umap".
-char *QP_query_digest_stats::get_digest_text(const umap_query_digest_text *digest_text_umap) {
-	char *digest_text_str = NULL;
-
-	if (digest_text) {
-		digest_text_str = digest_text;
-	} else {
-		std::unordered_map<uint64_t, char *>::const_iterator it;
-		it = digest_text_umap->find(digest);
-		if (it != digest_text_umap->end()) {
-			digest_text_str = it->second;
-		} else {
-			// LCOV_EXCL_START
-			assert(0);
-			// LCOV_EXCL_STOP
-		}
-	}
-
-	return digest_text_str;
-}
-
-char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
-	char **pta=qdsp->pta;
-
-	assert(schemaname);
-	pta[0]=schemaname;
-	assert(username);
-	pta[1]=username;
-	assert(client_address);
-	pta[2]=client_address;
-
-	assert(qdsp != NULL);
-	assert(qdsp->digest);
-	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
-	pta[3]=qdsp->digest;
-
-	pta[4] = get_digest_text(digest_text_umap);
-
-	//sprintf(qdsp->count_star,"%u",count_star);
-	my_itoa(qdsp->count_star, count_star);
-	pta[5]=qdsp->count_star;
-
-	time_t __now;
-	time(&__now);
-	unsigned long long curtime=monotonic_time();
-	time_t seen_time;
-	seen_time= __now - curtime/1000000 + first_seen/1000000;
-	//sprintf(qdsp->first_seen,"%ld", seen_time);
-	my_itoa(qdsp->first_seen, seen_time);
-	pta[6]=qdsp->first_seen;
-
-	seen_time= __now - curtime/1000000 + last_seen/1000000;
-	//sprintf(qdsp->last_seen,"%ld", seen_time);
-	my_itoa(qdsp->last_seen, seen_time);
-	pta[7]=qdsp->last_seen;
-	//sprintf(qdsp->sum_time,"%llu",sum_time);
-	my_itoa(qdsp->sum_time,sum_time);
-	pta[8]=qdsp->sum_time;
-	//sprintf(qdsp->min_time,"%llu",min_time);
-	my_itoa(qdsp->min_time,min_time);
-	pta[9]=qdsp->min_time;
-	//sprintf(qdsp->max_time,"%llu",max_time);
-	my_itoa(qdsp->max_time,max_time);
-	pta[10]=qdsp->max_time;
-	// we are reverting this back to the use of sprintf instead of my_itoa
-	// because with my_itoa we are losing the sign
-	// see issue #2285
-	sprintf(qdsp->hid,"%d",hid);
-	//my_itoa(qdsp->hid,hid);
-	pta[11]=qdsp->hid;
-	//sprintf(qdsp->rows_affected,"%llu",rows_affected);
-	my_itoa(qdsp->rows_affected,rows_affected);
-	pta[12]=qdsp->rows_affected;
-	//sprintf(qdsp->rows_sent,"%llu",rows_sent);
-	my_itoa(qdsp->rows_sent,rows_sent);
-	pta[13]=qdsp->rows_sent;
-	return pta;
-}
 
 struct __RE2_objects_t {
 	pcrecpp::RE_Options *opt1;
@@ -3673,6 +3405,21 @@ bool Query_Processor::pgsql_whitelisted_sqli_fingerprint(char* _s) {
 	}
 	pthread_mutex_unlock(&global_pgsql_firewall_whitelist_mutex);
 	return ret;
+}
+
+void Query_Processor_Output::get_info_json(json& j) {
+	j["create_new_connection"] = create_new_conn;
+	j["reconnect"] = reconnect;
+	j["sticky_conn"] = sticky_conn;
+	j["cache_timeout"] = cache_timeout;
+	j["cache_ttl"] = cache_ttl;
+	j["delay"] = delay;
+	j["destination_hostgroup"] = destination_hostgroup;
+	j["firewall_whitelist_mode"] = firewall_whitelist_mode;
+	j["multiplex"] = multiplex;
+	j["timeout"] = timeout;
+	j["retries"] = retries;
+	j["max_lag_ms"] = max_lag_ms;
 }
 
 template 

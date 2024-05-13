@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 
 #include <functional>
@@ -1074,8 +1078,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	MLM = new PgSQL_Listeners_Manager();
 
 	// Initialize prometheus metrics
-	init_prometheus_counter_array<th_metrics_map_idx, p_th_counter>(th_metrics_map, this->status_variables.p_counter_array);
-	init_prometheus_gauge_array<th_metrics_map_idx, p_th_gauge>(th_metrics_map, this->status_variables.p_gauge_array);
+	//init_prometheus_counter_array<th_metrics_map_idx, p_th_counter>(th_metrics_map, this->status_variables.p_counter_array);
+	//init_prometheus_gauge_array<th_metrics_map_idx, p_th_gauge>(th_metrics_map, this->status_variables.p_gauge_array);
 
 	// Init client_host_cache mutex
 	pthread_mutex_init(&mutex_client_host_cache, NULL);
@@ -1932,7 +1936,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		unsigned int intv = atoi(value);
 		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && intv > 0 && intv < 256) {
 			num_threads = intv;
-			this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
+			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
 			return true;
 		}
 		else {
@@ -2238,12 +2242,12 @@ void PgSQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	}
 	if (num) {
 		num_threads = num;
-		this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num);
+		//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num);
 	}
 	else {
 		if (num_threads == 0) {
 			num_threads = DEFAULT_NUM_THREADS; //default
-			this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(DEFAULT_NUM_THREADS);
+			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(DEFAULT_NUM_THREADS);
 		}
 	}
 	int rc = pthread_attr_setstacksize(&attr, stacksize);
@@ -2741,78 +2745,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 
 }
 
-PgSQL_Session* PgSQL_Thread::create_new_session_and_client_data_stream(int _fd) {
-	int arg_on = 1;
-	PgSQL_Session* sess = new PgSQL_Session;
-	register_session(sess); // register session
-	sess->client_myds = new PgSQL_Data_Stream();
-	sess->client_myds->fd = _fd;
-
-	// set not blocking for client connections too!
-	{
-		// PMC-10004
-		// While implementing SSL and fast_forward it was noticed that all frontend connections
-		// are in blocking, although this was never a problem because we call poll() before reading.
-		// Although it became a problem with fast_forward, SSL and large packets because SSL handled
-		// data in chunks of 16KB and there may be data inside SSL even when there is no data
-		// received from the network.
-		// The only modules that seems to be affected by this issue are Admin, SQLite3 Server
-		// and Clickhouse Server
-		int prevflags = fcntl(_fd, F_GETFL, 0);
-		if (prevflags == -1) {
-			proxy_error("For FD %d fcntl() returned -1 errno %d\n", _fd, errno);
-			if (shutdown == 0)
-				assert(prevflags != -1);
-		}
-		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
-		if (nb == -1) {
-			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
-			// previously we were asserting here. But it is possible that this->shutdown is still 0 during the
-			// shutdown itself:
-			// - the current thread is processing connections
-			// - the signal handler thread is still setting shutdown = 0
-			//if (shutdown == 0)
-			//	assert (nb != -1);
-		}
-	}
-	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char*)&arg_on, sizeof(arg_on));
-
-	if (mysql_thread___use_tcp_keepalive) {
-		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&arg_on, sizeof(arg_on));
-#ifdef TCP_KEEPIDLE
-		if (mysql_thread___tcp_keepalive_time > 0) {
-			int keepalive_time = mysql_thread___tcp_keepalive_time;
-			setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&keepalive_time, sizeof(keepalive_time));
-		}
-#endif
-	}
-
-#ifdef __APPLE__
-	setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_NOSIGPIPE, (char*)&arg_on, sizeof(int));
-#endif
-	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
-	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
-#ifdef DEBUG
-	sess->client_myds->myprot.dump_pkt = true;
-#endif
-	PgSQL_Connection* myconn = new PgSQL_Connection();
-	sess->client_myds->attach_connection(myconn);
-	myconn->set_is_client(); // this is used for prepared statements
-	myconn->last_time_used = curtime;
-	myconn->myds = sess->client_myds; // 20141011
-	myconn->fd = sess->client_myds->fd; // 20141011
-
-	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
-	uint32_t session_track_gtids_int = SpookyHash::Hash32(mysql_thread___default_session_track_gtids, strlen(mysql_thread___default_session_track_gtids), 10);
-	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
-	if (sess->client_myds->myconn->options.session_track_gtids) {
-		free(sess->client_myds->myconn->options.session_track_gtids);
-	}
-	sess->client_myds->myconn->options.session_track_gtids = strdup(mysql_thread___default_session_track_gtids);
-
-	return sess;
-}
-
 bool PgSQL_Thread::init() {
 	int i;
 	mysql_sessions = new PtrArray();
@@ -2890,18 +2822,6 @@ void PgSQL_Thread::poll_listener_del(int sock) {
 	}
 }
 
-void PgSQL_Thread::register_session(PgSQL_Session * _sess, bool up_start) {
-	if (mysql_sessions == NULL) {
-		mysql_sessions = new PtrArray();
-	}
-	mysql_sessions->add(_sess);
-	_sess->thread = this;
-	_sess->match_regexes = match_regexes;
-	if (up_start)
-		_sess->start_time = curtime;
-	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
-}
-
 void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions->index(idx));
@@ -2943,97 +2863,13 @@ void PgSQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 }
 
 // this function was inline in PgSQL_Thread::run()
-void PgSQL_Thread::ProcessAllMyDS_BeforePoll() {
-	bool check_if_move_to_idle_thread = false;
-#ifdef IDLE_THREADS
-	if (GloVars.global.idle_threads) {
-		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
-			last_move_to_idle_thread_time = curtime;
-			check_if_move_to_idle_thread = true;
-		}
-	}
-#endif
-	for (unsigned int n = 0; n < mypolls.len; n++) {
-		PgSQL_Data_Stream* myds = NULL;
-		myds = mypolls.myds[n];
-		mypolls.fds[n].revents = 0;
-		if (myds) {
-#ifdef IDLE_THREADS
-			if (check_if_move_to_idle_thread == true) {
-				// here we try to move it to the maintenance thread
-				if (myds->myds_type == MYDS_FRONTEND && myds->sess) {
-					if (myds->DSS == STATE_SLEEP && myds->sess->status == WAITING_CLIENT_DATA) {
-						if (move_session_to_idle_mysql_sessions(myds, n)) {
-							n--;  // compensate mypolls.remove_index_fast(n) and n++ of loop
-							continue;
-						}
-					}
-				}
-			}
-#endif // IDLE_THREADS
-			if (unlikely(myds->wait_until)) {
-				tune_timeout_for_myds_needs_pause(myds);
-			}
-			if (myds->sess) {
-				if (unlikely(myds->sess->pause_until > 0)) {
-					tune_timeout_for_session_needs_pause(myds);
-				}
-			}
-			myds->revents = 0;
-			if (myds->myds_type != MYDS_LISTENER) {
-				configure_pollout(myds, n);
-			}
-		}
-		proxy_debug(PROXY_DEBUG_NET, 1, "Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
-	}
-}
-
-
-// this function was inline in PgSQL_Thread::run()
-void PgSQL_Thread::ProcessAllMyDS_AfterPoll() {
-	for (unsigned int n = 0; n < mypolls.len; n++) {
-		proxy_debug(PROXY_DEBUG_NET, 3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd, mypolls.fds[n].events, mypolls.fds[n].revents);
-
-		PgSQL_Data_Stream* myds = mypolls.myds[n];
-		if (myds == NULL) {
-			read_one_byte_from_pipe(n);
-			continue;
-		}
-		if (mypolls.fds[n].revents == 0) {
-			if (poll_timeout_bool) {
-				check_timing_out_session(n);
-			}
-		}
-		else {
-			check_for_invalid_fd(n); // this is designed to assert in case of failure
-			switch (myds->myds_type) {
-				// Note: this logic that was here was removed completely because we added mariadb client library.
-			case MYDS_LISTENER:
-				// we got a new connection!
-				listener_handle_new_connection(myds, n);
-				continue;
-				break;
-			default:
-				break;
-			}
-			// data on exiting connection
-			bool rc = process_data_on_data_stream(myds, n);
-			if (rc == false) {
-				n--;
-			}
-		}
-	}
-}
-
-
-// this function was inline in PgSQL_Thread::run()
 void PgSQL_Thread::run___cleanup_mirror_queue() {
 	unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
 	if (mirror_queue_mysql_sessions_cache->len > l) {
 		while (mirror_queue_mysql_sessions_cache->len > mirror_queue_mysql_sessions->len && mirror_queue_mysql_sessions_cache->len > l) {
 			PgSQL_Session* newsess = (PgSQL_Session*)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
 			__sync_add_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-			GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
+			//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
 			delete newsess;
 		}
 	}
@@ -3091,7 +2927,7 @@ void PgSQL_Thread::run() {
 
 		handle_mirror_queue_mysql_sessions();
 
-		ProcessAllMyDS_BeforePoll();
+		ProcessAllMyDS_BeforePoll<PgSQL_Thread>();
 
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
@@ -3245,16 +3081,7 @@ void PgSQL_Thread::run() {
 			refresh_variables();
 		}
 
-#ifdef IDLE_THREADS
-		if (idle_maintenance_thread == false) {
-#endif // IDLE_THREADS
-			for (n = 0; n < mysql_sessions->len; n++) {
-				PgSQL_Session* _sess = (PgSQL_Session*)mysql_sessions->index(n);
-				_sess->to_process = 0;
-			}
-#ifdef IDLE_THREADS
-		}
-#endif // IDLE_THREADS
+		run_SetAllSession_ToProcess0<PgSQL_Thread,PgSQL_Session>();
 
 #ifdef IDLE_THREADS
 		// here we handle epoll_wait()
@@ -3289,7 +3116,7 @@ void PgSQL_Thread::run() {
 		}
 #endif // IDLE_THREADS
 
-		ProcessAllMyDS_AfterPoll();
+		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
 
 #ifdef IDLE_THREADS
 		__run_skip_2 :
@@ -3316,17 +3143,6 @@ void PgSQL_Thread::run() {
 	}
 }
 // end of ::run()
-
-unsigned int PgSQL_Thread::find_session_idx_in_mysql_sessions(PgSQL_Session * sess) {
-	unsigned int i = 0;
-	for (i = 0; i < mysql_sessions->len; i++) {
-		PgSQL_Session* mysess = (PgSQL_Session*)mysql_sessions->index(i);
-		if (mysess == sess) {
-			return i;
-		}
-	}
-	return i;
-}
 
 #ifdef IDLE_THREADS
 void PgSQL_Thread::idle_thread_to_kill_idle_sessions() {
@@ -3458,7 +3274,7 @@ void PgSQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 		//unsigned int maxsess=GloPTH->resume_mysql_sessions->len;
 		while (myexchange.resume_mysql_sessions->len) {
 			PgSQL_Session* mysess = (PgSQL_Session*)myexchange.resume_mysql_sessions->remove_index_fast(0);
-			register_session(mysess, false);
+			register_session(this, mysess, false);
 			PgSQL_Data_Stream* myds = mysess->client_myds;
 			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		}
@@ -3634,29 +3450,6 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 }
 
 
-
-// this function was inline in  PgSQL_Thread::process_all_sessions()
-void PgSQL_Thread::ProcessAllSessions_SortingSessions() {
-	unsigned int a = 0;
-	for (unsigned int n = 0; n < mysql_sessions->len; n++) {
-		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
-		if (sess->mybe && sess->mybe->server_myds) {
-			if (sess->mybe->server_myds->max_connect_time) {
-				PgSQL_Session* sess2 = (PgSQL_Session*)mysql_sessions->index(a);
-				if (sess2->mybe && sess2->mybe->server_myds && sess2->mybe->server_myds->max_connect_time && sess2->mybe->server_myds->max_connect_time <= sess->mybe->server_myds->max_connect_time) {
-					// do nothing
-				}
-				else {
-					void* p = mysql_sessions->pdata[a];
-					mysql_sessions->pdata[a] = mysql_sessions->pdata[n];
-					mysql_sessions->pdata[n] = p;
-					a++;
-				}
-			}
-		}
-	}
-}
-
 // this function was inline in PgSQL_Thread::process_all_sessions()
 void PgSQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, PgSQL_Session * sess) {
 	unregister_session(n);
@@ -3672,7 +3465,7 @@ void PgSQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, Pg
 		}
 		if (to_cache) {
 			__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-			GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+			//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 			mirror_queue_mysql_sessions_cache->add(sess);
 		}
 		else {
@@ -3784,7 +3577,7 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #endif // IDLE_THREADS
 	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions();
+		ProcessAllSessions_SortingSessions<PgSQL_Session>();
 	}
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -3907,6 +3700,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___authentication_method = GloPTH->get_variable_int((char*)"authentication_method");
 	pgsql_thread___show_processlist_extended = GloPTH->get_variable_int((char*)"show_processlist_extended");
 
+/*
 	mysql_thread___max_allowed_packet = GloPTH->get_variable_int((char*)"max_allowed_packet");
 	mysql_thread___automatic_detect_sqli = (bool)GloPTH->get_variable_int((char*)"automatic_detect_sqli");
 	mysql_thread___firewall_whitelist_enabled = (bool)GloPTH->get_variable_int((char*)"firewall_whitelist_enabled");
@@ -4039,6 +3833,7 @@ void PgSQL_Thread::refresh_variables() {
 			mysql_thread___default_variables[i] = GloPTH->get_variable_string(buf);
 		}
 	}
+*/
 
 	if (pgsql_thread___server_version) free(pgsql_thread___server_version);
 	pgsql_thread___server_version = GloPTH->get_variable_string((char*)"server_version");
@@ -4052,15 +3847,19 @@ void PgSQL_Thread::refresh_variables() {
 	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
 	mysql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
 	mysql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
+
 	GloPgSQL_Logger->events_set_base_filename(); // both filename and filesize are set here
 	GloPgSQL_Logger->audit_set_base_filename(); // both filename and filesize are set here
+/*
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
 	mysql_thread___default_schema = GloPTH->get_variable_string((char*)"default_schema");
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
 	mysql_thread___keep_multiplexing_variables = GloPTH->get_variable_string((char*)"keep_multiplexing_variables");
 	mysql_thread___server_capabilities = GloPTH->get_variable_uint16((char*)"server_capabilities");
 	mysql_thread___handle_unknown_charset = GloPTH->get_variable_int((char*)"handle_unknown_charset");
+*/
 	mysql_thread___poll_timeout = GloPTH->get_variable_int((char*)"poll_timeout");
+/*
 	mysql_thread___poll_timeout_on_failure = GloPTH->get_variable_int((char*)"poll_timeout_on_failure");
 	mysql_thread___have_compress = (bool)GloPTH->get_variable_int((char*)"have_compress");
 	
@@ -4106,7 +3905,8 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___handle_warnings = GloPTH->get_variable_int((char*)"handle_warnings");
 #ifdef DEBUG
 	mysql_thread___session_debug = (bool)GloPTH->get_variable_int((char*)"session_debug");
-#endif /* DEBUG */
+#endif // DEBUG
+*/
 	GloPTH->wrunlock();
 	pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 }
@@ -4157,7 +3957,7 @@ PgSQL_Thread::PgSQL_Thread() {
 
 	status_variables.active_transactions = 0;
 
-	for (unsigned int i = 0; i < st_var_END; i++) {
+	for (unsigned int i = 0; i < PG_st_var_END; i++) {
 		status_variables.stvar[i] = 0;
 	}
 	match_regexes = NULL;
@@ -4229,7 +4029,7 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 
 		// create a new client connection
 		mypolls.fds[n].revents = 0;
-		PgSQL_Session* sess = create_new_session_and_client_data_stream(c);
+		PgSQL_Session* sess = create_new_session_and_client_data_stream<PgSQL_Thread,PgSQL_Session*>(c);
 		__sync_add_and_fetch(&PgHGM->status.client_connections_created, 1);
 		if (__sync_add_and_fetch(&PgHGM->status.client_connections, 1) > mysql_thread___max_connections) {
 			sess->max_connections_reached = true;
@@ -4456,6 +4256,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1] = buf;
 		result->add_row(pta);
 	}
+/*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
 			if (strlen(PgSQL_Thread_status_variables_counter_array[i].name)) {
@@ -4489,6 +4290,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			}
 		}
 	}
+*/
 	{	// Mirror current concurrency
 		pta[0] = (char*)"Mirror_concurrency";
 		sprintf(buf, "%u", status_variables.mirror_sessions_current);
@@ -5090,12 +4892,13 @@ unsigned long long PgSQL_Threads_Handler::get_total_mirror_queue() {
 				q += thr->mirror_queue_mysql_sessions->len; // this is a dirty read
 		}
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::mirror_queue_lengths]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::mirror_queue_lengths]->Set(q);
 
 	return q;
 }
 
 
+/*
 unsigned long long PgSQL_Threads_Handler::get_status_variable(
 	enum PgSQL_Thread_status_variable v_idx,
 	p_th_counter::metric m_idx,
@@ -5125,9 +4928,10 @@ unsigned long long PgSQL_Threads_Handler::get_status_variable(
 		status_variables.p_counter_array[m_idx]->Increment(final_val);
 	}
 	return q;
-
 }
+*/
 
+/*
 unsigned long long PgSQL_Threads_Handler::get_status_variable(
 	enum PgSQL_Thread_status_variable v_idx,
 	p_th_gauge::metric m_idx,
@@ -5158,6 +4962,7 @@ unsigned long long PgSQL_Threads_Handler::get_status_variable(
 	return q;
 
 }
+*/
 
 unsigned int PgSQL_Threads_Handler::get_active_transations() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
@@ -5170,7 +4975,7 @@ unsigned int PgSQL_Threads_Handler::get_active_transations() {
 				q += __sync_fetch_and_add(&thr->status_variables.active_transactions, 0);
 		}
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::active_transactions]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::active_transactions]->Set(q);
 
 	return q;
 }
@@ -5187,7 +4992,7 @@ unsigned int PgSQL_Threads_Handler::get_non_idle_client_connections() {
 				q += __sync_fetch_and_add(&thr->mysql_sessions->len, 0);
 		}
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::client_connections_non_idle]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::client_connections_non_idle]->Set(q);
 
 	return q;
 }
@@ -5204,8 +5009,8 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 				q += __sync_fetch_and_add(&thr->status_variables.stvar[st_var_mysql_backend_buffers_bytes], 0);
 		}
 	}
-	const auto& cur_val = this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Value();
-	this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Increment(q - cur_val);
+	//const auto& cur_val = this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Value();
+	//this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Increment(q - cur_val);
 
 	return q;
 }
@@ -5231,7 +5036,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 			}
 		}
 #endif // IDLE_THREADS
-	this->status_variables.p_counter_array[p_th_gauge::mysql_frontend_buffers_bytes]->Increment(q);
+	//this->status_variables.p_counter_array[p_th_gauge::mysql_frontend_buffers_bytes]->Increment(q);
 
 	return q;
 }
@@ -5255,7 +5060,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_session_internal_bytes() {
 			}
 #endif // IDLE_THREADS
 	}
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_session_internal_bytes]->Set(q);
+	//this->status_variables.p_gauge_array[p_th_gauge::mysql_session_internal_bytes]->Set(q);
 
 	return q;
 }
@@ -5269,6 +5074,7 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 	get_mysql_backend_buffers_bytes();
 	get_mysql_frontend_buffers_bytes();
 	get_mysql_session_internal_bytes();
+/*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
 			get_status_variable(
@@ -5288,6 +5094,8 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 			);
 		}
 	}
+*/
+/*
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_wait_timeout]->Set(this->variables.wait_timeout);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_interval]->Set(this->variables.monitor_ping_interval / 1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_max_connections]->Set(this->variables.max_connections);
@@ -5302,6 +5110,7 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval / 1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_timeout]->Set(this->variables.monitor_replication_lag_timeout / 1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_history]->Set(this->variables.monitor_history / 1000.0);
+*/
 }
 
 void PgSQL_Thread::Get_Memory_Stats() {
@@ -5501,62 +5310,11 @@ void PgSQL_Thread::Scan_Sessions_to_Kill(PtrArray * mysess) {
 }
 
 #ifdef IDLE_THREADS
-bool PgSQL_Thread::move_session_to_idle_mysql_sessions(PgSQL_Data_Stream * myds, unsigned int n) {
-	unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n];
-	if (_tmp_idle < ((curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
-		// make sure data stream has no pending data out and session is not throttled (#1939)
-		// because epoll thread does not handle data stream with data out
-		if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
-			//unsigned int j;
-			bool has_backends = myds->sess->has_any_backend();
-			/*
-						for (j=0;j<myds->sess->mybes->len;j++) {
-							MySQL_Backend *tmp_mybe=(MySQL_Backend *)myds->sess->mybes->index(j);
-							PgSQL_Data_Stream *__myds=tmp_mybe->server_myds;
-							if (__myds->myconn) {
-								conns++;
-							}
-						}
-			*/
-			if (has_backends == false) {
-				unsigned long long idle_since = curtime - myds->sess->IdleTime();
-				mypolls.remove_index_fast(n);
-				myds->mypolls = NULL;
-				unsigned int i = find_session_idx_in_mysql_sessions(myds->sess);
-				myds->sess->thread = NULL;
-				unregister_session(i);
-				myds->sess->idle_since = idle_since;
-				idle_mysql_sessions->add(myds->sess);
-				return true;
-			}
-		}
-	}
-	return false;
-}
-#endif // IDLE_THREADS
-
-bool PgSQL_Thread::set_backend_to_be_skipped_if_frontend_is_slow(PgSQL_Data_Stream * myds, unsigned int n) {
-	if (myds->sess && myds->sess->client_myds && myds->sess->mirror == false) {
-		unsigned int buffered_data = 0;
-		buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
-		buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
-		// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
-		// but assuming that client isn't completely blocked, we will stop checking for data
-		// only at mysql_thread___threshold_resultset_size * 4
-		if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size * 4) {
-			mypolls.fds[n].events = 0;
-			return true;
-		}
-	}
-	return false;
-}
-
-#ifdef IDLE_THREADS
 void PgSQL_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	pthread_mutex_lock(&myexchange.mutex_idles);
 	while (myexchange.idle_mysql_sessions->len) {
 		PgSQL_Session* mysess = (PgSQL_Session*)myexchange.idle_mysql_sessions->remove_index_fast(0);
-		register_session(mysess, false);
+		register_session(this, mysess, false);
 		PgSQL_Data_Stream* myds = mysess->client_myds;
 		mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		// add in epoll()
@@ -5584,7 +5342,7 @@ void PgSQL_Thread::handle_mirror_queue_mysql_sessions() {
 			int idx;
 			idx = fastrand() % (mirror_queue_mysql_sessions->len);
 			PgSQL_Session* newsess = (PgSQL_Session*)mirror_queue_mysql_sessions->remove_index_fast(idx);
-			register_session(newsess);
+			register_session(this, newsess);
 			newsess->handler(); // execute immediately
 			if (newsess->status == WAITING_CLIENT_DATA) { // the mirror session has completed
 				unregister_session(mysql_sessions->len - 1);
@@ -5621,105 +5379,4 @@ void PgSQL_Thread::handle_kill_queues() {
 		maintenance_loop = true;
 	}
 	pthread_mutex_unlock(&kq.m);
-}
-
-void PgSQL_Thread::check_timing_out_session(unsigned int n) {
-	// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
-	// check for timeout
-	// no events. This section is copied from process_data_on_data_stream()
-	PgSQL_Data_Stream* _myds = mypolls.myds[n];
-	if (_myds && _myds->sess) {
-		if (_myds->wait_until && curtime > _myds->wait_until) {
-			// timeout
-			_myds->sess->to_process = 1;
-		}
-		else {
-			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
-				// timeout
-				_myds->sess->to_process = 1;
-			}
-		}
-	}
-}
-
-void PgSQL_Thread::check_for_invalid_fd(unsigned int n) {
-	// check if the FD is valid
-	if (mypolls.fds[n].revents == POLLNVAL) {
-		// debugging output before assert
-		PgSQL_Data_Stream* _myds = mypolls.myds[n];
-		if (_myds) {
-			if (_myds->myconn) {
-				proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd, _myds->myconn->fd);
-				assert(mypolls.fds[n].revents != POLLNVAL);
-			}
-		}
-		// if we reached her, we didn't assert() yet
-		proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd);
-		assert(mypolls.fds[n].revents != POLLNVAL);
-	}
-}
-
-void PgSQL_Thread::read_one_byte_from_pipe(unsigned int n) {
-	if (mypolls.fds[n].revents) {
-		unsigned char c;
-		if (read(mypolls.fds[n].fd, &c, 1) == -1) {// read just one byte
-			proxy_error("Error during read from signal_all_threads()\n");
-		}
-		proxy_debug(PROXY_DEBUG_GENERIC, 3, "Got signal from admin , done nothing\n");
-		//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the skeleton for issue #253
-		if (c) {
-			// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
-			pthread_mutex_unlock(&thread_mutex);
-			usleep(c * 1000);
-			pthread_mutex_lock(&thread_mutex);
-			// we enter in maintenance loop only if c is set
-			// when threads are signaling each other, there is no need to set maintenance_loop
-			maintenance_loop = true;
-		}
-	}
-}
-
-void PgSQL_Thread::tune_timeout_for_myds_needs_pause(PgSQL_Data_Stream * myds) {
-	if (myds->wait_until > curtime) {
-		if (mypolls.poll_timeout == 0 || (myds->wait_until - curtime < mypolls.poll_timeout)) {
-			mypolls.poll_timeout = myds->wait_until - curtime;
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , wait_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->wait_until, curtime);
-		}
-	}
-}
-
-void PgSQL_Thread::tune_timeout_for_session_needs_pause(PgSQL_Data_Stream * myds) {
-	if (mypolls.poll_timeout == 0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout)) {
-		mypolls.poll_timeout = myds->sess->pause_until - curtime;
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->sess->pause_until, curtime);
-	}
-}
-
-void PgSQL_Thread::configure_pollout(PgSQL_Data_Stream * myds, unsigned int n) {
-	if (myds->myds_type == MYDS_FRONTEND && myds->DSS == STATE_SLEEP && myds->sess && myds->sess->status == WAITING_CLIENT_DATA) {
-		myds->set_pollout();
-	}
-	else {
-		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END) {
-			mypolls.fds[n].events = POLLIN;
-			if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
-				mypolls.fds[n].events |= POLLOUT;
-		}
-		else {
-			myds->set_pollout();
-		}
-	}
-	if (unlikely(myds->sess->pause_until > curtime)) {
-		if (myds->myds_type == MYDS_FRONTEND) {
-			myds->remove_pollout();
-		}
-		if (myds->myds_type == MYDS_BACKEND) {
-			if (mysql_thread___throttle_ratio_server_to_client) {
-				mypolls.fds[n].events = 0;
-			}
-		}
-	}
-	if (myds->myds_type == MYDS_BACKEND) {
-		set_backend_to_be_skipped_if_frontend_is_slow(myds, n);
-	}
 }
