@@ -477,7 +477,8 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		}
 	}
 	if (ret == 0) {
-		SSL_CTX_set_verify(GloVars.global.ssl_ctx, SSL_VERIFY_PEER|SSL_VERIFY_CLIENT_ONCE, callback_ssl_verify_peer);
+		// https://github.com/sysown/proxysql/issues/4419
+		SSL_CTX_set_verify(GloVars.global.ssl_ctx, SSL_VERIFY_NONE, callback_ssl_verify_peer);
 	}
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
