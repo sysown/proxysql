@@ -77,8 +77,6 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		cluster_creds_t creds { GloProxyCluster->get_credentials() };
 
 		if (creds.user.size()) { // do not monitor if the username is empty
-			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			if (conn == NULL) {
 				conn = mysql_init(NULL);
 				if (conn==NULL) {
@@ -86,9 +84,10 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					goto __exit_monitor_thread;
 				}
 			}
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
+			unsigned int timeout = 1;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
@@ -1155,11 +1154,10 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 
 		creds = GloProxyCluster->get_credentials();
 		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
@@ -1451,11 +1449,10 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 
 		creds = GloProxyCluster->get_credentials();
 		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
@@ -1745,6 +1742,8 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 
 		creds = GloProxyCluster->get_credentials();
 		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			{
@@ -1893,11 +1892,10 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 
 		creds = GloProxyCluster->get_credentials();
 		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
@@ -2425,11 +2423,10 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 
 		creds = GloProxyCluster->get_credentials();
 		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
@@ -2589,11 +2586,10 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 
 		creds = GloProxyCluster->get_credentials();
 		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
