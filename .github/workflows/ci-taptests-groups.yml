@@ -64,7 +64,14 @@ jobs:
         #  MATRIX+="'${TM%.json}', "
         #done
         #MATRIX+=" ]"
-        MATRIX="[ 'tests', 'tests_with_deps/deprecate_eof_support' ]"
+        
+        MATRIX="[ "
+        for TM in TAP_WORKDIR; do
+          # test group folder must start with 'tests'
+          MATRIX+="'tests${TM##*/tests}', "
+        done
+        MATRIX+=" ]"        
+        #MATRIX="[ 'tests', 'tests_with_deps/deprecate_eof_support' ]"
         echo "===================="
         echo "matrix=${MATRIX}"
         echo "===================="
