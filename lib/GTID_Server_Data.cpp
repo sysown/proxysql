@@ -142,6 +142,7 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 
 	char str_port[NI_MAXSERV+1];
 	sprintf(str_port,"%d", gtid_port);
+
 	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
 	if (gai_rc) {
 		freeaddrinfo(res);
@@ -151,6 +152,10 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 
 	//int status = connect(s, (struct sockaddr *) &a, sizeof(a));
 	int status = connect(s, res->ai_addr, res->ai_addrlen);
+
+	// Free linked list
+	freeaddrinfo(res);
+
 	if ((status == 0) || ((status == -1) && (errno == EINPROGRESS))) {
 		struct ev_io *c = (struct ev_io *)malloc(sizeof(struct ev_io));
 		if (c) {
