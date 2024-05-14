@@ -575,6 +575,8 @@ const vector<sync_payload_t> module_sync_payloads {
 };
 
 int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t timeout) {
+	diag("Starting wait for node synchronization");
+
 	uint waited = 0;
 	bool not_synced = false;
 	std::string failed_query {};
@@ -584,7 +586,7 @@ int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t time
 
 		// Check that all the entries have been synced
 		for (const auto& query : queries) {
-			if (mysql_query(admin, query.c_str())) {
+			if (mysql_query_t(admin, query.c_str())) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 				return -1;
 			}
@@ -691,17 +693,39 @@ int check_module_checksums_sync(
 ) {
 	const char new_remote_checksum_query_t[] {
 		"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
-			"hostname='%s' AND port='%d' AND name='%s' AND checksum!='%s'"
+			"hostname='%s' AND port='%d' AND name='%s' AND checksum!='%s' AND checksum='%s'"
 	};
 	const char synced_runtime_checksums_query_t[] {
 		"SELECT COUNT(*) FROM runtime_checksums_values WHERE name='%s' AND checksum='%s'"
 	};
 
+	const char q_check_intv[] {
+		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_interval_ms'"
+	};
+	ext_val_t<int64_t> ext_check_intv { mysql_query_ext_val(admin, q_check_intv, int64_t(0)) };
+
+	if (ext_check_intv.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_check_intv) };
+		diag("Failed getting 'cluster_check_interval_ms'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		return EXIT_FAILURE;
+	}
+
+	const char q_sts_freq[] {
+		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_status_frequency'"
+	};
+	ext_val_t<int64_t> ext_sts_freq { mysql_query_ext_val(admin, q_sts_freq, int64_t(0)) };
+
+	if (ext_sts_freq.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_check_intv) };
+		diag("Failed getting 'cluster_check_status_frequency'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		return EXIT_FAILURE;
+	}
+
 	// Store current remote checksum value
 	const string& module { module_sync.module };
 
 	// Checksum can not be present if we have just added the remote
-	uint32_t CHECKSUM_SYNC_TIMEOUT = 3;
+	uint32_t CHECKSUM_SYNC_TIMEOUT = ((ext_check_intv.val/1000) * ext_sts_freq.val) + 1;
 
 	const char wait_remote_checksums_init_t[] {
 		"SELECT LENGTH(checksum) FROM stats_proxysql_servers_checksums WHERE "
@@ -736,6 +760,20 @@ int check_module_checksums_sync(
 		return EXIT_FAILURE;
 	}
 
+	// Get the new checksum computed after previous 'UPDATE' operation
+	const char q_module_checksum_t[] {
+		"SELECT checksum FROM main.runtime_checksums_values WHERE name='%s'"
+	};
+
+	cfmt_t q_module_checksum { cstr_format(q_module_checksum_t, module.c_str()) };
+	ext_val_t<string> ext_checksum { mysql_query_ext_val(admin, q_module_checksum.str, string()) };
+
+	if (ext_checksum.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_checksum) };
+		diag("Failed query   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		return EXIT_FAILURE;
+	}
+
 	// Wait for new checksum to be detected
 	cfmt_t new_remote_checksum_query {
 		cstr_format(
@@ -743,7 +781,8 @@ int check_module_checksums_sync(
 			conn_opts.host.c_str(),
 			conn_opts.port,
 			module.c_str(),
-			cur_remote_checksum.c_str()
+			cur_remote_checksum.c_str(),
+			ext_checksum.val.c_str()
 		)
 	};
 	int sync_res = wait_for_node_sync(r_admin, { new_remote_checksum_query.str }, CHECKSUM_SYNC_TIMEOUT);
@@ -1008,6 +1047,10 @@ int check_modules_checksums_sync(
 		check_module_checksums_sync(
 			admin, r_admin, m_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, remote_stderr
 		);
+		// A wait IS NOT required. The checks perform the required waiting, ensuring that the new computed
+		// checksum after the module update has been propagated to the other server. Previously the check
+		// didn't take into account the exact checksum, only the change, this led to invalid change
+		// detections.
 		check_module_checksums_sync(
 			r_admin, admin, r_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, main_stderr
 		);
