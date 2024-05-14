@@ -1282,6 +1282,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 							rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 							rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						}
+						(*proxy_sqlite3_finalize)(statement1);
 						GloAdmin->admindb->execute("COMMIT");
 
 
@@ -1325,6 +1326,8 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 							}
 							row_idx++;
 						}
+						(*proxy_sqlite3_finalize)(statement1fr);
+						(*proxy_sqlite3_finalize)(statement32fr);
 						//GloAdmin->admindb->execute("PRAGMA integrity_check");
 						GloAdmin->admindb->execute("COMMIT");
 
