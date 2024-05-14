@@ -65,15 +65,8 @@ jobs:
         #done
         #MATRIX+=" ]"
 
-        #source <(echo "export $(grep TAP_WORKDIR /proxysql/test/env.sh))
-        MATRIX="[ "
-        # test group folder must start with 'tests'
-        TESTGROUP=$(find proxysql/test/tap/ -name *-t | xargs -n1 dirname | uniq )
-        for TM in $TESTGROUP; do
-          MATRIX+="'tests${TM##*/tests}', "
-        done
-        MATRIX+=" ]"        
         #MATRIX="[ 'tests', 'tests_with_deps/deprecate_eof_support' ]"
+        MATRIX=$(cat proxysql/tap-matrix.json)
         echo "===================="
         echo "matrix=${MATRIX}"
         echo "===================="
