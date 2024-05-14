@@ -113,7 +113,6 @@ void connect_cb(EV_P_ ev_io *w, int revents) {
 }
 
 struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port) {
-	//struct sockaddr_in a;
 	int s;
 
 	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
@@ -121,16 +120,7 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 		close(s);
 		return NULL;
 	}
-/*
-	memset(&a, 0, sizeof(a));
-	a.sin_port = htons(gtid_port);
-	a.sin_family = AF_INET;
-	if (!inet_aton(address, (struct in_addr *) &a.sin_addr.s_addr)) {
-		perror("bad IP address format");
-		close(s);
-		return NULL;
-	}
-*/
+
 	ioctl_FIONBIO(s,1);
 
 	struct addrinfo hints;
@@ -150,7 +140,6 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 		return NULL;
 	}
 
-	//int status = connect(s, (struct sockaddr *) &a, sizeof(a));
 	int status = connect(s, res->ai_addr, res->ai_addrlen);
 
 	// Free linked list
