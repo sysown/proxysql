@@ -125,6 +125,14 @@ jobs:
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
           make ${{ matrix.dist }}-dbg | tee ci_build_log/build-tap.log
           
+          # create matrix of all test folders containing *-t
+          echo "[ "$(find proxysql/test/tap/ -name '*-t' | xargs -n1 dirname | uniq | xargs -I{} -n1 echo -n "{}, ")"]" > tap-matrix.json
+          find proxysql/test/tap/ -name *-t | xargs -n1 dirname | uniq  > tap-matrix.txt
+          echo "===================="
+          echo ">>>tap-matrix.txt<<<"
+          cat tap-matrix.txt
+          echo "===================="
+          # create matrixes of all tests
           for TESTS in test/tap/tests*; do
             echo "[ "$(find -L $TESTS -type f -name '*-t' -executable -printf "'%f', ")" ]" > tap-matrix-${TESTS##*/}.json
             find -L $TESTS -type f -name '*-t' -executable -printf "%f\n" > tap-matrix-${TESTS##*/}.txt
