@@ -126,7 +126,7 @@ jobs:
           make ${{ matrix.dist }}-dbg | tee ci_build_log/build-tap.log
           
           # create matrix of all test folders containing *-t
-          echo "[ "$(find test/tap/ -name '*-t' | xargs -n1 dirname | uniq | xargs -I{} -n1 echo -n "{}, ")"]" > tap-matrix.json
+          echo "[ "$(find test/tap/ -name '*-t' | xargs -n1 dirname | uniq | xargs -I{} -n1 echo -n "'{}', ")"]" > tap-matrix.json
           find test/tap/ -name *-t | xargs -n1 dirname | uniq  > tap-matrix.txt
           echo "===================="
           echo ">>>tap-matrix.txt<<<"
