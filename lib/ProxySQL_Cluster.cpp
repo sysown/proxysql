@@ -68,7 +68,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	char *query_error = NULL;
 	int cluster_check_status_frequency_count = 0;
 	MYSQL *conn = mysql_init(NULL);
-//		goto __exit_monitor_thread;
+
 	if (conn==NULL) {
 		proxy_error("Unable to run mysql_init()\n");
 		goto __exit_monitor_thread;
@@ -93,12 +93,10 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 			}
-			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
+			// FIXME: add optional support for compression
 			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Connecting to peer %s:%d\n", node->hostname, node->port);
 			MYSQL* rc_conn = mysql_real_connect(conn, node->get_host_address(), creds.user.c_str(), creds.pass.c_str(), NULL, node->port, NULL, 0);
-//			if (rc_conn) {
-//			}
-			//char *query = query1;
+
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
@@ -145,7 +143,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				}
 				while ( glovars.shutdown == 0 && rc_query == 0 && rc_bool == true) {
 					unsigned long long start_time=monotonic_time();
-					//unsigned long long before_query_time=monotonic_time();
+
 					rc_query = mysql_query(conn,query1);
 					if ( rc_query == 0 ) {
 						query_error = NULL;
@@ -157,19 +155,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						mysql_free_result(result);
 						// FIXME: update metrics are not updated for now. We only check checksum
 						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
-						//unsigned long long elapsed_time_ms = elapsed_time_us / 1000;
-/*
-						int e_ms = (int)elapsed_time_ms;
-						//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
-						int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-						if (ci > e_ms) {
-							if (rc_bool) {
-								usleep((ci-e_ms)*1000); // remember, usleep is in us
-							}
-						}
-*/
-						//query = query3;
-						//unsigned long long before_query_time2=monotonic_time();
+
 						if (update_checksum) {
 							unsigned long long before_query_time=monotonic_time();
 							rc_query = mysql_query(conn,query3);
@@ -177,20 +163,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								query_error = NULL;
 								query_error_counter = 0;
 								MYSQL_RES *result = mysql_store_result(conn);
-								//unsigned long long after_query_time2=monotonic_time();
-								//unsigned long long elapsed_time_us2 = (after_query_time2 - before_query_time2);
 								rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
 								mysql_free_result(result);
-								//unsigned long long elapsed_time_ms2 = elapsed_time_us2 / 1000;
-								//int e_ms = (int)elapsed_time_ms + int(elapsed_time_ms2);
-								//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
-								//int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-								//if (ci > e_ms) {
-								//	if (rc_bool) {
-								//		tts = 1;
-								//		//usleep((ci-e_ms)*1000); // remember, usleep is in us
-								//	}
-								//}
 							} else {
 								query_error = query3;
 								if (query_error_counter == 0) {
@@ -205,12 +179,6 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							}
 						} else {
 							GloProxyCluster->Update_Node_Checksums(node->hostname, node->port);
-							//int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-							//if (ci > elapsed_time_ms) {
-							//	if (rc_bool) {
-							//		usleep((ci-elapsed_time_ms)*1000); // remember, usleep is in us
-							//	}
-							//}
 						}
 						if (rc_query == 0) {
 							cluster_check_status_frequency_count++;
@@ -293,9 +261,7 @@ __exit_monitor_thread:
 	}
 	proxy_info("Cluster: closing thread for peer %s:%d\n", node->hostname, node->port);
 	delete node;
-	//pthread_exit(0);
 	mysql_thread_end();
-	//GloProxyCluster->thread_ending(node->thrid);
 
 	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_cluster_threads,tmp_stack_size);
 
