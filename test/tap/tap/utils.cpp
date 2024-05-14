@@ -522,6 +522,39 @@ ext_val_t<string> ext_single_row_val(const mysql_res_row& row, const string& def
 	}
 }
 
+ext_val_t<int32_t> ext_single_row_val(const mysql_res_row& row, const int32_t& def_val) {
+	if (row.empty() || row.front().empty()) {
+		return { -1, def_val, {} };
+	} else {
+        errno = 0;
+        char* p_end {};
+        const int32_t val = std::strtol(row.front().c_str(), &p_end, 10);
+
+		if (row[0] == p_end || errno == ERANGE) {
+			return { -2, def_val, string { row[0] } };
+		} else {
+			return { EXIT_SUCCESS, val, string { row[0] } };
+		}
+	}
+}
+
+ext_val_t<uint32_t> ext_single_row_val(const mysql_res_row& row, const uint32_t& def_val) {
+	if (row.empty() || row.front().empty()) {
+		return { -1, def_val, {} };
+	} else {
+        errno = 0;
+        char* p_end {};
+        const uint32_t val = std::strtoul(row.front().c_str(), &p_end, 10);
+
+		if (row[0] == p_end || errno == ERANGE) {
+			return { -2, def_val, string { row[0] } };
+		} else {
+			return { EXIT_SUCCESS, val, string { row[0] } };
+		}
+	}
+}
+
+
 ext_val_t<int64_t> ext_single_row_val(const mysql_res_row& row, const int64_t& def_val) {
 	if (row.empty() || row.front().empty()) {
 		return { -1, def_val, {} };
@@ -544,7 +577,7 @@ ext_val_t<uint64_t> ext_single_row_val(const mysql_res_row& row, const uint64_t&
 	} else {
         errno = 0;
         char* p_end {};
-        const uint64_t val = std::strtoll(row.front().c_str(), &p_end, 10);
+        const uint64_t val = std::strtoull(row.front().c_str(), &p_end, 10);
 
 		if (row[0] == p_end || errno == ERANGE) {
 			return { -2, def_val, string { row[0] } };

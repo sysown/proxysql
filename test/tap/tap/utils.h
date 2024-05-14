@@ -171,6 +171,8 @@ struct ext_val_t {
  * @return An `ext_val_t<T>` where T is the type of the provided default value.
  */
 ext_val_t<std::string> ext_single_row_val(const mysql_res_row& row, const std::string& def_val);
+ext_val_t<int32_t> ext_single_row_val(const mysql_res_row& row, const int32_t& def_val);
+ext_val_t<uint32_t> ext_single_row_val(const mysql_res_row& row, const uint32_t& def_val);
 ext_val_t<int64_t> ext_single_row_val(const mysql_res_row& row, const int64_t& def_val);
 ext_val_t<uint64_t> ext_single_row_val(const mysql_res_row& row, const uint64_t& def_val);
 
