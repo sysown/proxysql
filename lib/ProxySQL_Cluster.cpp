@@ -74,7 +74,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		goto __exit_monitor_thread;
 	}
 	while (glovars.shutdown == 0 && rc_bool == true) {
-		cluster_creds_t creds { GloProxyCluster->get_credentials() };
+		cluster_creds_t creds(GloProxyCluster->get_credentials());
 
 		if (creds.user.size()) { // do not monitor if the username is empty
 			if (conn == NULL) {
