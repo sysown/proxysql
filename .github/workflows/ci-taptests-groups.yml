@@ -64,10 +64,12 @@ jobs:
         #  MATRIX+="'${TM%.json}', "
         #done
         #MATRIX+=" ]"
-        
+
+        #source <(echo "export $(grep TAP_WORKDIR /proxysql/test/env.sh))
         MATRIX="[ "
-        for TM in $TAP_WORKDIR; do
-          # test group folder must start with 'tests'
+        # test group folder must start with 'tests'
+        TESTGROUP=$(find proxysql/test/tap/ -name *-t | xargs -n1 dirname | uniq )
+        for TM in $TESTGROUP; do
           MATRIX+="'tests${TM##*/tests}', "
         done
         MATRIX+=" ]"        
