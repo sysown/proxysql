@@ -280,10 +280,13 @@ int main(int argc, char** argv) {
 	vector<ept_info_t> i_epts_info {};
 	const auto ext_i_epts_info = [] (const faulty_req_t& req) { return req.ept_info; };
 
+	// Failed scripts may require to read the full output from ASAN leaks report. This in combination with the
+	// forked process shutdown slowdown can take a considerable amount of time. A cleaner solution would be
+	// to disable 'detect_leaks' at runtime, but doesn't look feasible at the moment.
 	int wasan = get_env_int("WITHASAN", 0);
 	if (wasan) {
 		for (auto& req : invalid_requests) {
-			req.ept_info.timeout += 2000;
+			req.ept_info.timeout += 8000;
 		}
 	}
 
