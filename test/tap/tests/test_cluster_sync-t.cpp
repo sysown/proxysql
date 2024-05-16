@@ -1028,7 +1028,8 @@ int check_modules_checksums_sync(
 
 	for (size_t dis_module = 0; dis_module < module_sync_payloads.size(); dis_module++) {
 		printf("\n");
-		diag("Start test with sync DISABLED for module '%s'", module_sync_payloads[dis_module].module.c_str());
+		const string dis_module_str { module_sync_payloads[dis_module].module };
+		diag("Start test with sync DISABLED for module '%s'", dis_module_str.c_str());
 
 		for (const sync_payload_t& sync_payload : module_sync_payloads) {
 			const string set_query { "SET " + sync_payload.sync_variable + "=" + def_syncs };
@@ -1041,9 +1042,11 @@ int check_modules_checksums_sync(
 		MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 		// Check that ALL modules sync, but 'dis_module' in both ways - Main-To-Remote and Remote-To-Main
+		diag("Checking ALL modules SYNC but DISABLED module '%s'", dis_module_str.c_str());
 		check_all_modules_sync(admin, r_admin, m_conn_opts.first, dis_module, main_stderr, remote_stderr);
 
 		// Enable back the module
+		diag("Renable module '%s' synchronization", dis_module_str.c_str());
 		const string enable_query {
 			"SET " + module_sync_payloads[dis_module].sync_variable + "=" + std::to_string(def_mod_diffs_sync)
 		};
@@ -1065,6 +1068,7 @@ int check_modules_checksums_sync(
 		}
 
 		// Check that the module syncs again in both ways
+		diag("Checking module '%s' syncs again - MAIN to REMOTE", dis_module_str.c_str());
 		check_module_checksums_sync(
 			admin, r_admin, m_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, remote_stderr
 		);
@@ -1072,12 +1076,14 @@ int check_modules_checksums_sync(
 		// checksum after the module update has been propagated to the other server. Previously the check
 		// didn't take into account the exact checksum, only the change, this led to invalid change
 		// detections.
+		diag("Checking module '%s' syncs again - REMOTE to MAIN", dis_module_str.c_str());
 		check_module_checksums_sync(
 			r_admin, admin, r_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, main_stderr
 		);
 
 		if (module_sync_payloads[dis_module].module != "proxysql_servers") {
 			// Disable the module using checksums
+			diag("Disable module '%s' using checksums", dis_module_str.c_str());
 			const string disable_checksum_query {
 				"SET " + module_sync_payloads[dis_module].checksum_variable + "=false"
 			};
@@ -1085,6 +1091,7 @@ int check_modules_checksums_sync(
 			MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 			// Check that ALL modules sync, but 'dis_module' in both ways - Main-To-Remote and Remote-To-Main
+			diag("Checking ALL modules SYNC but DISABLED module '%s'", dis_module_str.c_str());
 			check_all_modules_sync(admin, r_admin, m_conn_opts.first, dis_module, main_stderr, remote_stderr);
 
 			// Enable back the module
@@ -1108,9 +1115,11 @@ int check_modules_checksums_sync(
 			}
 
 			// Check that the module syncs again in both ways
+			diag("Checking module '%s' syncs again - MAIN to REMOTE", dis_module_str.c_str());
 			check_module_checksums_sync(
 				admin, r_admin, m_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, remote_stderr
 			);
+			diag("Checking module '%s' syncs again - REMOTE to MAIN", dis_module_str.c_str());
 			check_module_checksums_sync(
 				r_admin, admin, r_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, main_stderr
 			);
