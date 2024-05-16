@@ -4,19 +4,21 @@
 #include <algorithm>
 #include <string>
 #include <vector>
-#include <random>
 #include <fstream>
-#include <sstream>
-#include <regex>
 
 #include "curl/curl.h"
-#include <mysql.h>
+
 #include "sqlite3db.h"
+#include "json_fwd.hpp"
 
 #include "command_line.h"
-#include "json.hpp"
+#include "mysql.h"
 
+// Improve dependency failure compilation error
 #ifndef DISABLE_WARNING_COUNT_LOGGING
+
+extern "C" {
+
 /* We are overriding some of the mariadb APIs to extract the warning count and print it in the log. 
    This override will apply to all TAP tests, except when the TAP test is linked with the MySQL client library (LIBMYSQL_HELPER defined).
 */
@@ -49,6 +51,9 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line);
 #define mysql_stmt_execute(stmt) mysql_stmt_execute_override(stmt,__FILE__,__LINE__)
 #define mysql_stmt_store_result(stmt) mysql_stmt_store_result_override(stmt,__FILE__,__LINE__)
 #define mysql_stmt_close(stmt) mysql_stmt_close_override(stmt,__FILE__,__LINE__)
+
+}
+
 #endif 
 
 inline std::string get_formatted_time() {
@@ -92,19 +97,11 @@ int mysql_query_t(MYSQL* mysql, const char* query);
 		} \
 	} while(0)
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value);
 int show_admin_global_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value);
 int set_admin_global_variable(MYSQL *mysql, const std::string& var_name, const std::string& var_value);
 int get_server_version(MYSQL *mysql, std::string& version);
 int select_config_file(MYSQL* mysql, std::string& resultset);
-
-#ifdef __cplusplus
-}
-#endif
 
 /*
  * @return int Zero in case of success, or the errno returned by `execvp` in case of failure.
@@ -119,8 +116,6 @@ int execvp(const std::string& file, const std::vector<const char*>& argv, std::s
  * @return int The error code returned by popen.
  */
 int exec(const std::string& cmd, std::string& result);
-
-
 
 // create table test.sbtest1 with num_rows rows
 int create_table_test_sbtest1(int num_rows, MYSQL *mysql);
@@ -430,6 +425,13 @@ std::vector<std::vector<T>> get_permutations(const std::vector<T>& elem_set) {
 }
 
 /**
+ * @brief Generates permutations of binary vectors of the specified size.
+ * @param tg_size The target size of the binary vectors.
+ * @return The generated permutations.
+ */
+std::vector<std::vector<bool>> get_all_bin_vec(size_t tg_size);
+
+/**
  * @brief Struct holding options on how to performs connections for 'EOF' tests.
  */
 struct conn_cnf_t {
@@ -585,21 +587,26 @@ std::string get_env(const std::string& var);
 /**
  * @brief Opens the file in the supplied path in the provided stream, and seeks the end of it.
  * @param f_path Path to the file to open.
- * @param f_logfile Output parameter with the stream to be updated with the oppened file.
- * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise. Error casuse is logged.
+ * @param f_logfile Output parameter with the stream to be updated with the opened file.
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise. Error cause is logged.
  */
 int open_file_and_seek_end(const std::string& f_path, std::fstream& f_stream);
 
-using line_match_t = std::tuple<std::fstream::pos_type, std::string, std::smatch>;
-enum LINE_MATCH_T { POS, LINE, MATCHES };
+using line_match_t = std::tuple<std::fstream::pos_type, std::string, std::string>;
+enum LINE_MATCH_T { POS, LINE, MATCH };
 
 /**
  * @brief Extracts the lines matching the regex from the supplied stream till reaching EOF.
  * @param f_stream The stream to be matched with the regex.
  * @param regex The regex used to match the stream line-by-line.
+ * @param get_matches If matched patterns should be returned (LINE_MATCH_T::MATCH). If supplied, the regex
+ *  should contain at least one sub-pattern, or be a complete sub-pattern, otherwise it will fail to match.
+ *  For example, regex '\d+' should become '(\d+)'.
  * @return All the lines found matching the regex.
  */
-std::vector<line_match_t> get_matching_lines(std::fstream& f_stream, const std::string& regex);
+std::vector<line_match_t> get_matching_lines(
+	std::fstream& f_stream, const std::string& regex, bool get_matches=false
+);
 
 /**
  * @brief Opens a sqlite3 db file located in the supplied path with the provided flags.
