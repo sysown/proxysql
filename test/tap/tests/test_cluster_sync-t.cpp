@@ -683,6 +683,32 @@ string fetch_runtime_checksum(MYSQL* admin, const string& module) {
 
 const int def_mod_diffs_sync = 2;
 
+int32_t get_checksum_sync_timeout(MYSQL* admin) {
+	const char q_check_intv[] {
+		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_interval_ms'"
+	};
+	ext_val_t<int64_t> ext_check_intv { mysql_query_ext_val(admin, q_check_intv, int64_t(0)) };
+
+	if (ext_check_intv.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_check_intv) };
+		diag("Failed getting 'cluster_check_interval_ms'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		return -1;
+	}
+
+	const char q_sts_freq[] {
+		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_status_frequency'"
+	};
+	ext_val_t<int64_t> ext_sts_freq { mysql_query_ext_val(admin, q_sts_freq, int64_t(0)) };
+
+	if (ext_sts_freq.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_check_intv) };
+		diag("Failed getting 'cluster_check_status_frequency'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		return -1;
+	}
+
+	return ((ext_check_intv.val/1000) * ext_sts_freq.val) + 1;
+}
+
 int check_module_checksums_sync(
 	MYSQL* admin,
 	MYSQL* r_admin,
@@ -699,33 +725,15 @@ int check_module_checksums_sync(
 		"SELECT COUNT(*) FROM runtime_checksums_values WHERE name='%s' AND checksum='%s'"
 	};
 
-	const char q_check_intv[] {
-		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_interval_ms'"
-	};
-	ext_val_t<int64_t> ext_check_intv { mysql_query_ext_val(admin, q_check_intv, int64_t(0)) };
-
-	if (ext_check_intv.err != EXIT_SUCCESS) {
-		const string err { get_ext_val_err(admin, ext_check_intv) };
-		diag("Failed getting 'cluster_check_interval_ms'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
-		return EXIT_FAILURE;
-	}
-
-	const char q_sts_freq[] {
-		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_status_frequency'"
-	};
-	ext_val_t<int64_t> ext_sts_freq { mysql_query_ext_val(admin, q_sts_freq, int64_t(0)) };
-
-	if (ext_sts_freq.err != EXIT_SUCCESS) {
-		const string err { get_ext_val_err(admin, ext_check_intv) };
-		diag("Failed getting 'cluster_check_status_frequency'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
-		return EXIT_FAILURE;
-	}
-
 	// Store current remote checksum value
 	const string& module { module_sync.module };
 
 	// Checksum can not be present if we have just added the remote
-	uint32_t CHECKSUM_SYNC_TIMEOUT = ((ext_check_intv.val/1000) * ext_sts_freq.val) + 1;
+	uint32_t CHECKSUM_SYNC_TIMEOUT = get_checksum_sync_timeout(admin);
+	if (CHECKSUM_SYNC_TIMEOUT == -1) {
+		diag("Failed fetching values to compute 'CHECKSUM_SYNC_TIMEOUT'");
+		return EXIT_FAILURE;
+	}
 
 	const char wait_remote_checksums_init_t[] {
 		"SELECT LENGTH(checksum) FROM stats_proxysql_servers_checksums WHERE "
@@ -735,7 +743,7 @@ int check_module_checksums_sync(
 		cstr_format(wait_remote_checksums_init_t, conn_opts.host.c_str(), conn_opts.port, module.c_str())
 	};
 
-	int checksum_present = wait_for_node_sync( r_admin, { wait_remote_checksums_init.str }, CHECKSUM_SYNC_TIMEOUT);
+	int checksum_present = wait_for_node_sync(r_admin, { wait_remote_checksums_init.str }, CHECKSUM_SYNC_TIMEOUT);
 	if (checksum_present) {
 		diag("No checksum (or zero) detected int the target remote server for module '%s'", module.c_str());
 		return EXIT_FAILURE;
@@ -770,7 +778,7 @@ int check_module_checksums_sync(
 
 	if (ext_checksum.err != EXIT_SUCCESS) {
 		const string err { get_ext_val_err(admin, ext_checksum) };
-		diag("Failed query   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		diag("Failed query   query:`%s`, err:`%s`", q_module_checksum.str.c_str(), err.c_str());
 		return EXIT_FAILURE;
 	}
 
@@ -948,6 +956,19 @@ int check_all_modules_sync(
 	for (size_t j = 0; j < module_sync_payloads.size(); j++) {
 		const sync_payload_t& sync_payload = module_sync_payloads[j];
 		const int diffs_sync = j == dis_module ? 0 : def_mod_diffs_sync;
+
+		// REQUIRE-WAIT: All checks make use of the 'admin_variables' to enable/disable module
+		// synchronization. The previous module check only waits for the module synchronization itself, but
+		// not for the propagation of the changed 'admin_variables'; not waiting the propagation of this
+		// previous change could interfere with the checks target to this same module.
+		if (module_sync_payloads[j].module == "admin_variables") {
+			uint32_t CHECKSUM_SYNC_TIMEOUT = get_checksum_sync_timeout(admin);
+			if (CHECKSUM_SYNC_TIMEOUT == -1) {
+				diag("Failed fetching values to compute 'CHECKSUM_SYNC_TIMEOUT'");
+				return EXIT_FAILURE;
+			}
+			sleep(CHECKSUM_SYNC_TIMEOUT);
+		}
 
 		int check_sync = check_module_checksums_sync(admin, r_admin, conn_opts, sync_payload, diffs_sync, remote_stderr);
 		if (check_sync) {
