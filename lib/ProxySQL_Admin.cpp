@@ -6389,6 +6389,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	Admin_HTTP_Server = NULL;
 	AdminRestApiServer = NULL;
+	AdminHTTPServer = NULL;
+
 /*
 	AdminRestApiServer = new ProxySQL_RESTAPI_Server();
 	AdminRestApiServer->print_version();
