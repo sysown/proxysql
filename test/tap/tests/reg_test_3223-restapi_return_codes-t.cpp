@@ -48,7 +48,7 @@ const vector<honest_req_t> honest_requests {
 	{ { "partial_output_flush_script", "%s.py", "POST", 10000 }, { "{}" } },
 };
 
-const vector<faulty_req_t> invalid_requests {
+vector<faulty_req_t> invalid_requests {
 	// Checks that 'POST' fails for:
 	//   1 - Empty parameters.
 	//   2 - Invalid JSON input.
@@ -279,6 +279,14 @@ int main(int argc, char** argv) {
 
 	vector<ept_info_t> i_epts_info {};
 	const auto ext_i_epts_info = [] (const faulty_req_t& req) { return req.ept_info; };
+
+	int wasan = get_env_int("WITHASAN", 0);
+	if (wasan) {
+		for (auto& req : invalid_requests) {
+			req.ept_info.timeout += 2000;
+		}
+	}
+
 	std::transform(
 		invalid_requests.begin(), invalid_requests.end(), std::back_inserter(i_epts_info), ext_i_epts_info
 	);
