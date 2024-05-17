@@ -201,7 +201,6 @@ class MySrvC {	// MySQL Server Container
 	uint16_t gtid_port;
 	uint16_t flags;
 	int64_t weight;
-	enum MySerStatus status;
 	unsigned int compression;
 	int64_t max_connections;
 	unsigned int aws_aurora_current_lag_us;
@@ -263,6 +262,11 @@ class MySrvC {	// MySQL Server Container
 			max_connections_used = connections_used;
 		return max_connections_used;
 	}
+	void set_status(MySerStatus _status);
+	inline
+	MySerStatus get_status() const { return status; }
+private:
+	enum MySerStatus status;
 };
 
 class MySrvList {	// MySQL Server List
@@ -282,6 +286,8 @@ class MySrvList {	// MySQL Server List
 class MyHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
+	std::atomic<uint32_t> num_online_servers;
+	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
 	MySrvList *mysrvs;
@@ -313,6 +319,13 @@ class MyHGC {	// MySQL Host Group Container
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+	void refresh_online_server_count();
+	void log_num_online_server_count_error();
+	inline
+	bool online_servers_within_threshold() const {
+		if (num_online_servers.load(std::memory_order_relaxed) <= attributes.max_num_online_servers) return true;
+		return false;
+	}
 };
 
 class Group_Replication_Info {
@@ -930,6 +943,9 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
+#ifdef DEBUG
+	bool is_locked = false;
+#endif
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.

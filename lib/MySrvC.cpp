@@ -14,7 +14,7 @@ MySrvC::MySrvC(
 	port=p;
 	gtid_port=gp;
 	weight=_weight;
-	status=_status;
+	status = _status;
 	compression=_compression;
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
@@ -141,4 +141,9 @@ MySrvC::~MySrvC() {
 	if (comment) free(comment);
 	delete ConnectionsUsed;
 	delete ConnectionsFree;
+}
+
+void MySrvC::set_status(MySerStatus _status) {
+	status = _status;
+	if (myhgc)myhgc->refresh_online_server_count();
 }
