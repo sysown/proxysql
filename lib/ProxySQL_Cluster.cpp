@@ -63,28 +63,20 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	char *query1 = (char *)"SELECT GLOBAL_CHECKSUM()"; // in future this will be used for "light check"
 	char *query2 = (char *)"SELECT * FROM stats_mysql_global ORDER BY Variable_Name";
 	char *query3 = (char *)"SELECT * FROM runtime_checksums_values ORDER BY name";
-	char *username = NULL;
-	char *password = NULL;
 	bool rc_bool = true;
 	int query_error_counter = 0;
 	char *query_error = NULL;
 	int cluster_check_status_frequency_count = 0;
 	MYSQL *conn = mysql_init(NULL);
-//		goto __exit_monitor_thread;
+
 	if (conn==NULL) {
 		proxy_error("Unable to run mysql_init()\n");
 		goto __exit_monitor_thread;
 	}
 	while (glovars.shutdown == 0 && rc_bool == true) {
-		MYSQL * rc_conn = NULL;
-		int rc_query = 0;
-		bool update_checksum = false;
-		if (username) { free(username); }
-		if (password) { free(password); }
-		GloProxyCluster->get_credentials(&username, &password);
-		if (strlen(username)) { // do not monitor if the username is empty
-			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
+		cluster_creds_t creds(GloProxyCluster->get_credentials());
+
+		if (creds.user.size()) { // do not monitor if the username is empty
 			if (conn == NULL) {
 				conn = mysql_init(NULL);
 				if (conn==NULL) {
@@ -92,23 +84,22 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					goto __exit_monitor_thread;
 				}
 			}
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
+			unsigned int timeout = 1;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 			}
-			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
+			// FIXME: add optional support for compression
 			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Connecting to peer %s:%d\n", node->hostname, node->port);
-			rc_conn = mysql_real_connect(conn, node->get_host_address(), username, password, NULL, node->port, NULL, 0);
-//			if (rc_conn) {
-//			}
-			//char *query = query1;
+			MYSQL* rc_conn = mysql_real_connect(conn, node->get_host_address(), creds.user.c_str(), creds.pass.c_str(), NULL, node->port, NULL, 0);
+
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
-				rc_query = mysql_query(conn,(char *)"SELECT @@version");
+				int rc_query = mysql_query(conn,(char *)"SELECT @@version");
 				if (rc_query == 0) {
 					query_error = NULL;
 					query_error_counter = 0;
@@ -151,7 +142,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				}
 				while ( glovars.shutdown == 0 && rc_query == 0 && rc_bool == true) {
 					unsigned long long start_time=monotonic_time();
-					//unsigned long long before_query_time=monotonic_time();
+
 					rc_query = mysql_query(conn,query1);
 					if ( rc_query == 0 ) {
 						query_error = NULL;
@@ -159,23 +150,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						MYSQL_RES *result = mysql_store_result(conn);
 						//unsigned long long after_query_time=monotonic_time();
 						//unsigned long long elapsed_time_us = (after_query_time - before_query_time);
-						update_checksum = GloProxyCluster->Update_Global_Checksum(node->hostname, node->port, result);
+						bool update_checksum = GloProxyCluster->Update_Global_Checksum(node->hostname, node->port, result);
 						mysql_free_result(result);
 						// FIXME: update metrics are not updated for now. We only check checksum
 						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
-						//unsigned long long elapsed_time_ms = elapsed_time_us / 1000;
-/*
-						int e_ms = (int)elapsed_time_ms;
-						//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
-						int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-						if (ci > e_ms) {
-							if (rc_bool) {
-								usleep((ci-e_ms)*1000); // remember, usleep is in us
-							}
-						}
-*/
-						//query = query3;
-						//unsigned long long before_query_time2=monotonic_time();
+
 						if (update_checksum) {
 							unsigned long long before_query_time=monotonic_time();
 							rc_query = mysql_query(conn,query3);
@@ -183,37 +162,22 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								query_error = NULL;
 								query_error_counter = 0;
 								MYSQL_RES *result = mysql_store_result(conn);
-								//unsigned long long after_query_time2=monotonic_time();
-								//unsigned long long elapsed_time_us2 = (after_query_time2 - before_query_time2);
 								rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
 								mysql_free_result(result);
-								//unsigned long long elapsed_time_ms2 = elapsed_time_us2 / 1000;
-								//int e_ms = (int)elapsed_time_ms + int(elapsed_time_ms2);
-								//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
-								//int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-								//if (ci > e_ms) {
-								//	if (rc_bool) {
-								//		tts = 1;
-								//		//usleep((ci-e_ms)*1000); // remember, usleep is in us
-								//	}
-								//}
 							} else {
 								query_error = query3;
 								if (query_error_counter == 0) {
 									unsigned long long after_query_time=monotonic_time();
 									unsigned long long elapsed_time_us = (after_query_time - before_query_time);
-									proxy_error("Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n", node->hostname, node->port , username, elapsed_time_us/1000 , query_error, mysql_error(conn));
+									proxy_error(
+										"Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n",
+										node->hostname, node->port, creds.user.c_str(), elapsed_time_us/1000, query_error, mysql_error(conn)
+									);
 								}
 								if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 							}
 						} else {
 							GloProxyCluster->Update_Node_Checksums(node->hostname, node->port);
-							//int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-							//if (ci > elapsed_time_ms) {
-							//	if (rc_bool) {
-							//		usleep((ci-elapsed_time_ms)*1000); // remember, usleep is in us
-							//	}
-							//}
 						}
 						if (rc_query == 0) {
 							cluster_check_status_frequency_count++;
@@ -235,7 +199,10 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 									if (query_error_counter == 0) {
 										unsigned long long after_query_time=monotonic_time();
 										unsigned long long elapsed_time_us = (after_query_time - before_query_time);
-										proxy_error("Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n", node->hostname, node->port , username, elapsed_time_us/1000 , query_error, mysql_error(conn));
+										proxy_error(
+											"Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n",
+											node->hostname, node->port, creds.user.c_str(), elapsed_time_us/1000, query_error, mysql_error(conn)
+										);
 									}
 									if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 								}
@@ -246,7 +213,10 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						if (query_error_counter == 0) {
 							unsigned long long after_query_time=monotonic_time();
 							unsigned long long elapsed_time_us = (after_query_time - start_time);
-							proxy_error("Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n", node->hostname, node->port , username, elapsed_time_us/1000, query_error, mysql_error(conn));
+							proxy_error(
+								"Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n",
+								node->hostname, node->port, creds.user.c_str(), elapsed_time_us/1000, query_error, mysql_error(conn)
+							);
 						}
 						if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 					}
@@ -290,9 +260,7 @@ __exit_monitor_thread:
 	}
 	proxy_info("Cluster: closing thread for peer %s:%d\n", node->hostname, node->port);
 	delete node;
-	//pthread_exit(0);
 	mysql_thread_end();
-	//GloProxyCluster->thread_ending(node->thrid);
 
 	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_cluster_threads,tmp_stack_size);
 
@@ -1176,40 +1144,38 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_query_rules_mutex);
 	nodes.get_peer_to_sync_mysql_query_rules(&hostname, &port, &ip_address);
 	if (hostname) {
-		char *username = NULL;
-		char *password = NULL;
-		// bool rc_bool = true;
-		MYSQL *rc_conn;
-		int rc_query;
-		int rc;
+		cluster_creds_t creds {};
+
 		MYSQL *conn = mysql_init(NULL);
 		if (conn==NULL) {
 			proxy_error("Unable to run mysql_init()\n");
 			goto __exit_pull_mysql_query_rules_from_peer;
 		}
-		GloProxyCluster->get_credentials(&username, &password);
-		if (strlen(username)) { // do not monitor if the username is empty
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 			}
 			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Query Rules from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
 			proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
-			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
+			MYSQL* rc_conn = mysql_real_connect(
+				conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0
+			);
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 				MYSQL_RES *result1 = NULL;
 				MYSQL_RES *result2 = NULL;
 				//rc_query = mysql_query(conn,"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules");
-				rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_QUERY_RULES);
+				int rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_QUERY_RULES);
 				if ( rc_query == 0 ) {
-					MYSQL_RES *result1 = mysql_store_result(conn);
+					result1 = mysql_store_result(conn);
 					rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING);
 					if ( rc_query == 0) {
 						result2 = mysql_store_result(conn);
@@ -1237,7 +1203,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 						sqlite3_stmt *statement1 = NULL;
 						//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 						//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q, -1, &statement1, 0);
-						rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+						int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 						ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						GloAdmin->admindb->execute("BEGIN TRANSACTION");
 						while ((row = mysql_fetch_row(result1))) {
@@ -1280,6 +1246,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 							rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 							rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						}
+						(*proxy_sqlite3_finalize)(statement1);
 						GloAdmin->admindb->execute("COMMIT");
 
 
@@ -1323,6 +1290,8 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 							}
 							row_idx++;
 						}
+						(*proxy_sqlite3_finalize)(statement1fr);
+						(*proxy_sqlite3_finalize)(statement32fr);
 						//GloAdmin->admindb->execute("PRAGMA integrity_check");
 						GloAdmin->admindb->execute("COMMIT");
 
@@ -1470,22 +1439,20 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_users_mutex);
 	nodes.get_peer_to_sync_mysql_users(&hostname, &port, &ip_address);
 	if (hostname) {
-		char *username = NULL;
-		char *password = NULL;
-		MYSQL *rc_conn;
-		int rc_query;
+		cluster_creds_t creds {};
+
 		MYSQL *conn = mysql_init(NULL);
 		if (conn==NULL) {
 			proxy_error("Unable to run mysql_init()\n");
 			goto __exit_pull_mysql_users_from_peer;
 		}
-		GloProxyCluster->get_credentials(&username, &password);
-		if (strlen(username)) { // do not monitor if the username is empty
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
@@ -1493,7 +1460,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
 
-			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
+			MYSQL* rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0);
 			if (rc_conn == nullptr) {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
@@ -1512,7 +1479,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 
 			MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
-			rc_query = mysql_query(conn, CLUSTER_QUERY_MYSQL_USERS);
+			int rc_query = mysql_query(conn, CLUSTER_QUERY_MYSQL_USERS);
 			if (rc_query == 0) {
 				MYSQL_RES* mysql_users_result = mysql_store_result(conn);
 				MYSQL_RES* ldap_mapping_result = nullptr;
@@ -1620,12 +1587,6 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
 				}
 			}
-		}
-		if (username) {
-			free(username);
-		}
-		if (password) {
-			free(password);
 		}
 __exit_pull_mysql_users_from_peer:
 		if (conn) {
@@ -1771,17 +1732,18 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 	pthread_mutex_lock(&GloProxyCluster->update_runtime_mysql_servers_mutex);
 	nodes.get_peer_to_sync_runtime_mysql_servers(&hostname, &port, &peer_checksum, &ip_address);
 	if (hostname) {
-		char *username = NULL;
-		char *password = NULL;
-		// bool rc_bool = true;
-		MYSQL *rc_conn;
+		cluster_creds_t creds {};
+
 		MYSQL *conn = mysql_init(NULL);
 		if (conn==NULL) {
 			proxy_error("Unable to run mysql_init()\n");
 			goto __exit_pull_mysql_servers_from_peer;
 		}
-		GloProxyCluster->get_credentials(&username, &password);
-		if (strlen(username)) { // do not monitor if the username is empty
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			{
@@ -1790,7 +1752,9 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 			}
 			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching 'MySQL Servers' from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			proxy_info("Cluster: Fetching 'MySQL Servers' from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
-			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
+			MYSQL* rc_conn = mysql_real_connect(
+				conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0
+			);
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
@@ -1856,12 +1820,6 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 				fetch_failed = true;
 			}
 		}
-		if (username) {
-			free(username);
-		}
-		if (password) {
-			free(password);
-		}
 __exit_pull_mysql_servers_from_peer:
 		if (conn) {
 			if (conn->net.pvio) {
@@ -1924,29 +1882,29 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 	nodes.get_peer_to_sync_mysql_servers_v2(&hostname, &port, &peer_mysql_servers_v2_checksum, 
 		&peer_runtime_mysql_servers_checksum, &ip_address);
 	if (hostname) {
-		char* username = NULL;
-		char* password = NULL;
-		// bool rc_bool = true;
-		MYSQL* rc_conn;
+		cluster_creds_t creds {};
+
 		MYSQL* conn = mysql_init(NULL);
 		if (conn == NULL) {
 			proxy_error("Unable to run mysql_init()\n");
 			goto __exit_pull_mysql_servers_v2_from_peer;
 		}
-		GloProxyCluster->get_credentials(&username, &password);
-		if (strlen(username)) { // do not monitor if the username is empty
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 			}
 			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers v2 from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_mysql_servers_v2_checksum);
 			proxy_info("Cluster: Fetching MySQL Servers v2 from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_mysql_servers_v2_checksum);
-			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
+			MYSQL* rc_conn = mysql_real_connect(
+				conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0
+			);
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
@@ -2395,12 +2353,6 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 				fetch_failed = true;
 			}
 		}
-		if (username) {
-			free(username);
-		}
-		if (password) {
-			free(password);
-		}
 	__exit_pull_mysql_servers_v2_from_peer:
 		if (conn) {
 			if (conn->net.pvio) {
@@ -2461,31 +2413,28 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 	}
 
 	if (hostname) {
-		char *username = NULL;
-		char *password = NULL;
-		MYSQL *rc_conn = nullptr;
-		int rc_query = 0;
-		int rc = 0;
-		MYSQL *conn = mysql_init(NULL);
+		cluster_creds_t creds {};
 
+		MYSQL *conn = mysql_init(NULL);
 		if (conn == NULL) {
 			proxy_error("Unable to run mysql_init()\n");
 			goto __exit_pull_mysql_variables_from_peer;
 		}
 
-		GloProxyCluster->get_credentials(&username, &password);
-		if (strlen(username)) { // do not monitor if the username is empty
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 			}
 			proxy_info("Cluster: Fetching %s variables from peer %s:%d started\n", vars_type_str, hostname, port);
-			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
+			MYSQL* rc_conn = mysql_real_connect(
+				conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0
+			);
 
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
@@ -2503,7 +2452,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 					}
 				}
 				s_query += " ORDER BY variable_name";
-				mysql_query(conn, s_query.c_str());
+				int rc_query = mysql_query(conn, s_query.c_str());
 
 				if (rc_query == 0) {
 					MYSQL_RES *result = mysql_store_result(conn);
@@ -2535,7 +2484,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 					MYSQL_ROW row;
 					char *q = (char *)"INSERT OR REPLACE INTO global_variables (variable_name, variable_value) VALUES (?1 , ?2)";
 					sqlite3_stmt *statement1 = NULL;
-					rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+					int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 					ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 
 					while ((row = mysql_fetch_row(result))) {
@@ -2604,12 +2553,6 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 				fetch_failed = true;
 			}
 		}
-		if (username) {
-			free(username);
-		}
-		if (password) {
-			free(password);
-		}
 __exit_pull_mysql_variables_from_peer:
 		if (conn) {
 			if (conn->net.pvio) {
@@ -2633,23 +2576,20 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 	pthread_mutex_lock(&GloProxyCluster->update_proxysql_servers_mutex);
 	nodes.get_peer_to_sync_proxysql_servers(&hostname, &port, &ip_address);
 	if (hostname) {
-		char *username = NULL;
-		char *password = NULL;
-		// bool rc_bool = true;
-		MYSQL *rc_conn;
-		int rc_query;
+		cluster_creds_t creds {};
+
 		MYSQL *conn = mysql_init(NULL);
 		if (conn==NULL) {
 			proxy_error("Unable to run mysql_init()\n");
 			goto __exit_pull_proxysql_servers_from_peer;
 		}
-		GloProxyCluster->get_credentials(&username, &password);
-		if (strlen(username)) { // do not monitor if the username is empty
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
 			unsigned int timeout = 1;
-			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{
 				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
@@ -2660,11 +2600,13 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 				"Cluster: Fetching ProxySQL Servers from peer %s:%d started. Expected checksum: %s\n",
 				hostname, port, expected_checksum.c_str()
 			);
-			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
+			MYSQL* rc_conn = mysql_real_connect(
+				conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0
+			);
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
-				rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers ORDER BY hostname, port");
+				int rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers ORDER BY hostname, port");
 				if ( rc_query == 0 ) {
 					MYSQL_RES* result = mysql_store_result(conn);
 					uint64_t proxy_servers_hash = mysql_raw_checksum(result);
@@ -2737,12 +2679,6 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 				metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
 				fetch_failed = true;
 			}
-		}
-		if (username) {
-			free(username);
-		}
-		if (password) {
-			free(password);
 		}
 __exit_pull_proxysql_servers_from_peer:
 		if (conn) {
@@ -4467,11 +4403,13 @@ void ProxySQL_Cluster::p_update_metrics() {
 };
 
 // this function returns credentials to the caller, used by monitoring threads
-void ProxySQL_Cluster::get_credentials(char **username, char **password) {
+cluster_creds_t ProxySQL_Cluster::get_credentials() {
 	pthread_mutex_lock(&mutex);
-	*username = strdup(cluster_username);
-	*password = strdup(cluster_password);
+	const string user { cluster_username };
+	const string pass { cluster_password };
 	pthread_mutex_unlock(&mutex);
+
+	return { user, pass };
 }
 
 void ProxySQL_Cluster::set_username(char *_username) {
