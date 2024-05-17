@@ -95,16 +95,16 @@ jobs:
         echo "BIN_PKG=$(ls -1 binaries/*[mb])" >> $GITHUB_ENV
         echo "BIN_HASH=$(ls -1 binaries/*.id-hash)" >> $GITHUB_ENV
     
-    - name: Deploy to Repo
-      uses: easingthemes/ssh-deploy@main
-      env:
-          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
-          ARGS: "-aic"
-          SOURCE: ${{ env.BIN_PKG }}
-          REMOTE_HOST: ${{ secrets.REPO_HOST }}
-          REMOTE_USER: ${{ secrets.REPO_USER }}
-          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}/
-          EXCLUDE: binaries/.gitignore
+#    - name: Deploy to Repo
+#      uses: easingthemes/ssh-deploy@main
+#      env:
+#          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
+#          ARGS: "-aic"
+#          SOURCE: ${{ env.BIN_PKG }}
+#          REMOTE_HOST: ${{ secrets.REPO_HOST }}
+#          REMOTE_USER: ${{ secrets.REPO_USER }}
+#          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}/
+#          EXCLUDE: binaries/.gitignore
     
     - name: Push packages
       env:
