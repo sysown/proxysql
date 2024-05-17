@@ -27,14 +27,14 @@ jobs:
         
         EOF
 
-    - name: Clean repo
-      uses: appleboy/ssh-action@v0.1.8
-      with:
-        host: ${{ secrets.REPO_HOST }}
-        username: ${{ secrets.REPO_USER }}
-        key: ${{ secrets.REPO_PRIVATE_KEY }}
-        script: |
-          ls -1 ${{ secrets.REPO_TARGET }} | sort -rV | tail +6 | xargs -n1 rm -rf
+#    - name: Clean repo
+#      uses: appleboy/ssh-action@v0.1.8
+#      with:
+#        host: ${{ secrets.REPO_HOST }}
+#        username: ${{ secrets.REPO_USER }}
+#        key: ${{ secrets.REPO_PRIVATE_KEY }}
+#        script: |
+#          ls -1 ${{ secrets.REPO_TARGET }} | sort -rV | tail +6 | xargs -n1 rm -rf
     
   build:
     runs-on: ubuntu-22.04
