@@ -124,7 +124,7 @@ libtap_mysql57.a: tap.o command_line.o utils_mysql57.o cpp-dotenv/static/cpp-dot
 libtap_mysql8.a: tap.o command_line.o utils_mysql8.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	ar rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
-libtap.so: libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
+libtap.so: libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so libre2.so
 	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive $(LWGCOV)
 
 
