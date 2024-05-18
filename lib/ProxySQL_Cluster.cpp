@@ -562,13 +562,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					checksums_values.mysql_servers.checksum, GloVars.checksums_values.mysql_servers.checksum, checksums_values.mysql_servers.diff_check);
 			}
 			if (strcmp(checksums_values.mysql_servers.checksum, GloVars.checksums_values.mysql_servers.checksum) == 0) {
-				// See LOGGING-NOTE at 'admin_variables' above.
-				if (checksums_values.mysql_servers.last_changed == now) {
-					proxy_info(
-						"Cluster: checksum for mysql_servers from peer %s:%d matches with local checksum %s , we won't sync.\n",
-						hostname, port, GloVars.checksums_values.mysql_servers.checksum
-					);
-				}
 				checksums_values.mysql_servers.diff_check = 0;
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum for mysql_servers from peer %s:%d matches with local checksum %s, reset diff_check to 0.\n", hostname, port, GloVars.checksums_values.mysql_servers.checksum);
 			}
@@ -609,13 +602,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					checksums_values.mysql_servers_v2.checksum, GloVars.checksums_values.mysql_servers_v2.checksum, checksums_values.mysql_servers_v2.diff_check);
 			}
 			if (strcmp(checksums_values.mysql_servers_v2.checksum, GloVars.checksums_values.mysql_servers_v2.checksum) == 0) {
-				// See LOGGING-NOTE at 'admin_variables' above.
-				if (checksums_values.mysql_servers_v2.last_changed == now) {
-					proxy_info(
-						"Cluster: checksum for mysql_servers_v2 from peer %s:%d matches with local checksum %s , we won't sync.\n",
-						hostname, port, GloVars.checksums_values.mysql_servers_v2.checksum
-					);
-				}
 				checksums_values.mysql_servers_v2.diff_check = 0;
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum for mysql_servers_v2 from peer %s:%d matches with local checksum %s, reset diff_check to 0.\n", hostname, port, GloVars.checksums_values.mysql_servers.checksum);
 			}
