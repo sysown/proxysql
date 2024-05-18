@@ -1,0 +1,24 @@
+From cb0b6bcde64b3d108f5f9adb429af57890e0bcee Mon Sep 17 00:00:00 2001
+From: Igor Raits <igor.raits@gmail.com>
+Date: Sat, 18 May 2024 19:57:19 +0200
+Subject: [PATCH] Include unistd.h for getpid()
+
+---
+ src/thread_lister.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/thread_lister.c b/src/thread_lister.c
+index 15fedac..48cb4e4 100644
+--- a/src/thread_lister.c
++++ b/src/thread_lister.c
+@@ -34,6 +34,7 @@
+ #include "thread_lister.h"
+ 
+ #include <stdio.h> /* needed for NULL on some powerpc platforms (?!) */
++#include <unistd.h> /* getpid() */
+ #include <sys/prctl.h>
+ 
+ #include "linuxthreads.h"
+-- 
+2.45.0
+

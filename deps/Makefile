@@ -115,6 +115,7 @@ ev: libev/libev/.libs/libev.a
 coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd coredumper && tar -zxf coredumper-*.tar.gz
+	patch -d coredumper/coredumper -p1 -i ../0001-Include-unistd.h-for-getpid.patch
 	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 coredumper: coredumper/coredumper/src/libcoredumper.a
