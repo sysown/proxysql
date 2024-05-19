@@ -219,6 +219,7 @@ jobs:
 
         # fixes
         cd ${{ github.workspace }}/proxysql/test/tap/tests
+        ls -al
         
         true
 
