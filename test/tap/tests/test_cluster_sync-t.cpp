@@ -575,6 +575,8 @@ const vector<sync_payload_t> module_sync_payloads {
 };
 
 int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t timeout) {
+	diag("Starting wait for node synchronization");
+
 	uint waited = 0;
 	bool not_synced = false;
 	std::string failed_query {};
@@ -584,7 +586,7 @@ int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t time
 
 		// Check that all the entries have been synced
 		for (const auto& query : queries) {
-			if (mysql_query(admin, query.c_str())) {
+			if (mysql_query_t(admin, query.c_str())) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 				return -1;
 			}
@@ -681,6 +683,32 @@ string fetch_runtime_checksum(MYSQL* admin, const string& module) {
 
 const int def_mod_diffs_sync = 2;
 
+int32_t get_checksum_sync_timeout(MYSQL* admin) {
+	const char q_check_intv[] {
+		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_interval_ms'"
+	};
+	ext_val_t<int64_t> ext_check_intv { mysql_query_ext_val(admin, q_check_intv, int64_t(0)) };
+
+	if (ext_check_intv.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_check_intv) };
+		diag("Failed getting 'cluster_check_interval_ms'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		return -1;
+	}
+
+	const char q_sts_freq[] {
+		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_status_frequency'"
+	};
+	ext_val_t<int64_t> ext_sts_freq { mysql_query_ext_val(admin, q_sts_freq, int64_t(0)) };
+
+	if (ext_sts_freq.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_check_intv) };
+		diag("Failed getting 'cluster_check_status_frequency'   query:`%s`, err:`%s`", q_check_intv, err.c_str());
+		return -1;
+	}
+
+	return ((ext_check_intv.val/1000) * ext_sts_freq.val) + 1;
+}
+
 int check_module_checksums_sync(
 	MYSQL* admin,
 	MYSQL* r_admin,
@@ -691,7 +719,7 @@ int check_module_checksums_sync(
 ) {
 	const char new_remote_checksum_query_t[] {
 		"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
-			"hostname='%s' AND port='%d' AND name='%s' AND checksum!='%s'"
+			"hostname='%s' AND port='%d' AND name='%s' AND checksum!='%s' AND checksum='%s'"
 	};
 	const char synced_runtime_checksums_query_t[] {
 		"SELECT COUNT(*) FROM runtime_checksums_values WHERE name='%s' AND checksum='%s'"
@@ -701,7 +729,11 @@ int check_module_checksums_sync(
 	const string& module { module_sync.module };
 
 	// Checksum can not be present if we have just added the remote
-	uint32_t CHECKSUM_SYNC_TIMEOUT = 3;
+	uint32_t CHECKSUM_SYNC_TIMEOUT = get_checksum_sync_timeout(admin);
+	if (CHECKSUM_SYNC_TIMEOUT == -1) {
+		diag("Failed fetching values to compute 'CHECKSUM_SYNC_TIMEOUT'");
+		return EXIT_FAILURE;
+	}
 
 	const char wait_remote_checksums_init_t[] {
 		"SELECT LENGTH(checksum) FROM stats_proxysql_servers_checksums WHERE "
@@ -711,7 +743,7 @@ int check_module_checksums_sync(
 		cstr_format(wait_remote_checksums_init_t, conn_opts.host.c_str(), conn_opts.port, module.c_str())
 	};
 
-	int checksum_present = wait_for_node_sync( r_admin, { wait_remote_checksums_init.str }, CHECKSUM_SYNC_TIMEOUT);
+	int checksum_present = wait_for_node_sync(r_admin, { wait_remote_checksums_init.str }, CHECKSUM_SYNC_TIMEOUT);
 	if (checksum_present) {
 		diag("No checksum (or zero) detected int the target remote server for module '%s'", module.c_str());
 		return EXIT_FAILURE;
@@ -736,6 +768,20 @@ int check_module_checksums_sync(
 		return EXIT_FAILURE;
 	}
 
+	// Get the new checksum computed after previous 'UPDATE' operation
+	const char q_module_checksum_t[] {
+		"SELECT checksum FROM main.runtime_checksums_values WHERE name='%s'"
+	};
+
+	cfmt_t q_module_checksum { cstr_format(q_module_checksum_t, module.c_str()) };
+	ext_val_t<string> ext_checksum { mysql_query_ext_val(admin, q_module_checksum.str, string()) };
+
+	if (ext_checksum.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(admin, ext_checksum) };
+		diag("Failed query   query:`%s`, err:`%s`", q_module_checksum.str.c_str(), err.c_str());
+		return EXIT_FAILURE;
+	}
+
 	// Wait for new checksum to be detected
 	cfmt_t new_remote_checksum_query {
 		cstr_format(
@@ -743,7 +789,8 @@ int check_module_checksums_sync(
 			conn_opts.host.c_str(),
 			conn_opts.port,
 			module.c_str(),
-			cur_remote_checksum.c_str()
+			cur_remote_checksum.c_str(),
+			ext_checksum.val.c_str()
 		)
 	};
 	int sync_res = wait_for_node_sync(r_admin, { new_remote_checksum_query.str }, CHECKSUM_SYNC_TIMEOUT);
@@ -910,6 +957,19 @@ int check_all_modules_sync(
 		const sync_payload_t& sync_payload = module_sync_payloads[j];
 		const int diffs_sync = j == dis_module ? 0 : def_mod_diffs_sync;
 
+		// REQUIRE-WAIT: All checks make use of the 'admin_variables' to enable/disable module
+		// synchronization. The previous module check only waits for the module synchronization itself, but
+		// not for the propagation of the changed 'admin_variables'; not waiting the propagation of this
+		// previous change could interfere with the checks target to this same module.
+		if (module_sync_payloads[j].module == "admin_variables") {
+			uint32_t CHECKSUM_SYNC_TIMEOUT = get_checksum_sync_timeout(admin);
+			if (CHECKSUM_SYNC_TIMEOUT == -1) {
+				diag("Failed fetching values to compute 'CHECKSUM_SYNC_TIMEOUT'");
+				return EXIT_FAILURE;
+			}
+			sleep(CHECKSUM_SYNC_TIMEOUT);
+		}
+
 		int check_sync = check_module_checksums_sync(admin, r_admin, conn_opts, sync_payload, diffs_sync, remote_stderr);
 		if (check_sync) {
 			if (diffs_sync) {
@@ -968,7 +1028,8 @@ int check_modules_checksums_sync(
 
 	for (size_t dis_module = 0; dis_module < module_sync_payloads.size(); dis_module++) {
 		printf("\n");
-		diag("Start test with sync DISABLED for module '%s'", module_sync_payloads[dis_module].module.c_str());
+		const string dis_module_str { module_sync_payloads[dis_module].module };
+		diag("Start test with sync DISABLED for module '%s'", dis_module_str.c_str());
 
 		for (const sync_payload_t& sync_payload : module_sync_payloads) {
 			const string set_query { "SET " + sync_payload.sync_variable + "=" + def_syncs };
@@ -981,9 +1042,11 @@ int check_modules_checksums_sync(
 		MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 		// Check that ALL modules sync, but 'dis_module' in both ways - Main-To-Remote and Remote-To-Main
+		diag("Checking ALL modules SYNC but DISABLED module '%s'", dis_module_str.c_str());
 		check_all_modules_sync(admin, r_admin, m_conn_opts.first, dis_module, main_stderr, remote_stderr);
 
 		// Enable back the module
+		diag("Renable module '%s' synchronization", dis_module_str.c_str());
 		const string enable_query {
 			"SET " + module_sync_payloads[dis_module].sync_variable + "=" + std::to_string(def_mod_diffs_sync)
 		};
@@ -1005,15 +1068,22 @@ int check_modules_checksums_sync(
 		}
 
 		// Check that the module syncs again in both ways
+		diag("Checking module '%s' syncs again - MAIN to REMOTE", dis_module_str.c_str());
 		check_module_checksums_sync(
 			admin, r_admin, m_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, remote_stderr
 		);
+		// A wait IS NOT required. The checks perform the required waiting, ensuring that the new computed
+		// checksum after the module update has been propagated to the other server. Previously the check
+		// didn't take into account the exact checksum, only the change, this led to invalid change
+		// detections.
+		diag("Checking module '%s' syncs again - REMOTE to MAIN", dis_module_str.c_str());
 		check_module_checksums_sync(
 			r_admin, admin, r_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, main_stderr
 		);
 
 		if (module_sync_payloads[dis_module].module != "proxysql_servers") {
 			// Disable the module using checksums
+			diag("Disable module '%s' using checksums", dis_module_str.c_str());
 			const string disable_checksum_query {
 				"SET " + module_sync_payloads[dis_module].checksum_variable + "=false"
 			};
@@ -1021,6 +1091,7 @@ int check_modules_checksums_sync(
 			MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 			// Check that ALL modules sync, but 'dis_module' in both ways - Main-To-Remote and Remote-To-Main
+			diag("Checking ALL modules SYNC but DISABLED module '%s'", dis_module_str.c_str());
 			check_all_modules_sync(admin, r_admin, m_conn_opts.first, dis_module, main_stderr, remote_stderr);
 
 			// Enable back the module
@@ -1044,9 +1115,11 @@ int check_modules_checksums_sync(
 			}
 
 			// Check that the module syncs again in both ways
+			diag("Checking module '%s' syncs again - MAIN to REMOTE", dis_module_str.c_str());
 			check_module_checksums_sync(
 				admin, r_admin, m_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, remote_stderr
 			);
+			diag("Checking module '%s' syncs again - REMOTE to MAIN", dis_module_str.c_str());
 			check_module_checksums_sync(
 				r_admin, admin, r_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, main_stderr
 			);

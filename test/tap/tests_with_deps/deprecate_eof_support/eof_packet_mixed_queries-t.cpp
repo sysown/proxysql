@@ -11,7 +11,6 @@
  *     - Fast forward
  */
 
-#include <algorithm>
 #include <unistd.h>
 #include <vector>
 #include <string>
@@ -150,13 +149,14 @@ pair<uint32_t,string> perform_stmt_select_query(
 	p_binds[0].is_null = 0;
 	p_binds[0].length = 0;
 
-	if (mysql_stmt_bind_param(stmts, p_binds)) {
-		string_format("'mysql_stmt_bind_param' at line %d failed: %s", err_msg, __LINE__, mysql_stmt_error(stmts));
+	int myerr = 0;
+
+	if ((myerr = mysql_stmt_bind_param(stmts, p_binds))) {
+		string_format("'mysql_stmt_bind_param' at line %d failed with error %d", err_msg, __LINE__, myerr);
 		return { EXIT_FAILURE, err_msg };
 	}
 
-	int s_err = mysql_stmt_execute(stmts);
-	if (s_err != EXIT_SUCCESS) {
+	if ((myerr = mysql_stmt_execute(stmts))) {
 		string_format("'mysql_stmt_execute' at line %d failed: %s", err_msg, __LINE__, mysql_stmt_error(stmts));
 		return { EXIT_FAILURE, err_msg };
 	}
@@ -184,20 +184,18 @@ pair<uint32_t,string> perform_stmt_select_query(
 	r_binds[2].length= &length[2];
 	r_binds[2].error= &error[2];
 
-	s_err = mysql_stmt_bind_result(stmts, r_binds);
-	if (s_err != EXIT_SUCCESS) {
-		string_format("'mysql_stmt_bind_result' at line %d failed: %s", err_msg, __LINE__, mysql_stmt_error(stmts));
+	if ((myerr = mysql_stmt_bind_result(stmts, r_binds))) {
+		string_format("'mysql_stmt_bind_result' at line %d failed with error %d", err_msg, __LINE__, myerr);
 		return { EXIT_FAILURE, err_msg };
 	}
 
-	if (mysql_stmt_store_result(stmts) || mysql_errno(mysql_server) != EXIT_SUCCESS) {
-		string_format("'mysql_stmt_store_result' at line %d failed: %s", err_msg, __LINE__, mysql_stmt_error(stmts));
+	if ((myerr = mysql_stmt_store_result(stmts)) || mysql_errno(mysql_server) != EXIT_SUCCESS) {
+		string_format("'mysql_stmt_store_result' at line %d failed with error %d", err_msg, __LINE__, myerr);
 		return { EXIT_FAILURE, err_msg };
 	}
 
-	s_err = mysql_stmt_fetch(stmts);
-	if (s_err != EXIT_SUCCESS) {
-		string_format("'mysql_stmt_fetch' at line %d failed: %s", err_msg, __LINE__, mysql_stmt_error(stmts));
+	if ((myerr = mysql_stmt_fetch(stmts))) {
+		string_format("'mysql_stmt_fetch' at line %d failed with error %d", err_msg, __LINE__, myerr);
 		return { EXIT_FAILURE, err_msg };
 	}
 
@@ -313,8 +311,10 @@ pair<uint32_t,string> perform_stmt_update_query(
 	bindsu[2].is_null = 0;
 	bindsu[2].length = 0;
 
-	if (mysql_stmt_bind_param(stmtu, bindsu)) {
-		string_format("'mysql_stmt_bind_param' at line %d failed: %s", err_msg, __LINE__, mysql_stmt_error(stmtu));
+	int myerr = 0;
+
+	if ((myerr=mysql_stmt_bind_param(stmtu, bindsu))) {
+		string_format("'mysql_stmt_bind_param' at line %d failed with error %d", err_msg, __LINE__, myerr);
 		return { EXIT_FAILURE, err_msg };
 	}
 
@@ -497,9 +497,6 @@ int test_target_queries(MYSQL* proxy) {
 	return !(op_res.first == EXIT_SUCCESS);
 }
 
-// NOTE: Test hardcoded to hostgroup '0'
-const uint32_t HG_ID = 0;
-
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -524,8 +521,8 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	// Change default query rules to avoid replication issues
-	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET destination_hostgroup=0 WHERE rule_id=2");
+	// Change default query rules to avoid replication issues; This test only requires the default hostgroup
+	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET active=0");
 	MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	MYSQL* proxy = mysql_init(NULL);
@@ -578,7 +575,7 @@ int main(int argc, char** argv) {
 cleanup:
 
 	// Recover default query rules
-	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET destination_hostgroup=0 WHERE rule_id=2");
+	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET active=1");
 	MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	mysql_close(admin);

@@ -24,6 +24,10 @@ int main() {
 
 	plan(1);
 
+	int32_t WASAN = get_env_int("WITHASAN", 0);
+	// Double the value of previously failed ASAN run: '89415ms'
+	int32_t EXP_TIME = WASAN == 0 ? 20000 : 180000;
+
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
 	// Initialize connection
@@ -57,7 +61,7 @@ int main() {
 		if (start_pos != std::string::npos &&
 			end_pos != std::string::npos) {
 			uint64_t time = std::stoull(msg.substr(start_pos + 5, end_pos - (start_pos + 5)));
-			ok(time < 20000, "Total duration is '%lu ms' should be less than 20 Seconds", time);
+			ok(time < EXP_TIME, "Total duration is '%lu ms' should be less than %d Seconds", time, EXP_TIME/1000);
 		}
 	}
 	mysql_close(proxysql_admin);

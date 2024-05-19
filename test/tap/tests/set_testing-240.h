@@ -1,14 +1,6 @@
-std::vector<std::string> split(const std::string& s, char delimiter)
-{
-	std::vector<std::string> tokens;
-	std::string token;
-	std::istringstream tokenStream(s);
-	while (std::getline(tokenStream, token, delimiter))
-	{
-		tokens.push_back(token);
-	}
-	return tokens;
-}
+#include <iostream>
+#include <vector>
+#include "json.hpp"
 
 using nlohmann::json;
 
@@ -146,7 +138,7 @@ struct cpu_timer
 
 
 inline int fastrand() {
-	g_seed = (214014*g_seed+2531011);
+	g_seed = (214013*g_seed+2531011);
 	return (g_seed>>16)&0x7FFF;
 }
 

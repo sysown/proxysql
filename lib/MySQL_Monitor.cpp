@@ -4091,6 +4091,14 @@ void* monitor_GR_thread_HG(void *arg) {
 		//  3. Delegate the async fetching + actions of 'MySQL_Monitor_State_Data' with conns on 'Monitor_Poll'.
 		///////////////////////////////////////////////////////////////////////////////////////
 
+		// NOTE: This is just a best effort to avoid invalid memory accesses during 'SHUTDOWN SLOW'. Since the
+		// previous section is 'time consuming', there are good changes that we can detect a shutdown before
+		// trying to perform the monitoring actions on the acquired 'mmsd'. This exact scenario and timing has
+		// been previously observed in the CI.
+		if (GloMyMon->shutdown) {
+			break;
+		}
+
 		// Handle 'mmsds' that failed to optain conns
 		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : fail_mmsds) {
 			async_gr_mon_actions_handler(mmsd.get());

@@ -1,5 +1,3 @@
-/* c_tokenizer.h */
-// some code borrowed from http://www.cplusplus.com/faq/sequences/strings/split/
 
 #pragma once
 #ifndef C_TOKENIZER_H
@@ -34,7 +32,6 @@ const char* free_tokenizer( tokenizer_t* tokenizer );
 const char* tokenize( tokenizer_t* tokenizer );
 char * mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
 char * mysql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
-char * mysql_query_digest_and_first_comment(char *s , int len , char **first_comment, char *buf);
 char * mysql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
 char * mysql_query_digest_and_first_comment_one_it(char *s , int len , char **first_comment, char *buf);
 char * mysql_query_strip_comments(char *s , int len);

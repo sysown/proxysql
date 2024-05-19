@@ -1,30 +1,28 @@
 #include <algorithm>
 #include <chrono>
-#include <string>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <numeric>
-#include <memory>
 #include <string>
-#include <unistd.h>
+#include <sstream>
+#include <random>
 #include <sys/wait.h>
-
-#include "mysql.h"
-
-#include "tap.h"
-#include "utils.h"
-
 #include <unistd.h>
 #include <utility>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <iostream>
+
+#include "json.hpp"
+#include "re2/re2.h"
 
 #include "proxysql_utils.h"
 
+#include "mysql.h"
+#include "utils.h"
+#include "tap.h"
+
 using std::pair;
 using std::map;
+using std::fstream;
 using std::string;
 using std::vector;
 
@@ -38,9 +36,10 @@ using nlohmann::json;
 #define STMT_VECTOR_PTR(mysql)			(static_cast<std::vector<MYSQL_STMT*>*>(mysql->unused_3))
 #define STMT_EXECUTED_VECTOR_PTR(mysql)	(static_cast<std::vector<std::unique_ptr<char,decltype(&free)>>*>(mysql->unused_4))
 
-#define STMT_FIND_INDEX(stmt,idx)		const std::vector<MYSQL_STMT*>& vec_stmt = STMT_VECTOR(stmt); \
-										for (size_t i = 0; i < vec_stmt.size(); i++) {\
-											if (vec_stmt[i] == stmt) {\
+#define STMT_FIND_INDEX(stmt,idx)		const std::vector<MYSQL_STMT*>* vec_stmt = STMT_VECTOR_PTR(stmt->mysql);\
+										size_t vec_size = vec_stmt ? vec_stmt->size() : 0;\
+										for (size_t i = 0; i < vec_size; i++) {\
+											if ((*vec_stmt)[i] == stmt) {\
 												idx = i; \
 												break; \
 											}\
@@ -72,6 +71,10 @@ using nlohmann::json;
 											vec_query.pop_back();\
 										}
 
+#ifndef DISABLE_WARNING_COUNT_LOGGING
+
+extern "C" {
+
 MYSQL* mysql_init_override(MYSQL* mysql, const char* file, int line) {
 	static bool init = false;
 	MYSQL* result = (*real_mysql_init)(mysql);
@@ -88,7 +91,9 @@ MYSQL* mysql_init_override(MYSQL* mysql, const char* file, int line) {
 int mysql_query_override(MYSQL* mysql, const char* query, const char* file, int line) {
 	const int result = (*real_mysql_query)(mysql, query);
 	if (result == 0) {
-		LAST_QUERY_EXECUTED_STR(mysql) = query;
+		if (LAST_QUERY_EXECUTED_PTR(mysql)) {
+			LAST_QUERY_EXECUTED_STR(mysql) = query;
+		}
 		if (mysql_errno(mysql) == 0 && mysql_field_count(mysql) == 0 && mysql_warning_count(mysql) > 0) {
 			fprintf(stdout, "File %s, Line %d, [mysql_query] A warning was generated during the execution of the query:'%s', warning count:%d\n",
 				file, line, query, mysql_warning_count(mysql));
@@ -99,7 +104,7 @@ int mysql_query_override(MYSQL* mysql, const char* query, const char* file, int 
 
 MYSQL_RES* mysql_store_result_override(MYSQL* mysql, const char* file, int line) {
 	MYSQL_RES* result = (*real_mysql_store_result)(mysql);
-	if (mysql_errno(mysql) == 0 && mysql_warning_count(mysql) > 0) {
+	if (mysql_errno(mysql) == 0 && mysql_warning_count(mysql) > 0 && LAST_QUERY_EXECUTED_PTR(mysql)) {
 		fprintf(stdout, "File %s, Line %d, [mysql_store_result] A warning was generated during the execution of the query:'%s', warning count:%d\n",
 			file, line, LAST_QUERY_EXECUTED_STR(mysql).c_str(), mysql_warning_count(mysql));
 	}
@@ -107,7 +112,9 @@ MYSQL_RES* mysql_store_result_override(MYSQL* mysql, const char* file, int line)
 }
 
 void mysql_close_override(MYSQL* mysql, const char* file, int line) {
-	delete LAST_QUERY_EXECUTED_PTR(mysql);
+	if (LAST_QUERY_EXECUTED_PTR(mysql)) {
+		delete LAST_QUERY_EXECUTED_PTR(mysql);
+	}
 	if (STMT_VECTOR_PTR(mysql)) {
 		delete STMT_VECTOR_PTR(mysql);
 		delete STMT_EXECUTED_VECTOR_PTR(mysql);
@@ -175,6 +182,10 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line) 
 	STMT_REMOVE(stmt)
 	return (*real_mysql_stmt_close)(stmt);
 }
+
+}
+
+#endif
 
 std::size_t count_matches(const string& str, const string& substr) {
 	std::size_t result = 0;
@@ -522,6 +533,39 @@ ext_val_t<string> ext_single_row_val(const mysql_res_row& row, const string& def
 	}
 }
 
+ext_val_t<int32_t> ext_single_row_val(const mysql_res_row& row, const int32_t& def_val) {
+	if (row.empty() || row.front().empty()) {
+		return { -1, def_val, {} };
+	} else {
+        errno = 0;
+        char* p_end {};
+        const int32_t val = std::strtol(row.front().c_str(), &p_end, 10);
+
+		if (row[0] == p_end || errno == ERANGE) {
+			return { -2, def_val, string { row[0] } };
+		} else {
+			return { EXIT_SUCCESS, val, string { row[0] } };
+		}
+	}
+}
+
+ext_val_t<uint32_t> ext_single_row_val(const mysql_res_row& row, const uint32_t& def_val) {
+	if (row.empty() || row.front().empty()) {
+		return { -1, def_val, {} };
+	} else {
+        errno = 0;
+        char* p_end {};
+        const uint32_t val = std::strtoul(row.front().c_str(), &p_end, 10);
+
+		if (row[0] == p_end || errno == ERANGE) {
+			return { -2, def_val, string { row[0] } };
+		} else {
+			return { EXIT_SUCCESS, val, string { row[0] } };
+		}
+	}
+}
+
+
 ext_val_t<int64_t> ext_single_row_val(const mysql_res_row& row, const int64_t& def_val) {
 	if (row.empty() || row.front().empty()) {
 		return { -1, def_val, {} };
@@ -544,7 +588,7 @@ ext_val_t<uint64_t> ext_single_row_val(const mysql_res_row& row, const uint64_t&
 	} else {
         errno = 0;
         char* p_end {};
-        const uint64_t val = std::strtoll(row.front().c_str(), &p_end, 10);
+        const uint64_t val = std::strtoull(row.front().c_str(), &p_end, 10);
 
 		if (row[0] == p_end || errno == ERANGE) {
 			return { -2, def_val, string { row[0] } };
@@ -1022,6 +1066,27 @@ cleanup:
 	return res;
 }
 
+vector<vector<bool>> get_all_bin_vec(size_t tg_size) {
+	vector<vector<bool>> all_bin_strs {};
+	vector<bool> bin_vec(tg_size, 0);
+
+	for (size_t i = 0; i < tg_size; i++) {
+		if (i == 0) {
+			bin_vec[i] = 0;
+			for (const vector<bool> p : get_permutations(bin_vec)) {
+				all_bin_strs.push_back(p);
+			}
+		}
+
+		bin_vec[i] = 1;
+		for (const vector<bool> p : get_permutations(bin_vec)) {
+			all_bin_strs.push_back(p);
+		}
+	}
+
+	return all_bin_strs;
+}
+
 string to_string(const conn_cnf_t& cnf) {
 	return string {
 		string { "{" }
@@ -1314,24 +1379,27 @@ int open_file_and_seek_end(const string& f_path, std::fstream& f_stream) {
 	return EXIT_SUCCESS;
 }
 
-std::vector<line_match_t> get_matching_lines(std::fstream& f_stream, const std::string& regex) {
-	std::vector<line_match_t> found_matches {};
+vector<line_match_t> get_matching_lines(fstream& f_stream, const string& s_regex, bool get_matches) {
+	vector<line_match_t> found_matches {};
 
-	std::string next_line {};
-	std::fstream::pos_type init_pos { f_stream.tellg() };
+	string next_line {};
+	fstream::pos_type init_pos { f_stream.tellg() };
 
-	while (std::getline(f_stream, next_line)) {
-		std::regex regex_err_line { regex };
-		std::smatch match_results {};
+	while (getline(f_stream, next_line)) {
+		re2::RE2 regex { s_regex };
+		re2::StringPiece match;
 
-		if (std::regex_search(next_line, match_results, regex_err_line)) {
-			found_matches.push_back({ f_stream.tellg(), next_line, match_results });
+		if (get_matches && RE2::PartialMatch(next_line, regex, &match)) {
+			found_matches.push_back({ f_stream.tellg(), next_line, match.ToString() });
+		}
+		if (!get_matches && RE2::PartialMatch(next_line, regex)) {
+			found_matches.push_back({ f_stream.tellg(), next_line, match.ToString() });
 		}
 	}
 
 	if (found_matches.empty() == false) {
-		const std::string& last_match { std::get<LINE_MATCH_T::LINE>(found_matches.back()) };
-		const std::fstream::pos_type last_match_pos { std::get<LINE_MATCH_T::POS>(found_matches.back()) };
+		const string& last_match { std::get<LINE_MATCH_T::LINE>(found_matches.back()) };
+		const fstream::pos_type last_match_pos { std::get<LINE_MATCH_T::POS>(found_matches.back()) };
 
 		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
 		f_stream.seekg(last_match_pos);
