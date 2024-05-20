@@ -160,11 +160,18 @@ ifeq ($(TEST_WITHASAN),1)
 	WASAN += -DTEST_WITHASAN
 endif
 
+NOJEMALLOC := $(shell echo $(NOJEMALLOC))
+ifeq ($(NOJEMALLOC),1)
+NOJEM=-DNOJEM
+else
+NOJEM=
+endif
+
 MYCXXFLAGS := $(STDCPP)
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS += -fuse-ld=lld
 endif
-MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
+MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
 STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -lscram -lusual -lpq -lpgcommon -lpgport

@@ -5,6 +5,7 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
+#include "clickhouse/client.h"
 #include "cpp.h"
 
 #include "MySQL_Logger.hpp"
@@ -1340,6 +1341,7 @@ bool ClickHouse_Session::init() {
 	hostname = GloClickHouseServer->get_variable((char *)"hostname");
 	port = GloClickHouseServer->get_variable((char *)"port");
 	try {
+		clickhouse::ClientOptions co;
 		co.SetHost(hostname);
 		co.SetPort(atoi(port));
 		co.SetCompressionMethod(CompressionMethod::None);
@@ -1395,7 +1397,7 @@ static void *child_mysql(void *arg) {
 
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_CLICKHOUSE;
 	sess->handler_function=ClickHouse_Server_session_handler;

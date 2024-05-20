@@ -6,6 +6,15 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#ifdef DEBUG
+//#define VALGRIND_ENABLE_ERROR_REPORTING
+//#define VALGRIND_DISABLE_ERROR_REPORTING
+#include "valgrind.h"
+#else
+#define VALGRIND_ENABLE_ERROR_REPORTING
+#define VALGRIND_DISABLE_ERROR_REPORTING
+#endif // DEBUG
+
 #define USLEEP_SQLITE_LOCKED 100
 
 

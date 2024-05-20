@@ -5,7 +5,9 @@
 #include <prometheus/gauge.h>
 
 #include "proxysql.h"
+#include "Base_Thread.h"
 #include "cpp.h"
+#include "ProxySQL_Poll.h"
 #include "PgSQL_Variables.h"
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
@@ -106,9 +108,10 @@ enum PgSQL_Thread_status_variable {
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
 	st_var_END*/
+	PG_st_var_END
 };
 
-class __attribute__((aligned(64))) PgSQL_Thread
+class __attribute__((aligned(64))) PgSQL_Thread : public Base_Thread
 {
 private:
 	unsigned int servers_table_version_previous;
@@ -116,7 +119,7 @@ private:
 	unsigned long long last_processing_idles;
 	PgSQL_Connection** my_idle_conns;
 	bool processing_idles;
-	bool maintenance_loop;
+	//bool maintenance_loop;
 	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray* cached_connections;
@@ -128,7 +131,7 @@ private:
 	std::map<unsigned int, unsigned int> sessmap;
 #endif // IDLE_THREADS
 
-	Session_Regex** match_regexes;
+	//Session_Regex** match_regexes;
 
 #ifdef IDLE_THREADS
 	void worker_thread_assigns_sessions_to_idle_thread(PgSQL_Thread * thr);
@@ -138,19 +141,19 @@ private:
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(PgSQL_Thread * thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();
-	bool move_session_to_idle_mysql_sessions(PgSQL_Data_Stream * myds, unsigned int n);
+	//bool move_session_to_idle_mysql_sessions(PgSQL_Data_Stream * myds, unsigned int n);
 #endif // IDLE_THREADS
 
-	unsigned int find_session_idx_in_mysql_sessions(PgSQL_Session * sess);
-	bool set_backend_to_be_skipped_if_frontend_is_slow(PgSQL_Data_Stream * myds, unsigned int n);
+	//unsigned int find_session_idx_in_mysql_sessions(PgSQL_Session * sess);
+	//bool set_backend_to_be_skipped_if_frontend_is_slow(PgSQL_Data_Stream * myds, unsigned int n);
 	void handle_mirror_queue_mysql_sessions();
 	void handle_kill_queues();
-	void check_timing_out_session(unsigned int n);
-	void check_for_invalid_fd(unsigned int n);
-	void read_one_byte_from_pipe(unsigned int n);
-	void tune_timeout_for_myds_needs_pause(PgSQL_Data_Stream * myds);
-	void tune_timeout_for_session_needs_pause(PgSQL_Data_Stream * myds);
-	void configure_pollout(PgSQL_Data_Stream * myds, unsigned int n);
+	//void check_timing_out_session(unsigned int n);
+	//void check_for_invalid_fd(unsigned int n);
+	//void read_one_byte_from_pipe(unsigned int n);
+	//void tune_timeout_for_myds_needs_pause(PgSQL_Data_Stream * myds);
+	//void tune_timeout_for_session_needs_pause(PgSQL_Data_Stream * myds);
+	//void configure_pollout(PgSQL_Data_Stream * myds, unsigned int n);
 
 protected:
 	int nfds;
@@ -161,12 +164,11 @@ public:
 
 	ProxySQL_Poll<PgSQL_Data_Stream> mypolls;
 	pthread_t thread_id;
-	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
-	unsigned long long last_move_to_idle_thread_time;
+	//unsigned long long last_move_to_idle_thread_time;
 	std::atomic<unsigned long long> atomic_curtime;
-	PtrArray* mysql_sessions;
+	//PtrArray* mysql_sessions;
 	PtrArray* mirror_queue_mysql_sessions;
 	PtrArray* mirror_queue_mysql_sessions_cache;
 #ifdef IDLE_THREADS
@@ -177,17 +179,16 @@ public:
 #endif // IDLE_THREADS
 
 	int pipefd[2];
-	int shutdown;
 	kill_queue_t kq;
 
-	bool epoll_thread;
+	//bool epoll_thread;
 	bool poll_timeout_bool;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
 	struct {
-		unsigned long long stvar[st_var_END];
+		unsigned long long stvar[PG_st_var_END];
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -206,20 +207,20 @@ public:
 
 	PgSQL_Thread();
 	~PgSQL_Thread();
-	PgSQL_Session* create_new_session_and_client_data_stream(int _fd);
+//	PgSQL_Session* create_new_session_and_client_data_stream(int _fd);
 	bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();
-	void ProcessAllMyDS_BeforePoll();
-	void ProcessAllMyDS_AfterPoll();
+	//void ProcessAllMyDS_BeforePoll();
+	//void ProcessAllMyDS_AfterPoll();
 	void run();
 	void poll_listener_add(int sock);
 	void poll_listener_del(int sock);
-	void register_session(PgSQL_Session*, bool up_start = true);
+	//void register_session(PgSQL_Session*, bool up_start = true);
 	void unregister_session(int);
 	struct pollfd* get_pollfd(unsigned int i);
 	bool process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n);
-	void ProcessAllSessions_SortingSessions();
+	//void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, PgSQL_Session * sess);
 	void ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
 	void process_all_sessions();
@@ -568,8 +569,8 @@ public:
 		unsigned int mirror_sessions_current;
 		int threads_initialized = 0;
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array{};
-		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array{};
+		//std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array{};
+		//std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array{};
 	} status_variables;
 
 	std::atomic<bool> bootstrapping_listeners;
@@ -684,8 +685,8 @@ public:
 	SQLite3_result* SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
-	unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
-	unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
+	//unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
+	//unsigned long long get_status_variable(enum PgSQL_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();
