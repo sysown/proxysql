@@ -47,7 +47,7 @@ enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND, USERNAME_NONE };
 
 #define PROXYSQL_USE_RESULT
 
-enum MDB_ASYNC_ST { // MariaDB Async State Machine
+enum ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CONNECT_START,
 	ASYNC_CONNECT_CONT,
 	ASYNC_CONNECT_END,
@@ -121,6 +121,10 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 
 	ASYNC_IDLE
 };
+
+using MDB_ASYNC_ST = ASYNC_ST;
+using PG_ASYNC_ST = ASYNC_ST;
+
 
 // list of possible debugging modules
 enum debug_module {

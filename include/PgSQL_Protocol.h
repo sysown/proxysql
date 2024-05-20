@@ -63,21 +63,40 @@ struct pgsql_hdr {
 	PtrSize_t data;
 };
 
+struct PG_Field {
+	char*	 name;
+	uint32_t tbl_oid;
+	uint16_t col_idx;
+	uint32_t type_oid;
+	uint16_t col_len;
+	uint32_t type_mod;
+	uint16_t fmt;
+};
+
+using PG_Fields = std::vector<PG_Field>;
+
 class PG_pkt 
 {
 public:
 	PG_pkt(unsigned c = PG_PKT_DEFAULT_SIZE) {
+		ownership = true;
 		capacity = l_near_pow_2(c);
 		size = 0;
 		ptr = (char*)malloc(capacity);
 		multiple_pkt_mode = false;
+	}
+	PG_pkt(void* _ptr, unsigned int _capacity) {
+		ownership = false;
+		ptr = (char*)_ptr;
+		capacity = _capacity;
+		size = 0;
 	}
 	~PG_pkt() {
 		reset();
 	}
 
 	void reset() {
-		if (ptr) 
+		if (ptr && ownership == true)
 			free(ptr);
 		ptr = nullptr;
 		size = 0;
@@ -154,8 +173,49 @@ private:
 	// currently for debug only. will replace this with a single variable that will contain last pkt offset
 	std::vector<unsigned int> pkt_offset;
 	bool multiple_pkt_mode = false;
-
+	bool ownership = true;
 	friend void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type);
+};
+
+class PgSQL_Protocol;
+class PgSQL_ResultSet {
+public:
+	PgSQL_Data_Stream* ds;
+	PgSQL_Protocol* proto;
+	PGconn* pgsql_conn;
+	PGresult* result;
+
+	PgSQL_ResultSet();
+	~PgSQL_ResultSet();
+
+	void init(PgSQL_Protocol* _proto, PGconn* _conn);
+	void buffer_init(PgSQL_Protocol* _proto);
+
+	unsigned int add_row_description(PGresult* result);
+	unsigned int add_row(PGresult* result);
+	unsigned int add_eof(PGresult* result);
+	void add_err(PgSQL_Data_Stream* _myds);
+	bool get_resultset(PtrSizeArray* PSarrayFinal);
+	
+	void buffer_to_PSarrayOut(bool _last = false);
+	unsigned long long current_size();
+
+
+
+//private:
+	unsigned char* buffer;
+	unsigned int buffer_used;
+
+	uint8_t sid;
+	bool transfer_started;
+	bool resultset_completed;
+
+	unsigned int num_fields;
+	unsigned long long num_rows;
+	unsigned long long resultset_size;
+	PtrSizeArray PSarrayOUT;
+
+	friend class PgSQL_Protocol;
 };
 
 class PgSQL_Protocol : public MySQL_Protocol {
@@ -166,14 +226,21 @@ public:
 		sess = __sess;
 		current_PreStmt = NULL;
 	}
+	PgSQL_Data_Stream* get_myds() { return *myds; }
 
 	bool generate_pkt_initial_handshake(bool send, void** ptr, unsigned int* len, uint32_t* thread_id, bool deprecate_eof_active) override;
 	bool process_startup_packet(unsigned char* pkt, unsigned int len, bool& ssl_request);
 	EXECUTION_STATE process_handshake_response_packet(unsigned char* pkt, unsigned int len);
 	void welcome_client();
 
-	void generate_error_packet(bool send_ready, const char* msg, const char* code, bool fatal);
-	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query);
+	void generate_error_packet(bool send, bool ready, const char* msg, const char* code, bool fatal, PtrSize_t* _ptr = NULL);
+	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, PtrSize_t* _ptr = NULL);
+
+	//bool generate_row_description(bool send, PgSQL_ResultSet* rs, const PG_Fields& fields, unsigned int size);
+	
+	unsigned int copy_row_description_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result);
+	unsigned int copy_row_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result);
+	unsigned int copy_eof_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result);
 private:
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
 	void load_conn_parameters(pgsql_hdr* pkt, bool startup);

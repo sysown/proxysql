@@ -5395,7 +5395,7 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 	PgSQL_SrvC* mysrvc = NULL;
 	mysrvc = (PgSQL_SrvC*)c->parent;
 	// reset insert_id #1093
-	c->pgsql->insert_id = 0;
+	//c->pgsql->insert_id = 0;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
 			cached_connections->add(c);

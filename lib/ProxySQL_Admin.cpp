@@ -160,6 +160,9 @@ static unordered_map<string, const vector<string>&> module_tablenames = {
 	{ "scheduler", scheduler_tablenames },
 	{ "proxysql_servers", proxysql_servers_tablenames },
 	{ "restapi", restapi_tablenames },
+	{ "pgsql_servers", pgsql_servers_tablenames },
+	{ "pgsql_firewall", pgsql_firewall_tablenames },
+	{ "pgsql_query_rules", pgsql_query_rules_tablenames },
 };
 
 static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, const string& p2, const string& p3) {
@@ -13596,7 +13599,7 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
 		sprintf(new_msg, "%s%s", prefix_msg, msg);
-		myds->myprot.generate_error_packet(false, new_msg, NULL, false);
+		myds->myprot.generate_error_packet(true,true, new_msg, NULL, false);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
 	}
