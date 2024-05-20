@@ -134,7 +134,7 @@ public:
 	} proxy_addr;
 
 	AUTHENTICATION_METHOD auth_method = AUTHENTICATION_METHOD::NO_PASSWORD;
-	int auth_next_pkt_type = 0;
+	uint32_t auth_next_pkt_type = 0;
 	bool auth_received_startup = false;
 	
 	ScramState scram_state;

@@ -721,7 +721,7 @@ CREATE TABLE stats_mysql_processlist (
 void ProxySQL_Admin::stats___pgsql_processlist() {
 	int rc;
 	if (!GloMTH) return;
-	pgsql_thread___show_processlist_extended = variables.mysql_show_processlist_extended;
+	pgsql_thread___show_processlist_extended = variables.pgsql_show_processlist_extended;
 	SQLite3_result* resultset = GloPTH->SQL3_Processlist();
 	if (resultset == NULL) return;
 

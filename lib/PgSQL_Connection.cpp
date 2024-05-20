@@ -383,9 +383,9 @@ bool PgSQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 			memcpy(schemaname,_new,l);
 			schemaname[l]=0;
 		} else {
-			int k=strlen(mysql_thread___default_schema);
+			int k=strlen(pgsql_thread___default_schema);
 			schemaname=(char *)malloc(k+1);
-			memcpy(schemaname,mysql_thread___default_schema,k);
+			memcpy(schemaname, pgsql_thread___default_schema,k);
 			schemaname[k]=0;
 		}
 		compute_hash();
@@ -748,13 +748,13 @@ void PgSQL_Connection_Placeholder::connect_start() {
 	}
 	if (parent->use_ssl) {
 		mysql_ssl_set(pgsql,
-				mysql_thread___ssl_p2s_key,
-				mysql_thread___ssl_p2s_cert,
-				mysql_thread___ssl_p2s_ca,
-				mysql_thread___ssl_p2s_capath,
-				mysql_thread___ssl_p2s_cipher);
-		mysql_options(pgsql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-		mysql_options(pgsql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+			pgsql_thread___ssl_p2s_key,
+			pgsql_thread___ssl_p2s_cert,
+			pgsql_thread___ssl_p2s_ca,
+			pgsql_thread___ssl_p2s_capath,
+			pgsql_thread___ssl_p2s_cipher);
+		mysql_options(pgsql, MYSQL_OPT_SSL_CRL, pgsql_thread___ssl_p2s_crl);
+		mysql_options(pgsql, MYSQL_OPT_SSL_CRLPATH, pgsql_thread___ssl_p2s_crlpath);
 		mysql_options(pgsql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;
@@ -1102,7 +1102,7 @@ PG_ASYNC_ST PgSQL_Connection_Placeholder::handler(short event) {
 	if (pgsql==NULL) {
 		// it is the first time handler() is being called
 		async_state_machine=ASYNC_CONNECT_START;
-		myds->wait_until=myds->sess->thread->curtime+mysql_thread___connect_timeout_server*1000;
+		myds->wait_until=myds->sess->thread->curtime+ pgsql_thread___connect_timeout_server *1000;
 		if (myds->max_connect_time) {
 			if (myds->wait_until > myds->max_connect_time) {
 				myds->wait_until = myds->max_connect_time;
@@ -1430,7 +1430,7 @@ handler_again:
 					unsigned int buffered_data=0;
 					buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 					buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
-					if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*8) {
+					if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size*8) {
 						next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause . See #1232
 						break;
 					}
@@ -1456,9 +1456,9 @@ handler_again:
 					if (rows_read_inner > 1) {
 						process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(processed_bytes);
 						if (
-							(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
+							(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size*8)
 								||
-							( mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
+							(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
 						) {
 							next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause
 						} else {
@@ -1609,7 +1609,7 @@ handler_again:
 					unsigned int buffered_data=0;
 					buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 					buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
-					if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*8) {
+					if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size*8) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
 						break;
 					}
@@ -1627,7 +1627,7 @@ handler_again:
 				async_fetch_row_start=false;
 				if (mysql_row) {
 					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
-						if (mysql_thread___verbose_query_error) {
+						if (pgsql_thread___verbose_query_error) {
 							PgSQL_Data_Stream* client_myds = myds->sess->client_myds;
 							const char* username = "";
 							const char* schema = "";
@@ -1663,9 +1663,9 @@ handler_again:
 					bytes_info.bytes_recv += br;
 					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
 					if (
-						(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
+						(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size*8)
 							||
-						( mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
+						(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)pgsql_thread___throttle_ratio_server_to_client) )
 					) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 					} else {
@@ -2573,9 +2573,9 @@ bool PgSQL_Connection_Placeholder::IsKeepMultiplexEnabledVariables(char *query_d
 	std::vector<char*>keep_multiplexing_variables_v;
 	char* keep_multiplexing_variables_tmp;
 	char* save_keep_multiplexing_variables_ptr = NULL;
-	unsigned long keep_multiplexing_variables_len=strlen(mysql_thread___keep_multiplexing_variables);
+	unsigned long keep_multiplexing_variables_len=strlen(pgsql_thread___keep_multiplexing_variables);
 	keep_multiplexing_variables_tmp=(char*)malloc(keep_multiplexing_variables_len+1);
-	memcpy(keep_multiplexing_variables_tmp, mysql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
+	memcpy(keep_multiplexing_variables_tmp, pgsql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
 	keep_multiplexing_variables_tmp[keep_multiplexing_variables_len]='\0';
 	char* keep_multiplexing_variables_tok=strtok_r(keep_multiplexing_variables_tmp, " ,", &save_keep_multiplexing_variables_ptr);
 	while (keep_multiplexing_variables_tok){
@@ -2657,7 +2657,7 @@ void PgSQL_Connection_Placeholder::ProcessQueryAndSetStatusFlags(char *query_dig
 //				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
 		if (strncasecmp(query_digest_text,"SET ",4)==0) {
 			// For issue #555 , multiplexing is disabled if --safe-updates is used (see session_vars definition)
-			int sqloh = mysql_thread___set_query_lock_on_hostgroup;
+			int sqloh = pgsql_thread___set_query_lock_on_hostgroup;
 			switch (sqloh) {
 				case 0: // old algorithm
 					if (mul!=2) {
@@ -3025,7 +3025,7 @@ PG_ASYNC_ST PgSQL_Connection::handler(short event) {
 	if (pgsql_conn == NULL) {
 		// it is the first time handler() is being called
 		async_state_machine = ASYNC_CONNECT_START;
-		myds->wait_until = myds->sess->thread->curtime + mysql_thread___connect_timeout_server * 1000;
+		myds->wait_until = myds->sess->thread->curtime + pgsql_thread___connect_timeout_server * 1000;
 		if (myds->max_connect_time) {
 			if (myds->wait_until > myds->max_connect_time) {
 				myds->wait_until = myds->max_connect_time;
@@ -3247,7 +3247,7 @@ handler_again:
 			unsigned int buffered_data = 0;
 			buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 			buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
-			if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size * 8) {
+			if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 8) {
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
 				break;
 			}
@@ -3320,9 +3320,9 @@ handler_again:
 				bytes_info.bytes_recv += br;
 				processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
 				if (
-					(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size * 8)
+					(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
 					||
-					(mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)mysql_thread___throttle_ratio_server_to_client))
+					(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 					) {
 					next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 				}
@@ -3575,7 +3575,7 @@ handler_again:
 				unsigned int buffered_data = 0;
 				buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 				buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
-				if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size * 8) {
+				if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 8) {
 					next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause . See #1232
 					break;
 				}
@@ -3601,9 +3601,9 @@ handler_again:
 				if (rows_read_inner > 1) {
 					process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(processed_bytes);
 					if (
-						(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size * 8)
+						(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
 						||
-						(mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)mysql_thread___throttle_ratio_server_to_client))
+						(pgsql_thread___throttle_max_bytes_per_second_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 						) {
 						next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause
 					}
@@ -3758,7 +3758,7 @@ handler_again:
 			unsigned int buffered_data = 0;
 			buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 			buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
-			if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size * 8) {
+			if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 8) {
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
 				break;
 			}
@@ -3778,7 +3778,7 @@ handler_again:
 		async_fetch_row_start = false;
 		if (mysql_row) {
 			if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
-				if (mysql_thread___verbose_query_error) {
+				if (pgsql_thread___verbose_query_error) {
 					PgSQL_Data_Stream* client_myds = myds->sess->client_myds;
 					const char* username = "";
 					const char* schema = "";
@@ -3815,9 +3815,9 @@ handler_again:
 			bytes_info.bytes_recv += br;
 			processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
 			if (
-				(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size * 8)
+				(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
 				||
-				(mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)mysql_thread___throttle_ratio_server_to_client))
+				(pgsql_thread___throttle_max_bytes_per_second_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 				) {
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 			}

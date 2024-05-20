@@ -10,6 +10,8 @@
 #include "cpp.h"
 #include "PgSQL_Variables.h"
 
+
+class PgSQL_ResultSet;
 //#include "../deps/json/json.hpp"
 //using json = nlohmann::json;
 
@@ -365,7 +367,7 @@ public:
 	PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 
 	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false);
-	void PgSQL_Result_to_PgSQL_wire(PGconn* mysql, PgSQL_ResultSet* MyRS, unsigned int warning_count, PgSQL_Data_Stream* _myds = NULL);
+	void PgSQL_Result_to_PgSQL_wire(PGconn* pgsql_conn, PgSQL_ResultSet* MyRS, unsigned int warning_count, PgSQL_Data_Stream* _myds = NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Connection* myconn);
 	unsigned int NumActiveTransactions(bool check_savpoint = false);
 	bool HasOfflineBackends();

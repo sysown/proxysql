@@ -703,7 +703,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 	char* password = NULL;
 	char* default_schema = NULL;
-	char* db = NULL;
+	//char* db = NULL;
 	char* attributes = NULL;
 	void* sha1_pass = NULL;
 	int max_connections;
@@ -1171,7 +1171,7 @@ char* extract_tag_from_query(const char* query) {
 
 	constexpr size_t crete_table_len = sizeof("CREATE TABLE AS") - 1;
 
-	int qtlen = strlen(query);
+	size_t qtlen = strlen(query);
 	if ((qtlen > crete_table_len) && strncasecmp(query, "CREATE TABLE AS", crete_table_len) == 0) {
 		return strdup("SELECT");
 	}
@@ -1315,7 +1315,7 @@ unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_ResultSet(bool send, 
 	
 	unsigned int fields_cnt = PQnfields(result);
 	unsigned int size = 1 + 4 + 2;
-	for (int i = 0; i < fields_cnt; i++) {
+	for (unsigned int i = 0; i < fields_cnt; i++) {
 		size += strlen(PQfname(result, i)) + 1 + 18; // null terminator, name, reloid, colnr, oid, typsize, typmod, fmt
 	}
 
@@ -1393,7 +1393,7 @@ unsigned int PgSQL_Protocol::copy_row_to_PgSQL_ResultSet(bool send, PgSQL_Result
 	unsigned int total_size = 0;
 	for (unsigned int i = 0; i < numRows; i++) {
 		unsigned int size = 1 + 4 + 2; // 'D', length, field count
-		for (int j = 0; j < pg_rs->num_fields; j++) {
+		for (unsigned int j = 0; j < pg_rs->num_fields; j++) {
 			size += PQgetlength(result, i, j) + 4; // length, value
 		}
 		total_size += size;
@@ -1429,7 +1429,7 @@ unsigned int PgSQL_Protocol::copy_row_to_PgSQL_ResultSet(bool send, PgSQL_Result
 		pgpkt.put_uint32(size - 1);
 		pgpkt.put_uint16(pg_rs->num_fields);
 		int column_value_len = 0;
-		for (int j = 0; j < pg_rs->num_fields; j++) {
+		for (unsigned int j = 0; j < pg_rs->num_fields; j++) {
 			column_value_len = PQgetlength(result, i, j);
 			pgpkt.put_uint32(column_value_len);
 			pgpkt.put_bytes(PQgetvalue(result, i, j), column_value_len);
