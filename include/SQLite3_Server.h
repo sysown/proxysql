@@ -56,7 +56,7 @@ class SQLite3_Server {
 	std::vector<table_def_t *> *tables_defs_readonly;
 #endif // TEST_READONLY
 #ifdef TEST_REPLICATIONLAG
-	std::unordered_map<std::string, int> replicationlag_map;
+	std::unordered_map<std::string, std::unique_ptr<int>> replicationlag_map;
 	std::vector<table_def_t*>* tables_defs_replicationlag;
 #endif // TEST_REPLICATIONLAG
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
@@ -105,7 +105,7 @@ class SQLite3_Server {
 #ifdef TEST_REPLICATIONLAG
 	pthread_mutex_t test_replicationlag_mutex;
 	void load_replicationlag_table(MySQL_Session* sess);
-	int replicationlag_test_value(const char* p);
+	int* replicationlag_test_value(const char* p);
 	int replicationlag_map_size() {
 		return replicationlag_map.size();
 	}

@@ -2692,9 +2692,16 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	myhgc->mysrvs->add(mysrvc);
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const char *address, unsigned int port, int current_replication_lag) {
-	int j;
-	for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const char *address, unsigned int port, 
+	int current_replication_lag, bool override_repl_lag) {
+	
+	if (current_replication_lag == -1 && override_repl_lag == true) {
+		current_replication_lag = myhgc->get_monitor_slave_lag_when_null();
+		override_repl_lag = false;
+		proxy_error("Replication lag on server %s:%d is NULL, using value %d\n", address, port, current_replication_lag);
+	}
+
+	for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
 			mysrvc->cur_replication_lag = current_replication_lag;
@@ -2703,9 +2710,9 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 //					(current_replication_lag==-1 )
 //					||
 					(
-						current_replication_lag>=0 &&
+						current_replication_lag >= 0 &&
 						mysrvc->max_replication_lag > 0 && // see issue #4018
-						((unsigned int)current_replication_lag > mysrvc->max_replication_lag)
+						(current_replication_lag > (int)mysrvc->max_replication_lag)
 					)
 				) {
 					// always increase the counter
@@ -2730,9 +2737,10 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 			} else {
 				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 					if (
-						(current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
+						(/*current_replication_lag >= 0 &&*/override_repl_lag == false &&
+						(current_replication_lag <= (int)mysrvc->max_replication_lag))
 						||
-						(current_replication_lag==-2) // see issue 959
+						(current_replication_lag==-2 && override_repl_lag == true) // see issue 959
 					) {
 						mysrvc->set_status(MYSQL_SERVER_STATUS_ONLINE);
 						proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
@@ -2758,18 +2766,19 @@ void MySQL_HostGroups_Manager::replication_lag_action(const std::list<replicatio
 		const std::string& address = std::get<REPLICATION_LAG_SERVER_T::RLS_ADDRESS>(server);
 		const unsigned int port = std::get<REPLICATION_LAG_SERVER_T::RLS_PORT>(server);
 		const int current_replication_lag = std::get<REPLICATION_LAG_SERVER_T::RLS_CURRENT_REPLICATION_LAG>(server);
+		const bool override_repl_lag = std::get<REPLICATION_LAG_SERVER_T::RLS_OVERRIDE_REPLICATION_LAG>(server);
 
 		if (mysql_thread___monitor_replication_lag_group_by_host == false) {
 			// legacy check. 1 check per server per hostgroup
 			MyHGC *myhgc = MyHGC_find(hid);
-			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag,override_repl_lag);
 		}
 		else {
 			// only 1 check per server, no matter the hostgroup
 			// all hostgroups must be searched
 			for (unsigned int i=0; i<MyHostGroups->len; i++) {
 				MyHGC*myhgc=(MyHGC*)MyHostGroups->index(i);
-				replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+				replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag,override_repl_lag);
 			}
 		}
 	}
@@ -6226,8 +6235,13 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
-			int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
 			myhgc->attributes.handle_warnings = handle_warnings;
+
+			const auto monitor_slave_lag_when_null_check = [](int32_t monitor_slave_lag_when_null) -> bool 
+				{ return (monitor_slave_lag_when_null >= 0 && monitor_slave_lag_when_null <= 604800); };
+			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check);
+			myhgc->attributes.monitor_slave_lag_when_null = monitor_slave_lag_when_null;
 		}
 		catch (const json::exception& e) {
 			proxy_error(
