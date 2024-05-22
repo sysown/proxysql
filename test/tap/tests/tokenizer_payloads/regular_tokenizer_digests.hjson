@@ -31,6 +31,84 @@
 		"s3": "select ?",
 		"s4": "select ?"
 	},
+	// Space compression; control characters, digits and literals
+	{
+		"q": [
+			"SELECT\r\n\t1",
+			"SELECT\r\n\t 1",
+			"SELECT \r\n\t1",
+			"SELECT \r\n\t 1",
+			"SELECT \r\n\t 1\r\n\t",
+			"SELECT \r\n\t 1 \r\n\t"
+		],
+		"s1": "SELECT ?",
+		"s2": "SELECT ?",
+		"s3": "SELECT ?",
+		"s4": "SELECT ?"
+	},
+	{
+		"q": [
+			"SELECT\n'foo',\n\t4\n\t",
+			"SELECT\n\t 'foo',\n\t4\n\t",
+			"SELECT\n\t 'foo' ,\n\t4\n\t",
+			"SELECT \n\t 'foo' ,\n\t4\n\t",
+			"SELECT \n\t 'foo' \n\t ,\n\t4\n\t",
+			"SELECT\n\t \n\t'foo',\n\t4\n\t",
+			"SELECT\n\t \n\t'foo',\n\t \n\t4\n\t",
+			"SELECT\n\t \n\t'foo',\n\t \n\t4\n\t"
+		],
+		"s2": "SELECT ?,?",
+		"s3": "SELECT ?,?",
+		"s4": "SELECT ?,?"
+	},
+	// Space compression; control characters, digits, literals and operators
+	{
+		"q": [
+			"SELECT\n\t-\t'1'",
+			"SELECT\n\t-\t'1'\n\t",
+			"SELECT\n\t -\t'1'\n\t",
+			"SELECT\n\t - \t'1'",
+			"SELECT\n\t -\n\t '1'",
+			"SELECT\n\t - \n\t '1' \n\t"
+		],
+		"s1": "SELECT - ?",
+		"s2": "SELECT ?",
+		"s3": "SELECT ?",
+		"s4": "SELECT ?"
+	},
+	{
+		"q": [ "SELECT (\n  \t + \t\t 2   / 2 \t\t)" ],
+		"s1": "SELECT ( + ? / ? )"
+	},
+	{
+		"q": [ "SELECT (\t\t+2/2\t\t)" ],
+		"s1": "SELECT ( +?/? )"
+	},
+	{
+		"q": [
+			"SELECT (\t\t+2/2\t\t)",
+			"SELECT (\n  \t + \t\t 2   / 2 \t\t)"
+		],
+		"s2": "SELECT (?/?)",
+		"s3": "SELECT (?/?)",
+		"s4": "SELECT (?/?)"
+	},
+	{
+		"q": [
+			"SELECT 1,\n-4",
+			"SELECT 1, \n-4",
+			"SELECT 1,\n -4",
+			"SELECT 1, \n -4",
+			"SELECT 'foo',\n\t-4",
+			"SELECT 'foo', \n\t-4",
+			"SELECT 'foo',\n\t -4",
+			"SELECT 'foo', \n\t -4"
+		],
+		"s1": "SELECT ?, -?",
+		"s2": "SELECT ?,?",
+		"s3": "SELECT ?,?",
+		"s4": "SELECT ?,?"
+	},
 	// Final spaces and ending query delimiters (';')
 	{
 		"q": [
