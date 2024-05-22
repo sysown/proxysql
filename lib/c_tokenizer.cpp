@@ -1267,10 +1267,10 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts
 				// Q: `SELECT\s\s  1`
 				//              ^ address used to be replaced by next char
 				// ```
-				if (shared_st->prev_char == ' ' && is_space_char(*shared_st->q)) {
+				if (is_space_char(shared_st->prev_char) && is_space_char(*shared_st->q)) {
 					// if current position in result buffer is the first space found, we move to the next
 					// position, in order to respect the first space char.
-					if (*(shared_st->res_cur_pos-1) != ' ') {
+					if (!is_space_char(*(shared_st->res_cur_pos-1))) {
 						shared_st->res_cur_pos++;
 					}
 
@@ -2400,10 +2400,10 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 				// Q: `SELECT\s\s  1`
 				//              ^ address used to be replaced by next char
 				// ```
-				if (shared_st.prev_char == ' ' && is_space_char(*shared_st.q)) {
+				if (is_space_char(shared_st.prev_char) && is_space_char(*shared_st.q)) {
 					// if current position in result buffer is the first space found, we move to the next
 					// position, in order to respect the first space char.
-					if (*(shared_st.res_cur_pos-1) != ' ') {
+					if (!is_space_char(*(shared_st.res_cur_pos-1))) {
 						shared_st.res_cur_pos++;
 					}
 
