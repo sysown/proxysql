@@ -32,11 +32,11 @@
 #include <random>
 #include <vector>
 #include <string>
-#include <regex>
 
 #include "json.hpp"
 #include "proxysql.h"
 #include "proxysql_utils.h"
+#include "re2/re2.h"
 #include "command_line.h"
 #include "tap.h"
 
@@ -151,8 +151,10 @@ nlohmann::json get_tests_defs(const string& filepath) {
 	std::ifstream file_stream(filepath);
 	std::string test_file_contents((std::istreambuf_iterator<char>(file_stream)), (std::istreambuf_iterator<char>()));
 
-	std::regex comment_pattern { ".*\\/\\/.*[\\r\\n]" };
-	string test_file_no_comments { std::regex_replace(test_file_contents, comment_pattern, "") };
+	std::string comment_pattern { ".*\\/\\/.*[\\r\\n]" };
+	string test_file_no_comments { test_file_contents };
+
+	re2::RE2::GlobalReplace(&test_file_no_comments, comment_pattern, "");
 	nlohmann::json j_test_defs = nlohmann::json::parse(test_file_no_comments, nullptr, true);
 
 	return j_test_defs;
