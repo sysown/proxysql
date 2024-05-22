@@ -2393,7 +2393,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 				// suppress all the double spaces.
 				// ==============================
 				//
-				// The supression is performed using the address of the second space found as the
+				// The suppression is performed using the address of the second space found as the
 				// pivoting point for further space suppression in the result buffer:
 				//
 				// ```
