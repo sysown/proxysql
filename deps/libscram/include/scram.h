@@ -16,12 +16,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-/*
- * SCRAM support
- */
-
-#include <usual/crypto/sha256.h>
-
  /*
   * Ought to match NAMEDATALEN.  Some cloud services use longer user
   * names, so give it some extra room.
@@ -50,7 +44,7 @@ struct ScramState {
 	uint8_t ServerKey[32];
 };
 
-struct PgUser {
+struct PgCredentials {
 	char name[MAX_USERNAME];
 	char passwd[MAX_PASSWORD];
 	uint8_t scram_ClientKey[32];
@@ -60,7 +54,7 @@ struct PgUser {
 };
 
 typedef struct ScramState ScramState;
-typedef struct PgUser PgUser;
+typedef struct PgCredentials PgCredentials;
 
 typedef enum PasswordType {
 	PASSWORD_TYPE_PLAINTEXT = 0,
@@ -68,60 +62,67 @@ typedef enum PasswordType {
 	PASSWORD_TYPE_SCRAM_SHA_256
 } PasswordType;
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-const char* scram_error();
-void scram_reset_error();
+	PasswordType get_password_type(const char* shadow_pass);
 
-void free_scram_state(ScramState* scram_state);
-PasswordType get_password_type(const char *shadow_pass);
+	// Returns the last error message
+	const char* scram_error();
 
-/*
- * Functions for communicating as a client with the server
- */
+	// Resets the error message
+	void scram_reset_error();
 
-char *build_client_first_message(ScramState *scram_state);
-char *build_client_final_message(ScramState *scram_state,
-				 const PgUser *user,
-				 const char *server_nonce,
-				 const char *salt,
-				 int saltlen,
-				 int iterations);
+	// Initializes a new ScramState object
+	ScramState* scram_state_init();
 
-bool read_server_first_message(ScramState* scram_state, char *input,
-			       char **server_nonce_p, char **salt_p, int *saltlen_p, int *iterations_p);
-bool read_server_final_message(char *input, char *ServerSignature);
+	// Frees the memory allocated for a ScramState object
+	void free_scram_state(ScramState* scram_state);
 
-bool verify_server_signature(ScramState *scram_state, const PgUser *user, const char *ServerSignature);
+	/*
+	 * Functions for communicating as a client with the server
+	 */
+	char *build_client_first_message(ScramState *scram_state);
+
+	char *build_client_final_message(ScramState *scram_state,
+					 const PgCredentials *credentials,
+					 const char *server_nonce,
+					 const char *salt,
+					 int saltlen,
+					 int iterations);
+
+	bool read_server_first_message(ScramState* scram_state, char *input,
+					   char **server_nonce_p, char **salt_p, int *saltlen_p, int *iterations_p);
+
+	bool read_server_final_message(char *input, char *ServerSignature);
+
+	bool verify_server_signature(ScramState *scram_state, const PgCredentials *credentials, const char *ServerSignature);
 
 
-/*
- * Functions for communicating as a server to the client
- */
+	/*
+	 * Functions for communicating as a server to the client
+	 */
 
-bool read_client_first_message(char *input,
-			       char *cbind_flag_p,
-			       char **client_first_message_bare_p,
-			       char **client_nonce_p);
+	bool read_client_first_message(char *input,
+					   char *cbind_flag_p,
+					   char **client_first_message_bare_p,
+					   char **client_nonce_p);
 
-bool read_client_final_message(ScramState* scram_state, const uint8_t *raw_input, char *input,
-			       const char **client_final_nonce_p,
-			       char **proof_p);
+	bool read_client_final_message(ScramState* scram_state, const uint8_t *raw_input, char *input,
+					   const char **client_final_nonce_p,
+					   char **proof_p);
 
-char *build_server_first_message(ScramState *scram_state,
-				 const char *username, const char *stored_secret);
+	char *build_server_first_message(ScramState *scram_state,
+					 const char *username, const char *stored_secret);
 
-char *build_server_final_message(ScramState *scram_state);
+	char *build_server_final_message(ScramState *scram_state);
 
-bool verify_final_nonce(const ScramState *scram_state, const char *client_final_nonce);
+	bool verify_final_nonce(const ScramState *scram_state, const char *client_final_nonce);
 
-bool verify_client_proof(ScramState *state, const char *ClientProof);
+	bool verify_client_proof(ScramState *state, const char *ClientProof);
 
-bool scram_verify_plain_password(const char *username, const char *password,
-				 const char *secret);
+	bool scram_verify_plain_password(const char *username, const char *password, const char *secret);
 
 #ifdef __cplusplus
 }
