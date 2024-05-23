@@ -7,8 +7,8 @@
 #include <unordered_set>
 #include <prometheus/exposer.h>
 #include <prometheus/counter.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
+#include "openssl/ssl.h"
+#include "openssl/err.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
