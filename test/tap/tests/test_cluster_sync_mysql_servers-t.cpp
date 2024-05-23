@@ -42,7 +42,7 @@
 
 #include "libconfig.h"
 
-#include <proxysql_utils.h>
+#include "proxysql_utils.h"
 
 #include "mysql.h"
 #ifndef SPOOKYV2
