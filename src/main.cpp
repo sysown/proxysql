@@ -27,11 +27,11 @@
 #include "Web_Interface.hpp"
 #include "proxysql_utils.h"
 
-#include <libdaemon/dfork.h>
-#include <libdaemon/dsignal.h>
-#include <libdaemon/dlog.h>
-#include <libdaemon/dpid.h>
-#include <libdaemon/dexec.h>
+#include "libdaemon/dfork.h"
+#include "libdaemon/dsignal.h"
+#include "libdaemon/dlog.h"
+#include "libdaemon/dpid.h"
+#include "libdaemon/dexec.h"
 #include "ev.h"
 
 #include "curl/curl.h"
