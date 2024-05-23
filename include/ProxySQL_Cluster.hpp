@@ -6,8 +6,8 @@
 #include "wqueue.h"
 #include <vector>
 
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 #define PROXYSQL_NODE_METRICS_LEN	5
 
