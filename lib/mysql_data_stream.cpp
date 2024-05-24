@@ -433,7 +433,8 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 			// other part, we perform a 'quiet' shutdown. For more context see
 			// MYSQL #29579.
 			SSL_set_quiet_shutdown(ssl, 1);
-			SSL_shutdown(ssl);
+			if (SSL_shutdown(ssl) < 0)
+				ERR_clear_error();
 		}
 		if (ssl) SSL_free(ssl);
 	}
@@ -515,7 +516,8 @@ void MySQL_Data_Stream::shut_hard() {
 		// other part, we perform a 'quiet' shutdown. For more context see
 		// MYSQL #29579.
 		SSL_set_quiet_shutdown(ssl, 1);
-		SSL_shutdown(ssl);
+		if (SSL_shutdown(ssl) < 0)
+			ERR_clear_error();
 	}
 	if (fd >= 0) {
 		shutdown(fd, SHUT_RDWR);
