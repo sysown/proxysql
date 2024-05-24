@@ -1,6 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
-#include <openssl/x509v3.h>
+#include "openssl/x509v3.h"
 
 static long
 get_file_size (const char *filename) {

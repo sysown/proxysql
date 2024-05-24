@@ -9,10 +9,10 @@
 #include <pthread.h>
 #include <string>
 
-#include <prometheus/counter.h>
-#include <prometheus/detail/builder.h>
-#include <prometheus/family.h>
-#include <prometheus/gauge.h>
+#include "prometheus/counter.h"
+#include "prometheus/detail/builder.h"
+#include "prometheus/family.h"
+#include "prometheus/gauge.h"
 
 #include "prometheus_helpers.h"
 #include "proxysql_utils.h"
