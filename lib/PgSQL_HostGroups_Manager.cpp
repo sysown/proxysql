@@ -4867,8 +4867,8 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 					intsize+=sizeof(PgSQL_Connection)+sizeof(MYSQL);
 					intsize+=myconn->pgsql->net.max_packet;
 					intsize+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
-					if (myconn->MyRS) {
-						intsize+=myconn->MyRS->current_size();
+					if (myconn->query_result) {
+						intsize+=myconn->query_result->current_size();
 					}
 				}
 				intsize+=((mysrvc->ConnectionsUsed->conns_length())*sizeof(PgSQL_Connection *));

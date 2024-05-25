@@ -48,7 +48,7 @@
 #define NEW_HEADER_LEN  5
 
 class ProxySQL_Admin;
-struct PgUser;
+struct PgCredentials;
 struct ScramState;
 
 enum class EXECUTION_STATE {
@@ -96,8 +96,12 @@ public:
 	}
 
 	void reset() {
-		if (ptr && ownership == true)
-			free(ptr);
+		if (ptr) {
+			if (ownership == true)
+				free(ptr);
+			else
+				assert(size == capacity); // just to check if we are not passing buffer boundaries
+		}
 		ptr = nullptr;
 		size = 0;
 		capacity = 0;
@@ -178,42 +182,45 @@ private:
 };
 
 class PgSQL_Protocol;
-class PgSQL_ResultSet {
+class PgSQL_Query_Result {
 public:
-	PgSQL_Data_Stream* ds;
-	PgSQL_Protocol* proto;
-	PGconn* pgsql_conn;
-	PGresult* result;
-
-	PgSQL_ResultSet();
-	~PgSQL_ResultSet();
+	PgSQL_Query_Result();
+	~PgSQL_Query_Result();
 
 	void init(PgSQL_Protocol* _proto, PGconn* _conn);
-	void buffer_init(PgSQL_Protocol* _proto);
-
 	unsigned int add_row_description(PGresult* result);
 	unsigned int add_row(PGresult* result);
-	unsigned int add_eof(PGresult* result);
-	void add_err(PgSQL_Data_Stream* _myds);
+	unsigned int add_command_completion(PGresult* result);
+	unsigned int add_error(PgSQL_Data_Stream* _myds, PGresult* result);
 	bool get_resultset(PtrSizeArray* PSarrayFinal);
 	
-	void buffer_to_PSarrayOut(bool _last = false);
 	unsigned long long current_size();
+	inline bool is_transfer_started() const { return transfer_started; }
+	inline bool is_resultset_completed() const { return resultset_completed; }
+	inline unsigned long long get_num_rows() const { return num_rows; }
+	inline unsigned int get_num_fields() const { return num_fields; }
+	inline unsigned long long get_resultset_size() const { return resultset_size; }
 
+private:
+	void buffer_init();
+	inline unsigned int buffer_available_capacity() const { return (RESULTSET_BUFLEN - buffer_used); }
+	unsigned char* buffer_reserve_space(unsigned int size);
+	void buffer_to_PSarrayOut();
+	void reset();
 
-
-//private:
-	unsigned char* buffer;
+	PtrSizeArray PSarrayOUT;
+	unsigned long long resultset_size;
+	unsigned long long num_rows;
+	unsigned long long pkt_count;
+	unsigned int num_fields;
 	unsigned int buffer_used;
-
-	uint8_t sid;
+	//ExecStatusType	result_status;
+	unsigned char* buffer;
+	PgSQL_Protocol* proto;
+	PGconn* pgsql_conn;
+	//PGresult* result;
 	bool transfer_started;
 	bool resultset_completed;
-
-	unsigned int num_fields;
-	unsigned long long num_rows;
-	unsigned long long resultset_size;
-	PtrSizeArray PSarrayOUT;
 
 	friend class PgSQL_Protocol;
 };
@@ -236,16 +243,17 @@ public:
 	void generate_error_packet(bool send, bool ready, const char* msg, const char* code, bool fatal, PtrSize_t* _ptr = NULL);
 	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, PtrSize_t* _ptr = NULL);
 
-	//bool generate_row_description(bool send, PgSQL_ResultSet* rs, const PG_Fields& fields, unsigned int size);
+	//bool generate_row_description(bool send, PgSQL_Query_Result* rs, const PG_Fields& fields, unsigned int size);
 	
-	unsigned int copy_row_description_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result);
-	unsigned int copy_row_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result);
-	unsigned int copy_eof_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result);
+	unsigned int copy_row_description_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
+	unsigned int copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
+	unsigned int copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
+	unsigned int copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
 private:
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
 	void load_conn_parameters(pgsql_hdr* pkt, bool startup);
-	bool scram_handle_client_first(ScramState* scram_state, PgUser* user, const unsigned char* data, uint32_t datalen);
-	bool scram_handle_client_final(ScramState* scram_state, PgUser* user, const unsigned char* data, uint32_t datalen);
+	bool scram_handle_client_first(ScramState* scram_state, PgCredentials* user, const unsigned char* data, uint32_t datalen);
+	bool scram_handle_client_final(ScramState* scram_state, PgCredentials* user, const unsigned char* data, uint32_t datalen);
 
 	PgSQL_Data_Stream** myds;
 	PgSQL_Connection_userinfo* userinfo;

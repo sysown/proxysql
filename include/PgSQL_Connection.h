@@ -11,7 +11,7 @@ namespace nlohmann { class json; }
 
 
 class PgSQL_SrvC;
-class PgSQL_ResultSet;
+class PgSQL_Query_Result;
 //#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001 // DEPRECATED
 #define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
@@ -344,8 +344,6 @@ class PgSQL_Connection_Placeholder {
 	MYSQL *ret_mysql;
 	MYSQL_RES *mysql_result;
 	MYSQL_ROW mysql_row;
-	MySQL_ResultSet *MyRS;
-	MySQL_ResultSet *MyRS_reuse;
 	PgSQL_SrvC *parent;
 	PgSQL_Connection_userinfo *userinfo;
 	PgSQL_Data_Stream *myds;
@@ -486,6 +484,11 @@ class PgSQL_Connection_Placeholder {
 	bool requires_CHANGE_USER(const PgSQL_Connection *client_conn);
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return pgsql ? pgsql->thread_id : 0; }
+
+private:
+	// these will be removed
+	MySQL_ResultSet *MyRS;
+	MySQL_ResultSet *MyRS_reuse;
 };
 
 enum  PG_ERROR_TYPE {
@@ -566,11 +569,13 @@ public:
 
 	PGconn* pgsql_conn;
 	PGresult* last_result;
-	PgSQL_ResultSet* MyRS;
-	PgSQL_ResultSet* MyRS_reuse;
-	
+	PgSQL_Query_Result* query_result;
+	PgSQL_Query_Result* query_result_reuse;
+
 	PG_ERROR_TYPE err_type;
 	std::string err_msg;
+
+	bool first_result;
 	//PgSQL_SrvC* parent;
 	//PgSQL_Connection_userinfo* userinfo;
 	//PgSQL_Data_Stream* myds;

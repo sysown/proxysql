@@ -137,7 +137,7 @@ public:
 	uint32_t auth_next_pkt_type = 0;
 	bool auth_received_startup = false;
 	
-	ScramState scram_state;
+	ScramState* scram_state;
 
 	unsigned int connect_tries;
 	int query_retries_on_failure;

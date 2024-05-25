@@ -4049,8 +4049,8 @@ __get_pkts_from_client:
 							return handler_ret;
 						}
 						else {
-							proxy_error("Experimental feature");
-							//assert(0);
+							proxy_error("Not implemented yet");
+							assert(0);
 						}
 					}
 					else {
@@ -4238,8 +4238,15 @@ __get_pkts_from_client:
 							}
 						}
 						break;
+						case 'X':
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got QUIT packet\n");
+							if (GloPgSQL_Logger) { GloPgSQL_Logger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
+							l_free(pkt.size, pkt.ptr);
+							handler_ret = -1;
+							return handler_ret;
+							break;
 						default:
-							// not implemented yet
+							proxy_error("Not implemented yet");
 							assert(0);
 						}
 					}
@@ -4668,7 +4675,7 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
 			if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
-				if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+				if (myds->myconn->query_result && myds->myconn->query_result->is_transfer_started()) {
 					// transfer to frontend has started, we cannot retry
 				}
 				else {
@@ -4847,7 +4854,7 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds, i
 	if (myds->query_retries_on_failure > 0) {
 		myds->query_retries_on_failure--;
 		if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
-			if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+			if (myds->myconn->query_result && myds->myconn->query_result->is_transfer_started()) {
 				// transfer to frontend has started, we cannot retry
 			}
 			else {
@@ -4998,7 +5005,7 @@ void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds,
 	switch (status) {
 	case PROCESSING_QUERY:
 		if (myconn) {
-			PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->MyRS, myconn->warning_count, myds);
+			PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->query_result, myconn->warning_count, myds);
 		}
 		else {
 			PgSQL_Result_to_PgSQL_wire(NULL, NULL, 0, myds);
@@ -5030,7 +5037,7 @@ void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds,
 	{
 		char sqlstate[10];
 		if (myconn && myconn->pgsql) {
-			if (myconn->MyRS) {
+			if (myconn->query_result) {
 				PROXY_TRACE2();
 				myds->sess->handler_rc0_PROCESSING_STMT_EXECUTE(myds);
 			}
@@ -5490,7 +5497,7 @@ handler_again:
 
 				switch (status) {
 				case PROCESSING_QUERY:
-					PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->MyRS, myconn->warning_count, myconn->myds);
+					PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->query_result, myconn->warning_count, myconn->myds);
 					break;
 				case PROCESSING_STMT_PREPARE:
 				{
@@ -5578,28 +5585,28 @@ handler_again:
 						// rc==1 , query is still running
 						// start sending to frontend if pgsql_thread___threshold_resultset_size is reached
 					case 1:
-						if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int)pgsql_thread___threshold_resultset_size) {
-							myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+						if (myconn->query_result && myconn->query_result->get_resultset_size() > (unsigned int)pgsql_thread___threshold_resultset_size) {
+							myconn->query_result->get_resultset(client_myds->PSarrayOUT);
 						}
 						break;
 						// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
 					case 2:
-						PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->MyRS, myconn->warning_count, myconn->myds);
-						if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
-							if (myconn->MyRS_reuse) {
-								delete myconn->MyRS_reuse;
+						PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->query_result, myconn->warning_count, myconn->myds);
+						if (myconn->query_result) { // we also need to clear query_result, so that the next staement will recreate it if needed
+							if (myconn->query_result_reuse) {
+								delete myconn->query_result_reuse;
 							}
-							//myconn->MyRS->reset_pid = false;
-							myconn->MyRS_reuse = myconn->MyRS;
-							myconn->MyRS = NULL;
+							//myconn->query_result->reset_pid = false;
+							myconn->query_result_reuse = myconn->query_result;
+							myconn->query_result = NULL;
 						}
 						NEXT_IMMEDIATE(PROCESSING_QUERY);
 						break;
 						// rc==3 , a multi statement query is still running
 						// start sending to frontend if pgsql_thread___threshold_resultset_size is reached
 					case 3:
-						if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int)pgsql_thread___threshold_resultset_size) {
-							myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+						if (myconn->query_result && myconn->query_result->get_resultset_size() > (unsigned int)pgsql_thread___threshold_resultset_size) {
+							myconn->query_result->get_resultset(client_myds->PSarrayOUT);
 						}
 						break;
 					default:
@@ -5651,9 +5658,9 @@ handler_again:
 		);
 		if (rc == 0 || rc == -1) {
 			// Cleanup the connection resulset from 'SHOW WARNINGS' for the next query.
-			if (myconn->MyRS != NULL) {
-				delete myconn->MyRS;
-				myconn->MyRS = NULL;
+			if (myconn->query_result != NULL) {
+				delete myconn->query_result;
+				myconn->query_result = NULL;
 			}
 
 			if (rc == -1) {
@@ -7841,27 +7848,27 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 }
 
 void PgSQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Connection* myconn) {
-	PgSQL_ResultSet* MyRS = NULL;
+	PgSQL_Query_Result* query_result = NULL;
 	if (myconn) {
-		if (myconn->MyRS) {
-			MyRS = myconn->MyRS;
+		if (myconn->query_result) {
+			query_result = myconn->query_result;
 		}
 	}
 	/*
 		MYSQL_RES *stmt_result=myconn->query.stmt_result;
 		if (stmt_result) {
-			MySQL_ResultSet *MyRS=new MySQL_ResultSet();
-			MyRS->init(&client_myds->myprot, stmt_result, stmt->pgsql, stmt);
-			MyRS->get_resultset(client_myds->PSarrayOUT);
-			CurrentQuery.rows_sent = MyRS->num_rows;
-			//removed  bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
-			delete MyRS;
+			MySQL_ResultSet *query_result=new MySQL_ResultSet();
+			query_result->init(&client_myds->myprot, stmt_result, stmt->pgsql, stmt);
+			query_result->get_resultset(client_myds->PSarrayOUT);
+			CurrentQuery.rows_sent = query_result->num_rows;
+			//removed  bool resultset_completed=query_result->get_resultset(client_myds->PSarrayOUT);
+			delete query_result;
 	*/
-	if (MyRS) {
-		assert(MyRS->result);
-		//MyRS->init_with_stmt(myconn);
-		bool resultset_completed = MyRS->get_resultset(client_myds->PSarrayOUT);
-		CurrentQuery.rows_sent = MyRS->num_rows;
+	if (query_result) {
+		//assert(query_result->result);
+		//query_result->init_with_stmt(myconn);
+		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
+		CurrentQuery.rows_sent = query_result->get_num_rows();
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
 	}
 	else {
@@ -7890,56 +7897,58 @@ void PgSQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Conn
 	}
 }
 
-void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PGconn* pgsql, PgSQL_ResultSet* MyRS, unsigned int warning_count, PgSQL_Data_Stream* _myds) {
+void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PGconn* pgsql, PgSQL_Query_Result* query_result, unsigned int warning_count, PgSQL_Data_Stream* _myds) {
 	if (pgsql == NULL) {
 		// error
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 2013, (char*)"HY000", (char*)"Lost connection to MySQL server during query");
 		return;
 	}
-	if (MyRS) {
-		//assert(MyRS->result);
-		bool transfer_started = MyRS->transfer_started;
-		bool resultset_completed = MyRS->get_resultset(client_myds->PSarrayOUT);
-		CurrentQuery.rows_sent = MyRS->num_rows;
-		bool com_field_list = client_myds->com_field_list;
-		assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
-		if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
-			/*if (qpo && qpo->cache_ttl > 0 && com_field_list == false) { // the resultset should be cached
-				if (mysql_errno(pgsql) == 0 &&
-					(mysql_warning_count(pgsql) == 0 ||
-						mysql_thread___query_cache_handle_warnings == 1)) { // no errors
-					if (
-						(qpo->cache_empty_result == 1)
-						|| (
-							(qpo->cache_empty_result == -1)
-							&&
-							(thread->variables.query_cache_stores_empty_result || MyRS->num_rows)
-							)
-						) {
-						client_myds->resultset->copy_add(client_myds->PSarrayOUT, 0, client_myds->PSarrayOUT->len);
-						client_myds->resultset_length = MyRS->resultset_size;
-						unsigned char* aa = client_myds->resultset2buffer(false);
-						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len - 1, NULL);
-						bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-						GloQC->set(
-							client_myds->myconn->userinfo->hash,
-							(const unsigned char*)CurrentQuery.QueryPointer,
-							CurrentQuery.QueryLength,
-							aa,
-							client_myds->resultset_length,
-							thread->curtime / 1000,
-							thread->curtime / 1000,
-							thread->curtime / 1000 + qpo->cache_ttl,
-							deprecate_eof_active
-						);
-						l_free(client_myds->resultset_length, aa);
-						client_myds->resultset_length = 0;
-					}
+
+	assert(query_result);
+
+	bool transfer_started = query_result->is_transfer_started();
+	bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
+	CurrentQuery.rows_sent = query_result->get_num_rows();
+	bool com_field_list = client_myds->com_field_list;
+	assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
+	if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
+		/*if (qpo && qpo->cache_ttl > 0 && com_field_list == false) { // the resultset should be cached
+			if (mysql_errno(pgsql) == 0 &&
+				(mysql_warning_count(pgsql) == 0 ||
+					mysql_thread___query_cache_handle_warnings == 1)) { // no errors
+				if (
+					(qpo->cache_empty_result == 1)
+					|| (
+						(qpo->cache_empty_result == -1)
+						&&
+						(thread->variables.query_cache_stores_empty_result || query_result->num_rows)
+						)
+					) {
+					client_myds->resultset->copy_add(client_myds->PSarrayOUT, 0, client_myds->PSarrayOUT->len);
+					client_myds->resultset_length = query_result->resultset_size;
+					unsigned char* aa = client_myds->resultset2buffer(false);
+					while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len - 1, NULL);
+					bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+					GloQC->set(
+						client_myds->myconn->userinfo->hash,
+						(const unsigned char*)CurrentQuery.QueryPointer,
+						CurrentQuery.QueryLength,
+						aa,
+						client_myds->resultset_length,
+						thread->curtime / 1000,
+						thread->curtime / 1000,
+						thread->curtime / 1000 + qpo->cache_ttl,
+						deprecate_eof_active
+					);
+					l_free(client_myds->resultset_length, aa);
+					client_myds->resultset_length = 0;
 				}
-			}*/
-		}
-	} else { // no result set
-		/*int myerrno = mysql_errno(pgsql);
+			}
+		}*/
+	}
+	
+	/*else { // no result set
+		int myerrno = mysql_errno(pgsql);
 		if (myerrno == 0) {
 			unsigned int num_rows = mysql_affected_rows(pgsql);
 			uint16_t setStatus = (active_transactions ? SERVER_STATUS_IN_TRANS : 0);
@@ -7968,7 +7977,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PGconn* pgsql, PgSQL_ResultSet* M
 			}
 			//client_myds->pkt_sid++;
 		}*/
-	}
+	//}
 }
 
 void PgSQL_Session::SQLite3_to_MySQL(SQLite3_result* result, char* error, int affected_rows, MySQL_Protocol* myprot, bool in_transaction, bool deprecate_eof_active) {
@@ -8009,19 +8018,19 @@ void PgSQL_Session::SQLite3_to_MySQL(SQLite3_result* result, char* error, int af
 		char** p = (char**)malloc(sizeof(char*) * result->columns);
 		unsigned long* l = (unsigned long*)malloc(sizeof(unsigned long*) * result->columns);
 
-		MySQL_ResultSet MyRS{};
-		MyRS.buffer_init(myprot);
+		MySQL_ResultSet query_result{};
+		query_result.buffer_init(myprot);
 
 		for (int r = 0; r < result->rows_count; r++) {
 			for (int i = 0; i < result->columns; i++) {
 				l[i] = result->rows[r]->sizes[i];
 				p[i] = result->rows[r]->fields[i];
 			}
-			sid = myprot->generate_pkt_row3(&MyRS, NULL, sid, result->columns, l, p, 0); sid++;
+			sid = myprot->generate_pkt_row3(&query_result, NULL, sid, result->columns, l, p, 0); sid++;
 		}
 
-		MyRS.buffer_to_PSarrayOut();
-		MyRS.get_resultset(myds->PSarrayOUT);
+		query_result.buffer_to_PSarrayOut();
+		query_result.get_resultset(myds->PSarrayOUT);
 
 		myds->DSS = STATE_ROW;
 
@@ -8311,8 +8320,8 @@ void PgSQL_Session::Memory_Stats() {
 					backend += myconn->pgsql->net.max_packet;
 					backend += (4096 * 15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
 				}
-				if (myconn->MyRS) {
-					backend += myconn->MyRS->current_size();
+				if (myconn->query_result) {
+					backend += myconn->query_result->current_size();
 				}
 			}
 		}

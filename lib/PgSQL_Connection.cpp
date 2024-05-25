@@ -2952,8 +2952,9 @@ bool PgSQL_Connection_Placeholder::get_gtid(char *buff, uint64_t *trx_id) {
 PgSQL_Connection::PgSQL_Connection() {
 	pgsql_conn = NULL;
 	last_result = NULL;
-	MyRS = NULL;
-	MyRS_reuse = NULL;
+	query_result = NULL;
+	query_result_reuse = NULL;
+	first_result = true;
 	reset_error();
 }
 
@@ -2967,13 +2968,13 @@ PgSQL_Connection::~PgSQL_Connection() {
 		PQfinish(pgsql_conn);
 		pgsql_conn = NULL;
 	}
-	if (MyRS) {
-		delete MyRS;
-		MyRS = NULL;
+	if (query_result) {
+		delete query_result;
+		query_result = NULL;
 	}
-	if (MyRS_reuse) {
-		delete MyRS_reuse;
-		MyRS_reuse = NULL;
+	if (query_result_reuse) {
+		delete query_result_reuse;
+		query_result_reuse = NULL;
 	}
 	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		if (variables[i].value) {
@@ -3067,7 +3068,7 @@ handler_again:
 				}
 			}
 		}
-		if (get_error_type() != PG_NO_ERROR) {
+		if (is_error_present()) {
 			// always increase the counter
 			proxy_error("Failed to PQconnectStart() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->myhgc->hid, parent->address, parent->port, PQsocket(pgsql_conn), myds->fd, PQstatus(pgsql_conn), get_error_message().c_str());
 			NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
@@ -3116,57 +3117,19 @@ handler_again:
 		//MySQL_Monitor::update_dns_cache_from_mysql_conn(pgsql);
 		break;
 	case ASYNC_CONNECT_FAILED:
-		PQfinish(pgsql_conn);//release connection even on error
+		//PQfinish(pgsql_conn);//release connection even on error
+		//pgsql_conn = NULL;
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 		parent->connect_error(mysql_errno(pgsql));
 		break;
 	case ASYNC_CONNECT_TIMEOUT:
 		// to fix
-		PQfinish(pgsql_conn);//release connection
+		//PQfinish(pgsql_conn);//release connection
+		//pgsql_conn = NULL;
 		proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
 		parent->connect_error(mysql_errno(pgsql));
 		break;
-	case ASYNC_SET_AUTOCOMMIT_START:
-		//set_autocommit_start();
-		async_exit_status = PG_EVENT_NONE;
-		if (async_exit_status) {
-			next_event(ASYNC_SET_AUTOCOMMIT_CONT);
-		}
-		else {
-			NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_END);
-		}
-		break;
-	case ASYNC_SET_AUTOCOMMIT_CONT:
-		//set_autocommit_cont(event);
-		async_exit_status = PG_EVENT_NONE;
-		if (async_exit_status) {
-			next_event(ASYNC_SET_AUTOCOMMIT_CONT);
-		}
-		else {
-			NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_END);
-		}
-		break;
-	case ASYNC_SET_AUTOCOMMIT_END:
-		if (/*ret_bool*/ false) {
-			NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_FAILED);
-		}
-		else {
-			NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_SUCCESSFUL);
-		}
-		break;
-	case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
-		//options.last_set_autocommit = (options.autocommit ? 1 : 0); // we successfully set autocommit
-		//if ((pgsql->server_status & SERVER_STATUS_AUTOCOMMIT) && options.autocommit == false) {
-		//	proxy_warning("It seems we are hitting bug http://bugs.pgsql.com/bug.php?id=66884\n");
-		//}
-		break;
-	case ASYNC_SET_AUTOCOMMIT_FAILED:
-		//fprintf(stderr,"%s\n",mysql_error(pgsql));
-		//proxy_error("Failed SET AUTOCOMMIT: %s\n", mysql_error(pgsql));
-		//PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(pgsql));
-		break;
-
 	case ASYNC_QUERY_START:
 		query_start();
 		__sync_fetch_and_add(&parent->queries_sent, 1);
@@ -3208,28 +3171,29 @@ handler_again:
 		}
 		fetch_result_start();
 		if (async_exit_status == PG_EVENT_NONE) {
-			async_fetch_row_start = false;
-			//if (myds->sess->mirror == false) {
-			//	if (MyRS_reuse == NULL) {
-			//		MyRS = new PgSQL_ResultSet();
-			//		MyRS->init(&myds->sess->client_myds->myprot, pgsql_conn);
-			//	}
-			//	else {
-			//		MyRS = MyRS_reuse;
-			//		MyRS_reuse = NULL;
-			//		MyRS->init(&myds->sess->client_myds->myprot, pgsql_conn);
-			//	}
-			//} else {
-			//	if (MyRS_reuse == NULL) {
-			//		MyRS = new PgSQL_ResultSet();
-			//		MyRS->init(NULL, pgsql_conn);
-			//	}
-			//	else {
-			//		MyRS = MyRS_reuse;
-			//		MyRS_reuse = NULL;
-			//		MyRS->init(NULL, pgsql_conn);
-			//	}
-			//}
+			first_result = true;
+			if (myds->sess->mirror == false) {
+				if (query_result_reuse == NULL) {
+					query_result = new PgSQL_Query_Result();
+					query_result->init(&myds->sess->client_myds->myprot, pgsql_conn);
+				}
+				else {
+					query_result = query_result_reuse;
+					query_result_reuse = NULL;
+					query_result->init(&myds->sess->client_myds->myprot, pgsql_conn);
+				}
+			}
+			else {
+				if (query_result_reuse == NULL) {
+					query_result = new PgSQL_Query_Result();
+					query_result->init(NULL, pgsql_conn);
+				}
+				else {
+					query_result = query_result_reuse;
+					query_result_reuse = NULL;
+					query_result->init(NULL, pgsql_conn);
+				}
+			}
 			NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 		}
 		else {
@@ -3254,7 +3218,6 @@ handler_again:
 		}
 
 		fetch_result_cont(event);
-	
 		if (async_exit_status) {
 			next_event(ASYNC_USE_RESULT_CONT);
 			break;
@@ -3262,58 +3225,32 @@ handler_again:
 
 		PGresult* result = get_last_result();
 
-		/*if (result == NULL && async_fetch_row_start == false) {
-			const std::string errmsg = PQerrorMessage(pgsql_conn);
-			set_error(PG_RESULT_FAILED, errmsg);
-			proxy_error("Failed to get initial result. %s\n", errmsg.c_str());
-			NEXT_IMMEDIATE(ASYNC_QUERY_END);
-		}*/
-
 		if (result) {
 			switch (PQresultStatus(result)) {
 			case PGRES_COMMAND_OK:
-				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+				query_result->add_command_completion(result);
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 				break;
 			case PGRES_TUPLES_OK:
 			case PGRES_SINGLE_TUPLE:
 				break;
 			default:
-				const std::string errmsg = PQresultErrorMessage(result);
-				set_error(PG_RESULT_FAILED, errmsg);
-				proxy_error("Failed condition in PQresultStatus(). %s\n", errmsg.c_str());
-				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+				//const std::string errmsg = PQresultErrorMessage(result);
+				//set_error(PG_RESULT_FAILED, errmsg);
+				//proxy_error("Failed condition in PQresultStatus(). %s\n", errmsg.c_str());
+				//NEXT_IMMEDIATE(ASYNC_QUERY_END);
+				query_result->add_error(myds, result);
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 			}
 
-			if (async_fetch_row_start == false) {
-				async_fetch_row_start = true;
-				if (myds->sess->mirror == false) {
-					if (MyRS_reuse == NULL) {
-						MyRS = new PgSQL_ResultSet();
-						MyRS->init(&myds->sess->client_myds->myprot, pgsql_conn);
-					}
-					else {
-						MyRS = MyRS_reuse;
-						MyRS_reuse = NULL;
-						MyRS->init(&myds->sess->client_myds->myprot, pgsql_conn);
-					}
-				}
-				else {
-					if (MyRS_reuse == NULL) {
-						MyRS = new PgSQL_ResultSet();
-						MyRS->init(NULL, pgsql_conn);
-					}
-					else {
-						MyRS = MyRS_reuse;
-						MyRS_reuse = NULL;
-						MyRS->init(NULL, pgsql_conn);
-					}
-				}
-				MyRS->add_row_description(result);
+			if (first_result == true) {
+				first_result = false;
+				query_result->add_row_description(result);
 			}
 
 			if (PQntuples(result) > 0) {
 
-				unsigned int br = MyRS->add_row(result);
+				unsigned int br = query_result->add_row(result);
 				__sync_fetch_and_add(&parent->bytes_recv, br);
 				myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
 				myds->bytes_info.bytes_recv += br;
@@ -3330,17 +3267,16 @@ handler_again:
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
 				}
 			} else {
-				MyRS->add_eof(result);
+				query_result->add_command_completion(result);
 				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 			}
 		} 
 
-		if (MyRS->resultset_completed == false) {
+		if (query_result->is_resultset_completed() == false) {
 			if (myds) {
-				MyRS->add_err(myds);
+				query_result->add_error(myds, NULL);
 			}
 		}
-		// we reach here if there was no error
 		NEXT_IMMEDIATE(ASYNC_QUERY_END);
 	}
 	break;
@@ -3544,14 +3480,14 @@ handler_again:
 			else {
 				update_warning_count_from_statement();
 				if (myds->sess->mirror == false) {
-					if (MyRS_reuse == NULL) {
-						MyRS = new MySQL_ResultSet();
-						MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, pgsql, query.stmt);
+					if (query_result_reuse == NULL) {
+						query_result = new MySQL_ResultSet();
+						query_result->init(&myds->sess->client_myds->myprot, query.stmt_result, pgsql, query.stmt);
 					}
 					else {
-						MyRS = MyRS_reuse;
-						MyRS_reuse = NULL;
-						MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, pgsql, query.stmt);
+						query_result = query_result_reuse;
+						query_result_reuse = NULL;
+						query_result->init(&myds->sess->client_myds->myprot, query.stmt_result, pgsql, query.stmt);
 					}
 				}
 				else {
@@ -3726,25 +3662,25 @@ handler_again:
 			// and the warning_count and status flag details are extracted from the final OK packet.
 			update_warning_count_from_connection();
 			if (myds->sess->mirror == false) {
-				if (MyRS_reuse == NULL) {
-					MyRS = new MySQL_ResultSet();
-					MyRS->init(&myds->sess->client_myds->myprot, mysql_result, pgsql);
+				if (query_result_reuse == NULL) {
+					query_result = new MySQL_ResultSet();
+					query_result->init(&myds->sess->client_myds->myprot, mysql_result, pgsql);
 				}
 				else {
-					MyRS = MyRS_reuse;
-					MyRS_reuse = NULL;
-					MyRS->init(&myds->sess->client_myds->myprot, mysql_result, pgsql);
+					query_result = query_result_reuse;
+					query_result_reuse = NULL;
+					query_result->init(&myds->sess->client_myds->myprot, mysql_result, pgsql);
 				}
 			}
 			else {
-				if (MyRS_reuse == NULL) {
-					MyRS = new MySQL_ResultSet();
-					MyRS->init(NULL, mysql_result, pgsql);
+				if (query_result_reuse == NULL) {
+					query_result = new MySQL_ResultSet();
+					query_result->init(NULL, mysql_result, pgsql);
 				}
 				else {
-					MyRS = MyRS_reuse;
-					MyRS_reuse = NULL;
-					MyRS->init(NULL, mysql_result, pgsql);
+					query_result = query_result_reuse;
+					query_result_reuse = NULL;
+					query_result->init(NULL, mysql_result, pgsql);
 				}
 			}
 			async_fetch_row_start = false;
@@ -3808,7 +3744,7 @@ handler_again:
 					);
 				}
 			}
-			unsigned int br = MyRS->add_row(mysql_row);
+			unsigned int br = query_result->add_row(mysql_row);
 			__sync_fetch_and_add(&parent->bytes_recv, br);
 			myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
 			myds->bytes_info.bytes_recv += br;
@@ -3830,7 +3766,7 @@ handler_again:
 				int _myerrno = mysql_errno(pgsql);
 				if (_myerrno) {
 					if (myds) {
-						//-- MyRS->add_err(myds);
+						//-- query_result->add_err(myds);
 						NEXT_IMMEDIATE(ASYNC_QUERY_END);
 					}
 				}
@@ -3839,7 +3775,7 @@ handler_again:
 			update_warning_count_from_connection();
 			// we reach here if there was no error
 			// exclude warning_count from the OK/EOF packet for the ‘SHOW WARNINGS’ statement
-			MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
+			query_result->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
 			NEXT_IMMEDIATE(ASYNC_QUERY_END);
 		}
 	}
@@ -4015,6 +3951,7 @@ handler_again:
 
 void PgSQL_Connection::connect_start() {
 	PROXY_TRACE();
+	assert(pgsql_conn == NULL); // already there is a connection
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
 
@@ -4268,7 +4205,7 @@ void PgSQL_Connection::compute_unknown_transaction_status() {
 
 void PgSQL_Connection::async_free_result() {
 	PROXY_TRACE();
-	assert(pgsql_conn);
+	//assert(pgsql_conn);
 
 	if (query.ptr) {
 		query.ptr = NULL;
@@ -4304,12 +4241,12 @@ void PgSQL_Connection::async_free_result() {
 	}
 	compute_unknown_transaction_status();
 	async_state_machine = ASYNC_IDLE;
-	if (MyRS) {
-		if (MyRS_reuse) {
-			delete (MyRS_reuse);
+	if (query_result) {
+		if (query_result_reuse) {
+			delete (query_result_reuse);
 		}
-		MyRS_reuse = MyRS;
-		MyRS = NULL;
+		query_result_reuse = query_result;
+		query_result = NULL;
 	}
 }
 

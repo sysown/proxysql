@@ -330,8 +330,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	statuses.myconnpoll_put = 0;
 
 	com_field_wild = NULL;
-	
-	memset(&scram_state, 0, sizeof(ScramState));
+	scram_state = nullptr;
 }
 
 // Destructor
@@ -428,7 +427,7 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		x509_subject_alt_name = NULL;
 	}
 
-	free_scram_state(&scram_state);
+	free_scram_state(scram_state);
 }
 
 // this function initializes a PgSQL_Data_Stream 

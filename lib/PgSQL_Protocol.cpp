@@ -817,14 +817,17 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			uint32_t length;
 			const unsigned char* data;
 			int read_pos = 0;
-
 			using_password = true;
 
-			PgUser stored_user_info{ '\0' };
+			if ((*myds)->scram_state == NULL) {
+				(*myds)->scram_state = scram_state_init();
+			}
+
+			PgCredentials stored_user_info{ '\0' };
 			strncpy(stored_user_info.name, user, MAX_USERNAME);
 			strncpy(stored_user_info.passwd, password, MAX_PASSWORD);
 
-			if (!(*myds)->scram_state.server_nonce) {
+			if (!(*myds)->scram_state->server_nonce) {
 				/* process as SASLInitialResponse */
 				int pos = get_string((const char*)hdr.data.ptr, hdr.data.size, &mech);
 
@@ -856,7 +859,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 				// check mem boundry
 
-				if (!scram_handle_client_first(&(*myds)->scram_state, &stored_user_info, ((const unsigned char*)hdr.data.ptr) + read_pos, length)) {
+				if (!scram_handle_client_first((*myds)->scram_state, &stored_user_info, ((const unsigned char*)hdr.data.ptr) + read_pos, length)) {
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed\n", (*myds), (*myds)->sess, user);
 					generate_error_packet(true,false, "SASL authentication failed", NULL, true);
 					break;
@@ -873,19 +876,20 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				data = (const unsigned char*)hdr.data.ptr;
 				length = hdr.data.size;
 
-				if (scram_handle_client_final(&(*myds)->scram_state, &stored_user_info, data, length)) {
+				if (scram_handle_client_final((*myds)->scram_state, &stored_user_info, data, length)) {
 					/* save SCRAM keys for user */
-					if (!(*myds)->scram_state.adhoc) {
+					if (!(*myds)->scram_state->adhoc) {
 						memcpy(stored_user_info.scram_ClientKey,
-							(*myds)->scram_state.ClientKey,
-							sizeof((*myds)->scram_state.ClientKey));
+							(*myds)->scram_state->ClientKey,
+							sizeof((*myds)->scram_state->ClientKey));
 						memcpy(stored_user_info.scram_ServerKey,
-							(*myds)->scram_state.ServerKey,
-							sizeof((*myds)->scram_state.ServerKey));
+							(*myds)->scram_state->ServerKey,
+							sizeof((*myds)->scram_state->ServerKey));
 						stored_user_info.has_scram_keys = true;
 					}
 
-					free_scram_state(&(*myds)->scram_state);
+					free_scram_state((*myds)->scram_state);
+					(*myds)->scram_state = NULL;
 					//if (!finish_client_login(client))
 					//	return false;
 					//welcome_client();
@@ -1056,7 +1060,7 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	}
 }
 
-bool PgSQL_Protocol::scram_handle_client_first(ScramState* scram_state, PgUser* user, const unsigned char* data, uint32_t datalen)
+bool PgSQL_Protocol::scram_handle_client_first(ScramState* scram_state, PgCredentials* user, const unsigned char* data, uint32_t datalen)
 {
 	char* ibuf;
 	char* input;
@@ -1107,7 +1111,7 @@ failed:
 	return false;
 }
 
-bool PgSQL_Protocol::scram_handle_client_final(ScramState* scram_state, PgUser* user, const unsigned char* data, uint32_t datalen)
+bool PgSQL_Protocol::scram_handle_client_final(ScramState* scram_state, PgCredentials* user, const unsigned char* data, uint32_t datalen)
 {
 	char* ibuf;
 	char* input;
@@ -1244,7 +1248,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 	return true;
 }
 
-//bool PgSQL_Protocol::generate_row_description(bool send, PgSQL_ResultSet* rs, const PG_Fields& fields, unsigned int size) {
+//bool PgSQL_Protocol::generate_row_description(bool send, PgSQL_Query_Result* rs, const PG_Fields& fields, unsigned int size) {
 //	if ((*myds)->sess->mirror == true) {
 //		return true;
 //	}
@@ -1305,12 +1309,9 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 //	return true;
 //}
 
-unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result) {
-	if ((*myds)->sess->mirror == true) {
-		return true;
-	}
 
-	assert(pg_rs);
+unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+	assert(pg_query_result);
 	assert(result);
 	
 	unsigned int fields_cnt = PQnfields(result);
@@ -1320,30 +1321,16 @@ unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_ResultSet(bool send, 
 	}
 
 	unsigned char* _ptr = NULL;
+	bool alloced_new_buffer = false;
+	_ptr = pg_query_result->buffer_reserve_space(size);
 
-	unsigned int available_capacity = (RESULTSET_BUFLEN - pg_rs->buffer_used);
-	if (size <= available_capacity) {
-		// there is space in the buffer, add the data to it
-		_ptr = pg_rs->buffer + pg_rs->buffer_used;
-		pg_rs->buffer_used += size;
-	} else {
-		// there is no space in the buffer, we flush the buffer and recreate it
-		pg_rs->buffer_to_PSarrayOut();
-		// now we can check again if there is space in the buffer
-		available_capacity = (RESULTSET_BUFLEN - pg_rs->buffer_used);
-		if (size <= available_capacity) {
-			// there is space in the NEW buffer, add the data to it
-			_ptr = pg_rs->buffer + pg_rs->buffer_used;
-			pg_rs->buffer_used += size;
-		} else {
-			// a new buffer is not enough to store the new row
-			_ptr = (unsigned char*)l_alloc(size);
-			available_capacity = size;
-		}
+	// buffer is not enough to store the new row description. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
 	}
 
-	assert(_ptr);
-	PG_pkt pgpkt(_ptr, available_capacity);
+	PG_pkt pgpkt(_ptr, size);
 
 	pgpkt.put_char('T');
 	pgpkt.put_uint32(size - 1);
@@ -1359,145 +1346,107 @@ unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_ResultSet(bool send, 
 		pgpkt.put_uint16(PQfformat(result, i));
 	}
 
-	if (send == true) { (*myds)->PSarrayOUT->add((void*)_ptr, size); }
+	if (send == true) { 
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
 
 //#ifdef DEBUG
 //	if (dump_pkt) { __dump_pkt(__func__, _ptr, size); }
 //#endif
-	if (pg_rs) {
-		if (_ptr >= pg_rs->buffer && _ptr < pg_rs->buffer + RESULTSET_BUFLEN) {
-			// we are writing within the buffer, do not add to PSarrayOUT
-		}
-		else {
-			// we are writing outside the buffer, add to PSarrayOUT
-			pg_rs->PSarrayOUT.add(_ptr, size);
-		}
+
+	pg_query_result->resultset_size = size;
+
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
 	}
 	
-	pg_rs->num_fields = fields_cnt;
-	pg_rs->resultset_size = size;
-
+	pg_query_result->num_fields = fields_cnt;
+	pg_query_result->pkt_count++;
 	return size;
 }
 
-unsigned int PgSQL_Protocol::copy_row_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result) {
-	if ((*myds)->sess->mirror == true) {
-		return true;
-	}
-
-	assert(pg_rs);
+unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+	assert(pg_query_result);
 	assert(result);
-	assert(pg_rs->num_fields);
+	assert(pg_query_result->num_fields);
 
 	const unsigned int numRows = PQntuples(result);
 	unsigned int total_size = 0;
 	for (unsigned int i = 0; i < numRows; i++) {
 		unsigned int size = 1 + 4 + 2; // 'D', length, field count
-		for (unsigned int j = 0; j < pg_rs->num_fields; j++) {
+		for (unsigned int j = 0; j < pg_query_result->num_fields; j++) {
 			size += PQgetlength(result, i, j) + 4; // length, value
 		}
 		total_size += size;
+
 		unsigned char* _ptr = NULL;
+		bool alloced_new_buffer = false;
+		_ptr = pg_query_result->buffer_reserve_space(size);
 
-		unsigned int available_capacity = (RESULTSET_BUFLEN - pg_rs->buffer_used);
-		if (size <= available_capacity) {
-			// there is space in the buffer, add the data to it
-			_ptr = pg_rs->buffer + pg_rs->buffer_used;
-			pg_rs->buffer_used += size;
-		}
-		else {
-			// there is no space in the buffer, we flush the buffer and recreate it
-			pg_rs->buffer_to_PSarrayOut();
-			// now we can check again if there is space in the buffer
-			available_capacity = (RESULTSET_BUFLEN - pg_rs->buffer_used);
-			if (size <= available_capacity) {
-				// there is space in the NEW buffer, add the data to it
-				_ptr = pg_rs->buffer + pg_rs->buffer_used;
-				pg_rs->buffer_used += size;
-			}
-			else {
-				// a new buffer is not enough to store the new row
-				_ptr = (unsigned char*)l_alloc(size);
-				available_capacity = size;
-			}
+		// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+		if (_ptr == NULL) {
+			_ptr = (unsigned char*)l_alloc(size);
+			alloced_new_buffer = true;
 		}
 
-		assert(_ptr);
-		PG_pkt pgpkt(_ptr, available_capacity);
+		PG_pkt pgpkt(_ptr, size);
 
 		pgpkt.put_char('D');
 		pgpkt.put_uint32(size - 1);
-		pgpkt.put_uint16(pg_rs->num_fields);
+		pgpkt.put_uint16(pg_query_result->num_fields);
 		int column_value_len = 0;
-		for (unsigned int j = 0; j < pg_rs->num_fields; j++) {
+		for (unsigned int j = 0; j < pg_query_result->num_fields; j++) {
 			column_value_len = PQgetlength(result, i, j);
 			pgpkt.put_uint32(column_value_len);
 			pgpkt.put_bytes(PQgetvalue(result, i, j), column_value_len);
 		}
 
-		if (send == true) { (*myds)->PSarrayOUT->add((void*)_ptr, size); }
-
-		pg_rs->resultset_size += size;
-
-		if (pg_rs) {
-			if (_ptr >= pg_rs->buffer && _ptr < pg_rs->buffer + RESULTSET_BUFLEN) {
-				// we are writing within the buffer, do not add to PSarrayOUT
-			}
-			else {
-				// we are writing outside the buffer, add to PSarrayOUT
-				pg_rs->PSarrayOUT.add(_ptr, size);
-			}
+		if (send == true) { 
+			// not supported
+			//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
 		}
+
+		pg_query_result->resultset_size += size;
+
+		if (alloced_new_buffer) {
+			// we created new buffer
+			//pg_query_result->buffer_to_PSarrayOut();
+			pg_query_result->PSarrayOUT.add(_ptr, size);
+		}
+
+		pg_query_result->pkt_count++;
 	}
 
-	pg_rs->num_rows += numRows;
+	pg_query_result->num_rows += numRows;
 
 	return total_size;
 }
 
-unsigned int PgSQL_Protocol::copy_eof_to_PgSQL_ResultSet(bool send, PgSQL_ResultSet* pg_rs, PGresult* result) {
-	if ((*myds)->sess->mirror == true) {
-		return true;
-	}
-
-	assert(pg_rs);
+unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+	assert(pg_query_result);
 	assert(result);
-	assert(pg_rs->num_fields);
+	assert(pg_query_result->num_fields);
 
-	
 	const char* tag = PQcmdStatus(result);
-
 	if (!tag) assert(0); // for testing it should not be null
 
 	const unsigned int tag_len = strlen(tag) + 1;
-
 	unsigned int size = 1 + 4 + tag_len + 1 + 4 + 1; // 'C', length, tag, Z, length, I
-
 	unsigned char* _ptr = NULL;
+	bool alloced_new_buffer = false;
 
-	unsigned int available_capacity = (RESULTSET_BUFLEN - pg_rs->buffer_used);
-	if (size <= available_capacity) {
-		// there is space in the buffer, add the data to it
-		_ptr = pg_rs->buffer + pg_rs->buffer_used;
-		pg_rs->buffer_used += size;
-	} else {
-		// there is no space in the buffer, we flush the buffer and recreate it
-		pg_rs->buffer_to_PSarrayOut();
-		// now we can check again if there is space in the buffer
-		available_capacity = (RESULTSET_BUFLEN - pg_rs->buffer_used);
-		if (size <= available_capacity) {
-			// there is space in the NEW buffer, add the data to it
-			_ptr = pg_rs->buffer + pg_rs->buffer_used;
-			pg_rs->buffer_used += size;
-		} else {
-			// a new buffer is not enough to store the new row
-			_ptr = (unsigned char*)l_alloc(size);
-			available_capacity = size;
-		}
+	_ptr = pg_query_result->buffer_reserve_space(size);
+
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
 	}
 
-	assert(_ptr);
-	PG_pkt pgpkt(_ptr, available_capacity);
+	PG_pkt pgpkt(_ptr, size);
 
 	pgpkt.put_char('C');
 	pgpkt.put_uint32(tag_len + 4);
@@ -1506,35 +1455,185 @@ unsigned int PgSQL_Protocol::copy_eof_to_PgSQL_ResultSet(bool send, PgSQL_Result
 	pgpkt.put_uint32(4 + 1);
 	pgpkt.put_char('I');
 
-	if (send == true) { (*myds)->PSarrayOUT->add((void*)_ptr, size); }
-
-	pg_rs->resultset_size += size;
-
-	if (pg_rs) {
-		if (_ptr >= pg_rs->buffer && _ptr < pg_rs->buffer + RESULTSET_BUFLEN) {
-			// we are writing within the buffer, do not add to PSarrayOUT
-		} else {
-			// we are writing outside the buffer, add to PSarrayOUT
-			pg_rs->PSarrayOUT.add(_ptr, size);
-		}
+	if (send == true) { 
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
 	}
 
+	pg_query_result->resultset_size += size;
+
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
+	}
+	pg_query_result->pkt_count+=2;
 	return size;
 }
 
+unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+	assert(pg_query_result);
+	assert(result);
 
-PgSQL_ResultSet::PgSQL_ResultSet() {
+	const char* severity = PQresultErrorField(result, PG_DIAG_SEVERITY);
+	const char* text = PQresultErrorField(result, PG_DIAG_SEVERITY_NONLOCALIZED);
+	const char* sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+	const char* primary = PQresultErrorField(result, PG_DIAG_MESSAGE_PRIMARY);
+	const char* detail = PQresultErrorField(result, PG_DIAG_MESSAGE_DETAIL);
+	const char* hint = PQresultErrorField(result, PG_DIAG_MESSAGE_HINT);
+	const char* position = PQresultErrorField(result, PG_DIAG_STATEMENT_POSITION);
+	const char* internal_position = PQresultErrorField(result, PG_DIAG_INTERNAL_POSITION);
+	const char* internal_query = PQresultErrorField(result, PG_DIAG_INTERNAL_QUERY);
+	const char* context = PQresultErrorField(result, PG_DIAG_CONTEXT);
+	const char* schema_name = PQresultErrorField(result, PG_DIAG_SCHEMA_NAME);
+	const char* table_name = PQresultErrorField(result, PG_DIAG_TABLE_NAME);
+	const char* column_name = PQresultErrorField(result, PG_DIAG_COLUMN_NAME);
+	const char* datatype_name = PQresultErrorField(result, PG_DIAG_DATATYPE_NAME);
+	const char* constraint_name = PQresultErrorField(result, PG_DIAG_CONSTRAINT_NAME);
+	const char* source_file = PQresultErrorField(result, PG_DIAG_SOURCE_FILE);
+	const char* source_line = PQresultErrorField(result, PG_DIAG_SOURCE_LINE);
+	const char* source_function = PQresultErrorField(result, PG_DIAG_SOURCE_FUNCTION);
+
+	unsigned int size = 1 + 4 + 1 + 1 + 4 + 1; // 'E', length, null byte , Z, length, I
+
+	if (severity) size += strlen(severity) + 1 + 1;
+	if (text) size += strlen(text) + 1 + 1;
+	if (sqlstate) size += strlen(sqlstate) + 1 + 1;
+	if (primary) size += strlen(primary) + 1 + 1;
+	if (detail) size += strlen(detail) + 1 + 1;
+	if (hint) size += strlen(hint) + 1 + 1;
+	if (position) size += strlen(position) + 1 + 1;
+	if (internal_position) size += strlen(internal_position) + 1 + 1;
+	if (internal_query) size += strlen(internal_query) + 1 + 1;
+	if (context) size += strlen(context) + 1 + 1;
+	if (schema_name) size += strlen(schema_name) + 1 + 1;
+	if (table_name) size += strlen(table_name) + 1 + 1;
+	if (column_name) size += strlen(column_name) + 1 + 1;
+	if (datatype_name) size += strlen(datatype_name) + 1 + 1;
+	if (constraint_name) size += strlen(constraint_name) + 1 + 1;
+	if (source_file) size += strlen(source_file) + 1 + 1;
+	if (source_line) size += strlen(source_line) + 1 + 1;
+	if (source_function) size += strlen(source_function) + 1 + 1;
+
+	unsigned char* _ptr = NULL;
+	bool alloced_new_buffer = false;
+
+	_ptr = pg_query_result->buffer_reserve_space(size);
+
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+
+	PG_pkt pgpkt(_ptr, size);
+
+	pgpkt.put_char('E');
+	pgpkt.put_uint32(size - (6 + 1)); // subtracting ready packet size
+	if (severity) {
+		pgpkt.put_char('S');
+		pgpkt.put_string(severity);
+	}
+	if (text) {
+		pgpkt.put_char('V');
+		pgpkt.put_string(text);
+	}
+	if (sqlstate) {
+		pgpkt.put_char('C');
+		pgpkt.put_string(sqlstate);
+	}
+	if (primary) {
+		pgpkt.put_char('M');
+		pgpkt.put_string(primary);
+	}
+	if (detail) {
+		pgpkt.put_char('D');
+		pgpkt.put_string(detail);
+	}
+	if (hint) {
+		pgpkt.put_char('H');
+		pgpkt.put_string(hint);
+	}
+	if (position) {
+		pgpkt.put_char('P');
+		pgpkt.put_string(position);
+	}
+	if (internal_position) {
+		pgpkt.put_char('p');
+		pgpkt.put_string(internal_position);
+	}
+	if (internal_query) {
+		pgpkt.put_char('q');
+		pgpkt.put_string(internal_query);
+	}
+	if (context) {
+		pgpkt.put_char('W');
+		pgpkt.put_string(context);
+	}
+	if (schema_name) {
+		pgpkt.put_char('s');
+		pgpkt.put_string(schema_name);
+	}
+	if (table_name) {
+		pgpkt.put_char('t');
+		pgpkt.put_string(table_name);
+	}
+	if (column_name) {
+		pgpkt.put_char('c');
+		pgpkt.put_string(column_name);
+	}
+	if (datatype_name) {
+		pgpkt.put_char('d');
+		pgpkt.put_string(datatype_name);
+	}
+	if (constraint_name) {
+		pgpkt.put_char('n');
+		pgpkt.put_string(constraint_name);
+	}
+	if (source_file) {
+		pgpkt.put_char('F');
+		pgpkt.put_string(source_file);
+	}
+	if (source_line) {
+		pgpkt.put_char('L');
+		pgpkt.put_string(source_line);
+	}
+	if (source_function) {
+		pgpkt.put_char('R');
+		pgpkt.put_string(source_function);
+	}
+	pgpkt.put_char('\0');
+	pgpkt.put_char('Z');
+	pgpkt.put_uint32(4 + 1);
+	pgpkt.put_char('I');
+
+	if (send == true) {
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
+	
+	pg_query_result->resultset_size += size;
+
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
+	}
+	pg_query_result->pkt_count += 2;
+	return size;
+}
+
+PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer = NULL;
 	transfer_started = false;
 	resultset_completed = false;
 	buffer_used = 0;
 	resultset_size = 0;
-	sid = 0;
 	num_rows = 0;
-	ds = NULL;
+	pkt_count = 0;
 }
 
-PgSQL_ResultSet::~PgSQL_ResultSet() {
+PgSQL_Query_Result::~PgSQL_Query_Result() {
 	PtrSize_t pkt;
 	while (PSarrayOUT.len) {
 		PSarrayOUT.remove_index_fast(0, &pkt);
@@ -1547,15 +1646,14 @@ PgSQL_ResultSet::~PgSQL_ResultSet() {
 	}
 }
 
-void PgSQL_ResultSet::buffer_init(PgSQL_Protocol* _proto) {
+void PgSQL_Query_Result::buffer_init() {
 	if (buffer == NULL) {
 		buffer = (unsigned char*)malloc(RESULTSET_BUFLEN);
 	}
 	buffer_used = 0;
-	proto = _proto;
 }
 
-void PgSQL_ResultSet::init(PgSQL_Protocol* _proto, PGconn* _conn) {
+void PgSQL_Query_Result::init(PgSQL_Protocol* _proto, PGconn* _conn) {
 	PROXY_TRACE2();
 	transfer_started = false;
 	resultset_completed = false;
@@ -1563,132 +1661,80 @@ void PgSQL_ResultSet::init(PgSQL_Protocol* _proto, PGconn* _conn) {
 	//sid = 0;
 	num_rows = 0;
 	proto = _proto;
-	result = NULL;
+	//result = NULL;
 	pgsql_conn = _conn;
-	buffer_init(_proto);
-	
-	if (proto) { // if proto = NULL , this is a mirror
-		ds = proto->get_myds();
-		sid = ds->pkt_sid + 1;
-	}
+	buffer_init();
 
-	// immediately generate the first set of packets
-	// columns count
 	if (proto == NULL) {
 		return; // this is a mirror
 	}
-
-	/*
-	num_fields = PQnfields(result);
-	unsigned int total_size = 0;
-	for (int i = 0; i < num_fields; i++) {
-		total_size += strlen(PQfname(result, i)) + 18; // name, reloid, colnr, oid, typsize, typmod, fmt
-	}
-
-	PG_Fields fields(num_fields);
-
-	for (int i = 0; i < num_fields; i++) {
-		fields[i].name = PQfname(result, i);
-		fields[i].tbl_oid = PQftable(result, i);
-		fields[i].col_idx = PQftablecol(result, i);
-		fields[i].type_oid = PQftype(result, i);
-		fields[i].col_len = PQfsize(result, i);
-		fields[i].type_mod = PQfmod(result, i);
-		fields[i].fmt = PQfformat(result, i);
-	}
-
-	proto->generate_row_description(false, fields, resultset_size);
-	*/
-
 }
 
-unsigned int PgSQL_ResultSet::add_row_description(PGresult* result) {
-
-	const unsigned int bytes = proto->copy_row_description_to_PgSQL_ResultSet(false, this, result);
-
-	if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
-		buffer_to_PSarrayOut();
-	}
-
-	return bytes;
+unsigned int PgSQL_Query_Result::add_row_description(PGresult* result) {
+	return proto->copy_row_description_to_PgSQL_Query_Result(false, this, result);
 }
 
-unsigned int PgSQL_ResultSet::add_row(PGresult* result) {
-	const unsigned int bytes = proto->copy_row_to_PgSQL_ResultSet(false,this, result);
-	
-	if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
-		buffer_to_PSarrayOut();
-	}
-
-	return bytes;
+unsigned int PgSQL_Query_Result::add_row(PGresult* result) {
+	return proto->copy_row_to_PgSQL_Query_Result(false,this, result);
 }
 
-void PgSQL_ResultSet::add_err(PgSQL_Data_Stream* _myds) {
-	PtrSize_t pkt;
-	if (proto) {
-		buffer_to_PSarrayOut();
+unsigned int PgSQL_Query_Result::add_error(PgSQL_Data_Stream* _myds, PGresult* result) {
 
-		const char* sqlstate = NULL;
-		const char* errmsg = NULL;
+	if (_myds && _myds->killed_at) { // see case #750
+		PtrSize_t pkt;
 
-		if (result) {
-			sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
-			errmsg = PQresultErrorMessage(result);
-		} 
-
-		if (_myds && _myds->killed_at) { // see case #750
-			if (_myds->kill_type == 0) {
-				proto->generate_error_packet(false, true, (char*)"Query execution was interrupted, query_timeout exceeded", sqlstate ? sqlstate : "57014", false, &pkt);
-				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1907);
-			}
-			else {
-				proto->generate_error_packet(false, true, (char*)"Query execution was interrupted", sqlstate ? sqlstate : "57014", false, &pkt);
-				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1317);
-			}
-		} else {
-		
-			proto->generate_error_packet(false, true, errmsg ? errmsg : "Unknown error", sqlstate, false, &pkt);
-			// TODO: Check this is a mysql error
+		if (_myds->kill_type == 0) {
+			proto->generate_error_packet(false, true, (char*)"Query execution was interrupted, query_timeout exceeded", "57014", false, &pkt);
 			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1907);
 		}
+		else {
+			proto->generate_error_packet(false, true, (char*)"Query execution was interrupted", "57014", false, &pkt);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1317);
+		}
+
 		PSarrayOUT.add(pkt.ptr, pkt.size);
-		sid++;
 		resultset_size += pkt.size;
+	} else if (result) {
+		
+		proto->copy_error_to_PgSQL_Query_Result(false, this, result);
+		// get error from connection
+		//proto->generate_error_packet(false, true, "Unknown error", sqlstate, false, &pkt);
+		// TODO: Check this is a mysql error
+		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1907);
+	} else {
+
 	}
+
+	buffer_to_PSarrayOut();
 	resultset_completed = true;
 }
 
-bool PgSQL_ResultSet::get_resultset(PtrSizeArray* PSarrayFinal) {
+bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
+	assert(buffer_used == 0); // we still have data in the buffer
 	transfer_started = true;
 	if (proto) {
 		PSarrayFinal->copy_add(&PSarrayOUT, 0, PSarrayOUT.len);
 		while (PSarrayOUT.len)
 			PSarrayOUT.remove_index(PSarrayOUT.len - 1, NULL);
 	}
+	reset();
 	return resultset_completed;
 }
 
-void PgSQL_ResultSet::buffer_to_PSarrayOut(bool _last) {
+void PgSQL_Query_Result::buffer_to_PSarrayOut() {
 	if (buffer_used == 0)
 		return;	// exit immediately if the buffer is empty
 	if (buffer_used < RESULTSET_BUFLEN / 2) {
-		if (_last == false) {
-			buffer = (unsigned char*)realloc(buffer, buffer_used);
-		}
+		buffer = (unsigned char*)realloc(buffer, buffer_used);
 	}
 	PSarrayOUT.add(buffer, buffer_used);
-	if (_last) {
-		buffer = NULL;
-	}
-	else {
-		buffer = (unsigned char*)malloc(RESULTSET_BUFLEN);
-	}
+	buffer = (unsigned char*)malloc(RESULTSET_BUFLEN);
 	buffer_used = 0;
 }
 
-unsigned long long PgSQL_ResultSet::current_size() {
+unsigned long long PgSQL_Query_Result::current_size() {
 	unsigned long long intsize = 0;
-	intsize += sizeof(PgSQL_ResultSet);
+	intsize += sizeof(PgSQL_Query_Result);
 	intsize += RESULTSET_BUFLEN; // size of buffer
 	if (PSarrayOUT.len == 0)	// see bug #699
 		return intsize;
@@ -1707,9 +1753,36 @@ unsigned long long PgSQL_ResultSet::current_size() {
 	return intsize;
 }
 
-unsigned int PgSQL_ResultSet::add_eof(PGresult* result) {
-	const unsigned int bytes = proto->copy_eof_to_PgSQL_ResultSet(false, this, result);
+unsigned int PgSQL_Query_Result::add_command_completion(PGresult* result) {
+	const unsigned int bytes = proto->copy_command_completion_to_PgSQL_Query_Result(false, this, result);
 	buffer_to_PSarrayOut();
 	resultset_completed = true;
 	return bytes;
+}
+
+unsigned char* PgSQL_Query_Result::buffer_reserve_space(unsigned int size) {
+	unsigned char* ret_buffer = NULL;
+	if (size <= buffer_available_capacity()) {
+		// there is space in the buffer, add the data to it
+		ret_buffer = buffer + buffer_used;
+		buffer_used += size;
+	}
+	else {
+		// there is no space in the buffer, we flush the buffer and recreate it
+		buffer_to_PSarrayOut();
+		// now we can check again if there is space in the buffer
+		if (size <= buffer_available_capacity()) {
+			// there is space in the NEW buffer, add the data to it
+			ret_buffer = buffer + buffer_used;
+			buffer_used += size;
+		}
+	}
+	return ret_buffer;
+}
+
+void PgSQL_Query_Result::reset() {
+	resultset_size = 0;
+	num_fields = 0;
+	num_rows = 0;
+	pkt_count = 0;
 }
