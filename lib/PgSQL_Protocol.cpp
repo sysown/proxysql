@@ -1320,9 +1320,8 @@ unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_Query_Result(bool sen
 		size += strlen(PQfname(result, i)) + 1 + 18; // null terminator, name, reloid, colnr, oid, typsize, typmod, fmt
 	}
 
-	unsigned char* _ptr = NULL;
 	bool alloced_new_buffer = false;
-	_ptr = pg_query_result->buffer_reserve_space(size);
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
 
 	// buffer is not enough to store the new row description. Remember we have already pushed data to PSarrayOUT
 	if (_ptr == NULL) {
@@ -1382,9 +1381,8 @@ unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Que
 		}
 		total_size += size;
 
-		unsigned char* _ptr = NULL;
 		bool alloced_new_buffer = false;
-		_ptr = pg_query_result->buffer_reserve_space(size);
+		unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
 
 		// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
 		if (_ptr == NULL) {
@@ -1400,8 +1398,13 @@ unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Que
 		int column_value_len = 0;
 		for (unsigned int j = 0; j < pg_query_result->num_fields; j++) {
 			column_value_len = PQgetlength(result, i, j);
+			if (column_value_len == 0 && PQgetisnull(result, i, j) == 1) {
+				column_value_len = -1; /*0xFFFFFFFF*/
+			}
 			pgpkt.put_uint32(column_value_len);
-			pgpkt.put_bytes(PQgetvalue(result, i, j), column_value_len);
+			if (column_value_len > 0) {
+				pgpkt.put_bytes(PQgetvalue(result, i, j), column_value_len);
+			}
 		}
 
 		if (send == true) { 
@@ -1435,11 +1438,11 @@ unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool 
 
 	const unsigned int tag_len = strlen(tag) + 1;
 	unsigned int size = 1 + 4 + tag_len + 1 + 4 + 1; // 'C', length, tag, Z, length, I
-	unsigned char* _ptr = NULL;
 	bool alloced_new_buffer = false;
-
-	_ptr = pg_query_result->buffer_reserve_space(size);
-
+	
+	
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
+	
 	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
 	if (_ptr == NULL) {
 		_ptr = (unsigned char*)l_alloc(size);
@@ -1515,11 +1518,9 @@ unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Q
 	if (source_line) size += strlen(source_line) + 1 + 1;
 	if (source_function) size += strlen(source_function) + 1 + 1;
 
-	unsigned char* _ptr = NULL;
 	bool alloced_new_buffer = false;
-
-	_ptr = pg_query_result->buffer_reserve_space(size);
-
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
+	
 	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
 	if (_ptr == NULL) {
 		_ptr = (unsigned char*)l_alloc(size);
@@ -1679,7 +1680,7 @@ unsigned int PgSQL_Query_Result::add_row(PGresult* result) {
 }
 
 unsigned int PgSQL_Query_Result::add_error(PgSQL_Data_Stream* _myds, PGresult* result) {
-
+	unsigned int size = 0;
 	if (_myds && _myds->killed_at) { // see case #750
 		PtrSize_t pkt;
 
@@ -1694,9 +1695,10 @@ unsigned int PgSQL_Query_Result::add_error(PgSQL_Data_Stream* _myds, PGresult* r
 
 		PSarrayOUT.add(pkt.ptr, pkt.size);
 		resultset_size += pkt.size;
+		size = pkt.size;
 	} else if (result) {
 		
-		proto->copy_error_to_PgSQL_Query_Result(false, this, result);
+		size = proto->copy_error_to_PgSQL_Query_Result(false, this, result);
 		// get error from connection
 		//proto->generate_error_packet(false, true, "Unknown error", sqlstate, false, &pkt);
 		// TODO: Check this is a mysql error
@@ -1707,6 +1709,7 @@ unsigned int PgSQL_Query_Result::add_error(PgSQL_Data_Stream* _myds, PGresult* r
 
 	buffer_to_PSarrayOut();
 	resultset_completed = true;
+	return size;
 }
 
 bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
