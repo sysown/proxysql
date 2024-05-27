@@ -3,7 +3,7 @@
 #include "cpp.h"
 #include <string>
 #include <sys/utsname.h>
-#include <prometheus/registry.h>
+#include "prometheus/registry.h"
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
 #define SPOOKYV2

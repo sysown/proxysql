@@ -40,11 +40,11 @@
 #include <regex>
 #include <utility>
 
-#include <libconfig.h>
+#include "libconfig.h"
 
-#include <proxysql_utils.h>
+#include "proxysql_utils.h"
 
-#include <mysql.h>
+#include "mysql.h"
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
 #define SPOOKYV2

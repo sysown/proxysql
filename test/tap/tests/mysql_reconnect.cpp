@@ -13,7 +13,7 @@
 #include <thread>
 
 #ifdef LIBMYSQL_HELPER8
-#include <mysql/mysql.h>
+#include "mysql/mysql.h"
 #else
 #include "mysql.h"
 #endif

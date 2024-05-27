@@ -13,7 +13,7 @@
 #include <unistd.h>
 
 
-#include <libconfig.h++>
+#include "libconfig.h++"
 
 using namespace std;
 using namespace libconfig;

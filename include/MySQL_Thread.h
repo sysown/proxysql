@@ -1,8 +1,8 @@
 #ifndef __CLASS_MYSQL_THREAD_H
 #define __CLASS_MYSQL_THREAD_H
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 #include "proxysql.h"
 #include "cpp.h"
