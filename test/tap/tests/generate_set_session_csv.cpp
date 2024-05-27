@@ -158,8 +158,8 @@ int main() {
 	vars["auto_increment_offset"] = std::make_unique<variable>("auto_increment_offset", true, true, false);
 	vars["auto_increment_offset"]->add(int_values_small, 20);
 	vars["sql_select_limit"] = std::make_unique<variable>("sql_select_limit", true, true, false);
-	vars["sql_select_limit"]->add(int_values_small, 80);
-	vars["sql_select_limit"]->add(int_values, 80);
+	vars["sql_select_limit"]->add(int_values_small, 200);
+	vars["sql_select_limit"]->add(int_values, 200);
 	vars["group_concat_max_len"] = std::make_unique<variable>("group_concat_max_len", true, true, false);
 	vars["group_concat_max_len"]->add(int_values_small, 123);
 	vars["group_concat_max_len"]->add(int_values, 123);
