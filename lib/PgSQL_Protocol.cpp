@@ -1431,7 +1431,6 @@ unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Que
 unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
 	assert(pg_query_result);
 	assert(result);
-	assert(pg_query_result->num_fields);
 
 	const char* tag = PQcmdStatus(result);
 	if (!tag) assert(0); // for testing it should not be null
