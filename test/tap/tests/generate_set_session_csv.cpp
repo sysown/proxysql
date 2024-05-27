@@ -176,10 +176,10 @@ int main() {
 		}
 	}
 
-	vars["query_cache_type"] = std::make_unique<variable>("query_cache_type", true, true, false);
-	vars["query_cache_type"]->add(bool_values);
-	vars["query_cache_type"]->add("2");
-	add_values_and_quotes("query_cache_type", {"DeMaNd"});
+	//vars["query_cache_type"] = std::make_unique<variable>("query_cache_type", true, true, false);
+	//vars["query_cache_type"]->add(bool_values);
+	//vars["query_cache_type"]->add("2");
+	//add_values_and_quotes("query_cache_type", {"DeMaNd"});
 
 	vars["lock_wait_timeout"] = std::make_unique<variable>("lock_wait_timeout", true, true, false);
 	vars["lock_wait_timeout"]->add(int_values_small, 321);
