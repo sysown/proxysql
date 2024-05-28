@@ -3956,7 +3956,33 @@ void PgSQL_Connection::connect_start() {
 	async_exit_status = PG_EVENT_NONE;
 
 	std::ostringstream conninfo;
-	conninfo << "postgres://";
+	conninfo << "user=" << userinfo->username << " "; // username
+	conninfo << "password=" << userinfo->password << " "; // password
+	conninfo << "host=" << parent->address << " "; // backend address
+	conninfo << "port=" << parent->port << " "; // backend port
+	conninfo << "dbname=" << userinfo->schemaname << " "; // currently schemaname consists of datasename (have to improve this in future). In PostgreSQL database and schema are NOT the same.
+	conninfo << "application_name=proxysql "; // application name
+	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
+	if (parent->use_ssl) {
+		conninfo << "sslmode=require "; // SSL required
+		if (pgsql_thread___ssl_p2s_key)
+			conninfo << "sslkey=" << pgsql_thread___ssl_p2s_key << " ";
+		if (pgsql_thread___ssl_p2s_cert)
+			conninfo << "sslcert=" << pgsql_thread___ssl_p2s_cert << " ";
+		if (pgsql_thread___ssl_p2s_ca)
+			conninfo << "sslrootcert=" << pgsql_thread___ssl_p2s_ca << " ";
+		if (pgsql_thread___ssl_p2s_crl)
+			conninfo << "sslcrl=" << pgsql_thread___ssl_p2s_crl << " ";
+		if (pgsql_thread___ssl_p2s_crlpath)
+			conninfo << "sslcrldir=" << pgsql_thread___ssl_p2s_crlpath << " ";
+		// Only supported in PostgreSQL Server
+		// if (pgsql_thread___ssl_p2s_cipher)
+		//	  conninfo << "sslcipher=" << pgsql_thread___ssl_p2s_cipher << " ";
+	} else {
+		conninfo << "sslmode=disable "; // not supporting SSL
+	}
+
+	/*conninfo << "postgres://";
 	conninfo << userinfo->username << ":" << userinfo->password; // username and password
 	conninfo << "@";
 	conninfo << parent->address << ":" << parent->port; // backend address and port
@@ -3965,14 +3991,8 @@ void PgSQL_Connection::connect_start() {
 	conninfo << "?";
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	conninfo << "application_name=proxysql";
-	conninfo << "&sslmode=disable"; // currently we are not supporting SSL
-	/*conninfo << "user=" << userinfo->username << " ";
-	conninfo << "password=" << userinfo->password << " "; 
-	conninfo << "host=" << parent->address << " ";
-	conninfo << "port=" << parent->port << " ";
-	conninfo << "dbname=" << userinfo->schemaname << " ";
-	conninfo << "application_name=proxysql ";
-	conninfo << "sslmode=disable";*/
+	*/
+
 	const std::string& conninfo_str = conninfo.str();
 	pgsql_conn = PQconnectStart(conninfo_str.c_str());
 	//pgsql_conn = PQconnectdb(conninfo_str.c_str());
