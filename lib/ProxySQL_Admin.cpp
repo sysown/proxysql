@@ -4082,7 +4082,7 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 					} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
 						backup_shun_on_failures = pgsql_thread___shun_on_failures;
 						pgsql_thread___shun_on_failures = 1;
-						// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
+						// Set the error twice to surpass 'pgsql_thread___shun_on_failures' value.
 						mysrvc->connect_error(i_errcode, false);
 						mysrvc->connect_error(i_errcode, false);
 						pgsql_thread___shun_on_failures = backup_shun_on_failures;
