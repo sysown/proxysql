@@ -7539,6 +7539,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		checkvar = &GloVars.checksums_values.admin_variables;
 	} else if (modname == "mysql") {
 		checkvar = &GloVars.checksums_values.mysql_variables;
+	} else if (modname == "ldap") {
+		checkvar = &GloVars.checksums_values.ldap_variables;
 	}
 	assert(checkvar != NULL);
 	checkvar->set_checksum(buf);
