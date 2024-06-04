@@ -1704,7 +1704,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 bool is_valid_global_variable(const char *var_name) {
 	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 11) && GloPTH->has_variable(var_name + 6)) {
+	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 6) && GloPTH->has_variable(var_name + 6)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
 		return true;

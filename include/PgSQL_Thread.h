@@ -1,6 +1,6 @@
-#ifndef __CLASS_POSTGRESQL_THREAD_H
-#define __CLASS_POSTGRESQL_THREAD_H
-#define ____CLASS_STANDARD_POSTGRESQL_THREAD_H
+#ifndef __CLASS_PGSQL_THREAD_H
+#define __CLASS_PGSQL_THREAD_H
+#define ____CLASS_STANDARD_PGSQL_THREAD_H
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
@@ -702,4 +702,4 @@ public:
 };
 
 
-#endif /* __CLASS_POSTGRESQL_THREAD_H */
+#endif /* __CLASS_PGSQL_THREAD_H */

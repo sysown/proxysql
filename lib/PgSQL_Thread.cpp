@@ -272,7 +272,7 @@ void PgSQL_Listeners_Manager::del(unsigned int idx) {
 	delete ifi;
 }
 
-static char* mysql_thread_variables_names[] = {
+static char* pgsql_thread_variables_names[] = {
 	(char*)"authentication_method",
 	(char*)"shun_on_failures",
 	(char*)"shun_recovery_time_sec",
@@ -1991,7 +1991,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 }
 
 
-// return variables from both mysql_thread_variables_names AND mysql_tracked_variables
+// return variables from both pgsql_thread_variables_names AND mysql_tracked_variables
 char** PgSQL_Threads_Handler::get_variables_list() {
 
 
@@ -2176,14 +2176,14 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	}
 
 
-	const size_t l = sizeof(mysql_thread_variables_names) / sizeof(char*);
+	const size_t l = sizeof(pgsql_thread_variables_names) / sizeof(char*);
 	unsigned int i;
 	size_t ltv = 0;
 	for (i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_tracked_variables[i].is_global_variable)
 			ltv++;
 	}
-	char** ret = (char**)malloc(sizeof(char*) * (l + ltv)); // not adding + 1 because mysql_thread_variables_names is already NULL terminated
+	char** ret = (char**)malloc(sizeof(char*) * (l + ltv)); // not adding + 1 because pgsql_thread_variables_names is already NULL terminated
 	size_t fv = 0;
 	for (i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_tracked_variables[i].is_global_variable) {
@@ -2196,14 +2196,14 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	// this is an extra check.
 	assert(fv == ltv);
 	for (i = ltv; i < l + ltv - 1; i++) {
-		ret[i] = (strdup(mysql_thread_variables_names[i - ltv]));
+		ret[i] = (strdup(pgsql_thread_variables_names[i - ltv]));
 	}
 	ret[l + ltv - 1] = NULL; // last value
 	return ret;
 }
 
 // Returns true if the given name is the name of an existing mysql variable
-// scan both mysql_thread_variables_names AND mysql_tracked_variables
+// scan both pgsql_thread_variables_names AND mysql_tracked_variables
 bool PgSQL_Threads_Handler::has_variable(const char* name) {
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
@@ -2219,10 +2219,10 @@ bool PgSQL_Threads_Handler::has_variable(const char* name) {
 			}
 		}
 	}
-	size_t no_vars = sizeof(mysql_thread_variables_names) / sizeof(char*);
+	size_t no_vars = sizeof(pgsql_thread_variables_names) / sizeof(char*);
 	for (unsigned int i = 0; i < no_vars - 1; ++i) {
-		size_t var_len = strlen(mysql_thread_variables_names[i]);
-		if (strlen(name) == var_len && !strncmp(name, mysql_thread_variables_names[i], var_len)) {
+		size_t var_len = strlen(pgsql_thread_variables_names[i]);
+		if (strlen(name) == var_len && !strncmp(name, pgsql_thread_variables_names[i], var_len)) {
 			return true;
 		}
 	}
