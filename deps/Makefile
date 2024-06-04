@@ -303,7 +303,7 @@ pcre: pcre/pcre/.libs/libpcre.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a : libssl/openssl/libssl.a
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
-	cd postgresql/postgresql && ./configure --with-openssl --with-includes=$(shell pwd)/libssl/openssl/include/openssl --with-libraries=$(shell pwd)/libssl/openssl/lib --without-readline
+	cd postgresql/postgresql && ./configure --with-ssl=openssl --with-includes=$(shell pwd)/libssl/openssl/include/openssl --with-libraries=$(shell pwd)/libssl/openssl/lib --enable-static --without-readline 
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
 	#cd postgresql/postgresql && CC=${CC} CXX=${CXX} ${MAKE} -f src/interfaces/libpq/Makefile all
 
@@ -318,9 +318,9 @@ libusual/libusual/.libs/libusual.a: libssl/openssl/libssl.a
 
 libusual: libusual/libusual/.libs/libusual.a
 
-libscram/lib/libscram.a: libusual
+libscram/lib/libscram.a: libssl/openssl/libssl.a postgresql/postgresql/src/interfaces/libpq/libpq.a 
 	cd libscram && rm -rf lib/* || true
-	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBUSUAL_DIR=$(shell pwd)/libusual/libusual LIBOPENSSL_DIR=$(shell pwd)/libssl/openssl/
+	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR=$(shell pwd)/libssl/openssl/ POSTGRESQL_DIR=$(shell pwd)/postgresql/postgresql
 
 libscram: libscram/lib/libscram.a
 

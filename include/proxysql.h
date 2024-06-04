@@ -52,7 +52,7 @@
 
 #include "mysql.h"
 #include "mariadb_com.h"
-
+#include "libpq-fe.h"
 #include "proxysql_mem.h"
 
 #include "proxysql_structs.h"

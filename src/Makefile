@@ -89,9 +89,9 @@ EV_PATH := $(DEPS_PATH)/libev/libev/
 EV_IDIR := $(EV_PATH)
 EV_LDIR := $(EV_PATH)/.libs
 
-POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/
-POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/src/include -I$(POSTGRESQL_PATH)/src/interfaces/libpq
-POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/src/interfaces/libpq
+POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/src
+POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/include -I$(POSTGRESQL_PATH)/interfaces/libpq
+POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port
 
 LIBUSUAL_PATH=$(DEPS_PATH)/libusual/libusual
 LIBUSUAL_IDIR=$(LIBUSUAL_PATH)
@@ -174,7 +174,7 @@ endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
-STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lpq -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -lscram -lusual
+STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -lscram -lusual -lpq -lpgcommon -lpgport
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc
 endif

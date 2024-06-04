@@ -330,8 +330,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	statuses.myconnpoll_put = 0;
 
 	com_field_wild = NULL;
-	
-	memset(&scram_state, 0, sizeof(ScramState));
+	scram_state = nullptr;
 }
 
 // Destructor
@@ -428,7 +427,7 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		x509_subject_alt_name = NULL;
 	}
 
-	free_scram_state(&scram_state);
+	free_scram_state(scram_state);
 }
 
 // this function initializes a PgSQL_Data_Stream 
@@ -1282,7 +1281,7 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 			sess->last_HG_affected_rows = -1;
 		}
 	}
-	unsigned long long intv = mysql_thread___connection_max_age_ms;
+	unsigned long long intv = pgsql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
 		(((intv) && (mc->last_time_used > mc->creation_time + intv))
@@ -1296,7 +1295,7 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
 		sess->status != PINGING_SERVER
 		) {
-		if (mysql_thread___reset_connection_algorithm == 2) {
+		if (pgsql_thread___reset_connection_algorithm == 2) {
 			sess->create_new_session_and_reset_connection(this);
 		}
 		else {
@@ -1343,7 +1342,7 @@ bool PgSQL_Data_Stream::data_in_rbio() {
 
 void PgSQL_Data_Stream::reset_connection() {
 	if (myconn) {
-		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
+		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
 			myconn->last_time_used = sess->thread->curtime;
 			return_MySQL_Connection_To_Pool();
 		}

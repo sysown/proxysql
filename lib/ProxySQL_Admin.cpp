@@ -173,6 +173,9 @@ static unordered_map<string, const vector<string>&> module_tablenames = {
 	{ "scheduler", scheduler_tablenames },
 	{ "proxysql_servers", proxysql_servers_tablenames },
 	{ "restapi", restapi_tablenames },
+	{ "pgsql_servers", pgsql_servers_tablenames },
+	{ "pgsql_firewall", pgsql_firewall_tablenames },
+	{ "pgsql_query_rules", pgsql_query_rules_tablenames },
 };
 
 static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, const string& p2, const string& p3) {
@@ -3467,12 +3470,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				mysql_thread___hostgroup_manager_verbose = old_hostgroup_manager_verbose;
 			}
 			if (runtime_pgsql_servers) {
-				int old_hostgroup_manager_verbose = mysql_thread___hostgroup_manager_verbose;
-				mysql_thread___hostgroup_manager_verbose = 0;
+				int old_hostgroup_manager_verbose = pgsql_thread___hostgroup_manager_verbose;
+				pgsql_thread___hostgroup_manager_verbose = 0;
 				pgsql_servers_wrlock();
 				save_pgsql_servers_runtime_to_database(true);
 				pgsql_servers_wrunlock();
-				mysql_thread___hostgroup_manager_verbose = old_hostgroup_manager_verbose;
+				pgsql_thread___hostgroup_manager_verbose = old_hostgroup_manager_verbose;
 			}
 			if (runtime_proxysql_servers) {
 				//mysql_servers_wrlock();
@@ -4068,14 +4071,24 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 
 				MySrvC* mysrvc = MyHGM->find_server_in_hg(i_hg, srv_addr, i_port);
 				if (mysrvc != nullptr) {
-					int backup_mysql_thread___shun_on_failures = mysql_thread___shun_on_failures;
-					mysql_thread___shun_on_failures = 1;
-
-					// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
-					mysrvc->connect_error(i_errcode, false);
-					mysrvc->connect_error(i_errcode, false);
-
-					mysql_thread___shun_on_failures = backup_mysql_thread___shun_on_failures;
+					int backup_shun_on_failures;
+					if constexpr (std::is_same<T, MySQL_Session*>::value) {
+						backup_shun_on_failures = mysql_thread___shun_on_failures;
+						mysql_thread___shun_on_failures = 1;
+						// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
+						mysrvc->connect_error(i_errcode, false);
+						mysrvc->connect_error(i_errcode, false);
+						mysql_thread___shun_on_failures = backup_shun_on_failures;
+					} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+						backup_shun_on_failures = pgsql_thread___shun_on_failures;
+						pgsql_thread___shun_on_failures = 1;
+						// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
+						mysrvc->connect_error(i_errcode, false);
+						mysrvc->connect_error(i_errcode, false);
+						pgsql_thread___shun_on_failures = backup_shun_on_failures;
+					} else {
+						assert(0);
+					}
 
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				} else {
@@ -10817,7 +10830,7 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
 		sprintf(new_msg, "%s%s", prefix_msg, msg);
-		myds->myprot.generate_error_packet(false, new_msg, NULL, false);
+		myds->myprot.generate_error_packet(true,true, new_msg, NULL, false);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
 	}

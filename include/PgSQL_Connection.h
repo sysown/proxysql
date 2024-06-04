@@ -11,7 +11,7 @@ namespace nlohmann { class json; }
 
 
 class PgSQL_SrvC;
-
+class PgSQL_Query_Result;
 //#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001 // DEPRECATED
 #define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
@@ -175,6 +175,10 @@ static const Param_Name_Validation* PgSQL_Param_Name_Accepted_Values[PG_PARAM_SI
 	&load_balance_hosts
 };
 
+#define PG_EVENT_NONE	 0x00
+#define PG_EVENT_READ	 0x01
+#define PG_EVENT_WRITE	 0x02
+
 class PgSQL_Conn_Param {
 private:
 	bool validate(PgSQL_Param_Name key, const char* val) {
@@ -266,7 +270,6 @@ enum pgsql_charset_action {
 	POSTGRESQL_CHARSET_ACTION_CONNECT_START
 };
 
-
 class PgSQL_Connection_userinfo {
 	private:
 	uint64_t compute_hash();
@@ -285,7 +288,7 @@ class PgSQL_Connection_userinfo {
 	bool set_schemaname(char *, int);
 };
 
-class PgSQL_Connection {
+class PgSQL_Connection_Placeholder {
 	private:
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
@@ -341,8 +344,6 @@ class PgSQL_Connection {
 	MYSQL *ret_mysql;
 	MYSQL_RES *mysql_result;
 	MYSQL_ROW mysql_row;
-	MySQL_ResultSet *MyRS;
-	MySQL_ResultSet *MyRS_reuse;
 	PgSQL_SrvC *parent;
 	PgSQL_Connection_userinfo *userinfo;
 	PgSQL_Data_Stream *myds;
@@ -374,7 +375,7 @@ class PgSQL_Connection {
 	uint32_t status_flags;
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
 	int interr;	// integer return
-	MDB_ASYNC_ST async_state_machine;	// Async state machine
+	PG_ASYNC_ST async_state_machine;	// Async state machine
 	short wait_events;
 	uint8_t compression_pkt_id;
 	my_bool ret_bool;
@@ -386,8 +387,8 @@ class PgSQL_Connection {
 	bool unknown_transaction_status;
 	void compute_unknown_transaction_status();
 	char gtid_uuid[128];
-	PgSQL_Connection();
-	~PgSQL_Connection();
+	PgSQL_Connection_Placeholder();
+	~PgSQL_Connection_Placeholder();
 	bool set_autocommit(bool);
 	bool set_no_backslash_escapes(bool);
 	unsigned int set_charset(unsigned int, enum pgsql_charset_action);
@@ -417,8 +418,8 @@ class PgSQL_Connection {
 	void set_option_start();
 	void set_option_cont(short event);
 	void set_query(char *stmt, unsigned long length);
-	MDB_ASYNC_ST handler(short event);
-	void next_event(MDB_ASYNC_ST new_st);
+	PG_ASYNC_ST handler(short event);
+	void next_event(PG_ASYNC_ST new_st);
 
 	int async_connect(short event);
 	int async_change_user(short event);
@@ -483,5 +484,147 @@ class PgSQL_Connection {
 	bool requires_CHANGE_USER(const PgSQL_Connection *client_conn);
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return pgsql ? pgsql->thread_id : 0; }
+
+private:
+	// these will be removed
+	MySQL_ResultSet *MyRS;
+	MySQL_ResultSet *MyRS_reuse;
 };
+
+enum  PG_ERROR_TYPE {
+	PG_NO_ERROR,
+	PG_CONNECT_FAILED,
+	PG_QUERY_FAILED,
+	PG_RESULT_FAILED,
+
+};
+
+class PgSQL_Connection : public PgSQL_Connection_Placeholder {
+public:
+	PgSQL_Connection();
+	~PgSQL_Connection();
+
+	PG_ASYNC_ST handler(short event);
+	void connect_start();
+	void connect_cont(short event);
+	void query_start();
+	void query_cont(short event);
+	void fetch_result_start();
+	void fetch_result_cont(short event);
+	int  async_connect(short event);
+	int  async_set_autocommit(short event, bool ac);
+	int  async_query(short event, char* stmt, unsigned long length, MYSQL_STMT** _stmt = NULL, stmt_execute_metadata_t* _stmt_meta = NULL);
+	int  async_ping(short event);
+	void next_event(PG_ASYNC_ST new_st);
+	bool IsAutoCommit();
+	bool is_connected() const;
+	void compute_unknown_transaction_status();
+	void async_free_result();
+	void flush();
+
+	std::string get_error_code_from_result() const;
+
+	bool is_error_present() const {
+		return err_type != PG_NO_ERROR;
+	}
+
+	PG_ERROR_TYPE get_error_type() const {
+		return err_type;
+	}
+
+	std::string get_error_message() const {
+		return err_msg;
+	}
+
+	void set_error(PG_ERROR_TYPE _err_type, const std::string& _err_msg) {
+		err_type = _err_type;
+		err_msg = _err_msg;
+	}
+
+	void reset_error() {
+		err_type = PG_NO_ERROR;
+		err_msg.clear();
+	}
+
+	PGresult* get_last_result() const {
+		return last_result;
+	}
+
+	void set_last_result(PGresult* res) {
+		if (last_result) {
+			PQclear(last_result);
+		}
+
+		last_result = res;
+	}
+
+	void reset_last_result() {
+		if (last_result) {
+			PQclear(last_result);
+			last_result = nullptr;
+		}
+	}
+	void optimize() {}
+	//PgSQL_Conn_Param conn_params;
+
+	PGconn* pgsql_conn;
+	PGresult* last_result;
+	PgSQL_Query_Result* query_result;
+	PgSQL_Query_Result* query_result_reuse;
+
+	PG_ERROR_TYPE err_type;
+	std::string err_msg;
+
+	bool first_result;
+	//PgSQL_SrvC* parent;
+	//PgSQL_Connection_userinfo* userinfo;
+	//PgSQL_Data_Stream* myds;
+	//int fd;
+
+	/*std::string get_error_code(PG_ERROR_TYPE* errtype = NULL) {
+		assert(pgsql_conn);
+
+		std::string error_code = PGCONN_NO_ERROR;
+
+		ConnStatusType status = PQstatus(pgsql_conn);
+		if (status == CONNECTION_BAD) {
+			if (errtype) *errtype = PG_CONNECTION_ERROR;
+			error_code = PQparameterStatus(pgsql_conn, "SQLSTATE");
+		}
+		else if (pgsql_result != NULL) {
+			ExecStatusType status = PQresultStatus(pgsql_result);
+			if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+				if (errtype) *errtype = PG_SERVER_ERROR;
+				error_code = PQresultErrorField(pgsql_result, PG_DIAG_SQLSTATE);
+			}
+		}
+
+		return error_code;
+	}
+
+	std::string get_error_message(PG_ERROR_TYPE* errtype = NULL) {
+		assert(pgsql_conn);
+
+		std::string error_message{};
+
+		ConnStatusType status = PQstatus(pgsql_conn);
+		if (status == CONNECTION_BAD) {
+			if (errtype) *errtype = PG_CONNECTION_ERROR;
+			error_message = PQerrorMessage(pgsql_conn);
+		}
+		else if (pgsql_result != NULL) {
+			ExecStatusType status = PQresultStatus(pgsql_result);
+			if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+				if (errtype) *errtype = PG_SERVER_ERROR;
+				error_message = PQresultErrorMessage(pgsql_result);
+			}
+		}
+
+		return error_message;
+	}*/
+};
+
+
+
+
 #endif /* __CLASS_POSTGRESQL_CONNECTION_H */

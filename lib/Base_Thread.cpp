@@ -52,10 +52,16 @@ template<typename T, typename S>
 S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	int arg_on = 1;
 	S sess = NULL;
+	bool use_tcp_keepalive = false;
+	int tcp_keepalive_time = 0;
 	if constexpr (std::is_same<T, PgSQL_Thread>::value) {
 		sess = new PgSQL_Session();
+		use_tcp_keepalive = pgsql_thread___use_tcp_keepalive;
+		tcp_keepalive_time = pgsql_thread___tcp_keepalive_time;
 	} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
 		sess = new MySQL_Session();
+		use_tcp_keepalive = mysql_thread___use_tcp_keepalive;
+		tcp_keepalive_time = mysql_thread___tcp_keepalive_time;
 	} else {
 		assert(0);
 	}
@@ -98,11 +104,11 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	}
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char*)&arg_on, sizeof(arg_on));
 
-	if (mysql_thread___use_tcp_keepalive) {
+	if (use_tcp_keepalive) {
 		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&arg_on, sizeof(arg_on));
 #ifdef TCP_KEEPIDLE
-		if (mysql_thread___tcp_keepalive_time > 0) {
-			int keepalive_time = mysql_thread___tcp_keepalive_time;
+		if (tcp_keepalive_time > 0) {
+			int keepalive_time = tcp_keepalive_time;
 			setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&keepalive_time, sizeof(keepalive_time));
 		}
 #endif
@@ -345,8 +351,16 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 			myds->remove_pollout();
 		}
 		if (myds->myds_type==MYDS_BACKEND) {
-			if (mysql_thread___throttle_ratio_server_to_client) {
-				thr->mypolls.fds[n].events = 0;
+			if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+				if (pgsql_thread___throttle_ratio_server_to_client) {
+					thr->mypolls.fds[n].events = 0;
+				}
+			} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+				if (mysql_thread___throttle_ratio_server_to_client) {
+					thr->mypolls.fds[n].events = 0;
+				}
+			} else {
+				assert(0);
 			}
 		}
 	}
@@ -365,10 +379,22 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 		// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
 		// but assuming that client isn't completely blocked, we will stop checking for data
 		// only at mysql_thread___threshold_resultset_size * 4
-		if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*4) {
-			thr->mypolls.fds[n].events = 0;
-			return true;
+		if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+			if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 4) {
+				thr->mypolls.fds[n].events = 0;
+				return true;
+			}
 		}
+		else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+			if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size * 4) {
+				thr->mypolls.fds[n].events = 0;
+				return true;
+			}
+		}
+		else {
+			assert(0);
+		}
+		
 	}
 	return false;
 }
@@ -388,7 +414,18 @@ template<typename T, typename DS>
 bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n) {
 	T* thr = static_cast<T*>(this);
 	unsigned long long _tmp_idle = thr->mypolls.last_recv[n] > thr->mypolls.last_sent[n] ? thr->mypolls.last_recv[n] : thr->mypolls.last_sent[n] ;
-	if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
+
+	int session_idle_ms = 0;
+
+	if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+		session_idle_ms = pgsql_thread___session_idle_ms;
+	} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+		session_idle_ms = mysql_thread___session_idle_ms;
+	} else {
+		assert(0);
+	}
+
+	if (_tmp_idle < ( (curtime > (unsigned int)session_idle_ms * 1000) ? (curtime - session_idle_ms * 1000) : 0)) {
 		// make sure data stream has no pending data out and session is not throttled (#1939)
 		// because epoll thread does not handle data stream with data out
 		if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
@@ -430,7 +467,18 @@ void Base_Thread::ProcessAllMyDS_BeforePoll() {
 	bool check_if_move_to_idle_thread = false;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
-		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
+
+		int session_idle_ms = 0;
+
+		if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+			session_idle_ms = pgsql_thread___session_idle_ms;
+		} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+			session_idle_ms = mysql_thread___session_idle_ms;
+		} else {
+			assert(0);
+		}
+
+		if (curtime > last_move_to_idle_thread_time + (unsigned long long)session_idle_ms * 1000) {
 			last_move_to_idle_thread_time=curtime;
 			check_if_move_to_idle_thread=true;
 		}
