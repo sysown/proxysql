@@ -61,6 +61,7 @@ core
 #config
 proxysql.cnf*
 proxysql.db*
+proxysql-*.pem
 
 jeprof*heap
 perf.data*

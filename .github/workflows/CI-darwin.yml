@@ -1,0 +1,28 @@
+name: Darwin
+
+on:
+  push:
+    branches: [ "v2.x" ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  pull_request:
+      branches: [ "v2.x" ]
+      paths-ignore:
+      - '.github/**'
+      - '**.md'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install automake bzip2 cmake git gpatch gnutls ossp-uuid libtool
+
+      - name: Build
+        run: make
+
+      - name: Show version
+        run: ./src/proxysql --version
