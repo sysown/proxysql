@@ -102,7 +102,7 @@ jobs:
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           if [[ ${{ github.ref_name }} == v2.x ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY -b "${FAILS}"
+            gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_{{ matrix.infradb }} -b "${FAILS}"
           fi
         fi
     
