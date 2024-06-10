@@ -6764,7 +6764,7 @@ void DNS_Cache::clear() {
 bool DNS_Cache::empty() const {
 	bool result = true;
 
-	int rc = pthread_rwlock_rdlock(&rwlock_);
+	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
 	result = records.empty();
 	rc = pthread_rwlock_unlock(&rwlock_);
