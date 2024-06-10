@@ -303,6 +303,7 @@ pcre: pcre/pcre/.libs/libpcre.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a : libssl/openssl/libssl.a
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
+	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
 	cd postgresql/postgresql && ./configure --with-ssl=openssl --with-includes=$(shell pwd)/libssl/openssl/include/openssl --with-libraries=$(shell pwd)/libssl/openssl/lib --enable-static --without-readline 
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
 	#cd postgresql/postgresql && CC=${CC} CXX=${CXX} ${MAKE} -f src/interfaces/libpq/Makefile all

@@ -1327,7 +1327,7 @@ void PgSQL_Session::return_proxysql_internal(PtrSize_t* pkt) {
 	}
 	// default
 	client_myds->DSS = STATE_QUERY_SENT_NET;
-	client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1064, (char*)"42000", (char*)"Unknown PROXYSQL INTERNAL command", true);
+	client_myds->myprot.generate_error_packet(true, true, "Unknown PROXYSQL INTERNAL command", PGSQL_ERROR_CODES::ERRCODE_SYNTAX_ERROR, false, true);
 	if (mirror == false) {
 		RequestEnd(NULL);
 	}
@@ -1686,7 +1686,8 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt) {
 	if ((pkt->size >= 22 + 5) && (strncasecmp((char*)"LOAD DATA LOCAL INFILE", (char*)pkt->ptr + 5, 22) == 0)) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1047, (char*)"HY000", (char*)"Unsupported 'LOAD DATA LOCAL INFILE' command", true);
+			client_myds->myprot.generate_error_packet(true, true, "Unsupported 'LOAD DATA LOCAL INFILE' command", 
+				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
 			if (mirror == false) {
 				RequestEnd(NULL);
 			}
@@ -3061,7 +3062,8 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 			if (thread) {
 				thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 			}
-			client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), "57P03", false); // not sure if this is the right error code
+			client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, 
+				false, true); 
 			RequestEnd(mybe->server_myds);
 
 			string hg_status{};
@@ -3196,16 +3198,16 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 			}
 			else {
 			__exit_handler_again___status_CONNECTING_SERVER_with_err:
-				int myerr = mysql_errno(myconn->pgsql);
-				if (myerr) {
-					char sqlstate[10];
-					sprintf(sqlstate, "%s", mysql_sqlstate(myconn->pgsql));
-					client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, mysql_errno(myconn->pgsql), sqlstate, mysql_error(myconn->pgsql), true);
+				bool is_error_present = myconn->is_error_present();
+				if (is_error_present) {
+					client_myds->myprot.generate_error_packet(true, true, myconn->error_info.message.c_str(), 
+						myconn->error_info.code, false, true);
 				}
 				else {
 					char buf[256];
 					sprintf(buf, "Max connect failure while reaching hostgroup %d", current_hostgroup);
-					client_myds->myprot.generate_error_packet(true,true,buf, "57P03", false); // not sure if this is the right error code
+					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
+						false, true); 
 					if (thread) {
 						thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 					}
@@ -3221,7 +3223,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 				if (mirror) {
 					PROXY_TRACE();
 				}
-				myds->destroy_MySQL_Connection_From_Pool(myerr ? true : false);
+				myds->destroy_MySQL_Connection_From_Pool(is_error_present);
 				myds->max_connect_time = 0;
 				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 			}
@@ -3481,7 +3483,8 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					char* err_msg = (char*)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
 					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-					client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 9005, (char*)"HY000", buf, true);
+					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
+						false, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd(NULL);
 					free(buf);
@@ -3652,7 +3655,8 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					char* err_msg = (char*)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
 					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-					client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 9005, (char*)"HY000", buf, true);
+					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
+						false, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd(NULL);
 					free(buf);
@@ -4188,7 +4192,8 @@ __get_pkts_from_client:
 											char* err_msg = (char*)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 											char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
 											sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-											client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 9005, (char*)"HY000", buf, true);
+											client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
+												false, true);
 											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 											RequestEnd(NULL);
 											free(buf);
@@ -4405,7 +4410,8 @@ __get_pkts_from_client:
 									char* err_msg = (char*)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 									char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
 									sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-									client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 9005, (char*)"HY000", buf, true);
+									client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
+										false, true);
 									thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 									RequestEnd(NULL);
 									free(buf);
@@ -4909,10 +4915,10 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds, i
 // this function was inline
 void PgSQL_Session::handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn, int myerr, char* errmsg) {
 	if (pgsql_thread___verbose_query_error) {
-		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %d, %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, myerr, (errmsg ? errmsg : mysql_error(myconn->pgsql)), CurrentQuery.QueryParserArgs.digest_text);
+		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, myconn->get_error_code_with_message().c_str(), CurrentQuery.QueryParserArgs.digest_text);
 	}
 	else {
-		proxy_warning("Error during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, (errmsg ? errmsg : mysql_error(myconn->pgsql)));
+		proxy_warning("Error during query on (%d,%s,%d,%lu): %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->get_error_code_with_message().c_str());
 	}
 	PgHGM->add_pgsql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, myerr, (char*)(errmsg ? errmsg : mysql_error(myconn->pgsql)));
 }
@@ -5005,10 +5011,10 @@ void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds,
 	switch (status) {
 	case PROCESSING_QUERY:
 		if (myconn) {
-			PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->query_result, myconn->warning_count, myds);
+			PgSQL_Result_to_PgSQL_wire(myconn, myds);
 		}
 		else {
-			PgSQL_Result_to_PgSQL_wire(NULL, NULL, 0, myds);
+			PgSQL_Result_to_PgSQL_wire(NULL, myds);
 		}
 		break;
 	case PROCESSING_STMT_PREPARE:
@@ -5497,7 +5503,7 @@ handler_again:
 
 				switch (status) {
 				case PROCESSING_QUERY:
-					PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->query_result, myconn->warning_count, myconn->myds);
+					PgSQL_Result_to_PgSQL_wire(myconn, myconn->myds);
 					break;
 				case PROCESSING_STMT_PREPARE:
 				{
@@ -5591,8 +5597,8 @@ handler_again:
 						break;
 						// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
 					case 2:
-						PgSQL_Result_to_PgSQL_wire(myconn->pgsql_conn, myconn->query_result, myconn->warning_count, myconn->myds);
-						if (myconn->query_result) { // we also need to clear query_result, so that the next staement will recreate it if needed
+						PgSQL_Result_to_PgSQL_wire(myconn, myconn->myds);
+						if (myconn->query_result) { // we also need to clear query_result, so that the next statement will recreate it if needed
 							if (myconn->query_result_reuse) {
 								delete myconn->query_result_reuse;
 							}
@@ -5998,7 +6004,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			if (client_myds->switching_auth_stage) _pid += 2;
 			if (max_connections_reached == true) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p , Too many connections\n", this, client_myds);
-				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1040, (char*)"08004", (char*)"Too many connections", true);
+				client_myds->myprot.generate_error_packet(true, false, "Too many connections", PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS,
+					true, true);
 				proxy_warning("pgsql-max_connections reached. Returning 'Too many connections'\n");
 				GloPgSQL_Logger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL, (char*)"pgsql-max_connections reached");
 				__sync_fetch_and_add(&PgHGM->status.access_denied_max_connections, 1);
@@ -6010,7 +6017,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username) + 16);
 				sprintf(b, a, client_myds->myconn->userinfo->username, used_users);
 				GloPgSQL_Logger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL, b);
-				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 2, 1226, (char*)"42000", b, true);
+				client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS,
+					true, true);
 				proxy_warning("User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", client_myds->myconn->userinfo->username, used_users);
 				free(b);
 			}
@@ -6080,7 +6088,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username));
 					sprintf(b, a, client_myds->myconn->userinfo->username);
 					GloPgSQL_Logger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL, b);
-					client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1040, (char*)"42000", b, true);
+					client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+						true, true);
 					free(b);
 				}
 				free(addr);
@@ -6106,7 +6115,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					char* _a = (char*)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
 					char* _s = (char*)malloc(strlen(_a) + strlen(client_myds->myconn->userinfo->username) + 32);
 					sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-					client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1045, (char*)"28000", _s, true);
+					client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION,
+							true, true);
 					proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required\n", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . Access denied for user '%s' (using password: %s). SSL is required\n", this, client_myds, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 					__sync_add_and_fetch(&PgHGM->status.client_connections_aborted, 1);
@@ -6181,7 +6191,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			}
 #endif // DEBUG
 			sprintf(_s, "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			client_myds->myprot.generate_error_packet(true,false, _s, "28P01", true);
+			client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD, true, true);
 			proxy_error("%s\n", _s);
 			free(_s);
 			__sync_fetch_and_add(&PgHGM->status.access_denied_wrong_password, 1);
@@ -6246,13 +6256,15 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		/* FIXME: temporary */
 		l_free(pkt->size, pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1045, (char*)"28000", (char*)"Command not supported", true);
+		client_myds->myprot.generate_error_packet(true, true, "Command not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+			false, true);
 		client_myds->DSS = STATE_SLEEP;
 	}
 	else {
 		l_free(pkt->size, pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1045, (char*)"28000", (char*)"Command not supported", true);
+		client_myds->myprot.generate_error_packet(true, true, "Command not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+			false, true);
 		client_myds->DSS = STATE_SLEEP;
 	}
 }
@@ -6260,7 +6272,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t* pkt) {
 	l_free(pkt->size, pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 9003, (char*)"28000", (char*)"Command not supported");
+	client_myds->myprot.generate_error_packet(true, true, "Command not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false);
 	client_myds->DSS = STATE_SLEEP;
 }
 
@@ -7040,7 +7052,8 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								sprintf(errmsg, m, value1.c_str());
 							}
 							client_myds->DSS = STATE_QUERY_SENT_NET;
-							client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1115, (char*)"42000", errmsg, true);
+							client_myds->myprot.generate_error_packet(true, true, errmsg,
+								PGSQL_ERROR_CODES::ERRCODE_SYNTAX_ERROR_OR_ACCESS_RULE_VIOLATION, false, true);
 							client_myds->DSS = STATE_SLEEP;
 							status = WAITING_CLIENT_DATA;
 							free(errmsg);
@@ -7299,7 +7312,8 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					errmsg = (char*)malloc(charset.length() + strlen(m));
 					sprintf(errmsg, m, charset.c_str());
 					client_myds->DSS = STATE_QUERY_SENT_NET;
-					client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1115, (char*)"42000", errmsg, true);
+					client_myds->myprot.generate_error_packet(true, true, errmsg,
+						PGSQL_ERROR_CODES::ERRCODE_SYNTAX_ERROR_OR_ACCESS_RULE_VIOLATION, false, true);
 					client_myds->DSS = STATE_SLEEP;
 					status = WAITING_CLIENT_DATA;
 					free(errmsg);
@@ -7519,7 +7533,8 @@ __exit_set_destination_hostgroup:
 				client_myds->DSS = STATE_QUERY_SENT_NET;
 				char buf[140];
 				sprintf(buf, "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d", locked_on_hostgroup, current_hostgroup);
-				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 9006, (char*)"Y0000", buf);
+				client_myds->myprot.generate_error_packet(true, true, buf,
+					PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
 				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 				RequestEnd(NULL);
 				l_free(pkt->size, pkt->ptr);
@@ -7897,58 +7912,81 @@ void PgSQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Conn
 	}
 }
 
-void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PGconn* pgsql, PgSQL_Query_Result* query_result, unsigned int warning_count, PgSQL_Data_Stream* _myds) {
-	if (pgsql == NULL) {
+void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Data_Stream* _myds) {
+	if (_conn == NULL) {
 		// error
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 2013, (char*)"HY000", (char*)"Lost connection to MySQL server during query");
+		client_myds->myprot.generate_error_packet(true, true, "Lost connection to PostgreSQL server during query", 
+			PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE, false);
 		return;
 	}
 
-	assert(query_result);
+	PgSQL_Query_Result* query_result = _conn->query_result;
 
-	bool transfer_started = query_result->is_transfer_started();
-	bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
-	CurrentQuery.rows_sent = query_result->get_num_rows();
-	bool com_field_list = client_myds->com_field_list;
-	assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
-	if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
-		/*if (qpo && qpo->cache_ttl > 0 && com_field_list == false) { // the resultset should be cached
-			if (mysql_errno(pgsql) == 0 &&
-				(mysql_warning_count(pgsql) == 0 ||
-					mysql_thread___query_cache_handle_warnings == 1)) { // no errors
-				if (
-					(qpo->cache_empty_result == 1)
-					|| (
-						(qpo->cache_empty_result == -1)
-						&&
-						(thread->variables.query_cache_stores_empty_result || query_result->num_rows)
-						)
-					) {
-					client_myds->resultset->copy_add(client_myds->PSarrayOUT, 0, client_myds->PSarrayOUT->len);
-					client_myds->resultset_length = query_result->resultset_size;
-					unsigned char* aa = client_myds->resultset2buffer(false);
-					while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len - 1, NULL);
-					bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-					GloQC->set(
-						client_myds->myconn->userinfo->hash,
-						(const unsigned char*)CurrentQuery.QueryPointer,
-						CurrentQuery.QueryLength,
-						aa,
-						client_myds->resultset_length,
-						thread->curtime / 1000,
-						thread->curtime / 1000,
-						thread->curtime / 1000 + qpo->cache_ttl,
-						deprecate_eof_active
-					);
-					l_free(client_myds->resultset_length, aa);
-					client_myds->resultset_length = 0;
-				}
+	if (query_result && query_result->get_result_packet_type() != PGSQL_QUERY_RESULT_EMPTY) {
+		bool transfer_started = query_result->is_transfer_started();
+		// if there is an error, it will be false so results are not cached
+		bool is_tuple = query_result->get_result_packet_type() == (PGSQL_QUERY_RESULT_TUPLE | PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY); 
+		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
+		CurrentQuery.rows_sent = query_result->get_num_rows();
+		assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
+		if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
+			if (qpo && qpo->cache_ttl > 0 && is_tuple == true) { // the resultset should be cached
+				/*if (mysql_errno(pgsql) == 0 &&
+					(mysql_warning_count(pgsql) == 0 ||
+						mysql_thread___query_cache_handle_warnings == 1)) { // no errors
+					if (
+						(qpo->cache_empty_result == 1)
+						|| (
+							(qpo->cache_empty_result == -1)
+							&&
+							(thread->variables.query_cache_stores_empty_result || query_result->num_rows)
+							)
+						) {
+						client_myds->resultset->copy_add(client_myds->PSarrayOUT, 0, client_myds->PSarrayOUT->len);
+						client_myds->resultset_length = query_result->resultset_size;
+						unsigned char* aa = client_myds->resultset2buffer(false);
+						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len - 1, NULL);
+						bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+						GloQC->set(
+							client_myds->myconn->userinfo->hash,
+							(const unsigned char*)CurrentQuery.QueryPointer,
+							CurrentQuery.QueryLength,
+							aa,
+							client_myds->resultset_length,
+							thread->curtime / 1000,
+							thread->curtime / 1000,
+							thread->curtime / 1000 + qpo->cache_ttl,
+							deprecate_eof_active
+						);
+						l_free(client_myds->resultset_length, aa);
+						client_myds->resultset_length = 0;
+					}
+				}*/
 			}
-		}*/
-	}
-	
-	/*else { // no result set
-		int myerrno = mysql_errno(pgsql);
+		}
+	} else { // if query result is empty, means there was an error before query result was generated
+
+		if (!_conn->is_error_present())
+			assert(0); // if query result is empty, there should be an error present in connection.
+
+		if (_myds && _myds->killed_at) { 
+			if (_myds->kill_type == 0) {
+				client_myds->myprot.generate_error_packet(true, true, (char*)"Query execution was interrupted, query_timeout exceeded",
+					PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED, false);
+				//PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _conn->parent->myhgc->hid, _conn->parent->address, _conn->parent->port, 1907);
+			}
+			else {
+				client_myds->myprot.generate_error_packet(true, true, (char*)"Query execution was interrupted",
+					PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED, false);
+				//PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _conn->parent->myhgc->hid, _conn->parent->address, _conn->parent->port, 1317);
+			}
+		}
+		else {
+			client_myds->myprot.generate_error_packet(true, true, _conn->get_error_message().c_str(), _conn->get_error_code(), false);
+			//PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _conn->parent->myhgc->hid, _conn->parent->address, _conn->parent->port, 1907);
+		}
+
+		/*int myerrno = mysql_errno(pgsql);
 		if (myerrno == 0) {
 			unsigned int num_rows = mysql_affected_rows(pgsql);
 			uint16_t setStatus = (active_transactions ? SERVER_STATUS_IN_TRANS : 0);
@@ -7976,8 +8014,9 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PGconn* pgsql, PgSQL_Query_Result
 				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, mysql_errno(pgsql), sqlstate, mysql_error(pgsql));
 			}
 			//client_myds->pkt_sid++;
-		}*/
-	//}
+		}
+		*/
+	}
 }
 
 void PgSQL_Session::SQLite3_to_MySQL(SQLite3_result* result, char* error, int affected_rows, MySQL_Protocol* myprot, bool in_transaction, bool deprecate_eof_active) {
@@ -8050,10 +8089,12 @@ void PgSQL_Session::SQLite3_to_MySQL(SQLite3_result* result, char* error, int af
 		if (error) {
 			// there was an error
 			if (strcmp(error, (char*)"database is locked") == 0) {
-				myprot->generate_pkt_ERR(true, NULL, NULL, sid, 1205, (char*)"HY000", error);
+				client_myds->myprot.generate_error_packet(true, true, error,
+					PGSQL_ERROR_CODES::ERRCODE_T_R_DEADLOCK_DETECTED, false);
 			}
 			else {
-				myprot->generate_pkt_ERR(true, NULL, NULL, sid, 1045, (char*)"28000", error);
+				client_myds->myprot.generate_error_packet(true, true, error,
+					PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION, false);
 			}
 		}
 		else {

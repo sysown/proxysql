@@ -182,24 +182,33 @@ private:
 };
 
 class PgSQL_Protocol;
+
+#define PGSQL_QUERY_RESULT_EMPTY	0x00
+#define PGSQL_QUERY_RESULT_TUPLE	0x01
+#define PGSQL_QUERY_RESULT_COMMAND  0x02
+#define PGSQL_QUERY_RESULT_READY	0x04
+#define PGSQL_QUERY_RESULT_ERROR	0x08
+#define PGSQL_QUERY_RESULT_WARNING	0x10
+
 class PgSQL_Query_Result {
 public:
 	PgSQL_Query_Result();
 	~PgSQL_Query_Result();
 
-	void init(PgSQL_Protocol* _proto, PGconn* _conn);
-	unsigned int add_row_description(PGresult* result);
-	unsigned int add_row(PGresult* result);
-	unsigned int add_command_completion(PGresult* result);
-	unsigned int add_error(PgSQL_Data_Stream* _myds, PGresult* result);
+	void init(PgSQL_Protocol* _proto, PgSQL_Data_Stream* _myds, PgSQL_Connection* _conn);
+	unsigned int add_row_description(const PGresult* result);
+	unsigned int add_row(const PGresult* result);
+	unsigned int add_command_completion(const PGresult* result);
+	unsigned int add_error(const PGresult* result);
+	unsigned int add_ready_status(PGTransactionStatusType txn_status);
 	bool get_resultset(PtrSizeArray* PSarrayFinal);
 	
 	unsigned long long current_size();
 	inline bool is_transfer_started() const { return transfer_started; }
-	inline bool is_resultset_completed() const { return resultset_completed; }
 	inline unsigned long long get_num_rows() const { return num_rows; }
 	inline unsigned int get_num_fields() const { return num_fields; }
 	inline unsigned long long get_resultset_size() const { return resultset_size; }
+	inline uint8_t get_result_packet_type() const { return result_packet_type; }
 
 private:
 	void buffer_init();
@@ -214,13 +223,12 @@ private:
 	unsigned long long pkt_count;
 	unsigned int num_fields;
 	unsigned int buffer_used;
-	//ExecStatusType	result_status;
 	unsigned char* buffer;
 	PgSQL_Protocol* proto;
-	PGconn* pgsql_conn;
-	//PGresult* result;
+	PgSQL_Data_Stream* myds;
+	PgSQL_Connection* conn;
 	bool transfer_started;
-	bool resultset_completed;
+	uint8_t result_packet_type;
 
 	friend class PgSQL_Protocol;
 };
@@ -240,15 +248,16 @@ public:
 	EXECUTION_STATE process_handshake_response_packet(unsigned char* pkt, unsigned int len);
 	void welcome_client();
 
-	void generate_error_packet(bool send, bool ready, const char* msg, const char* code, bool fatal, PtrSize_t* _ptr = NULL);
+	void generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track = false, PtrSize_t* _ptr = NULL);
 	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, PtrSize_t* _ptr = NULL);
 
 	//bool generate_row_description(bool send, PgSQL_Query_Result* rs, const PG_Fields& fields, unsigned int size);
 	
-	unsigned int copy_row_description_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
-	unsigned int copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
-	unsigned int copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
-	unsigned int copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result);
+	unsigned int copy_row_description_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
+	unsigned int copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
+	unsigned int copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
+	unsigned int copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
+	unsigned int copy_ready_status_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGTransactionStatusType txn_status);
 private:
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
 	void load_conn_parameters(pgsql_hdr* pkt, bool startup);

@@ -10830,7 +10830,7 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
 		sprintf(new_msg, "%s%s", prefix_msg, msg);
-		myds->myprot.generate_error_packet(true,true, new_msg, NULL, false);
+		myds->myprot.generate_error_packet(true, true, new_msg, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
 	}

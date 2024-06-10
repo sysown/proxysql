@@ -684,7 +684,7 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 
 	if (!user || *user == '\0') {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p. no username supplied.\n", (*myds), (*myds)->sess);
-		generate_error_packet(true, false, "no username supplied", NULL, true);
+		generate_error_packet(true, false, "no username supplied", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 		return false;
 	}
 
@@ -731,7 +731,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 	if (!user || *user == '\0') {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Client password pkt before startup packet.\n", (*myds), (*myds)->sess, user);
-		generate_error_packet(true, false, "client password pkt before startup packet", NULL, true);
+		generate_error_packet(true, false, "client password pkt before startup packet", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 		goto __exit_process_pkt_handshake_response;
 	}
 
@@ -802,7 +802,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 			if (!pass || *pass == '\0') {
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds), (*myds)->sess, user);
-				generate_error_packet(true, false, "empty password returned by client", NULL, true);
+				generate_error_packet(true, false, "empty password returned by client", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 				break;
 			}
 
@@ -841,7 +841,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Selected SASL mechanism: %s.\n", (*myds), (*myds)->sess, user, mech);
 				if (strcmp(mech, "SCRAM-SHA-256") != 0) {
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Client selected an invalid SASL authentication mechanism: %s.\n", (*myds), (*myds)->sess, user, mech);
-					generate_error_packet(true, false, "client selected an invalid SASL authentication mechanism", NULL, true);
+					generate_error_packet(true, false, "client selected an invalid SASL authentication mechanism", 
+						PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 					break;
 				}
 
@@ -861,7 +862,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 				if (!scram_handle_client_first((*myds)->scram_state, &stored_user_info, ((const unsigned char*)hdr.data.ptr) + read_pos, length)) {
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed\n", (*myds), (*myds)->sess, user);
-					generate_error_packet(true,false, "SASL authentication failed", NULL, true);
+					generate_error_packet(true, false, "SASL authentication failed", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 					break;
 				}
 
@@ -908,7 +909,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		}
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. User not found in the database.\n", (*myds), (*myds)->sess, user);
-		generate_error_packet(true,false, "User not found", NULL, true);
+		generate_error_packet(true, false, "User not found", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 	}
 	// set the default session charset
 	//(*myds)->sess->default_charset = charset;
@@ -1010,9 +1011,14 @@ void PgSQL_Protocol::welcome_client() {
 	//(*myds)->sess->status = WAITING_CLIENT_DATA;
 }
 
-void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, const char* code, bool fatal, PtrSize_t* _ptr) {
+void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
+
+	if (send) {
+		// in case of fatal error we dont generate ready packets
+		ready = !fatal;
+	}
 
 	PG_pkt pgpkt{};
 
@@ -1022,7 +1028,7 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	pgpkt.write_generic('E', "cscscscsc", 
 		'S', fatal ? "FATAL" : "ERROR",
 		'V', fatal ? "FATAL" : "ERROR",
-		'C', code ? code : "08P01", 'M', msg, 0);
+		'C', PgSQL_Error_Helper::get_error_code(code), 'M', msg, 0);
 
 	if (ready) {
 		pgpkt.write_ReadyForQuery();
@@ -1057,6 +1063,12 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	if (_ptr) {
 		_ptr->ptr = buff.first;
 		_ptr->size = buff.second;
+	}
+
+	if (track) {
+		if (*myds && (*myds)->sess && (*myds)->sess->thread) {
+			(*myds)->sess->thread->status_variables.stvar[st_var_generated_pkt_err]++;
+		}
 	}
 }
 
@@ -1310,7 +1322,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 //}
 
 
-unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result) {
 	assert(pg_query_result);
 	assert(result);
 	
@@ -1367,7 +1379,7 @@ unsigned int PgSQL_Protocol::copy_row_description_to_PgSQL_Query_Result(bool sen
 	return size;
 }
 
-unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result) {
 	assert(pg_query_result);
 	assert(result);
 	assert(pg_query_result->num_fields);
@@ -1428,17 +1440,15 @@ unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Que
 	return total_size;
 }
 
-unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result) {
 	assert(pg_query_result);
 	assert(result);
 
-	const char* tag = PQcmdStatus(result);
+	const char* tag = PQcmdStatus((PGresult*)result);
 	if (!tag) assert(0); // for testing it should not be null
 
-	const unsigned int tag_len = strlen(tag) + 1;
-	unsigned int size = 1 + 4 + tag_len + 1 + 4 + 1; // 'C', length, tag, Z, length, I
+	const unsigned int size = strlen(tag) + 1 + 1 + 4; // tag length, null byte, 'C', length, tag
 	bool alloced_new_buffer = false;
-	
 	
 	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
 	
@@ -1451,11 +1461,8 @@ unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool 
 	PG_pkt pgpkt(_ptr, size);
 
 	pgpkt.put_char('C');
-	pgpkt.put_uint32(tag_len + 4);
+	pgpkt.put_uint32(size - 1);
 	pgpkt.put_string(tag);
-	pgpkt.put_char('Z');
-	pgpkt.put_uint32(4 + 1);
-	pgpkt.put_char('I');
 
 	if (send == true) { 
 		// not supported
@@ -1469,11 +1476,11 @@ unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool 
 		//pg_query_result->buffer_to_PSarrayOut();
 		pg_query_result->PSarrayOUT.add(_ptr, size);
 	}
-	pg_query_result->pkt_count+=2;
+	pg_query_result->pkt_count++;
 	return size;
 }
 
-unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGresult* result) {
+unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result) {
 	assert(pg_query_result);
 	assert(result);
 
@@ -1496,7 +1503,7 @@ unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Q
 	const char* source_line = PQresultErrorField(result, PG_DIAG_SOURCE_LINE);
 	const char* source_function = PQresultErrorField(result, PG_DIAG_SOURCE_FUNCTION);
 
-	unsigned int size = 1 + 4 + 1 + 1 + 4 + 1; // 'E', length, null byte , Z, length, I
+	unsigned int size = 1 + 4 + 1; // 'E', length, null byte
 
 	if (severity) size += strlen(severity) + 1 + 1;
 	if (text) size += strlen(text) + 1 + 1;
@@ -1529,7 +1536,7 @@ unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Q
 	PG_pkt pgpkt(_ptr, size);
 
 	pgpkt.put_char('E');
-	pgpkt.put_uint32(size - (6 + 1)); // subtracting ready packet size
+	pgpkt.put_uint32(size - 1); 
 	if (severity) {
 		pgpkt.put_char('S');
 		pgpkt.put_string(severity);
@@ -1603,9 +1610,6 @@ unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Q
 		pgpkt.put_string(source_function);
 	}
 	pgpkt.put_char('\0');
-	pgpkt.put_char('Z');
-	pgpkt.put_uint32(4 + 1);
-	pgpkt.put_char('I');
 
 	if (send == true) {
 		// not supported
@@ -1619,18 +1623,61 @@ unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Q
 		//pg_query_result->buffer_to_PSarrayOut();
 		pg_query_result->PSarrayOUT.add(_ptr, size);
 	}
-	pg_query_result->pkt_count += 2;
+	pg_query_result->pkt_count++;
+	return size;
+}
+
+unsigned int PgSQL_Protocol::copy_ready_status_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGTransactionStatusType txn_status) {
+	assert(pg_query_result);
+
+	char txn_state = 'I';
+	if (txn_status == PQTRANS_INTRANS)
+		txn_state = 'T';
+	else if (txn_status == PQTRANS_INERROR)
+		txn_state = 'E';
+
+	const unsigned int size = 1 + 4 + 1; // Z, length, I/T/E
+	bool alloced_new_buffer = false;
+
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
+
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+
+	PG_pkt pgpkt(_ptr, size);
+
+	pgpkt.put_char('Z');
+	pgpkt.put_uint32(size - 1);
+	pgpkt.put_char(txn_state);
+
+	if (send == true) {
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
+
+	pg_query_result->resultset_size += size;
+
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
+	}
+	pg_query_result->pkt_count++;
 	return size;
 }
 
 PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer = NULL;
 	transfer_started = false;
-	resultset_completed = false;
 	buffer_used = 0;
 	resultset_size = 0;
+	num_fields = 0;
 	num_rows = 0;
 	pkt_count = 0;
+	result_packet_type = PGSQL_QUERY_RESULT_EMPTY;
 }
 
 PgSQL_Query_Result::~PgSQL_Query_Result() {
@@ -1653,16 +1700,12 @@ void PgSQL_Query_Result::buffer_init() {
 	buffer_used = 0;
 }
 
-void PgSQL_Query_Result::init(PgSQL_Protocol* _proto, PGconn* _conn) {
+void PgSQL_Query_Result::init(PgSQL_Protocol* _proto, PgSQL_Data_Stream* _myds, PgSQL_Connection* _conn) {
 	PROXY_TRACE2();
 	transfer_started = false;
-	resultset_completed = false;
-	//resultset_size = 0;
-	//sid = 0;
-	num_rows = 0;
 	proto = _proto;
-	//result = NULL;
-	pgsql_conn = _conn;
+	conn = _conn;
+	myds = _myds;
 	buffer_init();
 
 	if (proto == NULL) {
@@ -1670,57 +1713,71 @@ void PgSQL_Query_Result::init(PgSQL_Protocol* _proto, PGconn* _conn) {
 	}
 }
 
-unsigned int PgSQL_Query_Result::add_row_description(PGresult* result) {
-	return proto->copy_row_description_to_PgSQL_Query_Result(false, this, result);
+unsigned int PgSQL_Query_Result::add_row_description(const PGresult* result) {
+	const unsigned int res = proto->copy_row_description_to_PgSQL_Query_Result(false, this, result);
+	result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+	return res;
 }
 
-unsigned int PgSQL_Query_Result::add_row(PGresult* result) {
+unsigned int PgSQL_Query_Result::add_row(const PGresult* result) {
+	//result_type |= PGSQL_QUERY_RESULT_TUPLE;
 	return proto->copy_row_to_PgSQL_Query_Result(false,this, result);
 }
 
-unsigned int PgSQL_Query_Result::add_error(PgSQL_Data_Stream* _myds, PGresult* result) {
+unsigned int PgSQL_Query_Result::add_error(const PGresult* result) {
 	unsigned int size = 0;
-	if (_myds && _myds->killed_at) { // see case #750
-		PtrSize_t pkt;
 
-		if (_myds->kill_type == 0) {
-			proto->generate_error_packet(false, true, (char*)"Query execution was interrupted, query_timeout exceeded", "57014", false, &pkt);
-			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1907);
-		}
-		else {
-			proto->generate_error_packet(false, true, (char*)"Query execution was interrupted", "57014", false, &pkt);
-			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1317);
+	if (result) {
+		size = proto->copy_error_to_PgSQL_Query_Result(false, this, result);
+		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
+	}
+	else {
+		PtrSize_t pkt;
+		if (myds && myds->killed_at) { // see case #750
+			if (myds->kill_type == 0) {
+				proto->generate_error_packet(false, false, (char*)"Query execution was interrupted, query_timeout exceeded",
+					PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED, false, false, &pkt);
+				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
+			} else {
+				proto->generate_error_packet(false, false, (char*)"Query execution was interrupted",
+					PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED, false, false, &pkt);
+				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1317);
+			}
+		} else if (conn->is_error_present()) {
+			proto->generate_error_packet(false, false, conn->get_error_message().c_str(), conn->get_error_code(), false, false, &pkt);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
+		} else {
+			assert(0); // should never reach here
 		}
 
 		PSarrayOUT.add(pkt.ptr, pkt.size);
 		resultset_size += pkt.size;
 		size = pkt.size;
-	} else if (result) {
-		
-		size = proto->copy_error_to_PgSQL_Query_Result(false, this, result);
-		// get error from connection
-		//proto->generate_error_packet(false, true, "Unknown error", sqlstate, false, &pkt);
-		// TODO: Check this is a mysql error
-		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1907);
-	} else {
-
 	}
 
-	buffer_to_PSarrayOut();
-	resultset_completed = true;
+	result_packet_type |= PGSQL_QUERY_RESULT_ERROR;
 	return size;
+}
+
+unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_status) {
+	const unsigned int bytes = proto->copy_ready_status_to_PgSQL_Query_Result(false, this, txn_status);
+	buffer_to_PSarrayOut();
+	result_packet_type |= PGSQL_QUERY_RESULT_READY;
+	return bytes;
 }
 
 bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
 	assert(buffer_used == 0); // we still have data in the buffer
 	transfer_started = true;
+	// Ready packet confirms that the result is complete
+	bool result_complete = (result_packet_type & PGSQL_QUERY_RESULT_READY);
 	if (proto) {
 		PSarrayFinal->copy_add(&PSarrayOUT, 0, PSarrayOUT.len);
 		while (PSarrayOUT.len)
 			PSarrayOUT.remove_index(PSarrayOUT.len - 1, NULL);
 	}
 	reset();
-	return resultset_completed;
+	return result_complete;
 }
 
 void PgSQL_Query_Result::buffer_to_PSarrayOut() {
@@ -1755,10 +1812,9 @@ unsigned long long PgSQL_Query_Result::current_size() {
 	return intsize;
 }
 
-unsigned int PgSQL_Query_Result::add_command_completion(PGresult* result) {
+unsigned int PgSQL_Query_Result::add_command_completion(const PGresult* result) {
 	const unsigned int bytes = proto->copy_command_completion_to_PgSQL_Query_Result(false, this, result);
-	buffer_to_PSarrayOut();
-	resultset_completed = true;
+	result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 	return bytes;
 }
 
@@ -1787,4 +1843,5 @@ void PgSQL_Query_Result::reset() {
 	num_fields = 0;
 	num_rows = 0;
 	pkt_count = 0;
+	result_packet_type = PGSQL_QUERY_RESULT_EMPTY;
 }

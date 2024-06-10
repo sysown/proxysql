@@ -1,5 +1,5 @@
-#ifndef __CLASS_POSTGRESQL_LOGGER_H
-#define __CLASS_POSTGRESQL_LOGGER_H
+#ifndef __CLASS_PGSQL_LOGGER_H
+#define __CLASS_PGSQL_LOGGER_H
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -96,5 +96,4 @@ class PgSQL_Logger {
 	void wrunlock();
 };
 
-
-#endif /* __CLASS_POSTGRESQL_LOGGER_H */
+#endif /* __CLASS_PGSQL_LOGGER_H */
