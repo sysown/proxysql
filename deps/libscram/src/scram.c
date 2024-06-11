@@ -28,6 +28,8 @@
 #include "common/scram-common.h"
 #include "common/hmac.h"
 
+#include <stdio.h>
+
 #define MAX_ERROR_LENGTH 256
 
 // Define thread-local storage for the error buffer
