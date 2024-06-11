@@ -127,7 +127,8 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 ifeq ($(SYS_KERN),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
-	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=yes && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=yes
+	cd curl/curl && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE}
 
 curl: curl/curl/lib/.libs/libcurl.a
 
@@ -303,7 +304,7 @@ pcre: pcre/pcre/.libs/libpcre.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a : libssl/openssl/libssl.a
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
-	cd postgresql/postgresql && ./configure --with-ssl=openssl --with-includes=$(shell pwd)/libssl/openssl/include/openssl --with-libraries=$(shell pwd)/libssl/openssl/lib --enable-static --without-readline 
+	cd postgresql/postgresql && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl ./configure --with-ssl=openssl --with-includes=$(shell pwd)/libssl/openssl/include/ --with-libraries=$(shell pwd)/libssl/openssl/ --without-readline 
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
 	#cd postgresql/postgresql && CC=${CC} CXX=${CXX} ${MAKE} -f src/interfaces/libpq/Makefile all
 
@@ -313,14 +314,14 @@ libusual/libusual/.libs/libusual.a: libssl/openssl/libssl.a
 	cd libusual && rm -rf libusual-*/ || true
 	cd libusual && tar -zxf libusual-*.tar.gz
 	cd libusual/libusual && ./autogen.sh
-	cd libusual/libusual && ./configure --with-openssl=$(shell pwd)/libssl/openssl/ --disable-shared
+	cd libusual/libusual && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl ./configure --with-openssl=$(shell pwd)/libssl/openssl/ --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a
 
 libscram/lib/libscram.a: libssl/openssl/libssl.a postgresql/postgresql/src/interfaces/libpq/libpq.a 
 	cd libscram && rm -rf lib/* || true
-	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR=$(shell pwd)/libssl/openssl/ POSTGRESQL_DIR=$(shell pwd)/postgresql/postgresql
+	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR=$(shell pwd)/libssl/openssl/ POSTGRESQL_DIR=$(shell pwd)/postgresql/postgresql/
 
 libscram: libscram/lib/libscram.a
 
