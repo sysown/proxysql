@@ -75,7 +75,7 @@
 #include <regex>
 #include <utility>
 
-#include <libconfig.h>
+#include "libconfig.h"
 
 #include "proxysql_utils.h"
 
