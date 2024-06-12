@@ -10,8 +10,8 @@
 #include <mutex>
 
 // Headers for declaring Prometheus counters
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 #include "thread.h"
 #include "wqueue.h"

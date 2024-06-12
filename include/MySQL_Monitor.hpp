@@ -1,8 +1,8 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
 #include <future>
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
