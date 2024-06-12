@@ -12,7 +12,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 
-#include <openssl/x509v3.h>
+#include "openssl/x509v3.h"
 
 
 /**

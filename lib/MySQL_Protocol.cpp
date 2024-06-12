@@ -2,7 +2,7 @@
 using json = nlohmann::json;
 #define PROXYJSON
 
-#include <openssl/rand.h>
+#include "openssl/rand.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "re2/re2.h"

@@ -43,7 +43,7 @@ using json = nlohmann::json;
 
 #include "curl/curl.h"
 
-#include <openssl/x509v3.h>
+#include "openssl/x509v3.h"
 
 #include <sys/mman.h>
 
@@ -78,7 +78,7 @@ char *binary_sha1 = NULL;
 #endif
 
 static pthread_mutex_t *lockarray;
-#include <openssl/crypto.h>
+#include "openssl/crypto.h"
 
 
 // this fuction will be called as a deatached thread
