@@ -67,8 +67,8 @@ struct bio_st {
     CRYPTO_RWLOCK *lock;
 };
 
-#elif (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30200000
-#pragma message "libssl 3.2.x detected"
+#elif (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30200000 || (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30300000
+#pragma message "libssl 3.2.x / 3.3.x detected"
 struct bio_st {
     OSSL_LIB_CTX *libctx;
     const BIO_METHOD *method;
