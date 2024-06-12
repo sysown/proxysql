@@ -17,26 +17,6 @@ services:
 
 ####################################################################################################
 ####################################################################################################
-  centos7_build:
-    extends:
-      service: _build
-    image: proxysql/packaging:build-centos7
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - PKG_RELEASE=centos7
-
-  centos7_dbg_build:
-    extends:
-      service: centos7_build
-    environment:
-      - PKG_RELEASE=dbg-centos7
-      - PROXYSQL_BUILD_TYPE=debug
-
-####################################################################################################
   centos8_build:
     extends:
       service: _build
@@ -226,25 +206,6 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
-####################################################################################################
-  ubuntu16_build:
-    extends:
-      service: _build
-    image: proxysql/packaging:build-ubuntu16
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - PKG_RELEASE=ubuntu16
-
-  ubuntu16_dbg_build:
-    extends:
-      service: ubuntu16_build
-    environment:
-      - PKG_RELEASE=dbg-ubuntu16
-      - PROXYSQL_BUILD_TYPE=debug
-
 ####################################################################################################
   ubuntu18_build:
     extends:
