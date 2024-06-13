@@ -10,7 +10,7 @@
 #include <regex>
 
 #include "curl/curl.h"
-#include <mysql.h>
+#include "mysql.h"
 #include "sqlite3db.h"
 
 #include "command_line.h"

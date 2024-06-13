@@ -12,8 +12,8 @@
 #include <thread>
 
 #include "json.hpp"
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysql/mysqld_error.h"
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h" 
