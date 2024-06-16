@@ -221,11 +221,11 @@ private:
 	void SetQueryTimeout();
 	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, PgSQL_Data_Stream* myds, bool& prepared_stmt_with_no_params);
 	void handler_rc0_PROCESSING_STMT_EXECUTE(PgSQL_Data_Stream* myds);
-	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds, int myerr, char** errmsg);
-	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn, int myerr, char* errmsg);
-	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int myerr, char** errmsg, int& handler_ret);
-	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool& wrong_pass);
-	void handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn);
+	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds);
+	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
+	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
+	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
+	void handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds);
 	int RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(PgSQL_Connection* myconn);
@@ -410,9 +410,10 @@ public:
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool*);
 	bool has_any_backend();
-	void detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, int myerr, const char* message, bool verbose = false);
+	void detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, bool verbose = false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
+	void set_previous_status_mode3(bool allow_execute = true);
 };
 
 #define PgSQL_KILL_QUERY       1

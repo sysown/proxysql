@@ -183,12 +183,12 @@ private:
 
 class PgSQL_Protocol;
 
-#define PGSQL_QUERY_RESULT_EMPTY	0x00
+#define PGSQL_QUERY_RESULT_NO_DATA	0x00
 #define PGSQL_QUERY_RESULT_TUPLE	0x01
-#define PGSQL_QUERY_RESULT_COMMAND  0x02
+#define PGSQL_QUERY_RESULT_COMMAND	0x02
 #define PGSQL_QUERY_RESULT_READY	0x04
 #define PGSQL_QUERY_RESULT_ERROR	0x08
-#define PGSQL_QUERY_RESULT_WARNING	0x10
+#define PGSQL_QUERY_RESULT_EMPTY	0x10
 
 class PgSQL_Query_Result {
 public:
@@ -200,6 +200,7 @@ public:
 	unsigned int add_row(const PGresult* result);
 	unsigned int add_command_completion(const PGresult* result);
 	unsigned int add_error(const PGresult* result);
+	unsigned int add_empty_query_response(const PGresult* result);
 	unsigned int add_ready_status(PGTransactionStatusType txn_status);
 	bool get_resultset(PtrSizeArray* PSarrayFinal);
 	
@@ -257,7 +258,9 @@ public:
 	unsigned int copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
+	unsigned int copy_empty_query_response_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_ready_status_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGTransactionStatusType txn_status);
+
 private:
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
 	void load_conn_parameters(pgsql_hdr* pkt, bool startup);

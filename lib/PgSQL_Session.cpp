@@ -1851,7 +1851,7 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 			}
 			else { // rc==-1
 				int myerr = mysql_errno(myconn->pgsql);
-				detected_broken_connection(__FILE__, __LINE__, __func__, "during ping", myconn, myerr, mysql_error(myconn->pgsql), true);
+				detected_broken_connection(__FILE__, __LINE__, __func__, "during ping", myconn,  true);
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
@@ -2031,22 +2031,8 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect = strdup(tmp_init_connect);
-			switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the PgSQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
 	}
@@ -2101,18 +2087,8 @@ bool PgSQL_Session::handler_again___verify_backend_session_track_gtids() {
 		mybe->server_myds->myconn->options.session_track_gtids_int =
 			SpookyHash::Hash32((char*)"OWN_GTID", strlen((char*)"OWN_GTID"), 10);
 		// we now switch status to set session_track_gtids
-		switch (status) {
-		case PROCESSING_QUERY:
-		case PROCESSING_STMT_PREPARE:
-		case PROCESSING_STMT_EXECUTE:
-			previous_status.push(status);
-			break;
-		default:
-			// LCOV_EXCL_START
-			assert(0);
-			break;
-			// LCOV_EXCL_STOP
-		}
+		// Sets the previous status of the PgSQL session according to the current status.
+		set_previous_status_mode3();
 		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
 	}
 	return ret;
@@ -2200,45 +2176,15 @@ bool PgSQL_Session::handler_again___verify_backend_autocommit() {
 			// enforce_autocommit_on_reads is disabled
 			// we need to check if it is a SELECT not FOR UPDATE
 			if (CurrentQuery.is_select_NOT_for_update() == false) {
-				//previous_status.push(PROCESSING_QUERY);
-				switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-				}
+				// Sets the previous status of the PgSQL session according to the current status.
+				set_previous_status_mode3();
 				NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 			}
 		}
 		else {
 			// in every other cases, enforce autocommit
-			//previous_status.push(PROCESSING_QUERY);
-			switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the PgSQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 		}
 	}
@@ -2287,44 +2233,14 @@ bool PgSQL_Session::handler_again___verify_backend_user_schema() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
 	if (client_myds->myconn->userinfo->hash != mybe->server_myds->myconn->userinfo->hash) {
 		if (strcmp(client_myds->myconn->userinfo->username, myds->myconn->userinfo->username)) {
-			//previous_status.push(PROCESSING_QUERY);
-			switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the PgSQL session according to the current status.
+			set_previous_status_mode3();
 			mybe->server_myds->wait_until = thread->curtime + pgsql_thread___connect_timeout_server * 1000;   // max_timeout
 			NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
 		}
 		if (strcmp(client_myds->myconn->userinfo->schemaname, myds->myconn->userinfo->schemaname)) {
-			//previous_status.push(PROCESSING_QUERY);
-			switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the PgSQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
 		}
 	}
@@ -2334,18 +2250,9 @@ bool PgSQL_Session::handler_again___verify_backend_user_schema() {
 		// the backend connection has some session variable set
 		// that the client never asked for
 		// because we can't unset variables, we will reset the connection
-		switch (status) {
-		case PROCESSING_QUERY:
-		case PROCESSING_STMT_PREPARE:
-		case PROCESSING_STMT_EXECUTE:
-			previous_status.push(status);
-			break;
-		default:
-			// LCOV_EXCL_START
-			assert(0);
-			break;
-			// LCOV_EXCL_STOP
-		}
+		// 
+		// Sets the previous status of the PgSQL session according to the current status.
+		set_previous_status_mode3();
 		mybe->server_myds->wait_until = thread->curtime + pgsql_thread___connect_timeout_server * 1000;   // max_timeout
 		NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
 	}
@@ -2385,7 +2292,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting INIT CONNECT", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting INIT CONNECT", myconn);
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if (rc != -2) { // see PMC-10003
 					if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
@@ -2493,7 +2400,7 @@ bool PgSQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int* _rc) 
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting LDAP USER VARIABLE", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting LDAP USER VARIABLE", myconn);
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
 				}
@@ -2580,7 +2487,7 @@ bool PgSQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int* _rc) {
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting SQL_LOG_BIN", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting SQL_LOG_BIN", myconn);
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
 				}
@@ -2660,7 +2567,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_CHARSET(int* _rc) {
 				}
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "during SET NAMES", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "during SET NAMES", myconn);
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
 				}
@@ -2806,7 +2713,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 				// client error, serious
 				std::string action = "while setting ";
 				action += var_name;
-				detected_broken_connection(__FILE__, __LINE__, __func__, action.c_str(), myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, action.c_str(), myconn);
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
@@ -2925,7 +2832,7 @@ bool PgSQL_Session::handler_again___status_SETTING_MULTI_STMT(int* _rc) {
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting MYSQL_OPTION_MULTI_STATEMENTS", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting MYSQL_OPTION_MULTI_STATEMENTS", myconn);
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
@@ -3000,7 +2907,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_SCHEMA(int* _rc) {
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "during INIT_DB", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "during INIT_DB", myconn);
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
@@ -3276,7 +3183,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_USER_SERVER(int* _rc) {
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "during CHANGE_USER", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "during CHANGE_USER", myconn);
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
 				}
@@ -3381,7 +3288,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int* _rc) {
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
 				// client error, serious
-				detected_broken_connection(__FILE__, __LINE__, __func__, "during SET AUTOCOMMIT", myconn, myerr, mysql_error(myconn->pgsql));
+				detected_broken_connection(__FILE__, __LINE__, __func__, "during SET AUTOCOMMIT", myconn);
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
 				}
@@ -4656,35 +4563,31 @@ __get_pkts_from_client:
 int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = myds->myconn;
 	// the query failed
-	if (
-		// due to #774 , we now read myconn->server_status instead of myconn->parent->status
-		(myconn->server_status == MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
-		||
-		(myconn->server_status == MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic == true && myconn->parent->shunned_and_kill_all_connections == true) // the query failed because the server is shunned due to a serious failure
-		||
-		(myconn->server_status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
-		) {
+	if (myconn->IsServerOffline()) {
+		// Set maximum connect time if connect timeout is configured
 		if (pgsql_thread___connect_timeout_server_max) {
 			myds->max_connect_time = thread->curtime + pgsql_thread___connect_timeout_server_max * 1000;
 		}
+
+		// Variables to track retry and error conditions
 		bool retry_conn = false;
 		if (myconn->server_status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 			thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
 			proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
 			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_LAGGING_SRV);
-		}
-		else {
+		} else {
 			thread->status_variables.stvar[st_var_backend_offline_during_query]++;
 			proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
 			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 		}
+
+		// Retry the query if retries are allowed and conditions permit
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
 			if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 				if (myds->myconn->query_result && myds->myconn->query_result->is_transfer_started()) {
 					// transfer to frontend has started, we cannot retry
-				}
-				else {
+				} else {
 					retry_conn = true;
 					proxy_warning("Retrying query.\n");
 				}
@@ -4694,23 +4597,8 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 		myds->fd = 0;
 		if (retry_conn) {
 			myds->DSS = STATE_NOT_INITIALIZED;
-			//previous_status.push(PROCESSING_QUERY);
-			switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the PgSQL session according to the current status.
+			set_previous_status_mode3();
 			return 1;
 		}
 		return -1;
@@ -4852,25 +4740,24 @@ void PgSQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(PgSQL_Data_Stream* myds)
 // now it returns:
 // true: NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
 // false: continue
-bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds, int myerr, char** errmsg) {
+bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = myds->myconn;
 	bool retry_conn = false;
 	// client error, serious
-	detected_broken_connection(__FILE__, __LINE__, __func__, "running query", myconn, myerr, mysql_error(myconn->pgsql), true);
+	detected_broken_connection(__FILE__, __LINE__, __func__, "running query", myconn, true);
 	if (myds->query_retries_on_failure > 0) {
 		myds->query_retries_on_failure--;
-		if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
-			if (myds->myconn->query_result && myds->myconn->query_result->is_transfer_started()) {
+		if ((myconn->reusable == true) && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false) {
+			if (myconn->query_result && myconn->query_result->is_transfer_started()) {
 				// transfer to frontend has started, we cannot retry
-			}
-			else {
-				if (myds->myconn->pgsql->server_status & SERVER_MORE_RESULTS_EXIST) {
+			} else {
+				// a hack to check if we have pending results. This should never occur.
+				if (myconn->get_last_result() != nullptr) {
 					// transfer to frontend has started, because this is, at least,
 					// the second resultset coming from the server
 					// we cannot retry
-					proxy_warning("Disabling query retry because SERVER_MORE_RESULTS_EXIST is set\n");
-				}
-				else {
+					proxy_warning("Disabling query retry because we were in middle of processing results\n");
+				} else {
 					retry_conn = true;
 					proxy_warning("Retrying query.\n");
 				}
@@ -4881,46 +4768,23 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds, i
 	myds->fd = 0;
 	if (retry_conn) {
 		myds->DSS = STATE_NOT_INITIALIZED;
-		//previous_status.push(PROCESSING_QUERY);
-		switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-		case PROCESSING_QUERY:
-			previous_status.push(PROCESSING_QUERY);
-			break;
-		case PROCESSING_STMT_PREPARE:
-			previous_status.push(PROCESSING_STMT_PREPARE);
-			break;
-		case PROCESSING_STMT_EXECUTE:
-			previous_status.push(PROCESSING_STMT_EXECUTE);
-			break;
-		default:
-			// LCOV_EXCL_START
-			assert(0);
-			break;
-			// LCOV_EXCL_STOP
-		}
-		if (*errmsg) {
-			free(*errmsg);
-			*errmsg = NULL;
-		}
+		// Sets the previous status of the PgSQL session according to the current status.
+		set_previous_status_mode3();
 		return true;
-	}
-	if (*errmsg) {
-		free(*errmsg);
-		*errmsg = NULL;
 	}
 	return false;
 }
 
 
 // this function was inline
-void PgSQL_Session::handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn, int myerr, char* errmsg) {
+void PgSQL_Session::handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn) {
 	if (pgsql_thread___verbose_query_error) {
 		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, myconn->get_error_code_with_message().c_str(), CurrentQuery.QueryParserArgs.digest_text);
 	}
 	else {
 		proxy_warning("Error during query on (%d,%s,%d,%lu): %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->get_error_code_with_message().c_str());
 	}
-	PgHGM->add_pgsql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, myerr, (char*)(errmsg ? errmsg : mysql_error(myconn->pgsql)));
+	PgHGM->add_pgsql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, 9999, (char*)myconn->get_error_code_with_message().c_str());
 }
 
 
@@ -4930,12 +4794,12 @@ void PgSQL_Session::handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn,
 //		if handler_ret == -1 : return
 //		if handler_ret == 0 : NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
 // false: continue
-bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int myerr, char** errmsg, int& handler_ret) {
+bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret) {
 	bool retry_conn = false;
 	PgSQL_Connection* myconn = myds->myconn;
 	handler_ret = 0; // default
-	switch (myerr) {
-	case 1317:  // Query execution was interrupted
+	switch (myconn->get_error_code()) {
+	case PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED:  // Query execution was interrupted
 		if (killed == true) { // this session is being kiled
 			handler_ret = -1;
 			return true;
@@ -4945,60 +4809,32 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 			break;
 		}
 		break;
-	case 1047: // WSREP has not yet prepared node for application use
-	case 1053: // Server shutdown in progress
-		myconn->parent->connect_error(myerr);
+	case PGSQL_ERROR_CODES::ERRCODE_ADMIN_SHUTDOWN: // Server shutdown in progress. Requested by Admin
+	case PGSQL_ERROR_CODES::ERRCODE_CRASH_SHUTDOWN: // Server shutdown in progress
+	case PGSQL_ERROR_CODES::ERRCODE_CANNOT_CONNECT_NOW: // Server in initialization mode and not ready to handle new connections
+		myconn->parent->connect_error(9999);
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
-			if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
+			if ((myconn->reusable == true) && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false) {
 				retry_conn = true;
 				proxy_warning("Retrying query.\n");
 			}
 		}
-		switch (myerr) {
-		case 1047: // WSREP has not yet prepared node for application use
-		case 1053: // Server shutdown in progress
-			myds->destroy_MySQL_Connection_From_Pool(false);
-			break;
-		default:
-			if (pgsql_thread___reset_connection_algorithm == 2) {
-				create_new_session_and_reset_connection(myds);
-			}
-			else {
-				myds->destroy_MySQL_Connection_From_Pool(true);
-			}
-			break;
-		}
+		myds->destroy_MySQL_Connection_From_Pool(false);
 		myconn = myds->myconn;
 		myds->fd = 0;
 		if (retry_conn) {
 			myds->DSS = STATE_NOT_INITIALIZED;
 			//previous_status.push(PROCESSING_QUERY);
-			switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-			}
-			if (*errmsg) {
-				free(*errmsg);
-				*errmsg = NULL;
-			}
+			set_previous_status_mode3(false);
 			return true; // it will call NEXT_IMMEDIATE(CONNECTING_SERVER);
 			//NEXT_IMMEDIATE(CONNECTING_SERVER);
 		}
 		//handler_ret = -1;
 		//return handler_ret;
 		break;
-	case 1153: // ER_NET_PACKET_TOO_LARGE
-		proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, mysql_error(myconn->pgsql));
+	case PGSQL_ERROR_CODES::ERRCODE_OUT_OF_MEMORY:
+		proxy_warning("Error OUT_OF_MEMORY during query on (%d,%s,%d,%lu): %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->get_error_code_with_message().c_str());
 		break;
 	default:
 		break; // continue normally
@@ -5007,7 +4843,8 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 }
 
 // this function used to be inline.
-void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool& wrong_pass) {
+void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass) {
+	PgSQL_Connection* myconn = myds->myconn;
 	switch (status) {
 	case PROCESSING_QUERY:
 		if (myconn) {
@@ -5067,24 +4904,22 @@ void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds,
 }
 
 // this function was inline
-void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
-	if (myds->myconn) {
-		myds->myconn->reduce_auto_increment_delay_token();
-		if (pgsql_thread___multiplexing && (myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
+void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds) {
+	PgSQL_Connection* myconn = myds->myconn;
+	if (myconn) {
+		myconn->reduce_auto_increment_delay_token();
+		if (pgsql_thread___multiplexing && (myconn->reusable == true) && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false) {
 			myds->DSS = STATE_NOT_INITIALIZED;
-			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit() == false) {
+			if (mysql_thread___autocommit_false_not_reusable && myconn->IsAutoCommit() == false) {
 				if (pgsql_thread___reset_connection_algorithm == 2) {
 					create_new_session_and_reset_connection(myds);
-				}
-				else {
+				} else {
 					myds->destroy_MySQL_Connection_From_Pool(true);
 				}
-			}
-			else {
+			} else {
 				myds->return_MySQL_Connection_To_Pool();
 			}
-		}
-		else {
+		} else {
 			myconn->async_state_machine = ASYNC_IDLE;
 			myds->DSS = STATE_MARIADB_GENERIC;
 		}
@@ -5316,25 +5151,12 @@ handler_again:
 		}
 		if (mybe->server_myds->DSS == STATE_NOT_INITIALIZED) {
 			// we don't have a backend yet
-			switch (status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-			}
+			// It saves the current processing status of the session (status) onto the previous_status stack
+			// Sets the previous status of the PgSQL session according to the current status.
+			set_previous_status_mode3();
+			// It transitions the session to the CONNECTING_SERVER state immediately.
 			NEXT_IMMEDIATE(CONNECTING_SERVER);
-		}
-		else {
+		} else {
 			PgSQL_Data_Stream* myds = mybe->server_myds;
 			PgSQL_Connection* myconn = myds->myconn;
 			mybe->server_myds->max_connect_time = 0;
@@ -5546,16 +5368,16 @@ handler_again:
 			else {
 				if (rc == -1) {
 					// the query failed
-					int myerr = mysql_errno(myconn->pgsql);
-					char* errmsg = NULL;
-					if (myerr == 0) {
-						if (CurrentQuery.mysql_stmt) {
+					const bool is_error_present = myconn->is_error_present(); // false means failure is due to server being in OFFLINE state
+					if (is_error_present == false) {
+						
+						/*if (CurrentQuery.mysql_stmt) {
 							myerr = mysql_stmt_errno(CurrentQuery.mysql_stmt);
 							errmsg = strdup(mysql_stmt_error(CurrentQuery.mysql_stmt));
-						}
+						}*/
 					}
-					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-					CurrentQuery.mysql_stmt = NULL; // immediately reset mysql_stmt
+					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, 9999); // TOFIX
+					//CurrentQuery.mysql_stmt = NULL; // immediately reset mysql_stmt
 					int rc1 = handler_ProcessingQueryError_CheckBackendConnectionStatus(myds);
 					if (rc1 == -1) {
 						handler_ret = -1;
@@ -5565,28 +5387,25 @@ handler_again:
 						if (rc1 == 1)
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
 					}
-					if (myerr >= 2000 && myerr < 3000) {
-						if (handler_minus1_ClientLibraryError(myds, myerr, &errmsg)) {
+					if (myconn->is_connection_in_reusable_state() == false) {
+						if (handler_minus1_ClientLibraryError(myds)) {
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
-						}
-						else {
+						} else {
 							handler_ret = -1;
 							return handler_ret;
 						}
-					}
-					else {
-						handler_minus1_LogErrorDuringQuery(myconn, myerr, errmsg);
-						if (handler_minus1_HandleErrorCodes(myds, myerr, &errmsg, handler_ret)) {
+					} else {
+						handler_minus1_LogErrorDuringQuery(myconn);
+						if (handler_minus1_HandleErrorCodes(myds, handler_ret)) {
 							if (handler_ret == 0)
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 							return handler_ret;
 						}
-						handler_minus1_GenerateErrorMessage(myds, myconn, wrong_pass);
+						handler_minus1_GenerateErrorMessage(myds, wrong_pass);
 						RequestEnd(myds);
-						handler_minus1_HandleBackendConnection(myds, myconn);
+						handler_minus1_HandleBackendConnection(myds);
 					}
-				}
-				else {
+				} else {
 					switch (rc) {
 						// rc==1 , query is still running
 						// start sending to frontend if pgsql_thread___threshold_resultset_size is reached
@@ -5620,10 +5439,7 @@ handler_again:
 					}
 				}
 			}
-
 			goto __exit_DSS__STATE_NOT_INITIALIZED;
-
-
 		}
 		break;
 
@@ -7922,7 +7738,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 
 	PgSQL_Query_Result* query_result = _conn->query_result;
 
-	if (query_result && query_result->get_result_packet_type() != PGSQL_QUERY_RESULT_EMPTY) {
+	if (query_result && query_result->get_result_packet_type() != PGSQL_QUERY_RESULT_NO_DATA) {
 		bool transfer_started = query_result->is_transfer_started();
 		// if there is an error, it will be false so results are not cached
 		bool is_tuple = query_result->get_result_packet_type() == (PGSQL_QUERY_RESULT_TUPLE | PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY); 
@@ -8729,22 +8545,22 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	l_free(pkt.size, pkt.ptr);
 }
 
-void PgSQL_Session::detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, int myerr, const char* message, bool verbose) {
-	char* msg = (char*)message;
-	if (msg == NULL) {
-		msg = (char*)"Detected offline server prior to statement execution";
+void PgSQL_Session::detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, bool verbose) {
+	
+	const char* code = PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION);;
+	const char* msg = "Detected offline server prior to statement execution";
+
+	if (myconn->is_error_present() == true) {
+		code = myconn->get_error_code_str();
+		msg = myconn->get_error_message().c_str();
 	}
-	if (myerr == 0) {
-		myerr = ER_PROXYSQL_OFFLINE_SRV;
-		msg = (char*)"Detected offline server prior to statement execution";
-	}
+	
 	unsigned long long last_used = thread->curtime - myconn->last_time_used;
 	last_used /= 1000;
 	if (verbose) {
-		proxy_error_inline(file, line, func, "Detected a broken connection while %s on (%d,%s,%d,%lu) , FD (Conn:%d , MyDS:%d) , user %s , last_used %llums ago : %d, %s\n", action, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->myds->fd, myconn->fd, myconn->userinfo->username, last_used, myerr, msg);
-	}
-	else {
-		proxy_error_inline(file, line, func, "Detected a broken connection while %s on (%d,%s,%d,%lu) , user %s , last_used %llums ago : %d, %s\n", action, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->userinfo->username, last_used, myerr, msg);
+		proxy_error_inline(file, line, func, "Detected a broken connection while %s on (%d,%s,%d,%lu) , FD (Conn:%d , MyDS:%d) , user %s , last_used %llums ago : %s, %s\n", action, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->myds->fd, myconn->fd, myconn->userinfo->username, last_used, code, msg);
+	} else {
+		proxy_error_inline(file, line, func, "Detected a broken connection while %s on (%d,%s,%d,%lu) , user %s , last_used %llums ago : %s, %s\n", action, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->userinfo->username, last_used, code, msg);
 	}
 }
 
@@ -8787,5 +8603,51 @@ void PgSQL_Session::reset_warning_hostgroup_flag_and_release_connection()
 			}
 		}
 		warning_in_hg = -1;
+	}
+}
+
+/**
+ * @brief Sets the previous status of the PgSQL session according to the current status, with an option to allow EXECUTE statements.
+ *
+ * This method updates the previous status of the PgSQL session based on its current status. It employs a switch statement
+ * to determine the current status and then pushes the corresponding status value onto the `previous_status` stack. If the
+ * `allow_execute` parameter is set to true and the current status is `PROCESSING_STMT_EXECUTE`, the method pushes this status
+ * onto the stack; otherwise, it skips pushing the status for EXECUTE statements. If the current status does not match any known
+ * status value (which should not occur under normal circumstances), the method asserts to indicate a programming error.
+ * It currently works with only 3 possible status:
+ * - PROCESSING_QUERY
+ * - PROCESSING_STMT_PREPARE
+ * - PROCESSING_STMT_EXECUTE
+ *
+ * @param allow_execute A boolean value indicating whether to allow the status of EXECUTE statements to be pushed onto the
+ * `previous_status` stack. If set to true, the method will include EXECUTE statements in the session's status history.
+ *
+ * @return void.
+ * @note This method assumes that the `status` member variable has been properly initialized with one of the predefined
+ * status values.
+ * @note This method is primarily used to maintain a history of the session's previous states for later reference or
+ * recovery purposes.
+ * @note The LCOV_EXCL_START and LCOV_EXCL_STOP directives are used to exclude the assert statement from code coverage
+ * analysis because the condition should not occur during normal execution and is included as a safeguard against
+ * programming errors.
+ */
+void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
+	switch (status) {
+	case PROCESSING_QUERY:
+		previous_status.push(PROCESSING_QUERY);
+		break;
+	case PROCESSING_STMT_PREPARE:
+		previous_status.push(PROCESSING_STMT_PREPARE);
+		break;
+	case PROCESSING_STMT_EXECUTE:
+		if (allow_execute == true) {
+			previous_status.push(PROCESSING_STMT_EXECUTE);
+			break;
+		}
+	default:
+		// LCOV_EXCL_START
+		assert(0); // Assert to indicate an unexpected status value
+		break;
+		// LCOV_EXCL_STOP
 	}
 }

@@ -3193,26 +3193,53 @@ handler_again:
 
 		const PGresult* result = get_last_result();
 		if (result) {
-			switch (PQresultStatus(result)) {
-			case PGRES_COMMAND_OK:
-				query_result->add_command_completion(result);
-				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
-				break;
-			case PGRES_TUPLES_OK:
-			case PGRES_SINGLE_TUPLE:
-				break;
-			default:
-			{
-				set_error_from_result(result, PGSQL_ERROR_FIELD_ALL);
-				query_result->add_error(result);
-				const PGSQL_ERROR_CATEGORY error_category = get_error_category();
-				if (error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_SYNTAX_ERROR &&
-					error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_STATUS &&
-					error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_DATA_ERROR) {
-					proxy_error("Error: %s\n", get_error_code_with_message().c_str());
-				}
-			}
-				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+			auto state = PQresultStatus(result);
+			switch (state) {
+				case PGRES_COMMAND_OK:
+					query_result->add_command_completion(result);
+					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+					break;
+				case PGRES_EMPTY_QUERY:
+					query_result->add_empty_query_response(result);
+					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+					break;
+				case PGRES_TUPLES_OK:
+				case PGRES_SINGLE_TUPLE:
+					break;
+				case PGRES_COPY_OUT:
+				case PGRES_COPY_IN:
+				case PGRES_COPY_BOTH:
+					// NOT IMPLEMENTED
+					assert(0);
+					break;
+				case PGRES_BAD_RESPONSE:
+				case PGRES_NONFATAL_ERROR:
+				case PGRES_FATAL_ERROR:
+				default:
+					// we don't have a command completion, empty query responseor error packet in the result. This check is here to 
+					// handle internal cleanup of libpq that might return residual protocol messages from the broken connection and 
+					// may add multiple final packets.
+					if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
+						set_error_from_result(result, PGSQL_ERROR_FIELD_ALL);
+						assert(is_error_present());
+
+						// we will not send FATAL error messages to the client
+						const PGSQL_ERROR_SEVERITY severity = get_error_severity();
+						if (severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR ||
+							severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_WARNING ||
+							severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_NOTICE) {
+
+							query_result->add_error(result);
+						}
+						
+						const PGSQL_ERROR_CATEGORY error_category = get_error_category();
+						if (error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_SYNTAX_ERROR &&
+							error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_STATUS &&
+							error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_DATA_ERROR) {
+							proxy_error("Error: %s\n", get_error_code_with_message().c_str());
+						}
+					}
+					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 			}
 
 			if (first_result == true) {
@@ -3242,7 +3269,7 @@ handler_again:
 			}
 		} 
 
-		if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_ERROR)) == 0) {
+		if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
 			// if we reach here we assume that error_info is already set in previous call
 			if (!is_error_present())
 				assert(0); // we might have missed setting error_info in previous call
@@ -3974,7 +4001,7 @@ void PgSQL_Connection::connect_start() {
 	//pgsql_conn = PQconnectdb(conninfo_str.c_str());
 
 	//PQsetErrorVerbosity(pgsql_conn, PQERRORS_VERBOSE);
-	//PQsetErrorContextVisibility(pgsql_conn, PQSHOW_CONTEXT_ALWAYS);
+	//PQsetErrorContextVisibility(pgsql_conn, PQSHOW_CONTEXT_ERRORS);
 
 	if (pgsql_conn == NULL || PQstatus(pgsql_conn) == CONNECTION_BAD) {
 		if (pgsql_conn) {
@@ -4100,10 +4127,14 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	if (PQconsumeInput(pgsql_conn) == 0) {
 		// WARNING: DO NOT RELEASE this PGresult
 		const PGresult* result = PQgetResultFromPGconn(pgsql_conn);
-		set_error_from_result(result);
-		// this is not actually an error, a hint to the user
-		error_info.severity = PGSQL_ERROR_SEVERITY::ERRSEVERITY_INFO;
-		proxy_warning("Failed to consume input. %s\n", get_error_code_with_message().c_str());
+		/* We will only set the error if the result is not NULL or we didn't capture error in last call. If the result is NULL,
+		 * it indicates that an error was already captured during a previous PQconsumeInput call,
+		 * and we do not want to overwrite that information.
+		 */
+		if (result || is_error_present() == false) {
+			set_error_from_result(result);
+			proxy_error("Failed to consume input. %s\n", get_error_code_with_message().c_str());
+		}
 	}
 
 	if (PQisBusy(pgsql_conn)) {
@@ -4187,20 +4218,21 @@ void PgSQL_Connection::compute_unknown_transaction_status() {
 			return;
 		}
 
-		if (is_connected() == false) {
+		/*if (is_connected() == false) {
 			unknown_transaction_status = true;
 			return;
-		}
+		}*/
 
 		switch (PQtransactionStatus(pgsql_conn)) {
 		case PQTRANS_INTRANS:
 		case PQTRANS_INERROR:
-		case PQTRANS_UNKNOWN:
 		case PQTRANS_ACTIVE:
 			unknown_transaction_status = true;
 			break;
+		case PQTRANS_UNKNOWN:
 		default:
-			unknown_transaction_status = false;
+			//unknown_transaction_status = false;
+			break;
 		}
 	}
 }
@@ -4470,7 +4502,8 @@ bool PgSQL_Connection::IsKnownActiveTransaction() {
 	bool in_txn = false;
 	if (pgsql_conn) {
 		// Get the transaction status
-		if (PQtransactionStatus(pgsql_conn) == PQTRANS_INTRANS) {
+		PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
+		if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
 			in_txn = true;
 		}
 	}
@@ -4487,12 +4520,12 @@ bool PgSQL_Connection::IsActiveTransaction() {
 		switch (status) {
 		case PQTRANS_INTRANS:
 		case PQTRANS_INERROR:
-		case PQTRANS_UNKNOWN:
 			in_txn = true;
 			break;
+		case PQTRANS_UNKNOWN:
+		case PQTRANS_IDLE:
+		case PQTRANS_ACTIVE:
 		default:
-		//case PQTRANS_IDLE:
-		//case PQTRANS_ACTIVE:
 			in_txn = false;
 		}
 
@@ -4525,4 +4558,11 @@ bool PgSQL_Connection::IsServerOffline() {
 		ret = true;
 	}
 	return ret;
+}
+
+bool PgSQL_Connection::is_connection_in_reusable_state() const {
+	const PGTransactionStatusType txn_status = PQtransactionStatus(pgsql_conn);
+	const bool conn_usable = !(txn_status == PQTRANS_UNKNOWN || txn_status == PQTRANS_ACTIVE);
+	assert(!(conn_usable == false && is_error_present() == false));
+	return conn_usable;
 }

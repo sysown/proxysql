@@ -520,6 +520,8 @@ public:
 	bool IsActiveTransaction();
 	bool IsKnownActiveTransaction();
 	bool IsServerOffline();
+	
+	bool is_connection_in_reusable_state() const;
 
 	int get_server_version() {
 		return PQserverVersion(pgsql_conn);
@@ -538,11 +540,15 @@ public:
 		return false;
 	}
 
+	PGSQL_ERROR_SEVERITY get_error_severity() const {
+		return error_info.severity;
+	}
+
 	PGSQL_ERROR_CATEGORY get_error_category() const {
 		return error_info.category;
 	}
 
-	std::string get_error_message() const {
+	const std::string& get_error_message() const {
 		return error_info.message;
 	}
 
@@ -562,8 +568,19 @@ public:
 		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? "FATAL" : "ERROR");
 	}
 
+	void set_error(PGSQL_ERROR_CODES code, const char* message, bool is_fatal) {
+		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? 
+			PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL : PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR);
+	}
+
 	void set_error_from_result(const PGresult* result, uint16_t ext_fields = 0) {
-		PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
+		if (result) {
+			PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
+		} else {
+			const char* errmsg = PQerrorMessage(pgsql_conn);
+			set_error(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, errmsg ? errmsg : "Unknown error", true);
+			//PgSQL_Error_Helper::fill_error_info_from_error_message(error_info, errmsg);
+		}
 	}
 
 	void reset_error() {

@@ -388,12 +388,18 @@ void reset_error_info(PgSQL_ErrorInfo& err_info, bool release_extented);
 
 class PgSQL_Error_Helper {
 public:
-	static constexpr const char* get_error_code(PGSQL_ERROR_CODES err_code) {
-		return error_code_str[static_cast<uint8_t>(err_code)];
+	static constexpr const char* get_error_code(PGSQL_ERROR_CODES code) {
+		return error_code_str[static_cast<uint8_t>(code)];
+	}
+
+	static constexpr const char* get_severity(PGSQL_ERROR_SEVERITY severity) {
+		return severity_str[static_cast<uint8_t>(severity)];
 	}
 
 	static void fill_error_info(PgSQL_ErrorInfo& err_info, const PGresult* result, uint16_t ext_fields);
 	static void fill_error_info(PgSQL_ErrorInfo& err_info, const char* code, const char* msg, const char* severity);
+	static void fill_error_info(PgSQL_ErrorInfo& err_info, PGSQL_ERROR_CODES code, const char* msg, PGSQL_ERROR_SEVERITY severity);
+	//static void fill_error_info_from_error_message(PgSQL_ErrorInfo& err_info, const char* error_msg);
 
 private:
 	static PGSQL_ERROR_CODES identify_error_code(const char* code);
@@ -646,6 +652,19 @@ private:
 	};
 
 	static_assert(static_cast<uint8_t>(PGSQL_ERROR_CODES::PGSQL_ERROR_CODES_COUNT) == sizeof(error_code_str) / sizeof(char*), "Mismatch between PGSQL_ERROR_CODES_COUNT and error_code_str array size");
+
+	static constexpr const char* severity_str[] = {
+		"UNKNOWN",
+		"FATAL",
+		"PANIC",
+		"ERROR",
+		"WARNING",
+		"NOTICE",
+		"DEBUG",
+		"INFO",
+		"LOG"
+	};
+	static_assert(static_cast<uint8_t>(PGSQL_ERROR_SEVERITY::PGSQL_ERROR_SEVERITY_COUNT) == sizeof(severity_str) / sizeof(char*), "Mismatch between PGSQL_ERROR_SEVERITY_COUNT and severity_str array size");
 };
 
 #define PGSQL_GET_ERROR_CODE_STR(ENUM_CODE) PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ENUM_CODE)

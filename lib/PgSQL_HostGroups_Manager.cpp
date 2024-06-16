@@ -3358,10 +3358,9 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
-			int myerr=mysql_errno(c->pgsql);
-			if (myerr >= 2000 && myerr < 3000) {
+			if (c->is_connection_in_reusable_state() == false) {
 				// client library error . We must not try to save the connection
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset PgSQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset PgSQL_Connection %p, server %s:%d . Error %s\n", c, mysrvc->address, mysrvc->port, c->get_error_code_with_message().c_str());
 			} else {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 				to_del=false;

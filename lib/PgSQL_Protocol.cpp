@@ -1627,6 +1627,42 @@ unsigned int PgSQL_Protocol::copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Q
 	return size;
 }
 
+unsigned int PgSQL_Protocol::copy_empty_query_response_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result) {
+	assert(pg_query_result);
+	// we are currently not using result. It is just for future use
+
+	const unsigned int size = 1 + 4; // I, length
+	bool alloced_new_buffer = false;
+
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
+
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+
+	PG_pkt pgpkt(_ptr, size);
+
+	pgpkt.put_char('I');
+	pgpkt.put_uint32(size - 1);
+
+	if (send == true) {
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
+
+	pg_query_result->resultset_size += size;
+
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
+	}
+	pg_query_result->pkt_count++;
+	return size;
+}
+
 unsigned int PgSQL_Protocol::copy_ready_status_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGTransactionStatusType txn_status) {
 	assert(pg_query_result);
 
@@ -1677,7 +1713,7 @@ PgSQL_Query_Result::PgSQL_Query_Result() {
 	num_fields = 0;
 	num_rows = 0;
 	pkt_count = 0;
-	result_packet_type = PGSQL_QUERY_RESULT_EMPTY;
+	result_packet_type = PGSQL_QUERY_RESULT_NO_DATA;
 }
 
 PgSQL_Query_Result::~PgSQL_Query_Result() {
@@ -1757,6 +1793,12 @@ unsigned int PgSQL_Query_Result::add_error(const PGresult* result) {
 
 	result_packet_type |= PGSQL_QUERY_RESULT_ERROR;
 	return size;
+}
+
+unsigned int PgSQL_Query_Result::add_empty_query_response(const PGresult* result) {
+	const unsigned int bytes = proto->copy_empty_query_response_to_PgSQL_Query_Result(false, this, result);
+	result_packet_type |= PGSQL_QUERY_RESULT_EMPTY;
+	return bytes;
 }
 
 unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_status) {
@@ -1843,5 +1885,5 @@ void PgSQL_Query_Result::reset() {
 	num_fields = 0;
 	num_rows = 0;
 	pkt_count = 0;
-	result_packet_type = PGSQL_QUERY_RESULT_EMPTY;
+	result_packet_type = PGSQL_QUERY_RESULT_NO_DATA;
 }

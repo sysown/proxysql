@@ -253,6 +253,10 @@ PGSQL_ERROR_SEVERITY PgSQL_Error_Helper::identify_error_severity(const char* sev
 		ret = PGSQL_ERROR_SEVERITY::ERRSEVERITY_DEBUG;
 	} else if (strcasecmp(severity, "LOG") == 0) {
 		ret = PGSQL_ERROR_SEVERITY::ERRSEVERITY_LOG;
+	} else if (strcasecmp(severity, "INFO") == 0) {
+		ret = PGSQL_ERROR_SEVERITY::ERRSEVERITY_INFO;
+	} else {
+		ret = PGSQL_ERROR_SEVERITY::ERRSEVERITY_UNKNOWN_SEVERITY;
 	}
 	return ret;
 }
@@ -285,6 +289,46 @@ void PgSQL_Error_Helper::fill_error_info(PgSQL_ErrorInfo& err_info, const char* 
 	err_info.category = PgSQL_Error_Helper::categorize_error_class(err_info.type);
 	err_info.message = msg;
 }
+
+void PgSQL_Error_Helper::fill_error_info(PgSQL_ErrorInfo& err_info, PGSQL_ERROR_CODES code, const char* msg, PGSQL_ERROR_SEVERITY severity) {
+	fill_error_info(err_info, get_error_code(code), msg, PgSQL_Error_Helper::get_severity(severity));
+}
+
+/*
+void PgSQL_Error_Helper::fill_error_info_from_error_message(PgSQL_ErrorInfo& err_info, const char* error_msg) {
+	std::string errorMsgStr(error_msg);
+	std::string sqlState;
+	std::string primaryErrorMsg;
+	std::string severity;
+
+	// Initialize positions
+	size_t startPos = 0;
+	size_t endPos = 0;
+
+	// Extract severity (assume it's the first word in the primary error message)
+	size_t severityEndPos = errorMsgStr.find(": ");
+	if (severityEndPos != std::string::npos) {
+		severity = errorMsgStr.substr(0, severityEndPos);
+		startPos = severityEndPos + 2; // Skip the ": "
+	} else {
+		severity = get_severity(PGSQL_ERROR_SEVERITY::ERRSEVERITY_UNKNOWN_SEVERITY);
+	}
+
+	// Extract SQL state in the format [XXXXX]
+	startPos = errorMsgStr.find('[', startPos);
+	endPos = (startPos != std::string::npos) ? errorMsgStr.find(']', startPos) : std::string::npos;
+
+	if (startPos != std::string::npos && endPos != std::string::npos && endPos == startPos + 6) {
+		sqlState = errorMsgStr.substr(startPos + 1, 5); // Extract the SQL state
+		primaryErrorMsg = errorMsgStr.substr(severityEndPos + 2, startPos - (severityEndPos + 2)); // Extract the primary error message up to the SQL state
+	} else {
+		sqlState = get_error_code(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION); // Default SQL state
+		primaryErrorMsg = errorMsgStr.substr(severityEndPos + 2); // No SQL state found, remainder is the error message
+	}
+
+	fill_error_info(err_info, sqlState.c_str(), primaryErrorMsg.c_str(), severity.c_str());
+}
+*/
 
 void reset_error_info(PgSQL_ErrorInfo& err_info, bool release_extented) {
 	err_info.sqlstate[0] = '\0';

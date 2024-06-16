@@ -107,8 +107,8 @@ enum PgSQL_Thread_status_variable {
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
-	st_var_END*/
-	PG_st_var_END
+	*/
+	PG_st_var_END = 42 // to avoid ASAN complaining. TO FIX
 };
 
 class __attribute__((aligned(64))) PgSQL_Thread : public Base_Thread
