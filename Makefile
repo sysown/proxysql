@@ -35,7 +35,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 2.6.3
+CURVER ?= 3.0.0
 #export DEBUG
 #export EXTRALINK
 export MAKE
@@ -303,19 +303,19 @@ ubuntu: $(REL_ARCH)-ubuntu ;
 
 amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
-amd64-centos: centos7 centos7-dbg centos8 centos8-clang centos8-dbg centos9 centos9-clang centos9-dbg
+amd64-centos: centos8 centos8-clang centos8-dbg centos9 centos9-clang centos9-dbg
 amd64-debian: debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
-amd64-fedora: fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg
+amd64-fedora: fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg fedora40 fedora40-clang fedora40-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
-amd64-ubuntu: ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
+amd64-ubuntu: ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
 arm64-almalinux: almalinux8 almalinux9
-arm64-centos: centos7 centos8 centos9
+arm64-centos: centos8 centos9
 arm64-debian: debian10 debian11 debian12
-arm64-fedora: fedora38 fedora39
+arm64-fedora: fedora38 fedora39 fedora40
 arm64-opensuse: opensuse15
-arm64-ubuntu: ubuntu16 ubuntu18 ubuntu20 ubuntu22
+arm64-ubuntu: ubuntu18 ubuntu20 ubuntu22 ubuntu24
 
 almalinux%: build-almalinux% ;
 centos%: build-centos% ;
@@ -341,9 +341,9 @@ build-%:
 
 .NOTPARALLEL: binaries/proxysql%
 binaries/proxysql%:
-	@docker compose -p proxysql down -v --remove-orphans
-	@docker compose -p proxysql up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
-	@docker compose -p proxysql down -v --remove-orphans
+	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
+	@docker compose -p "${GIT_VERSION/./}" up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
+	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
 
 
 ### clean targets

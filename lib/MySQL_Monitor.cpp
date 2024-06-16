@@ -18,7 +18,7 @@ using json = nlohmann::json;
 #include <thread>
 #include <future>
 #include <sstream>
-#include <prometheus/counter.h>
+#include "prometheus/counter.h"
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"

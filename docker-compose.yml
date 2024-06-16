@@ -1,4 +1,4 @@
-version: "3.0"
+#version: "3.0"
 services:
 
 ####################################################################################################
@@ -16,26 +16,6 @@ services:
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
 ####################################################################################################
-####################################################################################################
-  centos7_build:
-    extends:
-      service: _build
-    image: proxysql/packaging:build-centos7
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - PKG_RELEASE=centos7
-
-  centos7_dbg_build:
-    extends:
-      service: centos7_build
-    environment:
-      - PKG_RELEASE=dbg-centos7
-      - PROXYSQL_BUILD_TYPE=debug
-
 ####################################################################################################
   centos8_build:
     extends:
@@ -151,6 +131,34 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  fedora40_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-fedora40
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=fedora40
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora40_clang_build:
+    extends:
+      service: fedora40_build
+    image: proxysql/packaging:build-clang-fedora40
+    environment:
+      - PKG_RELEASE=fedora40-clang
+
+  fedora40_dbg_build:
+    extends:
+      service: fedora40_build
+    environment:
+      - PKG_RELEASE=dbg-fedora40
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   debian10_build:
     extends:
@@ -227,25 +235,6 @@ services:
 
 ####################################################################################################
 ####################################################################################################
-  ubuntu16_build:
-    extends:
-      service: _build
-    image: proxysql/packaging:build-ubuntu16
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - PKG_RELEASE=ubuntu16
-
-  ubuntu16_dbg_build:
-    extends:
-      service: ubuntu16_build
-    environment:
-      - PKG_RELEASE=dbg-ubuntu16
-      - PROXYSQL_BUILD_TYPE=debug
-
-####################################################################################################
   ubuntu18_build:
     extends:
       service: _build
@@ -317,6 +306,33 @@ services:
       service: ubuntu22_build
     environment:
       - PKG_RELEASE=dbg-ubuntu22
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  ubuntu24_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-ubuntu24
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=ubuntu24
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  ubuntu24_clang_build:
+    extends:
+      service: ubuntu24_build
+    image: proxysql/packaging:build-clang-ubuntu24
+    environment:
+      - PKG_RELEASE=ubuntu24-clang
+
+  ubuntu24_dbg_build:
+    extends:
+      service: ubuntu24_build
+    environment:
+      - PKG_RELEASE=dbg-ubuntu24
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################

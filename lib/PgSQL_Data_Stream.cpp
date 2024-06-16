@@ -9,7 +9,7 @@
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_Data_Stream.h"
 
-#include <openssl/x509v3.h>
+#include "openssl/x509v3.h"
 
 /*
 

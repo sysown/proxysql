@@ -13,8 +13,8 @@
 #define DEFAULT_purge_threshold_pct_min 3
 #define DEFAULT_purge_threshold_pct_max 90
 
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 class KV_BtreeArray;
 
