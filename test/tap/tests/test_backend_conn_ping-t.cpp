@@ -664,6 +664,29 @@ int main(int, char**) {
 		diag("'check_backend_conns()' failed for servers: '%s'", nlohmann::json(m_server_test).dump().c_str());
 	}
 
+	// NOTE-TODO: We are required to recover the connection pool to an usable status for subsequent tests.
+	// This could be done giving sensible values to `mysql-free_connections_pct`, for keeping always a good
+	// number of connections below the max server threshold, and `mysql-ping_interval_server_msec`, ensuring
+	// that after the test is finished, those idle connections would be release till reaching
+	// `free_connections_pct`. These conditions are not ensured right now.
+	{
+		diag("Connection pool cleanup before test exit");
+		MYSQL_QUERY_T(admin, "UPDATE mysql_servers SET max_connections=0");
+		MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		diag("Waiting for connection cleanup on ProxySQL...");
+		w_res = wait_target_backend_conns(admin, 0, 10);
+		if (w_res != EXIT_SUCCESS) {
+			string err_msg {};
+			if (w_res == -2) {
+				err_msg = "'wait_target_backend_conns()' timed out";
+			} else {
+				err_msg = "'wait_target_backend_conns()' failed";
+			}
+			fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, err_msg.c_str());
+		}
+	}
+
 	diag("Restoring previous 'MySQL' servers infra config...");
 
 	{
