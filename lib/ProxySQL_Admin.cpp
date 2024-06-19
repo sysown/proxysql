@@ -12108,10 +12108,10 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		free(ad->attributes);
 		free(ad);
 	}
-	if (_runtime) {
-		(*proxy_sqlite3_finalize)(f_statement1);
-		(*proxy_sqlite3_finalize)(b_statement1);
-	}
+
+	(*proxy_sqlite3_finalize)(f_statement1);
+	(*proxy_sqlite3_finalize)(b_statement1);
+
 	free(ads);
 }
 
