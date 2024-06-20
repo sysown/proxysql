@@ -417,8 +417,15 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		// verifications purposes.
 		if (!SSL_CTX_load_verify_locations(GloVars.global.ssl_ctx, ssl_ca_fp, ssl_ca_fp)) {
 			proxy_error("Unable to load CA certificates location for verification. Shutting down\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 		}
+
+		// Completely disable session tickets and session-cache. SSL sessions resume/tickets aren't supported
+		// right now, so disabling them shouldn't have negative effects. On the other hand, enabling them can
+		// lead to invalid SSL handshakes when the client tries to reuse a previously issued session ticket.
+		// In this scenario an invalid handshake will take place, and the client will be disconnected. Some
+		// clients (MySQL > 8.0.29) attempt session reuses during reconnect operations.
+		SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_TICKET);
+		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
 	} else {
 		// here we use global.tmp_ssl_ctx instead of global.ssl_ctx
 		// because we will try to swap at the end
@@ -478,6 +485,9 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 	}
 	if (ret == 0) {
 		SSL_CTX_set_verify(GloVars.global.ssl_ctx, SSL_VERIFY_PEER|SSL_VERIFY_CLIENT_ONCE, callback_ssl_verify_peer);
+		// Completely disable session tickets and session-cache. See comment above.
+		SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_TICKET);
+		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
 	}
 	X509_free(x509);
 	EVP_PKEY_free(pkey);

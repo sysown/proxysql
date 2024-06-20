@@ -15,11 +15,10 @@
  *     established. This is for regular and 'fast_forward' connections.
  */
 
+#include <math.h>
 #include <cstring>
-#include <fstream>
 #include <string>
 #include <stdio.h>
-#include <vector>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>

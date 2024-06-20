@@ -15,6 +15,7 @@ void MySrvList::add(MySrvC *s) {
 		s->myhgc=myhgc;
 	}
 	servers->add(s);
+	myhgc->refresh_online_server_count();
 }
 
 
@@ -32,6 +33,7 @@ void MySrvList::remove(MySrvC *s) {
 	int i=find_idx(s);
 	assert(i>=0);
 	servers->remove_index_fast((unsigned int)i);
+	myhgc->refresh_online_server_count();
 }
 
 MySrvList::~MySrvList() {

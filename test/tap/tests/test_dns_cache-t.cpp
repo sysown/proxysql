@@ -6,12 +6,12 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include <string>
-#include <algorithm>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <vector>
-#include <chrono>
+#include <sstream>
+#include <string>
 #include <thread>
 
 #include "mysql.h"
@@ -20,18 +20,6 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-
-std::vector<std::string> split(const std::string& s, char delimiter) {
-	std::vector<std::string> tokens {};
-	std::string token {};
-	std::istringstream tokenStream(s);
-
-	while (std::getline(tokenStream, token, delimiter)) {
-		tokens.push_back(token);
-	}
-
-	return tokens;
-}
 
 /**
  * @brief Extract the metrics values from the output of the admin command

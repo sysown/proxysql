@@ -31,8 +31,8 @@
 #include <thread>
 #include <unistd.h>
 
-#include "proxysql_utils.h"
 #include "openssl/ssl.h"
+#include "json.hpp"
 #include "mysql.h"
 
 #include "tap.h"

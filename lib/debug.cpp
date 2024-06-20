@@ -46,24 +46,28 @@ static inline unsigned long long debug_monotonic_time() {
 #ifdef DEBUG
 
 
-// this set will have all the filters related to debug
-// for convention, the key is:
-// filename:line:function
-// this key structure applies also if line is 0 or function is empty
-// filename is mandatory
-std::set<std::string> debug_filters;
+/**
+ * @brief Contains all filters related to debug.
+ * @details The convention for key value is `filename:line:function`. This key structure also applies also
+ *  applies if the line is `0` or function is empty, the `filename` is always mandatory.
+ *
+ *  IMPORTANT: This structure is a pointer to avoid race conditions during process termination, otherwise the
+ *  destruction of the object may be performed before working threads have exited. This structure will leak,
+ *  this is intentional, since we can't synchronize the exit of the working threads with its destruction.
+ */
+std::set<std::string>* debug_filters = nullptr;
 
 static bool filter_debug_entry(const char *__file, int __line, const char *__func) {
 	//pthread_mutex_lock(&debug_mutex);
 	pthread_rwlock_rdlock(&filters_rwlock);
 	bool to_filter = false;
-	if (debug_filters.size()) { // if the set is empty we aren't performing any filter, so we won't search
+	if (debug_filters && debug_filters->size()) { // if the set is empty we aren't performing any filter, so we won't search
 		std::string key(__file);
 		key += ":" + std::to_string(__line);
 		key += ":";
 		key += __func;
 		// we start with a full search
-		if (debug_filters.find(key) != debug_filters.end()) {
+		if (debug_filters->find(key) != debug_filters->end()) {
 			to_filter = true;
 		} else {
 			// we now search filename + line
@@ -71,7 +75,7 @@ static bool filter_debug_entry(const char *__file, int __line, const char *__fun
 			key += ":" + std::to_string(__line);
 			// remember to add the final ":"
 			key += ":";
-			if (debug_filters.find(key) != debug_filters.end()) {
+			if (debug_filters->find(key) != debug_filters->end()) {
 				to_filter = true;
 			} else {
 				// we now search filename + function
@@ -79,14 +83,14 @@ static bool filter_debug_entry(const char *__file, int __line, const char *__fun
 				// no line = 0
 				key += ":0:";
 				key += __func;
-				if (debug_filters.find(key) != debug_filters.end()) {
+				if (debug_filters->find(key) != debug_filters->end()) {
 					to_filter = true;
 				} else {
 					// we now search filename only
 					key = __file;
 					// remember to add ":" even if no line
 					key += ":0:";
-					if (debug_filters.find(key) != debug_filters.end()) {
+					if (debug_filters->find(key) != debug_filters->end()) {
 						to_filter = true;
 					} else {
 						// if we reached here, we couldn't find any filter
@@ -105,7 +109,9 @@ static bool filter_debug_entry(const char *__file, int __line, const char *__fun
 void proxy_debug_get_filters(std::set<std::string>& f) {
 	//pthread_mutex_lock(&debug_mutex);
 	pthread_rwlock_rdlock(&filters_rwlock);
-	f = debug_filters;
+	if (debug_filters) {
+		f = *debug_filters;
+	}
 	pthread_rwlock_unlock(&filters_rwlock);
 	//pthread_mutex_unlock(&debug_mutex);
 }
@@ -115,8 +121,12 @@ void proxy_debug_get_filters(std::set<std::string>& f) {
 void proxy_debug_load_filters(std::set<std::string>& f) {
 	//pthread_mutex_lock(&debug_mutex);
 	pthread_rwlock_wrlock(&filters_rwlock);
-	debug_filters.erase(debug_filters.begin(), debug_filters.end());
-	debug_filters = f;
+	if (debug_filters) {
+		debug_filters->erase(debug_filters->begin(), debug_filters->end());
+		*debug_filters = f;
+	} else {
+		debug_filters = new std::set<std::string>(f);
+	}
 	pthread_rwlock_unlock(&filters_rwlock);
 	//pthread_mutex_unlock(&debug_mutex);
 }

@@ -10,7 +10,7 @@
  *   * Multistatements queries mixed with the previous ones are also properly executed.
  */
 
-#include <algorithm>
+#include <math.h>
 #include <unistd.h>
 #include <vector>
 #include <tuple>
@@ -19,7 +19,6 @@
 #include <stdio.h>
 
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "proxysql_utils.h"
 

@@ -378,6 +378,11 @@ struct fetch_query {
 	std::string msgs[3];
 };
 
+struct cluster_creds_t {
+	string user;
+	string pass;
+};
+
 class ProxySQL_Cluster {
 private:
 	SQLite3DB* mydb;
@@ -444,7 +449,7 @@ public:
 
 		MySQL_Monitor::trigger_dns_cache_update();
 	}
-	void get_credentials(char**, char**);
+	cluster_creds_t get_credentials();
 	void set_username(char*);
 	void set_password(char*);
 	void set_admin_mysql_ifaces(char*);

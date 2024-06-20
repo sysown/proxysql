@@ -5,11 +5,13 @@
  *   supplied buffer size are properly tested.
  */
 
-#include <algorithm>
+#include <numeric>
+#include <math.h>
 #include <iostream>
 #include <tuple>
 #include <vector>
 #include <string>
+#include <sstream>
 
 #include "proxysql_utils.h"
 #include "tap.h"

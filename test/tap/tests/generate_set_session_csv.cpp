@@ -158,8 +158,8 @@ int main() {
 	vars["auto_increment_offset"] = std::make_unique<variable>("auto_increment_offset", true, true, false);
 	vars["auto_increment_offset"]->add(int_values_small, 20);
 	vars["sql_select_limit"] = std::make_unique<variable>("sql_select_limit", true, true, false);
-	vars["sql_select_limit"]->add(int_values_small, 80);
-	vars["sql_select_limit"]->add(int_values, 80);
+	vars["sql_select_limit"]->add(int_values_small, 200);
+	vars["sql_select_limit"]->add(int_values, 200);
 	vars["group_concat_max_len"] = std::make_unique<variable>("group_concat_max_len", true, true, false);
 	vars["group_concat_max_len"]->add(int_values_small, 123);
 	vars["group_concat_max_len"]->add(int_values, 123);
@@ -176,10 +176,10 @@ int main() {
 		}
 	}
 
-	vars["query_cache_type"] = std::make_unique<variable>("query_cache_type", true, true, false);
-	vars["query_cache_type"]->add(bool_values);
-	vars["query_cache_type"]->add("2");
-	add_values_and_quotes("query_cache_type", {"DeMaNd"});
+	//vars["query_cache_type"] = std::make_unique<variable>("query_cache_type", true, true, false);
+	//vars["query_cache_type"]->add(bool_values);
+	//vars["query_cache_type"]->add("2");
+	//add_values_and_quotes("query_cache_type", {"DeMaNd"});
 
 	vars["lock_wait_timeout"] = std::make_unique<variable>("lock_wait_timeout", true, true, false);
 	vars["lock_wait_timeout"]->add(int_values_small, 321);

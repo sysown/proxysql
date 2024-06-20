@@ -116,6 +116,9 @@ heaptrack.*
 test/deps/mariadb-connector-c/mariadb-connector-c-*/
 test/deps/mysql-connector-c/mysql-5.7.*/
 test/deps/mysql-connector-c/mysql-boost-5.7.*.tar.gz
+test/deps/mysql-connector-c-8.4.0/mariadb-connector-c-*/
+test/deps/mysql-connector-c-8.4.0/mysql-8.4.*/
+test/deps/mysql-connector-c-8.4.0/mysql-8.4.*.tar.gz
 
 #tap tests
 test/tap/tap/cpp-dotenv/cpp-dotenv-*
