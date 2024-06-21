@@ -13,10 +13,10 @@
  *  iterations of 'MySQL_Session::handler', which will force the 'CONNECTING_SERVER' situation.
  */
 
-#include <vector>
+#include <cstring>
+#include <random>
 #include <string>
 #include <stdio.h>
-#include <cstring>
 #include <unistd.h>
 #include "mysql.h"
 

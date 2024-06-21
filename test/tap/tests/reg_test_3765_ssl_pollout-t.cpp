@@ -109,6 +109,11 @@ int main(int argc, char** argv) {
 
 	plan(6);
 
+	// For ASAN builds we don't care about correctness in this measurement.
+	if (get_env_int("WITHASAN", 0)) {
+		MAX_ALLOWED_CPU_USAGE = 80;
+	}
+
 	double idle_cpu_ms = 0;
 	double final_cpu_ms = 0;
 
