@@ -80,7 +80,6 @@ jobs:
         sed -i '/^#\?fn_test_proxysql [^({]/ d' run-tests.bash
         sed -i '/^#\?fn_test_proxysql_dev [^({]/ d' run-tests.bash
         sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
-        tail -20 run-tests.bash
         
     - name: Run tests
       run: |
