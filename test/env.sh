@@ -1,1 +1,1 @@
-export TAP_WORKDIR="$WORKSPACE/test/tap/tests_multiplexing_false/"
+export TAP_WORKDIRS="$WORKSPACE/test/tap/tests_multiplexing_false/"
