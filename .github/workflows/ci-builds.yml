@@ -53,6 +53,9 @@ jobs:
           # debian11 is needed for 3p testing
           - dist: 'debian11'
             type: ''
+          # debian12 is needed for 3p testing
+          - dist: 'debian12'
+            type: ''
           - dist: 'opensuse15'
             type: '-clang'
           - dist: 'ubuntu16'
