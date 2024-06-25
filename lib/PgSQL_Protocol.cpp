@@ -988,19 +988,21 @@ void PgSQL_Protocol::welcome_client() {
 
 	pgpkt.set_multi_pkt_mode(true);
 	pgpkt.write_AuthenticationOk();
-	pgpkt.write_ParameterStatus("server_encoding", "UTF-8");
+	
 	pgpkt.write_ParameterStatus("is_superuser", "on"); // only for admin
-
-	const char* client_encoding = (*myds)->myconn->conn_params.get_value(PG_CLIENT_ENCODING);
-	if (client_encoding)
-		pgpkt.write_ParameterStatus("client_encoding", client_encoding);
 
 	const char* application_name = (*myds)->myconn->conn_params.get_value(PG_APPLICATION_NAME);
 	if (application_name)
 		pgpkt.write_ParameterStatus("application_name", application_name);
 
+	const char* client_encoding = (*myds)->myconn->conn_params.get_value(PG_CLIENT_ENCODING);
+	if (client_encoding)
+		pgpkt.write_ParameterStatus("client_encoding", client_encoding);
+
 	if (pgsql_thread___server_version)
 		pgpkt.write_ParameterStatus("server_version", pgsql_thread___server_version);
+
+	pgpkt.write_ParameterStatus("server_encoding", "UTF8");
 
 	pgpkt.write_ReadyForQuery();
 	pgpkt.set_multi_pkt_mode(false);
