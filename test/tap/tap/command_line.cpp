@@ -48,6 +48,27 @@ CommandLine::~CommandLine() {
 	if (mysql_password)
 		free(mysql_password);
 
+	if (pgsql_admin_host)
+		free(pgsql_admin_host);
+	if (pgsql_server_host)
+		free(pgsql_server_host);
+	if (pgsql_server_username)
+		free(pgsql_server_username);
+	if (pgsql_server_password)
+		free(pgsql_server_password);
+	if (pgsql_host)
+		free(pgsql_host);
+	if (pgsql_username)
+		free(pgsql_username);
+	if (pgsql_password)
+		free(pgsql_password);
+	if (pgsql_root_host)
+		free(pgsql_root_host);
+	if (pgsql_root_username)
+		free(pgsql_root_username);
+	if (pgsql_root_password)
+		free(pgsql_root_password);
+
 	if (workdir)
 		free(workdir);
 }
@@ -238,6 +259,82 @@ int CommandLine::getEnv() {
 			replace_str_field(&this->mysql_password, value);
 	}
 
+	{
+		// unprivileged test connection
+		value = getenv("TAP_PGSQL_HOST");
+		if (value)
+			replace_str_field(&this->pgsql_host, value);
+
+		value = getenv("TAP_PGSQL_PORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				pgsql_port = env_port;
+		}
+
+		value = getenv("TAP_PGSQL_USERNAME");
+		if (value)
+			replace_str_field(&this->pgsql_username, value);
+
+		value = getenv("TAP_PGSQL_PASSWORD");
+		if (value)
+			replace_str_field(&this->pgsql_password, value);
+
+		// privileged test connection
+		value = getenv("TAP_PGSQLROOT_HOST");
+		if (value)
+			replace_str_field(&this->pgsql_root_host, value);
+
+		value = getenv("TAP_PGSQLROOT_PORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				pgsql_root_port = env_port;
+		}
+
+		value = getenv("TAP_PGSQLROOT_USERNAME");
+		if (value)
+			replace_str_field(&this->pgsql_root_username, value);
+
+		value = getenv("TAP_PGSQLROOT_PASSWORD");
+		if (value)
+			replace_str_field(&this->pgsql_root_password, value);
+
+
+		// pgsql proxysql admin connection
+		value = getenv("TAP_PGSQLADMIN_HOST");
+		if (value)
+			replace_str_field(&this->pgsql_admin_host, value);
+
+		value = getenv("TAP_PGSQLADMIN_PORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				pgsql_admin_port = env_port;
+		}
+
+		// admin username and password are identical for both MySQL and PostgreSQL.
+
+		// pgsql server connection
+		value = getenv("TAP_PGSQLSERVER_HOST");
+		if (value)
+			replace_str_field(&this->pgsql_server_host, value);
+
+		value = getenv("TAP_PGSQLSERVER_PORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				pgsql_server_port = env_port;
+		}
+
+		value = getenv("TAP_PGSQLSERVER_USERNAME");
+		if (value)
+			replace_str_field(&this->pgsql_server_username, value);
+
+		value = getenv("TAP_PGSQLSERVER_PASSWORD");
+		if (value)
+			replace_str_field(&this->pgsql_server_password, value);
+	}
 
 	value = getenv("TAP_WORKDIR");
 	if (value)
