@@ -315,9 +315,6 @@ prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/l
 test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
 
-libpq-t: libpq-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS_PG) $(STATIC_LIBS) -o $@
-
 
 ### clean targets
 
