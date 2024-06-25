@@ -463,6 +463,7 @@ public:
 		char* default_schema;
 		char* interfaces;
 		char* keep_multiplexing_variables;
+		char* default_client_encoding;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using PgSQL_Variables instead
 		int handle_unknown_charset;
 		bool servers_stats;

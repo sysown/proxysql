@@ -998,6 +998,10 @@ void PgSQL_Protocol::welcome_client() {
 	const char* client_encoding = (*myds)->myconn->conn_params.get_value(PG_CLIENT_ENCODING);
 	if (client_encoding)
 		pgpkt.write_ParameterStatus("client_encoding", client_encoding);
+	// if client does not provide client_encoding, PostgreSQL uses the default client encoding. 
+	// We need to save the default client encoding to send it to the client in case client doesn't provide one.
+	else if (pgsql_thread___default_client_encoding) 
+		pgpkt.write_ParameterStatus("client_encoding", pgsql_thread___default_client_encoding);
 
 	if (pgsql_thread___server_version)
 		pgpkt.write_ParameterStatus("server_version", pgsql_thread___server_version);
