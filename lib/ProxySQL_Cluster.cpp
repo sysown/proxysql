@@ -2051,13 +2051,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						MYSQL_ROW row;
 						char* q = (char*)"INSERT INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (%s, \"%s\", %s, %s, \"%s\", %s, %s, %s, %s, %s, %s, '%s')";
 						while ((row = mysql_fetch_row(results[0]))) {
-							int i;
 							int l = 0;
-							for (i = 0; i < 11; i++) {
+							for (int i = 0; i < 11; i++) {
 								l += strlen(row[i]);
 							}
 							char* o = escape_string_single_quotes(row[11], false);
-							char* query = (char*)malloc(strlen(q) + i + strlen(o) + 64);
+							char* query = (char*)malloc(strlen(q) + l + strlen(o) + 64);
 
 							sprintf(query, q, row[0], row[1], row[2], row[3], (strcmp(row[4], "SHUNNED") == 0 ? "ONLINE" : row[4]), row[5], row[6], row[7], row[8], row[9], row[10], o);
 							if (o != row[11]) { // there was a copy
@@ -2073,13 +2072,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						GloAdmin->admindb->execute("DELETE FROM mysql_replication_hostgroups");
 						q = (char*)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (%s, %s, '%s', '%s')";
 						while ((row = mysql_fetch_row(results[1]))) {
-							int i;
 							int l = 0;
-							for (i = 0; i < 3; i++) {
+							for (int i = 0; i < 3; i++) {
 								l += strlen(row[i]);
 							}
 							char* o = escape_string_single_quotes(row[3], false);
-							char* query = (char*)malloc(strlen(q) + i + strlen(o) + 64);
+							char* query = (char*)malloc(strlen(q) + l + strlen(o) + 64);
 							sprintf(query, q, row[0], row[1], row[2], o);
 							if (o != row[3]) { // there was a copy
 								free(o);
@@ -2100,9 +2098,8 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						int affected_rows = 0;
 						SQLite3_result* resultset = NULL;
 						while ((row = mysql_fetch_row(results[2]))) {
-							int i;
 							int l = 0;
-							for (i = 0; i < 8; i++) {
+							for (int i = 0; i < 8; i++) {
 								l += strlen(row[i]);
 							}
 							char* o = nullptr;
@@ -2112,7 +2109,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							if (row[8] != nullptr) {
 								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
 								o = escape_string_single_quotes(row[8], false);
-								query = (char*)malloc(strlen(fqs.c_str()) + i + strlen(o) + 64);
+								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen(o) + 64);
 								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 								// free in case of 'o' being a copy
 								if (o != row[8]) {
@@ -2122,7 +2119,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 								// In case of comment being null, placeholder must not have ''
 								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
-								query = (char*)malloc(strlen(fqs.c_str()) + strlen("NULL") + i + 64);
+								query = (char*)malloc(strlen(fqs.c_str()) + strlen("NULL") + l + 64);
 								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							}
 
@@ -2143,9 +2140,8 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
 							"max_writers, writer_is_also_reader, max_transactions_behind, comment) ";
 						while ((row = mysql_fetch_row(results[3]))) {
-							int i;
 							int l = 0;
-							for (i = 0; i < 8; i++) {
+							for (int i = 0; i < 8; i++) {
 								l += strlen(row[i]);
 							}
 							char* o = nullptr;
@@ -2155,7 +2151,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							if (row[8] != nullptr) {
 								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
 								o = escape_string_single_quotes(row[8], false);
-								query = (char*)malloc(strlen(fqs.c_str()) + i + strlen(o) + 64);
+								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen(o) + 64);
 								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 								// free in case of 'o' being a copy
 								if (o != row[8]) {
@@ -2165,7 +2161,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 								// In case of comment being null, placeholder must not have ''
 								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
-								query = (char*)malloc(strlen(fqs.c_str()) + i + strlen("NULL") + 64);
+								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen("NULL") + 64);
 								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							}
 
@@ -2186,9 +2182,8 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
 							"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) ";
 						while ((row = mysql_fetch_row(results[4]))) {
-							int i;
 							int l = 0;
-							for (i = 0; i < 13; i++) {
+							for (int i = 0; i < 13; i++) {
 								l += strlen(row[i]);
 							}
 							char* o = nullptr;
@@ -2198,7 +2193,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							if (row[13] != nullptr) {
 								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, '%s')";
 								o = escape_string_single_quotes(row[13], false);
-								query = (char*)malloc(strlen(fqs.c_str()) + i + strlen(o) + 64);
+								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen(o) + 64);
 								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
 								// free in case of 'o' being a copy
 								if (o != row[13]) {
@@ -2208,7 +2203,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 								// In case of comment being null, placeholder must not have ''
 								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
-								query = (char*)malloc(strlen(fqs.c_str()) + i + strlen("NULL") + 64);
+								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen("NULL") + 64);
 								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
 							}
 
@@ -2605,13 +2600,12 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 						GloAdmin->admindb->execute("DELETE FROM proxysql_servers");
 						char *q=(char *)"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %s, %s, '%s')";
 						while (MYSQL_ROW row = mysql_fetch_row(result)) {
-							int i;
 							int l=0;
-							for (i=0; i<3; i++) {
+							for (int i=0; i<3; i++) {
 								l+=strlen(row[i]);
 							}
 							char *o=escape_string_single_quotes(row[3],false);
-							char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
+							char *query = (char *)malloc(strlen(q)+l+strlen(o)+64);
 							sprintf(query,q,row[0],row[1],row[2],o);
 							if (o!=row[3]) { // there was a copy
 								free(o);
