@@ -1475,6 +1475,7 @@ static void * sqlite3server_main_loop(void *arg)
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	set_thread_name("ClickHouseMain");
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
 		int *client;

@@ -2386,6 +2386,7 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
  * @return A pointer to the created MySQL thread.
  */
 proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
+	char thr_name[16];
 	if (idles==false) {
 		if (pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]) != 0 ) {
 			// LCOV_EXCL_START
@@ -2393,6 +2394,8 @@ proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, 
 			assert(0);
 			// LCOV_EXCL_STOP
 		}
+		snprintf(thr_name, sizeof(thr_name), "MySQLWorker%d", tn);
+		pthread_setname_np(mysql_threads[tn].thread_id, thr_name);
 #ifdef IDLE_THREADS
 	} else {
 		if (GloVars.global.idle_threads) {
@@ -2402,6 +2405,7 @@ proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, 
 				assert(0);
 				// LCOV_EXCL_STOP
 			}
+			snprintf(thr_name, sizeof(thr_name), "MySQLIdle%d", tn);
 		}
 #endif // IDLE_THREADS
 	}

@@ -792,6 +792,7 @@ void * Query_Cache::purgeHash_thread(void *) {
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	set_thread_name("QueryCachePurge");
 	mysql_thr->refresh_variables();
 	max_memory_size = (uint64_t) mysql_thread___query_cache_size_MB*1024*1024;
 	while (shutdown==0) {

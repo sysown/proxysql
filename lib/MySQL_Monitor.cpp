@@ -68,6 +68,9 @@ class ConsumerThread : public Thread {
 		thrn=_n;
 	}
 	void* run() {
+		char thr_name[16];
+		snprintf(thr_name, sizeof(thr_name), "%.12s%03d", typeid(T).name(), thrn);
+		set_thread_name(thr_name);
 		// Remove 1 item at a time and process it. Blocks if no items are
 		// available to process.
 		for (int i = 0; (thrn ? i < thrn : 1); i++) {
@@ -729,6 +732,7 @@ void * monitor_connect_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	set_thread_name("MonitorConnect");
 	while (GloMTH==NULL) {
 		usleep(50000);
 	}
@@ -742,6 +746,7 @@ void * monitor_ping_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	set_thread_name("MonitorPing");
 	while (GloMTH==NULL) {
 		usleep(50000);
 	}
@@ -755,6 +760,7 @@ void * monitor_read_only_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	set_thread_name("MonitorReadOnly");
 	while (GloMTH==NULL) {
 		usleep(50000);
 	}
@@ -768,6 +774,7 @@ void * monitor_group_replication_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	set_thread_name("MonitorGR");
 	while (GloMTH==NULL) {
 		usleep(50000);
 	}
@@ -782,6 +789,7 @@ void * monitor_galera_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	set_thread_name("MonitorGalera");
 	while (GloMTH==NULL) {
 		usleep(50000);
 	}
@@ -795,6 +803,7 @@ void * monitor_aws_aurora_pthread(void *arg) {
 //	bool cache=false;
 //	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 //#endif
+	set_thread_name("MonitorAurora");
 	while (GloMTH==NULL) {
 		usleep(50000);
 	}
@@ -808,6 +817,7 @@ void * monitor_replication_lag_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	set_thread_name("MonitReplicLag");
 	while (GloMTH==NULL) {
 		usleep(50000);
 	}
@@ -821,6 +831,7 @@ void* monitor_dns_cache_pthread(void* arg) {
 	bool cache = false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	set_thread_name("MonitorDNSCache");
 	while (GloMTH == NULL) {
 		usleep(50000);
 	}
@@ -3996,6 +4007,7 @@ struct mon_thread_info_t {
 
 void* monitor_GR_thread_HG(void *arg) {
 	uint32_t wr_hg = *(static_cast<uint32_t*>(arg));
+	set_thread_name("MonitorGRwrHG");
 	proxy_info("Started Monitor thread for Group Replication writer HG %u\n", wr_hg);
 
 	// Quick exit during shutdown/restart
@@ -5854,6 +5866,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	unsigned int min_lag_ms = 0;
 	unsigned int lag_num_checks = 1;
 	//unsigned int i = 0;
+	set_thread_name("MonitorAuroraHG");
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;

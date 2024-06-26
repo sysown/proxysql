@@ -78,6 +78,7 @@ static pthread_mutex_t *lockarray;
 static void * waitpid_thread(void *arg) {
 	pid_t *cpid_ptr=(pid_t *)arg;
 	int status;
+	set_thread_name("waitpid");
 	waitpid(*cpid_ptr, &status, 0);
 	free(cpid_ptr);
 	return NULL;
@@ -195,6 +196,7 @@ static char * main_check_latest_version() {
  * @return NULL.
  */
 void * main_check_latest_version_thread(void *arg) {
+	set_thread_name("CheckLatestVers");
 	// Fetch the latest version information
 	char * latest_version = main_check_latest_version();
 	// we check for potential invalid data , see issue #4042
