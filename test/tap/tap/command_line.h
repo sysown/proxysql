@@ -40,7 +40,7 @@ class CommandLine {
 
 	// proxysql postgresql admin connection
 	char* pgsql_admin_host = strdup("127.0.0.1");
-	int   pgsql_admin_port = 6034;
+	int   pgsql_admin_port = 6132;
 
 	// pgsql server connection
 	char* pgsql_server_host = strdup("127.0.0.1");
@@ -50,13 +50,13 @@ class CommandLine {
 
 	// unpriviliged test connection
 	char* pgsql_host = strdup("127.0.0.1");
-	int   pgsql_port = 6035;
+	int   pgsql_port = 6133;
 	char* pgsql_username = strdup("testuser");
 	char* pgsql_password = strdup("testuser");
 
 	// priviliged test connection
 	char* pgsql_root_host = strdup("127.0.0.1");
-	int	  pgsql_root_port = 6035;
+	int	  pgsql_root_port = 6133;
 	char* pgsql_root_username = strdup("postgres");
 	char* pgsql_root_password = strdup("postgres");
 

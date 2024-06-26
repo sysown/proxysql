@@ -5954,7 +5954,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	} else {
 		variables.mysql_ifaces=strdup("0.0.0.0:6032"); // changed. See isseu #1103
 	}
-	variables.pgsql_ifaces= strdup("0.0.0.0:6034");
+	variables.pgsql_ifaces= strdup("0.0.0.0:6132");
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;

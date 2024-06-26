@@ -2339,8 +2339,7 @@ void PgSQL_Threads_Handler::start_listeners() {
 	char* _tmp = NULL;
 	_tmp = GloPTH->get_variable((char*)"interfaces");
 	if (strlen(_tmp) == 0) {
-		//GloPTH->set_variable((char *)"interfaces", (char *)"0.0.0.0:6033;/tmp/proxysql.sock"); // set default
-		GloPTH->set_variable((char*)"interfaces", (char*)"0.0.0.0:6035"); // changed. See isseu #1104
+		GloPTH->set_variable((char*)"interfaces", (char*)"0.0.0.0:6133");
 	}
 	free(_tmp);
 	tokenizer_t tok;
