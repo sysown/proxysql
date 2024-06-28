@@ -14,6 +14,17 @@
 #include "tap.h"
 #include "utils.h"
 
+
+#define PQEXEC(conn, query) ({PGresult* res = PQexec(conn, query); \
+                              ExecStatusType status = PQresultStatus(res); \
+                              if (status != PGRES_COMMAND_OK && \
+                                  status != PGRES_TUPLES_OK) { \
+                                  fprintf(stderr, "File %s, line %d, status %d, %s\n", \
+					              __FILE__, __LINE__, status, PQresultErrorMessage(res)); \
+                              } \
+							  res; \
+                              })
+
 CommandLine cl;
 
 PGconn* create_new_connection(bool with_ssl) {
@@ -42,20 +53,20 @@ PGconn* create_new_connection(bool with_ssl) {
 void setup_database(PGconn* conn) {
     PGresult* res;
 
-    res = PQexec(conn, "DROP TABLE IF EXISTS test_table");
+    res = PQEXEC(conn, "DROP TABLE IF EXISTS test_table");
     PQclear(res);
 
-    res = PQexec(conn, "CREATE TABLE test_table (id SERIAL PRIMARY KEY, value TEXT)");
+    res = PQEXEC(conn, "CREATE TABLE test_table (id SERIAL PRIMARY KEY, value TEXT)");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "Created test_table");
     PQclear(res);
 
-    res = PQexec(conn, "INSERT INTO test_table (value) VALUES ('test1'), ('test2'), ('test3')");
+    res = PQEXEC(conn, "INSERT INTO test_table (value) VALUES ('test1'), ('test2'), ('test3')");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "Inserted initial records into test_table");
     PQclear(res);
 }
 
 void test_simple_query(PGconn* conn) {
-    PGresult* res = PQexec(conn, "SELECT 1");
+    PGresult* res = PQEXEC(conn, "SELECT 1");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         ok(1, "Simple SELECT query executed successfully");
         int nFields = PQnfields(res);
@@ -71,7 +82,7 @@ void test_simple_query(PGconn* conn) {
 }
 
 void test_insert_query(PGconn* conn) {
-    PGresult* res = PQexec(conn, "INSERT INTO test_table (value) VALUES ('test4')");
+    PGresult* res = PQEXEC(conn, "INSERT INTO test_table (value) VALUES ('test4')");
     if (PQresultStatus(res) == PGRES_COMMAND_OK) {
         ok(1, "INSERT query executed successfully");
         ok(strcmp(PQcmdTuples(res), "1") == 0, "One row inserted");
@@ -81,7 +92,7 @@ void test_insert_query(PGconn* conn) {
     PQclear(res);
 
     // Verify insertion
-    res = PQexec(conn, "SELECT value FROM test_table WHERE value = 'test4'");
+    res = PQEXEC(conn, "SELECT value FROM test_table WHERE value = 'test4'");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int nRows = PQntuples(res);
         ok(nRows == 1, "Inserted row is present");
@@ -94,7 +105,7 @@ void test_insert_query(PGconn* conn) {
 }
 
 void test_update_query(PGconn* conn) {
-    PGresult* res = PQexec(conn, "UPDATE test_table SET value = 'updated' WHERE value = 'test2'");
+    PGresult* res = PQEXEC(conn, "UPDATE test_table SET value = 'updated' WHERE value = 'test2'");
     if (PQresultStatus(res) == PGRES_COMMAND_OK) {
         ok(1, "UPDATE query executed successfully");
         ok(strcmp(PQcmdTuples(res), "1") == 0, "One row updated");
@@ -104,7 +115,7 @@ void test_update_query(PGconn* conn) {
     PQclear(res);
 
     // Verify update
-    res = PQexec(conn, "SELECT value FROM test_table WHERE value = 'updated'");
+    res = PQEXEC(conn, "SELECT value FROM test_table WHERE value = 'updated'");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int nRows = PQntuples(res);
         ok(nRows == 1, "Updated row is present");
@@ -117,7 +128,7 @@ void test_update_query(PGconn* conn) {
 }
 
 void test_delete_query(PGconn* conn) {
-    PGresult* res = PQexec(conn, "DELETE FROM test_table WHERE value = 'test3'");
+    PGresult* res = PQEXEC(conn, "DELETE FROM test_table WHERE value = 'test3'");
     if (PQresultStatus(res) == PGRES_COMMAND_OK) {
         ok(1, "DELETE query executed successfully");
         ok(strcmp(PQcmdTuples(res), "1") == 0, "One row deleted");
@@ -127,7 +138,7 @@ void test_delete_query(PGconn* conn) {
     PQclear(res);
 
     // Verify deletion
-    res = PQexec(conn, "SELECT value FROM test_table WHERE value = 'test3'");
+    res = PQEXEC(conn, "SELECT value FROM test_table WHERE value = 'test3'");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int nRows = PQntuples(res);
         ok(nRows == 0, "Deleted row is no longer present");
@@ -138,27 +149,27 @@ void test_delete_query(PGconn* conn) {
 }
 
 void test_invalid_query(PGconn* conn) {
-    PGresult* res = PQexec(conn, "SELECT * FROM non_existent_table");
+    PGresult* res = PQEXEC(conn, "SELECT * FROM non_existent_table");
     ok(PQresultStatus(res) == PGRES_FATAL_ERROR, "Query on non-existent table failed as expected");
     PQclear(res);
 }
 
 void test_transaction_commit(PGconn* conn) {
-    PGresult* res = PQexec(conn, "BEGIN");
+    PGresult* res = PQEXEC(conn, "BEGIN");
     ok(PQtransactionStatus(conn) == PQTRANS_INTRANS, "Connection in Transaction state");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "BEGIN transaction");
 
-    res = PQexec(conn, "INSERT INTO test_table (value) VALUES ('transaction commit')");
+    res = PQEXEC(conn, "INSERT INTO test_table (value) VALUES ('transaction commit')");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "INSERT in transaction");
     PQclear(res);
 
-    res = PQexec(conn, "COMMIT");
+    res = PQEXEC(conn, "COMMIT");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "COMMIT transaction");
     PQclear(res);
     ok(PQtransactionStatus(conn) == PQTRANS_IDLE, "Connection in Idle state");
 
     // Verify commit
-    res = PQexec(conn, "SELECT value FROM test_table WHERE value = 'transaction commit'");
+    res = PQEXEC(conn, "SELECT value FROM test_table WHERE value = 'transaction commit'");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int nRows = PQntuples(res);
         ok(nRows == 1, "Committed row is present");
@@ -171,21 +182,21 @@ void test_transaction_commit(PGconn* conn) {
 }
 
 void test_transaction_rollback(PGconn* conn) {
-    PGresult* res = PQexec(conn, "BEGIN");
+    PGresult* res = PQEXEC(conn, "BEGIN");
     ok(PQtransactionStatus(conn) == PQTRANS_INTRANS, "Connection in Transaction state");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "BEGIN transaction");
 
-    res = PQexec(conn, "INSERT INTO test_table (value) VALUES ('transaction rollback')");
+    res = PQEXEC(conn, "INSERT INTO test_table (value) VALUES ('transaction rollback')");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "INSERT in transaction");
     PQclear(res);
 
-    res = PQexec(conn, "ROLLBACK");
+    res = PQEXEC(conn, "ROLLBACK");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "ROLLBACK transaction");
     PQclear(res);
     ok(PQtransactionStatus(conn) == PQTRANS_IDLE, "Connection in Idle state");
 
     // Verify rollback
-    res = PQexec(conn, "SELECT value FROM test_table WHERE value = 'transaction rollback'");
+    res = PQEXEC(conn, "SELECT value FROM test_table WHERE value = 'transaction rollback'");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int nRows = PQntuples(res);
         ok(nRows == 0, "Rolled back row is not present");
@@ -196,22 +207,22 @@ void test_transaction_rollback(PGconn* conn) {
 }
 
 void test_transaction_error(PGconn* conn) {
-    PGresult* res = PQexec(conn, "BEGIN");
+    PGresult* res = PQEXEC(conn, "BEGIN");
     ok(PQtransactionStatus(conn) == PQTRANS_INTRANS, "Connection in Transaction state");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "BEGIN transaction");
 
-    res = PQexec(conn, "SELECT 1/0");
+    res = PQEXEC(conn, "SELECT 1/0");
     ok(PQresultStatus(res) == PGRES_FATAL_ERROR, "Error result returned");
     PQclear(res);
     ok(PQtransactionStatus(conn) == PQTRANS_INERROR, "Connection in Error Transaction state");
 
-    res = PQexec(conn, "ROLLBACK");
+    res = PQEXEC(conn, "ROLLBACK");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "ROLLBACK transaction");
     PQclear(res);
     ok(PQtransactionStatus(conn) == PQTRANS_IDLE, "Connection in Idle state");
 
     // Verify rollback
-    res = PQexec(conn, "SELECT value FROM test_table WHERE value = 'transaction rollback'");
+    res = PQEXEC(conn, "SELECT value FROM test_table WHERE value = 'transaction rollback'");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int nRows = PQntuples(res);
         ok(nRows == 0, "Rolled back row is not present");
@@ -222,7 +233,7 @@ void test_transaction_error(PGconn* conn) {
 }
 
 void test_null_value(PGconn* conn) {
-    PGresult* res = PQexec(conn, "INSERT INTO test_table (value) VALUES (NULL)");
+    PGresult* res = PQEXEC(conn, "INSERT INTO test_table (value) VALUES (NULL)");
     if (PQresultStatus(res) == PGRES_COMMAND_OK) {
         ok(1, "INSERT NULL value executed successfully");
         ok(strcmp(PQcmdTuples(res), "1") == 0, "One row inserted with NULL value");
@@ -232,7 +243,7 @@ void test_null_value(PGconn* conn) {
     PQclear(res);
 
     // Verify NULL insertion
-    res = PQexec(conn, "SELECT value FROM test_table WHERE value IS NULL");
+    res = PQEXEC(conn, "SELECT value FROM test_table WHERE value IS NULL");
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int nRows = PQntuples(res);
         ok(nRows == 1, "Inserted NULL value is present");
@@ -243,7 +254,7 @@ void test_null_value(PGconn* conn) {
 }
 
 void test_constraint_violation(PGconn* conn) {
-    PGresult* res = PQexec(conn, "INSERT INTO test_table (id, value) VALUES (1, 'duplicate id')");
+    PGresult* res = PQEXEC(conn, "INSERT INTO test_table (id, value) VALUES (1, 'duplicate id')");
     ok(PQresultStatus(res) == PGRES_FATAL_ERROR, "INSERT with duplicate ID failed as expected");
     PQclear(res);
 }
@@ -251,7 +262,7 @@ void test_constraint_violation(PGconn* conn) {
 void teardown_database(PGconn* conn) {
     PGresult* res;
 
-    res = PQexec(conn, "DROP TABLE IF EXISTS test_table");
+    res = PQEXEC(conn, "DROP TABLE IF EXISTS test_table");
     PQclear(res);
 }
 
