@@ -38,6 +38,28 @@ class CommandLine {
 	char* mysql_username = strdup("root");
 	char* mysql_password = strdup("root");
 
+	// proxysql postgresql admin connection
+	char* pgsql_admin_host = strdup("127.0.0.1");
+	int   pgsql_admin_port = 6132;
+
+	// pgsql server connection
+	char* pgsql_server_host = strdup("127.0.0.1");
+	int   pgsql_server_port = 5432;
+	char* pgsql_server_username = strdup("postgres");
+	char* pgsql_server_password = strdup("postgres");
+
+	// unpriviliged test connection
+	char* pgsql_host = strdup("127.0.0.1");
+	int   pgsql_port = 6133;
+	char* pgsql_username = strdup("testuser");
+	char* pgsql_password = strdup("testuser");
+
+	// priviliged test connection
+	char* pgsql_root_host = strdup("127.0.0.1");
+	int	  pgsql_root_port = 6133;
+	char* pgsql_root_username = strdup("postgres");
+	char* pgsql_root_password = strdup("postgres");
+
 	char* workdir = strdup("./");
 
 	uint64_t client_flags = 0;

@@ -304,7 +304,8 @@ pcre: pcre/pcre/.libs/libpcre.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a : libssl/openssl/libssl.a
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
-	cd postgresql/postgresql && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl ./configure --with-ssl=openssl --with-includes=$(shell pwd)/libssl/openssl/include/ --with-libraries=$(shell pwd)/libssl/openssl/ --without-readline 
+	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
+	cd postgresql/postgresql && LD_LIBRARY_PATH="$(shell pwd)/libssl/openssl" ./configure --with-ssl=openssl --with-includes="$(shell pwd)/libssl/openssl/include/" --with-libraries="$(shell pwd)/libssl/openssl/" --without-readline 
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
 	#cd postgresql/postgresql && CC=${CC} CXX=${CXX} ${MAKE} -f src/interfaces/libpq/Makefile all
 
@@ -314,14 +315,14 @@ libusual/libusual/.libs/libusual.a: libssl/openssl/libssl.a
 	cd libusual && rm -rf libusual-*/ || true
 	cd libusual && tar -zxf libusual-*.tar.gz
 	cd libusual/libusual && ./autogen.sh
-	cd libusual/libusual && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl ./configure --with-openssl=$(shell pwd)/libssl/openssl/ --disable-shared
+	cd libusual/libusual && ./configure --with-openssl="$(shell pwd)/libssl/openssl/" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a
 
 libscram/lib/libscram.a: libssl/openssl/libssl.a postgresql/postgresql/src/interfaces/libpq/libpq.a 
 	cd libscram && rm -rf lib/* || true
-	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR=$(shell pwd)/libssl/openssl/ POSTGRESQL_DIR=$(shell pwd)/postgresql/postgresql/
+	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(shell pwd)/libssl/openssl" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 
 libscram: libscram/lib/libscram.a
 

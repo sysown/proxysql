@@ -1,8 +1,9 @@
-#ifndef __CLASS_POSTGRESQL_CONNECTION_H
-#define __CLASS_POSTGRESQL_CONNECTION_H
+#ifndef __CLASS_PGSQL_CONNECTION_H
+#define __CLASS_PGSQL_CONNECTION_H
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "PgSQL_Error_Helper.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -449,22 +450,8 @@ class PgSQL_Connection_Placeholder {
 	void process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes);
 
 	void async_free_result();
-	/**
-	 * @brief Returns if the connection is **for sure**, known to be in an active transaction.
-	 * @details The function considers two things:
-	 *   1. If 'server_status' is flagged with 'SERVER_STATUS_IN_TRANS'.
-	 *   2. If the connection has 'autcommit=0' and 'autocommit_false_is_transaction' is set.
-	 * @return True if the connection is known to be in a transaction, or equivalent state.
-	 */
-	bool IsKnownActiveTransaction();
-	/**
-	 * @brief Returns if the connection is in a **potential transaction**.
-	 * @details This function is a more strict version of 'IsKnownActiveTransaction', which also considers
-	 *  connections which holds 'unknown_transaction_status' as potentially active transactions.
-	 * @return True if the connection is in potentially in an active transaction.
-	 */
-	bool IsActiveTransaction();
-	bool IsServerOffline();
+
+	
 	bool IsAutoCommit();
 	bool AutocommitFalse_AndSavepoint();
 	bool MultiplexDisabled(bool check_delay_token = true);
@@ -489,14 +476,23 @@ private:
 	// these will be removed
 	MySQL_ResultSet *MyRS;
 	MySQL_ResultSet *MyRS_reuse;
-};
 
-enum  PG_ERROR_TYPE {
-	PG_NO_ERROR,
-	PG_CONNECT_FAILED,
-	PG_QUERY_FAILED,
-	PG_RESULT_FAILED,
-
+	bool IsServerOffline();
+	/**
+ * @brief Returns if the connection is **for sure**, known to be in an active transaction.
+ * @details The function considers two things:
+ *   1. If 'server_status' is flagged with 'SERVER_STATUS_IN_TRANS'.
+ *   2. If the connection has 'autcommit=0' and 'autocommit_false_is_transaction' is set.
+ * @return True if the connection is known to be in a transaction, or equivalent state.
+ */
+	bool IsKnownActiveTransaction();
+	/**
+	 * @brief Returns if the connection is in a **potential transaction**.
+	 * @details This function is a more strict version of 'IsKnownActiveTransaction', which also considers
+	 *  connections which holds 'unknown_transaction_status' as potentially active transactions.
+	 * @return True if the connection is in potentially in an active transaction.
+	 */
+	bool IsActiveTransaction();
 };
 
 class PgSQL_Connection : public PgSQL_Connection_Placeholder {
@@ -521,41 +517,86 @@ public:
 	void compute_unknown_transaction_status();
 	void async_free_result();
 	void flush();
+	bool IsActiveTransaction();
+	bool IsKnownActiveTransaction();
+	bool IsServerOffline();
+	
+	bool is_connection_in_reusable_state() const;
 
-	std::string get_error_code_from_result() const;
+	int get_server_version() {
+		return PQserverVersion(pgsql_conn);
+	}
+
+	int get_protocol_version() {
+		return PQprotocolVersion(pgsql_conn);
+	}
 
 	bool is_error_present() const {
-		return err_type != PG_NO_ERROR;
+		if (error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL ||
+			error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR ||
+			error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_PANIC) {
+				return true;
+		}
+		return false;
 	}
 
-	PG_ERROR_TYPE get_error_type() const {
-		return err_type;
+	PGSQL_ERROR_SEVERITY get_error_severity() const {
+		return error_info.severity;
 	}
 
-	std::string get_error_message() const {
-		return err_msg;
+	PGSQL_ERROR_CATEGORY get_error_category() const {
+		return error_info.category;
 	}
 
-	void set_error(PG_ERROR_TYPE _err_type, const std::string& _err_msg) {
-		err_type = _err_type;
-		err_msg = _err_msg;
+	const std::string& get_error_message() const {
+		return error_info.message;
+	}
+
+	std::string get_error_code_with_message() const {
+		return ("[" + std::string(error_info.sqlstate) + "] " + error_info.message);
+	}
+
+	const char* get_error_code_str() const {
+		return error_info.sqlstate;
+	}
+
+	PGSQL_ERROR_CODES get_error_code() const {
+		return error_info.code;
+	}
+
+	void set_error(const char* code, const char* message, bool is_fatal) {
+		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? "FATAL" : "ERROR");
+	}
+
+	void set_error(PGSQL_ERROR_CODES code, const char* message, bool is_fatal) {
+		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? 
+			PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL : PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR);
+	}
+
+	void set_error_from_result(const PGresult* result, uint16_t ext_fields = 0) {
+		if (result) {
+			PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
+		} else {
+			const char* errmsg = PQerrorMessage(pgsql_conn);
+			set_error(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, errmsg ? errmsg : "Unknown error", true);
+			//PgSQL_Error_Helper::fill_error_info_from_error_message(error_info, errmsg);
+		}
 	}
 
 	void reset_error() {
-		err_type = PG_NO_ERROR;
-		err_msg.clear();
+		reset_error_info(error_info, false);
 	}
 
 	PGresult* get_last_result() const {
 		return last_result;
 	}
 
-	void set_last_result(PGresult* res) {
+	void set_last_result(PGresult* result) {
 		if (last_result) {
 			PQclear(last_result);
 		}
 
-		last_result = res;
+		last_result = result;
 	}
 
 	void reset_last_result() {
@@ -565,66 +606,18 @@ public:
 		}
 	}
 	void optimize() {}
-	//PgSQL_Conn_Param conn_params;
 
+	//PgSQL_Conn_Param conn_params;
+	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
 	PGresult* last_result;
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
-
-	PG_ERROR_TYPE err_type;
-	std::string err_msg;
-
 	bool first_result;
 	//PgSQL_SrvC* parent;
 	//PgSQL_Connection_userinfo* userinfo;
 	//PgSQL_Data_Stream* myds;
 	//int fd;
-
-	/*std::string get_error_code(PG_ERROR_TYPE* errtype = NULL) {
-		assert(pgsql_conn);
-
-		std::string error_code = PGCONN_NO_ERROR;
-
-		ConnStatusType status = PQstatus(pgsql_conn);
-		if (status == CONNECTION_BAD) {
-			if (errtype) *errtype = PG_CONNECTION_ERROR;
-			error_code = PQparameterStatus(pgsql_conn, "SQLSTATE");
-		}
-		else if (pgsql_result != NULL) {
-			ExecStatusType status = PQresultStatus(pgsql_result);
-			if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
-				if (errtype) *errtype = PG_SERVER_ERROR;
-				error_code = PQresultErrorField(pgsql_result, PG_DIAG_SQLSTATE);
-			}
-		}
-
-		return error_code;
-	}
-
-	std::string get_error_message(PG_ERROR_TYPE* errtype = NULL) {
-		assert(pgsql_conn);
-
-		std::string error_message{};
-
-		ConnStatusType status = PQstatus(pgsql_conn);
-		if (status == CONNECTION_BAD) {
-			if (errtype) *errtype = PG_CONNECTION_ERROR;
-			error_message = PQerrorMessage(pgsql_conn);
-		}
-		else if (pgsql_result != NULL) {
-			ExecStatusType status = PQresultStatus(pgsql_result);
-			if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
-				if (errtype) *errtype = PG_SERVER_ERROR;
-				error_message = PQresultErrorMessage(pgsql_result);
-			}
-		}
-
-		return error_message;
-	}*/
 };
 
-
-
-
-#endif /* __CLASS_POSTGRESQL_CONNECTION_H */
+#endif /* __CLASS_PGSQL_CONNECTION_H */

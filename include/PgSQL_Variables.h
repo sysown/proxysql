@@ -1,5 +1,5 @@
-#ifndef POSTGRESQL_VARIABLES_H
-#define POSTGRESQL_VARIABLES_H
+#ifndef PGSQL_VARIABLES_H
+#define PGSQL_VARIABLES_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -51,5 +51,5 @@ public:
 	bool parse_variable_number(PgSQL_Session*sess, int idx, std::string &value1, bool* lock_hostgroup);
 };
 
-#endif // POSTGRESQL_VARIABLES_H
+#endif // PGSQL_VARIABLES_H
 

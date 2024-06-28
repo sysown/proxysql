@@ -167,14 +167,14 @@ static enum pgsql_sslstatus get_sslstatus(SSL* ssl, int n)
 	ERR_clear_error();
 	switch (err) {
 	case SSL_ERROR_NONE:
-		return POSTGRESQL_SSLSTATUS_OK;
+		return PGSQL_SSLSTATUS_OK;
 	case SSL_ERROR_WANT_WRITE:
 	case SSL_ERROR_WANT_READ:
-		return POSTGRESQL_SSLSTATUS_WANT_IO;
+		return PGSQL_SSLSTATUS_WANT_IO;
 	case SSL_ERROR_ZERO_RETURN:
 	case SSL_ERROR_SYSCALL:
 	default:
-		return POSTGRESQL_SSLSTATUS_FAIL;
+		return PGSQL_SSLSTATUS_FAIL;
 	}
 }
 
@@ -232,14 +232,14 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 			long rc = SSL_get_verify_result(ssl);
 			if (rc != X509_V_OK) {
 				proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n", addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
-				return POSTGRESQL_SSLSTATUS_FAIL;
+				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
 	}
 	status = get_sslstatus(ssl, n);
 	//proxy_info("SSL status = %d\n", status);
 	/* Did SSL request to write bytes? */
-	if (status == POSTGRESQL_SSLSTATUS_WANT_IO) {
+	if (status == PGSQL_SSLSTATUS_WANT_IO) {
 		//proxy_info("SSL status is WANT_IO %d\n", status);
 		do {
 			n = BIO_read(wbio_ssl, buf, sizeof(buf));
@@ -250,7 +250,7 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 			}
 			else if (!BIO_should_retry(wbio_ssl)) {
 				//proxy_info("BIO_should_retry failed\n");
-				return POSTGRESQL_SSLSTATUS_FAIL;
+				return PGSQL_SSLSTATUS_FAIL;
 			}
 		} while (n > 0);
 	}
@@ -623,7 +623,7 @@ int PgSQL_Data_Stream::read_from_net() {
 				len -= n2;
 				if (!SSL_is_init_finished(ssl)) {
 					//proxy_info("SSL_is_init_finished NOT completed\n");
-					if (do_ssl_handshake() == POSTGRESQL_SSLSTATUS_FAIL) {
+					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return -1;
@@ -653,7 +653,7 @@ int PgSQL_Data_Stream::read_from_net() {
 			*/
 			status = get_sslstatus(ssl, n2);
 			//proxy_info("SSL status = %d\n", status);
-			if (status == POSTGRESQL_SSLSTATUS_WANT_IO) {
+			if (status == PGSQL_SSLSTATUS_WANT_IO) {
 				do {
 					n2 = BIO_read(wbio_ssl, buf2, sizeof(buf2));
 					//proxy_info("BIO_read with %d bytes\n", n2);
@@ -666,7 +666,7 @@ int PgSQL_Data_Stream::read_from_net() {
 					}
 				} while (n2 > 0);
 			}
-			if (status == POSTGRESQL_SSLSTATUS_FAIL) {
+			if (status == PGSQL_SSLSTATUS_FAIL) {
 				shut_soft();
 				return -1;
 			}
@@ -867,7 +867,7 @@ void PgSQL_Data_Stream::set_pollout() {
 			else {
 				if (!SSL_is_init_finished(ssl)) {
 					//proxy_info("SSL_is_init_finished NOT completed\n");
-					if (do_ssl_handshake() == POSTGRESQL_SSLSTATUS_FAIL) {
+					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return;
@@ -905,7 +905,7 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 	if (encrypted) {
 		if (!SSL_is_init_finished(ssl)) {
 			//proxy_info("SSL_is_init_finished completed: NO!\n");
-			if (do_ssl_handshake() == POSTGRESQL_SSLSTATUS_FAIL) {
+			if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 				//proxy_info("SSL_is_init_finished failed!!\n");
 				shut_soft();
 				return -1;

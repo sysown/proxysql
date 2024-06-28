@@ -1704,7 +1704,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 bool is_valid_global_variable(const char *var_name) {
 	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 11) && GloPTH->has_variable(var_name + 6)) {
+	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 6) && GloPTH->has_variable(var_name + 6)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
 		return true;
@@ -4082,7 +4082,7 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 					} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
 						backup_shun_on_failures = pgsql_thread___shun_on_failures;
 						pgsql_thread___shun_on_failures = 1;
-						// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
+						// Set the error twice to surpass 'pgsql_thread___shun_on_failures' value.
 						mysrvc->connect_error(i_errcode, false);
 						mysrvc->connect_error(i_errcode, false);
 						pgsql_thread___shun_on_failures = backup_shun_on_failures;
@@ -5954,7 +5954,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	} else {
 		variables.mysql_ifaces=strdup("0.0.0.0:6032"); // changed. See isseu #1103
 	}
-	variables.pgsql_ifaces= strdup("0.0.0.0:6034");
+	variables.pgsql_ifaces= strdup("0.0.0.0:6132");
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;
@@ -10835,7 +10835,7 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
 		sprintf(new_msg, "%s%s", prefix_msg, msg);
-		myds->myprot.generate_error_packet(true,true, new_msg, NULL, false);
+		myds->myprot.generate_error_packet(true, true, new_msg, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
 	}

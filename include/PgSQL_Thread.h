@@ -1,8 +1,8 @@
-#ifndef __CLASS_POSTGRESQL_THREAD_H
-#define __CLASS_POSTGRESQL_THREAD_H
-#define ____CLASS_STANDARD_POSTGRESQL_THREAD_H
-#include "prometheus/counter.h"
-#include "prometheus/gauge.h"
+#ifndef __CLASS_PGSQL_THREAD_H
+#define __CLASS_PGSQL_THREAD_H
+#define ____CLASS_STANDARD_PGSQL_THREAD_H
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
 
 #include "proxysql.h"
 #include "Base_Thread.h"
@@ -107,8 +107,8 @@ enum PgSQL_Thread_status_variable {
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
-	st_var_END*/
-	PG_st_var_END
+	*/
+	PG_st_var_END = 42 // to avoid ASAN complaining. TO FIX
 };
 
 class __attribute__((aligned(64))) PgSQL_Thread : public Base_Thread
@@ -463,6 +463,7 @@ public:
 		char* default_schema;
 		char* interfaces;
 		char* keep_multiplexing_variables;
+		char* default_client_encoding;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using PgSQL_Variables instead
 		int handle_unknown_charset;
 		bool servers_stats;
@@ -702,4 +703,4 @@ public:
 };
 
 
-#endif /* __CLASS_POSTGRESQL_THREAD_H */
+#endif /* __CLASS_PGSQL_THREAD_H */

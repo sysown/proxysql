@@ -272,7 +272,7 @@ void PgSQL_Listeners_Manager::del(unsigned int idx) {
 	delete ifi;
 }
 
-static char* mysql_thread_variables_names[] = {
+static char* pgsql_thread_variables_names[] = {
 	(char*)"authentication_method",
 	(char*)"shun_on_failures",
 	(char*)"shun_recovery_time_sec",
@@ -397,6 +397,7 @@ static char* mysql_thread_variables_names[] = {
 	(char*)"poll_timeout_on_failure",
 	(char*)"server_capabilities",
 	(char*)"server_version",
+	(char*)"default_client_encoding",
 	(char*)"keep_multiplexing_variables",
 	(char*)"kill_backend_connection_when_disconnect",
 	(char*)"client_session_track_gtid",
@@ -906,7 +907,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 
 	variables.authentication_method = (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256; //SCRAM Authentication method
 	variables.server_version = strdup((char*)"16.1"); 
-
+	variables.default_client_encoding = strdup((char*)"UTF8");
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
 	variables.unshun_algorithm = 0;
@@ -1285,6 +1286,7 @@ char* PgSQL_Threads_Handler::get_variable_string(char* name) {
 		if (!strcmp(name, "default_schema")) return strdup(variables.default_schema);
 	}
 	if (!strcmp(name, "server_version")) return strdup(variables.server_version);
+	if (!strcmp(name, "default_client_encoding")) return strdup(variables.default_client_encoding);
 	if (!strcmp(name, "eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcmp(name, "auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name, "interfaces")) return strdup(variables.interfaces);
@@ -1417,6 +1419,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 	}
 	if (!strcasecmp(name, "firewall_whitelist_errormsg")) return strdup(variables.firewall_whitelist_errormsg);
 	if (!strcasecmp(name, "server_version")) return strdup(variables.server_version);
+	if (!strcasecmp(name, "default_client_encoding")) return strdup(variables.default_client_encoding);
 	if (!strcasecmp(name, "auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcasecmp(name, "eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name, "default_schema")) return strdup(variables.default_schema);
@@ -1701,7 +1704,16 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 			return false;
 		}
 	}
-
+	if (!strcasecmp(name, "default_client_encoding")) {
+		if (vallen) {
+			free(variables.default_client_encoding);
+			variables.default_client_encoding = strdup(value);
+			return true;
+		}
+		else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name, "init_connect")) {
 		if (variables.init_connect) free(variables.init_connect);
 		variables.init_connect = NULL;
@@ -1991,7 +2003,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 }
 
 
-// return variables from both mysql_thread_variables_names AND mysql_tracked_variables
+// return variables from both pgsql_thread_variables_names AND mysql_tracked_variables
 char** PgSQL_Threads_Handler::get_variables_list() {
 
 
@@ -2176,14 +2188,14 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	}
 
 
-	const size_t l = sizeof(mysql_thread_variables_names) / sizeof(char*);
+	const size_t l = sizeof(pgsql_thread_variables_names) / sizeof(char*);
 	unsigned int i;
 	size_t ltv = 0;
 	for (i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_tracked_variables[i].is_global_variable)
 			ltv++;
 	}
-	char** ret = (char**)malloc(sizeof(char*) * (l + ltv)); // not adding + 1 because mysql_thread_variables_names is already NULL terminated
+	char** ret = (char**)malloc(sizeof(char*) * (l + ltv)); // not adding + 1 because pgsql_thread_variables_names is already NULL terminated
 	size_t fv = 0;
 	for (i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_tracked_variables[i].is_global_variable) {
@@ -2196,14 +2208,14 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	// this is an extra check.
 	assert(fv == ltv);
 	for (i = ltv; i < l + ltv - 1; i++) {
-		ret[i] = (strdup(mysql_thread_variables_names[i - ltv]));
+		ret[i] = (strdup(pgsql_thread_variables_names[i - ltv]));
 	}
 	ret[l + ltv - 1] = NULL; // last value
 	return ret;
 }
 
 // Returns true if the given name is the name of an existing mysql variable
-// scan both mysql_thread_variables_names AND mysql_tracked_variables
+// scan both pgsql_thread_variables_names AND mysql_tracked_variables
 bool PgSQL_Threads_Handler::has_variable(const char* name) {
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
@@ -2219,10 +2231,10 @@ bool PgSQL_Threads_Handler::has_variable(const char* name) {
 			}
 		}
 	}
-	size_t no_vars = sizeof(mysql_thread_variables_names) / sizeof(char*);
+	size_t no_vars = sizeof(pgsql_thread_variables_names) / sizeof(char*);
 	for (unsigned int i = 0; i < no_vars - 1; ++i) {
-		size_t var_len = strlen(mysql_thread_variables_names[i]);
-		if (strlen(name) == var_len && !strncmp(name, mysql_thread_variables_names[i], var_len)) {
+		size_t var_len = strlen(pgsql_thread_variables_names[i]);
+		if (strlen(name) == var_len && !strncmp(name, pgsql_thread_variables_names[i], var_len)) {
 			return true;
 		}
 	}
@@ -2327,8 +2339,7 @@ void PgSQL_Threads_Handler::start_listeners() {
 	char* _tmp = NULL;
 	_tmp = GloPTH->get_variable((char*)"interfaces");
 	if (strlen(_tmp) == 0) {
-		//GloPTH->set_variable((char *)"interfaces", (char *)"0.0.0.0:6033;/tmp/proxysql.sock"); // set default
-		GloPTH->set_variable((char*)"interfaces", (char*)"0.0.0.0:6035"); // changed. See isseu #1104
+		GloPTH->set_variable((char*)"interfaces", (char*)"0.0.0.0:6133");
 	}
 	free(_tmp);
 	tokenizer_t tok;
@@ -2569,6 +2580,7 @@ PgSQL_Threads_Handler::~PgSQL_Threads_Handler() {
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
+	if (variables.default_client_encoding) free(variables.default_client_encoding);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
@@ -2706,6 +2718,7 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
 	
 	if (pgsql_thread___server_version) { free(pgsql_thread___server_version); pgsql_thread___server_version = NULL; }
+	if (pgsql_thread___default_client_encoding) { free(pgsql_thread___default_client_encoding); pgsql_thread___default_client_encoding = NULL; }
 
 	for (int i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_thread___default_variables[i]) {
@@ -2723,7 +2736,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (pgsql_thread___ssl_p2s_cipher) { free(pgsql_thread___ssl_p2s_cipher); pgsql_thread___ssl_p2s_cipher = NULL; }
 	if (pgsql_thread___ssl_p2s_crl) { free(pgsql_thread___ssl_p2s_crl); pgsql_thread___ssl_p2s_crl = NULL; }
 	if (pgsql_thread___ssl_p2s_crlpath) { free(pgsql_thread___ssl_p2s_crlpath); pgsql_thread___ssl_p2s_crlpath = NULL; }
-
 
 	if (match_regexes) {
 		Session_Regex* sr = NULL;
@@ -3856,6 +3868,9 @@ void PgSQL_Thread::refresh_variables() {
 
 	if (pgsql_thread___server_version) free(pgsql_thread___server_version);
 	pgsql_thread___server_version = GloPTH->get_variable_string((char*)"server_version");
+	if (pgsql_thread___default_client_encoding) free(pgsql_thread___default_client_encoding);
+	pgsql_thread___default_client_encoding = GloPTH->get_variable_string((char*)"default_client_encoding");
+
 	pgsql_thread___have_ssl = (bool)GloPTH->get_variable_int((char*)"have_ssl");
 
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
@@ -3874,6 +3889,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___default_schema = GloPTH->get_variable_string((char*)"default_schema");
 	if (pgsql_thread___keep_multiplexing_variables) free(pgsql_thread___keep_multiplexing_variables);
 	pgsql_thread___keep_multiplexing_variables = GloPTH->get_variable_string((char*)"keep_multiplexing_variables");
+
 	/*
 	mysql_thread___server_capabilities = GloPTH->get_variable_uint16((char*)"server_capabilities");
 	mysql_thread___handle_unknown_charset = GloPTH->get_variable_int((char*)"handle_unknown_charset");
@@ -3942,6 +3958,7 @@ PgSQL_Thread::PgSQL_Thread() {
 	last_processing_idles = 0;
 	__thread_PgSQL_Thread_Variables_version = 0;
 	pgsql_thread___server_version = NULL;
+	pgsql_thread___default_client_encoding = NULL;
 	pgsql_thread___have_ssl = true;
 	pgsql_thread___default_schema = NULL;
 	pgsql_thread___init_connect = NULL;

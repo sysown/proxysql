@@ -1,5 +1,5 @@
-#ifndef __CLASS_POSTGRESQL_DATA_STREAM_H
-#define __CLASS_POSTGRESQL_DATA_STREAM_H
+#ifndef __CLASS_PGSQL_DATA_STREAM_H
+#define __CLASS_PGSQL_DATA_STREAM_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -58,7 +58,7 @@ public:
 	}
 };
 
-enum pgsql_sslstatus { POSTGRESQL_SSLSTATUS_OK, POSTGRESQL_SSLSTATUS_WANT_IO, POSTGRESQL_SSLSTATUS_FAIL };
+enum pgsql_sslstatus { PGSQL_SSLSTATUS_OK, PGSQL_SSLSTATUS_WANT_IO, PGSQL_SSLSTATUS_FAIL };
 
 class PgSQL_Data_Stream
 {
@@ -269,4 +269,4 @@ public:
 
 	void reset_connection();
 };
-#endif /* __CLASS_MYSQL_DATA_STREAM_H */
+#endif /* __CLASS_PGSQL_DATA_STREAM_H */

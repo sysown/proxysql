@@ -1,5 +1,5 @@
-#ifndef __CLASS_POSTGRESQL_HOSTGROUPS_MANAGER_H
-#define __CLASS_POSTGRESQL_HOSTGROUPS_MANAGER_H
+#ifndef __CLASS_PGSQL_HOSTGROUPS_MANAGER_H
+#define __CLASS_PGSQL_HOSTGROUPS_MANAGER_H
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -984,4 +984,4 @@ private:
 };
 
 
-#endif /* __CLASS_POSTGRESQL_HOSTGROUPS_MANAGER_H */
+#endif /* __CLASS_PGSQL_HOSTGROUPS_MANAGER_H */
