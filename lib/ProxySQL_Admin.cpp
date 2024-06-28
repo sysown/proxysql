@@ -301,6 +301,8 @@ extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 
+extern void (*flush_logs_function)();
+
 extern Web_Interface *GloWebInterface;
 
 extern ProxySQL_Cluster *GloProxyCluster;
@@ -1552,6 +1554,29 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
 	return false;
 }
 
+static void flush_logs_handler() {
+	GloAdmin->flush_logs();
+}
+
+void ProxySQL_Admin::flush_logs() {
+	if (GloMyLogger) {
+		GloMyLogger->flush_log();
+	}
+	this->flush_error_log();
+	proxysql_keylog_close();
+	char* ssl_keylog_file = this->get_variable((char*)"ssl_keylog_file");
+	if (ssl_keylog_file != NULL) {
+		if (strlen(ssl_keylog_file) > 0) {
+			if (proxysql_keylog_open(ssl_keylog_file) == false) {
+				// re-opening file failed, setting ssl_keylog_enabled to false
+				GloVars.global.ssl_keylog_enabled = false;
+				proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", ssl_keylog_file);
+			}
+		}
+		free(ssl_keylog_file);
+	}
+}
+
 /*
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
@@ -1821,22 +1846,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL FLUSH LOGS") && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH LOGS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (GloMyLogger) {
-			GloMyLogger->flush_log();
-		}
-		SPA->flush_error_log();
-		proxysql_keylog_close();
-		char* ssl_keylog_file = SPA->get_variable((char*)"ssl_keylog_file");
-		if (ssl_keylog_file != NULL) {
-			if (strlen(ssl_keylog_file) > 0) {
-				if (proxysql_keylog_open(ssl_keylog_file) == false) {
-					// re-opening file failed, setting ssl_keylog_enabled to false
-					GloVars.global.ssl_keylog_enabled = false;
-					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", ssl_keylog_file);
-				}
-			}
-			free(ssl_keylog_file);
-		}	
+		SPA->flush_logs();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
@@ -6387,6 +6397,10 @@ int check_if_user_config(SQLite3DB* admindb, const char* query) {
 bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	cpu_timer cpt;
 
+	if (flush_logs_function == NULL) {
+		flush_logs_function = flush_logs_handler;
+	}
+
 	Admin_HTTP_Server = NULL;
 	AdminRestApiServer = NULL;
 	AdminHTTPServer = NULL;
@@ -9348,7 +9362,11 @@ void ProxySQL_Admin::p_update_metrics() {
  * @return On success, the number of currently opened file descriptors, '-1' otherwise.
  */
 int32_t get_open_fds() {
+#if defined(__FreeBSD__) || defined(__APPLE__)
+	DIR* dir = opendir("/dev/fd");
+#else
 	DIR* dir = opendir("/proc/self/fd");
+#endif
 	if (dir == NULL) {
 		proxy_error("'opendir()' failed with error: '%d'\n", errno);
 		return -1;

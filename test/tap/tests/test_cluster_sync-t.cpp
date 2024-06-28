@@ -1231,9 +1231,9 @@ int main(int, char**) {
 		// In case of error place in log the reason
 		if (exec_res || save_proxy_stderr.load()) {
 			if (exec_res) {
-				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_node_stderr.txt'");
+				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
 			} else {
-				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_node_stderr.txt'");
+				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
 			}
 		}
 

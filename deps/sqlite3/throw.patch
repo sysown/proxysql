@@ -1,0 +1,11 @@
+--- sqlite3.c.orig	2024-04-04 15:53:48.801105000 +0000
++++ sqlite3.c	2024-04-04 15:54:51.423876000 +0000
+@@ -25175,7 +25175,7 @@
+ ////////////////////////////////////////////////////////////////////////////////
+ 
+ // ctype.h
+-extern int toupper (int __c) __THROW;
++extern int toupper (int __c);
+ 
+ // SHA256_crypt
+ char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);
