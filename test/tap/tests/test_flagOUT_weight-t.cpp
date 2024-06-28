@@ -1,11 +1,11 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <math.h>
 #include <unistd.h>
 
 #include <vector>
 #include <string>
-#include <sstream>
 #include "mysql.h"
 
 #include "tap.h"

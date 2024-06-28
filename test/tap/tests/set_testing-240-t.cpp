@@ -11,21 +11,16 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "mysql.h"
 #include <string.h>
 #include <string>
 #include <time.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <pthread.h>
-#include <sstream>
-#include <iostream>
-#include <fstream>
 #include <mutex>
 
+#include "mysql.h"
 #include "json.hpp"
-#include "re2/re2.h"
-#include "re2/regexp.h"
 
 #include "tap.h"
 #include "utils.h"

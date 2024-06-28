@@ -6016,6 +6016,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.p_memory_metrics_interval = 61;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
+	all_modules_started = false;
 	debug_output = 1;
 	proxysql_set_admin_debug_output(debug_output);
 #endif /* DEBUG */
@@ -6380,6 +6381,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	Admin_HTTP_Server = NULL;
 	AdminRestApiServer = NULL;
+	AdminHTTPServer = NULL;
+
 /*
 	AdminRestApiServer = new ProxySQL_RESTAPI_Server();
 	AdminRestApiServer->print_version();
@@ -7667,6 +7670,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		checkvar = &GloVars.checksums_values.admin_variables;
 	} else if (modname == "mysql") {
 		checkvar = &GloVars.checksums_values.mysql_variables;
+	} else if (modname == "ldap") {
+		checkvar = &GloVars.checksums_values.ldap_variables;
 	}
 	assert(checkvar != NULL);
 	checkvar->set_checksum(buf);

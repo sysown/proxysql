@@ -1,11 +1,8 @@
-#include <algorithm>
 #include <unistd.h>
 #include <vector>
 #include <string>
 #include <stdio.h>
 #include <stdlib.h>
-#include <iostream>
-#include <random>
 
 #include "mysql.h"
 #include "mysqld_error.h"

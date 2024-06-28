@@ -2992,7 +2992,7 @@ void PgSQL_Thread::run() {
 		GloPgSQL_Logger->flush();
 
 		pre_poll_time = curtime;
-		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : mysql_thread___poll_timeout) : mysql_thread___poll_timeout);
+		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway

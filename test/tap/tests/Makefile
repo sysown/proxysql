@@ -88,7 +88,6 @@ TAP_LDIR := ../tap
 
 DOTENV_DYN_PATH := $(TAP_LDIR)/cpp-dotenv/dynamic/cpp-dotenv
 DOTENV_DYN_IDIR := $(DOTENV_DYN_PATH)/include
-#DOTENV_DYN_LDIR := $(DOTENV_DYN_PATH)
 DOTENV_DYN_LDIR := $(TAP_LDIR)
 
 TEST_DEPS_PATH := $(PROXYSQL_PATH)/test/deps
@@ -106,6 +105,11 @@ POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/src
 POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/include -I$(POSTGRESQL_PATH)/interfaces/libpq
 POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port
 
+TEST_MYSQL8_PATH := $(TEST_DEPS_PATH)/mysql-connector-c-8.4.0/mysql-connector-c
+TEST_MYSQL8_IDIR := $(TEST_MYSQL8_PATH)/include
+TEST_MYSQL8_EDIR := $(TEST_MYSQL8_PATH)/libbinlogevents/export/
+TEST_MYSQL8_LDIR := $(TEST_MYSQL8_PATH)/libmysql
+
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
 ODIR := $(PROXYSQL_PATH)/obj
@@ -114,8 +118,15 @@ EXECUTABLE := proxysql
 
 OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o
 
-IDIRS := -I$(TAP_IDIR) -I$(RE2_IDIR) -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(LIBCONFIG_IDIR) -I$(MARIADB_IDIR) -I$(DAEMONPATH_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(PROMETHEUS_IDIR) -I$(DOTENV_DYN_IDIR) -I$(SSL_IDIR) -I$(SQLITE3_IDIR) -I$(JSON_IDIR) -I$(POSTGRESQL_IDIR)
-LDIRS := -L$(TAP_LDIR) -L$(RE2_LDIR) -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(LIBCONFIG_LDIR) -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR) -L$(DOTENV_DYN_LDIR) -L$(SSL_LDIR) -L$(PCRE_LDIR) -L$(LIBINJECTION_LDIR) -L$(POSTGRESQL_LDIR)
+IDIRS := -I$(TAP_IDIR) -I$(RE2_IDIR) -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(LIBCONFIG_IDIR) -I$(MARIADB_IDIR)\
+		 -I$(DAEMONPATH_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR)\
+		 -I$(PROMETHEUS_IDIR) -I$(DOTENV_DYN_IDIR) -I$(SSL_IDIR) -I$(SQLITE3_IDIR) -I$(JSON_IDIR) -I$(POSTGRESQL_IDIR)
+
+LDIRS := -L$(TAP_LDIR) -L$(RE2_LDIR) -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(LIBCONFIG_LDIR) -L$(MARIADB_LDIR)\
+		 -L$(DAEMONPATH_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR)\
+		 -L$(PROMETHEUS_LDIR) -L$(DOTENV_DYN_LDIR) -L$(SSL_LDIR) -L$(PCRE_LDIR) -L$(LIBINJECTION_LDIR) -L$(POSTGRESQL_LDIR)
+
+#SOURCES := ../tap/utils.cpp
 
 UNAME_S := $(shell uname -s)
 
@@ -130,9 +141,9 @@ MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBS := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS_PG := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
 #MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
+
 MYLIBSJEMALLOC := -Wl,-Bstatic -ljemalloc
 STATIC_LIBS := $(CITYHASH_LDIR)/libcityhash.a
-#STATIC_LIBS := $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_LDIR)/libcityhash.a
 
 LIBCOREDUMPERAR :=
 ifeq ($(UNAME_S),Linux)
@@ -168,12 +179,15 @@ endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 
-
 ### main targets
 
 .DEFAULT: default
 .PHONY: default
 default: all
+
+CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(SSL_IDIR) -I$(RE2_IDIR)
+CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(SSL_LDIR) -L$(RE2_LDIR)
+CUSTOMARGS += -Wl,-Bdynamic -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -ldl
 
 .PHONY: all
 all: tests
@@ -181,13 +195,15 @@ all: tests
 debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 debug: tests
 
-#tests: build_test_deps
+tests: CUSTOMARGS += $(OPT)
 tests: tests-cpp \
 	tests-php \
 	tests-py \
 	setparser_test \
 	reg_test_3504-change_user_libmariadb_helper \
 	reg_test_3504-change_user_libmysql_helper \
+	mysql_reconnect_libmariadb-t \
+	mysql_reconnect_libmysql-t \
 	setparser_test2 setparser_test2-t \
 	setparser_test3 setparser_test3-t \
 	set_testing-240.csv \
@@ -234,7 +250,6 @@ py-%:
 
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
-#	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl $(STATIC_LIBS) $(TAP_LDIR)/libtap.so -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DTEST_GALERA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
@@ -272,42 +287,41 @@ setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap.so $(RE2_PATH)/util/test.c
 setparser_test2-t: setparser_test2
 	ln -fs setparser_test2 setparser_test2-t
 
-setparser_test2: setparser_test2.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
+setparser_test2: setparser_test2.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
 	$(CXX) $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test3-t: setparser_test3
 	ln -fs setparser_test3 setparser_test3-t
 
-setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
+setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
 	$(CXX) -DPARSERDEBUG $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
-
-
-CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(SSL_IDIR)
-CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(SSL_LDIR)
-#CUSTOMARGS += -Wl,-Bstatic -lcurl
-CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lpthread -lz -ldl 
-CUSTOMARGS += $(OPT)
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
+	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -Wl,-Bstatic -lmysqlclient -ltap_mysql57 $(CUSTOMARGS) -o $@
+
+mysql_reconnect_libmariadb-t: mysql_reconnect.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+mysql_reconnect_libmysql-t: mysql_reconnect.cpp $(TAP_LDIR)/libtap_mysql8.a
+	$(CXX) -DLIBMYSQL_HELPER8 -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL8_EDIR) -L$(TEST_MYSQL8_LDIR) -lmysqlclient -ltap_mysql8 -lresolv $(CUSTOMARGS) -o $@
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
+	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient -ltap_mysql57 $(CUSTOMARGS) -o $@
 
 reg_test_stmt_resultset_err_no_rows_libmysql-t: reg_test_stmt_resultset_err_no_rows-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
+	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient -ltap_mysql57 $(CUSTOMARGS) -o $@
 
 reg_test_mariadb_stmt_store_result_libmysql-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
+	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient -ltap_mysql57 $(CUSTOMARGS) -o $@
 
 reg_test_mariadb_stmt_store_result_async-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 prepare_statement_err3024_libmysql-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
+	$(CXX) -DLIBMYSQL_HELPER -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient -ltap_mysql57 $(CUSTOMARGS) -o $@
 
 prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@

@@ -205,7 +205,6 @@ class MySrvC {	// MySQL Server Container
 	uint16_t gtid_port;
 	uint16_t flags;
 	int64_t weight;
-	enum MySerStatus status;
 	unsigned int compression;
 	int64_t max_connections;
 	unsigned int aws_aurora_current_lag_us;
@@ -267,6 +266,11 @@ class MySrvC {	// MySQL Server Container
 			max_connections_used = connections_used;
 		return max_connections_used;
 	}
+	void set_status(MySerStatus _status);
+	inline
+	MySerStatus get_status() const { return status; }
+private:
+	enum MySerStatus status;
 };
 
 class MySrvList {	// MySQL Server List
@@ -286,6 +290,8 @@ class MySrvList {	// MySQL Server List
 class MyHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
+	std::atomic<uint32_t> num_online_servers;
+	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
 	MySrvList *mysrvs;
@@ -295,6 +301,7 @@ class MyHGC {	// MySQL Host Group Container
 		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
 		uint32_t max_num_online_servers;
 		uint32_t throttle_connections_per_sec;
+		int32_t monitor_slave_lag_when_null;
 		int8_t autocommit;
 		int8_t free_connections_pct;
 		int8_t handle_warnings;
@@ -314,9 +321,20 @@ class MyHGC {	// MySQL Host Group Container
 	bool handle_warnings_enabled() const {
 		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
 	}
+	inline
+	int32_t get_monitor_slave_lag_when_null() const {
+		return attributes.configured == true && attributes.monitor_slave_lag_when_null != -1 ? attributes.monitor_slave_lag_when_null : mysql_thread___monitor_slave_lag_when_null;
+	}
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+	void refresh_online_server_count();
+	void log_num_online_server_count_error();
+	inline
+	bool online_servers_within_threshold() const {
+		if (num_online_servers.load(std::memory_order_relaxed) <= attributes.max_num_online_servers) return true;
+		return false;
+	}
 };
 
 class Group_Replication_Info {
@@ -540,9 +558,10 @@ using address_t = std::string;
 using port_t = unsigned int;
 using read_only_t = int;
 using current_replication_lag = int;
+using override_replication_lag = bool;
 
 using read_only_server_t = std::tuple<hostname_t,port_t,read_only_t>;
-using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag>;
+using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag,override_replication_lag>;
 
 enum READ_ONLY_SERVER_T {
 	ROS_HOSTNAME = 0,
@@ -556,6 +575,7 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS_ADDRESS,
 	RLS_PORT,
 	RLS_CURRENT_REPLICATION_LAG,
+	RLS_OVERRIDE_REPLICATION_LAG,
 	RLS__SIZE
 };
 
@@ -934,6 +954,9 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
+#ifdef DEBUG
+	bool is_locked = false;
+#endif
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.
@@ -1090,7 +1113,7 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
-	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int);
+	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
 	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
