@@ -5,6 +5,7 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
+#include "clickhouse/client.h"
 #include "cpp.h"
 
 #include "MySQL_Logger.hpp"
@@ -585,7 +586,7 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
-void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
+void ClickHouse_Server_session_handler(Client_Session<MySQL_Session*> sess, void *_pa, PtrSize_t *pkt) {
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -612,7 +613,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		query_no_space[query_no_space_length]=0;
 	}
 
-	proxy_debug(PROXY_DEBUG_SQLITE, 4, "Received query on Session %p , thread_session_id %u : %s\n", sess, sess->thread_session_id, query_no_space);
+	proxy_debug(PROXY_DEBUG_SQLITE, 4, "Received query on Session %p , thread_session_id %u : %s\n", (MySQL_Session*)sess, sess->thread_session_id, query_no_space);
 
 
 	if (sess->session_type == PROXYSQL_SESSION_CLICKHOUSE) {
@@ -1340,6 +1341,7 @@ bool ClickHouse_Session::init() {
 	hostname = GloClickHouseServer->get_variable((char *)"hostname");
 	port = GloClickHouseServer->get_variable((char *)"port");
 	try {
+		clickhouse::ClientOptions co;
 		co.SetHost(hostname);
 		co.SetPort(atoi(port));
 		co.SetCompressionMethod(CompressionMethod::None);
@@ -1395,7 +1397,7 @@ static void *child_mysql(void *arg) {
 
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_CLICKHOUSE;
 	sess->handler_function=ClickHouse_Server_session_handler;

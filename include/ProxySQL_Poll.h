@@ -22,6 +22,7 @@ class iface_info {
 	}
 };
 
+template<class T>
 class ProxySQL_Poll {
 	private:
 	void shrink();
@@ -31,7 +32,7 @@ class ProxySQL_Poll {
 	unsigned int len;
 	unsigned int size;
 	struct pollfd *fds;
-	MySQL_Data_Stream **myds;
+	T **myds;
 	unsigned long long *last_recv;
 	unsigned long long *last_sent;
 	std::atomic<bool> bootstrapping_listeners;
@@ -43,7 +44,7 @@ class ProxySQL_Poll {
 
 	ProxySQL_Poll();
 	~ProxySQL_Poll();
-	void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time);
+	void add(uint32_t _events, int _fd, T *_myds, unsigned long long sent_time);
 	void remove_index_fast(unsigned int i);
 	int find_index(int fd);
 };

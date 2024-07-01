@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "MySQL_HostGroups_Manager.h"
 
 #ifdef TEST_AURORA
@@ -44,7 +48,10 @@ void MyHGC::reset_attributes() {
 	attributes.comment = NULL;
 	free(attributes.ignore_session_variables_text);
 	attributes.ignore_session_variables_text = NULL;
-	attributes.ignore_session_variables_json = json();
+	if (attributes.ignore_session_variables_json) {
+		delete attributes.ignore_session_variables_json;
+		attributes.ignore_session_variables_json = NULL;
+	}
 }
 	
 MyHGC::~MyHGC() {

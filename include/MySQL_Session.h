@@ -10,12 +10,15 @@
 #include <functional>
 #include <vector>
 
+#include "Client_Session.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
 
 extern class MySQL_Variables mysql_variables;
 
@@ -23,6 +26,7 @@ extern class MySQL_Variables mysql_variables;
  * @enum proxysql_session_type
  * @brief Defines the types of ProxySQL sessions.
  */
+/*
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
 	PROXYSQL_SESSION_ADMIN,
@@ -33,6 +37,7 @@ enum proxysql_session_type {
 
 	PROXYSQL_SESSION_NONE
 };
+*/
 
 /**
  * @enum ps_type
@@ -44,26 +49,9 @@ enum ps_type : uint8_t {
 	ps_type_execute_stmt = 0x2
 };
 
-std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
-/**
- * @class Session_Regex
- * @brief Encapsulates regex operations for session handling.
- *
- * This class is used for matching patterns in SQL queries, specifically for
- * settings like sql_log_bin, sql_mode, and time_zone.
- * See issues #509 , #815 and #816
- */
-class Session_Regex {
-	private:
-	void *opt;
-	void *re;
-	char *s;
-	public:
-	Session_Regex(char *p);
-	~Session_Regex();
-	bool match(char *m);
-};
+
+std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 /**
  * @class Query_Info
@@ -397,7 +385,7 @@ class MySQL_Session
 	void set_status(enum session_status e);
 	int handler();
 
-	void (*handler_function) (MySQL_Session *arg, void *, PtrSize_t *pkt);
+	void (*handler_function) (Client_Session<MySQL_Session*> arg, void *, PtrSize_t *pkt);
 	MySQL_Backend * find_backend(int);
 	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
@@ -442,16 +430,16 @@ class MySQL_Session
 	 *   params.
 	 */
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
-	void generate_proxysql_internal_session_json(json &);
+	void generate_proxysql_internal_session_json(nlohmann::json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
 	bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
-	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
-
 	void set_previous_status_mode3(bool allow_execute=true);
+
+	friend void SQLite3_Server_session_handler(Client_Session<MySQL_Session*>, void *_pa, PtrSize_t *pkt);
 };
 
 #define KILL_QUERY       1

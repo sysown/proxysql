@@ -6,7 +6,12 @@
 #include "cpp.h"
 #include <vector>
 
-#include "clickhouse/client.h"
+//#include "clickhouse/client.h"
+
+
+namespace clickhouse {
+    class Client;
+}
 
 class ClickHouse_Session {
    public:
@@ -18,7 +23,6 @@ class ClickHouse_Session {
 	bool init();
 	bool connected;
 	~ClickHouse_Session();
-	clickhouse::ClientOptions co;
 	clickhouse::Client *client;
 };
 

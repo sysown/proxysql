@@ -7,7 +7,7 @@
 #include <fstream>
 
 #include "curl/curl.h"
-
+#include "mysql.h"
 #include "sqlite3db.h"
 #include "json_fwd.hpp"
 

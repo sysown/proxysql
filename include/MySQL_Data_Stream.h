@@ -6,6 +6,11 @@
 
 #include "MySQL_Protocol.h"
 
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
+
 #ifndef uchar
 typedef unsigned char uchar;
 #endif
@@ -119,7 +124,7 @@ class MySQL_Data_Stream
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
 
-	ProxySQL_Poll *mypolls;
+	ProxySQL_Poll<MySQL_Data_Stream> *mypolls;
 	//int listener;
 	MySQL_Connection *myconn;
 	MySQL_Session *sess;  // pointer to the session using this data stream
@@ -177,8 +182,7 @@ class MySQL_Data_Stream
 	char *com_field_wild;
 
 	MySQL_Data_Stream();
-	~MySQL_Data_Stream();
-
+	virtual ~MySQL_Data_Stream();
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
@@ -273,6 +277,8 @@ class MySQL_Data_Stream
 
 	bool data_in_rbio();
 
-	void get_client_myds_info_json(json&);
+	void reset_connection();
+
+	void get_client_myds_info_json(nlohmann::json&);
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

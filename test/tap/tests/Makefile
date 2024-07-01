@@ -17,6 +17,10 @@ MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR := $(MARIADB_PATH)/include
 MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
 
+POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/src
+POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/include -I$(POSTGRESQL_PATH)/interfaces/libpq
+POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port
+
 JEMALLOC_PATH := $(DEPS_PATH)/jemalloc/jemalloc
 JEMALLOC_IDIR := $(JEMALLOC_PATH)/include/jemalloc
 JEMALLOC_LDIR := $(JEMALLOC_PATH)/lib
@@ -97,6 +101,10 @@ TEST_MYSQL_IDIR := $(TEST_MYSQL_PATH)/include
 TEST_MYSQL_EDIR := $(TEST_MYSQL_PATH)/libbinlogevents/export/
 TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
 
+POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/src
+POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/include -I$(POSTGRESQL_PATH)/interfaces/libpq
+POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port
+
 TEST_MYSQL8_PATH := $(TEST_DEPS_PATH)/mysql-connector-c-8.4.0/mysql-connector-c
 TEST_MYSQL8_IDIR := $(TEST_MYSQL8_PATH)/include
 TEST_MYSQL8_EDIR := $(TEST_MYSQL8_PATH)/libbinlogevents/export/
@@ -110,14 +118,15 @@ EXECUTABLE := proxysql
 
 OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o
 
-SOURCES := ../tap/utils.cpp
-
 IDIRS := -I$(TAP_IDIR) -I$(RE2_IDIR) -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(LIBCONFIG_IDIR) -I$(MARIADB_IDIR)\
 		 -I$(DAEMONPATH_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR)\
-		 -I$(PROMETHEUS_IDIR) -I$(DOTENV_DYN_IDIR) -I$(SSL_IDIR) -I$(SQLITE3_IDIR) -I$(JSON_IDIR)
+		 -I$(PROMETHEUS_IDIR) -I$(DOTENV_DYN_IDIR) -I$(SSL_IDIR) -I$(SQLITE3_IDIR) -I$(JSON_IDIR) -I$(POSTGRESQL_IDIR)
+
 LDIRS := -L$(TAP_LDIR) -L$(RE2_LDIR) -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(LIBCONFIG_LDIR) -L$(MARIADB_LDIR)\
 		 -L$(DAEMONPATH_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR)\
-		 -L$(PROMETHEUS_LDIR) -L$(DOTENV_DYN_LDIR) -L$(SSL_LDIR) -L$(PCRE_LDIR) -L$(LIBINJECTION_LDIR)
+		 -L$(PROMETHEUS_LDIR) -L$(DOTENV_DYN_LDIR) -L$(SSL_LDIR) -L$(PCRE_LDIR) -L$(LIBINJECTION_LDIR) -L$(POSTGRESQL_LDIR)
+
+#SOURCES := ../tap/utils.cpp
 
 UNAME_S := $(shell uname -s)
 
@@ -125,11 +134,13 @@ ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
 endif
 
-MYLIBS := -Wl,--export-dynamic
-MYLIBS += -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -luuid
-MYLIBS += -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lpcrecpp -lpcre -lmariadbclient -lhttpserver\
-		  -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS += -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
+MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
+MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS_PG_PART := -Wl,-Bstatic -lpq -lpgcommon -lpgport
+MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
+MYLIBS := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+#MYLIBS_PG := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+#MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 
 MYLIBSJEMALLOC := -Wl,-Bstatic -ljemalloc
 STATIC_LIBS := $(CITYHASH_LDIR)/libcityhash.a

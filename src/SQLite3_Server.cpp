@@ -357,7 +357,7 @@ vector<aurora_hg_info_t> get_hgs_info(SQLite3DB* db) {
 
 #endif
 
-void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
+void SQLite3_Server_session_handler(Client_Session<MySQL_Session*> sess, void *_pa, PtrSize_t *pkt) {
 
 	char *error=NULL;
 	int cols;
@@ -1041,7 +1041,7 @@ static void *child_mysql(void *arg) {
 
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function=SQLite3_Server_session_handler;

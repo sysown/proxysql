@@ -1336,12 +1336,12 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile() {
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	if (root.exists("proxysql_servers")==true) {
-		const Setting &mysql_servers = root["proxysql_servers"];
-		int count = mysql_servers.getLength();
+		const Setting & proxysql_servers = root["proxysql_servers"];
+		int count = proxysql_servers.getLength();
 		//fprintf(stderr, "Found %d servers\n",count);
 		char *q=(char *)"INSERT OR REPLACE INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %d, %d, '%s')";
 		for (i=0; i< count; i++) {
-			const Setting &server = mysql_servers[i];
+			const Setting &server = proxysql_servers[i];
 			std::string address;
 			int port;
 			int weight=0;
@@ -1418,4 +1418,638 @@ int ProxySQL_Config::Write_Global_Variables_to_configfile(std::string& data) {
 		delete sqlite_resultset;
 
 	return 0;
+}
+
+int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char* query = (char*)"SELECT * FROM pgsql_servers";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from pgsql_servers : %s\n", error);
+		return -1;
+	}
+	else {
+		if (sqlite_resultset) {
+			data += "pgsql_servers:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "hostgroup_id", r->fields[0], "");
+				addField(data, "hostname", r->fields[1]);
+				addField(data, "port", r->fields[2], "");
+				addField(data, "gtid_port", r->fields[3], "");
+				addField(data, "status", r->fields[4]);
+				addField(data, "weight", r->fields[5], "");
+				addField(data, "compression", r->fields[6], "");
+				addField(data, "max_connections", r->fields[7], "");
+				addField(data, "max_replication_lag", r->fields[8], "");
+				addField(data, "use_ssl", r->fields[9], "");
+				addField(data, "max_latency_ms", r->fields[10], "");
+				addField(data, "comment", r->fields[11]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	query = (char*)"SELECT * FROM pgsql_replication_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from pgsql_replication_hostgroups : %s\n", error);
+		return -1;
+	}
+	else {
+		if (sqlite_resultset) {
+			data += "pgsql_replication_hostgroups:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "writer_hostgroup", r->fields[0], "");
+				addField(data, "reader_hostgroup", r->fields[1], "");
+				addField(data, "check_type", r->fields[2]);
+				addField(data, "comment", r->fields[3]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
+}
+
+int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	int i;
+	int rows = 0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	if (root.exists("pgsql_servers") == true) {
+		const Setting& pgsql_servers = root["pgsql_servers"];
+		int count = pgsql_servers.getLength();
+		//fprintf(stderr, "Found %d servers\n",count);
+		char* q = (char*)"INSERT OR REPLACE INTO pgsql_servers (hostname, port, gtid_port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
+		for (i = 0; i < count; i++) {
+			const Setting& server = pgsql_servers[i];
+			std::string address;
+			std::string status = "ONLINE";
+			int port = 3306;
+			int gtid_port = 0;
+			int hostgroup;
+			int weight = 1;
+			int compression = 0;
+			int max_connections = 1000; // default
+			int max_replication_lag = 0; // default
+			int use_ssl = 0;
+			int max_latency_ms = 0;
+			std::string comment = "";
+			if (server.lookupValue("address", address) == false) {
+				if (server.lookupValue("hostname", address) == false) {
+					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostname\n");
+					continue;
+				}
+			}
+			server.lookupValue("port", port);
+			server.lookupValue("gtid_port", gtid_port);
+			if (server.lookupValue("hostgroup", hostgroup) == false) {
+				if (server.lookupValue("hostgroup_id", hostgroup) == false) {
+					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostgroup_id\n");
+					continue;
+				}
+			}
+			server.lookupValue("status", status);
+			if (
+				(strcasecmp(status.c_str(), (char*)"ONLINE"))
+				&& (strcasecmp(status.c_str(), (char*)"SHUNNED"))
+				&& (strcasecmp(status.c_str(), (char*)"OFFLINE_SOFT"))
+				&& (strcasecmp(status.c_str(), (char*)"OFFLINE_HARD"))
+				) {
+				status = "ONLINE";
+			}
+			server.lookupValue("compression", compression);
+			server.lookupValue("weight", weight);
+			server.lookupValue("max_connections", max_connections);
+			server.lookupValue("max_replication_lag", max_replication_lag);
+			server.lookupValue("use_ssl", use_ssl);
+			server.lookupValue("max_latency_ms", max_latency_ms);
+			server.lookupValue("comment", comment);
+			char* o1 = strdup(comment.c_str());
+			char* o = escape_string_single_quotes(o1, false);
+			char* query = (char*)malloc(strlen(q) + strlen(status.c_str()) + strlen(address.c_str()) + strlen(o) + 128);
+			sprintf(query, q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
+			//fprintf(stderr, "%s\n", query);
+			admindb->execute(query);
+			if (o != o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
+	if (root.exists("pgsql_replication_hostgroups") == true) {
+		const Setting& pgsql_replication_hostgroups = root["pgsql_replication_hostgroups"];
+		int count = pgsql_replication_hostgroups.getLength();
+		char* q = (char*)"INSERT OR REPLACE INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment, check_type) VALUES (%d, %d, '%s', '%s')";
+		for (i = 0; i < count; i++) {
+			const Setting& line = pgsql_replication_hostgroups[i];
+			int writer_hostgroup;
+			int reader_hostgroup;
+			std::string comment = "";
+			std::string check_type = "";
+			if (line.lookupValue("writer_hostgroup", writer_hostgroup) == false) {
+				proxy_error("Admin: detected a pgsql_replication_hostgroups in config file without a mandatory writer_hostgroup\n");
+				continue;
+			}
+			if (line.lookupValue("reader_hostgroup", reader_hostgroup) == false) {
+				proxy_error("Admin: detected a pgsql_replication_hostgroups in config file without a mandatory reader_hostgroup\n");
+				continue;
+			}
+			line.lookupValue("comment", comment);
+			char* o1 = strdup(comment.c_str());
+			char* o = escape_string_single_quotes(o1, false);
+			line.lookupValue("check_type", check_type);
+			if (
+				(strcasecmp(check_type.c_str(), (char*)"read_only"))
+				&& (strcasecmp(check_type.c_str(), (char*)"innodb_read_only"))
+				&& (strcasecmp(check_type.c_str(), (char*)"super_read_only"))
+				) {
+				check_type = "read_only";
+			}
+			char* t1 = strdup(check_type.c_str());
+			char* t = escape_string_single_quotes(t1, false);
+			char* query = (char*)malloc(strlen(q) + strlen(o) + strlen(t) + 32);
+			sprintf(query, q, writer_hostgroup, reader_hostgroup, o, t);
+			//fprintf(stderr, "%s\n", query);
+			admindb->execute(query);
+			if (o != o1) free(o);
+			free(o1);
+			if (t != t1) free(t);
+			free(t1);
+			free(query);
+			rows++;
+		}
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Config::Write_PgSQL_Users_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char* query = (char*)"SELECT * FROM pgsql_users";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from pgsql_users: %s\n", error);
+		return -1;
+	}
+	else {
+		if (sqlite_resultset) {
+			data += "pgsql_users:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "username", r->fields[0]);
+				addField(data, "password", r->fields[1]);
+				addField(data, "active", r->fields[2], "");
+				addField(data, "use_ssl", r->fields[3], "");
+				addField(data, "default_hostgroup", r->fields[4], "");
+				addField(data, "default_schema", r->fields[5]);
+				addField(data, "schema_locked", r->fields[6], "");
+				addField(data, "transaction_persistent", r->fields[7], "");
+				addField(data, "fast_forward", r->fields[8], "");
+				addField(data, "backend", r->fields[9], "");
+				addField(data, "frontend", r->fields[10], "");
+				addField(data, "max_connections", r->fields[11], "");
+				addField(data, "attributes", r->fields[12]);
+				addField(data, "comment", r->fields[13]);
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
+}
+
+int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	if (root.exists("pgsql_users") == false) return 0;
+	const Setting& pgsql_users = root["pgsql_users"];
+	int count = pgsql_users.getLength();
+	//fprintf(stderr, "Found %d users\n",count);
+	int i;
+	int rows = 0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char* q = (char*)"INSERT OR REPLACE INTO pgsql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s','%s')";
+	for (i = 0; i < count; i++) {
+		const Setting& user = pgsql_users[i];
+		std::string username;
+		std::string password = "";
+		int active = 1;
+		int use_ssl = 0;
+		int default_hostgroup = 0;
+		std::string default_schema = "";
+		int schema_locked = 0;
+		int transaction_persistent = 1;
+		int fast_forward = 0;
+		int max_connections = 10000;
+		std::string comment = "";
+		std::string attributes = "";
+		if (user.lookupValue("username", username) == false) {
+			proxy_error("Admin: detected a pgsql_users in config file without a mandatory username\n");
+			continue;
+		}
+		user.lookupValue("password", password);
+		user.lookupValue("default_hostgroup", default_hostgroup);
+		user.lookupValue("active", active);
+		user.lookupValue("use_ssl", use_ssl);
+		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
+		user.lookupValue("default_schema", default_schema);
+		user.lookupValue("schema_locked", schema_locked);
+		user.lookupValue("transaction_persistent", transaction_persistent);
+		user.lookupValue("fast_forward", fast_forward);
+		user.lookupValue("max_connections", max_connections);
+		user.lookupValue("attributes", attributes);
+		user.lookupValue("comment", comment);
+		char* o1 = strdup(comment.c_str());
+		char* o = escape_string_single_quotes(o1, false);
+		char* query = (char*)malloc(strlen(q) + strlen(username.c_str()) + strlen(password.c_str()) + strlen(o) + strlen(attributes.c_str()) + 128);
+		sprintf(query, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
+		admindb->execute(query);
+		if (o != o1) free(o);
+		free(o1);
+		free(query);
+		rows++;
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Config::Write_PgSQL_Query_Rules_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char* query = (char*)"SELECT * FROM pgsql_query_rules";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from pgsql_query_rules : %s\n", error);
+		return -1;
+	}
+	else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "pgsql_query_rules:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "rule_id", r->fields[0], "");
+				addField(data, "active", r->fields[1], "");
+				addField(data, "username", r->fields[2]);
+				addField(data, "schemaname", r->fields[3]);
+				addField(data, "flagIN", r->fields[4], "");
+				addField(data, "client_addr", r->fields[5]);
+				addField(data, "proxy_addr", r->fields[6]);
+				addField(data, "proxy_port", r->fields[7], "");
+				addField(data, "digest", r->fields[8]);
+				addField(data, "match_digest", r->fields[9]);
+				addField(data, "match_pattern", r->fields[10]);
+				addField(data, "negate_match_pattern", r->fields[11], "");
+				addField(data, "re_modifiers", r->fields[12]);
+				addField(data, "flagOUT", r->fields[13], "");
+				addField(data, "replace_pattern", r->fields[14]);
+				addField(data, "destination_hostgroup", r->fields[15], "");
+				addField(data, "cache_ttl", r->fields[16], "");
+				addField(data, "cache_empty_result", r->fields[17], "");
+				addField(data, "cache_timeout", r->fields[18], "");
+				addField(data, "reconnect", r->fields[19], "");
+				addField(data, "timeout", r->fields[20], "");
+				addField(data, "retries", r->fields[21], "");
+				addField(data, "delay", r->fields[22], "");
+				addField(data, "next_query_flagIN", r->fields[23], "");
+				addField(data, "mirror_flagOUT", r->fields[24], "");
+				addField(data, "mirror_hostgroup", r->fields[25], "");
+				addField(data, "error_msg", r->fields[26]);
+				addField(data, "OK_msg", r->fields[27]);
+				addField(data, "sticky_conn", r->fields[28], "");
+				addField(data, "multiplex", r->fields[29], "");
+				addField(data, "gtid_from_hostgroup", r->fields[30], "");
+				addField(data, "log", r->fields[31], "");
+				addField(data, "apply", r->fields[32], "");
+				addField(data, "attributes", r->fields[33]);
+				addField(data, "comment", r->fields[34]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
+}
+
+
+int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	if (root.exists("pgsql_query_rules") == false) return 0;
+	const Setting& pgsql_query_rules = root["pgsql_query_rules"];
+	int count = pgsql_query_rules.getLength();
+	//fprintf(stderr, "Found %d users\n",count);
+	int i;
+	int rows = 0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char* q = (char*)"INSERT OR REPLACE INTO pgsql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
+	for (i = 0; i < count; i++) {
+		const Setting& rule = pgsql_query_rules[i];
+		int rule_id;
+		int active = 1;
+		bool username_exists = false;
+		std::string username;
+		bool schemaname_exists = false;
+		std::string schemaname;
+		int flagIN = 0;
+
+		// variables for parsing client_addr
+		bool client_addr_exists = false;
+		std::string client_addr;
+
+		// variables for parsing proxy_addr
+		bool proxy_addr_exists = false;
+		std::string proxy_addr;
+
+		// variable for parsing proxy_port
+		int proxy_port = -1;
+
+		// variables for parsing digest
+		bool digest_exists = false;
+		std::string digest;
+
+
+		bool match_digest_exists = false;
+		std::string match_digest;
+		bool match_pattern_exists = false;
+		std::string match_pattern;
+		int negate_match_pattern = 0;
+
+		bool re_modifiers_exists = false;
+		std::string re_modifiers;
+
+		int flagOUT = -1;
+		bool replace_pattern_exists = false;
+		std::string replace_pattern;
+		int destination_hostgroup = -1;
+		int next_query_flagIN = -1;
+		int mirror_flagOUT = -1;
+		int mirror_hostgroup = -1;
+		int cache_ttl = -1;
+		int cache_empty_result = -1;
+		int cache_timeout = -1;
+		int reconnect = -1;
+		int timeout = -1;
+		int retries = -1;
+		int delay = -1;
+		bool error_msg_exists = false;
+		std::string error_msg;
+		bool OK_msg_exists = false;
+		std::string OK_msg;
+
+		int sticky_conn = -1;
+		int multiplex = -1;
+		int gtid_from_hostgroup = -1;
+
+		// variable for parsing log
+		int log = -1;
+
+		int apply = 0;
+
+		// attributes
+		bool attributes_exists = false;
+		std::string attributes{};
+
+		bool comment_exists = false;
+		std::string comment;
+
+		// validate arguments
+		if (rule.lookupValue("rule_id", rule_id) == false) {
+			proxy_error("Admin: detected a pgsql_query_rules in config file without a mandatory rule_id\n");
+			continue;
+		}
+		rule.lookupValue("active", active);
+		if (rule.lookupValue("username", username)) username_exists = true;
+		if (rule.lookupValue("schemaname", schemaname)) schemaname_exists = true;
+		rule.lookupValue("flagIN", flagIN);
+
+		if (rule.lookupValue("client_addr", client_addr)) client_addr_exists = true;
+		if (rule.lookupValue("proxy_addr", proxy_addr)) proxy_addr_exists = true;
+		rule.lookupValue("proxy_port", proxy_port);
+		if (rule.lookupValue("digest", digest)) digest_exists = true;
+
+		if (rule.lookupValue("match_digest", match_digest)) match_digest_exists = true;
+		if (rule.lookupValue("match_pattern", match_pattern)) match_pattern_exists = true;
+		rule.lookupValue("negate_match_pattern", negate_match_pattern);
+		if (rule.lookupValue("re_modifiers", re_modifiers)) {
+		}
+		else {
+			re_modifiers = "CASELESS";
+		}
+		re_modifiers_exists = true;
+		rule.lookupValue("flagOUT", flagOUT);
+		if (rule.lookupValue("replace_pattern", replace_pattern)) replace_pattern_exists = true;
+		rule.lookupValue("destination_hostgroup", destination_hostgroup);
+		rule.lookupValue("next_query_flagIN", next_query_flagIN);
+		rule.lookupValue("mirror_flagOUT", mirror_flagOUT);
+		rule.lookupValue("mirror_hostgroup", mirror_hostgroup);
+		rule.lookupValue("cache_ttl", cache_ttl);
+		rule.lookupValue("cache_empty_result", cache_empty_result);
+		rule.lookupValue("cache_timeout", cache_timeout);
+		rule.lookupValue("reconnect", reconnect);
+		rule.lookupValue("timeout", timeout);
+		rule.lookupValue("retries", retries);
+		rule.lookupValue("delay", delay);
+
+		if (rule.lookupValue("error_msg", error_msg)) error_msg_exists = true;
+		if (rule.lookupValue("OK_msg", OK_msg)) OK_msg_exists = true;
+
+		rule.lookupValue("sticky_conn", sticky_conn);
+		rule.lookupValue("multiplex", multiplex);
+		rule.lookupValue("gtid_from_hostgroup", gtid_from_hostgroup);
+
+		rule.lookupValue("log", log);
+
+		rule.lookupValue("apply", apply);
+		if (rule.lookupValue("comment", comment)) comment_exists = true;
+		if (rule.lookupValue("attributes", attributes)) attributes_exists = true;
+
+
+		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
+		int query_len = 0;
+		query_len += strlen(q) +
+			strlen(std::to_string(rule_id).c_str()) +
+			strlen(std::to_string(active).c_str()) +
+			(username_exists ? strlen(username.c_str()) : 0) + 4 +
+			(schemaname_exists ? strlen(schemaname.c_str()) : 0) + 4 +
+			strlen(std::to_string(flagIN).c_str()) + 4 +
+
+			(client_addr_exists ? strlen(client_addr.c_str()) : 0) + 4 +
+			(proxy_addr_exists ? strlen(proxy_addr.c_str()) : 0) + 4 +
+			strlen(std::to_string(proxy_port).c_str()) + 4 +
+
+			(match_digest_exists ? strlen(match_digest.c_str()) : 0) + 4 +
+			(match_pattern_exists ? strlen(match_pattern.c_str()) : 0) + 4 +
+			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
+			(re_modifiers_exists ? strlen(re_modifiers.c_str()) : 0) + 4 +
+			strlen(std::to_string(flagOUT).c_str()) + 4 +
+			(replace_pattern_exists ? strlen(replace_pattern.c_str()) : 0) + 4 +
+			strlen(std::to_string(destination_hostgroup).c_str()) + 4 +
+			strlen(std::to_string(cache_ttl).c_str()) + 4 +
+			strlen(std::to_string(cache_empty_result).c_str()) + 4 +
+			strlen(std::to_string(cache_timeout).c_str()) + 4 +
+			strlen(std::to_string(reconnect).c_str()) + 4 +
+			strlen(std::to_string(timeout).c_str()) + 4 +
+			strlen(std::to_string(next_query_flagIN).c_str()) + 4 +
+			strlen(std::to_string(mirror_flagOUT).c_str()) + 4 +
+			strlen(std::to_string(mirror_hostgroup).c_str()) + 4 +
+			strlen(std::to_string(retries).c_str()) + 4 +
+			strlen(std::to_string(delay).c_str()) + 4 +
+			(error_msg_exists ? strlen(error_msg.c_str()) : 0) + 4 +
+			(OK_msg_exists ? strlen(OK_msg.c_str()) : 0) + 4 +
+			strlen(std::to_string(sticky_conn).c_str()) + 4 +
+			strlen(std::to_string(multiplex).c_str()) + 4 +
+			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
+			strlen(std::to_string(log).c_str()) + 4 +
+			strlen(std::to_string(apply).c_str()) + 4 +
+			(attributes_exists ? strlen(attributes.c_str()) : 0) + 4 +
+			(comment_exists ? strlen(comment.c_str()) : 0) + 4 +
+			64;
+		char* query = (char*)malloc(query_len);
+		if (username_exists)
+			username = "\"" + username + "\"";
+		else
+			username = "NULL";
+		if (schemaname_exists)
+			schemaname = "\"" + schemaname + "\"";
+		else
+			schemaname = "NULL";
+
+		if (client_addr_exists)
+			client_addr = "\"" + client_addr + "\"";
+		else
+			client_addr = "NULL";
+		if (proxy_addr_exists)
+			proxy_addr = "\"" + proxy_addr + "\"";
+		else
+			proxy_addr = "NULL";
+		if (digest_exists)
+			digest = "\"" + digest + "\"";
+		else
+			digest = "NULL";
+
+		if (match_digest_exists)
+			match_digest = "\"" + match_digest + "\"";
+		else
+			match_digest = "NULL";
+		if (match_pattern_exists)
+			match_pattern = "\"" + match_pattern + "\"";
+		else
+			match_pattern = "NULL";
+		if (replace_pattern_exists)
+			replace_pattern = "\"" + replace_pattern + "\"";
+		else
+			replace_pattern = "NULL";
+		if (error_msg_exists)
+			error_msg = "\"" + error_msg + "\"";
+		else
+			error_msg = "NULL";
+		if (OK_msg_exists)
+			OK_msg = "\"" + OK_msg + "\"";
+		else
+			OK_msg = "NULL";
+		if (re_modifiers_exists)
+			re_modifiers = "\"" + re_modifiers + "\"";
+		else
+			re_modifiers = "NULL";
+		if (attributes_exists)
+			attributes = "'" + attributes + "'";
+		else
+			attributes = "NULL";
+		if (comment_exists)
+			comment = "'" + comment + "'";
+		else
+			comment = "NULL";
+
+
+		sprintf(query, q,
+			rule_id, active,
+			username.c_str(),
+			schemaname.c_str(),
+			(flagIN >= 0 ? std::to_string(flagIN).c_str() : "NULL"),
+			client_addr.c_str(),
+			proxy_addr.c_str(),
+			(proxy_port >= 0 ? std::to_string(proxy_port).c_str() : "NULL"),
+			digest.c_str(),
+			match_digest.c_str(),
+			match_pattern.c_str(),
+			(negate_match_pattern == 0 ? 0 : 1),
+			re_modifiers.c_str(),
+			(flagOUT >= 0 ? std::to_string(flagOUT).c_str() : "NULL"),
+			replace_pattern.c_str(),
+			(destination_hostgroup >= 0 ? std::to_string(destination_hostgroup).c_str() : "NULL"),
+			(cache_ttl >= 0 ? std::to_string(cache_ttl).c_str() : "NULL"),
+			(cache_empty_result >= 0 ? std::to_string(cache_empty_result).c_str() : "NULL"),
+			(cache_timeout >= 0 ? std::to_string(cache_timeout).c_str() : "NULL"),
+			(reconnect >= 0 ? std::to_string(reconnect).c_str() : "NULL"),
+			(timeout >= 0 ? std::to_string(timeout).c_str() : "NULL"),
+			(retries >= 0 ? std::to_string(retries).c_str() : "NULL"),
+			(delay >= 0 ? std::to_string(delay).c_str() : "NULL"),
+			(next_query_flagIN >= 0 ? std::to_string(next_query_flagIN).c_str() : "NULL"),
+			(mirror_flagOUT >= 0 ? std::to_string(mirror_flagOUT).c_str() : "NULL"),
+			(mirror_hostgroup >= 0 ? std::to_string(mirror_hostgroup).c_str() : "NULL"),
+			error_msg.c_str(),
+			OK_msg.c_str(),
+			(sticky_conn >= 0 ? std::to_string(sticky_conn).c_str() : "NULL"),
+			(multiplex >= 0 ? std::to_string(multiplex).c_str() : "NULL"),
+			(gtid_from_hostgroup >= 0 ? std::to_string(gtid_from_hostgroup).c_str() : "NULL"),
+			(log >= 0 ? std::to_string(log).c_str() : "NULL"),
+			(apply == 0 ? 0 : 1),
+			attributes.c_str(),
+			comment.c_str()
+		);
+		//fprintf(stderr, "%s\n", query);
+		admindb->execute(query);
+		free(query);
+		rows++;
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
 }

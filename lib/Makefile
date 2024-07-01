@@ -57,10 +57,21 @@ PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
 
+LIBUSUAL_PATH=$(DEPS_PATH)/libusual/libusual
+LIBUSUAL_IDIR=$(LIBUSUAL_PATH)
+LIBUSUAL_LDIR=$(LIBUSUAL_PATH)/.libs/
+
+LIBSCRAM_PATH=$(DEPS_PATH)/libscram/
+LIBSCRAM_IDIR=$(LIBSCRAM_PATH)/include/
+LIBSCRAM_LDIR=$(LIBSCRAM_PATH)/lib/
+
+POSTGRES_PATH=$(DEPS_PATH)/postgresql/postgresql/src/
+POSTGRES_IFACE=$(POSTGRES_PATH)/interfaces/libpq/ -I$(POSTGRES_PATH)/include
+POSTGRES_LDIR=$(POSTGRES_IFACES)/libpq/
 
 IDIR := ../include
 
-IDIRS := -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) -I$(CLICKHOUSE_CPP_DIR)/contrib/ $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)
+IDIRS := -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) -I$(CLICKHOUSE_CPP_DIR)/contrib/ $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBUSUAL_IDIR) -I$(LIBSCRAM_IDIR) -I$(POSTGRES_IFACE)
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
 endif
@@ -130,7 +141,10 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	QP_rule_text.oo QP_query_digest_stats.oo \
 	GTID_Server_Data.oo MyHGC.oo MySrvConnList.oo MySrvList.oo MySrvC.oo \
 	MySQL_encode.oo MySQL_ResultSet.oo \
-	proxysql_find_charset.oo ProxySQL_Poll.oo
+	ProxySQL_Admin_Tests.oo ProxySQL_Admin_Tests2.oo ProxySQL_Admin_Scheduler.oo ProxySQL_Admin_Disk_Upgrade.oo ProxySQL_Admin_Stats.oo \
+	Base_Session.oo Base_Thread.oo \
+  proxysql_find_charset.oo ProxySQL_Poll.oo sha256crypt.oo PgSQL_Protocol.oo PgSQL_Thread.oo Client_Session.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo
+
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
 

@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 
 #include <functional>
@@ -26,7 +30,7 @@ using std::vector;
 using std::function;
 
 #ifdef DEBUG
-MySQL_Session *sess_stopat;
+static MySQL_Session *sess_stopat;
 #endif
 
 #ifdef epoll_create1
@@ -157,7 +161,7 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_backend_offline_during_query,p_th_counter::backend_offline_during_query,     (char *)"backend_offline_during_query" },
 	{ st_var_aws_aurora_replicas_skipped_during_query , p_th_counter::aws_aurora_replicas_skipped_during_query,  (char *)"get_aws_aurora_replicas_skipped_during_query" },
 	{ st_var_automatic_detected_sqli,     p_th_counter::automatic_detected_sql_injection,  (char *)"automatic_detected_sql_injection" },
-	{ st_var_whitelisted_sqli_fingerprint,p_th_counter::whitelisted_sqli_fingerprint,     (char *)"whitelisted_sqli_fingerprint" },
+	{ st_var_mysql_whitelisted_sqli_fingerprint,p_th_counter::mysql_whitelisted_sqli_fingerprint,     (char *)"mysql_whitelisted_sqli_fingerprint" },
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
@@ -772,8 +776,8 @@ th_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			p_th_counter::whitelisted_sqli_fingerprint,
-			"proxysql_whitelisted_sqli_fingerprint_total",
+			p_th_counter::mysql_whitelisted_sqli_fingerprint,
+			"proxysql_mysql_whitelisted_sqli_fingerprint_total",
 			"Detected a whitelisted 'sql injection' fingerprint.",
 			metric_tags {}
 		),
@@ -1957,8 +1961,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				variables.auditlog_filename = strdup(value);
 				free(full_path);
 				return true;
-			}
-			else {
+			} else {
 				proxy_error("%s is an invalid value for auditlog_filename path, the directory cannot be accessed\n", eval_dirname);
 				free(full_path);
 				return false;
@@ -1983,8 +1986,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				variables.eventslog_filename = strdup(value);
 				free(full_path);
 				return true;
-			}
-			else {
+			} else {
 				proxy_error("%s is an invalid value for eventslog_filename path, the directory cannot be accessed\n", eval_dirname);
 				free(full_path);
 				return false;
@@ -2487,7 +2489,7 @@ void MySQL_Threads_Handler::stop_listeners() {
  * @return Either an string holding the string representation of internal
  *   member 'client_addr', or empty string if this member is NULL.
  */
-std::string get_client_addr(struct sockaddr* client_addr) {
+static std::string get_client_addr(struct sockaddr* client_addr) {
 	char buf[INET6_ADDRSTRLEN];
 	std::string str_client_addr {};
 
@@ -2587,7 +2589,7 @@ char** client_host_cache_entry_row(
  *
  * @param row The pointer array holding the row values to be freed.
  */
-void free_client_host_cache_row(char** row) {
+static void free_client_host_cache_row(char** row) {
 	for (int i = 0; i < CLIENT_HOST_CACHE_COLUMNS; i++) {
 		free(row[i]);
 	}
@@ -2878,78 +2880,6 @@ MySQL_Thread::~MySQL_Thread() {
 
 }
 
-MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd) {
-	int arg_on=1;
-	MySQL_Session *sess=new MySQL_Session;
-	register_session(sess); // register session
-	sess->client_myds = new MySQL_Data_Stream();
-	sess->client_myds->fd=_fd;
-
-	// set not blocking for client connections too!
-	{
-		// PMC-10004
-		// While implementing SSL and fast_forward it was noticed that all frontend connections
-		// are in blocking, although this was never a problem because we call poll() before reading.
-		// Although it became a problem with fast_forward, SSL and large packets because SSL handled
-		// data in chunks of 16KB and there may be data inside SSL even when there is no data
-		// received from the network.
-		// The only modules that seems to be affected by this issue are Admin, SQLite3 Server
-		// and Clickhouse Server
-		int prevflags = fcntl(_fd, F_GETFL, 0);
-		if (prevflags == -1) {
-			proxy_error("For FD %d fcntl() returned -1 errno %d\n", _fd, errno);
-			if (shutdown == 0)
-				assert (prevflags != -1);
-		}
-		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
-		if (nb == -1) {
-			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
-			// previously we were asserting here. But it is possible that this->shutdown is still 0 during the
-			// shutdown itself:
-			// - the current thread is processing connections
-			// - the signal handler thread is still setting shutdown = 0
-			//if (shutdown == 0)
-			//	assert (nb != -1);
-		}
-	}
-	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
-
-	if (mysql_thread___use_tcp_keepalive) {
-		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_KEEPALIVE, (char *) &arg_on, sizeof(arg_on));
-#ifdef TCP_KEEPIDLE
-		if (mysql_thread___tcp_keepalive_time > 0) {
-			int keepalive_time = mysql_thread___tcp_keepalive_time;
-			setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &keepalive_time, sizeof(keepalive_time));
-		}
-#endif
-	}
-
-#ifdef __APPLE__
-		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
-#endif
-	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
-#ifdef DEBUG
-	sess->client_myds->myprot.dump_pkt=true;
-#endif
-	MySQL_Connection *myconn=new MySQL_Connection();
-	sess->client_myds->attach_connection(myconn);
-	myconn->set_is_client(); // this is used for prepared statements
-	myconn->last_time_used=curtime;
-	myconn->myds=sess->client_myds; // 20141011
-	myconn->fd=sess->client_myds->fd; // 20141011
-
-	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
-	uint32_t session_track_gtids_int=SpookyHash::Hash32(mysql_thread___default_session_track_gtids,strlen(mysql_thread___default_session_track_gtids),10);
-	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
-	if (sess->client_myds->myconn->options.session_track_gtids) {
-		free(sess->client_myds->myconn->options.session_track_gtids);
-	}
-	sess->client_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
-
-	return sess;
-}
-
 bool MySQL_Thread::init() {
 	int i;
 	mysql_sessions = new PtrArray();
@@ -3027,18 +2957,6 @@ void MySQL_Thread::poll_listener_del(int sock) {
 	}
 }
 
-void MySQL_Thread::register_session(MySQL_Session *_sess, bool up_start) {
-	if (mysql_sessions==NULL) {
-		mysql_sessions = new PtrArray();
-	}
-	mysql_sessions->add(_sess);
-	_sess->thread=this;
-	_sess->match_regexes=match_regexes;
-	if (up_start)
-		_sess->start_time=curtime;
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
-}
-
 void MySQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions==NULL) return;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions->index(idx));
@@ -3090,100 +3008,6 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 	processing_idles=true;
 	last_processing_idles=curtime;
 }
-
-// this function was inline in MySQL_Thread::run()
-void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
-	bool check_if_move_to_idle_thread = false;
-#ifdef IDLE_THREADS
-	if (GloVars.global.idle_threads) {
-		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
-			last_move_to_idle_thread_time=curtime;
-			check_if_move_to_idle_thread=true;
-		}
-	}
-#endif
-	for (unsigned int n = 0; n < mypolls.len; n++) {
-		MySQL_Data_Stream *myds=NULL;
-		myds=mypolls.myds[n];
-		mypolls.fds[n].revents=0;
-		if (myds) {
-#ifdef IDLE_THREADS
-			if (check_if_move_to_idle_thread == true) {
-				// here we try to move it to the maintenance thread
-				if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
-					if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
-						if (move_session_to_idle_mysql_sessions(myds, n)) {
-							n--;  // compensate mypolls.remove_index_fast(n) and n++ of loop
-							continue;
-						}
-					}
-				}
-			}
-#endif // IDLE_THREADS
-			if (unlikely(myds->wait_until)) {
-				tune_timeout_for_myds_needs_pause(myds);
-			}
-			if (myds->sess) {
-				if (unlikely(myds->sess->pause_until > 0)) {
-					tune_timeout_for_session_needs_pause(myds);
-				}
-			}
-			myds->revents=0;
-			if (myds->myds_type!=MYDS_LISTENER) {
-				configure_pollout(myds, n);
-			}
-		}
-		proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
-	}
-}
-
-
-// this function was inline in MySQL_Thread::run()
-/**
- * @brief Processes all MySQL Data Streams after polling.
- * 
- * This function iterates through all MySQL polls and processes the associated data streams.
- * For each poll, it prints debug information about the file descriptor and its events.
- * If a MySQL Data Stream is associated with the poll, it checks for events on the file descriptor.
- * If there are no events and a poll timeout is enabled, it checks for sessions timing out.
- * If there are events, it checks for invalid file descriptors and handles new connections 
- * for listener type data streams. For other types of data streams, it processes data and 
- * handles any potential errors.
- */
-void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
-	for (unsigned int n = 0; n < mypolls.len; n++) {
-		proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
-
-		MySQL_Data_Stream *myds=mypolls.myds[n];
-		if (myds==NULL) {
-			read_one_byte_from_pipe(n);
-			continue;
-		}
-		if (mypolls.fds[n].revents==0) {
-			if (poll_timeout_bool) {
-				check_timing_out_session(n);
-			}
-		} else {
-			check_for_invalid_fd(n); // this is designed to assert in case of failure
-			switch(myds->myds_type) {
-				// Note: this logic that was here was removed completely because we added mariadb client library.
-				case MYDS_LISTENER:
-					// we got a new connection!
-					listener_handle_new_connection(myds,n);
-					continue;
-					break;
-				default:
-					break;
-			}
-			// data on exiting connection
-			bool rc=process_data_on_data_stream(myds, n);
-			if (rc==false) {
-				n--;
-			}
-		}
-	}
-}
-
 
 // this function was inline in MySQL_Thread::run()
 /**
@@ -3316,24 +3140,6 @@ void MySQL_Thread::run_StopListener() {
 	}
 }
 
-
-void MySQL_Thread::run_SetAllSession_ToProcess0() {
-	unsigned int n;
-#ifdef IDLE_THREADS
-	// @note: in MySQL_Thread::run we have:  bool idle_maintenance_thread=epoll_thread;
-	// Thus idle_maintenance_thread and epoll_thread are equivalent.
-	if (epoll_thread==false) {
-#endif // IDLE_THREADS
-		for (n=0; n<mysql_sessions->len; n++) {
-			MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
-			_sess->to_process=0;
-		}
-#ifdef IDLE_THREADS
-	}
-#endif // IDLE_THREADS
-}
-
-
 // main loop
 /**
  * @brief Main loop for the MySQL thread.
@@ -3392,7 +3198,7 @@ __run_skip_1:
 
 			handle_mirror_queue_mysql_sessions();
 
-			ProcessAllMyDS_BeforePoll();
+			ProcessAllMyDS_BeforePoll<MySQL_Thread>();
 
 #ifdef IDLE_THREADS
 			run_MoveSessionsBetweenThreads();
@@ -3497,7 +3303,7 @@ __run_skip_1:
 			refresh_variables();
 		}
 
-		run_SetAllSession_ToProcess0();
+		run_SetAllSession_ToProcess0<MySQL_Thread,MySQL_Session>();
 
 #ifdef IDLE_THREADS
 		// here we handle epoll_wait()
@@ -3512,7 +3318,7 @@ __run_skip_1:
 			}
 		} else {
 #endif // IDLE_THREADS
-			ProcessAllMyDS_AfterPoll();
+			ProcessAllMyDS_AfterPoll<MySQL_Thread>();
 			// iterate through all sessions and process the session logic
 			process_all_sessions();
 			return_local_connections();
@@ -3523,17 +3329,6 @@ __run_skip_1:
 	}
 }
 // end of ::run()
-
-unsigned int MySQL_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *sess) {
-	unsigned int i=0;
-	for (i=0;i<mysql_sessions->len;i++) {
-		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
-		if (mysess==sess) {
-			return i;
-		}
-	}
-	return i;
-}
 
 #ifdef IDLE_THREADS
 
@@ -3715,7 +3510,7 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 		//unsigned int maxsess=GloMTH->resume_mysql_sessions->len;
 		while (myexchange.resume_mysql_sessions->len) {
 			MySQL_Session *mysess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
-			register_session(mysess, false);
+			register_session(this, mysess, false);
 			MySQL_Data_Stream *myds=mysess->client_myds;
 			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		}
@@ -3882,38 +3677,6 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 	return true;
 }
 
-
-
-// this function was inline in  MySQL_Thread::process_all_sessions()
-/**
- * @brief Sort all sessions based on maximum connection time.
- * 
- * This function iterates through all MySQL sessions and sorts them based on their maximum connection time.
- * Sessions with a valid maximum connection time are compared, and if one session has a greater maximum connection
- * time than another, their positions in the session list are swapped. The sorting is performed in-place.
- * 
- * @note This function assumes that MySQL sessions and their associated data structures have been initialized
- * and are accessible within the MySQL Thread.
- */
-void MySQL_Thread::ProcessAllSessions_SortingSessions() {
-	unsigned int a=0;
-	for (unsigned int n=0; n<mysql_sessions->len; n++) {
-		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
-		if (sess->mybe && sess->mybe->server_myds) {
-			if (sess->mybe->server_myds->max_connect_time) {
-				MySQL_Session *sess2=(MySQL_Session *)mysql_sessions->index(a);
-				if (sess2->mybe && sess2->mybe->server_myds && sess2->mybe->server_myds->max_connect_time && sess2->mybe->server_myds->max_connect_time <= sess->mybe->server_myds->max_connect_time) {
-					// do nothing
-				} else {
-					void *p=mysql_sessions->pdata[a];
-					mysql_sessions->pdata[a]=mysql_sessions->pdata[n];
-					mysql_sessions->pdata[n]=p;
-					a++;
-				}
-			}
-		}
-	}
-}
 
 // this function was inline in MySQL_Thread::process_all_sessions()
 void MySQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess) {
@@ -4138,7 +3901,7 @@ void MySQL_Thread::process_all_sessions() {
 	}
 #endif // IDLE_THREADS
 	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions();
+		ProcessAllSessions_SortingSessions<MySQL_Session>();
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
@@ -4478,7 +4241,7 @@ MySQL_Thread::MySQL_Thread() {
 
 	status_variables.active_transactions=0;
 
-	for (unsigned int i = 0; i < st_var_END ; i++) {
+	for (unsigned int i = 0; i < MY_st_var_END ; i++) {
 		status_variables.stvar[i] = 0;
 	}
 	match_regexes=NULL;
@@ -4574,7 +4337,7 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 
 		// create a new client connection
 		mypolls.fds[n].revents=0;
-		MySQL_Session *sess=create_new_session_and_client_data_stream(c);
+		MySQL_Session *sess=create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(c);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_created,1);
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
@@ -5910,58 +5673,6 @@ void MySQL_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
 
 #ifdef IDLE_THREADS
 /**
- * @brief Moves a session to the idle session array if it meets the idle criteria.
- * 
- * This function checks if a session should be moved to the idle session array based on its idle time
- * and other conditions. If the session meets the idle criteria, it is moved to the idle session array.
- * 
- * @param myds Pointer to the MySQL data stream associated with the session.
- * @param n The index of the session in the poll array.
- * @return True if the session is moved to the idle session array, false otherwise.
- */
-bool MySQL_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n) {
-	unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
-	if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
-		// make sure data stream has no pending data out and session is not throttled (#1939)
-		// because epoll thread does not handle data stream with data out
-		if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
-			//unsigned int j;
-			bool has_backends = myds->sess->has_any_backend();
-			if (has_backends==false) {
-				unsigned long long idle_since = curtime - myds->sess->IdleTime();
-				mypolls.remove_index_fast(n);
-				myds->mypolls=NULL;
-				unsigned int i = find_session_idx_in_mysql_sessions(myds->sess);
-				myds->sess->thread=NULL;
-				unregister_session(i);
-				myds->sess->idle_since = idle_since;
-				idle_mysql_sessions->add(myds->sess);
-				return true;
-			}
-		}
-	}
-	return false;
-}
-#endif // IDLE_THREADS
-
-bool MySQL_Thread::set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n) {
-	if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
-		unsigned int buffered_data=0;
-		buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
-		buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
-		// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
-		// but assuming that client isn't completely blocked, we will stop checking for data
-		// only at mysql_thread___threshold_resultset_size * 4
-		if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*4) {
-			mypolls.fds[n].events = 0;
-			return true;
-		}
-	}
-	return false;
-}
-
-#ifdef IDLE_THREADS
-/**
  * @brief Moves sessions from the idle thread's session array to the worker thread's session array.
  * 
  * This function is called by the idle maintenance thread to transfer sessions from the idle session array
@@ -5974,7 +5685,7 @@ void MySQL_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	pthread_mutex_lock(&myexchange.mutex_idles);
 	while (myexchange.idle_mysql_sessions->len) {
 		MySQL_Session *mysess=(MySQL_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
-		register_session(mysess, false);
+		register_session(this, mysess, false);
 		MySQL_Data_Stream *myds=mysess->client_myds;
 		mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		// add in epoll()
@@ -6001,7 +5712,7 @@ void MySQL_Thread::handle_mirror_queue_mysql_sessions() {
 			int idx;
 			idx=fastrand()%(mirror_queue_mysql_sessions->len);
 			MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
-			register_session(newsess);
+			register_session(this, newsess);
 			newsess->handler(); // execute immediately
 			if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 				unregister_session(mysql_sessions->len-1);
@@ -6044,121 +5755,4 @@ void MySQL_Thread::handle_kill_queues() {
 		maintenance_loop=true;
 	}
 	pthread_mutex_unlock(&kq.m);
-}
-
-
-/**
- * @brief Checks for timing out session and marks them for processing.
- * 
- * This function checks for timing out sessions and marks them for processing. Although the logic for managing connection timeout
- * was removed due to the addition of the MariaDB client library, this function remains as a placeholder. It checks if the session
- * has reached its wait_until or pause_until time, and if so, marks the session for processing.
- * 
- * @param n The index of the session in the MySQL_Data_Stream array.
- */
-void MySQL_Thread::check_timing_out_session(unsigned int n) {
-	// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
-	// check for timeout
-	// no events. This section is copied from process_data_on_data_stream()
-	MySQL_Data_Stream *_myds=mypolls.myds[n];
-	if (_myds && _myds->sess) {
-		if (_myds->wait_until && curtime > _myds->wait_until) {
-			// timeout
-			_myds->sess->to_process=1;
-		} else {
-			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
-				// timeout
-				_myds->sess->to_process=1;
-			}
-		}
-	}
-}
-
-
-/**
- * @brief Checks for an invalid file descriptor (FD) and raises an error if found.
- * 
- * This function checks if the file descriptor (FD) at the specified index in the `mypolls.fds` array is invalid (`POLLNVAL`).
- * If an invalid FD is found, it raises an error and asserts to ensure that the program does not proceed with an invalid FD.
- * 
- * @param n The index of the file descriptor in the `mypolls.fds` array.
- */
-void MySQL_Thread::check_for_invalid_fd(unsigned int n) {
-	// check if the FD is valid
-	if (mypolls.fds[n].revents==POLLNVAL) {
-		// debugging output before assert
-		MySQL_Data_Stream *_myds=mypolls.myds[n];
-		if (_myds) {
-			if (_myds->myconn) {
-				proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd, _myds->myconn->fd);
-				assert(mypolls.fds[n].revents!=POLLNVAL);
-			}
-		}
-		// if we reached her, we didn't assert() yet
-		proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd);
-		assert(mypolls.fds[n].revents!=POLLNVAL);
-	}
-}
-
-void MySQL_Thread::read_one_byte_from_pipe(unsigned int n) {
-	if (mypolls.fds[n].revents) {
-		unsigned char c;
-		if (read(mypolls.fds[n].fd, &c, 1)==-1) {// read just one byte
-			proxy_error("Error during read from signal_all_threads()\n");
-		}
-		proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
-		//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the skeleton for issue #253
-		if (c) {
-			// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
-			pthread_mutex_unlock(&thread_mutex);
-			usleep(c*1000);
-			pthread_mutex_lock(&thread_mutex);
-			// we enter in maintenance loop only if c is set
-			// when threads are signaling each other, there is no need to set maintenance_loop
-			maintenance_loop=true;
-		}
-	}
-}
-
-void MySQL_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
-	if (myds->wait_until > curtime) {
-		if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
-			mypolls.poll_timeout= myds->wait_until - curtime;
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , wait_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->wait_until, curtime);
-		}
-	}
-}
-
-void MySQL_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds) {
-	if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
-		mypolls.poll_timeout= myds->sess->pause_until - curtime;
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->sess->pause_until, curtime);
-	}
-}
-
-void MySQL_Thread::configure_pollout(MySQL_Data_Stream *myds, unsigned int n) {
-	if (myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
-		myds->set_pollout();
-	} else {
-		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END) {
-			mypolls.fds[n].events = POLLIN;
-			if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
-				mypolls.fds[n].events |= POLLOUT;
-		} else {
-			myds->set_pollout();
-		}
-	}
-	if (unlikely(myds->sess->pause_until > curtime)) {
-		if (myds->myds_type==MYDS_FRONTEND) {
-			myds->remove_pollout();
-		}
-		if (myds->myds_type==MYDS_BACKEND) {
-			if (mysql_thread___throttle_ratio_server_to_client) {
-				mypolls.fds[n].events = 0;
-			}
-		}
-	}
-	if (myds->myds_type==MYDS_BACKEND) {
-		set_backend_to_be_skipped_if_frontend_is_slow(myds, n);
-	}
 }

@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -53,9 +57,10 @@ class MySrvC;
 class MySrvList;
 class MyHGC;
 
+const int MYSQL_ERRORS_STATS_FIELD_NUM = 11;
+
 struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port);
 void * GTID_syncer_run();
-
 
 static int wait_for_mysql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
@@ -79,6 +84,49 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 		if (pfd.revents & POLLPRI) status |= MYSQL_WAIT_EXCEPT;
 		return status;
 	}
+}
+
+/**
+ * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
+ *
+ * @param j JSON object constructed from 'servers_defaults' field.
+ * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
+ *  error logging.
+ * @param key The key for the value to be extracted.
+ * @param val_check A validation function, checks if the value is within a expected range.
+ *
+ * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
+ */
+template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
+T j_get_srv_default_int_val(
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+) {
+	if (j.find(key) != j.end()) {
+		const json::value_t val_type = j[key].type();
+		const char* type_name = j[key].type_name();
+
+		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
+			T val = j[key].get<T>();
+
+			if (val_check(val)) {
+				return val;
+			} else {
+				proxy_error(
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+						" Value NOT UPDATED.\n",
+					static_cast<int64_t>(val), key.c_str(), hid
+				);
+			}
+		} else {
+			proxy_error(
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					" Value NOT UPDATED.\n",
+				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+			);
+		}
+	}
+
+	return static_cast<T>(-1);
 }
 
 
@@ -1075,7 +1123,7 @@ unique_ptr<SQLite3_result> get_mysql_servers_v2() {
 	return unique_ptr<SQLite3_result>(resultset);
 }
 
-void update_glovars_checksum_with_peers(
+static void update_glovars_checksum_with_peers(
 	ProxySQL_Checksum_Value& module_checksum,
 	const string& new_checksum,
 	const string& peer_checksum_value,
@@ -1112,7 +1160,7 @@ void update_glovars_checksum_with_peers(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-void update_glovars_mysql_servers_checksum(
+static void update_glovars_mysql_servers_checksum(
 	const string& new_checksum,
 	const runtime_mysql_servers_checksum_t& peer_checksum = {},
 	bool update_version = false
@@ -1143,7 +1191,7 @@ void update_glovars_mysql_servers_checksum(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-void update_glovars_mysql_servers_v2_checksum(
+static void update_glovars_mysql_servers_v2_checksum(
 	const string& new_checksum,
 	const mysql_servers_v2_checksum_t& peer_checksum = {},
 	bool update_version = false
@@ -1235,6 +1283,10 @@ std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint6
 
 	string mysrvs_checksum { get_checksum_from_hash(hash_1) };
 	return mysrvs_checksum;
+}
+
+bool MySQL_HostGroups_Manager::commit() {
+	return commit({},{});
 }
 
 bool MySQL_HostGroups_Manager::commit(
@@ -2154,7 +2206,7 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 	int cols = 0;
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
-	char* query = const_cast<char*>("SELECT hostname, port, status, use_ssl FROM mysql_servers WHERE status != 3 GROUP BY hostname, port");
+	const char* query = "SELECT hostname, port, status, use_ssl FROM mysql_servers WHERE status != 3 GROUP BY hostname, port";
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -5053,7 +5105,7 @@ bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, 
 	return ret;
 }
 
-void print_galera_nodes_last_status() {
+static void print_galera_nodes_last_status() {
 	std::unique_ptr<SQLite3_result> result { new SQLite3_result(13) };
 
 	result->add_column_definition(SQLITE_TEXT,"hostname");
@@ -5963,7 +6015,7 @@ class MySQL_Errors_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*11);
+		char **pta=(char **)malloc(sizeof(char *)*MYSQL_ERRORS_STATS_FIELD_NUM);
 		sprintf(buf,"%d",hostgroup);
 		pta[0]=strdup(buf);
 		assert(hostname);
@@ -6005,7 +6057,7 @@ class MySQL_Errors_stats {
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<11;i++) {
+		for (i=0;i<MYSQL_ERRORS_STATS_FIELD_NUM;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -6069,7 +6121,7 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
-	SQLite3_result *result=new SQLite3_result(11);
+	SQLite3_result *result=new SQLite3_result(MYSQL_ERRORS_STATS_FIELD_NUM);
 	pthread_mutex_lock(&mysql_errors_mutex);
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"hostname");
@@ -6386,14 +6438,16 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		if (myhgc->attributes.ignore_session_variables_text == NULL) {
 			myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
 			if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
-				myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+				if (myhgc->attributes.ignore_session_variables_json != nullptr) { delete myhgc->attributes.ignore_session_variables_json; }
+				myhgc->attributes.ignore_session_variables_json = new json(json::parse(ignore_session_variables));
 			}
 		} else {
 			if (strcmp(myhgc->attributes.ignore_session_variables_text, ignore_session_variables) != 0) {
 				free(myhgc->attributes.ignore_session_variables_text);
 				myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
 				if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
-					myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+					if (myhgc->attributes.ignore_session_variables_json != nullptr) { delete myhgc->attributes.ignore_session_variables_json; }
+					myhgc->attributes.ignore_session_variables_json = new json(json::parse(ignore_session_variables));
 				}
 				// TODO: assign the variables
 			}
