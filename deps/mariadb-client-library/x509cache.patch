@@ -35,9 +35,6 @@ index 916024a8..79564a10 100644
  
  int STDCALL mysql_set_server_option(MYSQL *mysql,
 diff --git libmariadb/secure/openssl.c libmariadb/secure/openssl.c
-index 67d90c6a..26938959 100644
---- libmariadb/secure/openssl.c
-+++ libmariadb/secure/openssl.c
 @@ -30,6 +30,11 @@
  #include <openssl/conf.h>
  #include <openssl/md4.h>
@@ -50,7 +47,7 @@ index 67d90c6a..26938959 100644
  #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
  #include <openssl/applink.c>
  #endif
-@@ -70,6 +75,82 @@
+@@ -70,6 +75,89 @@
  extern my_bool ma_tls_initialized;
  extern unsigned int mariadb_deinitialize_ssl;
  
@@ -61,7 +58,7 @@ index 67d90c6a..26938959 100644
 +
 +static int proxysql_SSL_CTX_local_x509store_add_file(SSL_CTX *ctx, const char *CAfile, int add_in_store) {
 +  int found=0, i=0, fd=-1;
-+
++  ssize_t bytesRead = 0;
 +  struct stat statbuf;
 +  unsigned char temp[SHA_DIGEST_LENGTH];
 +  char file_sha1[SHA_DIGEST_LENGTH*2+2];
@@ -71,19 +68,26 @@ index 67d90c6a..26938959 100644
 +  if (fd == -1) return 0;
 +
 +  if(fstat(fd, &statbuf) == 0) {
-+    unsigned char *fb = (unsigned char *)mmap(0, statbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
-+    if (fb != MAP_FAILED) {
-+	  int i;
-+      SHA1(fb, statbuf.st_size, temp);
-+      for (i=0; i < SHA_DIGEST_LENGTH; i++) {
-+        sprintf((char*)&(file_sha1[i*2]), "%02x", temp[i]);
-+      }
-+      munmap(fb,statbuf.st_size);
-+      close(fd);
-+    } else {
++    // Allocate a buffer to read the file
++    unsigned char *fb = (unsigned char *)malloc(statbuf.st_size);
++    if (fb == NULL) {
 +      close(fd);
 +      return 0;
 +    }
++    // Read the file into the buffer
++    bytesRead = pread(fd, fb, statbuf.st_size, 0);
++    if (bytesRead != statbuf.st_size) {
++      free(fb);
++      close(fd);
++      return 0;
++    }
++    // Compute the SHA-1 hash
++    SHA1(fb, statbuf.st_size, temp);
++    for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
++      sprintf((char*)&(file_sha1[i*2]), "%02x", temp[i]);
++    }
++    free(fb);
++    close(fd);
 +  } else {
 +    close(fd);
 +    return 0;
@@ -133,7 +137,7 @@ index 67d90c6a..26938959 100644
  #define MAX_SSL_ERR_LEN 100
  char tls_library_version[TLS_VERSION_LENGTH];
  
-@@ -331,7 +412,7 @@ static int ma_tls_set_certs(MYSQL *mysql, SSL_CTX *ctx)
+@@ -331,7 +419,7 @@
         *keyfile= mysql->options.ssl_key;
    char *pw= (mysql->options.extension) ?
              mysql->options.extension->tls_pw : NULL;
@@ -142,7 +146,7 @@ index 67d90c6a..26938959 100644
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -345,10 +426,27 @@ static int ma_tls_set_certs(MYSQL *mysql, SSL_CTX *ctx)
+@@ -345,10 +433,27 @@
    }
  
    /* ca_file and ca_path */
@@ -173,4 +177,3 @@ index 67d90c6a..26938959 100644
      if (mysql->options.ssl_ca || mysql->options.ssl_capath)
        goto error;
      if (SSL_CTX_set_default_verify_paths(ctx) == 0)
-
