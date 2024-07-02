@@ -3367,9 +3367,9 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	int topology_loop = 0;
-	int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
+		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 		bool do_discovery_check = false;
 
 		unsigned int glover;
@@ -3404,11 +3404,13 @@ void * MySQL_Monitor::monitor_read_only() {
 			goto __end_monitor_read_only_loop;
 		}
 
-		if (topology_loop >= topology_loop_max) {
-			do_discovery_check = true;
-			topology_loop = 0;
+		if (topology_loop_max > 0) { // if the discovery interval is set to zero, do not query for the topology
+			if (topology_loop >= topology_loop_max) {
+				do_discovery_check = true;
+				topology_loop = 0;
+			} 
+			topology_loop += 1;
 		}
-		topology_loop += 1;
 
 		// resultset must be initialized before calling monitor_read_only_async
 		monitor_read_only_async(resultset, do_discovery_check);
