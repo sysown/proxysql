@@ -6649,6 +6649,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_modnum ON debug_log (modnum)");
 */
 		debugdb_disk->execute("PRAGMA synchronous=0");
+		debugdb_disk->execute("PRAGMA journal_mode=OFF");
 /*
 		// DO NOT ATTACH DATABASE
 		// it seems sqlite starts randomly failing. For example these 2 TAP tests:
