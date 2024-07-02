@@ -3353,6 +3353,31 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 	}
 }
 
+/**
+* @brief Check if a list of servers is matching the description of an AWS RDS Multi-AZ DB Cluster.
+* @details This method takes a vector of discovered servers and checks that there are exactly three which are named "instance-[1|2|3]" respectively, as expected on an AWS RDS Multi-AZ DB Cluster.
+* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
+* @return Returns 'true' if all conditions are met and 'false' otherwise.
+*/
+bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const std::vector<MYSQL_ROW>& discovered_servers) {
+	if (discovered_servers.size() != 3) {
+		return false;
+	}
+
+	const std::vector<std::string> instance_names = {"-instance-1", "-instance-2", "-instance-3"};
+	int identified_hosts = 0;
+	for (std::string instance_str : instance_names) {
+		for (MYSQL_ROW server : discovered_servers) {
+			std::string current_discovered_hostname = server[2];
+			if (current_discovered_hostname.find(instance_str) != std::string::npos) {
+				++identified_hosts;
+				break;
+			}
+		}
+	}
+	return (identified_hosts == 3);
+}
+
 void * MySQL_Monitor::monitor_read_only() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -7388,8 +7413,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 					discovered_servers.push_back(row);
 				}
 
-				// Process the discovered servers and add them to 'runtime_mysql_servers'
-				if (!discovered_servers.empty()) {
+				// Process the discovered servers and add them to 'runtime_mysql_servers' (process only for AWS RDS Multi-AZ DB Clusters)
+				if (!discovered_servers.empty() && is_aws_rds_multi_az_db_cluster_topology(discovered_servers)) {
 					process_discovered_topology(originating_server_hostname, discovered_servers, mmsd->reader_hostgroup);
 				}
 			} else {
