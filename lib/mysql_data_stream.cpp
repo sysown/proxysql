@@ -698,9 +698,16 @@ int MySQL_Data_Stream::read_from_net() {
 		} else {
 			int ssl_ret=SSL_get_error(ssl, r);
 			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- session_id: %u , SSL_get_error(): %d , errno: %d\n", sess, this, sess->thread_session_id, ssl_ret, errno);
-			if (ssl_ret == SSL_ERROR_SYSCALL && (errno == EINTR || errno == EAGAIN)) {
+			const int st = ERR_get_error();
+			if (
+				(ssl_ret == SSL_ERROR_SYSCALL) &&
+				(
+					((errno == EINTR || errno == EAGAIN))
+					|| (st == 0)
+				)
+			) {
 				// the read was interrupted, do nothing
-				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d\n", sess, this, errno);
+				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d, ERR_get_error=%d\n", sess, this, errno, st);
 			} else {
 				if (r==0) { // we couldn't read any data
 					if (revents & POLLIN) {
