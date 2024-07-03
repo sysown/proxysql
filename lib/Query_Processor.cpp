@@ -770,7 +770,7 @@ void * get_query_digests_total_size_parallel(void *_arg) {
 	unsigned long long i = 0;
 	unsigned long long m = arg->m;
 	unsigned long long ret = 0;
-	set_thread_name("GetQueryDigeTota");
+	set_thread_name("GetQueryDigeTot");
 	for (std::unordered_map<uint64_t, void *>::iterator it=arg->gu->begin(); it!=arg->gu->end(); ++it) {
 		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
 			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
@@ -854,7 +854,7 @@ void * purge_query_digests_parallel(void *_arg) {
 	unsigned long long i = 0;
 	unsigned long long r = 0;
 	unsigned long long m = arg->m;
-	set_thread_name("PurgeQueryDigest");
+	set_thread_name("PurgeQueryDgest");
 	for (std::unordered_map<uint64_t, void *>::iterator it=arg->gu->begin(); it!=arg->gu->end(); ++it) {
 		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
 			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;

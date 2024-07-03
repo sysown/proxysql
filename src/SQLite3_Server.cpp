@@ -1021,7 +1021,7 @@ static void *child_mysql(void *arg) {
 
 	int client = *(int *)arg;
 
-	set_thread_name("SQLiteChildMySQL");
+	set_thread_name("SQLiteChldMySQL");
 	GloMTH->wrlock();
 	{
 		char *s=GloMTH->get_variable((char *)"server_capabilities");
