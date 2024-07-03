@@ -985,8 +985,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_ping_interval=8000;
 	variables.monitor_ping_max_failures=3;
 	variables.monitor_ping_timeout=1000;
-	variables.monitor_aws_rds_topology_discovery_interval=1000;
-	variables.monitor_read_only_interval=0;
+	variables.monitor_aws_rds_topology_discovery_interval=0;
+	variables.monitor_read_only_interval=1000;
 	variables.monitor_read_only_timeout=800;
 	variables.monitor_read_only_max_timeout_count=3;
 	variables.monitor_replication_lag_group_by_host=false;
