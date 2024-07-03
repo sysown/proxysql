@@ -63,13 +63,17 @@ template<typename T, bool check_monitor_enabled_flag = true>
 class ConsumerThread : public Thread {
 	wqueue<WorkItem<T>*>& m_queue;
 	int thrn;
+	char thr_name[16];
 	public:
-	ConsumerThread(wqueue<WorkItem<T>*>& queue, int _n) : m_queue(queue) {
+	ConsumerThread(wqueue<WorkItem<T>*>& queue, int _n, char thread_name[16]=NULL) : m_queue(queue) {
 		thrn=_n;
+		if (thread_name && thread_name[0]) {
+			snprintf(thr_name, sizeof(thr_name), "%.16s", thread_name);
+		} else {
+			snprintf(thr_name, sizeof(thr_name), "%.12s%03d", typeid(T).name(), thrn);
+		}
 	}
 	void* run() {
-		char thr_name[16];
-		snprintf(thr_name, sizeof(thr_name), "%.12s%03d", typeid(T).name(), thrn);
 		set_thread_name(thr_name);
 		// Remove 1 item at a time and process it. Blocks if no items are
 		// available to process.
@@ -4994,7 +4998,7 @@ __monitor_run:
 	}
 	ConsumerThread<MySQL_Monitor_State_Data> **threads= (ConsumerThread<MySQL_Monitor_State_Data> **)malloc(sizeof(ConsumerThread<MySQL_Monitor_State_Data> *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
-		threads[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 0);
+		threads[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 0, "MyMonStateData");
 		threads[i]->start(2048,false);
 	}
 	started_threads += num_threads;
@@ -5064,7 +5068,7 @@ __monitor_run:
 					threads= (ConsumerThread<MySQL_Monitor_State_Data> **)realloc(threads, sizeof(ConsumerThread<MySQL_Monitor_State_Data> *)*num_threads);
 					started_threads += (num_threads - old_num_threads);
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
-						threads[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 0);
+						threads[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 0, "MyMonStateData");
 						threads[i]->start(2048,false);
 					}
 				}
@@ -5093,7 +5097,7 @@ __monitor_run:
 					threads= (ConsumerThread<MySQL_Monitor_State_Data> **)realloc(threads, sizeof(ConsumerThread<MySQL_Monitor_State_Data> *)*num_threads);
 					started_threads += new_threads;
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
-						threads[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 0);
+						threads[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 0, "MyMonStateData");
 						threads[i]->start(2048,false);
 					}
 				}
@@ -5113,7 +5117,7 @@ __monitor_run:
 					aux_threads = qsize;
 					started_threads += aux_threads;
 					for (unsigned int i=0; i<qsize; i++) {
-						threads_aux[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 245);
+						threads_aux[i] = new ConsumerThread<MySQL_Monitor_State_Data>(*queue, 245, "MyMonStateData");
 						threads_aux[i]->start(2048,false);
 					}
 					for (unsigned int i=0; i<qsize; i++) {
