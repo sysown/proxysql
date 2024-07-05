@@ -3366,8 +3366,12 @@ bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const std::vector<MY
 
 	const std::vector<std::string> instance_names = {"-instance-1", "-instance-2", "-instance-3"};
 	int identified_hosts = 0;
-	for (std::string instance_str : instance_names) {
+	for (const std::string& instance_str : instance_names) {
 		for (MYSQL_ROW server : discovered_servers) {
+			if (server[2] == NULL || (server[2][0] == '\0')) {
+				continue;
+			}
+
 			std::string current_discovered_hostname = server[2];
 			if (current_discovered_hostname.find(instance_str) != std::string::npos) {
 				++identified_hosts;
