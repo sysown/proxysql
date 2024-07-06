@@ -3,7 +3,7 @@
  * @brief Declaration of the MySQL_Session class and associated types and enums.
  */
 
-
+#ifdef CLASS_BASE_SESSION_H
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
 
@@ -14,6 +14,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
+#include "Base_Session.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -51,7 +52,7 @@ enum ps_type : uint8_t {
 
 
 
-std::string proxysql_session_type_str(enum proxysql_session_type session_type);
+//std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 /**
  * @class Query_Info
@@ -105,7 +106,7 @@ class Query_Info {
  * This class is central to ProxySQL's handling of client connections. It manages the lifecycle
  * of a session, processes queries, and communicates with backend MySQL servers.
  */
-class MySQL_Session
+class MySQL_Session: public Base_Session
 {
 	private:
 	//int handler_ret;
@@ -214,7 +215,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___multiple_statuses(int *rc);
 
-	void init();
+	//void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
 	/**
@@ -271,28 +272,31 @@ class MySQL_Session
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	std::stack<enum session_status> previous_status;
-	void * operator new(size_t);
-	void operator delete(void *);
 
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;
 	PtrSize_t pkt;
 
+#if 0
 	// uint64_t
 	unsigned long long start_time;
 	unsigned long long pause_until;
 
 	unsigned long long idle_since;
 	unsigned long long transaction_started_at;
+#endif // 0
 
 	// pointers
 	MySQL_Thread *thread;
 	Query_Processor_Output *qpo;
 	StatCounters *command_counters;
 	MySQL_Backend *mybe;
+#if 0
 	PtrArray *mybes;
+#endif // 0
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
+#if 0
 	/*
 	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
 	 *  maintenance thread. These values will be used to release the retained connections in the specific
@@ -349,6 +353,7 @@ class MySQL_Session
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
+#endif // 0
 	/**
 	 * @brief This status variable tracks whether the session is performing an
 	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
@@ -366,8 +371,8 @@ class MySQL_Session
 	//uint64_t gtid_trxid;
 	int gtid_hid;
 
-	MySQL_STMTs_meta *sess_STMTs_meta;
-	StmtLongDataHandler *SLDH;
+//	MySQL_STMTs_meta *sess_STMTs_meta;
+//	StmtLongDataHandler *SLDH;
 
 	Session_Regex **match_regexes;
 
@@ -386,9 +391,9 @@ class MySQL_Session
 	int handler();
 
 	void (*handler_function) (Client_Session<MySQL_Session*> arg, void *, PtrSize_t *pkt);
-	MySQL_Backend * find_backend(int);
-	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
-	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	//MySQL_Backend * find_backend(int);
+	//MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	//MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
@@ -469,3 +474,4 @@ private:
 void * kill_query_thread(void *arg);
 
 #endif /* __CLASS_MYSQL_SESSION_ H */
+#endif // CLASS_BASE_SESSION_H

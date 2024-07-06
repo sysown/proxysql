@@ -2849,7 +2849,7 @@ void PgSQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 		PgSQL_Data_Stream* myds;
 		PgSQL_Connection* mc = my_idle_conns[i];
 		PgSQL_Session* sess = new PgSQL_Session();
-		sess->mybe = sess->find_or_create_backend(mc->parent->myhgc->hid);
+		sess->mybe = sess->find_or_create_backend<PgSQL_Backend,PgSQL_Session,PgSQL_Data_Stream>(mc->parent->myhgc->hid);
 
 		myds = sess->mybe->server_myds;
 		myds->attach_connection(mc);

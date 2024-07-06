@@ -1,3 +1,5 @@
+#ifdef CLASS_BASE_SESSION_H
+
 #ifndef __CLASS_PGSQL_SESSION_H
 #define __CLASS_PGSQL_SESSION_H
 
@@ -9,6 +11,7 @@
 #include "Client_Session.h"
 #include "cpp.h"
 #include "PgSQL_Variables.h"
+#include "Base_Session.h"
 
 
 class PgSQL_Query_Result;
@@ -43,7 +46,7 @@ enum PgSQL_ps_type : uint8_t {
 
 
 
-std::string proxysql_session_type_str(enum proxysql_session_type session_type);
+//std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 // these structs will be used for various regex hardcoded
 // their initial use will be for sql_log_bin , sql_mode and time_zone
@@ -201,7 +204,7 @@ private:
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
 	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
 	bool handler_again___multiple_statuses(int* rc);
-	void init();
+	//void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t*);
 	/**
@@ -247,28 +250,31 @@ public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
 	std::stack<enum session_status> previous_status;
-	void* operator new(size_t);
-	void operator delete(void*);
 
 	PgSQL_Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;
 	PtrSize_t pkt;
 
+#if 0
 	// uint64_t
 	unsigned long long start_time;
 	unsigned long long pause_until;
 
 	unsigned long long idle_since;
 	unsigned long long transaction_started_at;
+#endif // 0
 
 	// pointers
 	PgSQL_Thread* thread;
 	Query_Processor_Output* qpo;
 	StatCounters* command_counters;
 	PgSQL_Backend* mybe;
+#if 0
 	PtrArray* mybes;
+#endif // 0
 	PgSQL_Data_Stream* client_myds;
 	PgSQL_Data_Stream* server_myds;
+#if 0
 	/*
 	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
 	 *  maintenance thread. These values will be used to release the retained connections in the specific
@@ -325,6 +331,7 @@ public:
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
+#endif // 0
 	/**
 	 * @brief This status variable tracks whether the session is performing an
 	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
@@ -342,8 +349,8 @@ public:
 	//uint64_t gtid_trxid;
 	int gtid_hid;
 
-	MySQL_STMTs_meta* sess_STMTs_meta;
-	StmtLongDataHandler* SLDH;
+//	MySQL_STMTs_meta* sess_STMTs_meta;
+//	StmtLongDataHandler* SLDH;
 
 	Session_Regex** match_regexes;
 
@@ -362,9 +369,9 @@ public:
 	int handler();
 
 	void (*handler_function) (Client_Session<PgSQL_Session*> arg, void*, PtrSize_t* pkt);
-	PgSQL_Backend* find_backend(int);
-	PgSQL_Backend* create_backend(int, PgSQL_Data_Stream* _myds = NULL);
-	PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);
+	//PgSQL_Backend* find_backend(int);
+	//PgSQL_Backend* create_backend(int, PgSQL_Data_Stream* _myds = NULL);
+	//PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 
 	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false);
 	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = NULL);
@@ -443,3 +450,4 @@ private:
 void* PgSQL_kill_query_thread(void* arg);
 
 #endif /* __CLASS_PGSQL_SESSION_H */
+#endif // CLASS_BASE_SESSION_H

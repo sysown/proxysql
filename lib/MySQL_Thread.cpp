@@ -2984,7 +2984,7 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 		MySQL_Data_Stream *myds;
 		MySQL_Connection *mc=my_idle_conns[i];
 		MySQL_Session *sess=new MySQL_Session();
-		sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
+		sess->mybe=sess->find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(mc->parent->myhgc->hid);
 
 		myds=sess->mybe->server_myds;
 		myds->attach_connection(mc);
