@@ -24,23 +24,9 @@ template Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread
 template Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::~Base_Session();
 template Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::~Base_Session();
 
-//template Base_Session<MySQL_Session,MySQL_Data_Stream>::Base_Session();
-//emplate Base_Session<PgSQL_Session,PgSQL_Data_Stream>::Base_Session();
-
-//template void Base_Session::init<MySQL_Session>();
-//template void Base_Session::init<PgSQL_Session>();
-
 template MySQL_Backend * Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::find_backend(int);
 template PgSQL_Backend * Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::find_backend(int);
-/*
-template MySQL_Backend * Base_Session::find_backend<MySQL_Backend,MySQL_Session>(int);
-template PgSQL_Backend * Base_Session::find_backend<PgSQL_Backend,PgSQL_Session>(int);
 
-template MySQL_Backend * Base_Session::create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(int, MySQL_Data_Stream *);
-template PgSQL_Backend * Base_Session::create_backend<PgSQL_Backend,PgSQL_Session,PgSQL_Data_Stream>(int, PgSQL_Data_Stream *);
-template MySQL_Backend * Base_Session::find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(int, MySQL_Data_Stream *);
-template PgSQL_Backend * Base_Session::find_or_create_backend<PgSQL_Backend,PgSQL_Session,PgSQL_Data_Stream>(int, PgSQL_Data_Stream *);
-*/
 template MySQL_Backend * Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::find_or_create_backend(int, MySQL_Data_Stream *);
 template PgSQL_Backend * Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::find_or_create_backend(int, PgSQL_Data_Stream *);
 
@@ -280,39 +266,6 @@ void Base_Session<S,DS,B,T>::writeout() {
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this); 
 }
-
-#if 0
-void MySQL_Session::writeout() {
-	if (client_myds) client_myds->array2buffer_full();
-	if (mybe && mybe->server_myds && mybe->server_myds->myds_type==MYDS_BACKEND) {
-		if (session_type==PROXYSQL_SESSION_MYSQL) {
-			if (mybe->server_myds->net_failure==false) {
-				if (mybe->server_myds->poll_fds_idx>-1) { // NOTE: attempt to force writes
-					mybe->server_myds->array2buffer_full();
-				}
-			}
-		} else {
-			mybe->server_myds->array2buffer_full();
-		}
-	}
-
-
-void PgSQL_Session::writeout() {
-	if (client_myds) client_myds->array2buffer_full();
-	if (mybe && mybe->server_myds && mybe->server_myds->myds_type == MYDS_BACKEND) {
-		if (session_type == PROXYSQL_SESSION_PGSQL) {
-			if (mybe->server_myds->net_failure == false) {
-				if (mybe->server_myds->poll_fds_idx > -1) { // NOTE: attempt to force writes
-					mybe->server_myds->array2buffer_full();
-				}
-			}
-		}
-		else {
-			mybe->server_myds->array2buffer_full();
-		}
-	}
-#endif // 0
-
 
 template<typename S, typename DS, typename B, typename T>
 void Base_Session<S,DS,B,T>::return_proxysql_internal(PtrSize_t* pkt) {
