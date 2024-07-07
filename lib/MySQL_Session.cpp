@@ -8305,6 +8305,7 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	}
 }
 
+#if 0
 /**
  * @brief Check if any backend has an active MySQL connection.
  *
@@ -8323,6 +8324,7 @@ bool MySQL_Session::has_any_backend() {
 	}
 	return false;
 }
+#endif // 0
 
 /**
  * @brief Handler for MYSQL_COM_STMT_RESET command in WAITING_CLIENT_DATA state with STATE_SLEEP.

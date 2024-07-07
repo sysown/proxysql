@@ -45,6 +45,9 @@ template void Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_T
 template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::return_proxysql_internal(_PtrSize_t*);
 template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::return_proxysql_internal(_PtrSize_t*);
 
+template bool Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::has_any_backend();
+template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::has_any_backend();
+
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::Base_Session() {
 };
@@ -323,3 +326,24 @@ void Base_Session<S,DS,B,T>::return_proxysql_internal(PtrSize_t* pkt) {
 	l_free(pkt->size, pkt->ptr);
 }
 
+
+
+/**
+ * @brief Check if any backend has an active MySQL connection.
+ *
+ * This function iterates through all backends associated with the session and checks if any backend has an
+ * active MySQL connection. If any backend has an active connection, it returns true; otherwise, it returns false.
+ *
+ * @return true if any backend has an active MySQL connection, otherwise false.
+ */
+template<typename S, typename DS, typename B, typename T>
+bool Base_Session<S,DS,B,T>::has_any_backend() {
+	for (unsigned int j=0;j < mybes->len;j++) {
+		B * tmp_mybe=(B *)mybes->index(j);
+		DS *__myds=tmp_mybe->server_myds;
+		if (__myds->myconn) {
+			return true;
+		}
+	}
+	return false;
+}

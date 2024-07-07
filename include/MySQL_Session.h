@@ -438,7 +438,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void generate_proxysql_internal_session_json(nlohmann::json &) override;
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
-	bool has_any_backend();
+	//bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();

@@ -8445,6 +8445,7 @@ void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup) {
 	}
 }
 
+#if 0
 bool PgSQL_Session::has_any_backend() {
 	for (unsigned int j = 0; j < mybes->len; j++) {
 		PgSQL_Backend* tmp_mybe = (PgSQL_Backend*)mybes->index(j);
@@ -8455,6 +8456,7 @@ bool PgSQL_Session::has_any_backend() {
 	}
 	return false;
 }
+#endif // 0
 
 void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
 	uint32_t stmt_global_id = 0;

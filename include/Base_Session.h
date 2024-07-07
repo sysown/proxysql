@@ -111,6 +111,7 @@ class Base_Session {
 	virtual void generate_proxysql_internal_session_json(nlohmann::json &) = 0;
 	virtual void RequestEnd(DS *) = 0;
 	virtual void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) = 0;
+	bool has_any_backend();
 };
 
 #endif // CLASS_BASE_SESSION_H
