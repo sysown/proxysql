@@ -48,6 +48,9 @@ template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQ
 template bool Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::has_any_backend();
 template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::has_any_backend();
 
+template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::reset_all_backends();
+template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::reset_all_backends();
+
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::Base_Session() {
 };
@@ -347,3 +350,23 @@ bool Base_Session<S,DS,B,T>::has_any_backend() {
 	}
 	return false;
 }
+
+
+
+
+/**
+ * @brief Reset all MySQL backends associated with this session.
+ * 
+ * This function resets all MySQL backends associated with the current session.
+ * It iterates over all backends stored in the session, resets each backend, and then deletes it.
+ * 
+ */
+template<typename S, typename DS, typename B, typename T>
+void Base_Session<S,DS,B,T>::reset_all_backends() {
+	B *mybe;
+	while(mybes->len) {
+		mybe=(B *)mybes->remove_index_fast(0);
+		mybe->reset();
+		delete mybe;
+	}
+};

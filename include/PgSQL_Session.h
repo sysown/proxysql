@@ -394,7 +394,7 @@ public:
 	int FindOneActiveTransaction(bool check_savepoint = false);
 	unsigned long long IdleTime();
 
-	void reset_all_backends();
+	//void reset_all_backends();
 	//void writeout();
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds);

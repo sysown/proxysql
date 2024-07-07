@@ -732,6 +732,7 @@ void PgSQL_Session::update_expired_conns(const vector<function<bool(PgSQL_Connec
 	}
 }
 
+#if 0
 void PgSQL_Session::reset_all_backends() {
 	PgSQL_Backend* mybe;
 	while (mybes->len) {
@@ -741,7 +742,6 @@ void PgSQL_Session::reset_all_backends() {
 	}
 };
 
-#if 0
 void PgSQL_Session::writeout() {
 	int tps = 10; // throttling per second , by default every 100ms
 	int total_written = 0;

@@ -822,6 +822,7 @@ void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connec
 	}
 }
 
+#if 0
 /**
  * @brief Reset all MySQL backends associated with this session.
  * 
@@ -838,7 +839,6 @@ void MySQL_Session::reset_all_backends() {
 	}
 };
 
-#if 0
 /**
  * @brief Writes data from the session to the network with optional throttling and flow control.
  *
