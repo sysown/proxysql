@@ -101,7 +101,7 @@ public:
 	bool is_select_NOT_for_update();
 };
 
-class PgSQL_Session : public Base_Session {
+class PgSQL_Session : public Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread> {
 private:
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
@@ -262,17 +262,17 @@ public:
 
 	unsigned long long idle_since;
 	unsigned long long transaction_started_at;
-#endif // 0
 
 	// pointers
 	PgSQL_Thread* thread;
+#endif // 0
 	Query_Processor_Output* qpo;
 	StatCounters* command_counters;
-	PgSQL_Backend* mybe;
 #if 0
+	PgSQL_Backend* mybe;
 	PtrArray* mybes;
-#endif // 0
 	PgSQL_Data_Stream* client_myds;
+#endif // 0
 	PgSQL_Data_Stream* server_myds;
 #if 0
 	/*
@@ -395,7 +395,7 @@ public:
 	unsigned long long IdleTime();
 
 	void reset_all_backends();
-	void writeout();
+	//void writeout();
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds);
 	bool handle_command_query_kill(PtrSize_t*);

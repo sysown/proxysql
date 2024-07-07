@@ -1,4 +1,4 @@
-class Base_Session;
+template<typename S, typename DSi, typename B, typename T> class Base_Session;
 
 //// avoid loading definition of MySQL_Session and PgSQL_Session
 //#define __CLASS_MYSQL_SESSION_H
@@ -17,6 +17,7 @@ class StmtLongDataHandler;
 class MySQL_Session;
 class PgSQL_Session;
 
+template<typename S, typename DS, typename B, typename T>
 class Base_Session {
 	public:
 	Base_Session();
@@ -29,7 +30,10 @@ class Base_Session {
 	unsigned long long idle_since;
 	unsigned long long transaction_started_at;
 
+	T * thread;
+	B *mybe;
 	PtrArray *mybes;
+	DS * client_myds;
 	/*
 	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
 	 *  maintenance thread. These values will be used to release the retained connections in the specific
@@ -90,10 +94,14 @@ class Base_Session {
 
 
 
-	template <typename T> void init();
-	template<typename B, typename S> B * find_backend(int hostgroup_id);
-	template<typename B, typename S, typename D> B * create_backend(int, D * _myds = NULL);
-	template<typename B, typename S, typename D> B * find_or_create_backend(int, D * _myds = NULL);
+	void init();
+	//template<typename B> B * find_backend(int hostgroup_id);
+	//template<typename B> B * create_backend(int, DS * _myds = NULL);
+	//template<typename B> B * find_or_create_backend(int, DS * _myds = NULL);
+	B * find_backend(int hostgroup_id);
+	B * create_backend(int, DS * _myds = NULL);
+	B * find_or_create_backend(int, DS * _myds = NULL);
+	void writeout();
 };
 
 #endif // CLASS_BASE_SESSION_H

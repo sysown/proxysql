@@ -670,7 +670,7 @@ MySQL_Session::MySQL_Session() {
 
 	match_regexes=NULL;
 
-	init<MySQL_Session>(); // we moved this out to allow CHANGE_USER
+	init(); // we moved this out to allow CHANGE_USER
 
 	last_insert_id=0; // #1093
 
@@ -838,6 +838,7 @@ void MySQL_Session::reset_all_backends() {
 	}
 };
 
+#if 0
 /**
  * @brief Writes data from the session to the network with optional throttling and flow control.
  *
@@ -955,6 +956,7 @@ void MySQL_Session::writeout() {
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
+#endif // 0
 
 /**
  * @brief Handles COMMIT or ROLLBACK commands received from the client.
@@ -3479,7 +3481,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 		}
-		mybe=find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(current_hostgroup);
+		mybe=find_or_create_backend(current_hostgroup);
 		if (client_myds->myconn->local_stmts==NULL) {
 			client_myds->myconn->local_stmts=new MySQL_STMTs_local_v14(true);
 		}
@@ -3508,7 +3510,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			CurrentQuery.end_time=thread->curtime;
 			CurrentQuery.end();
 		} else {
-			mybe=find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(current_hostgroup);
+			mybe=find_or_create_backend(current_hostgroup);
 			status=PROCESSING_STMT_PREPARE;
 			mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
 			mybe->server_myds->wait_until=0;
@@ -3652,7 +3654,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 		}
-		mybe=find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(current_hostgroup);
+		mybe=find_or_create_backend(current_hostgroup);
 		status=PROCESSING_STMT_EXECUTE;
 		mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
 		mybe->server_myds->wait_until=0;
@@ -3984,7 +3986,7 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 		return handler_ret;
 	}
 
-	mybe=find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(current_hostgroup); // set a backend
+	mybe=find_or_create_backend(current_hostgroup); // set a backend
 	mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 	previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
@@ -4089,7 +4091,7 @@ void MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigne
 	// forward before receiving the command. This way the state machine will
 	// handle the command automatically.
 	current_hostgroup = previous_hostgroup;
-	mybe = find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(current_hostgroup); // set a backend
+	mybe = find_or_create_backend(current_hostgroup); // set a backend
 	mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
 	// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
 	// we are now transitioning to 'FAST_FORWARD'.
@@ -4398,7 +4400,7 @@ __get_pkts_from_client:
 											}
 										}
 									}
-									mybe=find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(current_hostgroup);
+									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
 									// set query retries
 									mybe->server_myds->query_retries_on_failure=mysql_thread___query_retries_on_failure;
@@ -4979,7 +4981,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 void MySQL_Session::housekeeping_before_pkts() {
 	if (mysql_thread___multiplexing) {
 		for (const int hg_id : hgs_expired_conns) {
-			MySQL_Backend* mybe = find_backend<MySQL_Backend,MySQL_Session>(hg_id);
+			MySQL_Backend* mybe = find_backend(hg_id);
 
 			if (mybe != nullptr) {
 				MySQL_Data_Stream* myds = mybe->server_myds;
@@ -7104,7 +7106,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// we need to try to execute it where the last write was successful
 			if (last_HG_affected_rows >= 0) {
 				MySQL_Backend * _mybe = NULL;
-				_mybe = find_backend<MySQL_Backend,MySQL_Session>(last_HG_affected_rows);
+				_mybe = find_backend(last_HG_affected_rows);
 				if (_mybe) {
 					if (_mybe->server_myds) {
 						if (_mybe->server_myds->myconn) {
@@ -7262,7 +7264,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	//if (session_type == PROXYSQL_SESSION_MYSQL) {
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
 		reset();
-		init<MySQL_Session>();
+		init();
 		if (client_authenticated) {
 			if (use_ldap_auth == false) {
 				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
@@ -7343,7 +7345,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 		// Re-initialize the session
 		reset();
-		init<MySQL_Session>();
+		init();
 
 		// Recover the relevant session values
 		this->default_hostgroup = default_hostgroup;
@@ -7406,7 +7408,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				gtid_uuid = qpo->min_gtid;
 				with_gtid = true;
 			} else if (qpo->gtid_from_hostgroup >= 0) {
-				_gtid_from_backend = find_backend<MySQL_Backend,MySQL_Session>(qpo->gtid_from_hostgroup);
+				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
 				if (_gtid_from_backend) {
 					if (_gtid_from_backend->gtid_uuid[0]) {
 						gtid_uuid = _gtid_from_backend->gtid_uuid;
@@ -8026,7 +8028,7 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 
 	// we create a brand new session, a new data stream, and attach the connection to it
 	MySQL_Session * new_sess = new MySQL_Session();
-	new_sess->mybe = new_sess->find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(mc->parent->myhgc->hid);
+	new_sess->mybe = new_sess->find_or_create_backend(mc->parent->myhgc->hid);
 
 	new_myds = new_sess->mybe->server_myds;
 	new_myds->attach_connection(mc);
@@ -8435,7 +8437,7 @@ void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection() {
 		// if we've reached this point, it means that warning was found in the previous query, but the
 		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and 
 		// return connection back to the connection pool.
-		MySQL_Backend* _mybe = find_backend<MySQL_Backend,MySQL_Session>(warning_in_hg);
+		MySQL_Backend* _mybe = find_backend(warning_in_hg);
 		if (_mybe) {
 			MySQL_Data_Stream* myds = _mybe->server_myds;
 			if (myds && myds->myconn) {

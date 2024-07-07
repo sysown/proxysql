@@ -5,8 +5,23 @@
 #include "PgSQL_Data_Stream.h"
 
 // Explicitly instantiate the required template class and member functions
-template void Base_Session::init<MySQL_Session>();
-template void Base_Session::init<PgSQL_Session>();
+template void Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::init();
+template void Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::init();
+
+template Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::Base_Session();
+template Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::Base_Session();
+template Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::~Base_Session();
+template Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::~Base_Session();
+
+//template Base_Session<MySQL_Session,MySQL_Data_Stream>::Base_Session();
+//emplate Base_Session<PgSQL_Session,PgSQL_Data_Stream>::Base_Session();
+
+//template void Base_Session::init<MySQL_Session>();
+//template void Base_Session::init<PgSQL_Session>();
+
+template MySQL_Backend * Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::find_backend(int);
+template PgSQL_Backend * Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::find_backend(int);
+/*
 template MySQL_Backend * Base_Session::find_backend<MySQL_Backend,MySQL_Session>(int);
 template PgSQL_Backend * Base_Session::find_backend<PgSQL_Backend,PgSQL_Session>(int);
 
@@ -14,28 +29,36 @@ template MySQL_Backend * Base_Session::create_backend<MySQL_Backend,MySQL_Sessio
 template PgSQL_Backend * Base_Session::create_backend<PgSQL_Backend,PgSQL_Session,PgSQL_Data_Stream>(int, PgSQL_Data_Stream *);
 template MySQL_Backend * Base_Session::find_or_create_backend<MySQL_Backend,MySQL_Session,MySQL_Data_Stream>(int, MySQL_Data_Stream *);
 template PgSQL_Backend * Base_Session::find_or_create_backend<PgSQL_Backend,PgSQL_Session,PgSQL_Data_Stream>(int, PgSQL_Data_Stream *);
+*/
+template MySQL_Backend * Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::find_or_create_backend(int, MySQL_Data_Stream *);
+template PgSQL_Backend * Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::find_or_create_backend(int, PgSQL_Data_Stream *);
 
-Base_Session::Base_Session() {
+template void Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::writeout();
+template void Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::writeout();
+
+template<typename S, typename DS, typename B, typename T>
+Base_Session<S,DS,B,T>::Base_Session() {
 };
 
-Base_Session::~Base_Session() {
+template<typename S, typename DS, typename B, typename T>
+Base_Session<S,DS,B,T>::~Base_Session() {
 };
 
-template<typename T>
-void Base_Session::init() {
+template<typename S, typename DS, typename B, typename T>
+void Base_Session<S,DS,B,T>::init() {
 	transaction_persistent_hostgroup = -1;
 	transaction_persistent = false;
 	mybes = new PtrArray(4);
 	// Conditional initialization based on derived class
-	if constexpr (std::is_same_v<T, MySQL_Session>) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		sess_STMTs_meta = new MySQL_STMTs_meta();
 		SLDH = new StmtLongDataHandler();
 	}
 };
 
 
-template<typename B, typename S>
-B * Base_Session::find_backend(int hostgroup_id) {
+template<typename S, typename DS, typename B, typename T>
+B * Base_Session<S,DS,B,T>::find_backend(int hostgroup_id) {
 	B *_mybe;
 	unsigned int i;
 	for (i=0; i < mybes->len; i++) {
@@ -58,15 +81,15 @@ B * Base_Session::find_backend(int hostgroup_id) {
  * @param _myds The MySQL data stream associated with the backend.
  * @return A pointer to the newly created MySQL_Backend object.
  */
-template<typename B, typename S, typename D>
-B * Base_Session::create_backend(int hostgroup_id, D *_myds) {
+template<typename S, typename DS, typename B, typename T>
+B * Base_Session<S,DS,B,T>::create_backend(int hostgroup_id, DS *_myds) {
 	B *_mybe = new B();
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	_mybe->hostgroup_id=hostgroup_id;
 	if (_myds) {
 		_mybe->server_myds=_myds;
 	} else {
-		_mybe->server_myds = new D();
+		_mybe->server_myds = new DS();
 		_mybe->server_myds->DSS=STATE_NOT_INITIALIZED;
 		_mybe->server_myds->init(MYDS_BACKEND_NOT_CONNECTED, static_cast<S*>(this), 0);
 	}
@@ -87,11 +110,167 @@ B * Base_Session::create_backend(int hostgroup_id, D *_myds) {
  * @param _myds The MySQL data stream associated with the backend.
  * @return A pointer to the MySQL_Backend object found or created.
  */
-template<typename B, typename S, typename D>
-B * Base_Session::find_or_create_backend(int hostgroup_id, D *_myds) {
-	B * _mybe = find_backend<B,S>(hostgroup_id);
+template<typename S, typename DS, typename B, typename T>
+B * Base_Session<S,DS,B,T>::find_or_create_backend(int hostgroup_id, DS *_myds) {
+	B * _mybe = find_backend(hostgroup_id);
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	// The pointer to the found or newly created backend is returned.
-	return ( _mybe ? _mybe : create_backend<B,S,D>(hostgroup_id, _myds) );
+	return ( _mybe ? _mybe : create_backend(hostgroup_id, _myds) );
 };
 
+/**
+ * @brief Writes data from the session to the network with optional throttling and flow control.
+ *
+ * The writeout() function in the MySQL_Session class is responsible for writing data from the session to the network.
+ * It supports throttling, which limits the rate at which data is sent to the client. Throttling is controlled by the
+ * mysql_thread___throttle_max_bytes_per_second_to_client configuration parameter. If throttling is disabled (the parameter
+ * is set to 0), the function bypasses throttling.
+ *
+ * This function first ensures that any pending data in the session's data stream (client_myds) is written to the network.
+ * This ensures that the network buffers are emptied, allowing new data to be sent.
+ *
+ * After writing data to the network, the function checks if flow control is necessary. If the total amount of data written
+ * exceeds the maximum allowed per call (mwpl), or if the data is sent too quickly, the function pauses writing for a brief
+ * period to control the flow of data.
+ *
+ * If throttling is enabled, the function adjusts the throttle based on the amount of data written and the configured maximum
+ * bytes per second. If the current throughput exceeds the configured limit, the function increases the pause duration to
+ * regulate the flow of data.
+ *
+ * Finally, if the session has a backend associated with it (mybe), and the backend has a server data stream (server_myds),
+ * the function also writes data from the server data stream to the network.
+ *
+ * @note This function assumes that necessary session and network structures are properly initialized.
+ *
+ * @see mysql_thread___throttle_max_bytes_per_second_to_client
+ * @see MySQL_Session::client_myds
+ * @see MySQL_Session::mybe
+ * @see MySQL_Backend::server_myds
+ */
+
+template<typename S, typename DS, typename B, typename T>
+void Base_Session<S,DS,B,T>::writeout() {
+	int tps = 10; // throttling per second , by default every 100ms
+	int total_written = 0;
+	unsigned long long last_sent_=0;
+	int tmbpstc = 0; // throttle_max_bytes_per_second_to_client
+	if constexpr (std::is_same<S, MySQL_Session>::value) {
+		tmbpstc = mysql_thread___throttle_max_bytes_per_second_to_client;
+	} else if constexpr (std::is_same<S, PgSQL_Session>::value) {
+		tmbpstc = pgsql_thread___throttle_max_bytes_per_second_to_client;
+	} else {
+		assert(0);
+	}
+	bool disable_throttle = tmbpstc == 0;
+	int mwpl = tmbpstc; // max writes per call
+	mwpl = mwpl/tps;
+	// logic to disable throttling
+	if constexpr (std::is_same<S, MySQL_Session>::value) {
+		if (session_type!=PROXYSQL_SESSION_MYSQL) {
+			disable_throttle = true;
+		}
+	}
+	if constexpr (std::is_same<S, PgSQL_Session>::value) {
+		if (session_type != PROXYSQL_SESSION_PGSQL) {
+			disable_throttle = true;
+		}
+	}
+	if (client_myds && thread->curtime >= client_myds->pause_until) {
+		if (mirror==false) {
+			bool runloop=false;
+			if (client_myds->mypolls) {
+				last_sent_ = client_myds->mypolls->last_sent[client_myds->poll_fds_idx];
+			}
+			int retbytes=client_myds->write_to_net_poll();
+			total_written+=retbytes;
+			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+				runloop=true;
+			}
+			while (runloop && (disable_throttle || total_written < mwpl)) {
+				runloop=false; // the default
+				client_myds->array2buffer_full();
+				struct pollfd fds;
+				fds.fd=client_myds->fd;
+				fds.events=POLLOUT;
+				fds.revents=0;
+				int retpoll=poll(&fds, 1, 0);
+				if (retpoll>0) {
+					if (fds.revents==POLLOUT) {
+						retbytes=client_myds->write_to_net_poll();
+						total_written+=retbytes;
+						if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+							runloop=true;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// flow control
+	if (!disable_throttle && total_written > 0) {
+		if (total_written > mwpl) {
+			unsigned long long add_ = 1000000 / tps + 1000000 / tps * ((unsigned long long)total_written - (unsigned long long)mwpl) / mwpl;
+			pause_until = thread->curtime + add_;
+			client_myds->remove_pollout();
+			client_myds->pause_until = thread->curtime + add_;
+		}
+		else {
+			if (total_written >= QUEUE_T_DEFAULT_SIZE) {
+				unsigned long long time_diff = thread->curtime - last_sent_;
+				if (time_diff == 0) { // sending data really too fast!
+					unsigned long long add_ = 1000000 / tps + 1000000 / tps * ((unsigned long long)total_written - (unsigned long long)mwpl) / mwpl;
+					pause_until = thread->curtime + add_;
+					client_myds->remove_pollout();
+					client_myds->pause_until = thread->curtime + add_;
+				}
+				else {
+					float current_Bps = (float)total_written * 1000 * 1000 / time_diff;
+					if (current_Bps > tmbpstc) {
+						unsigned long long add_ = 1000000 / tps;
+						pause_until = thread->curtime + add_;
+						assert(pause_until > thread->curtime);
+						client_myds->remove_pollout();
+						client_myds->pause_until = thread->curtime + add_;
+					}
+				}
+			}
+		}
+	}
+	if (mybe) {
+		if (mybe->server_myds) mybe->server_myds->write_to_net_poll();
+	}
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this); 
+}
+
+#if 0
+void MySQL_Session::writeout() {
+	if (client_myds) client_myds->array2buffer_full();
+	if (mybe && mybe->server_myds && mybe->server_myds->myds_type==MYDS_BACKEND) {
+		if (session_type==PROXYSQL_SESSION_MYSQL) {
+			if (mybe->server_myds->net_failure==false) {
+				if (mybe->server_myds->poll_fds_idx>-1) { // NOTE: attempt to force writes
+					mybe->server_myds->array2buffer_full();
+				}
+			}
+		} else {
+			mybe->server_myds->array2buffer_full();
+		}
+	}
+
+
+void PgSQL_Session::writeout() {
+	if (client_myds) client_myds->array2buffer_full();
+	if (mybe && mybe->server_myds && mybe->server_myds->myds_type == MYDS_BACKEND) {
+		if (session_type == PROXYSQL_SESSION_PGSQL) {
+			if (mybe->server_myds->net_failure == false) {
+				if (mybe->server_myds->poll_fds_idx > -1) { // NOTE: attempt to force writes
+					mybe->server_myds->array2buffer_full();
+				}
+			}
+		}
+		else {
+			mybe->server_myds->array2buffer_full();
+		}
+	}
+#endif // 0
