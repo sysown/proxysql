@@ -12,6 +12,11 @@ template<typename S, typename DSi, typename B, typename T> class Base_Session;
 #ifndef CLASS_BASE_SESSION_H
 #define CLASS_BASE_SESSION_H
 
+#ifndef PROXYJSON
+#define PROXYJSON
+namespace nlohmann { class json; }
+#endif // PROXYJSON
+
 class MySQL_STMTs_meta;
 class StmtLongDataHandler;
 class MySQL_Session;
@@ -21,7 +26,7 @@ template<typename S, typename DS, typename B, typename T>
 class Base_Session {
 	public:
 	Base_Session();
-	~Base_Session();
+	virtual ~Base_Session();
 
 	// uint64_t
 	unsigned long long start_time;
@@ -102,6 +107,10 @@ class Base_Session {
 	B * create_backend(int, DS * _myds = NULL);
 	B * find_or_create_backend(int, DS * _myds = NULL);
 	void writeout();
+	void return_proxysql_internal(PtrSize_t* pkt);
+	virtual void generate_proxysql_internal_session_json(nlohmann::json &) = 0;
+	virtual void RequestEnd(DS *) = 0;
+	virtual void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) = 0;
 };
 
 #endif // CLASS_BASE_SESSION_H

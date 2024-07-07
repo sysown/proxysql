@@ -147,7 +147,7 @@ private:
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
-	void return_proxysql_internal(PtrSize_t*);
+	//void return_proxysql_internal(PtrSize_t*);
 	bool handler_special_queries(PtrSize_t*);
 	bool handler_special_queries_STATUS(PtrSize_t*);
 	/**
@@ -179,7 +179,7 @@ private:
 	 * @param myds If not null, should point to a PgSQL_Data_Stream (backend connection) which connection status
 	 *   should be updated, and previous query resources cleanup.
 	 */
-	void RequestEnd(PgSQL_Data_Stream*);
+	void RequestEnd(PgSQL_Data_Stream*) override;
 	void LogQuery(PgSQL_Data_Stream*);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
@@ -373,7 +373,7 @@ public:
 	//PgSQL_Backend* create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 	//PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 
-	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false);
+	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) override;
 	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Connection* myconn);
 	unsigned int NumActiveTransactions(bool check_savpoint = false);
@@ -413,7 +413,7 @@ public:
 	 *   params.
 	 */
 	void finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool);
-	void generate_proxysql_internal_session_json(nlohmann::json&);
+	void generate_proxysql_internal_session_json(nlohmann::json&) override;
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool*);
 	bool has_any_backend();

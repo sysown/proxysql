@@ -1,8 +1,14 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "Base_Session.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
+
+using json = nlohmann::json;
 
 // Explicitly instantiate the required template class and member functions
 template void Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::init();
@@ -35,6 +41,9 @@ template PgSQL_Backend * Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Back
 
 template void Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::writeout();
 template void Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::writeout();
+
+template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::return_proxysql_internal(_PtrSize_t*);
+template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::return_proxysql_internal(_PtrSize_t*);
 
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::Base_Session() {
@@ -274,3 +283,43 @@ void PgSQL_Session::writeout() {
 		}
 	}
 #endif // 0
+
+
+template<typename S, typename DS, typename B, typename T>
+void Base_Session<S,DS,B,T>::return_proxysql_internal(PtrSize_t* pkt) {
+	unsigned int l = 0;
+	l = strlen((char*)"PROXYSQL INTERNAL SESSION");
+	if (pkt->size == (5 + l) && strncasecmp((char*)"PROXYSQL INTERNAL SESSION", (char*)pkt->ptr + 5, l) == 0) {
+		json j;
+		generate_proxysql_internal_session_json(j);
+		std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
+		SQLite3_result* resultset = new SQLite3_result(1);
+		resultset->add_column_definition(SQLITE_TEXT, "session_info");
+		char* pta[1];
+		pta[0] = (char*)s.c_str();
+		resultset->add_row(pta);
+		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+		delete resultset;
+		l_free(pkt->size, pkt->ptr);
+		return;
+	}
+	// default
+	client_myds->DSS = STATE_QUERY_SENT_NET;
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1064,(char *)"42000",(char *)"Unknown PROXYSQL INTERNAL command",true);
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		client_myds->myprot.generate_error_packet(true, true, "Unknown PROXYSQL INTERNAL command", PGSQL_ERROR_CODES::ERRCODE_SYNTAX_ERROR, false, true);
+	} else {
+		assert(0);
+	}
+	if (mirror == false) {
+		RequestEnd(NULL);
+	}
+	else {
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+	}
+	l_free(pkt->size, pkt->ptr);
+}
+

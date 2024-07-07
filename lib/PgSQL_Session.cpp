@@ -1256,6 +1256,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	}
 }
 
+#if 0
 void PgSQL_Session::return_proxysql_internal(PtrSize_t* pkt) {
 	unsigned int l = 0;
 	l = strlen((char*)"PROXYSQL INTERNAL SESSION");
@@ -1286,6 +1287,7 @@ void PgSQL_Session::return_proxysql_internal(PtrSize_t* pkt) {
 	}
 	l_free(pkt->size, pkt->ptr);
 }
+#endif // 0
 
 /**
  * @brief Handles special queries executed by the STATUS command in pgsql cli .
