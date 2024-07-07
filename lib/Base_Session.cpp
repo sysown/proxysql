@@ -180,10 +180,13 @@ void Base_Session<S,DS,B,T>::writeout() {
 	int total_written = 0;
 	unsigned long long last_sent_=0;
 	int tmbpstc = 0; // throttle_max_bytes_per_second_to_client
+	enum proxysql_session_type _tmp_session_type_cmp1;
 	if constexpr (std::is_same<S, MySQL_Session>::value) {
 		tmbpstc = mysql_thread___throttle_max_bytes_per_second_to_client;
+		_tmp_session_type_cmp1 = PROXYSQL_SESSION_MYSQL;
 	} else if constexpr (std::is_same<S, PgSQL_Session>::value) {
 		tmbpstc = pgsql_thread___throttle_max_bytes_per_second_to_client;
+		_tmp_session_type_cmp1 = PROXYSQL_SESSION_PGSQL;
 	} else {
 		assert(0);
 	}
@@ -191,16 +194,25 @@ void Base_Session<S,DS,B,T>::writeout() {
 	int mwpl = tmbpstc; // max writes per call
 	mwpl = mwpl/tps;
 	// logic to disable throttling
-	if constexpr (std::is_same<S, MySQL_Session>::value) {
-		if (session_type!=PROXYSQL_SESSION_MYSQL) {
-			disable_throttle = true;
+
+	if (session_type != _tmp_session_type_cmp1) {
+		disable_throttle = true;
+	}
+
+	if (client_myds) client_myds->array2buffer_full();
+	if (mybe && mybe->server_myds && mybe->server_myds->myds_type == MYDS_BACKEND) {
+		if (session_type == _tmp_session_type_cmp1) {
+			if (mybe->server_myds->net_failure == false) {
+				if (mybe->server_myds->poll_fds_idx > -1) { // NOTE: attempt to force writes
+					mybe->server_myds->array2buffer_full();
+				}
+			}
+		}
+		else {
+			mybe->server_myds->array2buffer_full();
 		}
 	}
-	if constexpr (std::is_same<S, PgSQL_Session>::value) {
-		if (session_type != PROXYSQL_SESSION_PGSQL) {
-			disable_throttle = true;
-		}
-	}
+
 	if (client_myds && thread->curtime >= client_myds->pause_until) {
 		if (mirror==false) {
 			bool runloop=false;
