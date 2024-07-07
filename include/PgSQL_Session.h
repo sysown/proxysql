@@ -161,7 +161,7 @@ private:
 	 * @return 'true' if the packet is intercepted and never forwarded to the client, 'false' otherwise.
 	 */
 	bool handler_CommitRollback(PtrSize_t*);
-	bool handler_SetAutocommit(PtrSize_t*);
+	//bool handler_SetAutocommit(PtrSize_t*);
 	/**
 	 * @brief Should execute most of the commands executed when a request is finalized.
 	 * @details Cleanup of current session state, and required operations to the supplied 'PgSQL_Data_Stream'

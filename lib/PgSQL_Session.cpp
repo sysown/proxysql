@@ -902,6 +902,7 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 }
 
 
+#if 0
 bool PgSQL_Session::handler_SetAutocommit(PtrSize_t* pkt) {
 	autocommit_handled = false;
 	sending_set_autocommit = false;
@@ -1059,6 +1060,7 @@ bool PgSQL_Session::handler_SetAutocommit(PtrSize_t* pkt) {
 	}
 	return false;
 }
+#endif // 0
 
 void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	char buff[32];
@@ -1371,9 +1373,9 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt) {
 		return true;
 	}
 	if (locked_on_hostgroup == -1) {
-		if (handler_SetAutocommit(pkt) == true) {
-			return true;
-		}
+		//if (handler_SetAutocommit(pkt) == true) {
+		//	return true;
+		//}
 		if (handler_CommitRollback(pkt) == true) {
 			return true;
 		}
