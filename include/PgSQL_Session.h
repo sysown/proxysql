@@ -189,7 +189,7 @@ private:
 
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_ldap_user_variable();
-	bool handler_again___verify_backend_autocommit();
+	//bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
@@ -201,7 +201,7 @@ private:
 	bool handler_again___status_CHANGING_SCHEMA(int*);
 	bool handler_again___status_CONNECTING_SERVER(int*);
 	bool handler_again___status_CHANGING_USER_SERVER(int*);
-	bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
+	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
 	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
 	bool handler_again___multiple_statuses(int* rc);
 	//void init();

@@ -2101,6 +2101,7 @@ bool PgSQL_Session::handler_again___verify_ldap_user_variable() {
 	return false;
 }
 
+#if 0
 bool PgSQL_Session::handler_again___verify_backend_autocommit() {
 	if (sending_set_autocommit) {
 		// if sending_set_autocommit==true, the next query proxysql is going
@@ -2179,6 +2180,7 @@ bool PgSQL_Session::handler_again___verify_backend_autocommit() {
 	}
 	return false;
 }
+#endif // 0
 
 bool PgSQL_Session::handler_again___verify_backend_user_schema() {
 	PgSQL_Data_Stream* myds = mybe->server_myds;
@@ -3187,6 +3189,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_USER_SERVER(int* _rc) {
 	return false;
 }
 
+#if 0
 bool PgSQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int* _rc) {
 	//fprintf(stderr,"CHANGING_AUTOCOMMIT\n");
 	assert(mybe->server_myds->myconn);
@@ -3275,6 +3278,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int* _rc) {
 	}
 	return false;
 }
+#endif // 0
 
 // this function was inline inside PgSQL_Session::get_pkts_from_client
 // where:
@@ -5515,9 +5519,9 @@ bool PgSQL_Session::handler_again___multiple_statuses(int* rc) {
 	case CHANGING_USER_SERVER:
 		ret = handler_again___status_CHANGING_USER_SERVER(rc);
 		break;
-	case CHANGING_AUTOCOMMIT:
-		ret = handler_again___status_CHANGING_AUTOCOMMIT(rc);
-		break;
+//	case CHANGING_AUTOCOMMIT:
+//		ret = handler_again___status_CHANGING_AUTOCOMMIT(rc);
+//		break;
 	case CHANGING_SCHEMA:
 		ret = handler_again___status_CHANGING_SCHEMA(rc);
 		break;
