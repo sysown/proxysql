@@ -726,6 +726,12 @@ int MySQL_Data_Stream::read_from_net() {
 				// it seems we end in shut_soft() anyway
 			}
 		}
+		if ( (revents & POLLHUP) ) {
+			// this is a final check
+			// Only if the amount of data read is 0 or less, then we check POLLHUP
+			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d\n", sess, this, revents, r);
+			shut_soft();
+		}
 	} else {
 		queue_w(queueIN,r);
 		bytes_info.bytes_recv+=r;
