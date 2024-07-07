@@ -207,11 +207,13 @@ private:
 	//void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t*);
+#if 0
 	/**
 	 * @brief Performs the required housekeeping operations over the session and its connections before
 	 *  performing any processing on received client packets.
 	 */
 	void housekeeping_before_pkts();
+#endif // 0
 	int get_pkts_from_client(bool&, PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
@@ -397,7 +399,7 @@ public:
 	//void reset_all_backends();
 	//void writeout();
 	void Memory_Stats();
-	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds);
+	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) override;
 	bool handle_command_query_kill(PtrSize_t*);
 	void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
 	/**

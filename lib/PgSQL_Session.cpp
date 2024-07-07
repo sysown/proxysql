@@ -4935,6 +4935,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA() {
 	*/
 }
 
+#if 0
 void PgSQL_Session::housekeeping_before_pkts() {
 	if (pgsql_thread___multiplexing) {
 		for (const int hg_id : hgs_expired_conns) {
@@ -4963,6 +4964,7 @@ void PgSQL_Session::housekeeping_before_pkts() {
 		}
 	}
 }
+#endif // 0
 
 // this function was inline
 void PgSQL_Session::handler_rc0_Process_GTID(PgSQL_Connection* myconn) {

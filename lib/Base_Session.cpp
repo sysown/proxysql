@@ -59,6 +59,9 @@ template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQ
 template bool Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::handler_special_queries_STATUS(_PtrSize_t*);
 template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::handler_special_queries_STATUS(_PtrSize_t*);
 
+template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::housekeeping_before_pkts();
+template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::housekeeping_before_pkts();
+
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::Base_Session() {
 };
@@ -468,4 +471,59 @@ bool Base_Session<S,DS,B,T>::handler_special_queries_STATUS(PtrSize_t* pkt) {
 		}
 	}
 	return false;
+}
+
+
+
+/**
+ * @brief Perform housekeeping tasks before processing packets.
+ *
+ * This function is responsible for performing necessary housekeeping tasks
+ * before processing packets. These tasks include handling expired connections
+ * for multiplexing scenarios. If multiplexing is enabled, it iterates over
+ * the list of expired backend connections and either returns them to the connection pool
+ * or destroys them based on certain conditions.
+ *
+ * @note This function assumes that the `hgs_expired_conns` vector contains the IDs
+ *       of the backend connections that have expired.
+ *
+ * @return None.
+ */
+template<typename S, typename DS, typename B, typename T>
+void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
+	bool thread___multiplexing = true;
+	int thread___reset_connection_algorithm = 0;
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+		thread___multiplexing = mysql_thread___multiplexing;
+		thread___reset_connection_algorithm = mysql_thread___reset_connection_algorithm;
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		thread___multiplexing = pgsql_thread___multiplexing;
+		thread___reset_connection_algorithm = pgsql_thread___reset_connection_algorithm;
+	} else {
+		assert(0);
+	}
+	if (thread___multiplexing) {
+		for (const int hg_id : hgs_expired_conns) {
+			B * mybe = find_backend(hg_id);
+
+			if (mybe != nullptr) {
+				DS * myds = mybe->server_myds;
+				// FIXME: NOTE: the logic for autocommit is relevant only for MYSQL
+				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+					if (thread___reset_connection_algorithm == 2) {
+						create_new_session_and_reset_connection(myds);
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
+					}
+				} else {
+					myds->return_MySQL_Connection_To_Pool();
+				}
+			}
+		}
+		// We are required to perform a cleanup after consuming the elements, thus preventing any subsequent
+		// 'handler' call to perform recomputing of the already processed elements.
+		if (hgs_expired_conns.empty() == false) {
+			hgs_expired_conns.clear();
+		}
+	}
 }

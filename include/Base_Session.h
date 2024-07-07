@@ -114,6 +114,12 @@ class Base_Session {
 	bool has_any_backend();
 	void reset_all_backends();
 	bool handler_special_queries_STATUS(PtrSize_t*);
+	/**
+	 * @brief Performs the required housekeeping operations over the session and its connections before
+	 *  performing any processing on received client packets.
+	 */
+	void housekeeping_before_pkts();
+	virtual void create_new_session_and_reset_connection(DS *_myds) = 0;
 };
 
 #endif // CLASS_BASE_SESSION_H

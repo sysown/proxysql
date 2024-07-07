@@ -4966,6 +4966,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 */
 }
 
+
+#if 0
 /**
  * @brief Perform housekeeping tasks before processing packets.
  *
@@ -5006,6 +5008,7 @@ void MySQL_Session::housekeeping_before_pkts() {
 		}
 	}
 }
+#endif // 0
 
 // this function was inline
 /**
