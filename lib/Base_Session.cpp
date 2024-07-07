@@ -8,6 +8,11 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
 
+#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
+#define SELECT_DB_USER_LEN 33
+#define SELECT_CHARSET_STATUS "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
+#define SELECT_CHARSET_STATUS_LEN 115
+
 using json = nlohmann::json;
 
 // Explicitly instantiate the required template class and member functions
@@ -50,6 +55,9 @@ template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQ
 
 template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::reset_all_backends();
 template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::reset_all_backends();
+
+template bool Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::handler_special_queries_STATUS(_PtrSize_t*);
+template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::handler_special_queries_STATUS(_PtrSize_t*);
 
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::Base_Session() {
@@ -370,3 +378,94 @@ void Base_Session<S,DS,B,T>::reset_all_backends() {
 		delete mybe;
 	}
 };
+
+
+
+/**
+ * @brief Handles special queries executed by the STATUS command in mysql cli .
+ *   Specifically:
+ *   "select DATABASE(), USER() limit 1"
+ *   "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
+ *   See Github issues 4396 and 4426
+ *
+ * @param PtrSize_t The packet from the client
+ *
+ * @return True if the queries are handled
+ *
+ * @note even if this function uses templates, perhaps is relevant only for MySQL client and not PostgreSQL
+ */
+template<typename S, typename DS, typename B, typename T>
+bool Base_Session<S,DS,B,T>::handler_special_queries_STATUS(PtrSize_t* pkt) {
+	if (pkt->size == (SELECT_DB_USER_LEN + 5)) {
+		if (strncasecmp(SELECT_DB_USER, (char*)pkt->ptr + 5, SELECT_DB_USER_LEN) == 0) {
+			SQLite3_result* resultset = new SQLite3_result(2);
+			resultset->add_column_definition(SQLITE_TEXT, "DATABASE()");
+			resultset->add_column_definition(SQLITE_TEXT, "USER()");
+			char* pta[2];
+			pta[0] = client_myds->myconn->userinfo->username;
+			pta[1] = client_myds->myconn->userinfo->schemaname;
+			resultset->add_row(pta);
+			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+			delete resultset;
+			l_free(pkt->size, pkt->ptr);
+			return true;
+		}
+	}
+
+	if (pkt->size == (SELECT_CHARSET_STATUS_LEN + 5)) {
+		if (strncasecmp(SELECT_CHARSET_STATUS, (char*)pkt->ptr + 5, SELECT_CHARSET_STATUS_LEN) == 0) {
+			SQLite3_result* resultset = new SQLite3_result(4);
+			resultset->add_column_definition(SQLITE_TEXT, "@@character_set_client");
+			resultset->add_column_definition(SQLITE_TEXT, "@@character_set_connection");
+			resultset->add_column_definition(SQLITE_TEXT, "@@character_set_server");
+			resultset->add_column_definition(SQLITE_TEXT, "@@character_set_database");
+
+			// here we do a bit back and forth to and from JSON to reuse existing code instead of writing new code.
+			// This is not great for performance, but this query is rarely executed.
+			string vals[4];
+			json j = {};
+			json& jc = j["conn"];
+			if constexpr (std::is_same_v<S, MySQL_Session>) {
+				MySQL_Connection * conn = client_myds->myconn;
+				conn->variables[SQL_CHARACTER_SET_CLIENT].fill_client_internal_session(jc, SQL_CHARACTER_SET_CLIENT);
+				conn->variables[SQL_CHARACTER_SET_CONNECTION].fill_client_internal_session(jc, SQL_CHARACTER_SET_CONNECTION);
+				conn->variables[SQL_CHARACTER_SET_DATABASE].fill_client_internal_session(jc, SQL_CHARACTER_SET_DATABASE);
+			} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+				PgSQL_Connection * conn = client_myds->myconn;
+				conn->variables[SQL_CHARACTER_SET_CLIENT].fill_client_internal_session(jc, SQL_CHARACTER_SET_CLIENT);
+				conn->variables[SQL_CHARACTER_SET_CONNECTION].fill_client_internal_session(jc, SQL_CHARACTER_SET_CONNECTION);
+				conn->variables[SQL_CHARACTER_SET_DATABASE].fill_client_internal_session(jc, SQL_CHARACTER_SET_DATABASE);
+			} else {
+				assert(0);
+			}
+
+			// @@character_set_client
+			vals[0] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_CLIENT].internal_variable_name];
+			// @@character_set_connection
+			vals[1] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_CONNECTION].internal_variable_name];
+			// @@character_set_server
+			if constexpr (std::is_same_v<S, MySQL_Session>) {
+				vals[2] = string(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+			} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+				vals[2] = string(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+			} else {
+				assert(0);
+			}
+			// @@character_set_database
+			vals[3] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_DATABASE].internal_variable_name];
+
+			const char* pta[4];
+			for (int i = 0; i < 4; i++) {
+				pta[i] = vals[i].c_str();
+			}
+			resultset->add_row(pta);
+			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+			delete resultset;
+			l_free(pkt->size, pkt->ptr);
+			return true;
+		}
+	}
+	return false;
+}

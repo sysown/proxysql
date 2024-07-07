@@ -30,9 +30,9 @@ using json = nlohmann::json;
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
-#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
+//#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
 #define SELECT_DB_USER_LEN 33
-#define SELECT_CHARSET_STATUS "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
+//#define SELECT_CHARSET_STATUS "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
 #define SELECT_CHARSET_STATUS_LEN 115
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
 #define PROXYSQL_VERSION_COMMENT_LEN 81
@@ -1289,7 +1289,6 @@ void PgSQL_Session::return_proxysql_internal(PtrSize_t* pkt) {
 	}
 	l_free(pkt->size, pkt->ptr);
 }
-#endif // 0
 
 /**
  * @brief Handles special queries executed by the STATUS command in pgsql cli .
@@ -1355,6 +1354,7 @@ bool PgSQL_Session::handler_special_queries_STATUS(PtrSize_t* pkt) {
 	}
 	return false;
 }
+#endif // 0
 
 bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
