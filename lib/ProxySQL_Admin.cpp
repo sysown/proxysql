@@ -6041,9 +6041,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.web_port_old = variables.web_port;
 	variables.web_verbosity = 0;
 	variables.p_memory_metrics_interval = 61;
+	all_modules_started = false;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
-	all_modules_started = false;
 	debug_output = 1;
 	proxysql_set_admin_debug_output(debug_output);
 #endif /* DEBUG */
