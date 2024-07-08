@@ -415,6 +415,7 @@ PgSQL_Connection_Placeholder::PgSQL_Connection_Placeholder() {
 	}
 
 	options.client_flag = 0;
+	options.server_capabilities = 0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
 	options.last_set_autocommit=-1;	// -1 = never set
