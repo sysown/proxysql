@@ -3203,14 +3203,10 @@ handler_again:
 
 			const ExecStatusType exec_status_type = PQresultStatus(result.get());
 
-			if (exec_status_type != PGRES_BAD_RESPONSE &&
-				exec_status_type != PGRES_NONFATAL_ERROR &&
-				exec_status_type != PGRES_FATAL_ERROR) {
-				if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY /*| PGSQL_QUERY_RESULT_ERROR*/))) {
-					next_multi_statement_result(result.release());
-					next_event(ASYNC_USE_RESULT_START);
-					break;
-				}
+			if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR))) {
+				next_multi_statement_result(result.release());
+				next_event(ASYNC_USE_RESULT_START);
+				break;
 			}
 
 			switch (exec_status_type) {
@@ -4624,5 +4620,4 @@ void PgSQL_Connection::next_multi_statement_result(PGresult* result) {
 	pgsql_result = result;
 	// copy buffer to PSarrayOut
 	query_result->buffer_to_PSarrayOut();
-	async_exit_status = PG_EVENT_READ | PG_EVENT_WRITE;
 }

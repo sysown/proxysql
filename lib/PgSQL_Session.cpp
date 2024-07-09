@@ -4795,6 +4795,7 @@ handler_again:
 							myconn->query_result_reuse = myconn->query_result;
 							myconn->query_result = NULL;
 						}
+						NEXT_IMMEDIATE(PROCESSING_QUERY);
 						break;
 						// rc==3 , a multi statement query is still running
 						// start sending to frontend if pgsql_thread___threshold_resultset_size is reached
