@@ -749,6 +749,7 @@ PgSQL_SrvConnList::~PgSQL_SrvConnList() {
 	delete conns;
 }
 
+#if 0
 PgSQL_SrvList::PgSQL_SrvList(PgSQL_HGC *_myhgc) {
 	myhgc=_myhgc;
 	servers=new PtrArray();
@@ -777,6 +778,7 @@ void PgSQL_SrvList::remove(PgSQL_SrvC *s) {
 	assert(i>=0);
 	servers->remove_index_fast((unsigned int)i);
 }
+#endif // 0
 
 void PgSQL_SrvConnList::drop_all_connections() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Dropping all connections (%u total) on PgSQL_SrvConnList %p for server %s:%d , hostgroup=%d , status=%d\n", conns_length(), this, mysrvc->address, mysrvc->port, mysrvc->myhgc->hid, mysrvc->status);
@@ -924,6 +926,7 @@ PgSQL_SrvC::~PgSQL_SrvC() {
 	delete ConnectionsFree;
 }
 
+#if 0
 PgSQL_SrvList::~PgSQL_SrvList() {
 	myhgc=NULL;
 	while (servers->len) {
@@ -932,7 +935,7 @@ PgSQL_SrvList::~PgSQL_SrvList() {
 	}
 	delete servers;
 }
-
+#endif // 0
 
 PgSQL_HGC::PgSQL_HGC(int _hid) {
 	hid=_hid;

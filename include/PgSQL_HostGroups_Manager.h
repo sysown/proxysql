@@ -37,6 +37,7 @@ namespace nlohmann { class json; }
 
 #define MHM_PTHREAD_MUTEX
 
+#include "Base_HostGroups_Manager.h"
 
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
@@ -240,11 +241,15 @@ class PgSQL_SrvC {	// MySQL Server Container
 	}
 };
 
-class PgSQL_SrvList {	// MySQL Server List
+class PgSQL_SrvList: public BaseSrvList<PgSQL_HGC> {
+#if 0
 	private:
 	PgSQL_HGC *myhgc;
 	int find_idx(PgSQL_SrvC *);
+#endif // 0
 	public:
+	PgSQL_SrvList(PgSQL_HGC* hgc) : BaseSrvList<PgSQL_HGC>(hgc) {}
+#if 0
 	PtrArray *servers;
 	unsigned int cnt() { return servers->len; }
 	PgSQL_SrvList(PgSQL_HGC *);
@@ -252,6 +257,8 @@ class PgSQL_SrvList {	// MySQL Server List
 	void add(PgSQL_SrvC *);
 	void remove(PgSQL_SrvC *);
 	PgSQL_SrvC * idx(unsigned int i) {return (PgSQL_SrvC *)servers->index(i); }
+#endif // 0
+	friend class PgSQL_HGC;
 };
 
 class PgSQL_HGC {	// MySQL Host Group Container

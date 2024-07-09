@@ -1,5 +1,10 @@
-#ifndef __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
-#define __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
+template <typename HGC> class BaseSrvList;
+
+class MyHGC;
+class PgSQL_HGC;
+class MySrvC;
+class PgSQL_SrvC;
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -28,6 +33,11 @@
 namespace nlohmann { class json; }
 #endif // PROXYJSON
 
+#include <variant>
+
+#ifndef CLASS_BASE_HOSTGROUPS_MANAGER_H
+#define CLASS_BASE_HOSTGROUPS_MANAGER_H
+
 #ifdef DEBUG
 /* */
 //	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
@@ -35,9 +45,8 @@ namespace nlohmann { class json; }
 //#define STRESSTEST_POOL
 #endif // DEBUG
 
+#if 0
 #define MHM_PTHREAD_MUTEX
-
-#include "Base_HostGroups_Manager.h"
 
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
@@ -198,6 +207,7 @@ class MySrvConnList {
 	MySQL_Connection *index(unsigned int);
 };
 
+
 class MySrvC {	// MySQL Server Container
 	public:
 	MyHGC *myhgc;
@@ -274,33 +284,40 @@ private:
 	enum MySerStatus status;
 };
 
-class MySrvList: public BaseSrvList<MyHGC> { // MySQL Server List
-#if 0
-	private:
-	MyHGC *myhgc;
-	int find_idx(MySrvC *);
 #endif // 0
+
+template <typename HGC>
+class BaseSrvList {	// MySQL Server List
+	private:
+	HGC *myhgc;
+	using TypeSrvC = typename std::conditional<
+		 std::is_same_v<HGC, MyHGC>, MySrvC, PgSQL_SrvC
+	>::type;
+	int find_idx(TypeSrvC *);
 	public:
-	MySrvList(MyHGC* hgc) : BaseSrvList<MyHGC>(hgc) {}
-#if 0
 	PtrArray *servers;
 	unsigned int cnt() { return servers->len; }
-	MySrvList(MyHGC *);
-	~MySrvList();
-	void add(MySrvC *);
-	void remove(MySrvC *);
-	MySrvC * idx(unsigned int i) {return (MySrvC *)servers->index(i); }
-#endif // 0
+	BaseSrvList(HGC *);
+	~BaseSrvList();
+	void add(TypeSrvC *);
+	void remove(TypeSrvC *);
+	TypeSrvC * idx(unsigned int i) {return (TypeSrvC *)servers->index(i); }
+
+	friend class PgSQL_SrvList;
+	friend class PgSQL_HGC;
+
 };
 
-class MyHGC {	// MySQL Host Group Container
+
+template <typename HGC>
+class BaseHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
 	std::atomic<uint32_t> num_online_servers;
 	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
-	MySrvList *mysrvs;
+	BaseSrvList<HGC> *mysrvs;
 	struct { // this is a series of attributes specific for each hostgroup
 		char * init_connect;
 		char * comment;
@@ -331,9 +348,15 @@ class MyHGC {	// MySQL Host Group Container
 	int32_t get_monitor_slave_lag_when_null() const {
 		return attributes.configured == true && attributes.monitor_slave_lag_when_null != -1 ? attributes.monitor_slave_lag_when_null : mysql_thread___monitor_slave_lag_when_null;
 	}
-	MyHGC(int);
-	~MyHGC();
-	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+	BaseHGC(int);
+	virtual ~BaseHGC();
+	using TypeSrvC = typename std::conditional<
+		 std::is_same_v<HGC, MyHGC>, std::variant<MySrvC>, std::variant<PgSQL_SrvC>
+	>::type;
+	using TypeSess = typename std::conditional<
+		 std::is_same_v<HGC, MyHGC>, std::variant<MySQL_Session>, std::variant<PgSQL_Session>
+	>::type;
+	TypeSess *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, TypeSess *sess);
 	void refresh_online_server_count();
 	void log_num_online_server_count_error();
 	inline
@@ -343,6 +366,7 @@ class MyHGC {	// MySQL Host Group Container
 	}
 };
 
+#if 0
 class Group_Replication_Info {
 	public:
 	int writer_hostgroup;
@@ -1235,5 +1259,5 @@ private:
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };
 
-
-#endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
+#endif // 0
+#endif // CLASS_BASE_HOSTGROUPS_MANAGER_H

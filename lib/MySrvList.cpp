@@ -1,3 +1,4 @@
+#if 0
 #include "MySQL_HostGroups_Manager.h"
 
 class MySrvConnList;
@@ -44,3 +45,4 @@ MySrvList::~MySrvList() {
 	}
 	delete servers;
 }
+#endif // 0
