@@ -1704,9 +1704,9 @@ uint64_t PgSQL_HostGroups_Manager::get_pgsql_servers_checksum(SQLite3_result* ru
 	return table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
 }
 
+#if 0
 bool PgSQL_HostGroups_Manager::gtid_exists(PgSQL_SrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
 	bool ret = false;
-#if 0
 	pthread_rwlock_rdlock(&gtid_rwlock);
 	std::string s1 = mysrvc->address;
 	s1.append(":");
@@ -1724,12 +1724,10 @@ bool PgSQL_HostGroups_Manager::gtid_exists(PgSQL_SrvC *mysrvc, char * gtid_uuid,
 	}
 	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
 	pthread_rwlock_unlock(&gtid_rwlock);
-#endif // 0
 	return ret;
 }
 
 void PgSQL_HostGroups_Manager::generate_pgsql_gtid_executed_tables() {
-#if 0
 	pthread_rwlock_wrlock(&gtid_rwlock);
 	// first, set them all as active = false
 	std::unordered_map<string, PgSQL_GTID_Server_Data *>::iterator it = gtid_map.begin();
@@ -1803,8 +1801,8 @@ void PgSQL_HostGroups_Manager::generate_pgsql_gtid_executed_tables() {
 		gtid_map.erase(*it3);
 	}
 	pthread_rwlock_unlock(&gtid_rwlock);
-#endif // 0
 }
+#endif // 0
 
 void PgSQL_HostGroups_Manager::purge_pgsql_servers_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
@@ -2192,12 +2190,14 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 						if (gtid_trxid) {
+#if 0
 							if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								mysrvcCandidates[num_candidates]=mysrvc;
 								num_candidates++;
 							}
+#endif // 0
 						} else {
 							if (max_lag_ms >= 0) {
 								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
@@ -2260,12 +2260,14 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 									if (gtid_trxid) {
+#if 0
 										if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 											mysrvcCandidates[num_candidates]=mysrvc;
 											num_candidates++;
 										}
+#endif // 0
 									} else {
 										if (max_lag_ms >= 0) {
 											if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
@@ -2345,12 +2347,14 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 						// if a server is taken back online, consider it immediately
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 							if (gtid_trxid) {
+#if 0
 								if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									mysrvcCandidates[num_candidates]=mysrvc;
 									num_candidates++;
 								}
+#endif // 0
 							} else {
 								if (max_lag_ms >= 0) {
 									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
@@ -4233,8 +4237,10 @@ void PgSQL_HostGroups_Manager::p_update_metrics() {
 
 	// Update the *connection_pool* metrics
 	this->p_update_connection_pool();
+#if 0
 	// Update the *gtid_executed* metrics
 	this->p_update_pgsql_gtid_executed();
+#endif // 0
 }
 
 SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
@@ -4315,6 +4321,7 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 	return intsize;
 }
 
+#if 0
 PgSQL_Group_Replication_Info::PgSQL_Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	comment=NULL;
 	if (c) {
@@ -4492,7 +4499,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::get_stats_pgsql_gtid_executed() {
 	return result;
 }
 
-
+#endif // 0
 
 class MySQL_Errors_stats {
 	public:
@@ -4699,6 +4706,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
 	return result;
 }
 
+#if 0
 PgSQL_AWS_Aurora_Info::PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
 	comment=NULL;
 	if (c) {
@@ -4815,6 +4823,7 @@ bool PgSQL_AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, 
 	}
 	return ret;
 }
+#endif // 0
 
 /**
  * @brief Initializes the supplied 'PgSQL_HGC' with the specified 'hostgroup_settings'.
