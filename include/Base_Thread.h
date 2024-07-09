@@ -77,6 +77,15 @@ class Base_Thread {
 	template<typename T> void ProcessAllMyDS_BeforePoll();
 	template<typename T, typename S> void run_SetAllSession_ToProcess0();
 
+
+#if ENABLE_TIMER
+	// for now this is not accessible via Admin/Prometheus , thus useful only with gdb
+	struct {
+		TimerCount Sessions_Handlers;
+		TimerCount Connections_Handlers;
+	} Timers;
+#endif // ENABLE_TIMER
+
 	friend class MySQL_Thread;
 	friend class PgSQL_Thread;
 };

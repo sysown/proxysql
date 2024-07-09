@@ -1,4 +1,5 @@
-
+#ifndef PROXYSQL_MACROS_H
+#define PROXYSQL_MACROS_H
 #define strdup_null(__c) ( __c ? strdup(__c) : __c )
 #define char_malloc (char *)malloc
 #define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
@@ -65,3 +66,8 @@
 # define unlikely(x) !!(x)
 #endif
 #endif /* PROXYSQL_LIKELY */
+
+#ifndef ENABLE_TIMER
+#define ENABLE_TIMER false
+#endif // ENABLE_TIMER
+#endif // PROXYSQL_MACROS_H
