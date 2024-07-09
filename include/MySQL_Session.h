@@ -268,7 +268,6 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt);
 	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt);
 	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt);
-//	int handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq);
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);

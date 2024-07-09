@@ -5822,84 +5822,6 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-/*
-// this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
-// returned values:
-// 0 : no action
-// 1 : return false
-// 2 : return true
-int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq) {
-	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-	opt2->set_case_sensitive(false);
-	char *pattern=(char *)"(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_LOG_BIN *(?:|:)= *(\\d+) *(?:(|;|-- .*|#.*))$";
-	re2::RE2 *re=new RE2(pattern, *opt2);
-	int i;
-	int rc=RE2::PartialMatch(nq, *re, &i);
-	delete re;
-	delete opt2;
-	if (rc && ( i==0 || i==1) ) {
-		//fprintf(stderr,"sql_log_bin=%d\n", i);
-		if (i == 1) {
-			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "1"))
-				return 1;
-		}
-		else if (i == 0) {
-			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "0"))
-				return 1;
-		}
-
-#ifdef DEBUG
-		proxy_info("Setting SQL_LOG_BIN to %d\n", i);
-#endif
-#ifdef DEBUG
-		{
-			string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Setting SQL_LOG_BIN to %d for query: %s\n", i, nqn.c_str());
-		}
-#endif
-		// we recompute command_type instead of taking it from the calling function
-		unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
-		if (command_type == _MYSQL_COM_QUERY) {
-			client_myds->DSS=STATE_QUERY_SENT_NET;
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
-			RequestEnd(NULL);
-			l_free(pkt->size,pkt->ptr);
-			return 2;
-		}
-	} else {
-		int kq = 0;
-		kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"SET @@SESSION.SQL_LOG_BIN = @MYSQLDUMP_TEMP_LOG_BIN;" , CurrentQuery.QueryLength);
-#ifdef DEBUG
-		{
-			string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Setting SQL_LOG_BIN to %d for query: %s\n", i, nqn.c_str());
-		}
-#endif
-		if (kq == 0) {
-			client_myds->DSS=STATE_QUERY_SENT_NET;
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
-			RequestEnd(NULL);
-			l_free(pkt->size,pkt->ptr);
-			return 2;
-		} else {
-			string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
-			unable_to_parse_set_statement(lock_hostgroup);
-			return 1;
-		}
-	}
-	return 0;
-}
-*/
-
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, ps_type prepare_stmt_type) {
 /*
 	lock_hostgroup:
@@ -6033,15 +5955,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
 			// remove trailing space and semicolon if present. See issue#4380
 			nq.erase(nq.find_last_not_of(" ;") + 1);
-/*
-			// we do not threat SET SQL_LOG_BIN as a special case
-			if (match_regexes && match_regexes[0]->match(dig)) {
-				int rc = handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(pkt, lock_hostgroup, nTrx, nq);
-				if (rc == 1) return false;
-				if (rc == 2) return true;
-				// if rc == 0 , continue as normal
-			}
-*/
 			if (
 				(
 					match_regexes && (match_regexes[1]->match(dig))
