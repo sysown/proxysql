@@ -293,6 +293,14 @@ class MySrvList: public BaseSrvList<MyHGC> { // MySQL Server List
 #endif // 0
 };
 
+
+class MyHGC: public BaseHGC<MyHGC> {
+	public:
+	MyHGC(int _hid) : BaseHGC<MyHGC>(_hid) {}
+	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+};
+
+#if 0
 class MyHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
@@ -342,6 +350,7 @@ class MyHGC {	// MySQL Host Group Container
 		return false;
 	}
 };
+#endif // 0
 
 class Group_Replication_Info {
 	public:

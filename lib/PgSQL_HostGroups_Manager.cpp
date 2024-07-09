@@ -935,7 +935,6 @@ PgSQL_SrvList::~PgSQL_SrvList() {
 	}
 	delete servers;
 }
-#endif // 0
 
 PgSQL_HGC::PgSQL_HGC(int _hid) {
 	hid=_hid;
@@ -981,6 +980,7 @@ PgSQL_HGC::~PgSQL_HGC() {
 	reset_attributes(); // free all memory
 	delete mysrvs;
 }
+#endif // 0
 
 using metric_name = std::string;
 using metric_help = std::string;

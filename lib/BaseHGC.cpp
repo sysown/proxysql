@@ -2,19 +2,54 @@
 using json = nlohmann::json;
 #define PROXYJSON
 
+#include "Base_HostGroups_Manager.h"
+
+
+template BaseHGC<MyHGC>::BaseHGC(int);
+template BaseHGC<MyHGC>::~BaseHGC();
+template void BaseHGC<MyHGC>::log_num_online_server_count_error();
+template void BaseHGC<MyHGC>::reset_attributes();
+template void BaseHGC<MyHGC>::refresh_online_server_count();
+template BaseHGC<PgSQL_HGC>::BaseHGC(int);
+template BaseHGC<PgSQL_HGC>::~BaseHGC();
+template void BaseHGC<PgSQL_HGC>::log_num_online_server_count_error();
+template void BaseHGC<PgSQL_HGC>::reset_attributes();
+template void BaseHGC<PgSQL_HGC>::refresh_online_server_count();
+
+template<typename HGC>
+using TypeSrvC = typename std::conditional<
+    std::is_same_v<HGC, MyHGC>, MySrvC, PgSQL_SrvC
+>::type;
+
+template<typename HGC>
+using TypeSess = typename std::conditional<
+	std::is_same_v<HGC, MyHGC>, MySQL_Session, PgSQL_Session
+>::type;
+
+
 #include "MySQL_HostGroups_Manager.h"
 
+
 #ifdef TEST_AURORA
+if constexpr (std::is_same_v<HGC, MyHGC>) {
 static unsigned long long array_mysrvc_total = 0;
 static unsigned long long array_mysrvc_cands = 0;
+}
 #endif // TEST_AURORA
 
 extern MySQL_Threads_Handler *GloMTH;
 
-#if 0
-MyHGC::MyHGC(int _hid) {
+
+template<typename HGC>
+BaseHGC<HGC>::BaseHGC(int _hid) {
 	hid=_hid;
-	mysrvs=new MySrvList(this);
+	if constexpr (std::is_same_v<HGC, MyHGC>) {
+		mysrvs=new MySrvList(static_cast<HGC*>(this));
+	} else if constexpr (std::is_same_v<HGC, PgSQL_HGC>) {
+		mysrvs=new PgSQL_SrvList(static_cast<HGC*>(this));
+	} else {
+		assert(0);
+	}
 	current_time_now = 0;
 	new_connections_now = 0;
 	attributes.initialized = false;
@@ -26,8 +61,10 @@ MyHGC::MyHGC(int _hid) {
 	num_online_servers.store(0, std::memory_order_relaxed);;
 	last_log_time_num_online_servers = 0;
 }
-	
-void MyHGC::reset_attributes() {
+
+
+template<typename HGC>
+void BaseHGC<HGC>::reset_attributes() {
 	if (attributes.initialized == false) {
 		attributes.init_connect = NULL;
 		attributes.comment = NULL;
@@ -54,13 +91,16 @@ void MyHGC::reset_attributes() {
 		attributes.ignore_session_variables_json = NULL;
 	}
 }
-	
-MyHGC::~MyHGC() {
+
+template<typename HGC>
+BaseHGC<HGC>::~BaseHGC() {
 	reset_attributes(); // free all memory
 	delete mysrvs;
 }
-#endif // 0
-MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
+
+#if 0
+template<typename HGC>
+TypeSrvC *BaseHGC<HGC>::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, TypeSess *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -68,19 +108,21 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	unsigned int l=mysrvs->cnt();
 	static time_t last_hg_log = 0;
 #ifdef TEST_AURORA
-	unsigned long long a1 = array_mysrvc_total/10000;
-	array_mysrvc_total += l;
-	unsigned long long a2 = array_mysrvc_total/10000;
-	if (a2 > a1) {
-		fprintf(stderr, "Total: %llu, Candidates: %llu\n", array_mysrvc_total-l, array_mysrvc_cands);
+		if constexpr (std::is_same_v<HGC, MyHGC>) {
+		unsigned long long a1 = array_mysrvc_total/10000;
+		array_mysrvc_total += l;
+		unsigned long long a2 = array_mysrvc_total/10000;
+		if (a2 > a1) {
+			fprintf(stderr, "Total: %llu, Candidates: %llu\n", array_mysrvc_total-l, array_mysrvc_cands);
+		}
 	}
 #endif // TEST_AURORA
-	MySrvC *mysrvcCandidates_static[32];
-	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
+	TypeSrvC *mysrvcCandidates_static[32];
+	TypeSrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
 	bool max_connections_reached = false;
 	if (l>32) {
-		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
+		mysrvcCandidates = (TypeSrvC **)malloc(sizeof(TypeSrvC *)*l);
 	}
 	if (l) {
 		//int j=0;
@@ -401,25 +443,30 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #endif // TEST_AURORA
 	return NULL; // if we reach here, we couldn't find any target
 }
+#endif // 0
 
-#if 0
-void MyHGC::refresh_online_server_count() {
+
+template<typename HGC>
+void BaseHGC<HGC>::refresh_online_server_count() {
 	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0)
 		return;
 #ifdef DEBUG
 	assert(MyHGM->is_locked);
 #endif
 	unsigned int online_servers_count = 0;
+	if constexpr (std::is_same_v<HGC, MyHGC>) { // FIXME: this logic for now is enabled only for MySQL
 	for (unsigned int i = 0; i < mysrvs->servers->len; i++) {
-		MySrvC* mysrvc = (MySrvC*)mysrvs->servers->index(i);
+		TypeSrvC* mysrvc = (TypeSrvC*)mysrvs->servers->index(i);
 		if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
 			online_servers_count++;
 		}
 	}
+	}
 	num_online_servers.store(online_servers_count, std::memory_order_relaxed);
 }
 
-void MyHGC::log_num_online_server_count_error() {
+template<typename HGC>
+void BaseHGC<HGC>::log_num_online_server_count_error() {
 	const time_t curtime = time(NULL);
 	// if this is the first time the method is called or if more than 10 seconds have passed since the last log
 	if (last_log_time_num_online_servers == 0 ||
@@ -430,4 +477,3 @@ void MyHGC::log_num_online_server_count_error() {
 			hid, num_online_servers.load(std::memory_order_relaxed), attributes.max_num_online_servers);
 	}
 }
-#endif // 0

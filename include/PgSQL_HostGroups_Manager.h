@@ -261,6 +261,14 @@ class PgSQL_SrvList: public BaseSrvList<PgSQL_HGC> {
 	friend class PgSQL_HGC;
 };
 
+
+class PgSQL_HGC: public BaseHGC<PgSQL_HGC> {
+	public:
+	PgSQL_HGC(int _hid) : BaseHGC<PgSQL_HGC>(_hid) {}
+	PgSQL_SrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess);
+};
+
+#if 0
 class PgSQL_HGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
@@ -296,6 +304,7 @@ class PgSQL_HGC {	// MySQL Host Group Container
 	~PgSQL_HGC();
 	PgSQL_SrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess);
 };
+#endif // 0
 
 class PgSQL_Group_Replication_Info {
 	public:

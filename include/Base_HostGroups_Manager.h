@@ -1,9 +1,12 @@
 template <typename HGC> class BaseSrvList;
+template <typename HGC> class BaseHGC;
 
 class MyHGC;
 class PgSQL_HGC;
 class MySrvC;
 class PgSQL_SrvC;
+class MySrvList;
+class PgSQL_SrvList;
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -317,6 +320,9 @@ class BaseHGC {	// MySQL Host Group Container
 	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
+	using TypeSrvList = typename std::conditional<
+		std::is_same_v<HGC, MyHGC>, MySrvList, PgSQL_SrvList
+	>::type;
 	BaseSrvList<HGC> *mysrvs;
 	struct { // this is a series of attributes specific for each hostgroup
 		char * init_connect;
@@ -351,10 +357,10 @@ class BaseHGC {	// MySQL Host Group Container
 	BaseHGC(int);
 	virtual ~BaseHGC();
 	using TypeSrvC = typename std::conditional<
-		 std::is_same_v<HGC, MyHGC>, std::variant<MySrvC>, std::variant<PgSQL_SrvC>
+		 std::is_same_v<HGC, MyHGC>, MySrvC, PgSQL_SrvC
 	>::type;
 	using TypeSess = typename std::conditional<
-		 std::is_same_v<HGC, MyHGC>, std::variant<MySQL_Session>, std::variant<PgSQL_Session>
+		 std::is_same_v<HGC, MyHGC>, MySQL_Session, PgSQL_Session
 	>::type;
 	TypeSess *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, TypeSess *sess);
 	void refresh_online_server_count();
