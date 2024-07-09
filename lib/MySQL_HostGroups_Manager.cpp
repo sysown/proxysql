@@ -661,11 +661,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);
 	pthread_mutex_init(&AWS_Aurora_Info_mutex, NULL);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_init(&lock, NULL);
-#else
-	spinlock_rwlock_init(&rwlock);
-#endif
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
 #ifdef DEBUG
@@ -756,18 +752,12 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 		ev_loop_destroy(gtid_ev_loop);
 	if (gtid_ev_timer)
 		free(gtid_ev_timer);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
-#endif
 }
 
 // wrlock() is only required during commit()
 void MySQL_HostGroups_Manager::wrlock() {
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_lock(&lock);
-#else
-	spin_wrlock(&rwlock);
-#endif
 #ifdef DEBUG
 	is_locked = true;
 #endif
@@ -808,11 +798,7 @@ void MySQL_HostGroups_Manager::wrunlock() {
 #ifdef DEBUG
 	is_locked = false;
 #endif
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_unlock(&lock);
-#else
-	spin_wrunlock(&rwlock);
-#endif
 }
 
 

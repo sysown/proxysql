@@ -35,7 +35,6 @@ namespace nlohmann { class json; }
 //#define STRESSTEST_POOL
 #endif // DEBUG
 
-#define MHM_PTHREAD_MUTEX
 
 #include "Base_HostGroups_Manager.h"
 
@@ -556,11 +555,7 @@ class MySQL_HostGroups_Manager {
 	pthread_mutex_t readonly_mutex;
 	std::set<std::string> read_only_set1;
 	std::set<std::string> read_only_set2;
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_t lock;
-#else
-	rwlock_t rwlock;
-#endif
 
 	enum HGM_TABLES {
 		MYSQL_SERVERS_V2 = 0,

@@ -837,11 +837,7 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 	status.select_for_update_or_equivalent=0;
 	status.auto_increment_delay_multiplex=0;
 	pthread_mutex_init(&readonly_mutex, NULL);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_init(&lock, NULL);
-#else
-	spinlock_rwlock_init(&rwlock);
-#endif
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
 #ifdef DEBUG
@@ -923,18 +919,12 @@ PgSQL_HostGroups_Manager::~PgSQL_HostGroups_Manager() {
 		ev_loop_destroy(gtid_ev_loop);
 	if (gtid_ev_timer)
 		free(gtid_ev_timer);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
-#endif
 }
 
 // wrlock() is only required during commit()
 void PgSQL_HostGroups_Manager::wrlock() {
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_lock(&lock);
-#else
-	spin_wrlock(&rwlock);
-#endif
 }
 
 void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
@@ -969,11 +959,7 @@ void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type e
 }
 
 void PgSQL_HostGroups_Manager::wrunlock() {
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_unlock(&lock);
-#else
-	spin_wrunlock(&rwlock);
-#endif
 }
 
 

@@ -49,7 +49,6 @@ namespace nlohmann { class json; }
 #endif // DEBUG
 
 #if 0
-#define MHM_PTHREAD_MUTEX
 
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
@@ -643,11 +642,7 @@ class MySQL_HostGroups_Manager {
 	pthread_mutex_t readonly_mutex;
 	std::set<std::string> read_only_set1;
 	std::set<std::string> read_only_set2;
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_t lock;
-#else
-	rwlock_t rwlock;
-#endif
 
 	enum HGM_TABLES {
 		MYSQL_SERVERS_V2 = 0,
