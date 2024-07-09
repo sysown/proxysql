@@ -386,7 +386,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	MySQL_Session();
 	~MySQL_Session();
 
-	void set_unhealthy();
+	//void set_unhealthy();
 	
 	void set_status(enum session_status e);
 	int handler();
@@ -399,9 +399,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false) override;
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
-	unsigned int NumActiveTransactions(bool check_savpoint=false);
-	bool HasOfflineBackends();
-	bool SetEventInOfflineBackends();
+	//unsigned int NumActiveTransactions(bool check_savpoint=false);
+	//bool HasOfflineBackends();
+	//bool SetEventInOfflineBackends();
 	/**
 	 * @brief Finds one active transaction in the current backend connections.
 	 * @details Since only one connection is returned, if the session holds multiple backend connections with
@@ -414,7 +414,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 *  https://bugs.mysql.com/bug.php?id=107875.
 	 * @returns The hostgroup in which the connection was found, -1 in case no connection is found.
 	 */
-	int FindOneActiveTransaction(bool check_savepoint=false);
+	//int FindOneActiveTransaction(bool check_savepoint=false);
 	unsigned long long IdleTime();
 
 	//void reset_all_backends();

@@ -52,6 +52,20 @@ template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQ
 template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::update_expired_conns(std::vector<std::function<bool (MySQL_Connection*)>, std::allocator<std::function<bool (MySQL_Connection*)> > > const&);
 template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::update_expired_conns(std::vector<std::function<bool (PgSQL_Connection*)>, std::allocator<std::function<bool (PgSQL_Connection*)> > > const&);
 
+template unsigned int Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::NumActiveTransactions(bool);
+template unsigned int Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::NumActiveTransactions(bool);
+
+template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::set_unhealthy();
+template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::set_unhealthy();
+
+template int Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::FindOneActiveTransaction(bool);
+template int Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::FindOneActiveTransaction(bool);
+
+template bool Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::HasOfflineBackends();
+template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::HasOfflineBackends();
+
+template bool Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::SetEventInOfflineBackends();
+template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::SetEventInOfflineBackends();
 
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::Base_Session() {
@@ -547,4 +561,109 @@ void Base_Session<S,DS,B,T>::update_expired_conns(const vector<function<bool(Typ
 			}
 		}
 	}
+}
+
+
+template<typename S, typename DS, typename B, typename T>
+void Base_Session<S,DS,B,T>::set_unhealthy() {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p\n", this);
+	healthy=0;
+}
+
+
+template<typename S, typename DS, typename B, typename T>
+unsigned int Base_Session<S,DS,B,T>::NumActiveTransactions(bool check_savepoint) {
+	unsigned int ret=0;
+	if (mybes==0) return ret;
+	B *_mybe;
+	unsigned int i;
+	for (i=0; i < mybes->len; i++) {
+		_mybe=(B *)mybes->index(i);
+		if (_mybe->server_myds) {
+			if (_mybe->server_myds->myconn) {
+				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
+					ret++;
+				} else {
+					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
+					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+					// SAVEPOINT and autocommit=0
+					if (check_savepoint) {
+						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
+							ret++;
+						}
+					}
+				}
+			}
+		}
+	}
+	return ret;
+}
+
+template<typename S, typename DS, typename B, typename T>
+bool Base_Session<S,DS,B,T>::HasOfflineBackends() {
+	bool ret=false;
+	if (mybes==0) return ret;
+	B * _mybe;
+	unsigned int i;
+	for (i=0; i < mybes->len; i++) {
+		_mybe=(B *)mybes->index(i);
+		if (_mybe->server_myds)
+			if (_mybe->server_myds->myconn)
+				if (_mybe->server_myds->myconn->IsServerOffline()) {
+					ret=true;
+					return ret;
+				}
+	}
+	return ret;
+}
+
+template<typename S, typename DS, typename B, typename T>
+bool Base_Session<S,DS,B,T>::SetEventInOfflineBackends() {
+	bool ret=false;
+	if (mybes==0) return ret;
+	B * _mybe;
+	unsigned int i;
+	for (i = 0; i < mybes->len; i++) {
+		_mybe = (B *) mybes->index(i);
+		if (_mybe->server_myds)
+			if (_mybe->server_myds->myconn)
+				if (_mybe->server_myds->myconn->IsServerOffline()) {
+					_mybe->server_myds->revents |= POLLIN;
+					ret = true;
+				}
+	}
+	return ret;
+}
+
+
+template<typename S, typename DS, typename B, typename T>
+int Base_Session<S,DS,B,T>::FindOneActiveTransaction(bool check_savepoint) {
+	int ret=-1;
+	if (mybes==0) return ret;
+	B * _mybe;
+	unsigned int i;
+	for (i=0; i < mybes->len; i++) {
+		_mybe = (B *) mybes->index(i);
+		if (_mybe->server_myds) {
+			if (_mybe->server_myds->myconn) {
+				if (_mybe->server_myds->myconn->IsKnownActiveTransaction()) {
+					return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+				}
+				else if (_mybe->server_myds->myconn->IsActiveTransaction()) {
+					ret = (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+				}
+				else {
+					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
+					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+					// SAVEPOINT and autocommit=0
+					if (check_savepoint) {
+						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
+							return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+						}
+					}
+				}
+			}
+		}
+	}
+	return ret;
 }

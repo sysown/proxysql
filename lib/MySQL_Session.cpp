@@ -7355,102 +7355,6 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 	}
 }
 
-void MySQL_Session::set_unhealthy() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p\n", this);
-	healthy=0;
-}
-
-
-unsigned int MySQL_Session::NumActiveTransactions(bool check_savepoint) {
-	unsigned int ret=0;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds) {
-			if (_mybe->server_myds->myconn) {
-				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
-					ret++;
-				} else {
-					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
-					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
-					// SAVEPOINT and autocommit=0
-					if (check_savepoint) {
-						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
-							ret++;
-						}
-					}
-				}
-			}
-		}
-	}
-	return ret;
-}
-
-bool MySQL_Session::HasOfflineBackends() {
-	bool ret=false;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsServerOffline()) {
-					ret=true;
-					return ret;
-				}
-	}
-	return ret;
-}
-
-bool MySQL_Session::SetEventInOfflineBackends() {
-	bool ret=false;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsServerOffline()) {
-					_mybe->server_myds->revents|=POLLIN;
-					ret = true;
-				}
-	}
-	return ret;
-}
-
-int MySQL_Session::FindOneActiveTransaction(bool check_savepoint) {
-	int ret=-1;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds) {
-			if (_mybe->server_myds->myconn) {
-				if (_mybe->server_myds->myconn->IsKnownActiveTransaction()) {
-					return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
-				} else if (_mybe->server_myds->myconn->IsActiveTransaction()) {
-					ret = (int)_mybe->server_myds->myconn->parent->myhgc->hid;
-				} else {
-					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
-					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
-					// SAVEPOINT and autocommit=0
-					if (check_savepoint) {
-						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
-							return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
-						}
-					}
-				}
-			}
-		}
-	}
-	return ret;
-}
-
 unsigned long long MySQL_Session::IdleTime() {
 	unsigned long long ret = 0;
 	if (client_myds==0) return 0;
@@ -7464,7 +7368,6 @@ unsigned long long MySQL_Session::IdleTime() {
 	}
 	return ret;
 }
-
 
 
 // this is called either from RequestEnd(), or at the end of executing
