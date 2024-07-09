@@ -253,76 +253,6 @@ class PgSQL_HGC: public BaseHGC<PgSQL_HGC> {
 	PgSQL_SrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess);
 };
 
-#if 0
-class PgSQL_Group_Replication_Info {
-	public:
-	int writer_hostgroup;
-	int backup_writer_hostgroup;
-	int reader_hostgroup;
-	int offline_hostgroup;
-	int max_writers;
-	int max_transactions_behind;
-	char *comment;
-	bool active;
-	int writer_is_also_reader;
-	bool __active;
-	bool need_converge; // this is set to true on LOAD PgSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
-	int current_num_writers;
-	int current_num_backup_writers;
-	int current_num_readers;
-	int current_num_offline;
-	PgSQL_Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	~PgSQL_Group_Replication_Info();
-};
-
-class PgSQL_Galera_Info {
-	public:
-	int writer_hostgroup;
-	int backup_writer_hostgroup;
-	int reader_hostgroup;
-	int offline_hostgroup;
-	int max_writers;
-	int max_transactions_behind;
-	char *comment;
-	bool active;
-	int writer_is_also_reader;
-	bool __active;
-	bool need_converge; // this is set to true on LOAD PgSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
-	int current_num_writers;
-	int current_num_backup_writers;
-	int current_num_readers;
-	int current_num_offline;
-	PgSQL_Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	~PgSQL_Galera_Info();
-};
-
-class PgSQL_AWS_Aurora_Info {
-	public:
-	int writer_hostgroup;
-	int reader_hostgroup;
-	int aurora_port;
-	int max_lag_ms;
-	int add_lag_ms;
-	int min_lag_ms;
-	int lag_num_checks;
-	int check_interval_ms;
-	int check_timeout_ms;
-	int writer_is_also_reader;
-	int new_reader_weight;
-	// TODO
-	// add intermediary status value, for example the last check time
-	char * domain_name;
-	char * comment;
-	bool active;
-	bool __active;
-	PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
-	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
-	~PgSQL_AWS_Aurora_Info();
-};
-#endif // 0
-
 struct PgSQL_p_hg_counter {
 	enum metric {
 		servers_table_version = 0,
@@ -642,12 +572,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 * @brief Update the prometheus "connection_pool" counters.
 	 */
 	void p_update_connection_pool();
-#if 0
-	/**
-	 * @brief Update the "stats_pgsql_gtid_executed" counters.
-	 */
-	void p_update_pgsql_gtid_executed();
-#endif // 0
 
 	void p_update_connection_pool_update_counter(
 		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
@@ -926,12 +850,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
-
-#if 0
-	SQLite3_result * get_stats_pgsql_gtid_executed();
-	void generate_pgsql_gtid_executed_tables();
-	bool gtid_exists(PgSQL_SrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
-#endif // 0
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
