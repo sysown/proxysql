@@ -4751,11 +4751,9 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 			if (myconn->query_result && myconn->query_result->is_transfer_started()) {
 				// transfer to frontend has started, we cannot retry
 			} else {
-				// a hack to check if we have pending results. This should never occur.
-				if (myconn->get_last_result() != nullptr) {
-					// transfer to frontend has started, because this is, at least,
-					// the second resultset coming from the server
-					// we cannot retry
+				// This should never occur.
+				if (myconn->processing_multi_statement == true) {
+					// we are in the process of retriving results from a multi-statement query
 					proxy_warning("Disabling query retry because we were in middle of processing results\n");
 				} else {
 					retry_conn = true;
@@ -5290,7 +5288,7 @@ handler_again:
 			if (rc == 0) {
 
 				if (active_transactions != 0) {  // run this only if currently we think there is a transaction
-					if (myconn->pgsql && (myconn->pgsql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
+					if (myconn->IsKnownActiveTransaction() == false) { // there is no transaction on the backend connection
 						active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
 						if (active_transactions == 0)
 							transaction_started_at = 0; // reset it
@@ -5303,8 +5301,8 @@ handler_again:
 				// see bug #3549
 				if (locked_on_hostgroup >= 0) {
 					assert(myconn != NULL);
-					assert(myconn->pgsql != NULL);
-					autocommit = myconn->pgsql->server_status & SERVER_STATUS_AUTOCOMMIT;
+					assert(myconn->pgsql_conn != NULL);
+					//autocommit = myconn->pgsql->server_status & SERVER_STATUS_AUTOCOMMIT;
 				}
 
 				if (mirror == false && myconn->pgsql) {
@@ -5421,11 +5419,9 @@ handler_again:
 							if (myconn->query_result_reuse) {
 								delete myconn->query_result_reuse;
 							}
-							//myconn->query_result->reset_pid = false;
 							myconn->query_result_reuse = myconn->query_result;
 							myconn->query_result = NULL;
 						}
-						NEXT_IMMEDIATE(PROCESSING_QUERY);
 						break;
 						// rc==3 , a multi statement query is still running
 						// start sending to frontend if pgsql_thread___threshold_resultset_size is reached
@@ -7744,7 +7740,8 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		bool is_tuple = query_result->get_result_packet_type() == (PGSQL_QUERY_RESULT_TUPLE | PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY); 
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = query_result->get_num_rows();
-		assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
+		if (_conn->processing_multi_statement == false)
+			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
 		if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true) { // the resultset should be cached
 				/*if (mysql_errno(pgsql) == 0 &&

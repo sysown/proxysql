@@ -627,7 +627,7 @@ static void * HGCU_thread_run() {
 			myconn->reset();
 			PgHGM->increase_reset_counter();
 			myconn=(PgSQL_Connection *)conn_array->index(i);
-			if (myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
+			if (myconn->pgsql && myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
 				PgSQL_Connection_userinfo *userinfo = myconn->userinfo;
 				char *auth_password = NULL;
 				if (userinfo->password) {
@@ -671,7 +671,7 @@ static void * HGCU_thread_run() {
 			usleep(50);
 			for (i=0;i<(int)conn_array->len;i++) {
 				myconn=(PgSQL_Connection *)conn_array->index(i);
-				if (myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
+				if (myconn->pgsql && myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
 					statuses[i]=wait_for_pgsql(myconn->pgsql, statuses[i]);
 					if (myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
 						if ((statuses[i] & MYSQL_WAIT_TIMEOUT) == 0) {

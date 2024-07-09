@@ -1749,6 +1749,7 @@ void PgSQL_Query_Result::init(PgSQL_Protocol* _proto, PgSQL_Data_Stream* _myds, 
 	conn = _conn;
 	myds = _myds;
 	buffer_init();
+	reset();
 
 	if (proto == NULL) {
 		return; // this is a mirror
