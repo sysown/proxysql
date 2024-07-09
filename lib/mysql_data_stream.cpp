@@ -71,8 +71,8 @@ struct bio_st {
     CRYPTO_RWLOCK *lock;
 };
 
-#elif (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30200000
-#pragma message "libssl 3.2.x detected"
+#elif (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30200000 || (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30300000
+#pragma message "libssl 3.2.x / 3.3.x detected"
 struct bio_st {
     OSSL_LIB_CTX *libctx;
     const BIO_METHOD *method;
@@ -702,9 +702,16 @@ int MySQL_Data_Stream::read_from_net() {
 		} else {
 			int ssl_ret=SSL_get_error(ssl, r);
 			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- session_id: %u , SSL_get_error(): %d , errno: %d\n", sess, this, sess->thread_session_id, ssl_ret, errno);
-			if (ssl_ret == SSL_ERROR_SYSCALL && (errno == EINTR || errno == EAGAIN)) {
+			const int st = ERR_get_error();
+			if (
+				(ssl_ret == SSL_ERROR_SYSCALL) &&
+				(
+					((errno == EINTR || errno == EAGAIN))
+					|| (st == 0)
+				)
+			) {
 				// the read was interrupted, do nothing
-				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d\n", sess, this, errno);
+				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d, ERR_get_error=%d\n", sess, this, errno, st);
 			} else {
 				if (r==0) { // we couldn't read any data
 					if (revents & POLLIN) {
@@ -718,6 +725,12 @@ int MySQL_Data_Stream::read_from_net() {
 				if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
 				// it seems we end in shut_soft() anyway
 			}
+		}
+		if ( (revents & POLLHUP) ) {
+			// this is a final check
+			// Only if the amount of data read is 0 or less, then we check POLLHUP
+			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d\n", sess, this, revents, r);
+			shut_soft();
 		}
 	} else {
 		queue_w(queueIN,r);

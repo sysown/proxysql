@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # make sure we have correct cwd
 pushd $(dirname $0) &>/dev/null

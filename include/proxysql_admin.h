@@ -789,5 +789,8 @@ class ProxySQL_Admin {
 #endif
 	template<class T>
 	friend void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt);
+
+	// FLUSH LOGS
+	void flush_logs();
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

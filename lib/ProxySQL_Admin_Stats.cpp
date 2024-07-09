@@ -25,8 +25,8 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
-extern bool proxysql_mysql_paused;
-extern bool proxysql_pgsql_paused;
+extern bool admin_proxysql_mysql_paused;
+extern bool admin_proxysql_pgsql_paused;
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern Query_Cache *GloQC;
@@ -50,11 +50,11 @@ void ProxySQL_Admin::p_update_metrics() {
 	this->p_update_stmt_metrics();
 
 	// updated mysql_listener_paused
-	int st = ( proxysql_mysql_paused == true ? 1 : 0);
+	int st = ( admin_proxysql_mysql_paused == true ? 1 : 0);
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_listener_paused]->Set(st);
 
 	// updated pgsql_listener_paused
-	st = (proxysql_pgsql_paused == true ? 1 : 0);
+	st = ( admin_proxysql_pgsql_paused == true ? 1 : 0);
 	this->metrics.p_gauge_array[p_admin_gauge::pgsql_listener_paused]->Set(st);
 }
 
@@ -556,7 +556,7 @@ void ProxySQL_Admin::stats___mysql_global() {
 	}
 	{
 		vn=(char *)"mysql_listener_paused";
-		sprintf(bu, "%s", ( proxysql_mysql_paused==true ? "true" : "false") );
+		sprintf(bu, "%s", ( admin_proxysql_mysql_paused==true ? "true" : "false") );
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 		sprintf(query,a,vn,bu);
 		statsdb->execute(query);

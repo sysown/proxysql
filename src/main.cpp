@@ -456,7 +456,6 @@ ProxySQL_Cluster *GloProxyCluster = NULL;
 
 ProxySQL_Statistics *GloProxyStats = NULL;
 
-
 void * mysql_worker_thread_func(void *arg) {
 
 //	__thr_sfp=l_mem_init();

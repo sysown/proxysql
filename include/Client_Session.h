@@ -118,17 +118,6 @@ public:
 };
 #define TO_CONNECTION_INFO(connection_info) Connection_Info_T<decltype(connection_info)>(connection_info)
 
-enum proxysql_session_type {
-	PROXYSQL_SESSION_MYSQL,
-	PROXYSQL_SESSION_ADMIN,
-	PROXYSQL_SESSION_STATS,
-	PROXYSQL_SESSION_SQLITE,
-	PROXYSQL_SESSION_CLICKHOUSE,
-	PROXYSQL_SESSION_MYSQL_EMU,
-	PROXYSQL_SESSION_PGSQL,
-	PROXYSQL_SESSION_NONE
-};
-
 std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 #endif /* __CLASS_CLIENT_SESSION_H */

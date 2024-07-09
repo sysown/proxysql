@@ -3,7 +3,7 @@
  * @brief Declaration of the MySQL_Session class and associated types and enums.
  */
 
-
+#ifdef CLASS_BASE_SESSION_H
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
 
@@ -14,6 +14,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
+#include "Base_Session.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -51,7 +52,7 @@ enum ps_type : uint8_t {
 
 
 
-std::string proxysql_session_type_str(enum proxysql_session_type session_type);
+//std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 /**
  * @class Query_Info
@@ -105,7 +106,7 @@ class Query_Info {
  * This class is central to ProxySQL's handling of client connections. It manages the lifecycle
  * of a session, processes queries, and communicates with backend MySQL servers.
  */
-class MySQL_Session
+class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>
 {
 	private:
 	//int handler_ret;
@@ -153,9 +154,9 @@ class MySQL_Session
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
-	void return_proxysql_internal(PtrSize_t *);
+	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
-	bool handler_special_queries_STATUS(PtrSize_t *);
+	//bool handler_special_queries_STATUS(PtrSize_t *);
 	/**
 	 * @brief Handles 'COMMIT|ROLLBACK' commands.
 	 * @details Forwarding the packet is required when there are active transactions. Since we are limited to
@@ -185,7 +186,7 @@ class MySQL_Session
 	 * @param myds If not null, should point to a MySQL_Data_Stream (backend connection) which connection status
 	 *   should be updated, and previous query resources cleanup.
 	 */
-	void RequestEnd(MySQL_Data_Stream *);
+	void RequestEnd(MySQL_Data_Stream *) override;
 	void LogQuery(MySQL_Data_Stream *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
@@ -214,15 +215,17 @@ class MySQL_Session
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___multiple_statuses(int *rc);
 
-	void init();
+	//void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
+
+#if 0
 	/**
 	 * @brief Performs the required housekeeping operations over the session and its connections before
 	 *  performing any processing on received client packets.
 	 */
 	void housekeeping_before_pkts();
-
+#endif // 0
 	int get_pkts_from_client(bool&, PtrSize_t&);
 
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
@@ -271,13 +274,12 @@ class MySQL_Session
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	std::stack<enum session_status> previous_status;
-	void * operator new(size_t);
-	void operator delete(void *);
 
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;
 	PtrSize_t pkt;
 
+#if 0
 	// uint64_t
 	unsigned long long start_time;
 	unsigned long long pause_until;
@@ -287,12 +289,16 @@ class MySQL_Session
 
 	// pointers
 	MySQL_Thread *thread;
+#endif // 0
 	Query_Processor_Output *qpo;
 	StatCounters *command_counters;
+#if 0
 	MySQL_Backend *mybe;
 	PtrArray *mybes;
 	MySQL_Data_Stream *client_myds;
+#endif // 0
 	MySQL_Data_Stream *server_myds;
+#if 0
 	/*
 	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
 	 *  maintenance thread. These values will be used to release the retained connections in the specific
@@ -349,6 +355,7 @@ class MySQL_Session
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
+#endif // 0
 	/**
 	 * @brief This status variable tracks whether the session is performing an
 	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
@@ -366,8 +373,8 @@ class MySQL_Session
 	//uint64_t gtid_trxid;
 	int gtid_hid;
 
-	MySQL_STMTs_meta *sess_STMTs_meta;
-	StmtLongDataHandler *SLDH;
+//	MySQL_STMTs_meta *sess_STMTs_meta;
+//	StmtLongDataHandler *SLDH;
 
 	Session_Regex **match_regexes;
 
@@ -386,11 +393,11 @@ class MySQL_Session
 	int handler();
 
 	void (*handler_function) (Client_Session<MySQL_Session*> arg, void *, PtrSize_t *pkt);
-	MySQL_Backend * find_backend(int);
-	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
-	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	//MySQL_Backend * find_backend(int);
+	//MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	//MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
-	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
+	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false) override;
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions(bool check_savpoint=false);
@@ -411,10 +418,10 @@ class MySQL_Session
 	int FindOneActiveTransaction(bool check_savepoint=false);
 	unsigned long long IdleTime();
 
-	void reset_all_backends();
-	void writeout();
+	//void reset_all_backends();
+	//void writeout();
 	void Memory_Stats();
-	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
+	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds) override;
 	bool handle_command_query_kill(PtrSize_t *);
 	void update_expired_conns(const std::vector<std::function<bool(MySQL_Connection*)>>&);
 	/**
@@ -430,10 +437,10 @@ class MySQL_Session
 	 *   params.
 	 */
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
-	void generate_proxysql_internal_session_json(nlohmann::json &);
+	void generate_proxysql_internal_session_json(nlohmann::json &) override;
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
-	bool has_any_backend();
+	//bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
@@ -469,3 +476,4 @@ private:
 void * kill_query_thread(void *arg);
 
 #endif /* __CLASS_MYSQL_SESSION_ H */
+#endif // CLASS_BASE_SESSION_H
