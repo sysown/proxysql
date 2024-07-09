@@ -548,15 +548,16 @@ struct srv_opts_t {
 	int32_t use_ssl;
 };
 
-class MySQL_HostGroups_Manager {
+class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	private:
+#if 0
 	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
 	pthread_mutex_t readonly_mutex;
 	std::set<std::string> read_only_set1;
 	std::set<std::string> read_only_set2;
 	pthread_mutex_t lock;
-
+#endif // 0
 	enum HGM_TABLES {
 		MYSQL_SERVERS_V2 = 0,
 		MYSQL_REPLICATION_HOSTGROUPS,
@@ -671,15 +672,16 @@ class MySQL_HostGroups_Manager {
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 
 
+#if 0
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, MyHGC *>MyHostGroups_map;
-
+#endif // 0
 	std::mutex Servers_SSL_Params_map_mutex;
 	std::unordered_map<std::string, MySQLServers_SslParams> Servers_SSL_Params_map;
-
+#if 0
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);
-
+#endif // 0
 	void add(MySrvC *, unsigned int);
 	void purge_mysql_servers_table();
 	void generate_mysql_servers_table(int *_onlyhg=NULL);
@@ -1014,7 +1016,6 @@ class MySQL_HostGroups_Manager {
 	 * @param lock When supplied the function calls 'wrlock()' and 'wrunlock()' functions for accessing the db.
 	 */
 	void update_table_mysql_servers_for_monitor(bool lock=false);
-	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 	/**

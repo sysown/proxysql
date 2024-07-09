@@ -38,6 +38,16 @@ using std::function;
 #include "Base_HostGroups_Manager.h"
 
 
+template Base_HostGroups_Manager<MyHGC>::Base_HostGroups_Manager();
+template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_find(unsigned int);
+template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_create(unsigned int);
+template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_lookup(unsigned int);
+
+template Base_HostGroups_Manager<PgSQL_HGC>::Base_HostGroups_Manager();
+template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_find(unsigned int);
+template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_create(unsigned int);
+template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_lookup(unsigned int);
+
 #if 0
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -623,7 +633,17 @@ hg_metrics_map = std::make_tuple(
 		)
 	}
 );
+#endif // 0
 
+template <typename HGC>
+Base_HostGroups_Manager<HGC>::Base_HostGroups_Manager() {
+	pthread_mutex_init(&readonly_mutex, NULL);
+	pthread_mutex_init(&lock, NULL);
+	admindb=NULL;	// initialized only if needed
+	mydb=new SQLite3DB();
+}
+
+#if 0
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
 	status.client_connections_aborted=0;
@@ -2153,6 +2173,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	return resultset;
 }
 
+#endif // 0
 /**
  * @brief Create a new MySQL host group container.
  *
@@ -2162,8 +2183,9 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
  * @param _hid The host group ID for the new container.
  * @return A pointer to the newly created `MyHGC` instance.
  */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
-	MyHGC *myhgc=new MyHGC(_hid);
+template <typename HGC>
+HGC * Base_HostGroups_Manager<HGC>::MyHGC_create(unsigned int _hid) {
+	HGC *myhgc=new HGC(_hid);
 	return myhgc;
 }
 
@@ -2177,11 +2199,12 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
  * @param _hid The host group ID to search for.
  * @return A pointer to the found `MyHGC` instance if found; otherwise, a null pointer.
  */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
+template <typename HGC>
+HGC * Base_HostGroups_Manager<HGC>::MyHGC_find(unsigned int _hid) {
 	if (MyHostGroups->len < 100) {
 		// for few HGs, we use the legacy search
 		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+			HGC *myhgc=(HGC *)MyHostGroups->index(i);
 			if (myhgc->hid==_hid) {
 				return myhgc;
 			}
@@ -2190,9 +2213,9 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
 		// for a large number of HGs, we use the unordered_map
 		// this search is slower for a small number of HGs, therefore we use
 		// it only for large number of HGs
-		std::unordered_map<unsigned int, MyHGC *>::const_iterator it = MyHostGroups_map.find(_hid);
+		typename std::unordered_map<unsigned int, HGC *>::const_iterator it = MyHostGroups_map.find(_hid);
 		if (it != MyHostGroups_map.end()) {
-			MyHGC *myhgc = it->second;
+			HGC *myhgc = it->second;
 			return myhgc;
 		}
 	}
@@ -2211,8 +2234,9 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
  * @return A pointer to the found or newly created `MyHGC` instance.
  * @note The function assertion fails if a newly created container is not found.
  */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
-	MyHGC *myhgc=NULL;
+template <typename HGC>
+HGC * Base_HostGroups_Manager<HGC>::MyHGC_lookup(unsigned int _hid) {
+	HGC *myhgc=NULL;
 	myhgc=MyHGC_find(_hid);
 	if (myhgc==NULL) {
 		myhgc=MyHGC_create(_hid);
@@ -2225,6 +2249,7 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	return myhgc;
 }
 
+#if 0
 void MySQL_HostGroups_Manager::increase_reset_counter() {
 	wrlock();
 	status.myconnpoll_reset++;

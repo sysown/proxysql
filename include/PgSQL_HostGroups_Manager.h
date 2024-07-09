@@ -453,15 +453,16 @@ struct PgSQL_srv_opts_t {
 	int32_t use_ssl;
 };
 
-class PgSQL_HostGroups_Manager {
-	private:
+class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
+#if 0
 	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
 	pthread_mutex_t readonly_mutex;
 	std::set<std::string> read_only_set1;
 	std::set<std::string> read_only_set2;
 	pthread_mutex_t lock;
-
+#endif // 0
+	private:
 	enum HGM_TABLES {
 		PgSQL_SERVERS_V2 = 0,
 		PgSQL_REPLICATION_HOSTGROUPS,
@@ -574,12 +575,13 @@ class PgSQL_HostGroups_Manager {
 	 */
 	uint64_t hgsm_pgsql_replication_hostgroups_checksum = 0;
 
-
+#if 0
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, PgSQL_HGC *>MyHostGroups_map;
 
 	PgSQL_HGC * MyHGC_find(unsigned int);
 	PgSQL_HGC * MyHGC_create(unsigned int);
+#endif // 0
 
 	void add(PgSQL_SrvC *, unsigned int);
 	void purge_pgsql_servers_table();
@@ -869,7 +871,6 @@ class PgSQL_HostGroups_Manager {
 	 * @param lock When supplied the function calls 'wrlock()' and 'wrunlock()' functions for accessing the db.
 	 */
 	void update_table_pgsql_servers_for_monitor(bool lock=false);
-	PgSQL_HGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(PgSQL_Connection *);
 	/**

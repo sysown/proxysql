@@ -657,13 +657,17 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.access_denied_max_user_connections=0;
 	status.select_for_update_or_equivalent=0;
 	status.auto_increment_delay_multiplex=0;
+#if 0
 	pthread_mutex_init(&readonly_mutex, NULL);
+#endif // 0
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);
 	pthread_mutex_init(&AWS_Aurora_Info_mutex, NULL);
+#if 0
 	pthread_mutex_init(&lock, NULL);
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
+#endif // 0
 #ifdef DEBUG
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
@@ -2265,6 +2269,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	return resultset;
 }
 
+#if 0
 /**
  * @brief Create a new MySQL host group container.
  *
@@ -2310,7 +2315,6 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
 	}
 	return NULL;
 }
-
 /**
  * @brief Lookup or create a MySQL host group container by host group ID.
  *
@@ -2336,6 +2340,7 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	MyHostGroups_map.emplace(_hid,myhgc);
 	return myhgc;
 }
+#endif // 0
 
 void MySQL_HostGroups_Manager::increase_reset_counter() {
 	wrlock();

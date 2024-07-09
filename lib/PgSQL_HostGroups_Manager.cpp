@@ -836,10 +836,12 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 	status.access_denied_max_user_connections=0;
 	status.select_for_update_or_equivalent=0;
 	status.auto_increment_delay_multiplex=0;
+#if 0
 	pthread_mutex_init(&readonly_mutex, NULL);
 	pthread_mutex_init(&lock, NULL);
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
+#endif // 0
 #ifdef DEBUG
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
@@ -2057,7 +2059,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	return resultset;
 }
 
-
+#if 0
 PgSQL_HGC * PgSQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 	PgSQL_HGC *myhgc=new PgSQL_HGC(_hid);
 	return myhgc;
@@ -2098,6 +2100,7 @@ PgSQL_HGC * PgSQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	MyHostGroups_map.emplace(_hid,myhgc);
 	return myhgc;
 }
+#endif // 0
 
 void PgSQL_HostGroups_Manager::increase_reset_counter() {
 	wrlock();

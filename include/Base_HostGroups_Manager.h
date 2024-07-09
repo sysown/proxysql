@@ -1,5 +1,6 @@
 template <typename HGC> class BaseSrvList;
 template <typename HGC> class BaseHGC;
+template <typename HGC> class Base_HostGroups_Manager;
 
 class MyHGC;
 class PgSQL_HGC;
@@ -634,7 +635,34 @@ struct srv_opts_t {
 	int64_t max_conns;
 	int32_t use_ssl;
 };
+#endif // 0
 
+template <typename HGC>
+class Base_HostGroups_Manager {
+	private:
+	SQLite3DB	*admindb;
+	SQLite3DB	*mydb;
+	pthread_mutex_t readonly_mutex;
+	std::set<std::string> read_only_set1;
+	std::set<std::string> read_only_set2;
+	pthread_mutex_t lock;
+
+	PtrArray *MyHostGroups;
+	std::unordered_map<unsigned int, HGC *>MyHostGroups_map;
+
+	HGC * MyHGC_find(unsigned int);
+	HGC * MyHGC_create(unsigned int);
+
+	public:
+	Base_HostGroups_Manager();
+	HGC * MyHGC_lookup(unsigned int);
+
+	friend class MySQL_HostGroups_Manager;
+	friend class PgSQL_HostGroups_Manager;
+
+};
+
+#if 0
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -1101,7 +1129,6 @@ class MySQL_HostGroups_Manager {
 	 * @param lock When supplied the function calls 'wrlock()' and 'wrunlock()' functions for accessing the db.
 	 */
 	void update_table_mysql_servers_for_monitor(bool lock=false);
-	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 	/**
