@@ -415,6 +415,7 @@ PgSQL_Connection_Placeholder::PgSQL_Connection_Placeholder() {
 	}
 
 	options.client_flag = 0;
+	options.server_capabilities = 0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
 	options.last_set_autocommit=-1;	// -1 = never set
@@ -3021,6 +3022,9 @@ void PgSQL_Connection::next_event(PG_ASYNC_ST new_st) {
 
 
 PG_ASYNC_ST PgSQL_Connection::handler(short event) {
+#if ENABLE_TIMER
+	Timer timer(myds->sess->thread->Timers.Connections_Handlers);
+#endif // ENABLE_TIMER
 	unsigned long long processed_bytes = 0;	// issue #527 : this variable will store the amount of bytes processed during this event
 	if (pgsql_conn == NULL) {
 		// it is the first time handler() is being called
