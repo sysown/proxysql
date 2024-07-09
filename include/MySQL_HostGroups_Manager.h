@@ -275,22 +275,8 @@ private:
 };
 
 class MySrvList: public BaseSrvList<MyHGC> { // MySQL Server List
-#if 0
-	private:
-	MyHGC *myhgc;
-	int find_idx(MySrvC *);
-#endif // 0
 	public:
 	MySrvList(MyHGC* hgc) : BaseSrvList<MyHGC>(hgc) {}
-#if 0
-	PtrArray *servers;
-	unsigned int cnt() { return servers->len; }
-	MySrvList(MyHGC *);
-	~MySrvList();
-	void add(MySrvC *);
-	void remove(MySrvC *);
-	MySrvC * idx(unsigned int i) {return (MySrvC *)servers->index(i); }
-#endif // 0
 };
 
 
@@ -299,58 +285,6 @@ class MyHGC: public BaseHGC<MyHGC> {
 	MyHGC(int _hid) : BaseHGC<MyHGC>(_hid) {}
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
 };
-
-#if 0
-class MyHGC {	// MySQL Host Group Container
-	public:
-	unsigned int hid;
-	std::atomic<uint32_t> num_online_servers;
-	time_t last_log_time_num_online_servers;
-	unsigned long long current_time_now;
-	uint32_t new_connections_now;
-	MySrvList *mysrvs;
-	struct { // this is a series of attributes specific for each hostgroup
-		char * init_connect;
-		char * comment;
-		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
-		uint32_t max_num_online_servers;
-		uint32_t throttle_connections_per_sec;
-		int32_t monitor_slave_lag_when_null;
-		int8_t autocommit;
-		int8_t free_connections_pct;
-		int8_t handle_warnings;
-		bool multiplex;
-		bool connection_warming;
-		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
-		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
-		nlohmann::json * ignore_session_variables_json = NULL; // the JSON format of ignore_session_variables
-	} attributes;
-	struct {
-		int64_t weight;
-		int64_t max_connections;
-		int32_t use_ssl;
-	} servers_defaults;
-	void reset_attributes();
-	inline
-	bool handle_warnings_enabled() const {
-		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
-	}
-	inline
-	int32_t get_monitor_slave_lag_when_null() const {
-		return attributes.configured == true && attributes.monitor_slave_lag_when_null != -1 ? attributes.monitor_slave_lag_when_null : mysql_thread___monitor_slave_lag_when_null;
-	}
-	MyHGC(int);
-	~MyHGC();
-	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
-	void refresh_online_server_count();
-	void log_num_online_server_count_error();
-	inline
-	bool online_servers_within_threshold() const {
-		if (num_online_servers.load(std::memory_order_relaxed) <= attributes.max_num_online_servers) return true;
-		return false;
-	}
-};
-#endif // 0
 
 class Group_Replication_Info {
 	public:

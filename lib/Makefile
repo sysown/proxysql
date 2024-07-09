@@ -140,7 +140,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	sha256crypt.oo \
 	BaseSrvList.oo BaseHGC.oo Base_HostGroups_Manager.oo \
 	QP_rule_text.oo QP_query_digest_stats.oo \
-	GTID_Server_Data.oo MyHGC.oo MySrvConnList.oo MySrvList.oo MySrvC.oo \
+	GTID_Server_Data.oo MyHGC.oo MySrvConnList.oo MySrvC.oo \
 	MySQL_encode.oo MySQL_ResultSet.oo \
 	ProxySQL_Admin_Tests.oo ProxySQL_Admin_Tests2.oo ProxySQL_Admin_Scheduler.oo ProxySQL_Admin_Disk_Upgrade.oo ProxySQL_Admin_Stats.oo \
 	Admin_Handler.oo Admin_FlushVariables.oo Admin_Bootstrap.oo \

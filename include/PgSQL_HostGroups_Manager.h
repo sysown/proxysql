@@ -242,22 +242,8 @@ class PgSQL_SrvC {	// MySQL Server Container
 };
 
 class PgSQL_SrvList: public BaseSrvList<PgSQL_HGC> {
-#if 0
-	private:
-	PgSQL_HGC *myhgc;
-	int find_idx(PgSQL_SrvC *);
-#endif // 0
 	public:
 	PgSQL_SrvList(PgSQL_HGC* hgc) : BaseSrvList<PgSQL_HGC>(hgc) {}
-#if 0
-	PtrArray *servers;
-	unsigned int cnt() { return servers->len; }
-	PgSQL_SrvList(PgSQL_HGC *);
-	~PgSQL_SrvList();
-	void add(PgSQL_SrvC *);
-	void remove(PgSQL_SrvC *);
-	PgSQL_SrvC * idx(unsigned int i) {return (PgSQL_SrvC *)servers->index(i); }
-#endif // 0
 	friend class PgSQL_HGC;
 };
 
@@ -267,44 +253,6 @@ class PgSQL_HGC: public BaseHGC<PgSQL_HGC> {
 	PgSQL_HGC(int _hid) : BaseHGC<PgSQL_HGC>(_hid) {}
 	PgSQL_SrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess);
 };
-
-#if 0
-class PgSQL_HGC {	// MySQL Host Group Container
-	public:
-	unsigned int hid;
-	unsigned long long current_time_now;
-	uint32_t new_connections_now;
-	PgSQL_SrvList *mysrvs;
-	struct { // this is a series of attributes specific for each hostgroup
-		char * init_connect;
-		char * comment;
-		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
-		uint32_t max_num_online_servers;
-		uint32_t throttle_connections_per_sec;
-		int8_t autocommit;
-		int8_t free_connections_pct;
-		int8_t handle_warnings;
-		bool multiplex;
-		bool connection_warming;
-		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
-		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
-		nlohmann::json * ignore_session_variables_json = NULL; // the JSON format of ignore_session_variables
-	} attributes;
-	struct {
-		int64_t weight;
-		int64_t max_connections;
-		int32_t use_ssl;
-	} servers_defaults;
-	void reset_attributes();
-	inline
-	bool handle_warnings_enabled() const {
-		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
-	}
-	PgSQL_HGC(int);
-	~PgSQL_HGC();
-	PgSQL_SrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess);
-};
-#endif // 0
 
 class PgSQL_Group_Replication_Info {
 	public:
