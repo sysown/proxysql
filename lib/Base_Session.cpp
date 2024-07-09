@@ -65,6 +65,11 @@ void Base_Session<S,DS,B,T>::init() {
 	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		sess_STMTs_meta = new MySQL_STMTs_meta();
 		SLDH = new StmtLongDataHandler();
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		sess_STMTs_meta = NULL;
+		SLDH = NULL;
+	} else {
+		assert(0);
 	}
 };
 
