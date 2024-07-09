@@ -656,6 +656,13 @@ class Base_HostGroups_Manager {
 	public:
 	Base_HostGroups_Manager();
 	HGC * MyHGC_lookup(unsigned int);
+	SQLite3_result * execute_query(char *query, char **error);
+
+	void wrlock();
+	void wrunlock();
+#ifdef DEBUG
+	bool is_locked = false;
+#endif
 
 	friend class MySQL_HostGroups_Manager;
 	friend class PgSQL_HostGroups_Manager;
@@ -1101,6 +1108,8 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result* get_current_mysql_table(const string& name);
 
 	SQLite3_result * execute_query(char *query, char **error);
+
+
 	/**
 	 * @brief Creates a resultset with the current full content of the target table.
 	 * @param string The target table. Valid values are:

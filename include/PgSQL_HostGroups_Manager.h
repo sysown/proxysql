@@ -691,8 +691,8 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	PgSQL_HostGroups_Manager();
 	~PgSQL_HostGroups_Manager();
 	void init();
-	void wrlock();
-	void wrunlock();
+	//void wrlock();
+	//void wrunlock();
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'pgsql_servers_v2' using the provided hash.
@@ -773,7 +773,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	void save_incoming_pgsql_table(SQLite3_result *, const string&);
 	SQLite3_result* get_current_pgsql_table(const string& name);
 
-	SQLite3_result * execute_query(char *query, char **error);
+	//SQLite3_result * execute_query(char *query, char **error);
 	/**
 	 * @brief Creates a resultset with the current full content of the target table.
 	 * @param string The target table. Valid values are:

@@ -759,14 +759,6 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	pthread_mutex_destroy(&lock);
 }
 
-// wrlock() is only required during commit()
-void MySQL_HostGroups_Manager::wrlock() {
-	pthread_mutex_lock(&lock);
-#ifdef DEBUG
-	is_locked = true;
-#endif
-}
-
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
 	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
 	if (err_type == p_mysql_error_type::proxysql) {
@@ -797,14 +789,6 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 
 	pthread_mutex_unlock(&mysql_errors_mutex);
 }
-
-void MySQL_HostGroups_Manager::wrunlock() {
-#ifdef DEBUG
-	is_locked = false;
-#endif
-	pthread_mutex_unlock(&lock);
-}
-
 
 void MySQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
 	struct timespec ts;
@@ -905,29 +889,6 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	(*proxy_sqlite3_finalize)(statement1);
 	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
-}
-
-/**
- * @brief Execute a SQL query and retrieve the resultset.
- *
- * This function executes a SQL query using the provided query string and returns the resultset obtained from the
- * database operation. It also provides an optional error parameter to capture any error messages encountered during
- * query execution.
- *
- * @param query A pointer to a null-terminated string containing the SQL query to be executed.
- * @param error A pointer to a char pointer where any error message encountered during query execution will be stored.
- *              Pass nullptr if error handling is not required.
- * @return A pointer to a SQLite3_result object representing the resultset obtained from the query execution. This
- *         pointer may be nullptr if the query execution fails or returns an empty result.
- */
-SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	wrlock();
-	mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
 }
 
 /**

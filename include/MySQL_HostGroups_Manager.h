@@ -898,11 +898,13 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 	void init();
+#if 0
 	void wrlock();
 	void wrunlock();
 #ifdef DEBUG
 	bool is_locked = false;
 #endif
+#endif // 0
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.
@@ -987,7 +989,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	void save_incoming_mysql_table(SQLite3_result *, const string&);
 	SQLite3_result* get_current_mysql_table(const string& name);
 
-	SQLite3_result * execute_query(char *query, char **error);
+	//SQLite3_result * execute_query(char *query, char **error);
 	/**
 	 * @brief Creates a resultset with the current full content of the target table.
 	 * @param string The target table. Valid values are:

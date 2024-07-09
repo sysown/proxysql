@@ -42,11 +42,17 @@ template Base_HostGroups_Manager<MyHGC>::Base_HostGroups_Manager();
 template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_find(unsigned int);
 template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_create(unsigned int);
 template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_lookup(unsigned int);
+template void Base_HostGroups_Manager<MyHGC>::wrlock();
+template void Base_HostGroups_Manager<MyHGC>::wrunlock();
 
 template Base_HostGroups_Manager<PgSQL_HGC>::Base_HostGroups_Manager();
 template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_find(unsigned int);
 template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_create(unsigned int);
 template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_lookup(unsigned int);
+template void Base_HostGroups_Manager<PgSQL_HGC>::wrlock();
+template void Base_HostGroups_Manager<PgSQL_HGC>::wrunlock();
+
+template SQLite3_result * Base_HostGroups_Manager<MyHGC>::execute_query(char*, char**);
 
 #if 0
 #define SAFE_SQLITE3_STEP(_stmt) do {\
@@ -776,14 +782,18 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	pthread_mutex_destroy(&lock);
 }
 
+#endif // 0
+
 // wrlock() is only required during commit()
-void MySQL_HostGroups_Manager::wrlock() {
+template <typename HGC>
+void Base_HostGroups_Manager<HGC>::wrlock() {
 	pthread_mutex_lock(&lock);
 #ifdef DEBUG
 	is_locked = true;
 #endif
 }
 
+#if 0
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
 	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
 	if (err_type == p_mysql_error_type::proxysql) {
@@ -814,15 +824,17 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 
 	pthread_mutex_unlock(&mysql_errors_mutex);
 }
+#endif // 0
 
-void MySQL_HostGroups_Manager::wrunlock() {
+template <typename HGC>
+void Base_HostGroups_Manager<HGC>::wrunlock() {
 #ifdef DEBUG
 	is_locked = false;
 #endif
 	pthread_mutex_unlock(&lock);
 }
 
-
+#if 0
 void MySQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
@@ -923,6 +935,7 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
 }
+#endif // 0
 
 /**
  * @brief Execute a SQL query and retrieve the resultset.
@@ -937,7 +950,8 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
  * @return A pointer to a SQLite3_result object representing the resultset obtained from the query execution. This
  *         pointer may be nullptr if the query execution fails or returns an empty result.
  */
-SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
+template <typename HGC>
+SQLite3_result * Base_HostGroups_Manager<HGC>::execute_query(char *query, char **error) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -947,6 +961,7 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 	return resultset;
 }
 
+#if 0
 /**
  * @brief Calculate and update the checksum for a specified table in the database.
  *

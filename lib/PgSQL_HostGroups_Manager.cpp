@@ -924,11 +924,6 @@ PgSQL_HostGroups_Manager::~PgSQL_HostGroups_Manager() {
 	pthread_mutex_destroy(&lock);
 }
 
-// wrlock() is only required during commit()
-void PgSQL_HostGroups_Manager::wrlock() {
-	pthread_mutex_lock(&lock);
-}
-
 void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
 	PgSQL_p_hg_dyn_counter::metric metric = PgSQL_p_hg_dyn_counter::pgsql_error;
 	if (err_type == p_pgsql_error_type::proxysql) {
@@ -959,11 +954,6 @@ void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type e
 
 	pthread_mutex_unlock(&pgsql_errors_mutex);
 }
-
-void PgSQL_HostGroups_Manager::wrunlock() {
-	pthread_mutex_unlock(&lock);
-}
-
 
 void PgSQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
 	struct timespec ts;
@@ -1064,16 +1054,6 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	(*proxy_sqlite3_finalize)(statement1);
 	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
-}
-
-SQLite3_result * PgSQL_HostGroups_Manager::execute_query(char *query, char **error) {
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	wrlock();
-  mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
 }
 
 void PgSQL_HostGroups_Manager::CUCFT1(
