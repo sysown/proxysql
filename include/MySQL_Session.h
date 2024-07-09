@@ -423,7 +423,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds) override;
 	bool handle_command_query_kill(PtrSize_t *);
-	void update_expired_conns(const std::vector<std::function<bool(MySQL_Connection*)>>&);
+	//void update_expired_conns(const std::vector<std::function<bool(MySQL_Connection*)>>&);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
 	 *  'transaction_persistent_hostgroup', and updates the 'MySQL_Data_Stream' and 'MySQL_Connection' before

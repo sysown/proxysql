@@ -48,6 +48,11 @@ template bool Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQ
 template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::housekeeping_before_pkts();
 template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::housekeeping_before_pkts();
 
+
+template void Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>::update_expired_conns(std::vector<std::function<bool (MySQL_Connection*)>, std::allocator<std::function<bool (MySQL_Connection*)> > > const&);
+template void Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::update_expired_conns(std::vector<std::function<bool (PgSQL_Connection*)>, std::allocator<std::function<bool (PgSQL_Connection*)> > > const&);
+
+
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::Base_Session() {
 };
@@ -494,6 +499,52 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 		// 'handler' call to perform recomputing of the already processed elements.
 		if (hgs_expired_conns.empty() == false) {
 			hgs_expired_conns.clear();
+		}
+	}
+}
+
+/**
+ * @brief Update expired connections based on specified checks.
+ * 
+ * This function iterates through the list of backends and their connections
+ * to determine if any connections have expired based on the provided checks.
+ * If a connection is found to be expired, its hostgroup ID is added to the
+ * list of expired connections for further processing.
+ * 
+ * @param checks A vector of function objects representing checks to determine if a connection has expired.
+ */
+template<typename S, typename DS, typename B, typename T>
+using TypeConn = typename std::conditional<
+	std::is_same_v<S, MySQL_Session>, MySQL_Connection, PgSQL_Connection
+>::type;
+
+template<typename S, typename DS, typename B, typename T>
+void Base_Session<S,DS,B,T>::update_expired_conns(const vector<function<bool(TypeConn *)>>& checks) {
+	for (uint32_t i = 0; i < mybes->len; i++) { // iterate through the list of backends 
+		B * mybe = static_cast<B *>(mybes->index(i));
+		DS * myds = mybe != nullptr ? mybe->server_myds : nullptr;
+
+
+		TypeConn * myconn = myds != nullptr ? myds->myconn : nullptr;
+
+		//!  it performs a series of checks to determine if it has expired
+		if (myconn != nullptr) {
+			const bool is_active_transaction = myconn->IsActiveTransaction();
+			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
+			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
+
+			// Make sure the connection is reusable before performing any check
+			if (myconn->reusable == true && is_active_transaction == false && multiplex_disabled == false && is_idle) {
+				for (const function<bool(TypeConn*)>& check : checks) {
+					if (check(myconn)) {
+						// If a connection is found to be expired based on the provided checks,
+						// its hostgroup ID is added to the list of expired connections (hgs_expired_conns)
+						// for further processing.
+						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
+						break;
+					}
+				}
+			}
 		}
 	}
 }

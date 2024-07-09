@@ -783,45 +783,6 @@ MySQL_Session::~MySQL_Session() {
 	}
 }
 
-
-/**
- * @brief Update expired connections based on specified checks.
- * 
- * This function iterates through the list of backends and their connections
- * to determine if any connections have expired based on the provided checks.
- * If a connection is found to be expired, its hostgroup ID is added to the
- * list of expired connections for further processing.
- * 
- * @param checks A vector of function objects representing checks to determine if a connection has expired.
- */
-void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connection*)>>& checks) {
-	for (uint32_t i = 0; i < mybes->len; i++) { // iterate through the list of backends 
-		MySQL_Backend* mybe = static_cast<MySQL_Backend*>(mybes->index(i));
-		MySQL_Data_Stream* myds = mybe != nullptr ? mybe->server_myds : nullptr;
-		MySQL_Connection* myconn = myds != nullptr ? myds->myconn : nullptr;
-
-		//!  it performs a series of checks to determine if it has expired
-		if (myconn != nullptr) {
-			const bool is_active_transaction = myconn->IsActiveTransaction();
-			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
-			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
-
-			// Make sure the connection is reusable before performing any check
-			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false && is_idle) {
-				for (const function<bool(MySQL_Connection*)>& check : checks) {
-					if (check(myconn)) {
-						// If a connection is found to be expired based on the provided checks,
-						// its hostgroup ID is added to the list of expired connections (hgs_expired_conns)
-						// for further processing.
-						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
-						break;
-					}
-				}
-			}
-		}
-	}
-}
-
 /**
  * @brief Handles COMMIT or ROLLBACK commands received from the client.
  *

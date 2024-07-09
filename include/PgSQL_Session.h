@@ -401,7 +401,7 @@ public:
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) override;
 	bool handle_command_query_kill(PtrSize_t*);
-	void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
+	//void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
 	 *  'transaction_persistent_hostgroup', and updates the 'PgSQL_Data_Stream' and 'PgSQL_Connection' before

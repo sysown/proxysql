@@ -708,30 +708,6 @@ PgSQL_Session::~PgSQL_Session() {
 	}
 }
 
-void PgSQL_Session::update_expired_conns(const vector<function<bool(PgSQL_Connection*)>>& checks) {
-	for (uint32_t i = 0; i < mybes->len; i++) {
-		PgSQL_Backend* mybe = static_cast<PgSQL_Backend*>(mybes->index(i));
-		PgSQL_Data_Stream* myds = mybe != nullptr ? mybe->server_myds : nullptr;
-		PgSQL_Connection* myconn = myds != nullptr ? myds->myconn : nullptr;
-
-		if (myconn != nullptr) {
-			const bool is_active_transaction = myconn->IsActiveTransaction();
-			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
-			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
-
-			// Make sure the connection is reusable before performing any check
-			if (myconn->reusable == true && is_active_transaction == false && multiplex_disabled == false && is_idle) {
-				for (const function<bool(PgSQL_Connection*)>& check : checks) {
-					if (check(myconn)) {
-						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
-						break;
-					}
-				}
-			}
-		}
-	}
-}
-
 bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	if (pkt->size <= 5) { return false; }
 	char c = ((char*)pkt->ptr)[5];

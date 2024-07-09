@@ -121,7 +121,10 @@ class Base_Session {
 	void housekeeping_before_pkts();
 	virtual void create_new_session_and_reset_connection(DS *_myds) = 0;
 
-
+	using TypeConn = typename std::conditional<
+		std::is_same_v<S, MySQL_Session>, MySQL_Connection, PgSQL_Connection
+	>::type;
+	void update_expired_conns(const std::vector<std::function<bool(TypeConn*)>>&);
 
 };
 
