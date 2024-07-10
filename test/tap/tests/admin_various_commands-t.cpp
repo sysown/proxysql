@@ -79,6 +79,7 @@ int main() {
 		{ 1 , "show VARIABLES" },
 		{ 1 , "show ALL variables" },
 		{ 1 , "show MYSQL variables" },
+		{ 1 , "SHOW PGSQL VARIABLES" },
 		{ 1 , "SHOW admin VARIABLES" },
 		{ 3 , "sHoW DATABASES" },
 		{ 3 , "sHoW SCHEMAS" },
