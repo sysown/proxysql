@@ -48,6 +48,7 @@ using json = nlohmann::json;
 #include <sys/mman.h>
 
 #include <uuid/uuid.h>
+#include <atomic>
 
 /*
 extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
@@ -59,6 +60,14 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 using std::map;
 using std::string;
 using std::vector;
+
+
+void sleep_iter(unsigned int iter) {
+	usleep(50*iter);
+#ifdef RUNNING_ON_VALGRIND
+	usleep((1000+rand()%1000)*iter);
+#endif // RUNNING_ON_VALGRIND
+}
 
 
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
@@ -408,7 +417,7 @@ using namespace std;
 //__cmd_proxysql_config_file=NULL;
 #define MAX_EVENTS 100
 
-static volatile int load_;
+std::atomic<int> load_;
 
 //__thread l_sfp *__thr_sfp=NULL;
 //#ifdef DEBUG
@@ -474,8 +483,9 @@ void * mysql_worker_thread_func(void *arg) {
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
-	__sync_fetch_and_sub(&load_,1);
-	do { usleep(50); } while (load_);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
 	//delete worker;
@@ -505,8 +515,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
-	__sync_fetch_and_sub(&load_,1);
-	do { usleep(50); } while (load_);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
 	//delete worker;
@@ -537,8 +548,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
 	//	worker->poll_listener_add(socket_fd);
-	__sync_fetch_and_sub(&load_, 1);
-	do { usleep(50); } while (load_);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
 	//delete worker;
@@ -568,8 +580,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
 	//	worker->poll_listener_add(socket_fd);
-	__sync_fetch_and_sub(&load_, 1);
-	do { usleep(50); } while (load_);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
 	//delete worker;
@@ -1331,11 +1344,8 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 
-	do { /* nothing */
-#ifdef DEBUG
-		usleep(5+rand()%10);
-#endif
-	} while (load_ != 1);
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_ != 1);
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 

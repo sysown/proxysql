@@ -12,6 +12,38 @@ extern int gdbg;
 #ifndef __PROXYSQL_DEBUG_H
 #define __PROXYSQL_DEBUG_H
 
+#include <chrono>
+#include <iostream>
+#include <atomic>
+
+#include "proxysql_macros.h"
+
+#if ENABLE_TIMER // this is defined in proxysql_macros.h
+class TimerCount {
+	public:
+	std::chrono::duration<double> Timer = std::chrono::seconds(0);
+	unsigned int Count = 0;
+};
+
+class Timer {
+	public:
+		Timer(TimerCount& tc) : totalTime(tc.Timer) {
+			start = std::chrono::high_resolution_clock::now();
+			tc.Count++;
+		}
+
+		~Timer() {
+			auto end = std::chrono::high_resolution_clock::now();
+			std::chrono::duration<double> elapsed = end - start;
+			totalTime += elapsed;
+		}
+	private:
+		//std::atomic<std::chrono::duration<double>>& totalTime; // If using atomic , use this instead
+		std::chrono::duration<double>& totalTime;
+		std::chrono::time_point<std::chrono::high_resolution_clock> start;
+};
+#endif // ENABLE_TIMER
+
 #ifdef DEBUG
 #define PROXY_TRACE() { proxy_debug(PROXY_DEBUG_GENERIC,10,"TRACE\n"); }
 //#define PROXY_TRACE2() { proxy_info("TRACE\n"); }

@@ -120,6 +120,9 @@ class Base_Session {
 	 */
 	void housekeeping_before_pkts();
 	virtual void create_new_session_and_reset_connection(DS *_myds) = 0;
+
+
+
 };
 
 #endif // CLASS_BASE_SESSION_H

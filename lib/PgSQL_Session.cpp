@@ -4389,6 +4389,9 @@ void PgSQL_Session::handler_rc0_Process_GTID(PgSQL_Connection* myconn) {
 }
 
 int PgSQL_Session::handler() {
+#if ENABLE_TIMER
+	Timer timer(thread->Timers.Sessions_Handlers);
+#endif // ENABLE_TIMER
 	int handler_ret = 0;
 	bool prepared_stmt_with_no_params = false;
 	bool wrong_pass = false;
