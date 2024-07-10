@@ -11,54 +11,6 @@ static unsigned long long array_mysrvc_cands = 0;
 
 extern MySQL_Threads_Handler *GloMTH;
 
-MyHGC::MyHGC(int _hid) {
-	hid=_hid;
-	mysrvs=new MySrvList(this);
-	current_time_now = 0;
-	new_connections_now = 0;
-	attributes.initialized = false;
-	reset_attributes();
-	// Uninitialized server defaults. Should later be initialized via 'mysql_hostgroup_attributes'.
-	servers_defaults.weight = -1;
-	servers_defaults.max_connections = -1;
-	servers_defaults.use_ssl = -1;
-	num_online_servers.store(0, std::memory_order_relaxed);;
-	last_log_time_num_online_servers = 0;
-}
-	
-void MyHGC::reset_attributes() {
-	if (attributes.initialized == false) {
-		attributes.init_connect = NULL;
-		attributes.comment = NULL;
-		attributes.ignore_session_variables_text = NULL;
-	}
-	attributes.initialized = true;
-	attributes.configured = false;
-	attributes.max_num_online_servers = 1000000;
-	attributes.throttle_connections_per_sec = 1000000;
-	attributes.autocommit = -1;
-	attributes.free_connections_pct = 10;
-	attributes.handle_warnings = -1;
-	attributes.monitor_slave_lag_when_null = -1;
-	attributes.multiplex = true;
-	attributes.connection_warming = false;
-	free(attributes.init_connect);
-	attributes.init_connect = NULL;
-	free(attributes.comment);
-	attributes.comment = NULL;
-	free(attributes.ignore_session_variables_text);
-	attributes.ignore_session_variables_text = NULL;
-	if (attributes.ignore_session_variables_json) {
-		delete attributes.ignore_session_variables_json;
-		attributes.ignore_session_variables_json = NULL;
-	}
-}
-	
-MyHGC::~MyHGC() {
-	reset_attributes(); // free all memory
-	delete mysrvs;
-}
-
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
@@ -399,32 +351,4 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
 	return NULL; // if we reach here, we couldn't find any target
-}
-
-void MyHGC::refresh_online_server_count() {
-	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0)
-		return;
-#ifdef DEBUG
-	assert(MyHGM->is_locked);
-#endif
-	unsigned int online_servers_count = 0;
-	for (unsigned int i = 0; i < mysrvs->servers->len; i++) {
-		MySrvC* mysrvc = (MySrvC*)mysrvs->servers->index(i);
-		if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
-			online_servers_count++;
-		}
-	}
-	num_online_servers.store(online_servers_count, std::memory_order_relaxed);
-}
-
-void MyHGC::log_num_online_server_count_error() {
-	const time_t curtime = time(NULL);
-	// if this is the first time the method is called or if more than 10 seconds have passed since the last log
-	if (last_log_time_num_online_servers == 0 ||
-		((curtime - last_log_time_num_online_servers) > 10)) {
-		last_log_time_num_online_servers = curtime;
-		proxy_error(
-			"Number of online servers detected in a hostgroup exceeds the configured maximum online servers. hostgroup:%u, num_online_servers:%u, max_online_servers:%u\n",
-			hid, num_online_servers.load(std::memory_order_relaxed), attributes.max_num_online_servers);
-	}
 }

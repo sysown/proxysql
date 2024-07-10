@@ -121,8 +121,28 @@ class Base_Session {
 	void housekeeping_before_pkts();
 	virtual void create_new_session_and_reset_connection(DS *_myds) = 0;
 
+	using TypeConn = typename std::conditional<
+		std::is_same_v<S, MySQL_Session>, MySQL_Connection, PgSQL_Connection
+	>::type;
+	void update_expired_conns(const std::vector<std::function<bool(TypeConn*)>>&);
 
-
+	void set_unhealthy();
+	unsigned int NumActiveTransactions(bool check_savpoint=false);
+	bool HasOfflineBackends();
+	bool SetEventInOfflineBackends();
+	/**
+	 * @brief Finds one active transaction in the current backend connections.
+	 * @details Since only one connection is returned, if the session holds multiple backend connections with
+	 *  potential transactions, the priority is:
+	 *   1. Connections flagged with 'SERVER_STATUS_IN_TRANS', or 'autocommit=0' in combination with
+	 *      'autocommit_false_is_transaction'.
+	 *   2. Connections with 'autocommit=0' holding a 'SAVEPOINT'.
+	 *   3. Connections with 'unknown transaction status', e.g: connections with errors.
+	 * @param check_savepoint Used to also check for connections holding savepoints. See MySQL bug
+	 *  https://bugs.mysql.com/bug.php?id=107875.
+	 * @returns The hostgroup in which the connection was found, -1 in case no connection is found.
+	 */
+	int FindOneActiveTransaction(bool check_savepoint=false);
 };
 
 #endif // CLASS_BASE_SESSION_H

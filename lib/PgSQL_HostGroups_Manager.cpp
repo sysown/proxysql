@@ -69,39 +69,6 @@ static pthread_mutex_t ev_loop_mutex;
 
 const int PgSQL_ERRORS_STATS_FIELD_NUM = 11;
 
-#if 0
-static std::string gtid_executed_to_string(gtid_set_t & gtid_executed);
-static void addGtid(const gtid_t & gtid, gtid_set_t & gtid_executed);
-
-static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int revents) {
-	if (glovars.shutdown) {
-		ev_break(loop);
-	}
-	pthread_mutex_lock(&ev_loop_mutex);
-	PgHGM->gtid_missing_nodes = false;
-	PgHGM->generate_pgsql_gtid_executed_tables();
-	pthread_mutex_unlock(&ev_loop_mutex);
-	return;
-}
-
-static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int revents) {
-	if (GloMTH == nullptr) { return; }
-	ev_timer_stop(loop, timer);
-	ev_timer_set(timer, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
-	if (glovars.shutdown) {
-		ev_break(loop);
-	}
-	if (PgHGM->gtid_missing_nodes) {
-		pthread_mutex_lock(&ev_loop_mutex);
-		PgHGM->gtid_missing_nodes = false;
-		PgHGM->generate_pgsql_gtid_executed_tables();
-		pthread_mutex_unlock(&ev_loop_mutex);
-	}
-	ev_timer_start(loop, timer);
-	return;
-}
-#endif // 0
-
 static int wait_for_pgsql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
 	int timeout, res;
@@ -168,435 +135,6 @@ T PgSQL_j_get_srv_default_int_val(
 
 	return static_cast<T>(-1);
 }
-
-#if 0
-static void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
-	pthread_mutex_lock(&ev_loop_mutex);
-	if (revents & EV_READ) {
-		PgSQL_GTID_Server_Data *sd = (PgSQL_GTID_Server_Data *)w->data;
-		bool rc = true;
-		rc = sd->readall();
-		if (rc == false) {
-			//delete sd;
-			std::string s1 = sd->address;
-			s1.append(":");
-			s1.append(std::to_string(sd->pgsql_port));
-			PgHGM->gtid_missing_nodes = true;
-			proxy_warning("GTID: failed to connect to ProxySQL binlog reader on port %d for server %s:%d\n", sd->port, sd->address, sd->pgsql_port);
-			std::unordered_map <string, PgSQL_GTID_Server_Data *>::iterator it2;
-			it2 = PgHGM->gtid_map.find(s1);
-			if (it2 != PgHGM->gtid_map.end()) {
-				//PgHGM->gtid_map.erase(it2);
-				it2->second = NULL;
-				delete sd;
-			}
-			ev_io_stop(PgHGM->gtid_ev_loop, w);
-			free(w);
-		} else {
-			sd->dump();
-		}
-	}
-	pthread_mutex_unlock(&ev_loop_mutex);
-}
-
-static void connect_cb(EV_P_ ev_io *w, int revents) {
-	pthread_mutex_lock(&ev_loop_mutex);
-	struct ev_io * c = w;
-	if (revents & EV_WRITE) {
-		int optval = 0;
-		socklen_t optlen = sizeof(optval);
-		if ((getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) ||
-			(optval != 0)) {
-			/* Connection failed; try the next address in the list. */
-			//int errnum = optval ? optval : errno;
-			ev_io_stop(PgHGM->gtid_ev_loop, w);
-			close(w->fd);
-			PgHGM->gtid_missing_nodes = true;
-			PgSQL_GTID_Server_Data * custom_data = (PgSQL_GTID_Server_Data *)w->data;
-			PgSQL_GTID_Server_Data *sd = custom_data;
-			std::string s1 = sd->address;
-			s1.append(":");
-			s1.append(std::to_string(sd->pgsql_port));
-			proxy_warning("GTID: failed to connect to ProxySQL binlog reader on port %d for server %s:%d\n", sd->port, sd->address, sd->pgsql_port);
-			std::unordered_map <string, PgSQL_GTID_Server_Data *>::iterator it2;
-			it2 = PgHGM->gtid_map.find(s1);
-			if (it2 != PgHGM->gtid_map.end()) {
-				//PgHGM->gtid_map.erase(it2);
-				it2->second = NULL;
-				delete sd;
-			}
-			//delete custom_data;
-			free(c);
-		} else {
-			ev_io_stop(PgHGM->gtid_ev_loop, w);
-			int fd=w->fd;
-			struct ev_io * new_w = (struct ev_io*) malloc(sizeof(struct ev_io));
-			new_w->data = w->data;
-			PgSQL_GTID_Server_Data * custom_data = (PgSQL_GTID_Server_Data *)new_w->data;
-			custom_data->w = new_w;
-			free(w);
-			ev_io_init(new_w, reader_cb, fd, EV_READ);
-			ev_io_start(PgHGM->gtid_ev_loop, new_w);
-		}
-	}
-	pthread_mutex_unlock(&ev_loop_mutex);
-}
-
-static struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t pgsql_port) {
-	//struct sockaddr_in a;
-	int s;
-
-	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-		perror("socket");
-		close(s);
-		return NULL;
-	}
-/*
-	memset(&a, 0, sizeof(a));
-	a.sin_port = htons(gtid_port);
-	a.sin_family = AF_INET;
-	if (!inet_aton(address, (struct in_addr *) &a.sin_addr.s_addr)) {
-		perror("bad IP address format");
-		close(s);
-		return NULL;
-	}
-*/
-	ioctl_FIONBIO(s,1);
-
-	struct addrinfo hints;
-	struct addrinfo *res = NULL;
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_protocol= IPPROTO_TCP;
-	hints.ai_family= AF_UNSPEC;
-	hints.ai_socktype= SOCK_STREAM;
-
-	char str_port[NI_MAXSERV+1];
-	sprintf(str_port,"%d", gtid_port);
-	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
-	if (gai_rc) {
-		freeaddrinfo(res);
-		//exit here
-		return NULL;
-	}
-
-	//int status = connect(s, (struct sockaddr *) &a, sizeof(a));
-	int status = connect(s, res->ai_addr, res->ai_addrlen);
-	if ((status == 0) || ((status == -1) && (errno == EINPROGRESS))) {
-		struct ev_io *c = (struct ev_io *)malloc(sizeof(struct ev_io));
-		if (c) {
-			ev_io_init(c, connect_cb, s, EV_WRITE);
-			PgSQL_GTID_Server_Data * custom_data = new PgSQL_GTID_Server_Data(c, address, gtid_port, pgsql_port);
-			c->data = (void *)custom_data;
-			return c;
-		}
-		/* else error */
-	}
-	return NULL;
-}
-
-
-
-PgSQL_GTID_Server_Data::PgSQL_GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _pgsql_port) {
-	active = true;
-	w = _w;
-	size = 1024; // 1KB buffer
-	data = (char *)malloc(size);
-	memset(uuid_server, 0, sizeof(uuid_server));
-	pos = 0;
-	len = 0;
-	address = strdup(_address);
-	port = _port;
-	pgsql_port = _pgsql_port;
-	events_read = 0;
-}
-
-void PgSQL_GTID_Server_Data::resize(size_t _s) {
-	char *data_ = (char *)malloc(_s);
-	memcpy(data_, data, (_s > size ? size : _s));
-	size = _s;
-	free(data);
-	data = data_;
-}
-
-PgSQL_GTID_Server_Data::~PgSQL_GTID_Server_Data() {
-	free(address);
-	free(data);
-}
-
-bool PgSQL_GTID_Server_Data::readall() {
-	bool ret = true;
-	if (size == len) {
-		// buffer is full, expand
-		resize(len*2);
-	}
-	int rc = 0;
-	rc = read(w->fd,data+len,size-len);
-	if (rc > 0) {
-		len += rc;
-	} else {
-		int myerr = errno;
-		proxy_error("Read returned %d bytes, error %d\n", rc, myerr);
-		if (
-			(rc == 0) ||
-			(rc==-1 && myerr != EINTR && myerr != EAGAIN)
-		) {
-			ret = false;
-		}
-	}
-	return ret;
-}
-
-
-bool PgSQL_GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	std::string s = gtid_uuid;
-	auto it = gtid_executed.find(s);
-//	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
-	if (it == gtid_executed.end()) {
-//		fprintf(stderr,"NO\n");
-		return false;
-	}
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-		if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
-//			fprintf(stderr,"YES\n");
-			return true;
-		}
-	}
-//	fprintf(stderr,"NO\n");
-	return false;
-}
-
-void PgSQL_GTID_Server_Data::read_all_gtids() {
-		while (read_next_gtid()) {
-		}
-	}
-
-void PgSQL_GTID_Server_Data::dump() {
-	if (len==0) {
-		return;
-	}
-	read_all_gtids();
-	//int rc = write(1,data+pos,len-pos);
-	fflush(stdout);
-	///pos += rc;
-	if (pos >= len/2) {
-		memmove(data,data+pos,len-pos);
-		len = len-pos;
-		pos = 0;
-	}
-}
-
-bool PgSQL_GTID_Server_Data::writeout() {
-	bool ret = true;
-	if (len==0) {
-		return ret;
-	}
-	int rc = 0;
-	rc = write(w->fd,data+pos,len-pos);
-	if (rc > 0) {
-		pos += rc;
-		if (pos >= len/2) {
-			memmove(data,data+pos,len-pos);
-			len = len-pos;
-			pos = 0;
-		}
-	}
-	return ret;
-}
-
-bool PgSQL_GTID_Server_Data::read_next_gtid() {
-	if (len==0) {
-		return false;
-	}
-	void *nlp = NULL;
-	nlp = memchr(data+pos,'\n',len-pos);
-	if (nlp == NULL) {
-		return false;
-	}
-	int l = (char *)nlp - (data+pos);
-	char rec_msg[80];
-	if (strncmp(data+pos,(char *)"ST=",3)==0) {
-		// we are reading the bootstrap
-		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
-		memcpy(bs, data+pos+3, l-3);
-		bs[l-3] = '\0';
-		char *saveptr1=NULL;
-		char *saveptr2=NULL;
-		//char *saveptr3=NULL;
-		char *token = NULL;
-		char *subtoken = NULL;
-		//char *subtoken2 = NULL;
-		char *str1 = NULL;
-		char *str2 = NULL;
-		//char *str3 = NULL;
-		for (str1 = bs; ; str1 = NULL) {
-			token = strtok_r(str1, ",", &saveptr1);
-			if (token == NULL) {
-				break;
-			}
-			int j = 0;
-			for (str2 = token; ; str2 = NULL) {
-				subtoken = strtok_r(str2, ":", &saveptr2);
-				if (subtoken == NULL) {
-					break;
-					}
-				j++;
-				if (j%2 == 1) { // we are reading the uuid
-					char *p = uuid_server;
-					for (unsigned int k=0; k<strlen(subtoken); k++) {
-						if (subtoken[k]!='-') {
-							*p = subtoken[k];
-							p++;
-						}
-					}
-					//fprintf(stdout,"BS from %s\n", uuid_server);
-				} else { // we are reading the trxids
-					uint64_t trx_from;
-					uint64_t trx_to;
-					sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
-					//fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server, trx_from, trx_to);
-					std::string s = uuid_server;
-					gtid_executed[s].emplace_back(trx_from, trx_to);
-			   }
-			}
-		}
-		pos += l+1;
-		free(bs);
-		//return true;
-	} else {
-		strncpy(rec_msg,data+pos,l);
-		pos += l+1;
-		rec_msg[l] = 0;
-		//int rc = write(1,data+pos,l+1);
-		//fprintf(stdout,"%s\n", rec_msg);
-		if (rec_msg[0]=='I') {
-			//char rec_uuid[80];
-			uint64_t rec_trxid = 0;
-			char *a = NULL;
-			int ul = 0;
-			switch (rec_msg[1]) {
-				case '1':
-					//sscanf(rec_msg+3,"%s\:%lu",uuid_server,&rec_trxid);
-					a = strchr(rec_msg+3,':');
-					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
-					rec_trxid=atoll(a+1);
-					break;
-				case '2':
-					//sscanf(rec_msg+3,"%lu",&rec_trxid);
-					rec_trxid=atoll(rec_msg+3);
-					break;
-				default:
-					break;
-			}
-			//fprintf(stdout,"%s:%lu\n", uuid_server, rec_trxid);
-			std::string s = uuid_server;
-			gtid_t new_gtid = std::make_pair(s,rec_trxid);
-			addGtid(new_gtid,gtid_executed);
-			events_read++;
-			//return true;
-		}
-	}
-	//std::cout << "current pos " << gtid_executed_to_string(gtid_executed) << std::endl << std::endl;
-	return true;
-}
-
-static std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
-	std::string gtid_set;
-	for (auto it=gtid_executed.begin(); it!=gtid_executed.end(); ++it) {
-		std::string s = it->first;
-		s.insert(8,"-");
-		s.insert(13,"-");
-		s.insert(18,"-");
-		s.insert(23,"-");
-		s = s + ":";
-		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-			std::string s2 = s;
-			s2 = s2 + std::to_string(itr->first);
-			s2 = s2 + "-";
-			s2 = s2 + std::to_string(itr->second);
-			s2 = s2 + ",";
-			gtid_set = gtid_set + s2;
-		}
-	}
-	// Extract latest comma only in case 'gtid_executed' isn't empty
-	if (gtid_set.empty() == false) {
-		gtid_set.pop_back();
-	}
-	return gtid_set;
-}
-
-
-
-static void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
-	auto it = gtid_executed.find(gtid.first);
-	if (it == gtid_executed.end())
-	{
-		gtid_executed[gtid.first].emplace_back(gtid.second, gtid.second);
-		return;
-	}
-
-	bool flag = true;
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		if (gtid.second >= itr->first && gtid.second <= itr->second)
-			return;
-		if (gtid.second + 1 == itr->first)
-		{
-			--itr->first;
-			flag = false;
-			break;
-		}
-		else if (gtid.second == itr->second + 1)
-		{
-			++itr->second;
-			flag = false;
-			break;
-		}
-		else if (gtid.second < itr->first)
-		{
-			it->second.emplace(itr, gtid.second, gtid.second);
-			return;
-		}
-	}
-
-	if (flag)
-		it->second.emplace_back(gtid.second, gtid.second);
-
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		auto next_itr = std::next(itr);
-		if (next_itr != it->second.end() && itr->second + 1 == next_itr->first)
-		{
-			itr->second = next_itr->second;
-			it->second.erase(next_itr);
-			break;
-		}
-	}
-}
-
-static void * GTID_syncer_run() {
-	//struct ev_loop * gtid_ev_loop;
-	//gtid_ev_loop = NULL;
-	PgHGM->gtid_ev_loop = ev_loop_new (EVBACKEND_POLL | EVFLAG_NOENV);
-	if (PgHGM->gtid_ev_loop == NULL) {
-		proxy_error("could not initialise GTID sync loop\n");
-		exit(EXIT_FAILURE);
-	}
-	//ev_async_init(gtid_ev_async, gtid_async_cb);
-	//ev_async_start(gtid_ev_loop, gtid_ev_async);
-	PgHGM->gtid_ev_timer = (struct ev_timer *)malloc(sizeof(struct ev_timer));
-	ev_async_init(PgHGM->gtid_ev_async, gtid_async_cb);
-	ev_async_start(PgHGM->gtid_ev_loop, PgHGM->gtid_ev_async);
-	//ev_timer_init(PgHGM->gtid_ev_timer, gtid_timer_cb, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
-	ev_timer_init(PgHGM->gtid_ev_timer, gtid_timer_cb, 3, 0);
-	ev_timer_start(PgHGM->gtid_ev_loop, PgHGM->gtid_ev_timer);
-	//ev_ref(gtid_ev_loop);
-	ev_run(PgHGM->gtid_ev_loop, 0);
-	//sleep(1000);
-	return NULL;
-}
-#endif // 0
 
 //static void * HGCU_thread_run() {
 static void * HGCU_thread_run() {
@@ -725,12 +263,6 @@ PgSQL_Connection * PgSQL_SrvConnList::remove(int _k) {
 	return (PgSQL_Connection *)conns->remove_index_fast(_k);
 }
 
-/*
-unsigned int PgSQL_SrvConnList::conns_length() {
-	return conns->len;
-}
-*/
-
 PgSQL_SrvConnList::PgSQL_SrvConnList(PgSQL_SrvC *_mysrvc) {
 	mysrvc=_mysrvc;
 	conns=new PtrArray();
@@ -747,35 +279,6 @@ PgSQL_SrvConnList::~PgSQL_SrvConnList() {
 		delete conn;
 	}
 	delete conns;
-}
-
-PgSQL_SrvList::PgSQL_SrvList(PgSQL_HGC *_myhgc) {
-	myhgc=_myhgc;
-	servers=new PtrArray();
-}
-
-void PgSQL_SrvList::add(PgSQL_SrvC *s) {
-	if (s->myhgc==NULL) {
-		s->myhgc=myhgc;
-	}
-	servers->add(s);
-}
-
-
-int PgSQL_SrvList::find_idx(PgSQL_SrvC *s) {
-  for (unsigned int i=0; i<servers->len; i++) {
-    PgSQL_SrvC *mysrv=(PgSQL_SrvC *)servers->index(i);
-    if (mysrv==s) {
-      return (unsigned int)i;
-    }
-  }
-  return -1;
-}
-
-void PgSQL_SrvList::remove(PgSQL_SrvC *s) {
-	int i=find_idx(s);
-	assert(i>=0);
-	servers->remove_index_fast((unsigned int)i);
 }
 
 void PgSQL_SrvConnList::drop_all_connections() {
@@ -922,61 +425,6 @@ PgSQL_SrvC::~PgSQL_SrvC() {
 	if (comment) free(comment);
 	delete ConnectionsUsed;
 	delete ConnectionsFree;
-}
-
-PgSQL_SrvList::~PgSQL_SrvList() {
-	myhgc=NULL;
-	while (servers->len) {
-		PgSQL_SrvC *mysrvc=(PgSQL_SrvC *)servers->remove_index_fast(0);
-		delete mysrvc;
-	}
-	delete servers;
-}
-
-
-PgSQL_HGC::PgSQL_HGC(int _hid) {
-	hid=_hid;
-	mysrvs=new PgSQL_SrvList(this);
-	current_time_now = 0;
-	new_connections_now = 0;
-	attributes.initialized = false;
-	reset_attributes();
-	// Uninitialized server defaults. Should later be initialized via 'pgsql_hostgroup_attributes'.
-	servers_defaults.weight = -1;
-	servers_defaults.max_connections = -1;
-	servers_defaults.use_ssl = -1;
-}
-
-void PgSQL_HGC::reset_attributes() {
-	if (attributes.initialized == false) {
-		attributes.init_connect = NULL;
-		attributes.comment = NULL;
-		attributes.ignore_session_variables_text = NULL;
-	}
-	attributes.initialized = true;
-	attributes.configured = false;
-	attributes.max_num_online_servers = 1000000;
-	attributes.throttle_connections_per_sec = 1000000;
-	attributes.autocommit = -1;
-	attributes.free_connections_pct = 10;
-	attributes.handle_warnings = -1;
-	attributes.multiplex = true;
-	attributes.connection_warming = false;
-	free(attributes.init_connect);
-	attributes.init_connect = NULL;
-	free(attributes.comment);
-	attributes.comment = NULL;
-	free(attributes.ignore_session_variables_text);
-	attributes.ignore_session_variables_text = NULL;
-	if (attributes.ignore_session_variables_json) {
-		delete attributes.ignore_session_variables_json;
-		attributes.ignore_session_variables_json = NULL;
-	}
-}
-
-PgSQL_HGC::~PgSQL_HGC() {
-	reset_attributes(); // free all memory
-	delete mysrvs;
 }
 
 using metric_name = std::string;
@@ -1388,14 +836,12 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 	status.access_denied_max_user_connections=0;
 	status.select_for_update_or_equivalent=0;
 	status.auto_increment_delay_multiplex=0;
+#if 0
 	pthread_mutex_init(&readonly_mutex, NULL);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_init(&lock, NULL);
-#else
-	spinlock_rwlock_init(&rwlock);
-#endif
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
+#endif // 0
 #ifdef DEBUG
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
@@ -1475,18 +921,7 @@ PgSQL_HostGroups_Manager::~PgSQL_HostGroups_Manager() {
 		ev_loop_destroy(gtid_ev_loop);
 	if (gtid_ev_timer)
 		free(gtid_ev_timer);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
-#endif
-}
-
-// wrlock() is only required during commit()
-void PgSQL_HostGroups_Manager::wrlock() {
-#ifdef MHM_PTHREAD_MUTEX
-	pthread_mutex_lock(&lock);
-#else
-	spin_wrlock(&rwlock);
-#endif
 }
 
 void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
@@ -1519,15 +954,6 @@ void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type e
 
 	pthread_mutex_unlock(&pgsql_errors_mutex);
 }
-
-void PgSQL_HostGroups_Manager::wrunlock() {
-#ifdef MHM_PTHREAD_MUTEX
-	pthread_mutex_unlock(&lock);
-#else
-	spin_wrunlock(&rwlock);
-#endif
-}
-
 
 void PgSQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
 	struct timespec ts;
@@ -1628,16 +1054,6 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	(*proxy_sqlite3_finalize)(statement1);
 	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
-}
-
-SQLite3_result * PgSQL_HostGroups_Manager::execute_query(char *query, char **error) {
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	wrlock();
-  mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
 }
 
 void PgSQL_HostGroups_Manager::CUCFT1(
@@ -2268,108 +1684,6 @@ uint64_t PgSQL_HostGroups_Manager::get_pgsql_servers_checksum(SQLite3_result* ru
 	return table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
 }
 
-bool PgSQL_HostGroups_Manager::gtid_exists(PgSQL_SrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
-	bool ret = false;
-#if 0
-	pthread_rwlock_rdlock(&gtid_rwlock);
-	std::string s1 = mysrvc->address;
-	s1.append(":");
-	s1.append(std::to_string(mysrvc->port));
-	std::unordered_map <string, PgSQL_GTID_Server_Data *>::iterator it2;
-	it2 = gtid_map.find(s1);
-	PgSQL_GTID_Server_Data *gtid_is=NULL;
-	if (it2!=gtid_map.end()) {
-		gtid_is=it2->second;
-		if (gtid_is) {
-			if (gtid_is->active == true) {
-				ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
-			}
-		}
-	}
-	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
-	pthread_rwlock_unlock(&gtid_rwlock);
-#endif // 0
-	return ret;
-}
-
-void PgSQL_HostGroups_Manager::generate_pgsql_gtid_executed_tables() {
-#if 0
-	pthread_rwlock_wrlock(&gtid_rwlock);
-	// first, set them all as active = false
-	std::unordered_map<string, PgSQL_GTID_Server_Data *>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		PgSQL_GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si) {
-			gtid_si->active = false;
-		}
-		it++;
-	}
-
-	// NOTE: We are required to lock while iterating over 'MyHostGroups'. Otherwise race conditions could take place,
-	// e.g. servers could be purged by 'purge_pgsql_servers_table' and invalid memory be accessed.
-	wrlock();
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-		PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
-		PgSQL_SrvC *mysrvc=NULL;
-		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
-			mysrvc=myhgc->mysrvs->idx(j);
-			if (mysrvc->gtid_port) {
-				std::string s1 = mysrvc->address;
-				s1.append(":");
-				s1.append(std::to_string(mysrvc->port));
-				std::unordered_map <string, PgSQL_GTID_Server_Data *>::iterator it2;
-				it2 = gtid_map.find(s1);
-				PgSQL_GTID_Server_Data *gtid_is=NULL;
-				if (it2!=gtid_map.end()) {
-					gtid_is=it2->second;
-					if (gtid_is == NULL) {
-						gtid_map.erase(it2);
-					}
-				}
-				if (gtid_is) {
-					gtid_is->active = true;
-				} else if (mysrvc->status != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-					// we didn't find it. Create it
-					/*
-					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
-					gtid_is = new PgSQL_GTID_Server_Data(watcher, mysrvc->address, mysrvc->port, mysrvc->gtid_port);
-					gtid_map.emplace(s1,gtid_is);
-					*/
-					struct ev_io * c = NULL;
-					c = new_connector(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					if (c) {
-						gtid_is = (PgSQL_GTID_Server_Data *)c->data;
-						gtid_map.emplace(s1,gtid_is);
-						//pthread_mutex_lock(&ev_loop_mutex);
-						ev_io_start(PgHGM->gtid_ev_loop,c);
-						//pthread_mutex_unlock(&ev_loop_mutex);
-					}
-				}
-			}
-		}
-	}
-	wrunlock();
-	std::vector<string> to_remove;
-	it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		PgSQL_GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si && gtid_si->active == false) {
-			to_remove.push_back(it->first);
-		}
-		it++;
-	}
-	for (std::vector<string>::iterator it3=to_remove.begin(); it3!=to_remove.end(); ++it3) {
-		it = gtid_map.find(*it3);
-		PgSQL_GTID_Server_Data * gtid_si = it->second;
-		ev_io_stop(PgHGM->gtid_ev_loop, gtid_si->w);
-		close(gtid_si->w->fd);
-		free(gtid_si->w);
-		gtid_map.erase(*it3);
-	}
-	pthread_rwlock_unlock(&gtid_rwlock);
-#endif // 0
-}
-
 void PgSQL_HostGroups_Manager::purge_pgsql_servers_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
@@ -2623,48 +1937,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	return resultset;
 }
 
-
-PgSQL_HGC * PgSQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
-	PgSQL_HGC *myhgc=new PgSQL_HGC(_hid);
-	return myhgc;
-}
-
-PgSQL_HGC * PgSQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
-	if (MyHostGroups->len < 100) {
-		// for few HGs, we use the legacy search
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
-			if (myhgc->hid==_hid) {
-				return myhgc;
-			}
-		}
-	} else {
-		// for a large number of HGs, we use the unordered_map
-		// this search is slower for a small number of HGs, therefore we use
-		// it only for large number of HGs
-		std::unordered_map<unsigned int, PgSQL_HGC *>::const_iterator it = MyHostGroups_map.find(_hid);
-		if (it != MyHostGroups_map.end()) {
-			PgSQL_HGC *myhgc = it->second;
-			return myhgc;
-		}
-	}
-	return NULL;
-}
-
-PgSQL_HGC * PgSQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
-	PgSQL_HGC *myhgc=NULL;
-	myhgc=MyHGC_find(_hid);
-	if (myhgc==NULL) {
-		myhgc=MyHGC_create(_hid);
-	} else {
-		return myhgc;
-	}
-	assert(myhgc);
-	MyHostGroups->add(myhgc);
-	MyHostGroups_map.emplace(_hid,myhgc);
-	return myhgc;
-}
-
 void PgSQL_HostGroups_Manager::increase_reset_counter() {
 	wrlock();
 	status.myconnpoll_reset++;
@@ -2755,12 +2027,14 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 						if (gtid_trxid) {
+#if 0
 							if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								mysrvcCandidates[num_candidates]=mysrvc;
 								num_candidates++;
 							}
+#endif // 0
 						} else {
 							if (max_lag_ms >= 0) {
 								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
@@ -2823,12 +2097,14 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 									if (gtid_trxid) {
+#if 0
 										if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 											mysrvcCandidates[num_candidates]=mysrvc;
 											num_candidates++;
 										}
+#endif // 0
 									} else {
 										if (max_lag_ms >= 0) {
 											if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
@@ -2908,12 +2184,14 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 						// if a server is taken back online, consider it immediately
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 							if (gtid_trxid) {
+#if 0
 								if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									mysrvcCandidates[num_candidates]=mysrvc;
 									num_candidates++;
 								}
+#endif // 0
 							} else {
 								if (max_lag_ms >= 0) {
 									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
@@ -4796,8 +4074,6 @@ void PgSQL_HostGroups_Manager::p_update_metrics() {
 
 	// Update the *connection_pool* metrics
 	this->p_update_connection_pool();
-	// Update the *gtid_executed* metrics
-	this->p_update_pgsql_gtid_executed();
 }
 
 SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
@@ -4877,185 +4153,6 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 	wrunlock();
 	return intsize;
 }
-
-PgSQL_Group_Replication_Info::PgSQL_Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
-	comment=NULL;
-	if (c) {
-		comment=strdup(c);
-	}
-	writer_hostgroup=w;
-	backup_writer_hostgroup=b;
-	reader_hostgroup=r;
-	offline_hostgroup=o;
-	max_writers=mw;
-	max_transactions_behind=mtb;
-	active=_a;
-	writer_is_also_reader=_w;
-	current_num_writers=0;
-	current_num_backup_writers=0;
-	current_num_readers=0;
-	current_num_offline=0;
-	__active=true;
-	need_converge=true;
-}
-
-PgSQL_Group_Replication_Info::~PgSQL_Group_Replication_Info() {
-	if (comment) {
-		free(comment);
-		comment=NULL;
-	}
-}
-
-bool PgSQL_Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
-	bool ret=false;
-	__active=true;
-	if (backup_writer_hostgroup!=b) {
-		backup_writer_hostgroup=b;
-		ret=true;
-	}
-	if (reader_hostgroup!=r) {
-		reader_hostgroup=r;
-		ret=true;
-	}
-	if (offline_hostgroup!=o) {
-		offline_hostgroup=o;
-		ret=true;
-	}
-	if (max_writers!=mw) {
-		max_writers=mw;
-		ret=true;
-	}
-	if (max_transactions_behind!=mtb) {
-		max_transactions_behind=mtb;
-		ret=true;
-	}
-	if (active!=_a) {
-		active=_a;
-		ret=true;
-	}
-	if (writer_is_also_reader!=_w) {
-		writer_is_also_reader=_w;
-		ret=true;
-	}
-	// for comment we don't change return value
-	if (comment) {
-		if (c) {
-			if (strcmp(comment,c)) {
-				free(comment);
-				comment=strdup(c);
-			}
-		} else {
-			free(comment);
-			comment=NULL;
-		}
-	} else {
-		if (c) {
-			comment=strdup(c);
-		}
-	}
-	return ret;
-}
-
-void PgSQL_HostGroups_Manager::p_update_pgsql_gtid_executed() {
-	pthread_rwlock_wrlock(&gtid_rwlock);
-
-	std::unordered_map<string, PgSQL_GTID_Server_Data*>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		PgSQL_GTID_Server_Data* gtid_si = it->second;
-		std::string address {};
-		std::string port {};
-		std::string endpoint_id {};
-
-		if (gtid_si) {
-			address = std::string(gtid_si->address);
-			port = std::to_string(gtid_si->pgsql_port);
-		} else {
-			std::string s = it->first;
-			std::size_t found = s.find_last_of(":");
-			address = s.substr(0, found);
-			port = s.substr(found + 1);
-		}
-		endpoint_id = address + ":" + port;
-
-		const auto& gitd_id_counter = this->status.p_gtid_executed_map.find(endpoint_id);
-		prometheus::Counter* gtid_counter = nullptr;
-
-		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
-			auto& gitd_counter =
-				this->status.p_dyn_counter_array[PgSQL_p_hg_dyn_counter::gtid_executed];
-
-			gtid_counter = std::addressof(gitd_counter->Add({
-				{ "hostname", address },
-				{ "port", port },
-			}));
-
-			this->status.p_gtid_executed_map.insert(
-				{
-					endpoint_id,
-					gtid_counter
-				}
-			);
-		} else {
-			gtid_counter = gitd_id_counter->second;
-		}
-
-		if (gtid_si) {
-			const auto& cur_executed_gtid = gtid_counter->Value();
-			gtid_counter->Increment(gtid_si->events_read - cur_executed_gtid);
-		}
-
-		it++;
-	}
-
-	pthread_rwlock_unlock(&gtid_rwlock);
-}
-
-SQLite3_result * PgSQL_HostGroups_Manager::get_stats_pgsql_gtid_executed() {
-	const int colnum = 4;
-	SQLite3_result * result = new SQLite3_result(colnum);
-	result->add_column_definition(SQLITE_TEXT,"hostname");
-	result->add_column_definition(SQLITE_TEXT,"port");
-	result->add_column_definition(SQLITE_TEXT,"gtid_executed");
-	result->add_column_definition(SQLITE_TEXT,"events");
-	int k;
-	pthread_rwlock_wrlock(&gtid_rwlock);
-	std::unordered_map<string, PgSQL_GTID_Server_Data *>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		PgSQL_GTID_Server_Data * gtid_si = it->second;
-		char buf[64];
-		char **pta=(char **)malloc(sizeof(char *)*colnum);
-		if (gtid_si) {
-			pta[0]=strdup(gtid_si->address);
-			sprintf(buf,"%d", (int)gtid_si->pgsql_port);
-			pta[1]=strdup(buf);
-			//sprintf(buf,"%d", mysrvc->port);
-			string s1 = gtid_executed_to_string(gtid_si->gtid_executed);
-			pta[2]=strdup(s1.c_str());
-			sprintf(buf,"%llu", gtid_si->events_read);
-			pta[3]=strdup(buf);
-		} else {
-			std::string s = it->first;
-			std::size_t found=s.find_last_of(":");
-			std::string host=s.substr(0,found);
-			std::string port=s.substr(found+1);
-			pta[0]=strdup(host.c_str());
-			pta[1]=strdup(port.c_str());
-			pta[2]=strdup((char *)"NULL");
-			pta[3]=strdup((char *)"0");
-		}
-		result->add_row(pta);
-		for (k=0; k<colnum; k++) {
-			if (pta[k])
-				free(pta[k]);
-		}
-		free(pta);
-		it++;
-	}
-	pthread_rwlock_unlock(&gtid_rwlock);
-	return result;
-}
-
-
 
 class MySQL_Errors_stats {
 	public:
@@ -5260,123 +4357,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
 	}
 	pthread_mutex_unlock(&pgsql_errors_mutex);
 	return result;
-}
-
-PgSQL_AWS_Aurora_Info::PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
-	comment=NULL;
-	if (c) {
-		comment=strdup(c);
-	}
-	writer_hostgroup=w;
-	reader_hostgroup=r;
-	max_lag_ms=maxl;
-	add_lag_ms=al;
-	min_lag_ms=minl;
-	lag_num_checks=lnc;
-	check_interval_ms=ci;
-	check_timeout_ms=ct;
-	writer_is_also_reader=wiar;
-	new_reader_weight=nrw;
-	active=_a;
-	__active=true;
-	//need_converge=true;
-	aurora_port = _port;
-	domain_name = strdup(_end_addr);
-}
-
-PgSQL_AWS_Aurora_Info::~PgSQL_AWS_Aurora_Info() {
-	if (comment) {
-		free(comment);
-		comment=NULL;
-	}
-	if (domain_name) {
-		free(domain_name);
-		domain_name=NULL;
-	}
-}
-
-bool PgSQL_AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
-	bool ret=false;
-	__active=true;
-	if (reader_hostgroup!=r) {
-		reader_hostgroup=r;
-		ret=true;
-	}
-	if (max_lag_ms!=maxl) {
-		max_lag_ms=maxl;
-		ret=true;
-	}
-	if (add_lag_ms!=al) {
-		add_lag_ms=al;
-		ret=true;
-	}
-	if (min_lag_ms!=minl) {
-		min_lag_ms=minl;
-		ret=true;
-	}
-	if (lag_num_checks!=lnc) {
-		lag_num_checks=lnc;
-		ret=true;
-	}
-	if (check_interval_ms!=ci) {
-		check_interval_ms=ci;
-		ret=true;
-	}
-	if (check_timeout_ms!=ct) {
-		check_timeout_ms=ct;
-		ret=true;
-	}
-	if (writer_is_also_reader != wiar) {
-		writer_is_also_reader = wiar;
-		ret = true;
-	}
-	if (new_reader_weight != nrw) {
-		new_reader_weight = nrw;
-		ret = true;
-	}
-	if (active!=_a) {
-		active=_a;
-		ret=true;
-	}
-	if (aurora_port != _port) {
-		aurora_port = _port;
-		ret = true;
-	}
-	if (domain_name) {
-		if (_end_addr) {
-			if (strcmp(domain_name,_end_addr)) {
-				free(domain_name);
-				domain_name = strdup(_end_addr);
-				ret = true;
-			}
-		} else {
-			free(domain_name);
-			domain_name=NULL;
-			ret = true;
-		}
-	} else {
-		if (_end_addr) {
-			domain_name=strdup(_end_addr);
-			ret = true;
-		}
-	}
-	// for comment we don't change return value
-	if (comment) {
-		if (c) {
-			if (strcmp(comment,c)) {
-				free(comment);
-				comment=strdup(c);
-			}
-		} else {
-			free(comment);
-			comment=NULL;
-		}
-	} else {
-		if (c) {
-			comment=strdup(c);
-		}
-	}
-	return ret;
 }
 
 /**

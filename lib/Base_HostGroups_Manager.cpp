@@ -35,7 +35,26 @@ using json = nlohmann::json;
 
 using std::function;
 
+#include "Base_HostGroups_Manager.h"
 
+
+template Base_HostGroups_Manager<MyHGC>::Base_HostGroups_Manager();
+template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_find(unsigned int);
+template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_create(unsigned int);
+template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_lookup(unsigned int);
+template void Base_HostGroups_Manager<MyHGC>::wrlock();
+template void Base_HostGroups_Manager<MyHGC>::wrunlock();
+
+template Base_HostGroups_Manager<PgSQL_HGC>::Base_HostGroups_Manager();
+template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_find(unsigned int);
+template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_create(unsigned int);
+template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_lookup(unsigned int);
+template void Base_HostGroups_Manager<PgSQL_HGC>::wrlock();
+template void Base_HostGroups_Manager<PgSQL_HGC>::wrunlock();
+
+template SQLite3_result * Base_HostGroups_Manager<MyHGC>::execute_query(char*, char**);
+
+#if 0
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
     rc=(*proxy_sqlite3_step)(_stmt);\
@@ -59,8 +78,6 @@ class MyHGC;
 
 const int MYSQL_ERRORS_STATS_FIELD_NUM = 11;
 
-struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port);
-void * GTID_syncer_run();
 
 static int wait_for_mysql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
@@ -622,7 +639,17 @@ hg_metrics_map = std::make_tuple(
 		)
 	}
 );
+#endif // 0
 
+template <typename HGC>
+Base_HostGroups_Manager<HGC>::Base_HostGroups_Manager() {
+	pthread_mutex_init(&readonly_mutex, NULL);
+	pthread_mutex_init(&lock, NULL);
+	admindb=NULL;	// initialized only if needed
+	mydb=new SQLite3DB();
+}
+
+#if 0
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
 	status.client_connections_aborted=0;
@@ -657,17 +684,13 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.access_denied_max_user_connections=0;
 	status.select_for_update_or_equivalent=0;
 	status.auto_increment_delay_multiplex=0;
-#if 0
 	pthread_mutex_init(&readonly_mutex, NULL);
-#endif // 0
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);
 	pthread_mutex_init(&AWS_Aurora_Info_mutex, NULL);
-#if 0
 	pthread_mutex_init(&lock, NULL);
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
-#endif // 0
 #ifdef DEBUG
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
@@ -759,6 +782,18 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	pthread_mutex_destroy(&lock);
 }
 
+#endif // 0
+
+// wrlock() is only required during commit()
+template <typename HGC>
+void Base_HostGroups_Manager<HGC>::wrlock() {
+	pthread_mutex_lock(&lock);
+#ifdef DEBUG
+	is_locked = true;
+#endif
+}
+
+#if 0
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
 	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
 	if (err_type == p_mysql_error_type::proxysql) {
@@ -789,7 +824,17 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 
 	pthread_mutex_unlock(&mysql_errors_mutex);
 }
+#endif // 0
 
+template <typename HGC>
+void Base_HostGroups_Manager<HGC>::wrunlock() {
+#ifdef DEBUG
+	is_locked = false;
+#endif
+	pthread_mutex_unlock(&lock);
+}
+
+#if 0
 void MySQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
@@ -890,7 +935,33 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
 }
+#endif // 0
 
+/**
+ * @brief Execute a SQL query and retrieve the resultset.
+ *
+ * This function executes a SQL query using the provided query string and returns the resultset obtained from the
+ * database operation. It also provides an optional error parameter to capture any error messages encountered during
+ * query execution.
+ *
+ * @param query A pointer to a null-terminated string containing the SQL query to be executed.
+ * @param error A pointer to a char pointer where any error message encountered during query execution will be stored.
+ *              Pass nullptr if error handling is not required.
+ * @return A pointer to a SQLite3_result object representing the resultset obtained from the query execution. This
+ *         pointer may be nullptr if the query execution fails or returns an empty result.
+ */
+template <typename HGC>
+SQLite3_result * Base_HostGroups_Manager<HGC>::execute_query(char *query, char **error) {
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	wrlock();
+	mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
+	wrunlock();
+	return resultset;
+}
+
+#if 0
 /**
  * @brief Calculate and update the checksum for a specified table in the database.
  *
@@ -1620,119 +1691,6 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 	return table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
 }
 
-/**
- * @brief Check if a GTID exists for a given MySQL server connection.
- *
- * This function checks whether a GTID (Global Transaction Identifier) exists for the specified MySQL server connection.
- * It performs the following steps:
- * 1. Acquires a read lock on the GTID read-write lock.
- * 2. Constructs a string representation of the MySQL server address and port.
- * 3. Searches for the GTID information associated with the MySQL server in the GTID map using the constructed string as the key.
- * 4. If the GTID information is found and is active, it checks whether the specified GTID exists.
- * 5. Releases the read lock on the GTID read-write lock.
- *
- * @param mysrvc A pointer to the MySQL server connection.
- * @param gtid_uuid A pointer to the character array representing the GTID UUID.
- * @param gtid_trxid The GTID transaction ID.
- * @return True if the specified GTID exists for the MySQL server connection, false otherwise.
- */
-bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
-	bool ret = false;
-	pthread_rwlock_rdlock(&gtid_rwlock);
-	std::string s1 = mysrvc->address;
-	s1.append(":");
-	s1.append(std::to_string(mysrvc->port));
-	std::unordered_map <string, GTID_Server_Data *>::iterator it2;
-	it2 = gtid_map.find(s1);
-	GTID_Server_Data *gtid_is=NULL;
-	if (it2!=gtid_map.end()) {
-		gtid_is=it2->second;
-		if (gtid_is) {
-			if (gtid_is->active == true) {
-				ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
-			}
-		}
-	}
-	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
-	pthread_rwlock_unlock(&gtid_rwlock);
-	return ret;
-}
-
-void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
-	pthread_rwlock_wrlock(&gtid_rwlock);
-	// first, set them all as active = false
-	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si) {
-			gtid_si->active = false;
-		}
-		it++;
-	}
-
-	// NOTE: We are required to lock while iterating over 'MyHostGroups'. Otherwise race conditions could take place,
-	// e.g. servers could be purged by 'purge_mysql_servers_table' and invalid memory be accessed.
-	wrlock();
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		MySrvC *mysrvc=NULL;
-		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
-			mysrvc=myhgc->mysrvs->idx(j);
-			if (mysrvc->gtid_port) {
-				std::string s1 = mysrvc->address;
-				s1.append(":");
-				s1.append(std::to_string(mysrvc->port));
-				std::unordered_map <string, GTID_Server_Data *>::iterator it2;
-				it2 = gtid_map.find(s1);
-				GTID_Server_Data *gtid_is=NULL;
-				if (it2!=gtid_map.end()) {
-					gtid_is=it2->second;
-					if (gtid_is == NULL) {
-						gtid_map.erase(it2);
-					}
-				}
-				if (gtid_is) {
-					gtid_is->active = true;
-				} else if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-					// we didn't find it. Create it
-					/*
-					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
-					gtid_is = new GTID_Server_Data(watcher, mysrvc->address, mysrvc->port, mysrvc->gtid_port);
-					gtid_map.emplace(s1,gtid_is);
-					*/
-					struct ev_io * c = NULL;
-					c = new_connector(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					if (c) {
-						gtid_is = (GTID_Server_Data *)c->data;
-						gtid_map.emplace(s1,gtid_is);
-						//pthread_mutex_lock(&ev_loop_mutex);
-						ev_io_start(MyHGM->gtid_ev_loop,c);
-						//pthread_mutex_unlock(&ev_loop_mutex);
-					}
-				}
-			}
-		}
-	}
-	wrunlock();
-	std::vector<string> to_remove;
-	it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si && gtid_si->active == false) {
-			to_remove.push_back(it->first);
-		}
-		it++;
-	}
-	for (std::vector<string>::iterator it3=to_remove.begin(); it3!=to_remove.end(); ++it3) {
-		it = gtid_map.find(*it3);
-		GTID_Server_Data * gtid_si = it->second;
-		ev_io_stop(MyHGM->gtid_ev_loop, gtid_si->w);
-		close(gtid_si->w->fd);
-		free(gtid_si->w);
-		gtid_map.erase(*it3);
-	}
-	pthread_rwlock_unlock(&gtid_rwlock);
-}
 
 /**
  * @brief Purge the MySQL servers table by removing offline hard servers with no active connections.
@@ -2230,7 +2188,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	return resultset;
 }
 
-#if 0
+#endif // 0
 /**
  * @brief Create a new MySQL host group container.
  *
@@ -2240,8 +2198,9 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
  * @param _hid The host group ID for the new container.
  * @return A pointer to the newly created `MyHGC` instance.
  */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
-	MyHGC *myhgc=new MyHGC(_hid);
+template <typename HGC>
+HGC * Base_HostGroups_Manager<HGC>::MyHGC_create(unsigned int _hid) {
+	HGC *myhgc=new HGC(_hid);
 	return myhgc;
 }
 
@@ -2255,11 +2214,12 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
  * @param _hid The host group ID to search for.
  * @return A pointer to the found `MyHGC` instance if found; otherwise, a null pointer.
  */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
+template <typename HGC>
+HGC * Base_HostGroups_Manager<HGC>::MyHGC_find(unsigned int _hid) {
 	if (MyHostGroups->len < 100) {
 		// for few HGs, we use the legacy search
 		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+			HGC *myhgc=(HGC *)MyHostGroups->index(i);
 			if (myhgc->hid==_hid) {
 				return myhgc;
 			}
@@ -2268,14 +2228,15 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
 		// for a large number of HGs, we use the unordered_map
 		// this search is slower for a small number of HGs, therefore we use
 		// it only for large number of HGs
-		std::unordered_map<unsigned int, MyHGC *>::const_iterator it = MyHostGroups_map.find(_hid);
+		typename std::unordered_map<unsigned int, HGC *>::const_iterator it = MyHostGroups_map.find(_hid);
 		if (it != MyHostGroups_map.end()) {
-			MyHGC *myhgc = it->second;
+			HGC *myhgc = it->second;
 			return myhgc;
 		}
 	}
 	return NULL;
 }
+
 /**
  * @brief Lookup or create a MySQL host group container by host group ID.
  *
@@ -2288,8 +2249,9 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
  * @return A pointer to the found or newly created `MyHGC` instance.
  * @note The function assertion fails if a newly created container is not found.
  */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
-	MyHGC *myhgc=NULL;
+template <typename HGC>
+HGC * Base_HostGroups_Manager<HGC>::MyHGC_lookup(unsigned int _hid) {
+	HGC *myhgc=NULL;
 	myhgc=MyHGC_find(_hid);
 	if (myhgc==NULL) {
 		myhgc=MyHGC_create(_hid);
@@ -2301,8 +2263,8 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	MyHostGroups_map.emplace(_hid,myhgc);
 	return myhgc;
 }
-#endif // 0
 
+#if 0
 void MySQL_HostGroups_Manager::increase_reset_counter() {
 	wrlock();
 	status.myconnpoll_reset++;
@@ -5796,106 +5758,6 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 	pthread_mutex_unlock(&Galera_Info_mutex);
 }
 
-void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
-	pthread_rwlock_wrlock(&gtid_rwlock);
-
-	std::unordered_map<string, GTID_Server_Data*>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data* gtid_si = it->second;
-		std::string address {};
-		std::string port {};
-		std::string endpoint_id {};
-
-		if (gtid_si) {
-			address = std::string(gtid_si->address);
-			port = std::to_string(gtid_si->mysql_port);
-		} else {
-			std::string s = it->first;
-			std::size_t found = s.find_last_of(":");
-			address = s.substr(0, found);
-			port = s.substr(found + 1);
-		}
-		endpoint_id = address + ":" + port;
-
-		const auto& gitd_id_counter = this->status.p_gtid_executed_map.find(endpoint_id);
-		prometheus::Counter* gtid_counter = nullptr;
-
-		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
-			auto& gitd_counter =
-				this->status.p_dyn_counter_array[p_hg_dyn_counter::gtid_executed];
-
-			gtid_counter = std::addressof(gitd_counter->Add({
-				{ "hostname", address },
-				{ "port", port },
-			}));
-
-			this->status.p_gtid_executed_map.insert(
-				{
-					endpoint_id,
-					gtid_counter
-				}
-			);
-		} else {
-			gtid_counter = gitd_id_counter->second;
-		}
-
-		if (gtid_si) {
-			const auto& cur_executed_gtid = gtid_counter->Value();
-			gtid_counter->Increment(gtid_si->events_read - cur_executed_gtid);
-		}
-
-		it++;
-	}
-
-	pthread_rwlock_unlock(&gtid_rwlock);
-}
-
-SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
-	const int colnum = 4;
-	SQLite3_result * result = new SQLite3_result(colnum);
-	result->add_column_definition(SQLITE_TEXT,"hostname");
-	result->add_column_definition(SQLITE_TEXT,"port");
-	result->add_column_definition(SQLITE_TEXT,"gtid_executed");
-	result->add_column_definition(SQLITE_TEXT,"events");
-	int k;
-	pthread_rwlock_wrlock(&gtid_rwlock);
-	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data * gtid_si = it->second;
-		char buf[64];
-		char **pta=(char **)malloc(sizeof(char *)*colnum);
-		if (gtid_si) {
-			pta[0]=strdup(gtid_si->address);
-			sprintf(buf,"%d", (int)gtid_si->mysql_port);
-			pta[1]=strdup(buf);
-			//sprintf(buf,"%d", mysrvc->port);
-			string s1 = gtid_executed_to_string(gtid_si->gtid_executed);
-			pta[2]=strdup(s1.c_str());
-			sprintf(buf,"%llu", gtid_si->events_read);
-			pta[3]=strdup(buf);
-		} else {
-			std::string s = it->first;
-			std::size_t found=s.find_last_of(":");
-			std::string host=s.substr(0,found);
-			std::string port=s.substr(found+1);
-			pta[0]=strdup(host.c_str());
-			pta[1]=strdup(port.c_str());
-			pta[2]=strdup((char *)"NULL");
-			pta[3]=strdup((char *)"0");
-		}
-		result->add_row(pta);
-		for (k=0; k<colnum; k++) {
-			if (pta[k])
-				free(pta[k]);
-		}
-		free(pta);
-		it++;
-	}
-	pthread_rwlock_unlock(&gtid_rwlock);
-	return result;
-}
-
-
 
 class MySQL_Errors_stats {
 	public:
@@ -7418,3 +7280,4 @@ void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_repli
 	wrunlock();
 	GloAdmin->mysql_servers_wrunlock();
 }
+#endif // 0
