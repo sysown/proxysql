@@ -615,18 +615,18 @@ int MySQL_Data_Stream::read_from_net() {
 				src += n2;
 				len -= n2;
 				if (!SSL_is_init_finished(ssl)) {
-					//proxy_info("SSL_is_init_finished NOT completed\n");
+					proxy_debug(PROXY_DEBUG_NET, 5, "SSL handshake not finished yet   session=%p bytes=%d BIO=%p len=%d\n", sess, n2, rbio_ssl, len);
 					if (do_ssl_handshake() == SSLSTATUS_FAIL) {
-						//proxy_info("SSL_is_init_finished failed!!\n");
+						proxy_debug(PROXY_DEBUG_NET, 5, "SSL handshake failed   session=%p bytes=%d BIO=%p len=%d\n", sess, n2, rbio_ssl, len);
 						shut_soft();
 						return -1;
 					}
 					if (!SSL_is_init_finished(ssl)) {
-						//proxy_info("SSL_is_init_finished yet NOT completed\n");
+						proxy_debug(PROXY_DEBUG_NET, 5, "SSL handshake not finished yet   session=%p bytes=%d BIO=%p len=%d\n", sess, n2, rbio_ssl, len);
 						return 0;
 					}
 				} else {
-					//proxy_info("SSL_is_init_finished completed\n");
+					proxy_debug(PROXY_DEBUG_NET, 5, "SSL handshake finished   session=%p bytes=%d BIO=%p len=%d\n", sess, n2, rbio_ssl, len);
 				}
 			}
 			n2 = SSL_read (ssl, queue_w_ptr(queueIN), s);
