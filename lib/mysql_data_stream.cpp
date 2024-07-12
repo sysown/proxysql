@@ -570,9 +570,7 @@ int MySQL_Data_Stream::read_from_net() {
 
 	int r=0;
 	int s=queue_available(queueIN);
-	if (encrypted) {
-	//	proxy_info("Queue available of %d bytes\n", s);
-	}
+
 	if (encrypted == false) {
 		if (pkts_recv) {
 			r = recv(fd, queue_w_ptr(queueIN), s, 0);
@@ -592,20 +590,6 @@ int MySQL_Data_Stream::read_from_net() {
 			}
 		}
 	} else { // encrypted == true
-/*
-		if (!SSL_is_init_finished(ssl)) {
-			int ret = SSL_do_handshake(ssl);
-			int ret2;
-			if (ret != 1) {
-				//ERR_print_errors_fp(stderr);
-				ret2 = SSL_get_error(ssl, ret);
-				fprintf(stderr,"%d\n",ret2);
-			}
-			return 0;
-		} else {
-			r = SSL_read (ssl, queue_w_ptr(queueIN), s);
-		}
-*/
 		PROXY_TRACE();
 		if (s < MY_SSL_BUFFER) {
 			return 0;	// no enough space for reads
@@ -623,7 +607,7 @@ int MySQL_Data_Stream::read_from_net() {
 			while (len > 0) {
 				n2 = BIO_write(rbio_ssl, src, len);
 				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: write %d bytes into BIO %p, len=%d\n", sess, n2, rbio_ssl, len);
-				//proxy_info("BIO_write with len = %d and %d bytes\n", len , n2);
+
 				if (n2 <= 0) {
 					shut_soft();
 					return -1;
@@ -648,23 +632,12 @@ int MySQL_Data_Stream::read_from_net() {
 			n2 = SSL_read (ssl, queue_w_ptr(queueIN), s);
 			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: read %d bytes from BIO %p into a buffer with %d bytes free\n", sess, n2, rbio_ssl, s);
 			r = n2;
-			//proxy_info("Read %d bytes from SSL\n", r);
-			if (n2 > 0) {
-			}
-/*
-			do {
-				n2 = SSL_read(ssl, buf2, sizeof(buf2));
-				if (n2 > 0) {
-					
-				}
-			} while (n > 0);
-*/
 			status = get_sslstatus(ssl, n2);
-			//proxy_info("SSL status = %d\n", status);
+
 			if (status == SSLSTATUS_WANT_IO) {
 				do {
 					n2 = BIO_read(wbio_ssl, buf2, sizeof(buf2));
-					//proxy_info("BIO_read with %d bytes\n", n2);
+
 					if (n2 > 0) {
           				queue_encrypted_bytes(buf2, n2);
 					} else if (!BIO_should_retry(wbio_ssl)) {
@@ -687,9 +660,9 @@ int MySQL_Data_Stream::read_from_net() {
 			r = ssl_recv_bytes;
 		}
 	}
-//__exit_read_from_next:
+
 	proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: read %d bytes from fd %d into a buffer of %d bytes free\n", sess, r, fd, s);
-	//proxy_error("read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
+
 	if (r < 1) {
 		if (encrypted==false) {
 			int myds_errno=errno;
