@@ -611,18 +611,15 @@ int MySQL_Data_Stream::read_from_net() {
 			return 0;	// no enough space for reads
 		}
 		char buf[MY_SSL_BUFFER];
-		//ssize_t n = read(fd, buf, sizeof(buf));
-		int n = recv(fd, buf, sizeof(buf), 0);
-		//proxy_info("SSL recv of %d bytes\n", n);
-		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, n,  rbio_ssl->num_write , rbio_ssl->num_read);
-		if (n > 0 || rbio_ssl->num_write > rbio_ssl->num_read) {
-			//on_read_cb(buf, (size_t)n);
+		int ssl_recv_bytes = recv(fd, buf, sizeof(buf), 0);
+		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, ssl_recv_bytes,  rbio_ssl->num_write , rbio_ssl->num_read);
 
+		if (ssl_recv_bytes > 0 || rbio_ssl->num_write > rbio_ssl->num_read) {
 			char buf2[MY_SSL_BUFFER];
 			int n2;
 			enum sslstatus status;
 			char *src = buf;
-			int len = n;
+			int len = ssl_recv_bytes;
 			while (len > 0) {
 				n2 = BIO_write(rbio_ssl, src, len);
 				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: write %d bytes into BIO %p, len=%d\n", sess, n2, rbio_ssl, len);
@@ -681,9 +678,13 @@ int MySQL_Data_Stream::read_from_net() {
 				return -1;
 			}
 		} else {
-			r = n;
-			//r += SSL_read (ssl, queue_w_ptr(queueIN), s);
-			//proxy_info("Read %d bytes from SSL\n", r);
+			// Shutdown if we either received the EOF, or operation failed with non-retryable error.
+			if (ssl_recv_bytes==0 || (ssl_recv_bytes==-1 && errno != EINTR && errno != EAGAIN)) {
+				proxy_debug(PROXY_DEBUG_NET, 5, "Received EOF, shutting down soft socket -- Session=%p, Datastream=%p\n", sess, this);
+				shut_soft();
+				return -1;
+			}
+			r = ssl_recv_bytes;
 		}
 	}
 //__exit_read_from_next:
