@@ -169,10 +169,13 @@ struct pthread_data_t {
 };
 
 const int BUSY_THREADS = get_env_int("TAP_SSL_BUSY_WAIT__BUSY_THREADS", 4);
-const int BUSY_WAIT_SECS = get_env_int("TAP_SSL_BUSY_WAIT__BUSY_WAIT_SECS", 5);
 const int MAX_IDLE_CPU = get_env_int("TAP_SSL_BUSY_WAIT__MAX_IDLE_CPU", 20);
 const int MAX_BUSY_CPU = get_env_int("TAP_SSL_BUSY_WAIT__MAX_BUSY_CPU", 25);
-const int SAMPLE_INTV_SECS = get_env_int("TAP_SSL_BUSY_WAIT__SAMPLE_INTV_SEC", 2);
+
+// NOTE: '10' is a nice value due to it's relationship with the 'system_cpu' interval
+const int BUSY_WAIT_SECS = get_env_int("TAP_SSL_BUSY_WAIT__BUSY_WAIT_SECS", 10);
+// NOTE: '5' is the min value due to time interval rounding 'round_intv_to_time_interval'
+const int SAMPLE_INTV_SECS = get_env_int("TAP_SSL_BUSY_WAIT__SAMPLE_INTV_SEC", BUSY_WAIT_SECS / 2);
 
 void create_busy_loops(int argc, char** argv, CommandLine& cl, BUSY_LOOP_T loop_type) {
 	vector<pthread_data_t> ths_data {};
@@ -278,11 +281,12 @@ int main(int argc, char** argv) {
 		MAX_IDLE_CPU, idle_cpu
 	);
 
+	diag("Trigger BUSY_LOOP regression    BUSY_THREADS=%d BUSY_WAIT_SECS=%d", BUSY_THREADS, BUSY_WAIT_SECS);
 	create_busy_loops(argc, argv, cl, BUSY_LOOP_T::BUSY_LOOP);
 
+	diag("Checking ProxySQL final CPU usage for 'BUSY_LOOP'");
 	double final_cpu_usage = 0;
 	int ret_f_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, final_cpu_usage);
-	diag("Getting the final CPU usage returned - %d", ret_f_cpu);
 
 	ok(
 		final_cpu_usage < MAX_BUSY_CPU,
@@ -290,9 +294,12 @@ int main(int argc, char** argv) {
 		MAX_BUSY_CPU, final_cpu_usage
 	);
 
-	// Extra wait to ensure cleanup of faulty client conns
-	sleep(BUSY_WAIT_SECS < 5 ? 5 : BUSY_WAIT_SECS / 2);
+	// Extra wait to ensure cleanup of faulty client conns. See 'BUSY_WAIT_SECS' NOTE in def.
+	int BUSY_WAIT_CLEANUP = BUSY_WAIT_SECS < 5 ? 5 : BUSY_WAIT_SECS / 2;
+	diag("Sleeping for %d secs for BUSY_LOOP client cleanup", BUSY_WAIT_CLEANUP);
+	sleep(BUSY_WAIT_CLEANUP);
 
+	diag("Checking ProxySQL idle CPU usage");
 	ret_i_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, idle_cpu);
 	if (ret_i_cpu) {
 		diag("Getting initial CPU usage failed with error - %d", ret_i_cpu);
@@ -306,18 +313,18 @@ int main(int argc, char** argv) {
 		MAX_IDLE_CPU, idle_cpu
 	);
 
+	diag("Trigger INF_LOOP regression    BUSY_THREADS=%d BUSY_WAIT_SECS=%d", BUSY_THREADS, BUSY_WAIT_SECS);
 	create_busy_loops(argc, argv, cl, BUSY_LOOP_T::INF_LOOP);
 
+	diag("Checking ProxySQL final CPU usage for 'BUSY_LOOP'");
 	final_cpu_usage = 0;
 	ret_f_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, final_cpu_usage);
-	diag("Getting the final CPU usage returned - %d", ret_f_cpu);
 
 	ok(
 		final_cpu_usage < MAX_BUSY_CPU,
 		"ProxySQL CPU usage should be below expected - Exp: %d%%, Act: %lf%%",
 		MAX_BUSY_CPU, final_cpu_usage
 	);
-
 
 	return exit_status();
 }
