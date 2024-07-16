@@ -946,20 +946,71 @@ string tap_curtime() {
 }
 
 int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usage) {
-	// check if proxysql process is consuming higher cpu than it should
+	// Create Admin connection
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
 
-	// recover admin variables
-	string set_stats_query { "SET admin-stats_system_cpu=" + std::to_string(intv) };
+	// Set new interval
+	const string set_stats_query { "SET admin-stats_system_cpu=" + std::to_string(intv) };
 	MYSQL_QUERY(proxysql_admin, set_stats_query.c_str());
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
+	// Wait until 'system_cpu' is filled with newer entries
+	time_t curtime = time(NULL);
+	uint32_t entry_count { 0 };
+
+	const char runtime_stats[] {
+		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='admin-stats_system_cpu'"
+	};
+	ext_val_t<int> ext_rintv { mysql_query_ext_val(proxysql_admin, runtime_stats, 10) };
+	if (ext_rintv.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(proxysql_admin, ext_rintv) };
+		diag("Failed query   query:`%s`, err:`%s`", runtime_stats, err.c_str());
+		return EXIT_FAILURE;
+	}
+
+	if (ext_rintv.val != intv) {
+		diag(
+			"WARNING: Supplied interval not available, using rounded value   intv=%d rintv=%d",
+			intv, ext_rintv.val
+		);
+	}
+
 	// sleep during the required interval + safe threshold
-	sleep(2 * intv + 2);
+	const uint32_t init_wait = 2 * ext_rintv.val + 2;
+	diag("Waiting for %d secs for new 'system_cpu' entries...   curtime=%ld", init_wait, curtime);
+	sleep(init_wait);
+
+	const string count_query {
+		"SELECT COUNT(*) FROM system_cpu WHERE timestamp > " + std::to_string(curtime)
+	};
+	ext_val_t<int> ext_stats_count { mysql_query_ext_val(proxysql_admin, count_query, 10) };
+
+	if (ext_stats_count.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(proxysql_admin, ext_stats_count) };
+		diag("Failed query   query:`%s`, err:`%s`", count_query.c_str(), err.c_str());
+		return EXIT_FAILURE;
+	}
+
+	entry_count = ext_stats_count.val;
+	diag("Finished initial wait for 'system_cpu'   entry_count=%d", entry_count);
+
+	while (entry_count < 2) {
+		diag("Waiting for more 'system_cpu' entries...   entry_count=%d", entry_count);
+		ext_val_t<int> ext_stats_count { mysql_query_ext_val(proxysql_admin, count_query, 10) };
+
+		if (ext_stats_count.err != EXIT_SUCCESS) {
+			const string err { get_ext_val_err(proxysql_admin, ext_stats_count) };
+			diag("Failed query   query:`%s`, err:`%s`", count_query.c_str(), err.c_str());
+			return EXIT_FAILURE;
+		}
+
+		entry_count = ext_stats_count.val;
+		sleep(1);
+	}
 
 	MYSQL_QUERY(proxysql_admin, "SELECT * FROM system_cpu ORDER BY timestamp DESC LIMIT 2");
 	MYSQL_RES* admin_res = mysql_store_result(proxysql_admin);
@@ -977,7 +1028,7 @@ int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usa
 	int init_stime_s = atoi(row[2]) * s_clk;
 	int init_t_s = init_utime_s + init_stime_s;
 
-	cpu_usage = 100.0 * ((final_t_s - init_t_s) / (static_cast<double>(intv) * 1000));
+	cpu_usage = 100.0 * ((final_t_s - init_t_s) / (static_cast<double>(ext_rintv.val) * 1000));
 
 	// free the result
 	mysql_free_result(admin_res);
