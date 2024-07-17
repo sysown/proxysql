@@ -68,7 +68,7 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& no_conns_cp
 	// get ProxySQL idle cpu usage
 	int idle_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, no_conns_cpu);
 	if (idle_err) {
-	    diag("Unable to get 'idle_cpu' usage.");
+	    diag("Unable to get 'no_conns_cpu' usage.");
 		return idle_err;
 	}
 
@@ -92,7 +92,7 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& no_conns_cp
 
 	int final_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_conns_cpu);
 	if (final_err) {
-	    diag("Unable to get 'final_cpu' usage.");
+	    diag("Unable to get 'idle_conns_cpu' usage.");
 		return idle_err;
 	}
 
