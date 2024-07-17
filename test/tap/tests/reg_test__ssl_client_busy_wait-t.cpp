@@ -12,6 +12,7 @@
 #include <string>
 #include <stdio.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 #include <poll.h>
 #include <fcntl.h>
@@ -26,6 +27,7 @@
 #include "utils.h"
 
 using std::string;
+using std::pair;
 using std::vector;
 
 /* Helper function to do the waiting for events on the socket. */
@@ -266,6 +268,43 @@ int main(int argc, char** argv) {
 
 	plan(4);
 
+	vector<MYSQL*> nodes_conns {};
+
+	{
+		MYSQL* admin = mysql_init(NULL);
+		if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+			return EXIT_FAILURE;
+		}
+
+		pair<int,vector<srv_addr_t>> nodes_fetch { fetch_cluster_nodes(admin, true) };
+		if (nodes_fetch.first) {
+			diag("Failed to fetch cluster nodes. Aborting further testing");
+			return EXIT_FAILURE;
+		}
+
+
+		// Ensure a more idle status for ProxySQL
+		for (const srv_addr_t& node : nodes_fetch.second) {
+			const char* user { cl.admin_username };
+			const char* pass { cl.admin_password };
+
+			MYSQL* myconn = mysql_init(NULL);
+
+			if (!mysql_real_connect(myconn, node.host.c_str(), user, pass, NULL, node.port, NULL, 0)) {
+				diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(myconn));
+				return EXIT_FAILURE;
+			}
+
+			MYSQL_QUERY_T(myconn, "DELETE FROM scheduler");
+			MYSQL_QUERY_T(myconn, "LOAD SCHEDULER TO RUNTIME");
+
+			nodes_conns.push_back(myconn);
+		}
+
+		mysql_close(admin);
+	}
+
 	diag("Checking ProxySQL idle CPU usage");
 	double idle_cpu = 0;
 	int ret_i_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, idle_cpu);
@@ -325,6 +364,12 @@ int main(int argc, char** argv) {
 		"ProxySQL CPU usage should be below expected - Exp: %d%%, Act: %lf%%",
 		MAX_BUSY_CPU, final_cpu_usage
 	);
+
+	// Recover cluster scheduler
+	for (MYSQL* myconn : nodes_conns) {
+		MYSQL_QUERY_T(myconn, "LOAD SCHEDULER FROM DISK");
+		MYSQL_QUERY_T(myconn, "LOAD SCHEDULER TO RUNTIME");
+	}
 
 	return exit_status();
 }
