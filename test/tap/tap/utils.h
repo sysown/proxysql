@@ -100,8 +100,7 @@ int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, cons
 
 #define MYSQL_QUERY_T(mysql, query) \
 	do { \
-		const std::string time { get_formatted_time() }; \
-		fprintf(stderr, "# %s: Issuing query '%s' to ('%s':%d)\n", time.c_str(), query, mysql->host, mysql->port); \
+		diag("Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port); \
 		if (mysql_query(mysql, query)) { \
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
 			return EXIT_FAILURE; \
@@ -231,7 +230,7 @@ std::string get_ext_val_err(MYSQL* mysql, const ext_val_t<T>& ext_val) {
 	} else if (ext_val.err == -2) {
 		return "Failed to parse response value '" + ext_val.str + "'";
 	} else {
-		return "Query failed with error '" + std::string { mysql_error(mysql) } + "'";
+		return std::string { mysql_error(mysql) };
 	}
 }
 
@@ -731,10 +730,55 @@ std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uin
  */
 int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout);
 
+using check_res_t = std::pair<int,std::string>;
+
+/**
+ * @brief Waits for multiple conditions to take place before returning.
+ * @param mysql Already oppened connection in which to execute the queries.
+ * @param qs Conditions represented as queries; must pass 'check_cond' requirements.
+ * @param to Timeout in which all the conditions should be accomplished.
+ * @return Vector of pairs of shape '{err, check}'.
+ */
+std::vector<check_res_t> wait_for_conds(MYSQL* mysql, const std::vector<std::string>& qs, uint32_t to);
+
+/**
+ * @brief Reduces a vector of 'check_res_t' to either success or failure.
+ * @param chks Vector to be fold into single value.
+ * @return -1 in case a check failed to execute, 1 if any check timedout, 0 for success.
+ */
+int proc_wait_checks(const std::vector<check_res_t>& chks);
+
+/**
+ * @brief Encapsulates a server address.
+ */
+struct srv_addr_t {
+	const std::string host;
+	const int port;
+};
+
 // Helpers using 'wait_for_cond' on 'stats_mysql_connection'
 void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
 void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
 void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
+
+/**
+ * @brief Fetches the ProxySQL nodes configured in the supplied instance.
+ * @param cl Parameters for performing the connection to the instance.
+ * @return Pair of shape '{err, {srv_addr}}'.
+ */
+std::pair<int,std::vector<srv_addr_t>> fetch_cluster_nodes(MYSQL* admin, bool dump_fetch=false);
+
+/**
+ * @brief Helper function that waits for a check in all the supplied nodes.
+ * @param cl Used for credentials to open conns to the nodes.
+ * @param nodes The nodes addresses in which to perform the checks.
+ * @param check The check itself to be performed in all the nodes. Must pass 'check_cond' requirements.
+ * @param to Timeout for synchronization to take place.
+ * @return 0 in case of success, 1 in case of timeout, and -1 in case of check failure.
+ */
+int check_nodes_sync(
+	const CommandLine& cl, const std::vector<srv_addr_t>& nodes, const std::string& check, uint32_t to
+);
 
 /**
  * @brief fetches and converts env var value to str/int/bool if possible otherwise uses default
