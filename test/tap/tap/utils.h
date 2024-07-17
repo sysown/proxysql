@@ -68,7 +68,18 @@ inline std::string get_formatted_time() {
 	return std::string(__buffer);
 }
 
-int mysql_query_t(MYSQL* mysql, const char* query);
+/**
+ * @brief Wrapper for 'mysql_query' with logging for convenience.
+ * @details Should be used through 'mysql_query_t' macro.
+ * @return Result of calling 'mysql_query'.
+ */
+int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, const char* fn);
+
+/**
+ * @brief Convenience macro with query logging.
+ */
+#define mysql_query_t(mysql, query)\
+	mysql_query_t__(mysql, query, __FILE__, __LINE__, __func__)
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \

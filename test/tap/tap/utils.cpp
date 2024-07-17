@@ -199,8 +199,8 @@ std::size_t count_matches(const string& str, const string& substr) {
 	return result;
 }
 
-int mysql_query_t(MYSQL* mysql, const char* query) {
-	diag("%s: Issuing query '%s' to ('%s':%d)", get_formatted_time().c_str(), query, mysql->host, mysql->port);
+int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, const char* fn) {
+	diag("%s:%d:%s(): Issuing query '%s' to ('%s':%d)", f, ln, fn, query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);
 }
 
