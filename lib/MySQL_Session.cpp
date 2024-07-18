@@ -2974,6 +2974,8 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					(myerr == 1193) // variable is not found
 					||
 					(myerr == 1651) // Query cache is disabled
+					||
+					(is_perm_track_err(myerr, var_name)) // Special permitted tracking errors (~= '1193')
 				) {
 					int idx = SQL_NAME_LAST_HIGH_WM;
 					for (int i=0; i<SQL_NAME_LAST_HIGH_WM; i++) {
