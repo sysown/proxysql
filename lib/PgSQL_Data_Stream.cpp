@@ -1299,12 +1299,10 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		) {
 		if (pgsql_thread___reset_connection_algorithm == 2) {
 			sess->create_new_session_and_reset_connection(this);
-		}
-		else {
+		} else {
 			destroy_MySQL_Connection_From_Pool(true);
 		}
-	}
-	else {
+	} else {
 		detach_connection();
 		unplug_backend();
 #ifdef STRESSTEST_POOL

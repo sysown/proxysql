@@ -179,6 +179,8 @@ static const Param_Name_Validation* PgSQL_Param_Name_Accepted_Values[PG_PARAM_SI
 #define PG_EVENT_NONE	 0x00
 #define PG_EVENT_READ	 0x01
 #define PG_EVENT_WRITE	 0x02
+#define PG_EVENT_EXCEPT  0x04
+#define PG_EVENT_TIMEOUT 0x08
 
 class PgSQL_Conn_Param {
 private:
@@ -507,10 +509,15 @@ public:
 	void query_cont(short event);
 	void fetch_result_start();
 	void fetch_result_cont(short event);
+	void reset_session_start();
+	void reset_session_cont(short event);
+	
 	int  async_connect(short event);
 	int  async_set_autocommit(short event, bool ac);
 	int  async_query(short event, char* stmt, unsigned long length, MYSQL_STMT** _stmt = NULL, stmt_execute_metadata_t* _stmt_meta = NULL);
 	int  async_ping(short event);
+	int  async_reset_session(short event);
+	
 	void next_event(PG_ASYNC_ST new_st);
 	bool IsAutoCommit();
 	bool is_connected() const;
@@ -598,6 +605,8 @@ public:
 	}
 
 	void reset_error() { reset_error_info(error_info, false); }
+
+	bool reset_session_in_txn = false;
 
 	PGresult* get_result();
 	void next_multi_statement_result(PGresult* result);

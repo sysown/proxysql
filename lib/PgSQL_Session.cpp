@@ -1473,44 +1473,36 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	// we recreate local_stmts : see issue #752
 	delete myconn->local_stmts;
 	myconn->local_stmts = new MySQL_STMTs_local_v14(false); // false by default, it is a backend
-	int rc = myconn->async_change_user(myds->revents);
+	int rc = myconn->async_reset_session(myds->revents);
 	if (rc == 0) {
-		__sync_fetch_and_add(&PgHGM->status.backend_change_user, 1);
-		//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+		//__sync_fetch_and_add(&PgHGM->status.backend_change_user, 1);
 		myds->myconn->reset();
 		myds->DSS = STATE_MARIADB_GENERIC;
 		myconn->async_state_machine = ASYNC_IDLE;
-		//		if (pgsql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 		myds->return_MySQL_Connection_To_Pool();
-		//		} else {
-		//			myds->destroy_MySQL_Connection_From_Pool(true);
-		//		}
 		delete mybe->server_myds;
 		mybe->server_myds = NULL;
 		set_status(session_status___NONE);
 		return -1;
-	}
-	else {
+	} else {
 		if (rc == -1 || rc == -2) {
 			if (rc == -2) {
-				proxy_error("Change user timeout during COM_CHANGE_USER on %s , %d\n", myconn->parent->address, myconn->parent->port);
+				proxy_error("Resetting Connection timeout during Reset Session on %s , %d\n", myconn->parent->address, myconn->parent->port);
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_CHANGE_USER_TIMEOUT);
-			}
-			else { // rc==-1
-				int myerr = mysql_errno(myconn->pgsql);
+			} else { // rc==-1
+				const bool error_present = myconn->is_error_present();
 				PgHGM->p_update_pgsql_error_counter(
 					p_pgsql_error_type::pgsql,
 					myconn->parent->myhgc->hid,
 					myconn->parent->address,
 					myconn->parent->port,
-					(myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV)
+					(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
 				);
-				if (myerr != 0) {
-					proxy_error("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->pgsql));
-				}
-				else {
+				if (error_present) {
+					proxy_error("Detected an error during Reset Session on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myconn->get_error_code_with_message().c_str());
+				} else {
 					proxy_error(
-						"Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n",
+						"Detected an error during Reset Session on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n",
 						myconn->parent->myhgc->hid,
 						myconn->parent->address,
 						myconn->parent->port,
@@ -1523,12 +1515,9 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
-			//delete mybe->server_myds;
-			//mybe->server_myds=NULL;
 			RequestEnd(myds); //fix bug #682
 			return -1;
-		}
-		else {
+		} else {
 			// rc==1 , nothing to do for now
 			if (myds->mypolls == NULL) {
 				thread->mypolls.add(POLLIN | POLLOUT, myds->fd, myds, thread->curtime);
@@ -7728,22 +7717,19 @@ void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* mycon
 				uint64_t delay_us = delay_multiplex_us > auto_increment_delay_us ? delay_multiplex_us : auto_increment_delay_us;
 
 				myds->wait_until = thread->curtime + delay_us;
-			}
-			else {
+			} else {
 				myds->wait_until = thread->curtime + pgsql_thread___connection_delay_multiplex_ms * 1000;
 			}
 
 			myconn->async_state_machine = ASYNC_IDLE;
 			myconn->multiplex_delayed = true;
 			myds->DSS = STATE_MARIADB_GENERIC;
-		}
-		else if (prepared_stmt_with_no_params == true) { // see issue #1432
+		} else if (prepared_stmt_with_no_params == true) { // see issue #1432
 			myconn->async_state_machine = ASYNC_IDLE;
 			myds->DSS = STATE_MARIADB_GENERIC;
 			myds->wait_until = 0;
 			myconn->multiplex_delayed = false;
-		}
-		else {
+		} else {
 			myconn->multiplex_delayed = false;
 			myds->wait_until = 0;
 			myds->DSS = STATE_NOT_INITIALIZED;
