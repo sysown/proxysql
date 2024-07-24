@@ -4552,8 +4552,8 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 					else {
 						pta[2] = strdup("unauthenticated user");
 					}
-					if (ui->schemaname) {
-						pta[3] = strdup(ui->schemaname);
+					if (ui->dbname) {
+						pta[3] = strdup(ui->dbname);
 					}
 				}
 
@@ -5189,8 +5189,8 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 				) {
 				PgSQL_Connection* client_conn = sess->client_myds->myconn;
 				if (c->requires_RESETTING_CONNECTION(client_conn) == false) { // RESETTING CONNECTION is not required
-					char* schema = client_conn->userinfo->schemaname;
-					if (strcmp(c->userinfo->schemaname, schema) == 0) { // same schema
+					char* dbname = client_conn->userinfo->dbname;
+					if (strcmp(c->userinfo->dbname, dbname) == 0) { // same dbname
 						unsigned int not_match = 0; // number of not matching session variables
 						c->number_of_matching_session_variables(client_conn, not_match);
 						if (not_match == 0) { // all session variables match

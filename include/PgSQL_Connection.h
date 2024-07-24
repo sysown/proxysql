@@ -280,7 +280,10 @@ class PgSQL_Connection_userinfo {
 	uint64_t hash;
 	char *username;
 	char *password;
-	char *schemaname;
+	union {
+		char* dbname;
+		char* schemaname; // temporary fix. To avoid changes in Base_Session and Query_Processor
+	};
 	char *sha1_pass;
 	char *fe_username;
 	// TODO POSGRESQL: add client and server scram keys
@@ -288,7 +291,7 @@ class PgSQL_Connection_userinfo {
 	~PgSQL_Connection_userinfo();
 	void set(char *, char *, char *, char *);
 	void set(PgSQL_Connection_userinfo *);
-	bool set_schemaname(char *, int);
+	bool set_dbname(char *, int);
 };
 
 class PgSQL_Connection_Placeholder {

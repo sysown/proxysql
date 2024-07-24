@@ -256,7 +256,7 @@ PgSQL_Connection_userinfo::PgSQL_Connection_userinfo() {
 	username=NULL;
 	password=NULL;
 	sha1_pass=NULL;
-	schemaname=NULL;
+	dbname=NULL;
 	fe_username=NULL;
 	hash=0;
 }
@@ -266,7 +266,7 @@ PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
 	if (fe_username) free(fe_username);
 	if (password) free(password);
 	if (sha1_pass) free(sha1_pass);
-	if (schemaname) free(schemaname);
+	if (dbname) free(dbname);
 }
 
 void PgSQL_Connection_Placeholder::compute_unknown_transaction_status() {
@@ -298,8 +298,8 @@ uint64_t PgSQL_Connection_userinfo::compute_hash() {
 		l+=strlen(username);
 	if (password)
 		l+=strlen(password);
-	if (schemaname)
-		l+=strlen(schemaname);
+	if (dbname)
+		l+=strlen(dbname);
 // two random seperator
 #define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
 #define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
@@ -317,9 +317,9 @@ uint64_t PgSQL_Connection_userinfo::compute_hash() {
 		strcpy(buf+l,password);
 		l+=strlen(password);
 	}
-	if (schemaname) {
-		strcpy(buf+l,schemaname);
-		l+=strlen(schemaname);
+	if (dbname) {
+		strcpy(buf+l, dbname);
+		l+=strlen(dbname);
 	}
 	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
 	l+=strlen(_COMPUTE_HASH_DEL2_);
@@ -328,30 +328,36 @@ uint64_t PgSQL_Connection_userinfo::compute_hash() {
 	return hash;
 }
 
-void PgSQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
-	if (u) {
+void PgSQL_Connection_userinfo::set(char *user, char *pass, char *db, char *sh1) {
+	if (user) {
 		if (username) {
-			if (strcmp(u,username)) {
+			if (strcmp(user,username)) {
 				free(username);
-				username=strdup(u);
+				username=strdup(user);
 			}
 		} else {
-			username=strdup(u);
+			username=strdup(user);
 		}
 	}
-	if (p) {
+	if (pass) {
 		if (password) {
-			if (strcmp(p,password)) {
+			if (strcmp(pass,password)) {
 				free(password);
-				password=strdup(p);
+				password=strdup(pass);
 			}
 		} else {
-			password=strdup(p);
+			password=strdup(pass);
 		}
 	}
-	if (s) {
-		if (schemaname) free(schemaname);
-		schemaname=strdup(s);
+	if (db) {
+		if (dbname) { 
+			if (strcmp(db,dbname)) {
+				free(dbname);
+				dbname=strdup(db);
+			}
+		} else {
+			dbname=strdup(db);
+		}
 	}
 	if (sh1) {
 		if (sha1_pass) {
@@ -363,29 +369,29 @@ void PgSQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 }
 
 void PgSQL_Connection_userinfo::set(PgSQL_Connection_userinfo *ui) {
-	set(ui->username, ui->password, ui->schemaname, ui->sha1_pass);
+	set(ui->username, ui->password, ui->dbname, ui->sha1_pass);
 }
 
 
-bool PgSQL_Connection_userinfo::set_schemaname(char *_new, int l) {
+bool PgSQL_Connection_userinfo::set_dbname(char *_new, int l) {
 	int _l=0;
-	if (schemaname) {
-		_l=strlen(schemaname); // bug fix for #609
+	if (dbname) {
+		_l=strlen(dbname); // bug fix for #609
 	}
-	if ((schemaname==NULL) || (l != _l) || (strncmp(_new,schemaname, l ))) {
-		if (schemaname) {
-			free(schemaname);
-			schemaname=NULL;
+	if ((dbname==NULL) || (l != _l) || (strncmp(_new, dbname, l ))) {
+		if (dbname) {
+			free(dbname);
+			dbname =NULL;
 		}
 		if (l) {
-			schemaname=(char *)malloc(l+1);
-			memcpy(schemaname,_new,l);
-			schemaname[l]=0;
+			dbname=(char *)malloc(l+1);
+			memcpy(dbname,_new,l);
+			dbname[l]=0;
 		} else {
 			int k=strlen(pgsql_thread___default_schema);
-			schemaname=(char *)malloc(k+1);
-			memcpy(schemaname, pgsql_thread___default_schema,k);
-			schemaname[k]=0;
+			dbname =(char *)malloc(k+1);
+			memcpy(dbname,pgsql_thread___default_schema,k);
+			dbname[k]=0;
 		}
 		compute_hash();
 		return true;
@@ -664,7 +670,7 @@ unsigned int PgSQL_Connection_Placeholder::number_of_matching_session_variables(
 void PgSQL_Connection_Placeholder::initdb_start() {
 	PROXY_TRACE();
 	PgSQL_Connection_userinfo *client_ui=myds->sess->client_myds->myconn->userinfo;
-	async_exit_status = mysql_select_db_start(&interr,pgsql,client_ui->schemaname);
+	async_exit_status = mysql_select_db_start(&interr,pgsql,client_ui->dbname);
 }
 
 void PgSQL_Connection_Placeholder::initdb_cont(short event) {
@@ -1978,7 +1984,7 @@ void PgSQL_Connection::connect_start() {
 	conninfo << "password=" << userinfo->password << " "; // password
 	conninfo << "host=" << parent->address << " "; // backend address
 	conninfo << "port=" << parent->port << " "; // backend port
-	conninfo << "dbname=" << userinfo->schemaname << " "; // currently schemaname consists of datasename (have to improve this in future). In PostgreSQL database and schema are NOT the same.
+	conninfo << "dbname=" << userinfo->dbname << " ";
 	conninfo << "application_name=proxysql "; // application name
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	if (parent->use_ssl) {

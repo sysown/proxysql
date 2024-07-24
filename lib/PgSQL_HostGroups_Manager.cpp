@@ -643,7 +643,7 @@ static void * HGCU_thread_run() {
 				// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
 				if (myconn->pgsql->charset->nr >= 255)
 					mysql_options(myconn->pgsql, MYSQL_SET_CHARSET_NAME, myconn->pgsql->charset->csname);
-				statuses[i]=mysql_change_user_start(&ret[i], myconn->pgsql, myconn->userinfo->username, auth_password, myconn->userinfo->schemaname);
+				statuses[i]=mysql_change_user_start(&ret[i], myconn->pgsql, myconn->userinfo->username, auth_password, myconn->userinfo->dbname);
 				if (myconn->pgsql->net.pvio==NULL || myconn->pgsql->net.fd==0 || myconn->pgsql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
 				}
@@ -3070,7 +3070,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 //PgSQL_SrvC * PgSQL_SrvList::idx(unsigned int i) { return (PgSQL_SrvC *)servers->index(i); }
 
 void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const PgSQL_Connection * client_conn) {
-	char *schema = client_conn->userinfo->schemaname;
+	char *dbname = client_conn->userinfo->dbname;
 	PgSQL_Connection * conn=NULL;
 	unsigned int k;
 	for (k = start;  k < end; k++) {
@@ -3090,7 +3090,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 				unsigned int cnt_match = 0; // number of matching session variables
 				unsigned int not_match = 0; // number of not matching session variables
 				cnt_match = conn->number_of_matching_session_variables(client_conn, not_match);
-				if (strcmp(conn->userinfo->schemaname,schema)==0) {
+				if (strcmp(conn->userinfo->dbname,dbname)==0) {
 					cnt_match++;
 				} else {
 					not_match++;
@@ -3802,7 +3802,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 	result->add_column_definition(SQLITE_TEXT,"srv_host");
 	result->add_column_definition(SQLITE_TEXT,"srv_port");
 	result->add_column_definition(SQLITE_TEXT,"user");
-	result->add_column_definition(SQLITE_TEXT,"schema");
+	result->add_column_definition(SQLITE_TEXT,"dbname");
 	result->add_column_definition(SQLITE_TEXT,"init_connect");
 	result->add_column_definition(SQLITE_TEXT,"time_zone");
 	result->add_column_definition(SQLITE_TEXT,"sql_mode");
@@ -3839,7 +3839,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 				sprintf(buf,"%d", mysrvc->port);
 				pta[3]=strdup(buf);
 				pta[4] = strdup(conn->userinfo->username);
-				pta[5] = strdup(conn->userinfo->schemaname);
+				pta[5] = strdup(conn->userinfo->dbname);
 				pta[6] = NULL;
 				if (conn->options.init_connect) {
 					pta[6] = strdup(conn->options.init_connect);

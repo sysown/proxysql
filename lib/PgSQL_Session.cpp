@@ -862,7 +862,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 		if (client_myds->myconn != NULL) { // only if myconn is defined
 			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
 				j["client"]["userinfo"]["username"] = (client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "");
-				j["client"]["userinfo"]["schemaname"] = (client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "");
+				j["client"]["userinfo"]["dbname"] = (client_myds->myconn->userinfo->dbname ? client_myds->myconn->userinfo->dbname : "");
 #ifdef DEBUG
 				j["client"]["userinfo"]["password"] = (client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "");
 #endif
@@ -1732,10 +1732,10 @@ bool PgSQL_Session::handler_again___verify_ldap_user_variable() {
 bool PgSQL_Session::handler_again___verify_backend_user_schema() {
 	PgSQL_Data_Stream* myds = mybe->server_myds;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->dbname, mybe->server_myds->myconn->userinfo->dbname);
 	if (client_myds->myconn->userinfo->hash != mybe->server_myds->myconn->userinfo->hash) {
 		assert(strcmp(client_myds->myconn->userinfo->username, myds->myconn->userinfo->username) == 0);
-		if (strcmp(client_myds->myconn->userinfo->schemaname, myds->myconn->userinfo->schemaname)) {
+		if (strcmp(client_myds->myconn->userinfo->dbname, myds->myconn->userinfo->dbname)) {
 			// Sets the previous status of the PgSQL session according to the current status.
 			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
@@ -2808,7 +2808,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 		uint64_t hash = client_myds->myconn->local_stmts->compute_hash(
 			(char*)client_myds->myconn->userinfo->username,
-			(char*)client_myds->myconn->userinfo->schemaname,
+			(char*)client_myds->myconn->userinfo->dbname,
 			(char*)CurrentQuery.QueryPointer,
 			CurrentQuery.QueryLength
 		);
@@ -4039,7 +4039,7 @@ bool PgSQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 	MySQL_STMT_Global_info* stmt_info = NULL;
 	stmt_info = GloMyStmt->add_prepared_statement(
 		(char*)client_myds->myconn->userinfo->username,
-		(char*)client_myds->myconn->userinfo->schemaname,
+		(char*)client_myds->myconn->userinfo->dbname,
 		(char*)CurrentQuery.QueryPointer,
 		CurrentQuery.QueryLength,
 		CurrentQuery.QueryParserArgs.first_comment,
@@ -4179,12 +4179,12 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 // this function was inline
 void PgSQL_Session::handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn) {
 	if (pgsql_thread___verbose_query_error) {
-		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, myconn->get_error_code_with_message().c_str(), CurrentQuery.QueryParserArgs.digest_text);
+		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->dbname, myconn->get_error_code_with_message().c_str(), CurrentQuery.QueryParserArgs.digest_text);
 	}
 	else {
 		proxy_warning("Error during query on (%d,%s,%d,%lu): %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->get_error_code_with_message().c_str());
 	}
-	PgHGM->add_pgsql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, 9999, (char*)myconn->get_error_code_with_message().c_str());
+	PgHGM->add_pgsql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->dbname, 9999, (char*)myconn->get_error_code_with_message().c_str());
 }
 
 
@@ -5112,7 +5112,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		l_free(pkt->size, pkt->ptr);
 		//if (client_myds->encrypted==false) {
-		if (client_myds->myconn->userinfo->schemaname == NULL) {
+		if (client_myds->myconn->userinfo->dbname == NULL) {
 #ifdef PROXYSQLCLICKHOUSE
 			if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				if (strlen(default_schema) == 0) {
@@ -5121,7 +5121,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 			}
 #endif /* PROXYSQLCLICKHOUSE */
-			client_myds->myconn->userinfo->set_schemaname(default_schema, strlen(default_schema));
+			client_myds->myconn->userinfo->set_dbname(default_schema, strlen(default_schema));
 		}
 		int free_users = 0;
 		int used_users = 0;
@@ -5448,7 +5448,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
 		__sync_fetch_and_add(&PgHGM->status.frontend_init_db, 1);
-		client_myds->myconn->userinfo->set_schemaname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
+		client_myds->myconn->userinfo->set_dbname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTrx = NumActiveTransactions();
@@ -5489,7 +5489,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			schemanameptr[strlen(schemanameptr) - 1] = '\0';
 			schemanameptr++;
 		}
-		client_myds->myconn->userinfo->set_schemaname(schemanameptr, strlen(schemanameptr));
+		client_myds->myconn->userinfo->set_dbname(schemanameptr, strlen(schemanameptr));
 		free(schemaname);
 		if (mirror == false) {
 			RequestEnd(NULL);
