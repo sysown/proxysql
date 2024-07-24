@@ -3070,7 +3070,6 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 //PgSQL_SrvC * PgSQL_SrvList::idx(unsigned int i) { return (PgSQL_SrvC *)servers->index(i); }
 
 void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const PgSQL_Connection * client_conn) {
-	char *dbname = client_conn->userinfo->dbname;
 	PgSQL_Connection * conn=NULL;
 	unsigned int k;
 	for (k = start;  k < end; k++) {
@@ -3090,11 +3089,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 				unsigned int cnt_match = 0; // number of matching session variables
 				unsigned int not_match = 0; // number of not matching session variables
 				cnt_match = conn->number_of_matching_session_variables(client_conn, not_match);
-				if (strcmp(conn->userinfo->dbname,dbname)==0) {
-					cnt_match++;
-				} else {
-					not_match++;
-				}
+
 				if (not_match==0) {
 					// it seems we found the perfect connection
 					number_of_matching_session_variables = cnt_match;

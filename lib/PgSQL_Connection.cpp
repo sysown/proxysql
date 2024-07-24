@@ -2806,6 +2806,9 @@ bool PgSQL_Connection::has_same_connection_options(const PgSQL_Connection* clien
 		if (strcmp(userinfo->username, client_conn->userinfo->username)) {
 			return false;
 		}
+		if (strcmp(userinfo->dbname, client_conn->userinfo->dbname)) {
+			return false;
+		}
 	}
 	return true;
 }

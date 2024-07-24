@@ -5189,42 +5189,40 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 				) {
 				PgSQL_Connection* client_conn = sess->client_myds->myconn;
 				if (c->requires_RESETTING_CONNECTION(client_conn) == false) { // RESETTING CONNECTION is not required
-					char* dbname = client_conn->userinfo->dbname;
-					if (strcmp(c->userinfo->dbname, dbname) == 0) { // same dbname
-						unsigned int not_match = 0; // number of not matching session variables
-						c->number_of_matching_session_variables(client_conn, not_match);
-						if (not_match == 0) { // all session variables match
-							if (gtid_uuid) { // gtid_uuid is used
-								// we first check if we already excluded this parent (MySQL Server)
-								PgSQL_SrvC* mysrvc = c->parent;
-								std::vector<PgSQL_SrvC*>::iterator it;
-								it = find(parents.begin(), parents.end(), mysrvc);
-								if (it != parents.end()) {
-									// we didn't exclude this server (yet?)
-									bool gtid_found = false;
-									gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
-									if (gtid_found) { // this server has the correct GTID
-										c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
-										return c;
-									}
-									else {
-										parents.push_back(mysrvc); // stop evaluating this server
-									}
+					unsigned int not_match = 0; // number of not matching session variables
+					c->number_of_matching_session_variables(client_conn, not_match);
+					if (not_match == 0) { // all session variables match
+						if (gtid_uuid) { // gtid_uuid is used
+							// we first check if we already excluded this parent (MySQL Server)
+							PgSQL_SrvC* mysrvc = c->parent;
+							std::vector<PgSQL_SrvC*>::iterator it;
+							it = find(parents.begin(), parents.end(), mysrvc);
+							if (it != parents.end()) {
+								// we didn't exclude this server (yet?)
+								bool gtid_found = false;
+								gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
+								if (gtid_found) { // this server has the correct GTID
+									c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
+									return c;
 								}
-							}
-							else { // gtid_is not used
-								if (max_lag_ms >= 0) {
-									if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
-										status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
-										continue;
-									}
+								else {
+									parents.push_back(mysrvc); // stop evaluating this server
 								}
-								// return the connection
-								c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
-								return c;
 							}
 						}
+						else { // gtid_is not used
+							if (max_lag_ms >= 0) {
+								if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
+									status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
+									continue;
+								}
+							}
+							// return the connection
+							c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
+							return c;
+						}
 					}
+					
 				}
 			}
 		}

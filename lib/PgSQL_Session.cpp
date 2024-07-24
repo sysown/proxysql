@@ -1729,17 +1729,13 @@ bool PgSQL_Session::handler_again___verify_ldap_user_variable() {
 	return false;
 }
 
-bool PgSQL_Session::handler_again___verify_backend_user_schema() {
+bool PgSQL_Session::handler_again___verify_backend_user_db() {
 	PgSQL_Data_Stream* myds = mybe->server_myds;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->dbname, mybe->server_myds->myconn->userinfo->dbname);
 	if (client_myds->myconn->userinfo->hash != mybe->server_myds->myconn->userinfo->hash) {
 		assert(strcmp(client_myds->myconn->userinfo->username, myds->myconn->userinfo->username) == 0);
-		if (strcmp(client_myds->myconn->userinfo->dbname, myds->myconn->userinfo->dbname)) {
-			// Sets the previous status of the PgSQL session according to the current status.
-			set_previous_status_mode3();
-			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
-		}
+		assert(strcmp(client_myds->myconn->userinfo->dbname, myds->myconn->userinfo->dbname) == 0);
 	}
 	// if we reach here, the username is the same
 	if (myds->myconn->requires_RESETTING_CONNECTION(client_myds->myconn)) {
@@ -4179,7 +4175,7 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 // this function was inline
 void PgSQL_Session::handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn) {
 	if (pgsql_thread___verbose_query_error) {
-		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->dbname, myconn->get_error_code_with_message().c_str(), CurrentQuery.QueryParserArgs.digest_text);
+		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , dbname \"%s\" , %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->dbname, myconn->get_error_code_with_message().c_str(), CurrentQuery.QueryParserArgs.digest_text);
 	}
 	else {
 		proxy_warning("Error during query on (%d,%s,%d,%lu): %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->get_error_code_with_message().c_str());
@@ -4517,7 +4513,7 @@ handler_again:
 				thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
 			if (default_hostgroup >= 0) {
-				if (handler_again___verify_backend_user_schema()) {
+				if (handler_again___verify_backend_user_db()) {
 					goto handler_again;
 				}
 				if (mirror == false) { // do not care about autocommit and charset if mirror
