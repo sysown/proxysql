@@ -470,7 +470,6 @@ class PgSQL_Connection_Placeholder {
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_tracked_options(const PgSQL_Connection *c);
-	bool requires_CHANGE_USER(const PgSQL_Connection *client_conn);
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return pgsql ? pgsql->thread_id : 0; }
 
@@ -529,6 +528,10 @@ public:
 	bool IsServerOffline();
 	
 	bool is_connection_in_reusable_state() const;
+
+	bool requires_RESETTING_CONNECTION(const PgSQL_Connection* client_conn);
+	
+	bool has_same_connection_options(const PgSQL_Connection* c);
 
 	int get_server_version() {
 		return PQserverVersion(pgsql_conn);

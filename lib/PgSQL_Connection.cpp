@@ -615,45 +615,6 @@ bool PgSQL_Connection_Placeholder::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
-bool PgSQL_Connection_Placeholder::requires_CHANGE_USER(const PgSQL_Connection *client_conn) {
-	char *username = client_conn->userinfo->username;
-	if (strcmp(userinfo->username,username)) {
-		// the two connections use different usernames
-		// The connection need to be reset with CHANGE_USER
-		return true;
-	}
-	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
-		if (client_conn->var_hash[i] == 0) {
-			if (var_hash[i]) {
-				// this connection has a variable set that the
-				// client connection doesn't have.
-				// Since connection cannot be unset , this connection
-				// needs to be reset with CHANGE_USER
-				return true;
-			}
-		}
-	}
-	if (client_conn->dynamic_variables_idx.size() < dynamic_variables_idx.size()) {
-		// the server connection has more variables set than the client
-		return true;
-	}
-	std::vector<uint32_t>::const_iterator it_c = client_conn->dynamic_variables_idx.begin(); // client connection iterator
-	std::vector<uint32_t>::const_iterator it_s = dynamic_variables_idx.begin();              // server connection iterator
-	for ( ; it_s != dynamic_variables_idx.end() ; it_s++) {
-		while ( it_c != client_conn->dynamic_variables_idx.end() && ( *it_c < *it_s ) ) {
-			it_c++;
-		}
-		if ( it_c != client_conn->dynamic_variables_idx.end() && *it_c == *it_s) {
-			// the backend variable idx matches the frontend variable idx
-		} else {
-			// we are processing a backend variable but there are
-			// no more frontend variables
-			return true;
-		}
-	}
-	return false;
-}
-
 unsigned int PgSQL_Connection_Placeholder::reorder_dynamic_variables_idx() {
 	dynamic_variables_idx.clear();
 	// note that we are inserting the index already ordered
@@ -698,22 +659,6 @@ unsigned int PgSQL_Connection_Placeholder::number_of_matching_session_variables(
 		}
 	}
 	return ret;
-}
-
-
-bool PgSQL_Connection_Placeholder::match_tracked_options(const PgSQL_Connection *c) {
-	uint32_t cf1 = options.client_flag; // own client flags
-	uint32_t cf2 = c->options.client_flag; // other client flags
-	if ((cf1 & CLIENT_FOUND_ROWS) == (cf2 & CLIENT_FOUND_ROWS)) {
-		if ((cf1 & CLIENT_MULTI_STATEMENTS) == (cf2 & CLIENT_MULTI_STATEMENTS)) {
-			if ((cf1 & CLIENT_MULTI_RESULTS) == (cf2 & CLIENT_MULTI_RESULTS)) {
-				if ((cf1 & CLIENT_IGNORE_SPACE) == (cf2 & CLIENT_IGNORE_SPACE)) {
-					return true;
-				}
-			}
-		}
-	}
-	return false;
 }
 
 // non blocking API
@@ -3339,6 +3284,9 @@ handler_again:
 	{
 		reset_session_cont(event);
 		if (async_exit_status) {
+			if (myds->wait_until != 0 && myds->sess->thread->curtime >= myds->wait_until) {
+				NEXT_IMMEDIATE(ASYNC_RESET_SESSION_TIMEOUT);
+			}
 			next_event(ASYNC_RESET_SESSION_CONT);
 			break;
 		}
@@ -4172,4 +4120,47 @@ void PgSQL_Connection::reset_session_cont(short event) {
 	}
 
 	pgsql_result = PQgetResult(pgsql_conn);
+}
+
+bool PgSQL_Connection::requires_RESETTING_CONNECTION(const PgSQL_Connection* client_conn) {
+	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
+		if (client_conn->var_hash[i] == 0) {
+			if (var_hash[i]) {
+				// this connection has a variable set that the
+				// client connection doesn't have.
+				// Since connection cannot be unset , this connection
+				// needs to be reset with CHANGE_USER
+				return true;
+			}
+		}
+	}
+	if (client_conn->dynamic_variables_idx.size() < dynamic_variables_idx.size()) {
+		// the server connection has more variables set than the client
+		return true;
+	}
+	std::vector<uint32_t>::const_iterator it_c = client_conn->dynamic_variables_idx.begin(); // client connection iterator
+	std::vector<uint32_t>::const_iterator it_s = dynamic_variables_idx.begin();              // server connection iterator
+	for (; it_s != dynamic_variables_idx.end(); it_s++) {
+		while (it_c != client_conn->dynamic_variables_idx.end() && (*it_c < *it_s)) {
+			it_c++;
+		}
+		if (it_c != client_conn->dynamic_variables_idx.end() && *it_c == *it_s) {
+			// the backend variable idx matches the frontend variable idx
+		}
+		else {
+			// we are processing a backend variable but there are
+			// no more frontend variables
+			return true;
+		}
+	}
+	return false;
+}
+
+bool PgSQL_Connection::has_same_connection_options(const PgSQL_Connection* client_conn) {
+	if (userinfo->hash != client_conn->userinfo->hash) {
+		if (strcmp(userinfo->username, client_conn->userinfo->username)) {
+			return false;
+		}
+	}
+	return true;
 }

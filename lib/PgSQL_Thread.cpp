@@ -4685,6 +4685,9 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				case RESETTING_CONNECTION:
 					pta[11] = strdup("Resetting connection");
 					break;
+				case RESETTING_CONNECTION_V2:
+					pta[11] = strdup("Resetting connection V2");
+					break;
 				case CHANGING_SCHEMA:
 					pta[11] = strdup("InitDB");
 					break;
@@ -5179,13 +5182,13 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 	PgSQL_Connection* c = NULL;
 	for (i = 0; i < cached_connections->len; i++) {
 		c = (PgSQL_Connection*)cached_connections->index(i);
-		if (c->parent->myhgc->hid == _hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
+		if (c->parent->myhgc->hid == _hid && sess->client_myds->myconn->has_same_connection_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used
 				(gtid_uuid && find(parents.begin(), parents.end(), c->parent) == parents.end()) // the server is currently not excluded
 				) {
 				PgSQL_Connection* client_conn = sess->client_myds->myconn;
-				if (c->requires_CHANGE_USER(client_conn) == false) { // CHANGE_USER is not required
+				if (c->requires_RESETTING_CONNECTION(client_conn) == false) { // RESETTING CONNECTION is not required
 					char* schema = client_conn->userinfo->schemaname;
 					if (strcmp(c->userinfo->schemaname, schema) == 0) { // same schema
 						unsigned int not_match = 0; // number of not matching session variables

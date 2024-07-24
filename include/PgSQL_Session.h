@@ -200,7 +200,7 @@ private:
 	bool handler_again___status_CHANGING_CHARSET(int* _rc);
 	bool handler_again___status_CHANGING_SCHEMA(int*);
 	bool handler_again___status_CONNECTING_SERVER(int*);
-	bool handler_again___status_CHANGING_USER_SERVER(int*);
+	bool handler_again___status_RESETTING_CONNECTION(int*);
 	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
 	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
 	bool handler_again___multiple_statuses(int* rc);

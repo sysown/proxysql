@@ -3075,13 +3075,13 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 	unsigned int k;
 	for (k = start;  k < end; k++) {
 		conn = (PgSQL_Connection *)conns->index(k);
-		if (conn->match_tracked_options(client_conn)) {
+		if (conn->has_same_connection_options(client_conn)) {
 			if (connection_quality_level == 0) {
 				// this is our best candidate so far
 				connection_quality_level = 1;
 				conn_found_idx = k;
 			}
-			if (conn->requires_CHANGE_USER(client_conn)==false) {
+			if (conn->requires_RESETTING_CONNECTION(client_conn)==false) {
 				if (connection_quality_level == 1) {
 					// this is our best candidate so far
 					connection_quality_level = 2;
@@ -3143,9 +3143,9 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 	bool needs_warming = false;
 	// connection_quality_level:
 	// 0 : not found any good connection, tracked options are not OK
-	// 1 : tracked options are OK , but CHANGE USER is required
-	// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
-	// 3 : tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+	// 1 : tracked options are OK , but RESETTING SESSION is required
+	// 2 : tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
+	// 3 : tracked options are OK , RESETTING SESSION is not required, and it seems that SET statements or INIT_DB ARE not required
 	unsigned int number_of_matching_session_variables = 0; // this includes session variables AND schema
 	bool connection_warming = pgsql_thread___connection_warming;
 	int free_connections_pct = pgsql_thread___free_connections_pct;
@@ -3174,8 +3174,8 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			}
 			// connection_quality_level:
-			// 1 : tracked options are OK , but CHANGE USER is required
-			// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+			// 1 : tracked options are OK , but RESETTING SESSION is required
+			// 2 : tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
 			switch (connection_quality_level) {
 				case 0: // not found any good connection, tracked options are not OK
 					// we must check if connections need to be freed before
@@ -3210,10 +3210,10 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 						__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					}
 					break;
-				case 1: //tracked options are OK , but CHANGE USER is required
+				case 1: //tracked options are OK , but RESETTING SESSION is required
 					// we may consider creating a new connection
 					{
 					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
@@ -3224,14 +3224,14 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 						__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					} else {
 						conn=(PgSQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					}
 					}
 					break;
-				case 2: // tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
-				case 3: // tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+				case 2: // tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
+				case 3: // tracked options are OK , RESETTING SESSION is not required, and it seems that SET statements or INIT_DB ARE not required
 					// here we return the best connection we have, no matter if connection_quality_level is 2 or 3
 					conn=(PgSQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					break;
@@ -3244,7 +3244,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 		} else {
 			conn=(PgSQL_Connection *)conns->remove_index_fast(i);
 		}
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return conn;
 	} else {
 		unsigned long long curtime = monotonic_time();
@@ -3269,7 +3269,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 			conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 			__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 			return  conn;
 		}
 	}
