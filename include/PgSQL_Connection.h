@@ -400,12 +400,6 @@ class PgSQL_Connection_Placeholder {
 	void set_status_sql_log_bin0(bool);
 	bool get_status(uint32_t status_flag);
 	bool get_status_sql_log_bin0();
-	void connect_start();
-	void connect_cont(short event);
-	void change_user_start();
-	void change_user_cont(short event);
-	void ping_start();
-	void ping_cont(short event);
 	void set_autocommit_start();
 	void set_autocommit_cont(short event);
 	void set_names_start();
@@ -421,17 +415,11 @@ class PgSQL_Connection_Placeholder {
 	void set_option_start();
 	void set_option_cont(short event);
 	void set_query(char *stmt, unsigned long length);
-	PG_ASYNC_ST handler(short event);
-	void next_event(PG_ASYNC_ST new_st);
-
-	int async_connect(short event);
-	int async_change_user(short event);
-	int async_select_db(short event);
+	
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, unsigned int nr);
 	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
-	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
-	int async_ping(short event);
+
 	int async_set_option(short event, bool mask);
 
 	void stmt_prepare_start();
@@ -473,27 +461,18 @@ class PgSQL_Connection_Placeholder {
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return pgsql ? pgsql->thread_id : 0; }
 
-private:
-	// these will be removed
-	MySQL_ResultSet *MyRS;
-	MySQL_ResultSet *MyRS_reuse;
 
-	bool IsServerOffline();
-	/**
- * @brief Returns if the connection is **for sure**, known to be in an active transaction.
- * @details The function considers two things:
- *   1. If 'server_status' is flagged with 'SERVER_STATUS_IN_TRANS'.
- *   2. If the connection has 'autcommit=0' and 'autocommit_false_is_transaction' is set.
- * @return True if the connection is known to be in a transaction, or equivalent state.
- */
-	bool IsKnownActiveTransaction();
-	/**
-	 * @brief Returns if the connection is in a **potential transaction**.
-	 * @details This function is a more strict version of 'IsKnownActiveTransaction', which also considers
-	 *  connections which holds 'unknown_transaction_status' as potentially active transactions.
-	 * @return True if the connection is in potentially in an active transaction.
-	 */
-	bool IsActiveTransaction();
+	/********* These will be removed **********/
+	MySQL_ResultSet* MyRS;
+	MySQL_ResultSet* MyRS_reuse;
+	
+	// these method should not be called from this class
+	int async_select_db(short event) { assert(0); return -1; }
+	bool IsServerOffline() { assert(0); return false; }
+	bool IsKnownActiveTransaction() { assert(0); return false; }
+	bool IsActiveTransaction() { assert(0); return false; }
+	PG_ASYNC_ST handler(short event) { assert(0); return ASYNC_IDLE; }
+	/********* End of remove ******************/
 };
 
 class PgSQL_Connection : public PgSQL_Connection_Placeholder {
