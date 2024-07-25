@@ -407,8 +407,6 @@ class PgSQL_Connection_Placeholder {
 	void set_autocommit_cont(short event);
 	void set_names_start();
 	void set_names_cont(short event);
-	void real_query_start();
-	void real_query_cont(short event);
 #ifndef PROXYSQL_USE_RESULT
 	void store_result_start();
 	void store_result_cont(short event);

@@ -729,17 +729,6 @@ void PgSQL_Connection_Placeholder::set_query(char *stmt, unsigned long length) {
 	}
 }
 
-void PgSQL_Connection_Placeholder::real_query_start() {
-	PROXY_TRACE();
-	async_exit_status = mysql_real_query_start(&interr , pgsql, query.ptr, query.length);
-}
-
-void PgSQL_Connection_Placeholder::real_query_cont(short event) {
-	if (event == 0) return;
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	async_exit_status = mysql_real_query_cont(&interr ,pgsql , mysql_status(event, true));
-}
-
 void PgSQL_Connection_Placeholder::stmt_prepare_start() {
 	PROXY_TRACE();
 	query.stmt=mysql_stmt_init(pgsql);
