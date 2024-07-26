@@ -608,7 +608,7 @@ int PgSQL_Data_Stream::read_from_net() {
 
 			char buf2[MY_SSL_BUFFER];
 			int n2;
-			enum pgsql_sslstatus pgsql_status;
+			//enum pgsql_sslstatus pgsql_status;
 			char* src = buf;
 			int len = n;
 			while (len > 0) {
@@ -1297,11 +1297,7 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
 		sess->status != PINGING_SERVER
 		) {
-		if (pgsql_thread___reset_connection_algorithm == 2) {
-			sess->create_new_session_and_reset_connection(this);
-		} else {
-			destroy_MySQL_Connection_From_Pool(true);
-		}
+		sess->create_new_session_and_reset_connection(this);
 	} else {
 		detach_connection();
 		unplug_backend();
@@ -1326,11 +1322,19 @@ void PgSQL_Data_Stream::destroy_queues() {
 
 void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	PgSQL_Connection* mc = myconn;
-	mc->last_time_used = sess->thread->curtime;
-	detach_connection();
-	unplug_backend();
-	mc->send_quit = sq;
-	PgHGM->destroy_MyConn_from_pool(mc);
+	PgSQL_SrvC* mysrvc = mc->parent;
+	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE &&
+		mc->async_state_machine == ASYNC_IDLE &&
+		mc->is_connection_in_reusable_state() == true) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", mc, mysrvc->address, mysrvc->port);
+		sess->create_new_session_and_reset_connection(this);
+	} else {
+		mc->last_time_used = sess->thread->curtime;
+		mc->send_quit = sq;
+		detach_connection();
+		unplug_backend();
+		PgHGM->destroy_MyConn_from_pool(mc);
+	}
 }
 
 bool PgSQL_Data_Stream::data_in_rbio() {
@@ -1342,15 +1346,14 @@ bool PgSQL_Data_Stream::data_in_rbio() {
 
 void PgSQL_Data_Stream::reset_connection() {
 	if (myconn) {
-		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
+		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true &&
+			myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
 			myconn->last_time_used = sess->thread->curtime;
 			return_MySQL_Connection_To_Pool();
-		}
-		else {
+		} else {
 			if (sess && sess->session_fast_forward == false) {
 				destroy_MySQL_Connection_From_Pool(true);
-			}
-			else {
+			} else {
 				destroy_MySQL_Connection_From_Pool(false);
 			}
 		}

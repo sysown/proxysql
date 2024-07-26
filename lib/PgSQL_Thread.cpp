@@ -383,7 +383,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"query_processor_regex",
 	(char*)"set_query_lock_on_hostgroup",
 	(char*)"set_parser_algorithm",
-	(char*)"reset_connection_algorithm",
 	(char*)"auto_increment_delay_multiplex",
 	(char*)"auto_increment_delay_multiplex_timeout_ms",
 	(char*)"long_query_time",
@@ -433,7 +432,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"ldap_user_variable",
 	(char*)"add_ldap_user_comment",
 	(char*)"default_session_track_gtids",
-	(char*)"connpoll_reset_queue_length",
 	(char*)"min_num_servers_lantency_awareness",
 	(char*)"aurora_max_lag_ms_only_read_from_replicas",
 	(char*)"stats_time_backend_query",
@@ -992,7 +990,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_processor_regex = 1;
 	variables.set_query_lock_on_hostgroup = 1;
 	variables.set_parser_algorithm = 2; // before 2.6.0 this was 1
-	variables.reset_connection_algorithm = 2;
 	variables.auto_increment_delay_multiplex = 5;
 	variables.auto_increment_delay_multiplex_timeout_ms = 10000;
 	variables.long_query_time = 1000;
@@ -1039,7 +1036,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_digests_track_hostname = false;
 	variables.query_digests_keep_comment = false;
 	variables.parse_failure_logs_digest = false;
-	variables.connpoll_reset_queue_length = 50;
 	variables.min_num_servers_lantency_awareness = 1000;
 	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
 	variables.stats_time_backend_query = false;
@@ -2127,12 +2123,10 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["throttle_max_bytes_per_second_to_client"] = make_tuple(&variables.throttle_max_bytes_per_second_to_client, 0, 2147483647, false);
 		VariablesPointers_int["throttle_ratio_server_to_client"] = make_tuple(&variables.throttle_ratio_server_to_client, 0, 100, false);
 		// backend management
-		VariablesPointers_int["connpoll_reset_queue_length"] = make_tuple(&variables.connpoll_reset_queue_length, 0, 10000, false);
 		VariablesPointers_int["default_max_latency_ms"] = make_tuple(&variables.default_max_latency_ms, 0, 20 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["free_connections_pct"] = make_tuple(&variables.free_connections_pct, 0, 100, false);
 		VariablesPointers_int["poll_timeout"] = make_tuple(&variables.poll_timeout, 10, 20000, false);
 		VariablesPointers_int["poll_timeout_on_failure"] = make_tuple(&variables.poll_timeout_on_failure, 10, 20000, false);
-		VariablesPointers_int["reset_connection_algorithm"] = make_tuple(&variables.reset_connection_algorithm, 1, 2, false);
 		VariablesPointers_int["shun_on_failures"] = make_tuple(&variables.shun_on_failures, 0, 10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"] = make_tuple(&variables.shun_recovery_time_sec, 0, 3600 * 24 * 365, false);
 		VariablesPointers_int["unshun_algorithm"] = make_tuple(&variables.unshun_algorithm, 0, 1, false);
@@ -3736,7 +3730,6 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___log_unhealthy_connections = (bool)GloPTH->get_variable_int((char*)"log_unhealthy_connections");
 	pgsql_thread___throttle_max_bytes_per_second_to_client = GloPTH->get_variable_int((char*)"throttle_max_bytes_per_second_to_client");
 	pgsql_thread___throttle_ratio_server_to_client = GloPTH->get_variable_int((char*)"throttle_ratio_server_to_client");
-	pgsql_thread___reset_connection_algorithm = GloPTH->get_variable_int((char*)"reset_connection_algorithm");
 	pgsql_thread___shun_on_failures = GloPTH->get_variable_int((char*)"shun_on_failures");
 	pgsql_thread___shun_recovery_time_sec = GloPTH->get_variable_int((char*)"shun_recovery_time_sec");
 	pgsql_thread___hostgroup_manager_verbose = GloPTH->get_variable_int((char*)"hostgroup_manager_verbose");

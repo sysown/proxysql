@@ -1423,8 +1423,7 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 		// due to issue #2096 we disable the global check on pgsql_thread___multiplexing
 		if ((myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 			myds->return_MySQL_Connection_To_Pool();
-		}
-		else {
+		} else {
 			myds->destroy_MySQL_Connection_From_Pool(true);
 		}
 		delete mybe->server_myds;
@@ -2700,7 +2699,7 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 		} else {
 			if (rc == -2) {
 				bool retry_conn = false;
-				proxy_error("Change user timeout during Resetting Connection on %s , %d\n", myconn->parent->address, myconn->parent->port);
+				proxy_error("Timeout during Resetting Connection on %s , %d\n", myconn->parent->address, myconn->parent->port);
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_CHANGE_USER_TIMEOUT);
 				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 					retry_conn = true;
@@ -4307,11 +4306,7 @@ void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* my
 		if (pgsql_thread___multiplexing && (myconn->reusable == true) && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false) {
 			myds->DSS = STATE_NOT_INITIALIZED;
 			if (mysql_thread___autocommit_false_not_reusable && myconn->IsAutoCommit() == false) {
-				if (pgsql_thread___reset_connection_algorithm == 2) {
-					create_new_session_and_reset_connection(myds);
-				} else {
-					myds->destroy_MySQL_Connection_From_Pool(true);
-				}
+				create_new_session_and_reset_connection(myds);
 			} else {
 				myds->return_MySQL_Connection_To_Pool();
 			}
@@ -7719,12 +7714,7 @@ void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* mycon
 			myds->wait_until = 0;
 			myds->DSS = STATE_NOT_INITIALIZED;
 			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit() == false) {
-				if (pgsql_thread___reset_connection_algorithm == 2) {
-					create_new_session_and_reset_connection(myds);
-				}
-				else {
-					myds->destroy_MySQL_Connection_From_Pool(true);
-				}
+				create_new_session_and_reset_connection(myds);
 			}
 			else {
 				myds->return_MySQL_Connection_To_Pool();

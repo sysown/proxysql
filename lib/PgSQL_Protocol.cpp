@@ -496,7 +496,7 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 	uint16_t len16;
 	uint8_t type8;
 	uint32_t code;
-	const uint8_t* ptr;
+	//const uint8_t* ptr;
 
 	unsigned int read_pos = 0;
 
