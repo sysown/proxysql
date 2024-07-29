@@ -35,8 +35,8 @@ namespace nlohmann { class json; }
 //#define STRESSTEST_POOL
 #endif // DEBUG
 
-#define MHM_PTHREAD_MUTEX
 
+#include "Base_HostGroups_Manager.h"
 
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
@@ -240,122 +240,17 @@ class PgSQL_SrvC {	// MySQL Server Container
 	}
 };
 
-class PgSQL_SrvList {	// MySQL Server List
-	private:
-	PgSQL_HGC *myhgc;
-	int find_idx(PgSQL_SrvC *);
+class PgSQL_SrvList: public BaseSrvList<PgSQL_HGC> {
 	public:
-	PtrArray *servers;
-	unsigned int cnt() { return servers->len; }
-	PgSQL_SrvList(PgSQL_HGC *);
-	~PgSQL_SrvList();
-	void add(PgSQL_SrvC *);
-	void remove(PgSQL_SrvC *);
-	PgSQL_SrvC * idx(unsigned int i) {return (PgSQL_SrvC *)servers->index(i); }
+	PgSQL_SrvList(PgSQL_HGC* hgc) : BaseSrvList<PgSQL_HGC>(hgc) {}
+	friend class PgSQL_HGC;
 };
 
-class PgSQL_HGC {	// MySQL Host Group Container
+
+class PgSQL_HGC: public BaseHGC<PgSQL_HGC> {
 	public:
-	unsigned int hid;
-	unsigned long long current_time_now;
-	uint32_t new_connections_now;
-	PgSQL_SrvList *mysrvs;
-	struct { // this is a series of attributes specific for each hostgroup
-		char * init_connect;
-		char * comment;
-		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
-		uint32_t max_num_online_servers;
-		uint32_t throttle_connections_per_sec;
-		int8_t autocommit;
-		int8_t free_connections_pct;
-		int8_t handle_warnings;
-		bool multiplex;
-		bool connection_warming;
-		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
-		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
-		nlohmann::json * ignore_session_variables_json = NULL; // the JSON format of ignore_session_variables
-	} attributes;
-	struct {
-		int64_t weight;
-		int64_t max_connections;
-		int32_t use_ssl;
-	} servers_defaults;
-	void reset_attributes();
-	inline
-	bool handle_warnings_enabled() const {
-		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
-	}
-	PgSQL_HGC(int);
-	~PgSQL_HGC();
+	PgSQL_HGC(int _hid) : BaseHGC<PgSQL_HGC>(_hid) {}
 	PgSQL_SrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess);
-};
-
-class PgSQL_Group_Replication_Info {
-	public:
-	int writer_hostgroup;
-	int backup_writer_hostgroup;
-	int reader_hostgroup;
-	int offline_hostgroup;
-	int max_writers;
-	int max_transactions_behind;
-	char *comment;
-	bool active;
-	int writer_is_also_reader;
-	bool __active;
-	bool need_converge; // this is set to true on LOAD PgSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
-	int current_num_writers;
-	int current_num_backup_writers;
-	int current_num_readers;
-	int current_num_offline;
-	PgSQL_Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	~PgSQL_Group_Replication_Info();
-};
-
-class PgSQL_Galera_Info {
-	public:
-	int writer_hostgroup;
-	int backup_writer_hostgroup;
-	int reader_hostgroup;
-	int offline_hostgroup;
-	int max_writers;
-	int max_transactions_behind;
-	char *comment;
-	bool active;
-	int writer_is_also_reader;
-	bool __active;
-	bool need_converge; // this is set to true on LOAD PgSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
-	int current_num_writers;
-	int current_num_backup_writers;
-	int current_num_readers;
-	int current_num_offline;
-	PgSQL_Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
-	~PgSQL_Galera_Info();
-};
-
-class PgSQL_AWS_Aurora_Info {
-	public:
-	int writer_hostgroup;
-	int reader_hostgroup;
-	int aurora_port;
-	int max_lag_ms;
-	int add_lag_ms;
-	int min_lag_ms;
-	int lag_num_checks;
-	int check_interval_ms;
-	int check_timeout_ms;
-	int writer_is_also_reader;
-	int new_reader_weight;
-	// TODO
-	// add intermediary status value, for example the last check time
-	char * domain_name;
-	char * comment;
-	bool active;
-	bool __active;
-	PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
-	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
-	~PgSQL_AWS_Aurora_Info();
 };
 
 struct PgSQL_p_hg_counter {
@@ -490,19 +385,16 @@ struct PgSQL_srv_opts_t {
 	int32_t use_ssl;
 };
 
-class PgSQL_HostGroups_Manager {
-	private:
+class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
+#if 0
 	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
 	pthread_mutex_t readonly_mutex;
 	std::set<std::string> read_only_set1;
 	std::set<std::string> read_only_set2;
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_t lock;
-#else
-	rwlock_t rwlock;
-#endif
-
+#endif // 0
+	private:
 	enum HGM_TABLES {
 		PgSQL_SERVERS_V2 = 0,
 		PgSQL_REPLICATION_HOSTGROUPS,
@@ -615,12 +507,13 @@ class PgSQL_HostGroups_Manager {
 	 */
 	uint64_t hgsm_pgsql_replication_hostgroups_checksum = 0;
 
-
+#if 0
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, PgSQL_HGC *>MyHostGroups_map;
 
 	PgSQL_HGC * MyHGC_find(unsigned int);
 	PgSQL_HGC * MyHGC_create(unsigned int);
+#endif // 0
 
 	void add(PgSQL_SrvC *, unsigned int);
 	void purge_pgsql_servers_table();
@@ -679,10 +572,6 @@ class PgSQL_HostGroups_Manager {
 	 * @brief Update the prometheus "connection_pool" counters.
 	 */
 	void p_update_connection_pool();
-	/**
-	 * @brief Update the "stats_pgsql_gtid_executed" counters.
-	 */
-	void p_update_pgsql_gtid_executed();
 
 	void p_update_connection_pool_update_counter(
 		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
@@ -801,8 +690,8 @@ class PgSQL_HostGroups_Manager {
 	PgSQL_HostGroups_Manager();
 	~PgSQL_HostGroups_Manager();
 	void init();
-	void wrlock();
-	void wrunlock();
+	//void wrlock();
+	//void wrunlock();
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'pgsql_servers_v2' using the provided hash.
@@ -883,7 +772,7 @@ class PgSQL_HostGroups_Manager {
 	void save_incoming_pgsql_table(SQLite3_result *, const string&);
 	SQLite3_result* get_current_pgsql_table(const string& name);
 
-	SQLite3_result * execute_query(char *query, char **error);
+	//SQLite3_result * execute_query(char *query, char **error);
 	/**
 	 * @brief Creates a resultset with the current full content of the target table.
 	 * @param string The target table. Valid values are:
@@ -909,7 +798,6 @@ class PgSQL_HostGroups_Manager {
 	 * @param lock When supplied the function calls 'wrlock()' and 'wrunlock()' functions for accessing the db.
 	 */
 	void update_table_pgsql_servers_for_monitor(bool lock=false);
-	PgSQL_HGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(PgSQL_Connection *);
 	/**
@@ -961,10 +849,6 @@ class PgSQL_HostGroups_Manager {
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
-
-	SQLite3_result * get_stats_pgsql_gtid_executed();
-	void generate_pgsql_gtid_executed_tables();
-	bool gtid_exists(PgSQL_SrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();

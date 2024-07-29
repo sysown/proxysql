@@ -657,17 +657,17 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.access_denied_max_user_connections=0;
 	status.select_for_update_or_equivalent=0;
 	status.auto_increment_delay_multiplex=0;
+#if 0
 	pthread_mutex_init(&readonly_mutex, NULL);
+#endif // 0
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);
 	pthread_mutex_init(&AWS_Aurora_Info_mutex, NULL);
-#ifdef MHM_PTHREAD_MUTEX
+#if 0
 	pthread_mutex_init(&lock, NULL);
-#else
-	spinlock_rwlock_init(&rwlock);
-#endif
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
+#endif // 0
 #ifdef DEBUG
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
@@ -756,21 +756,7 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 		ev_loop_destroy(gtid_ev_loop);
 	if (gtid_ev_timer)
 		free(gtid_ev_timer);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
-#endif
-}
-
-// wrlock() is only required during commit()
-void MySQL_HostGroups_Manager::wrlock() {
-#ifdef MHM_PTHREAD_MUTEX
-	pthread_mutex_lock(&lock);
-#else
-	spin_wrlock(&rwlock);
-#endif
-#ifdef DEBUG
-	is_locked = true;
-#endif
 }
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
@@ -803,18 +789,6 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 
 	pthread_mutex_unlock(&mysql_errors_mutex);
 }
-
-void MySQL_HostGroups_Manager::wrunlock() {
-#ifdef DEBUG
-	is_locked = false;
-#endif
-#ifdef MHM_PTHREAD_MUTEX
-	pthread_mutex_unlock(&lock);
-#else
-	spin_wrunlock(&rwlock);
-#endif
-}
-
 
 void MySQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
 	struct timespec ts;
@@ -915,29 +889,6 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	(*proxy_sqlite3_finalize)(statement1);
 	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
-}
-
-/**
- * @brief Execute a SQL query and retrieve the resultset.
- *
- * This function executes a SQL query using the provided query string and returns the resultset obtained from the
- * database operation. It also provides an optional error parameter to capture any error messages encountered during
- * query execution.
- *
- * @param query A pointer to a null-terminated string containing the SQL query to be executed.
- * @param error A pointer to a char pointer where any error message encountered during query execution will be stored.
- *              Pass nullptr if error handling is not required.
- * @return A pointer to a SQLite3_result object representing the resultset obtained from the query execution. This
- *         pointer may be nullptr if the query execution fails or returns an empty result.
- */
-SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	wrlock();
-	mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
 }
 
 /**
@@ -2277,78 +2228,6 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	return resultset;
-}
-
-/**
- * @brief Create a new MySQL host group container.
- *
- * This function creates a new instance of the MySQL host group container (`MyHGC`) with
- * the specified host group ID and returns a pointer to it.
- *
- * @param _hid The host group ID for the new container.
- * @return A pointer to the newly created `MyHGC` instance.
- */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
-	MyHGC *myhgc=new MyHGC(_hid);
-	return myhgc;
-}
-
-/**
- * @brief Find a MySQL host group container by host group ID.
- *
- * This function searches for a MySQL host group container with the specified host group ID
- * in the list of host groups. If found, it returns a pointer to the container; otherwise,
- * it returns a null pointer.
- *
- * @param _hid The host group ID to search for.
- * @return A pointer to the found `MyHGC` instance if found; otherwise, a null pointer.
- */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
-	if (MyHostGroups->len < 100) {
-		// for few HGs, we use the legacy search
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-			if (myhgc->hid==_hid) {
-				return myhgc;
-			}
-		}
-	} else {
-		// for a large number of HGs, we use the unordered_map
-		// this search is slower for a small number of HGs, therefore we use
-		// it only for large number of HGs
-		std::unordered_map<unsigned int, MyHGC *>::const_iterator it = MyHostGroups_map.find(_hid);
-		if (it != MyHostGroups_map.end()) {
-			MyHGC *myhgc = it->second;
-			return myhgc;
-		}
-	}
-	return NULL;
-}
-
-/**
- * @brief Lookup or create a MySQL host group container by host group ID.
- *
- * This function looks up a MySQL host group container with the specified host group ID. If
- * found, it returns a pointer to the existing container; otherwise, it creates a new container
- * with the specified host group ID, adds it to the list of host groups, and returns a pointer
- * to it.
- *
- * @param _hid The host group ID to lookup or create.
- * @return A pointer to the found or newly created `MyHGC` instance.
- * @note The function assertion fails if a newly created container is not found.
- */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
-	MyHGC *myhgc=NULL;
-	myhgc=MyHGC_find(_hid);
-	if (myhgc==NULL) {
-		myhgc=MyHGC_create(_hid);
-	} else {
-		return myhgc;
-	}
-	assert(myhgc);
-	MyHostGroups->add(myhgc);
-	MyHostGroups_map.emplace(_hid,myhgc);
-	return myhgc;
 }
 
 void MySQL_HostGroups_Manager::increase_reset_counter() {

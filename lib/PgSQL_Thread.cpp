@@ -5193,17 +5193,17 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 							if (it != parents.end()) {
 								// we didn't exclude this server (yet?)
 								bool gtid_found = false;
+#if 0
 								gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
+#endif // 0
 								if (gtid_found) { // this server has the correct GTID
 									c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
 									return c;
-								}
-								else {
+								} else {
 									parents.push_back(mysrvc); // stop evaluating this server
 								}
 							}
-						}
-						else { // gtid_is not used
+						} else { // gtid_is not used
 							if (max_lag_ms >= 0) {
 								if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
 									status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;

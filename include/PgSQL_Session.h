@@ -246,7 +246,6 @@ private:
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t* pkt);
-	//	int handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq);
 
 public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
@@ -365,7 +364,7 @@ public:
 	PgSQL_Session();
 	~PgSQL_Session();
 
-	void set_unhealthy();
+	//void set_unhealthy();
 
 	void set_status(enum session_status e);
 	int handler();
@@ -378,9 +377,9 @@ public:
 	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) override;
 	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Connection* myconn);
-	unsigned int NumActiveTransactions(bool check_savpoint = false);
-	bool HasOfflineBackends();
-	bool SetEventInOfflineBackends();
+	//unsigned int NumActiveTransactions(bool check_savpoint = false);
+	//bool HasOfflineBackends();
+	//bool SetEventInOfflineBackends();
 	/**
 	 * @brief Finds one active transaction in the current backend connections.
 	 * @details Since only one connection is returned, if the session holds multiple backend connections with
@@ -393,7 +392,7 @@ public:
 	 *  https://bugs.mysql.com/bug.php?id=107875.
 	 * @returns The hostgroup in which the connection was found, -1 in case no connection is found.
 	 */
-	int FindOneActiveTransaction(bool check_savepoint = false);
+	//int FindOneActiveTransaction(bool check_savepoint = false);
 	unsigned long long IdleTime();
 
 	//void reset_all_backends();
@@ -401,7 +400,7 @@ public:
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) override;
 	bool handle_command_query_kill(PtrSize_t*);
-	void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
+	//void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
 	 *  'transaction_persistent_hostgroup', and updates the 'PgSQL_Data_Stream' and 'PgSQL_Connection' before
