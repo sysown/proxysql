@@ -9,7 +9,7 @@
 #endif
 
 #include <sstream>
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
 
 static inline char is_digit(char c) {
