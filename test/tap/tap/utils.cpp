@@ -187,6 +187,45 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line) 
 
 #endif
 
+pair<int,vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl, MYSQL* admin) {
+	vector<MYSQL*> nodes_conns {};
+
+	pair<int,vector<srv_addr_t>> nodes_fetch { fetch_cluster_nodes(admin, true) };
+	if (nodes_fetch.first) {
+		diag("Failed to fetch cluster nodes. Aborting further testing");
+		return { EXIT_FAILURE, {} };
+	}
+
+	// Ensure a more idle status for ProxySQL
+	for (const srv_addr_t& node : nodes_fetch.second) {
+		const char* user { cl.admin_username };
+		const char* pass { cl.admin_password };
+
+		MYSQL* myconn = mysql_init(NULL);
+
+		if (!mysql_real_connect(myconn, node.host.c_str(), user, pass, NULL, node.port, NULL, 0)) {
+			diag(
+				"Failed to connect to Cluster node. Abort further testing"
+				"   host=%s port=%d errno=%d error='%s'",
+				node.host.c_str(), node.port, mysql_errno(myconn), mysql_error(myconn)
+			);
+			return { EXIT_FAILURE, {} };
+		}
+
+		const vector<const char*> queries { "DELETE FROM scheduler", "LOAD SCHEDULER TO RUNTIME" };
+		for (const char* q : queries) {
+			if (mysql_query_t(myconn, q)) {
+				diag("Failed to execute query   query=%s error='%s'", q, mysql_error(myconn));
+				return { EXIT_FAILURE, {} };
+			}
+		}
+
+		nodes_conns.push_back(myconn);
+	}
+
+	return { EXIT_SUCCESS, nodes_conns };
+}
+
 std::size_t count_matches(const string& str, const string& substr) {
 	std::size_t result = 0;
 	std::size_t pos = 0;
@@ -1939,7 +1978,7 @@ pair<int,vector<srv_addr_t>> fetch_cluster_nodes(MYSQL* admin, bool dump_fetch) 
 
 	MYSQL_RES* myres = mysql_store_result(admin);
 	if (myres == NULL) {
-		diag("Storing resultset failed   error:%s", mysql_error(admin));
+		diag("Storing resultset failed   error='%s'", mysql_error(admin));
 		return { static_cast<int>(mysql_errno(admin)), {} };
 	}
 

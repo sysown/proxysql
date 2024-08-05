@@ -56,6 +56,18 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line);
 
 #endif 
 
+/**
+ * @brief Helper function to disable Core nodes scheduler from ProxySQL Cluster nodes.
+ * @details In the CI environment, 'Scheduler' is used to induce extra load via Admin interface on
+ *  all the cluster nodes. Disabling this allows for more accurate measurements on the primary.
+ * @param cl CommandLine arguments supplied to the test.
+ * @param admin Already opened Admin conn to the primary instance.
+ * @return On success, the opened Admin connections to the Core nodes used to change their config,
+ *  these conns should later be used to restore their original config. On failure, a pair of shape
+ *  '{ EXIT_FAILURE, {} }'.
+ */
+std::pair<int,std::vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl, MYSQL* admin);
+
 inline std::string get_formatted_time() {
 	time_t __timer;
 	char __buffer[30];
