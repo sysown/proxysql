@@ -69,6 +69,8 @@ jobs:
         cd proxysql_3p_testing/
         git sparse-checkout list
         ./setup.sh
+        git -C ./proxysql switch v2.x
+        git -C ./proxysql pull --tags
         
         # extend timout
         cd test_laravel-framework
