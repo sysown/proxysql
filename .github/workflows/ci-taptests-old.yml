@@ -241,7 +241,7 @@ jobs:
     - name: Docker-hoster
       run: |
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        docker-compose up -d
+        docker compose up -d
         
     - name: Run proxysql
       run: |
