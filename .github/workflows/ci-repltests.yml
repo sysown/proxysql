@@ -62,7 +62,7 @@ jobs:
     - name: Docker-hoster
       run: |
         cd jenkins-build-scripts/infra-docker-hoster
-        docker-compose up -d
+        docker compose up -d
 
     - name: Replication-tests
       run: |
