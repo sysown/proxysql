@@ -213,6 +213,10 @@ jobs:
         rm -f test_session_status_flags-t
         rm -f test_auth_methods-t
         rm -f test_sqlite3_pass_exts-t
+        # missing cluster
+        rm -f reg_test_3765_ssl_pollout-t
+        rm -f reg_test__ssl_client_busy_wait-t
+        rm -f test_unshun_algorithm-t
 
         # FAIL
         #rm -f test_mysql_connect_retries-t
