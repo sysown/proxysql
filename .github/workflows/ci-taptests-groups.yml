@@ -234,8 +234,8 @@ jobs:
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
         
-        ./cluster_start.bash
-        sleep 10
+        #./cluster_start.bash
+        #sleep 10
         
         cd ${{ github.workspace }}/proxysql
         mkdir -p ci_infra_logs/regular_infra/proxysql
