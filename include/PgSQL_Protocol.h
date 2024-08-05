@@ -232,6 +232,7 @@ private:
 	uint8_t result_packet_type;
 
 	friend class PgSQL_Protocol;
+	friend class PgSQL_Connection;
 };
 
 class PgSQL_Protocol : public MySQL_Protocol {

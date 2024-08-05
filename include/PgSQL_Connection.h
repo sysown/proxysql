@@ -531,6 +531,7 @@ public:
 		return PQprotocolVersion(pgsql_conn);
 	}
 
+	inline
 	bool is_error_present() const {
 		if (error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL ||
 			error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR ||
@@ -540,28 +541,34 @@ public:
 		return false;
 	}
 
+	inline
 	PGSQL_ERROR_SEVERITY get_error_severity() const {
 		return error_info.severity;
 	}
 
+	inline
 	PGSQL_ERROR_CATEGORY get_error_category() const {
 		return error_info.category;
 	}
 
+	inline
 	const std::string& get_error_message() const {
 		return error_info.message;
 	}
 
-	std::string get_error_code_with_message() const {
-		return ("[" + std::string(error_info.sqlstate) + "] " + error_info.message);
-	}
-
-	const char* get_error_code_str() const {
+	inline
+		const char* get_error_code_str() const {
 		return error_info.sqlstate;
 	}
 
+	inline
 	PGSQL_ERROR_CODES get_error_code() const {
 		return error_info.code;
+	}
+
+	inline
+	std::string get_error_code_with_message() const {
+		return ("[" + std::string(error_info.sqlstate) + "] " + error_info.message);
 	}
 
 	void set_error(const char* code, const char* message, bool is_fatal) {
@@ -573,8 +580,15 @@ public:
 			PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL : PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR);
 	}
 
+	// safety check. Sometimes libpq return garbage result when connection is lost with the backend
+	bool is_error_result_valid(const PGresult* result) const {
+		if (result == nullptr)
+			return false;
+		return (PQresultErrorField(result, PG_DIAG_SQLSTATE) != nullptr);
+	}
+
 	void set_error_from_result(const PGresult* result, uint16_t ext_fields = 0) {
-		if (result) {
+		if (is_error_result_valid(result)) { 
 			PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
 		} else {
 			const char* errmsg = PQerrorMessage(pgsql_conn);
@@ -583,37 +597,20 @@ public:
 		}
 	}
 
-	void reset_error() {
-		reset_error_info(error_info, false);
-	}
+	void reset_error() { reset_error_info(error_info, false); }
 
-	PGresult* get_last_result() const {
-		return last_result;
-	}
-
-	void set_last_result(PGresult* result) {
-		if (last_result) {
-			PQclear(last_result);
-		}
-
-		last_result = result;
-	}
-
-	void reset_last_result() {
-		if (last_result) {
-			PQclear(last_result);
-			last_result = nullptr;
-		}
-	}
+	PGresult* get_result();
+	void next_multi_statement_result(PGresult* result);
+	bool set_single_row_mode();
 	void optimize() {}
 
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
-	PGresult* last_result;
+	PGresult* pgsql_result;
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
-	bool first_result;
+	bool new_result;
 	//PgSQL_SrvC* parent;
 	//PgSQL_Connection_userinfo* userinfo;
 	//PgSQL_Data_Stream* myds;
