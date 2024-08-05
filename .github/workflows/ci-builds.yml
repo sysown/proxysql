@@ -198,7 +198,7 @@ jobs:
           proxysql/tap-matrix*
 
     - name: Archive artifacts
-#      if: ${{ failure() && !cancelled() }}
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: ci-builds-${{ github.sha }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
