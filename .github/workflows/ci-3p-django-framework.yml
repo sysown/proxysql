@@ -68,7 +68,8 @@ jobs:
         
         cd proxysql_3p_testing/
         git sparse-checkout list
-        #./setup.sh
+        ./setup.sh
+        rm -rf ./proxysql
         mv ../proxysql .
         
         # extend timout
