@@ -71,6 +71,7 @@ jobs:
         ./setup.sh
         ls -al ./proxysql/
         rm -rf ./proxysql/.git
+        ls -al ./proxysql/binaries/
         #git -C ./proxysql switch v2.x
         #git -C ./proxysql pull --tags
         
