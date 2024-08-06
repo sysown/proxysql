@@ -66,6 +66,8 @@ jobs:
       run: |
         set +e
         
+        ls -al ./proxysql/
+        ls -al ./proxysql/binaries/
         cd proxysql_3p_testing/
         git sparse-checkout list
         ls -al ./proxysql/
