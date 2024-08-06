@@ -69,6 +69,7 @@ jobs:
         set +e
         
         cd jenkins-build-scripts
+        grep -rl 'docker-compose ' | xargs -r -n1 sed -i 's/docker-compose /docker compose /g'
         sed -i "s|#!/usr/bin/bash|#!/usr/bin/bash +e|" proxysql_repl_tests/bin/debezium-check.bash
         sed -i "s|#!/usr/bin/bash|#!/usr/bin/bash +e|" proxysql_repl_tests/exec_repl_test.sh
         sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
