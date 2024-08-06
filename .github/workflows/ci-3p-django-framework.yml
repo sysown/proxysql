@@ -37,7 +37,7 @@ jobs:
         token: ${{ secrets.GH_TOKEN }}
         sparse-checkout: |
           test_django-framework
-#          proxysql
+          proxysql
 
     - name: Wait for cache
       env:
