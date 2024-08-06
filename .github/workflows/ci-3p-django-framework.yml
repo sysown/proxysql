@@ -37,7 +37,7 @@ jobs:
         token: ${{ secrets.GH_TOKEN }}
         sparse-checkout: |
           test_django-framework
-          proxysql
+#          proxysql
 
     - name: Wait for cache
       env:
@@ -68,8 +68,8 @@ jobs:
         
         cd proxysql_3p_testing/
         git sparse-checkout list
-        ./setup.sh
         ls -al ./proxysql/
+        ./setup.sh
         rm -rf ./proxysql/.git
         ls -al ./proxysql/binaries/
         #git -C ./proxysql switch v2.x
