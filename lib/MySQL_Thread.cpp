@@ -499,6 +499,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"data_packets_history_size",
 	(char *)"handle_warnings",
 	(char *)"evaluate_replication_lag_on_servers_load",
+	(char *)"proxy_protocol_networks",
 	NULL
 };
 
@@ -1119,6 +1120,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_crl=NULL;
 	variables.ssl_p2s_crlpath=NULL;
 	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,transaction_isolation,version");
+	variables.proxy_protocol_networks = strdup((char *)"");
 	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
 	variables.default_authentication_plugin_int = 0; // mysql_native_password
 #ifdef DEBUG
@@ -1350,6 +1352,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
@@ -1505,6 +1508,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+	if (!strcasecmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
@@ -1876,6 +1880,28 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return true;
 		} else {
 			return false;
+		}
+	}
+	if (!strcasecmp(name,"proxy_protocol_networks")) {
+		bool ret = false;
+		if (vallen == 0) {
+			// accept empty string
+			ret = true;
+		} else if ( (vallen == 1) && strcmp(value,"*")==0) {
+			// accept `*`
+			ret = true;
+		} else {
+			ProxyProtocolInfo ppi;
+			if (ppi.is_valid_subnet_list(value) == true) {
+				ret = true;
+			}
+		}
+		if (ret == true) {
+			free(variables.proxy_protocol_networks);
+			variables.proxy_protocol_networks=strdup(value);
+			return true;
+		} else {
+			return true;
 		}
 	}
 	// SSL proxy to server variables
@@ -2703,6 +2729,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
+	if (variables.proxy_protocol_networks) free(variables.proxy_protocol_networks);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
@@ -2834,6 +2861,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
 	if (mysql_thread___default_authentication_plugin) { free(mysql_thread___default_authentication_plugin); mysql_thread___default_authentication_plugin=NULL; }
+	if (mysql_thread___proxy_protocol_networks) { free(mysql_thread___proxy_protocol_networks); mysql_thread___proxy_protocol_networks=NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
@@ -4377,6 +4405,7 @@ void MySQL_Thread::refresh_variables() {
 	GloMyLogger->audit_set_base_filename(); // both filename and filesize are set here
 	REFRESH_VARIABLE_CHAR(default_schema);
 	REFRESH_VARIABLE_CHAR(keep_multiplexing_variables);
+	REFRESH_VARIABLE_CHAR(proxy_protocol_networks);
 	REFRESH_VARIABLE_CHAR(default_authentication_plugin);
 	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");

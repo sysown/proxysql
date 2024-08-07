@@ -42,6 +42,11 @@
 
 #include <uuid/uuid.h>
 
+#ifdef DEBUG
+#include "proxy_protocol_info.h"
+#endif // DEBUG
+
+
 /*
 extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 	return NULL;
@@ -1966,6 +1971,17 @@ int main(int argc, const char * argv[]) {
 		int rc = print_jemalloc_conf();
 		if (rc) { exit(EXIT_FAILURE); }
 	}
+
+
+#ifdef DEBUG
+	{
+		// This run some ProxyProtocolInfo tests.
+		// It will assert() if any test fails
+		ProxyProtocolInfo ppi;
+		ppi.run_tests();
+	}
+#endif // DEBUG
+
 
 	{
 		MYSQL *my = mysql_init(NULL);
