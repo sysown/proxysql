@@ -29,8 +29,11 @@
  *  - Check that checksum is detected and fetched by the peer node (only checksum itself).
  *  - Check that once checksum is detected and fetched, it takes '%_diffs_before_sync' before the actual sync
  *    is performed, error log is used to verify this.
- *  - Finally check the config sync, the new checksum should match the previously detected.
+ *  - Check the config sync, the new checksum should match the previously detected.
  *    + Module 'admin_variables' may be the exception, since 'LOAD TO RUNTIME' generates a new checksum.
+ *  - To avoid race conditions, and make the next check always start from a known state, we finally check that
+ *    the primary has updated the monitoring checksums. This way we ensure that in the next check, a change in
+ *    the checksum means the new computed checksum not a previous, yet not synced one.
  *
  *  Each sync DISABLE check consists in:
  *
@@ -59,11 +62,9 @@
  */
 
 #include <unistd.h>
-#include <signal.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <time.h>
-#include <errno.h>
 
 #include <atomic>
 #include <vector>
@@ -72,7 +73,6 @@
 #include <iostream>
 #include <fstream>
 #include <functional>
-#include <regex>
 #include <utility>
 
 #include "libconfig.h"
@@ -99,58 +99,6 @@ using std::vector;
 using std::tuple;
 using std::fstream;
 using std::function;
-
-/**
- * @brief Helper function to verify that the sync of a table (or variable) have been performed.
- *
- * @param r_proxy_admin An already opened connection to ProxySQL.
- * @param queries Queries to be executed that should return a **non-zero** value after the sync has taken place.
- * @param sync_timeout Timeout for the sync to happen.
- *
- * @return EXIT_SUCCESS in case of success, otherwise:
- *  - '-1' if a query against Admin fails to be performed (failure is logged).
- *  - '-2' if timeout expired without sync being completed.
- */
-int sync_checker(MYSQL* r_proxy_admin, const vector<string>& queries, uint32_t sync_timeout) {
-	bool not_synced_query = false;
-	uint waited = 0;
-
-	while (waited < sync_timeout) {
-		not_synced_query = false;
-
-		// Check that all the entries have been synced
-		for (const auto& query : queries) {
-			int q_res = mysql_query(r_proxy_admin, query.c_str());
-			if (q_res != EXIT_SUCCESS) {
-				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(r_proxy_admin));
-				return -1;
-			}
-
-			MYSQL_RES* proxysql_servers_res = mysql_store_result(r_proxy_admin);
-			MYSQL_ROW row = mysql_fetch_row(proxysql_servers_res);
-			int row_value = atoi(row[0]);
-			mysql_free_result(proxysql_servers_res);
-
-			if (row_value == 0) {
-				not_synced_query = true;
-				break;
-			}
-		}
-
-		if (not_synced_query) {
-			waited += 1;
-			sleep(1);
-		} else {
-			break;
-		}
-	}
-
-	if (not_synced_query) {
-		return -2;
-	} else {
-		return EXIT_SUCCESS;
-	}
-}
 
 // GLOBAL TEST PARAMETERS
 const uint32_t SYNC_TIMEOUT = 10;
@@ -242,30 +190,6 @@ int setup_config_file(const CommandLine& cl) {
 	config_destroy(&cfg);
 
 	return 0;
-}
-
-int check_nodes_sync(
-	const CommandLine& cl, const vector<mysql_res_row>& core_nodes, const string& check_query, uint32_t sync_timeout
-) {
-	for (const auto& node : core_nodes) {
-		const string host { node[0] };
-		const int port = std::stol(node[1]);
-
-		MYSQL* c_node_admin = mysql_init(NULL);
-		if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(c_node_admin));
-			return EXIT_FAILURE;
-		}
-
-		int not_synced = sync_checker(c_node_admin, { check_query }, sync_timeout);
-		if (not_synced != EXIT_SUCCESS) {
-			const string err_msg { "Node '"  + host + ":" + std::to_string(port) + "' sync timed out" };
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, err_msg.c_str());
-			return EXIT_FAILURE;
-		}
-	}
-
-	return EXIT_SUCCESS;
 }
 
 const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
@@ -942,6 +866,53 @@ int check_module_checksums_sync(
 		}
 	}
 
+	// Check that the primary has updated monitored checksums:
+	//  - It's own checksum (monitoring itself).
+	//  - The new checksum from replica after its sync.
+	// This is important to avoid race conditions. If this sync is not performed, the primary may detect the
+	// new checksum in the replica confusing this with the previous check.
+	{
+		const char prim_repl_sync_t[] {
+			"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
+				"hostname='%s' AND port='%d' AND name='%s' AND checksum='%s'"
+		};
+		cfmt_t wait_remote_chksm_syn {
+			cstr_format( prim_repl_sync_t,
+				conn_opts.host.c_str(),
+				conn_opts.port,
+				module.c_str(),
+				ext_checksum.str.c_str()
+			)
+		};
+		const char prim_own_sync_t[] {
+			"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
+				"hostname='%s' AND port='%d' AND name='%s' AND checksum='%s'"
+		};
+		cfmt_t wait_own_chksm_sync {
+			cstr_format(
+				prim_repl_sync_t,
+				conn_opts.host.c_str(),
+				conn_opts.port,
+				module.c_str(),
+				ext_checksum.str.c_str()
+			)
+		};
+
+		int sync_res = wait_for_node_sync(admin, { wait_remote_chksm_syn.str }, CHECKSUM_SYNC_TIMEOUT);
+		ok(
+			sync_res == 0,
+			"Primary(%s:%d) has detected the new checksum '%s' in the replica(%s:%d)",
+			admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
+		);
+
+		sync_res = wait_for_node_sync(admin, { wait_remote_chksm_syn.str }, CHECKSUM_SYNC_TIMEOUT);
+		ok(
+			sync_res == 0,
+			"Primary(%s:%d) has detected its own new checksum '%s'",
+			admin->host, admin->port, ext_checksum.str.c_str()
+		);
+	}
+
 	return EXIT_SUCCESS;
 }
 
@@ -1139,17 +1110,31 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	const size_t num_pls = module_sync_payloads.size();
+	const size_t dis_mod_checks = 7;
+	const size_t ena_mod_checks = 5;
+	const size_t sync_pls = module_sync_payloads.size();
 
-	const size_t all_mod_sync_checks = ((5+(3*(num_pls-1)))*(num_pls-1))*2 + (5+(3*(num_pls-1)));
-	const size_t mod_sync_checks = ((3*4*(num_pls-1)) + 3*2);
-	const size_t init_mod_sync_checks = (3*2*num_pls);
+	// check_all_modules_sync: 'ENABLED' mods sync and 'DISABLED' doesn't - REMOTE / MAIN
+	const size_t check_all_modules_sync__tests = dis_mod_checks + (ena_mod_checks * (sync_pls-1));
+
+	// check_modules_checksums_sync:  All modules checksums tests
+	const size_t check_modules_checksums_sync__tests =
+		// 1: All 'ENABLED' modules sync - REMOTE / MAIN
+		sync_pls * ena_mod_checks * 2 +
+		// 2: Check all mods sync but disabled one
+		check_all_modules_sync__tests * sync_pls +
+		// 3: Re-enable module and check sync both ways
+		ena_mod_checks * 2 * sync_pls +
+		// 4: Disable module via checksums and check again
+		check_all_modules_sync__tests * (sync_pls - 1) +
+		// 5: Re-enable module and check sync both ways
+		ena_mod_checks * 2 * (sync_pls - 1);
 
 	plan(
 		// Sync tests by values
 		16 +
-		// Module with disabled sync checksum tests
-		init_mod_sync_checks + all_mod_sync_checks + mod_sync_checks
+		// Module checkums tests; enabled and disabled checksums
+		check_modules_checksums_sync__tests
 	);
 
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
@@ -1188,10 +1173,9 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
 	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==16062");
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
-	MYSQL_QUERY(proxy_admin, "SELECT hostname,port FROM proxysql_servers");
-	MYSQL_RES* my_res = mysql_store_result(proxy_admin);
-	vector<mysql_res_row> core_nodes { extract_mysql_rows(my_res) };
-	mysql_free_result(my_res);
+
+	pair<int,vector<srv_addr_t>> nodes_fetch { fetch_cluster_nodes(proxy_admin) };
+	if (nodes_fetch.first) { return EXIT_FAILURE; }
 
 	// 3. Wait for all Core nodes to sync (confirm primary out of core nodes)
 	string check_no_primary_query {};
@@ -1200,7 +1184,7 @@ int main(int, char**) {
 		check_no_primary_query, cl.host, cl.admin_port
 	);
 
-	int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+	int check_res = check_nodes_sync(cl, nodes_fetch.second, check_no_primary_query, SYNC_TIMEOUT);
 	if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	// 4. Remove all current servers from primary instance (only secondary sync matters)
@@ -1967,12 +1951,14 @@ int main(int, char**) {
 		std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
 		system(print_master_proxysql_servers.c_str());
 
-		int check_res = sync_checker(r_proxy_admin, select_proxysql_servers_queries, SYNC_TIMEOUT);
+		int wait_res = proc_wait_checks(
+			wait_for_conds(r_proxy_admin, select_proxysql_servers_queries, SYNC_TIMEOUT)
+		);
 
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
 		system(print_replica_proxysql_servers.c_str());
 
-		ok(check_res == EXIT_SUCCESS, "'proxysql_servers' with should be synced: '%d'", check_res);
+		ok(wait_res == EXIT_SUCCESS, "'proxysql_servers' with should be synced: '%d'", wait_res);
 
 		// TEARDOWN CONFIG
 		MYSQL_QUERY__(proxy_admin, "DELETE FROM proxysql_servers");
@@ -2009,10 +1995,13 @@ int main(int, char**) {
 		system(print_master_proxysql_servers.c_str());
 
 		// 3. Check that the servers have been synced in the replica
-		int check_res =
-			sync_checker(
-				r_proxy_admin, { "SELECT CASE count(*) WHEN 0 THEN 1 ELSE 0 END from proxysql_servers" }, SYNC_TIMEOUT
-			);
+		int wait_res = proc_wait_checks(
+			wait_for_conds(
+				r_proxy_admin,
+				{ "SELECT CASE count(*) WHEN 0 THEN 1 ELSE 0 END from proxysql_servers" },
+				SYNC_TIMEOUT
+			)
+		);
 
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
 		system(print_replica_proxysql_servers.c_str());
@@ -2028,7 +2017,7 @@ int main(int, char**) {
 		MYSQL_QUERY__(r_proxy_admin, "DROP TABLE IF EXISTS proxysql_servers_backup");
 		MYSQL_QUERY__(r_proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
-		ok(check_res == EXIT_SUCCESS, "Empty 'proxysql_servers' table ('0x00' checksum) should be synced: '%d'", check_res);
+		ok(wait_res == EXIT_SUCCESS, "Empty 'proxysql_servers' table ('0x00' checksum) should be synced: '%d'", wait_res);
 	}
 
 	sleep(2);
@@ -2525,7 +2514,7 @@ int main(int, char**) {
 		//	std::make_tuple("admin-cluster_username"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-cluster_password"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-debug"                                      , "false"                     ), Should not be synced
-//			std::make_tuple("admin-hash_passwords"                             , "true"                      ), // deprecated variable
+		//	std::make_tuple("admin-hash_passwords"                             , "true"                      ), // deprecated variable
 		//	std::make_tuple("admin-mysql_ifaces"                               , "0.0.0.0:6032"              ), // disabled because of cluster_sync_interfaces=false
 			std::make_tuple("admin-prometheus_memory_metrics_interval"         , "61"                        ),
 			std::make_tuple("admin-read_only"                                  , "false"                     ),
@@ -2715,14 +2704,16 @@ cleanup:
 			insert_query, cl.host, cl.admin_port
 		);
 
-		for (const auto& row : core_nodes) {
-			const string host { row[0] };
-			const int port = std::stol(row[1]);
+		for (const auto& node : nodes_fetch.second) {
 			MYSQL* c_node_admin = mysql_init(NULL);
 
-			diag("RESTORING: Inserting into node '%s:%d'", host.c_str(), port);
+			diag("RESTORING: Inserting into node '%s:%d'", node.host.c_str(), node.port);
 
-			if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
+			if (
+				!mysql_real_connect(
+					c_node_admin, node.host.c_str(), cl.admin_username, cl.admin_password, NULL, node.port, NULL, 0
+				)
+			) {
 				const string err_msg {
 					"Connection to core node failed with '" + string { mysql_error(c_node_admin) } + "'. Retrying..."
 				};
@@ -2751,7 +2742,7 @@ cleanup:
 		);
 
 		// Wait for the other nodes to sync ProxySQL servers to include Primary
-		int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+		int check_res = check_nodes_sync(cl, nodes_fetch.second, check_no_primary_query, SYNC_TIMEOUT);
 		if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 		// Recover the old ProxySQL servers from backup in primary

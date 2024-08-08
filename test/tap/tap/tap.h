@@ -78,6 +78,10 @@ extern "C" {
    @see SKIP_BIG_TESTS
 */
 extern int skip_big_tests;
+/**
+ * @brief Specifies if time logging should include microseconds; either 1 or 0.
+ */
+extern volatile int tap_log_us;
 
 /**
   @defgroup MyTAP_API MyTAP API

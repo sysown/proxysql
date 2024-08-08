@@ -83,7 +83,9 @@ int main(int argc, char** argv) {
 
 		// to check column alias issue:
 		{
-			const std::string& query = "SELECT testdb.echo_int(1) AS " + generate_random_string(length);
+			// NOTE: The randomly generated string should be escaped \`\`, otherwise could collide
+			// with SQL reserved words, causing an invalid test failure.
+			const std::string& query = "SELECT testdb.echo_int(1) AS `" + generate_random_string(length) + "`";
 			MYSQL_QUERY__(proxysql, query.c_str());
 
 			MYSQL_RES* res = mysql_use_result(proxysql);
