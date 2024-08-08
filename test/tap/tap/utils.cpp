@@ -1586,10 +1586,16 @@ cleanup:
 	return res;
 }
 
-json fetch_internal_session(MYSQL* proxy) {
-	int rc = mysql_query_t(proxy, "PROXYSQL INTERNAL SESSION");
+json fetch_internal_session(MYSQL* proxy, bool verbose) {
+	int rc = 0;
 
-	if (rc ) {
+	if (verbose) {
+		rc = mysql_query_t(proxy, "PROXYSQL INTERNAL SESSION");
+	} else {
+		rc = mysql_query(proxy, "PROXYSQL INTERNAL SESSION");
+	}
+
+	if (rc) {
 		return json {};
 	} else {
 		MYSQL_RES* myres = mysql_store_result(proxy);
@@ -1599,6 +1605,29 @@ json fetch_internal_session(MYSQL* proxy) {
 
 		return j_session;
 	}
+}
+
+map<string, double> parse_prometheus_metrics(const string& s) {
+	vector<string> lines { split(s, '\n') };
+	map<string, double> metrics_map {};
+
+	for (const string ln : lines) {
+		const vector<string> line_values { split(ln, ' ') };
+
+		if (ln.empty() == false && ln[0] != '#') {
+			if (line_values.size() > 2) {
+				size_t delim_pos_st = ln.rfind("} ");
+				string metric_key = ln.substr(0, delim_pos_st);
+				string metric_val = ln.substr(delim_pos_st + 2);
+
+				metrics_map.insert({metric_key, stod(metric_val)});
+			} else {
+				metrics_map.insert({line_values.front(), stod(line_values.back())});
+			}
+		}
+	}
+
+	return metrics_map;
 }
 
 struct cols_table_info_t {
