@@ -2,6 +2,7 @@
 #define __CLASS_MYSQL_LOGGER_H
 #include "proxysql.h"
 #include "cpp.h"
+#include <atomic>
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
@@ -29,6 +30,7 @@ class MySQL_Event {
 	bool have_affected_rows;
 	bool have_rows_sent;
 	bool have_gtid;
+	bool free_on_delete; // this bool defines if pointers should be freed when the destructor is called
 	uint64_t affected_rows;
 	uint64_t last_insert_id;
 	uint64_t rows_sent;
@@ -36,6 +38,8 @@ class MySQL_Event {
 	const char * gtid;
 	public:
 	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
+	MySQL_Event(const MySQL_Event &other);
+	~MySQL_Event();
 	uint64_t write(std::fstream *f, MySQL_Session *sess);
 	uint64_t write_query_format_1(std::fstream *f);
 	uint64_t write_query_format_2_json(std::fstream *f);
@@ -48,6 +52,28 @@ class MySQL_Event {
 	void set_rows_sent(uint64_t rs);
 	void set_gtid(MySQL_Session *sess);
 };
+
+class MySQL_Logger_CircularBuffer {
+private:
+	MySQL_Event **event_buffer;
+	size_t head;
+	size_t tail;
+	std::mutex mutex;
+
+public:
+	// we allow potential dirty read of buffer_size.
+	// this is not a problem because operation on the object are
+	// then performed holding the mutex
+	std::atomic<size_t> buffer_size;
+	MySQL_Logger_CircularBuffer(size_t size);
+
+	~MySQL_Logger_CircularBuffer();
+
+	void insert(MySQL_Event *event);
+	std::pair<MySQL_Event**, size_t> get_all_events();
+	void resize(size_t new_size);
+};
+
 
 class MySQL_Logger {
 	private:
@@ -94,6 +120,7 @@ class MySQL_Logger {
 	void flush();
 	void wrlock();
 	void wrunlock();
+	MySQL_Logger_CircularBuffer * MyLogCB;
 };
 
 

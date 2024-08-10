@@ -349,6 +349,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"enable_load_data_local_infile",
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
+	(char *)"eventslog_memory_history_size",
 	(char *)"eventslog_default_log",
 	(char *)"eventslog_format",
 	(char *)"auditlog_filename",
@@ -1069,6 +1070,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.server_version=strdup((char *)"8.0.11"); // changed in 2.6.0 , was 5.5.30
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
+	variables.eventslog_memory_history_size=0;
 	variables.eventslog_default_log=0;
 	variables.eventslog_format=1;
 	variables.auditlog_filename=strdup((char *)"");
@@ -2240,6 +2242,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
 		VariablesPointers_int["eventslog_filesize"]    = make_tuple(&variables.eventslog_filesize,   1024*1024, 1*1024*1024*1024, false);
+		VariablesPointers_int["eventslog_memory_history_size"] = make_tuple(&variables.eventslog_memory_history_size, 0, 8*1024*1024, false);
 		VariablesPointers_int["eventslog_default_log"] = make_tuple(&variables.eventslog_default_log,        0,                1, false);
 		// various
 		VariablesPointers_int["long_query_time"]           = make_tuple(&variables.long_query_time,              0,  20*24*3600*1000, false);
@@ -4368,6 +4371,13 @@ void MySQL_Thread::refresh_variables() {
 
 	REFRESH_VARIABLE_CHAR(server_version);
 	REFRESH_VARIABLE_INT(eventslog_filesize);
+	REFRESH_VARIABLE_INT(eventslog_memory_history_size);
+	{
+		int elmhs = mysql_thread___eventslog_memory_history_size;
+		if (GloMyLogger->MyLogCB->buffer_size != elmhs) {
+			GloMyLogger->MyLogCB->resize(elmhs);
+		}
+	}
 	REFRESH_VARIABLE_INT(eventslog_default_log);
 	REFRESH_VARIABLE_INT(eventslog_format);
 	REFRESH_VARIABLE_CHAR(eventslog_filename);

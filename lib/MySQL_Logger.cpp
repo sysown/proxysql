@@ -1,6 +1,7 @@
 #include <fstream>
 #include "proxysql.h"
 #include "cpp.h"
+#include <string.h>
 
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
@@ -62,6 +63,66 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	rows_sent=0;
 	client_stmt_id=0;
 	gtid = NULL;
+	free_on_delete = false; // by default, this is false. This because pointers do not belong to this object
+}
+
+MySQL_Event::MySQL_Event(const MySQL_Event &other) {
+
+	// Initialize basic members using memcpy
+	memcpy(this, &other, sizeof(MySQL_Event));
+
+	// Copy char pointers using strdup (if not null)
+	if (other.username != nullptr) {
+		username = strdup(other.username);
+	}
+	if (other.schemaname != nullptr) {
+		schemaname = strdup(other.schemaname);
+	}
+	// query_ptr is NOT null terminated
+	if (other.query_ptr != nullptr) {
+		query_ptr = (char *)malloc(query_len+1);
+		memcpy(query_ptr, other.query_ptr, query_len);
+		query_ptr[query_len] = '\0';
+	}
+	// server is NOT null terminated
+	if (other.server != nullptr) {
+		server = (char *)malloc(server_len+1);
+		memcpy(server, other.server, server_len);
+		server[server_len] = '\0';
+	}
+	// client is NOT null terminated
+	if (other.client != nullptr) {
+		client = (char *)malloc(client_len+1);
+		memcpy(client, other.client, client_len);
+		client[client_len] = '\0';
+	}
+	if (other.extra_info != nullptr) {
+		extra_info = strdup(other.extra_info);
+	}
+	free_on_delete = true; // pointers belong to this object
+}
+
+MySQL_Event::~MySQL_Event() {
+	if (free_on_delete == true) {
+		if (username != nullptr) {
+			free(username); username = nullptr;
+		}
+		if (schemaname != nullptr) {
+			free(schemaname); schemaname = nullptr;
+		}
+		if (query_ptr != nullptr) {
+			free(query_ptr); query_ptr = nullptr;
+		}
+		if (server != nullptr) {
+			free(server); server = nullptr;
+		}
+		if (client != nullptr) {
+			free(client); client = nullptr;
+		}
+		if (extra_info != nullptr) {
+			free(extra_info); extra_info = nullptr;
+		}
+	}
 }
 
 void MySQL_Event::set_client_stmt_id(uint32_t client_stmt_id) {
@@ -289,7 +350,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
 	//GloMyLogger->wrlock();
-        //move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
+		//move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
 
 	// write total length , fixed size
 	f->write((const char *)&total_bytes,sizeof(uint64_t));
@@ -459,7 +520,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
 	//GloMyLogger->wrlock();
-        //move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
+		//move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
 
 	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 	return total_bytes; // always 0
@@ -487,6 +548,7 @@ MySQL_Logger::MySQL_Logger() {
 	audit.logfile=NULL;
 	audit.log_file_id=0;
 	audit.max_log_file_size=100*1024*1024;
+	MyLogCB = new MySQL_Logger_CircularBuffer(0);
 };
 
 MySQL_Logger::~MySQL_Logger() {
@@ -498,13 +560,14 @@ MySQL_Logger::~MySQL_Logger() {
 		free(audit.datadir);
 	}
 	free(audit.base_filename);
+	delete MyLogCB;
 };
 
 void MySQL_Logger::wrlock() {
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_lock(&wmutex);
 #else
-  spin_wrlock(&rwlock);
+	spin_wrlock(&rwlock);
 #endif
 };
 
@@ -512,7 +575,7 @@ void MySQL_Logger::wrunlock() {
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_unlock(&wmutex);
 #else
-  spin_wrunlock(&rwlock);
+	spin_wrunlock(&rwlock);
 #endif
 };
 
@@ -674,8 +737,11 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 };
 
 void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
-	if (events.enabled==false) return;
-	if (events.logfile==NULL) return;
+	int elmhs = mysql_thread___eventslog_memory_history_size;
+	if (elmhs == 0) {
+		if (events.enabled==false) return;
+		if (events.logfile==NULL) return;
+	}
 	// 'MySQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
 	// due to a failed 'CONNECTION_RESET'. Because this scenario isn't a client request, we just return.
 	if (sess->client_myds==NULL || sess->client_myds->myconn== NULL) return;
@@ -791,17 +857,30 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	// right before the write to disk
 	//wrlock();
 	
-	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
-        GloMyLogger->wrlock();
 
-	me.write(events.logfile, sess);
+	if ((events.enabled == true) && (events.logfile != nullptr)) {
+		//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
+		GloMyLogger->wrlock();
+
+		me.write(events.logfile, sess);
 
 
-	unsigned long curpos=events.logfile->tellp();
-	if (curpos > events.max_log_file_size) {
-		events_flush_log_unlocked();
+		unsigned long curpos=events.logfile->tellp();
+		if (curpos > events.max_log_file_size) {
+			events_flush_log_unlocked();
+		}
+		wrunlock();
 	}
-	wrunlock();
+	if (MyLogCB->buffer_size != 0) {
+		MySQL_Event *me2 = new MySQL_Event(me);
+		MyLogCB->insert(me2);
+#if 1
+		for (int i=0; i<10000; i++) {
+			MySQL_Event *me2 = new MySQL_Event(me);
+			MyLogCB->insert(me2);
+		}
+#endif // 1
+	}
 
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
@@ -816,7 +895,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	if (audit.logfile==NULL) return;
 
 	if (sess == NULL) return;
-	if (sess->client_myds == NULL)  return; 
+	if (sess->client_myds == NULL) return;
 
 	MySQL_Connection_userinfo *ui= NULL;
 	if (sess) {
@@ -941,7 +1020,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	//wrlock();
 
 	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
-        GloMyLogger->wrlock();
+	GloMyLogger->wrlock();
 	me.write(audit.logfile, sess);
 
 
@@ -1004,15 +1083,15 @@ unsigned int MySQL_Logger::events_find_next_id() {
 			free(eval_dirname);
 			free(eval_filename);
 		}
-                if (eval_pathname) {
-                        free(eval_pathname);
-                }
+		if (eval_pathname) {
+				free(eval_pathname);
+		}
 		return maxidx;
 	} else {
-        /* could not open directory */
+		/* could not open directory */
 		proxy_error("Unable to open datadir: %s\n", eval_dirname);
 		exit(EXIT_FAILURE);
-	}        
+	}
 	return 0;
 }
 
@@ -1050,19 +1129,123 @@ unsigned int MySQL_Logger::audit_find_next_id() {
 			free(eval_dirname);
 			free(eval_filename);
 		}
-                if (eval_pathname) {
-                        free(eval_pathname);
-                }
+		if (eval_pathname) {
+				free(eval_pathname);
+		}
 		return maxidx;
 	} else {
-        /* could not open directory */
+		/* could not open directory */
 		proxy_error("Unable to open datadir: %s\n", eval_dirname);
 		exit(EXIT_FAILURE);
-	}        
+	}
 	return 0;
 }
 
 void MySQL_Logger::print_version() {
-  fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
+	fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
 };
+
+MySQL_Logger_CircularBuffer::MySQL_Logger_CircularBuffer(size_t size) {
+	head = 0;
+	tail = 0;
+	buffer_size = size;
+	event_buffer = new MySQL_Event*[buffer_size];
+}
+
+MySQL_Logger_CircularBuffer::~MySQL_Logger_CircularBuffer() {
+	for (size_t i = 0; i < buffer_size; ++i) {
+		if (event_buffer[i] != nullptr) {
+			delete event_buffer[i];
+		}
+	}
+	delete[] event_buffer;
+}
+
+void MySQL_Logger_CircularBuffer::resize(size_t new_size) {
+	std::lock_guard<std::mutex> lock(mutex);
+
+	if (new_size == buffer_size) {
+		return; // No need to resize
+	}
+
+	// Create the new buffer
+	MySQL_Event **new_buffer = new MySQL_Event*[new_size];
+
+	// Handle the case when initial buffer size is 0
+	if (buffer_size == 0) {
+		// No need to copy or delete; just update the members
+		delete[] event_buffer;
+		event_buffer = new_buffer;
+		buffer_size = new_size;
+		head = 0;
+		tail = 0;
+		return;
+	}
+
+	// Copy events from the old buffer and delete those not copied
+	size_t num_events = (head >= tail) ? (head - tail) : (buffer_size + head - tail);
+	size_t copy_count = std::min(num_events, new_size);
+
+	size_t i = 0;
+	for (size_t j = (tail + buffer_size - copy_count) % buffer_size; j != tail; j = (j + 1) % buffer_size) {
+		new_buffer[i++] = event_buffer[j];
+	}
+
+	// Delete events that were not copied
+	for (size_t j = 0; j < buffer_size; ++j) {
+		if (event_buffer[j] != nullptr && event_buffer[j] != new_buffer[j % new_size]) {
+			delete event_buffer[j];
+		}
+	}
+
+	// Delete the old buffer
+	delete[] event_buffer;
+
+	// Update the members
+	event_buffer = new_buffer;
+	buffer_size = new_size;
+	head = copy_count;
+	tail = 0;
+}
+
+
+void MySQL_Logger_CircularBuffer::insert(MySQL_Event *event) {
+	std::lock_guard<std::mutex> lock(mutex);
+
+	// Insert the new event
+	event_buffer[head] = event;
+
+	// Move head forward
+	head = (head + 1) % buffer_size;
+
+	// Update tail if necessary (if head is about to overwrite tail)
+	if (head == tail) {
+		// Delete the oldest element if it's not null
+		if (event_buffer[tail] != nullptr) {
+			delete event_buffer[tail];
+		}
+
+		// Move tail forward
+		tail = (tail + 1) % buffer_size;
+	}
+}
+
+
+std::pair<MySQL_Event**, size_t> MySQL_Logger_CircularBuffer::get_all_events() {
+	std::lock_guard<std::mutex> lock(mutex);
+
+	size_t num_events = (head >= tail) ? (head - tail) : (buffer_size + head - tail);
+	MySQL_Event **events = new MySQL_Event*[num_events];
+
+	size_t i = 0;
+	// Iterate from tail to head, copying the events
+	for (size_t j = tail; j != head; j = (j + 1) % buffer_size) {
+		events[i++] = event_buffer[j];
+	}
+
+	// Reset head and tail
+	head = tail; // Set head to tail to mark the buffer as empty
+
+	return std::make_pair(events, num_events);
+}
 
