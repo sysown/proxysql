@@ -1816,16 +1816,22 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
 }
 
 bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
-	assert(buffer_used == 0); // we still have data in the buffer
 	transfer_started = true;
 	// Ready packet confirms that the result is complete
-	bool result_complete = (result_packet_type & PGSQL_QUERY_RESULT_READY);
+	const bool result_complete = (result_packet_type & PGSQL_QUERY_RESULT_READY);
+	if (result_complete == true) {
+		assert(buffer_used == 0); // we still have data in the buffer
+	} else {
+		buffer_to_PSarrayOut();
+	}
+
 	if (proto) {
 		PSarrayFinal->copy_add(&PSarrayOUT, 0, PSarrayOUT.len);
 		while (PSarrayOUT.len)
 			PSarrayOUT.remove_index(PSarrayOUT.len - 1, NULL);
 	}
-	reset();
+	if (result_complete) 
+		reset(); // reset only if result is complete
 	return result_complete;
 }
 

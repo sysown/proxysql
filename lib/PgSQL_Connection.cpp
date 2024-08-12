@@ -1762,8 +1762,8 @@ handler_again:
 		break;
 	case ASYNC_USE_RESULT_CONT:
 	{
-		if (myds->sess && myds->sess->client_myds && myds->sess->mirror == false &&
-			myds->sess->status != SHOW_WARNINGS) { // see issue#4072
+		if (myds->sess && myds->sess->client_myds && myds->sess->mirror == false /* &&
+			myds->sess->status != SHOW_WARNINGS*/) { // see issue#4072
 			unsigned int buffered_data = 0;
 			buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 			buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
@@ -1870,6 +1870,7 @@ handler_again:
 					(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 					) {
 					next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+					break;
 				} else {
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
 				}
