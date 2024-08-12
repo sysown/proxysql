@@ -42,6 +42,11 @@ class SetParser {
 	// First implemenation of the parser for TRANSACTION ISOLATION LEVEL and TRANSACTION READ/WRITE
 	std::map<std::string, std::vector<std::string>> parse2();
 	std::string parse_character_set();
+	std::string parse_USE_query();
+#ifdef DEBUG
+	// built-in testing
+	void test_parse_USE_query();
+#endif // DEBUG
 	~SetParser();
 };
 

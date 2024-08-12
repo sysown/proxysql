@@ -3,9 +3,13 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <cassert>
+#include <utility> // for std::pair
 #ifdef PARSERDEBUG
 #include <iostream>
 #endif
+
+#include "pcrecpp.h"
 
 using namespace std;
 
@@ -506,3 +510,117 @@ std::string SetParser::parse_character_set() {
 	return value4;
 }
 
+std::string SetParser::parse_USE_query() {
+#ifdef DEBUG
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
+#endif // DEBUG
+
+
+std::string pattern = "";
+
+
+
+/*
+// Step 1: Match for an optional multiline comment at the beginning of the input string.
+   * `^`          : Matches the beginning of the string.
+   * `\s*`        : Matches zero or more whitespace characters (spaces, tabs, newlines).
+   * `(?: ... )?` : Non-capturing group, made optional by `?`.
+   * `\/\*.*\*\/` : Matches a multiline C-style comment
+   * `\s*`        : Matches zero or more whitespace characters.
+*/
+	pattern += R"(^\s*(?:\/\*.*\*\/\s*)?)";
+
+/*
+// Step 2: This part matches the "USE" keyword followed by zero or more spaces.
+   * `USE`: Matches the literal string "USE".
+   * `\s*`: Matches zero or more whitespace characters.
+*/
+	pattern += R"(USE\s*)";
+
+/*
+// Step 3: Match the optional backtick, optional space, and the dbname
+   * `\s+`             : Matches one or more whitespace characters.
+   * `|`               : Or operator.
+   * `(`               : Matches a backtick character literally.
+   * `(`)?`            : capturing group. This matches an optional opening backtick.
+   * `([a-zA-Z0-9_]+)` : Matches one or more alphanumeric characters or underscores (captures the dbname).
+   * `\1?`             : Backreference to the first capturing group (the opening backtick), making the closing backtick optional.
+
+   This part handles the following:
+     * Optional space or backtick : It matches either one or more spaces (`\s+`) or a backtick (`) after "USE". This allows for the optional space when the dbname is wrapped in backticks.
+     * Optional opening backtick  : It matches an optional opening backtick.
+     * Capturing the dbname       : It captures the actual dbname, which can consist of alphanumeric characters and underscores.
+     * Optional closing backtick  : It matches an optional closing backtick, which must match the opening backtick if present.
+*/
+	pattern += R"((`|\s+)?(?:`)?([a-zA-Z0-9_]+)\1?)";
+// add an optional space
+	pattern += R"(\s*)";
+
+/*
+// Step 4: Match the optional second comment
+   * `(?: ... )?` : Non-capturing group, made optional by `?`.
+   * `\/\*.*\*\/` : Matches a multiline C-style comment .
+   * `#[^\n]*$`   : Matches a single-line comment starting with `#` (until the end of the line).
+   * `-- [^\n]*$` : Matches a single-line comment starting with `-- ` (until the end of the line).
+*/
+	pattern += R"((?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?)";
+
+/*
+// Step 5: Match the end of the line
+   * `\s*`: Matches zero or more whitespace characters.
+   * `$`  : Matches the end of the string.
+*/
+	pattern += R"(\s*$)";
+
+
+	std::string dbname = "";
+	std::string opening_quote;
+
+	pcrecpp::RE_Options opt;
+	opt.set_caseless(true);
+	pcrecpp::RE re(pattern, opt);
+	std::string sp(query);
+	re.FullMatch(sp, &opening_quote, &dbname);
+
+	return dbname;
+}
+
+
+#ifdef DEBUG
+void SetParser::test_parse_USE_query() {
+
+	// Define vector of pairs (query, expected dbname)
+	std::vector<std::pair<std::string, std::string>> testCases = {
+		{"USE my_database", "my_database"},                      // Basic Case
+		{"USE   my_database", "my_database"},                    // Basic Case
+		{"USE   my_database ", "my_database"},                   // Basic Case
+		{"/* comment */USE dbname /* comment */",     "dbname"}, // With Comments
+		{"/* comment */   USE   dbname",              "dbname"}, // With Comments
+		{"USE    dbname           /* comment */",     "dbname"}, // With Comments
+		{"/* comment */USE `dbname` /* comment */",   "dbname"}, // With backtick
+		{"/* comment */USE `dbname`/* comment */",    "dbname"}, // With backtick
+		{"/* comment */USE`dbname` /* comment */",    "dbname"}, // With backtick
+		{"/* comment */USE `dbname`/* comment */",    "dbname"}, // With backtick
+		{"/* comment\nmultiline comment */USE dbname /* comment */", "dbname"}, // Multiline Comment
+		{"/* comment */USE dbname # comment",         "dbname"}, // Hash Comment
+		{"/* comment */USE dbname -- comment",        "dbname"}, // Double Dash Comment
+		{"/* comment */USE dbname   # comment",       "dbname"}, // Hash Comment
+		{"/* comment */USE dbname    -- comment",     "dbname"}, // Double Dash Comment
+		{"USE dbname   # comment",                    "dbname"}, // Hash Comment
+		{"USE dbname    -- comment",                  "dbname"}, // Double Dash Comment
+		{"SELECT * FROM my_table", ""}, // No match
+	};
+
+	// Run tests for each pair
+	for (const auto& p : testCases) {
+		set_query(p.first);
+		std::string dbname = parse_USE_query();
+		if (dbname != p.second) {
+			// we call parse_USE_query() again just to make it easier to create a breakpoint
+			std::string s = parse_USE_query();
+			assert(s == p.second);
+		}
+	}
+
+}
+#endif // DEBUG
