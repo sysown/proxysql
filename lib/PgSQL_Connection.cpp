@@ -2132,6 +2132,12 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	if (pgsql_result)
 		return;
 
+	// we already have data available in buffer
+	if (PQisBusy(pgsql_conn) == 0) {
+		pgsql_result = PQgetResult(pgsql_conn);
+		return;
+	}
+
 	if (PQconsumeInput(pgsql_conn) == 0) {
 		// WARNING: DO NOT RELEASE this PGresult
 		const PGresult* result = PQgetResultFromPGconn(pgsql_conn);
