@@ -513,101 +513,10 @@ std::string SetParser::parse_USE_query() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
 #endif // DEBUG
 
-std::string pattern = "";
-
-/*
-// Step 1: Match for an optional multiline comment at the beginning of the input string.
-   * `^`          : Matches the beginning of the string.
-   * `\s*`        : Matches zero or more whitespace characters (spaces, tabs, newlines).
-   * `(?: ... )?` : Non-capturing group, made optional by `?`.
-   * `\/\*.*\*\/` : Matches a multiline C-style comment
-   * `\s*`        : Matches zero or more whitespace characters.
-*/
-	pattern += R"(^\s*(?:\/\*.*\*\/\s*)?)";
-
-/*
-// Step 2: This part matches the "USE" keyword followed by zero or more spaces.
-   * `USE`: Matches the literal string "USE".
-   * `\s*`: Matches zero or more whitespace characters.
-*/
-	pattern += R"(USE\s*)";
-
-
-/*
-// Step 3: Match the optional comment between "USE" and the database name
-   * `(?: ... )?` : Non-capturing group, made optional by `?`.
-   * `\/\*.*\*\/` : Matches a multiline C-style comment .
-   * `#[^\n]*$`   : Matches a single-line comment starting with `#` (until the end of the line).
-   * `-- [^\n]*$` : Matches a single-line comment starting with `-- ` (until the end of the line).
-*/
-	pattern += R"((?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?)";
-
-
-/*
-// Step 4: Match the optional backtick, optional space, and the dbname
-   * `\s+`             : Matches one or more whitespace characters.
-   * `|`               : Or operator.
-   * `(`               : Matches a backtick character literally.
-   * `(`)?`            : capturing group. This matches an optional opening backtick.
-   * `([a-zA-Z0-9_]+)` : Matches one or more alphanumeric characters or underscores (captures the dbname).
-   * `\1?`             : Backreference to the first capturing group (the opening backtick), making the closing backtick optional.
-
-   This part handles the following:
-     * Optional space or backtick : It matches either one or more spaces (`\s+`) or a backtick (`) after "USE". This allows for the optional space when the dbname is wrapped in backticks.
-     * Optional opening backtick  : It matches an optional opening backtick.
-     * Capturing the dbname       : It captures the actual dbname, which can consist of alphanumeric characters and underscores.
-     * Optional closing backtick  : It matches an optional closing backtick, which must match the opening backtick if present.
-*/
-	//pattern += R"((`|\s+)?(`)?([a-zA-Z0-9_]+)\1?)";
-	pattern += R"(\s*`([a-zA-Z0-9_]+)`|\s+([a-zA-Z0-9_]+))";
-// add an optional space
-	pattern += R"(\s*)";
-
-/*
-// Step 5: Match the optional second comment
-   * `(?: ... )?` : Non-capturing group, made optional by `?`.
-   * `\/\*.*\*\/` : Matches a multiline C-style comment .
-   * `#[^\n]*$`   : Matches a single-line comment starting with `#` (until the end of the line).
-   * `-- [^\n]*$` : Matches a single-line comment starting with `-- ` (until the end of the line).
-*/
-	pattern += R"((?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?)";
-
-/*
-// Step 6: Match the end of the line
-   * `\s*`: Matches zero or more whitespace characters.
-   * `$`  : Matches the end of the string.
-*/
-	pattern += R"(\s*$)";
-
-	pattern = R"(^\s*(?:\/\*.*\*\/\s*)?USE\s*(?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?\s*(`(?:[a-zA-Z0-9_]+)`|\s+(?:[a-zA-Z0-9_]+))\s*(?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?\s*$)";
-
-/*
-	std::string dbname1 = "";
-	std::string dbname2 = "";
-	std::string opening_quote;
-*/
-
 	re2::RE2::Options opt2(RE2::Quiet);
 	opt2.set_case_sensitive(false);
 	opt2.set_longest_match(false);
-/*
-	re2::StringPiece input(query);
-	re2::RE2 re(pattern, *opt2);
-	re2::RE2::Consume(&input, re, &dbname1);
-	delete opt2;
-*/
-/*
-	pcrecpp::RE_Options opt;
-	opt.set_caseless(true);
-	pcrecpp::RE re(pattern, opt);
-	std::string sp(query);
-	re.FullMatch(sp, &dbname1);
-*/
-/*
-	if (dbname1 != "")
-		return dbname1;
-	return dbname2;
-*/
+
 	std::string dbname = remove_comments(query);
 	re2::RE2 re0("^\\s*", opt2);
 	re2::RE2::Replace(&dbname, re0, "");
@@ -639,17 +548,6 @@ std::string pattern = "";
 		return "";
 	}
 
-/*
-	{
-		// Find the first non-space character from the end
-		auto it = std::find_if_not(dbname.rbegin(), dbname.rend(), [](char c) {
-			return std::isspace(c);
-		});
-		// Erase the characters from the first non-space character to the end
-		dbname.erase(it.base(), dbname.end());
-
-	}
-*/
 	return "";
 }
 
