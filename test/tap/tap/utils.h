@@ -682,8 +682,18 @@ int64_t get_elem_idx(const T& e, const std::vector<T>& v) {
 /**
  * @brief Returns a 'JSON' object holding 'PROXYSQL INTERNAL SESSION' contents.
  * @param proxy And already openned connection to ProxySQL.
+ * @param verbose Wether to log or not the issued queries.
  */
-nlohmann::json fetch_internal_session(MYSQL* proxy);
+nlohmann::json fetch_internal_session(MYSQL* proxy, bool verbose=true);
+
+/**
+ * @brief Extract the metrics values from the output of:
+ *   - The admin command 'SHOW PROMETHEUS METRICS'.
+ *   - Querying the RESTAPI metrics endpoint.
+ * @param s ProxySQL prometheus exporter output.
+ * @return A map of metrics identifiers and values.
+ */
+std::map<std::string, double> parse_prometheus_metrics(const std::string& s);
 
 /**
  * @brief Returns a string table representation of the supplied resultset.

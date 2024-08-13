@@ -39,35 +39,6 @@ int mysql_query_d(MYSQL* mysql, const char* query) {
 	return mysql_query(mysql, query);
 }
 
-/**
- * @brief Extract the metrics values from the output of the admin command
- *   'SHOW PROMETHEUS METRICS'.
- * @param metrics_output The output of the command 'SHOW PROMETHEUS METRICS'.
- * @return A map holding the metrics identifier and its current value.
- */
-std::map<std::string, double> get_metric_values(std::string metrics_output) {
-	std::vector<std::string> output_lines { split(metrics_output, '\n') };
-	std::map<std::string, double> metrics_map {};
-
-	for (const std::string line : output_lines) {
-		const std::vector<std::string> line_values { split(line, ' ') };
-
-		if (line.empty() == false && line[0] != '#') {
-			if (line_values.size() > 2) {
-				size_t delim_pos_st = line.rfind("} ");
-				string metric_key = line.substr(0, delim_pos_st);
-				string metric_val = line.substr(delim_pos_st + 2);
-
-				metrics_map.insert({metric_key, std::stod(metric_val)});
-			} else {
-				metrics_map.insert({line_values.front(), std::stod(line_values.back())});
-			}
-		}
-	}
-
-	return metrics_map;
-}
-
 int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
 	MYSQL_QUERY(admin, "SHOW PROMETHEUS METRICS\\G");
 	MYSQL_RES* p_resulset = mysql_store_result(admin);
@@ -81,7 +52,7 @@ int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
 	}
 
 	mysql_free_result(p_resulset);
-	metrics_vals =  get_metric_values(row_value);
+	metrics_vals = parse_prometheus_metrics(row_value);
 
 	return EXIT_SUCCESS;
 }
