@@ -43,6 +43,7 @@ class SetParser {
 	std::map<std::string, std::vector<std::string>> parse2();
 	std::string parse_character_set();
 	std::string parse_USE_query();
+	std::string remove_comments(const std::string& q);
 #ifdef DEBUG
 	// built-in testing
 	void test_parse_USE_query();

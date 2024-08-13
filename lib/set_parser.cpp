@@ -5,9 +5,9 @@
 #include <map>
 #include <cassert>
 #include <utility> // for std::pair
-#ifdef PARSERDEBUG
+//#ifdef PARSERDEBUG
 #include <iostream>
-#endif
+//#endif
 
 #include "pcrecpp.h"
 
@@ -515,10 +515,7 @@ std::string SetParser::parse_USE_query() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
 #endif // DEBUG
 
-
 std::string pattern = "";
-
-
 
 /*
 // Step 1: Match for an optional multiline comment at the beginning of the input string.
@@ -537,8 +534,19 @@ std::string pattern = "";
 */
 	pattern += R"(USE\s*)";
 
+
 /*
-// Step 3: Match the optional backtick, optional space, and the dbname
+// Step 3: Match the optional comment between "USE" and the database name
+   * `(?: ... )?` : Non-capturing group, made optional by `?`.
+   * `\/\*.*\*\/` : Matches a multiline C-style comment .
+   * `#[^\n]*$`   : Matches a single-line comment starting with `#` (until the end of the line).
+   * `-- [^\n]*$` : Matches a single-line comment starting with `-- ` (until the end of the line).
+*/
+	pattern += R"((?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?)";
+
+
+/*
+// Step 4: Match the optional backtick, optional space, and the dbname
    * `\s+`             : Matches one or more whitespace characters.
    * `|`               : Or operator.
    * `(`               : Matches a backtick character literally.
@@ -552,12 +560,13 @@ std::string pattern = "";
      * Capturing the dbname       : It captures the actual dbname, which can consist of alphanumeric characters and underscores.
      * Optional closing backtick  : It matches an optional closing backtick, which must match the opening backtick if present.
 */
-	pattern += R"((`|\s+)?(?:`)?([a-zA-Z0-9_]+)\1?)";
+	//pattern += R"((`|\s+)?(`)?([a-zA-Z0-9_]+)\1?)";
+	pattern += R"(\s*`([a-zA-Z0-9_]+)`|\s+([a-zA-Z0-9_]+))";
 // add an optional space
 	pattern += R"(\s*)";
 
 /*
-// Step 4: Match the optional second comment
+// Step 5: Match the optional second comment
    * `(?: ... )?` : Non-capturing group, made optional by `?`.
    * `\/\*.*\*\/` : Matches a multiline C-style comment .
    * `#[^\n]*$`   : Matches a single-line comment starting with `#` (until the end of the line).
@@ -566,23 +575,121 @@ std::string pattern = "";
 	pattern += R"((?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?)";
 
 /*
-// Step 5: Match the end of the line
+// Step 6: Match the end of the line
    * `\s*`: Matches zero or more whitespace characters.
    * `$`  : Matches the end of the string.
 */
 	pattern += R"(\s*$)";
 
+	pattern = R"(^\s*(?:\/\*.*\*\/\s*)?USE\s*(?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?\s*(`(?:[a-zA-Z0-9_]+)`|\s+(?:[a-zA-Z0-9_]+))\s*(?:\/\*.*\*\/|#[^\n]*$|-- [^\n]*$)?\s*$)";
 
-	std::string dbname = "";
+/*
+	std::string dbname1 = "";
+	std::string dbname2 = "";
 	std::string opening_quote;
+*/
 
+	re2::RE2::Options opt2(RE2::Quiet);
+	opt2.set_case_sensitive(false);
+	opt2.set_longest_match(false);
+/*
+	re2::StringPiece input(query);
+	re2::RE2 re(pattern, *opt2);
+	re2::RE2::Consume(&input, re, &dbname1);
+	delete opt2;
+*/
+/*
 	pcrecpp::RE_Options opt;
 	opt.set_caseless(true);
 	pcrecpp::RE re(pattern, opt);
 	std::string sp(query);
-	re.FullMatch(sp, &opening_quote, &dbname);
+	re.FullMatch(sp, &dbname1);
+*/
+/*
+	if (dbname1 != "")
+		return dbname1;
+	return dbname2;
+*/
+	std::string dbname = remove_comments(query);
+	re2::RE2 re0("^\\s*", opt2);
+	re2::RE2::Replace(&dbname, re0, "");
+	if (dbname.size() >= 4) {
+		if (
+			strncasecmp(dbname.c_str(), "USE ",4) == 0
+			||
+			strncasecmp(dbname.c_str(), "USE`",4) == 0
+		) {
+			re2::RE2 re1("^USE\\s*", opt2);
+			re2::RE2::Replace(&dbname, re1, "");
+			re2::RE2 re2("\\s*$", opt2);
+			re2::RE2::Replace(&dbname, re2, "");
+			if (dbname[0] == '`') {
+				if (dbname[dbname.length()-1] == '`') {
+					return dbname;
+				}
+			} else {
+				return dbname;
+			}
+		}
+	} else {
+		return "";
+	}
 
-	return dbname;
+/*
+	{
+		// Find the first non-space character from the end
+		auto it = std::find_if_not(dbname.rbegin(), dbname.rend(), [](char c) {
+			return std::isspace(c);
+		});
+		// Erase the characters from the first non-space character to the end
+		dbname.erase(it.base(), dbname.end());
+
+	}
+*/
+	return "";
+}
+
+
+std::string SetParser::remove_comments(const std::string& q) {
+    std::string result = "";
+    bool in_multiline_comment = false;
+
+    for (size_t i = 0; i < query.size(); ++i) {
+        char current_char = query[i];
+
+        // Check for multiline comment start
+        if (current_char == '/' && i + 1 < query.size() && query[i + 1] == '*') {
+            in_multiline_comment = true;
+            i++; // Skip the '*'
+            continue;
+        }   
+
+        // Check for multiline comment end
+        if (in_multiline_comment && current_char == '*' && i + 1 < query.size() && query[i + 1] == '/') {
+            in_multiline_comment = false;
+            i++; // Skip the '/'
+            continue;
+        }   
+
+        // Skip characters inside multiline comment
+        if (in_multiline_comment) {
+            continue;
+        }
+
+        // Check for single-line comments
+        if (current_char == '#' || (current_char == '-' && i + 1 < query.size() && query[i + 1] == '-')) {
+            // Skip until the end of the line
+            while (i < query.size() && query[i] != '\n') {
+                i++;
+            }
+            continue;
+        }
+
+        // Append the character to the result if it's not a comment
+        result += current_char;
+    }
+
+    return result;
 }
 
 
@@ -597,10 +704,10 @@ void SetParser::test_parse_USE_query() {
 		{"/* comment */USE dbname /* comment */",     "dbname"}, // With Comments
 		{"/* comment */   USE   dbname",              "dbname"}, // With Comments
 		{"USE    dbname           /* comment */",     "dbname"}, // With Comments
-		{"/* comment */USE `dbname` /* comment */",   "dbname"}, // With backtick
-		{"/* comment */USE `dbname`/* comment */",    "dbname"}, // With backtick
-		{"/* comment */USE`dbname` /* comment */",    "dbname"}, // With backtick
-		{"/* comment */USE `dbname`/* comment */",    "dbname"}, // With backtick
+		{"/* comment */USE `dbname` /* comment */",   "`dbname`"}, // With backtick
+		{"/* comment */USE `dbname`/* comment */",    "`dbname`"}, // With backtick
+		{"/* comment */USE`dbname` /* comment */",    "`dbname`"}, // With backtick
+		{"/* comment */USE `dbname`/* comment */",    "`dbname`"}, // With backtick
 		{"/* comment\nmultiline comment */USE dbname /* comment */", "dbname"}, // Multiline Comment
 		{"/* comment */USE dbname # comment",         "dbname"}, // Hash Comment
 		{"/* comment */USE dbname -- comment",        "dbname"}, // Double Dash Comment
@@ -609,6 +716,28 @@ void SetParser::test_parse_USE_query() {
 		{"USE dbname   # comment",                    "dbname"}, // Hash Comment
 		{"USE dbname    -- comment",                  "dbname"}, // Double Dash Comment
 		{"SELECT * FROM my_table", ""}, // No match
+		{"/*+ placeholder_comment */ USE test_use_comment", "test_use_comment"},
+
+		{"USE /*+ placeholder_comment */ `test_use_comment-a1`", "`test_use_comment-a1`"},
+		{"USE /*+ placeholder_comment */   `test_use_comment_1`", "`test_use_comment_1`"},
+		{"USE/*+ placeholder_comment */ `test_use_comment_2`", "`test_use_comment_2`"},
+		{"USE /*+ placeholder_comment */`test_use_comment_3`", "`test_use_comment_3`"},
+		{"USE /*+ placeholder_comment */   test_use_comment_4", "test_use_comment_4"},
+		{"USE/*+ placeholder_comment */ test_use_comment_5", "test_use_comment_5"},
+		{"USE /*+ placeholder_comment */test_use_comment_6", "test_use_comment_6"},
+		{"USE /*+ placeholder_comment */   `test_use_comment-1`", "`test_use_comment-1`"},
+		{"use my_database", "my_database"},
+		{"/* comment */  use dbname -- comment",        "dbname"},
+		{"/* comment\nmultiline comment */USE dbname /* comment\nmultiline comment */", "dbname"}, // Multiline Comment
+
+//    db_query.push_back(std::make_tuple("`test_use_comment-2`", "USE/*+ placeholder_comment */ `test_use_comment-2`", false));
+//    db_query.push_back(std::make_tuple("`test_use_comment-3`", "USE /*+ placeholder_comment */`test_use_comment-3`", true));
+//    db_query.push_back(std::make_tuple("`test_use_comment-4`", "/*+ placeholder_comment */USE          `test_use_comment-4`", false));
+//    db_query.push_back(std::make_tuple("`test_use_comment-5`", "USE/*+ placeholder_comment */`test_use_comment-5`", false));
+//    db_query.push_back(std::make_tuple("`test_use_comment-6`", "/* comment */USE`test_use_comment-6`", false));
+//    db_query.push_back(std::make_tuple("`test_use_comment-7`", "USE`test_use_comment-7`", false));
+
+
 	};
 
 	// Run tests for each pair
@@ -616,6 +745,7 @@ void SetParser::test_parse_USE_query() {
 		set_query(p.first);
 		std::string dbname = parse_USE_query();
 		if (dbname != p.second) {
+			//std::cout << dbname << " : " << query << std::endl;
 			// we call parse_USE_query() again just to make it easier to create a breakpoint
 			std::string s = parse_USE_query();
 			assert(s == p.second);
