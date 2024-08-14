@@ -1955,7 +1955,6 @@ handler_again:
 			PQclear(result);
 			NEXT_IMMEDIATE(ASYNC_RESET_SESSION_CONT);
 		}
-
 		if (reset_session_in_txn) {
 			//assert(IsKnownActiveTransaction() == false);
 			reset_session_in_txn = false;
