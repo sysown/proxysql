@@ -172,7 +172,7 @@ int prepare_stmt_queries(const CommandLine& cl, const vector<query_t>& p_queries
 	// 1. Prepare the stmt in a connection
 	MYSQL* proxy_mysql = mysql_init(NULL);
 
-	diag("%s: Openning INITIAL connection...", tap_curtime().c_str());
+	diag("Openning INITIAL connection...");
 	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
@@ -216,7 +216,7 @@ int prepare_stmt_queries(const CommandLine& cl, const vector<query_t>& p_queries
 			return EXIT_FAILURE;
 		}
 
-		diag("%s: Issuing PREPARE for `%s` in INIT conn", tap_curtime().c_str(), query.c_str());
+		diag("Issuing PREPARE for `%s` in INIT conn", query.c_str());
 		int my_err = mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()));
 		if (my_err) {
 			diag(
@@ -229,7 +229,7 @@ int prepare_stmt_queries(const CommandLine& cl, const vector<query_t>& p_queries
 		mysql_stmt_close(stmt);
 	}
 
-	diag("%s: Closing PREPARING connection...", tap_curtime().c_str());
+	diag("Closing PREPARING connection...");
 	mysql_close(proxy_mysql);
 
 	return EXIT_SUCCESS;
@@ -326,7 +326,7 @@ int exec_stmt_queries(MYSQL* proxy_mysql, const vector<query_t>& test_queries) {
 		} else {
 			MYSQL_STMT* stmt = mysql_stmt_init(proxy_mysql);
 
-			diag("%s: Issuing PREPARE for `%s` in new conn", tap_curtime().c_str(), query.c_str());
+			diag("Issuing PREPARE for `%s` in new conn", query.c_str());
 			int my_err = mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()));
 			if (my_err) {
 				diag(
@@ -339,7 +339,7 @@ int exec_stmt_queries(MYSQL* proxy_mysql, const vector<query_t>& test_queries) {
 			// TODO: Remember to DOC requiring to execute
 			{
 				if (rep_check.first == 0 || rep_check.second == 0) {
-					diag("%s: Issuing EXECUTE for `%s` in new conn", tap_curtime().c_str(), query.c_str());
+					diag("Issuing EXECUTE for `%s` in new conn", query.c_str());
 					my_err = mysql_stmt_execute(stmt);
 					if (my_err) {
 						diag("'mysql_stmt_execute' at line %d failed: %s", __LINE__, mysql_stmt_error(stmt));

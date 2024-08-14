@@ -1,0 +1,11 @@
+--- coredumper/src/thread_lister.c	2022-12-07 14:57:26.000000000 +0000
++++ coredumper.patched/src/thread_lister.c	2024-07-09 10:58:42.500458663 +0000
+@@ -35,6 +35,8 @@
+ 
+ #include <stdio.h> /* needed for NULL on some powerpc platforms (?!) */
+ #include <sys/prctl.h>
++#include <sys/types.h>
++#include <unistd.h>
+ 
+ #include "linuxthreads.h"
+ /* Include other thread listers here that define THREADS macro

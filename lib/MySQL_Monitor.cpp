@@ -3367,6 +3367,35 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 	}
 }
 
+/**
+* @brief Check if a list of servers is matching the description of an AWS RDS Multi-AZ DB Cluster.
+* @details This method takes a vector of discovered servers and checks that there are exactly three which are named "instance-[1|2|3]" respectively, as expected on an AWS RDS Multi-AZ DB Cluster.
+* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
+* @return Returns 'true' if all conditions are met and 'false' otherwise.
+*/
+bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const std::vector<MYSQL_ROW>& discovered_servers) {
+	if (discovered_servers.size() != 3) {
+		return false;
+	}
+
+	const std::vector<std::string> instance_names = {"-instance-1", "-instance-2", "-instance-3"};
+	int identified_hosts = 0;
+	for (const std::string& instance_str : instance_names) {
+		for (MYSQL_ROW server : discovered_servers) {
+			if (server[2] == NULL || (server[2][0] == '\0')) {
+				continue;
+			}
+
+			std::string current_discovered_hostname = server[2];
+			if (current_discovered_hostname.find(instance_str) != std::string::npos) {
+				++identified_hosts;
+				break;
+			}
+		}
+	}
+	return (identified_hosts == 3);
+}
+
 void * MySQL_Monitor::monitor_read_only() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3381,9 +3410,9 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	int topology_loop = 0;
-	int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
+		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 		bool do_discovery_check = false;
 
 		unsigned int glover;
@@ -3418,11 +3447,13 @@ void * MySQL_Monitor::monitor_read_only() {
 			goto __end_monitor_read_only_loop;
 		}
 
-		if (topology_loop >= topology_loop_max) {
-			do_discovery_check = true;
-			topology_loop = 0;
+		if (topology_loop_max > 0) { // if the discovery interval is set to zero, do not query for the topology
+			if (topology_loop >= topology_loop_max) {
+				do_discovery_check = true;
+				topology_loop = 0;
+			} 
+			topology_loop += 1;
 		}
-		topology_loop += 1;
 
 		// resultset must be initialized before calling monitor_read_only_async
 		monitor_read_only_async(resultset, do_discovery_check);
@@ -7400,8 +7431,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 					discovered_servers.push_back(row);
 				}
 
-				// Process the discovered servers and add them to 'runtime_mysql_servers'
-				if (!discovered_servers.empty()) {
+				// Process the discovered servers and add them to 'runtime_mysql_servers' (process only for AWS RDS Multi-AZ DB Clusters)
+				if (!discovered_servers.empty() && is_aws_rds_multi_az_db_cluster_topology(discovered_servers)) {
 					process_discovered_topology(originating_server_hostname, discovered_servers, mmsd->reader_hostgroup);
 				}
 			} else {

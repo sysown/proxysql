@@ -448,6 +448,7 @@ class MySQL_Monitor {
 	static void trigger_dns_cache_update();
 
 	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup);
+	bool is_aws_rds_multi_az_db_cluster_topology(const std::vector<MYSQL_ROW>& discovered_servers);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;

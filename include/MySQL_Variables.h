@@ -20,6 +20,7 @@ bool update_server_variable(MySQL_Session* session, int idx, int &_rc);
 bool verify_server_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
 bool verify_set_names(MySQL_Session* session);
 bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
+bool is_perm_track_err(int err, const char* varname);
 
 class MySQL_Variables {
 	static verify_var verifiers[SQL_NAME_LAST_HIGH_WM];

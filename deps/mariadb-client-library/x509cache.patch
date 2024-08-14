@@ -35,9 +35,9 @@ index 916024a8..79564a10 100644
  
  int STDCALL mysql_set_server_option(MYSQL *mysql,
 diff --git libmariadb/secure/openssl.c libmariadb/secure/openssl.c
-+index 916024a8..79564a10 100644
-+--- libmariadb/secure/openssl.c
-++++ libmariadb/secure/openssl.c
+index 916024a8..79564a10 100644
+--- libmariadb/secure/openssl.c
++++ libmariadb/secure/openssl.c
 @@ -30,6 +30,11 @@
  #include <openssl/conf.h>
  #include <openssl/md4.h>

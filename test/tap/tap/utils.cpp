@@ -187,6 +187,45 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line) 
 
 #endif
 
+pair<int,vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl, MYSQL* admin) {
+	vector<MYSQL*> nodes_conns {};
+
+	pair<int,vector<srv_addr_t>> nodes_fetch { fetch_cluster_nodes(admin, true) };
+	if (nodes_fetch.first) {
+		diag("Failed to fetch cluster nodes. Aborting further testing");
+		return { EXIT_FAILURE, {} };
+	}
+
+	// Ensure a more idle status for ProxySQL
+	for (const srv_addr_t& node : nodes_fetch.second) {
+		const char* user { cl.admin_username };
+		const char* pass { cl.admin_password };
+
+		MYSQL* myconn = mysql_init(NULL);
+
+		if (!mysql_real_connect(myconn, node.host.c_str(), user, pass, NULL, node.port, NULL, 0)) {
+			diag(
+				"Failed to connect to Cluster node. Abort further testing"
+				"   host=%s port=%d errno=%d error='%s'",
+				node.host.c_str(), node.port, mysql_errno(myconn), mysql_error(myconn)
+			);
+			return { EXIT_FAILURE, {} };
+		}
+
+		const vector<const char*> queries { "DELETE FROM scheduler", "LOAD SCHEDULER TO RUNTIME" };
+		for (const char* q : queries) {
+			if (mysql_query_t(myconn, q)) {
+				diag("Failed to execute query   query=%s error='%s'", q, mysql_error(myconn));
+				return { EXIT_FAILURE, {} };
+			}
+		}
+
+		nodes_conns.push_back(myconn);
+	}
+
+	return { EXIT_SUCCESS, nodes_conns };
+}
+
 std::size_t count_matches(const string& str, const string& substr) {
 	std::size_t result = 0;
 	std::size_t pos = 0;
@@ -199,8 +238,8 @@ std::size_t count_matches(const string& str, const string& substr) {
 	return result;
 }
 
-int mysql_query_t(MYSQL* mysql, const char* query) {
-	diag("%s: Issuing query '%s' to ('%s':%d)", get_formatted_time().c_str(), query, mysql->host, mysql->port);
+int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, const char* fn) {
+	diag("%s:%d:%s(): Issuing query '%s' to ('%s':%d)", f, ln, fn, query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);
 }
 
@@ -946,20 +985,71 @@ string tap_curtime() {
 }
 
 int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usage) {
-	// check if proxysql process is consuming higher cpu than it should
+	// Create Admin connection
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
 
-	// recover admin variables
-	string set_stats_query { "SET admin-stats_system_cpu=" + std::to_string(intv) };
+	// Set new interval
+	const string set_stats_query { "SET admin-stats_system_cpu=" + std::to_string(intv) };
 	MYSQL_QUERY(proxysql_admin, set_stats_query.c_str());
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
+	// Wait until 'system_cpu' is filled with newer entries
+	time_t curtime = time(NULL);
+	uint32_t entry_count { 0 };
+
+	const char runtime_stats[] {
+		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='admin-stats_system_cpu'"
+	};
+	ext_val_t<int> ext_rintv { mysql_query_ext_val(proxysql_admin, runtime_stats, 10) };
+	if (ext_rintv.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(proxysql_admin, ext_rintv) };
+		diag("Failed query   query:`%s`, err:`%s`", runtime_stats, err.c_str());
+		return EXIT_FAILURE;
+	}
+
+	if (ext_rintv.val != intv) {
+		diag(
+			"WARNING: Supplied interval not available, using rounded value   intv=%d rintv=%d",
+			intv, ext_rintv.val
+		);
+	}
+
 	// sleep during the required interval + safe threshold
-	sleep(2 * intv + 2);
+	const uint32_t init_wait = 2 * ext_rintv.val + 2;
+	diag("Waiting for %d secs for new 'system_cpu' entries...   curtime=%ld", init_wait, curtime);
+	sleep(init_wait);
+
+	const string count_query {
+		"SELECT COUNT(*) FROM system_cpu WHERE timestamp > " + std::to_string(curtime)
+	};
+	ext_val_t<int> ext_stats_count { mysql_query_ext_val(proxysql_admin, count_query, 10) };
+
+	if (ext_stats_count.err != EXIT_SUCCESS) {
+		const string err { get_ext_val_err(proxysql_admin, ext_stats_count) };
+		diag("Failed query   query:`%s`, err:`%s`", count_query.c_str(), err.c_str());
+		return EXIT_FAILURE;
+	}
+
+	entry_count = ext_stats_count.val;
+	diag("Finished initial wait for 'system_cpu'   entry_count=%d", entry_count);
+
+	while (entry_count < 2) {
+		diag("Waiting for more 'system_cpu' entries...   entry_count=%d", entry_count);
+		ext_val_t<int> ext_stats_count { mysql_query_ext_val(proxysql_admin, count_query, 10) };
+
+		if (ext_stats_count.err != EXIT_SUCCESS) {
+			const string err { get_ext_val_err(proxysql_admin, ext_stats_count) };
+			diag("Failed query   query:`%s`, err:`%s`", count_query.c_str(), err.c_str());
+			return EXIT_FAILURE;
+		}
+
+		entry_count = ext_stats_count.val;
+		sleep(1);
+	}
 
 	MYSQL_QUERY(proxysql_admin, "SELECT * FROM system_cpu ORDER BY timestamp DESC LIMIT 2");
 	MYSQL_RES* admin_res = mysql_store_result(proxysql_admin);
@@ -977,7 +1067,7 @@ int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usa
 	int init_stime_s = atoi(row[2]) * s_clk;
 	int init_t_s = init_utime_s + init_stime_s;
 
-	cpu_usage = 100.0 * ((final_t_s - init_t_s) / (static_cast<double>(intv) * 1000));
+	cpu_usage = 100.0 * ((final_t_s - init_t_s) / (static_cast<double>(ext_rintv.val) * 1000));
 
 	// free the result
 	mysql_free_result(admin_res);
@@ -1496,10 +1586,16 @@ cleanup:
 	return res;
 }
 
-json fetch_internal_session(MYSQL* proxy) {
-	int rc = mysql_query_t(proxy, "PROXYSQL INTERNAL SESSION");
+json fetch_internal_session(MYSQL* proxy, bool verbose) {
+	int rc = 0;
 
-	if (rc ) {
+	if (verbose) {
+		rc = mysql_query_t(proxy, "PROXYSQL INTERNAL SESSION");
+	} else {
+		rc = mysql_query(proxy, "PROXYSQL INTERNAL SESSION");
+	}
+
+	if (rc) {
 		return json {};
 	} else {
 		MYSQL_RES* myres = mysql_store_result(proxy);
@@ -1509,6 +1605,29 @@ json fetch_internal_session(MYSQL* proxy) {
 
 		return j_session;
 	}
+}
+
+map<string, double> parse_prometheus_metrics(const string& s) {
+	vector<string> lines { split(s, '\n') };
+	map<string, double> metrics_map {};
+
+	for (const string ln : lines) {
+		const vector<string> line_values { split(ln, ' ') };
+
+		if (ln.empty() == false && ln[0] != '#') {
+			if (line_values.size() > 2) {
+				size_t delim_pos_st = ln.rfind("} ");
+				string metric_key = ln.substr(0, delim_pos_st);
+				string metric_val = ln.substr(delim_pos_st + 2);
+
+				metrics_map.insert({metric_key, stod(metric_val)});
+			} else {
+				metrics_map.insert({line_values.front(), stod(line_values.back())});
+			}
+		}
+	}
+
+	return metrics_map;
 }
 
 struct cols_table_info_t {
@@ -1690,42 +1809,49 @@ pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const vector<uint32_t> hgs
 	}
 }
 
-int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout) {
-	int result = EXIT_FAILURE;
+int check_cond(MYSQL* mysql, const string& q) {
+	diag("Checking condition '%s' in ('%s':%d)", q.c_str(), mysql->host, mysql->port);
 
-	auto start = std::chrono::system_clock::now();
-	std::chrono::duration<double> elapsed {};
+	int rc = mysql_query(mysql, q.c_str());
+	int res = 1;
 
-	while (elapsed.count() < timeout && result == EXIT_FAILURE) {
-		int rc = mysql_query(mysql, query.c_str());
-		fprintf(
-			stderr, "# %s: Waiting for condition '%s' in ('%s':%d)\n",
-			get_formatted_time().c_str(), query.c_str(), mysql->host, mysql->port
-		);
+	if (rc == 0) {
+		MYSQL_RES* myres = mysql_store_result(mysql);
 
-		if (rc == EXIT_SUCCESS) {
-			MYSQL_RES* myres = mysql_store_result(mysql);
-			if (myres) {
-				uint32_t field_num = mysql_num_fields(myres);
-				uint32_t row_num = mysql_num_rows(myres);
+		if (myres) {
+			uint32_t field_num = mysql_num_fields(myres);
+			uint32_t row_num = mysql_num_rows(myres);
 
-				if (field_num == 1 && row_num == 1) {
-					MYSQL_ROW row = mysql_fetch_row(myres);
+			if (field_num == 1 && row_num == 1) {
+				MYSQL_ROW myrow = mysql_fetch_row(myres);
 
-					if (row && strcasecmp("TRUE", row[0]) == 0) {
-						result = EXIT_SUCCESS;
-					}
-				}
-
-				mysql_free_result(myres);
-
-				if (result == EXIT_SUCCESS) {
-					break;
+				if (myrow && strcasecmp("TRUE", myrow[0]) == 0) {
+					res = 0;
+				} else if (myrow && atoi(myrow[0]) >= 1) {
+					res = 0;
 				}
 			}
-		} else {
-			diag("Condition query failed with error: ('%d','%s')", mysql_errno(mysql), mysql_error(mysql));
-			result = EXIT_FAILURE;
+		}
+	} else {
+		diag("Check failed with error '%s'", mysql_error(mysql));
+		res = -1;
+	}
+
+	return res;
+}
+
+int wait_for_cond(MYSQL* mysql, const string& q, uint32_t to) {
+	diag("Waiting for condition '%s' in ('%s':%d)", q.c_str(), mysql->host, mysql->port);
+
+	int result = 1;
+	std::chrono::duration<double> elapsed {};
+
+	auto start = std::chrono::system_clock::now();
+
+	while (elapsed.count() < to && result == EXIT_FAILURE) {
+		result = check_cond(mysql, q);
+
+		if (result == 0 || result == -1) {
 			break;
 		}
 
@@ -1736,6 +1862,74 @@ int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout) {
 	}
 
 	return result;
+}
+
+vector<check_res_t> wait_for_conds(MYSQL* mysql, const vector<string>& qs, uint32_t to) {
+	diag("Waiting multiple conditions in ('%s':%d):", mysql->host, mysql->port);
+	for (const string& q : qs) {
+		diag("  - cond: '%s'", q.c_str());
+	}
+
+	std::chrono::duration<double> elapsed {};
+
+	vector<check_res_t> res {};
+	std::transform(qs.begin(), qs.end(), std::back_inserter(res),
+		[] (const string& q) {
+			return check_res_t { 1, q };
+		}
+	);
+	auto start = std::chrono::system_clock::now();
+
+	while (elapsed.count() < to) {
+		int chk_res = 0;
+
+		for (std::size_t i = 0; i < qs.size(); i++) {
+			chk_res = check_cond(mysql, qs[i]);
+
+			if (chk_res == -1) {
+				diag("Error during query. Aborting further checks");
+				res[i].first = -1;
+				break;
+			} else if (chk_res == 0) {
+				res[i].first = 0;
+			}
+		}
+
+		int acc = std::accumulate(res.begin(), res.end(), size_t(0),
+			[] (size_t acc, const check_res_t& p) -> size_t {
+				if (p.first == 0) {
+					return acc + 1;
+				} else {
+					return acc;
+				}
+			});
+
+		if (acc == qs.size() || chk_res == -1) {
+			break;
+		} else {
+			usleep(500 * 1000);
+			auto it_end = std::chrono::system_clock::now();
+			elapsed = it_end - start;
+		}
+	}
+
+	return res;
+}
+
+int proc_wait_checks(const vector<check_res_t>& chks) {
+	int res = 0;
+
+	for (const check_res_t& r : chks) {
+		if (r.first == -1) {
+			res = -1;
+			diag("Waiting check FAILED to execute '%s'", r.second.c_str());
+		} else if (r.first == 1)  {
+			res = res == 0 ? 1 : res;
+			diag("Waiting check TIMEOUT '%s'", r.second.c_str());
+		}
+	}
+
+	return res;
 }
 
 void check_conn_count(MYSQL* admin, const string& conn_type, uint32_t conn_num, int32_t hg) {
@@ -1807,8 +2001,67 @@ void check_query_count(MYSQL* admin, vector<uint32_t> queries, uint32_t hg) {
 	}
 };
 
-const char* get_env_str(const char* envname, const char* envdefault) {
+pair<int,vector<srv_addr_t>> fetch_cluster_nodes(MYSQL* admin, bool dump_fetch) {
+	int rc = mysql_query_t(admin, "SELECT hostname,port FROM proxysql_servers");
+	if (rc) { return { static_cast<int>(mysql_errno(admin)), {} }; }
 
+	MYSQL_RES* myres = mysql_store_result(admin);
+	if (myres == NULL) {
+		diag("Storing resultset failed   error='%s'", mysql_error(admin));
+		return { static_cast<int>(mysql_errno(admin)), {} };
+	}
+
+	if (dump_fetch) {
+		const string res_table { dump_as_table(myres) };
+		diag("Dumping fetched cluster nodes:");
+
+		printf("%s", res_table.c_str());
+	}
+
+	vector<mysql_res_row> nodes_rows { extract_mysql_rows(myres) };
+	mysql_free_result(myres);
+
+	vector<srv_addr_t> nodes {};
+	std::transform(nodes_rows.begin(), nodes_rows.end(), std::back_inserter(nodes),
+		[] (const mysql_res_row& row) {
+			return srv_addr_t { row[0], std::atoi(row[1].c_str()) };
+		}
+	);
+
+	return { 0, nodes };
+}
+
+int check_nodes_sync(
+	const CommandLine& cl, const vector<srv_addr_t>& nodes, const string& check, uint32_t to
+) {
+	for (const auto& node : nodes) {
+		MYSQL* admin = mysql_init(NULL);
+
+		if (
+			!mysql_real_connect(
+				admin, node.host.c_str(), cl.admin_username, cl.admin_password, NULL, node.port, NULL, 0
+			)
+		) {
+			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+			return EXIT_FAILURE;
+		}
+
+		const vector<check_res_t> wres { wait_for_conds(admin, { check }, to) };
+		int node_sync = proc_wait_checks(wres);
+
+		if (node_sync != EXIT_SUCCESS) {
+			const string err { "Node '" + node.host + ":" + std::to_string(node.port) + "' sync timed out" };
+			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, err.c_str());
+			return EXIT_FAILURE;
+		}
+
+		mysql_close(admin);
+	}
+
+	return EXIT_SUCCESS;
+}
+
+const char* get_env_str(const char* envname, const char* envdefault) {
 	const char* envval = std::getenv(envname);
 
 	if (envval != NULL)
@@ -1818,13 +2071,11 @@ const char* get_env_str(const char* envname, const char* envdefault) {
 };
 
 int get_env_int(const char* envname, int envdefault) {
-
 	const char* envval = std::getenv(envname);
 	int res = envdefault;
 
 	if (envval != NULL)
 		res = strtol(envval, NULL, 0);
-//	diag("%s: %s='%s' >>> %d", __FUNCTION__, envname, envval, res);
 
 	return res;
 };
@@ -1851,8 +2102,6 @@ bool get_env_bool(const char* envname, bool envdefault) {
 			res = strtol(envval, NULL, 0);
 		}
 	}
-
-//	diag("%s: %s='%s' >>> %d", __FUNCTION__, envname, envval, res);
 
 	return (bool) res;
 };
