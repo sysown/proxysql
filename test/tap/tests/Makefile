@@ -203,6 +203,8 @@ tests: tests-cpp \
 	prepare_statement_err3024_async-t \
 	reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
+tests:
+	find -L . -type f -name '*.gcno' -empty -delete
 
 tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
