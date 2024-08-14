@@ -1711,6 +1711,41 @@ unsigned int PgSQL_Protocol::copy_ready_status_to_PgSQL_Query_Result(bool send, 
 	return size;
 }
 
+unsigned int PgSQL_Protocol::copy_buffer_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PSresult* result) {
+	assert(pg_query_result);
+	assert(result);
+	assert(result->len);
+	assert(result->data);
+
+	bool alloced_new_buffer = false;
+
+	const unsigned int size = result->len;
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
+
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+
+	memcpy(_ptr, result->data, size);
+
+	if (send == true) {
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
+
+	pg_query_result->resultset_size += size;
+
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
+	}
+	pg_query_result->pkt_count++;
+	return size;
+}
+
 PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer = NULL;
 	transfer_started = false;
@@ -1763,8 +1798,15 @@ unsigned int PgSQL_Query_Result::add_row_description(const PGresult* result) {
 }
 
 unsigned int PgSQL_Query_Result::add_row(const PGresult* result) {
-	//result_type |= PGSQL_QUERY_RESULT_TUPLE;
+
 	return proto->copy_row_to_PgSQL_Query_Result(false,this, result);
+}
+
+unsigned int PgSQL_Query_Result::add_row(const PSresult* result) {
+
+	const unsigned int res = proto->copy_buffer_to_PgSQL_Query_Result(false, this, result);
+	result_packet_type |= PGSQL_QUERY_RESULT_TUPLE; // temporary
+	return res;
 }
 
 unsigned int PgSQL_Query_Result::add_error(const PGresult* result) {
