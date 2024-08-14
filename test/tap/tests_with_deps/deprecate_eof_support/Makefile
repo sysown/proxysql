@@ -154,6 +154,9 @@ $(TEST_MYSQL_LDIR)/libmysqlclient.a:
 
 #tests: build_test_deps
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) ok_packet_mixed_queries-t fwd_eof_query fwd_eof_ok_query
+tests:
+	@echo "Removing empty .gcno files ..."
+	find -L . -type f -name '*.gcno' -empty -ls -delete
 
 COMMONARGS = $(OPT) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 

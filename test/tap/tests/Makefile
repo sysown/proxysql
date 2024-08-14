@@ -203,6 +203,9 @@ tests: tests-cpp \
 	prepare_statement_err3024_async-t \
 	reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
+tests:
+	@echo "Removing empty .gcno files ..."
+	find -L . -type f -name '*.gcno' -empty -ls -delete
 
 tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
