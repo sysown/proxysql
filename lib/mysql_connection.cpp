@@ -1256,6 +1256,14 @@ handler_again:
 			//if (parent->use_ssl) {
 			{
 				// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
+				// CONTEXT: This shouldn't be confused with the previous incompatibility that 'mariadbclient'
+				// had between the NONBLOCK flags and SSL connections, and that was reported and solved via
+				// CONC-320, our patch for this incompatibility was dropped on connector upgrade for v2.0.9.
+				// Setting the socket back to NONBLOCK is SAFE. This is because a connection can be used for
+				// BOTH blocking and not blocking calls, as described here:
+				// - https://mariadb.com/kb/en/using-the-non-blocking-library/#mixing-blocking-and-non-blocking-operation
+				// In case of SSL connections, it's still required to set the socket back to NONBLOCK prior to
+				// non-blockig calls.
 				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 				int f=fcntl(mysql->net.fd, F_GETFL);
 #ifdef FD_CLOEXEC

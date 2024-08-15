@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
 			for (const string& params : req.params) {
 				const string ept { join_path(base_address, req.ept_info.name) };
 				diag(
-					"%s: Checking valid '%s' request - ept: '%s', params: '%s'", tap_curtime().c_str(),
+					"Checking valid '%s' request - ept: '%s', params: '%s'",
 					req.ept_info.method.c_str(), ept.c_str(), params.c_str()
 				);
 				std::chrono::nanoseconds duration;
@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
 
 			const string ept { join_path(base_address, req.ept_info.name) };
 			diag(
-				"%s: Checking valid '%s' request - ept: '%s', params: '%s'", tap_curtime().c_str(),
+				"Checking valid '%s' request - ept: '%s', params: '%s'",
 				req.ept_info.method.c_str(), ept.c_str(), ept_pl.params.c_str()
 			);
 

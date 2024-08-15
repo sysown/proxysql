@@ -25,11 +25,9 @@
 #include <vector>
 #include <string>
 #include <stdio.h>
-#include <iostream>
 
 #include <unistd.h>
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "json.hpp"
 
@@ -142,14 +140,14 @@ int check_auto_increment_timeout(
 	const string set_auto_inc_to_query {
 		"SET mysql-auto_increment_delay_multiplex_timeout_ms=" + std::to_string(auto_inc_delay_to)
 	};
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_auto_inc_to_query.c_str());
+	diag("Executing query `%s`...", set_auto_inc_to_query.c_str());
 	MYSQL_QUERY(proxy_admin, set_auto_inc_to_query.c_str());
 
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL_QUERY(proxy_mysql, INSERT_QUERY);
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), INSERT_QUERY);
+	diag("Executing query `%s`...", INSERT_QUERY);
 
 	// Wait at least '500' milliseconds over the poll period
 	usleep((poll_to + 500) * 1000);
@@ -197,7 +195,7 @@ int check_auto_increment_timeout(
 	}
 
 	MYSQL_QUERY(proxy_mysql, "DO 1");
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "DO 1");
+	diag("Executing query `%s`...", "DO 1");
 
 	uint32_t old_auto_inc_delay_mult = cur_auto_inc_delay_mult;
 	g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_auto_inc_delay_mult);
@@ -244,9 +242,9 @@ int check_variables_config(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
 
 int check_auto_increment_delay_multiplex(MYSQL* proxy_mysql, MYSQL* proxy_admin) {
 	// Disable the 'timeout' for the this check since it can be fixated now
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "SET mysql-auto_increment_delay_multiplex_timeout_ms=0");
+	diag("Executing query `%s`...", "SET mysql-auto_increment_delay_multiplex_timeout_ms=0");
 	MYSQL_QUERY(proxy_admin, "SET mysql-auto_increment_delay_multiplex_timeout_ms=0");
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "SET mysql-connection_delay_multiplex_ms=0");
+	diag("Executing query `%s`...", "SET mysql-connection_delay_multiplex_ms=0");
 	MYSQL_QUERY(proxy_admin, "SET mysql-connection_delay_multiplex_ms=0");
 
 	int cur_auto_inc_delay_mult = 0;
@@ -310,13 +308,13 @@ int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* prox
 	uint64_t poll_timeout = 0;
 	int g_res = 0;
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_auto_inc_query.c_str());
+	diag("Executing query `%s`...", set_auto_inc_query.c_str());
 	MYSQL_QUERY(proxy_admin, set_auto_inc_query.c_str());
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "SET mysql-connection_delay_multiplex_ms=0");
+	diag("Executing query `%s`...", "SET mysql-connection_delay_multiplex_ms=0");
 	MYSQL_QUERY(proxy_admin, "SET mysql-connection_delay_multiplex_ms=0");
 
 	const string q_poll_timeout { "SELECT variable_value FROM global_variables WHERE variable_name='mysql-poll_timeout'" };
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), q_poll_timeout.c_str());
+	diag("Executing query `%s`...", q_poll_timeout.c_str());
 	g_res = get_query_result(proxy_admin, q_poll_timeout.c_str(), poll_timeout);
 	if (g_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
@@ -357,14 +355,14 @@ int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* prox
 	if (g_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	MYSQL_QUERY(proxy_admin, delay_query.c_str());
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), delay_query.c_str());
+	diag("Executing query `%s`...", delay_query.c_str());
 	MYSQL_QUERY(proxy_admin, timeout_query.c_str());
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), timeout_query.c_str());
+	diag("Executing query `%s`...", timeout_query.c_str());
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	{
 		// Insert disabling multiplexing for the connection
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), INSERT_QUERY);
+		diag("Executing query `%s`...", INSERT_QUERY);
 		MYSQL_QUERY(proxy_mysql, INSERT_QUERY);
 
 		// Perform queries in the same connection
@@ -373,7 +371,7 @@ int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* prox
 		while (waited < timeout_ms * 3) {
 			sleep(1);
 
-			diag("%s: Executing query `%s`...", tap_curtime().c_str(), "/* hostgroup=0 */ DO 1");
+			diag("Executing query `%s`...", "/* hostgroup=0 */ DO 1");
 			MYSQL_QUERY(proxy_mysql, "/* hostgroup=0 */ DO 1");
 			waited += 1000;
 		}
@@ -397,7 +395,7 @@ int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* prox
 		while (waited < timeout_ms * 3) {
 			sleep(1);
 
-			diag("%s: Executing query `%s`...", tap_curtime().c_str(), "SELECT 1");
+			diag("Executing query `%s`...", "SELECT 1");
 			MYSQL_QUERY(proxy_mysql, "SELECT 1");
 			mysql_free_result(mysql_store_result(proxy_mysql));
 
@@ -423,16 +421,16 @@ int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* prox
 
 	// Transactions connections should be preserved by 'auto_increment_delay_multiplex_timeout_ms'
 	{
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), "BEGIN");
+		diag("Executing query `%s`...", "BEGIN");
 		MYSQL_QUERY(proxy_mysql, "BEGIN");
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), INSERT_QUERY);
+		diag("Executing query `%s`...", INSERT_QUERY);
 		MYSQL_QUERY(proxy_mysql, INSERT_QUERY);
 
 		// Wait for the timeout and check the value
-		diag("%s: Waiting for timeout to expire...", tap_curtime().c_str());
+		diag("Waiting for timeout to expire...");
 		usleep(timeout_ms * 1000 + poll_timeout * 1000 + 500 * 1000 * 2);
 
-		diag("%s: Extracting current auto inc delay...", tap_curtime().c_str());
+		diag("Extracting current auto inc delay...");
 		int cur_delay = 0;
 		int g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
 		if (g_res != EXIT_SUCCESS) {
@@ -445,13 +443,13 @@ int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* prox
 			delay, cur_delay
 		);
 
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), "COMMIT");
+		diag("Executing query `%s`...", "COMMIT");
 		MYSQL_QUERY(proxy_mysql, "COMMIT");
 
-		diag("%s: Waiting for timeout to expire...", tap_curtime().c_str());
+		diag("Waiting for timeout to expire...");
 		usleep(timeout_ms * 1000 + poll_timeout * 1000 + 500 * 1000 * 2);
 
-		diag("%s: Extracting current auto inc delay...", tap_curtime().c_str());
+		diag("Extracting current auto inc delay...");
 		cur_delay = 0;
 		g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
 		if (g_res != EXIT_SUCCESS) {
@@ -468,16 +466,16 @@ int check_auto_increment_delay_multiplex_timeout(MYSQL* proxy_mysql, MYSQL* prox
 	// Multiplex disabled by any action should take precedence over 'auto_increment_delay_multiplex_timeout_ms'
 	{
 		const char* set_query { "SET @local_var='foo'" };
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_query);
+		diag("Executing query `%s`...", set_query);
 		MYSQL_QUERY(proxy_mysql, set_query);
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), INSERT_QUERY);
+		diag("Executing query `%s`...", INSERT_QUERY);
 		MYSQL_QUERY(proxy_mysql, INSERT_QUERY);
 
 		// Wait for the timeout and check the value
-		diag("%s: Waiting for timeout to expire...", tap_curtime().c_str());
+		diag("Waiting for timeout to expire...");
 		usleep(timeout_ms * 1000 + poll_timeout * 1000 + 500 * 1000 * 2);
 
-		diag("%s: Extracting current auto inc delay...", tap_curtime().c_str());
+		diag("Extracting current auto inc delay...");
 		int cur_delay = 0;
 		int g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
 		if (g_res != EXIT_SUCCESS) {
@@ -533,9 +531,9 @@ void check_connection_retained(MYSQL* proxy_mysql, uint32_t exp_conns) {
 int check_transactions_and_multiplex_disable(
 	MYSQL* proxy_mysql, const char* query, const uint32_t timeout, uint64_t poll_timeout=2
 ) {
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "BEGIN");
+	diag("Executing query `%s`...", "BEGIN");
 	MYSQL_QUERY(proxy_mysql, "BEGIN");
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), query);
+	diag("Executing query `%s`...", query);
 	MYSQL_QUERY(proxy_mysql, query);
 
 	diag("Checking connection present before timeout...");
@@ -547,7 +545,7 @@ int check_transactions_and_multiplex_disable(
 	diag("Checking connection is still present after timeout due to transaction...");
 	check_connection_retained(proxy_mysql, 1);
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "COMMIT");
+	diag("Executing query `%s`...", "COMMIT");
 	MYSQL_QUERY(proxy_mysql, "COMMIT");
 
 	diag("Sleeping for '%lf' seconds", timeout / 2.0);
@@ -565,7 +563,7 @@ int check_transactions_and_multiplex_disable(
 	diag("Checking multiplex disabled by any action take precedence over 'connection_delay_multiplex_ms'...");
 
 	const char* set_query { "SET @local_var='foo'" };
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_query);
+	diag("Executing query `%s`...", set_query);
 	MYSQL_QUERY(proxy_mysql, set_query);
 
 	diag("Sleeping for '%ld' seconds", timeout + poll_timeout);
@@ -587,13 +585,13 @@ int check_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy_admin) 
 	string_format("SET mysql-connection_delay_multiplex_ms=%d", set_delay_multiplex, timeout * 1000);
 	const char* set_auto_inc_delay { "SET mysql-auto_increment_delay_multiplex_timeout_ms=0" };
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_delay_multiplex.c_str());
+	diag("Executing query `%s`...", set_delay_multiplex.c_str());
 	MYSQL_QUERY(proxy_admin, set_delay_multiplex.c_str());
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_auto_inc_delay);
+	diag("Executing query `%s`...", set_auto_inc_delay);
 	MYSQL_QUERY(proxy_admin, set_auto_inc_delay);
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL_QUERY(proxy_mysql, "SELECT 1");
@@ -632,13 +630,13 @@ int check_multiplex_disabled_connection_delay_multiplex_ms(MYSQL* proxy_mysql, M
 	string_format("SET mysql-connection_delay_multiplex_ms=%d", set_delay_multiplex, timeout * 1000);
 	const char* set_auto_inc_delay { "SET mysql-auto_increment_delay_multiplex_timeout_ms=0" };
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_delay_multiplex.c_str());
+	diag("Executing query `%s`...", set_delay_multiplex.c_str());
 	MYSQL_QUERY(proxy_admin, set_delay_multiplex.c_str());
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_auto_inc_delay);
+	diag("Executing query `%s`...", set_auto_inc_delay);
 	MYSQL_QUERY(proxy_admin, set_auto_inc_delay);
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	// Check transactions behavior and multiplex disabling actions
@@ -652,11 +650,11 @@ int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy
 	const char* set_delay_multiplex_query { "SET mysql-connection_delay_multiplex_ms=2000" };
 	const char* set_auto_inc_timeout_query { "SET mysql-auto_increment_delay_multiplex_timeout_ms=0" };
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_delay_multiplex_query);
+	diag("Executing query `%s`...", set_delay_multiplex_query);
 	MYSQL_QUERY(proxy_admin, set_delay_multiplex_query);
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_auto_inc_timeout_query);
+	diag("Executing query `%s`...", set_auto_inc_timeout_query);
 	MYSQL_QUERY(proxy_admin, set_auto_inc_timeout_query);
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	// Retain connection in 'hg=0'
@@ -664,7 +662,7 @@ int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy
 
 	uint32_t waited = 0;
 	while (waited < 2*timeout) {
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), "DO 1");
+		diag("Executing query `%s`...", "DO 1");
 		MYSQL_QUERY(proxy_mysql, "DO 1");
 
 		sleep(1);
@@ -679,9 +677,9 @@ int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy
 
 	diag("Check connection expiring when traffic issued to different hostgroup...");
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "DO 1");
+	diag("Executing query `%s`...", "DO 1");
 	MYSQL_QUERY(proxy_mysql, "DO 1");
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "SELECT 1");
+	diag("Executing query `%s`...", "SELECT 1");
 	MYSQL_QUERY(proxy_mysql, "SELECT 1");
 	mysql_free_result(mysql_store_result(proxy_mysql));
 
@@ -719,7 +717,7 @@ int check_traffic_connection_delay_multiplex_ms(MYSQL* proxy_mysql, MYSQL* proxy
 	// Check for connections retained in 'hg 0'
 	waited = 0;
 	while (waited < timeout * 2) {
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), "SELECT 1");
+		diag("Executing query `%s`...", "SELECT 1");
 		MYSQL_QUERY(proxy_mysql, "SELECT 1");
 		mysql_free_result(mysql_store_result(proxy_mysql));
 
@@ -768,18 +766,18 @@ int check_auto_inc_delay_and_conn_delay_multiplex(MYSQL* proxy_mysql, MYSQL* pro
 	const char* set_delay_multiplex_query { "SET mysql-connection_delay_multiplex_ms=2000" };
 	const char* set_auto_inc_timeout_query { "SET mysql-auto_increment_delay_multiplex_timeout_ms=0" };
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_delay_multiplex_query);
+	diag("Executing query `%s`...", set_delay_multiplex_query);
 	MYSQL_QUERY(proxy_admin, set_delay_multiplex_query);
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_auto_inc_timeout_query);
+	diag("Executing query `%s`...", set_auto_inc_timeout_query);
 	MYSQL_QUERY(proxy_admin, set_auto_inc_timeout_query);
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	// Retain connection in 'hg=0'
 	diag("Checking connection not expiring due to 'auto_increment_delay_multiplex'.");
 
 	uint32_t waited = 0;
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), INSERT_QUERY);
+	diag("Executing query `%s`...", INSERT_QUERY);
 	MYSQL_QUERY(proxy_mysql, INSERT_QUERY);
 
 	diag("* Check connection retained after executing the query");
@@ -797,13 +795,13 @@ int check_auto_inc_delay_and_conn_delay_multiplex(MYSQL* proxy_mysql, MYSQL* pro
 	);
 
 	string_format("SET mysql-auto_increment_delay_multiplex_timeout_ms=%d", auto_inc_timeout_query, timeout*2*1000);
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), auto_inc_timeout_query.c_str());
+	diag("Executing query `%s`...", auto_inc_timeout_query.c_str());
 	MYSQL_QUERY(proxy_admin, auto_inc_timeout_query.c_str());
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), INSERT_QUERY);
+	diag("Executing query `%s`...", INSERT_QUERY);
 	MYSQL_QUERY(proxy_mysql, INSERT_QUERY);
 
 	diag("Sleeping for '%d' seconds", timeout + 1);
@@ -834,17 +832,17 @@ int check_auto_inc_delay_and_conn_delay_multiplex(MYSQL* proxy_mysql, MYSQL* pro
 	);
 
 	string_format("SET mysql-auto_increment_delay_multiplex_timeout_ms=%d", auto_inc_timeout_query, timeout*1000);
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), auto_inc_timeout_query.c_str());
+	diag("Executing query `%s`...", auto_inc_timeout_query.c_str());
 	MYSQL_QUERY(proxy_admin, auto_inc_timeout_query.c_str());
 
 	const char* set_delay_multiplex_query_2 { "SET mysql-connection_delay_multiplex_ms=4000" };
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_delay_multiplex_query_2);
+	diag("Executing query `%s`...", set_delay_multiplex_query_2);
 	MYSQL_QUERY(proxy_admin, set_delay_multiplex_query_2);
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), INSERT_QUERY);
+	diag("Executing query `%s`...", INSERT_QUERY);
 	MYSQL_QUERY(proxy_mysql, INSERT_QUERY);
 
 	diag("Sleeping for '%d' seconds", timeout + 1);

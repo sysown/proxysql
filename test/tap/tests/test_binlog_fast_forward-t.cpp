@@ -84,7 +84,7 @@ int pull_replication(MYSQL *mysql, int server_id) {
 			}
 		}
 		if (print_diag == true)
-			diag("%s: server_id %d , event: %d , received events: %d , received heartbeats: %d", tap_curtime().c_str(), server_id, event->event_type, num_events, num_heartbeats);
+			diag("server_id %d , event: %d , received events: %d , received heartbeats: %d", server_id, event->event_type, num_events, num_heartbeats);
 	}
 	// we expects NHB heartbeats
 	ok(num_heartbeats == NHB , "For server_id %d received %d heartbeats", server_id, num_heartbeats);

@@ -2156,6 +2156,13 @@ int main(int argc, const char * argv[]) {
 //		std::cerr << "Main init phase0 completed in ";
 #endif
 	}
+#ifdef DEBUG
+	{
+		// Automated testing
+		SetParser parser("");
+		parser.test_parse_USE_query();
+	}
+#endif // DEBUG
 	{
 		cpu_timer t;
 		ProxySQL_Main_process_global_variables(argc, argv);

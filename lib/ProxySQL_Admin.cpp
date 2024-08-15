@@ -193,7 +193,8 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 }
 
 
-static int round_intv_to_time_interval(int& intv) {
+static int round_intv_to_time_interval(const char* name, int _intv) {
+	int intv = _intv;
 	if (intv > 300) {
 		intv = 600;
 	} else {
@@ -220,6 +221,9 @@ static int round_intv_to_time_interval(int& intv) {
 				}
 			}
 		}
+	}
+	if (intv != _intv) {
+		proxy_warning("Variable '%s' rounded to interval '%d'\n", name, intv);
 	}
 	return intv;
 }
@@ -3437,7 +3441,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (!strcasecmp(name,"stats_mysql_connection_pool")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 300) {
-				intv = round_intv_to_time_interval(intv);
+				intv = round_intv_to_time_interval(name, intv);
 				variables.stats_mysql_connection_pool=intv;
 				GloProxyStats->variables.stats_mysql_connection_pool=intv;
 				return true;
@@ -3448,7 +3452,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (!strcasecmp(name,"stats_mysql_connections")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 300) {
-				intv = round_intv_to_time_interval(intv);
+				intv = round_intv_to_time_interval(name, intv);
 				variables.stats_mysql_connections=intv;
 				GloProxyStats->variables.stats_mysql_connections=intv;
 				return true;
@@ -3459,7 +3463,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (!strcasecmp(name,"stats_mysql_query_cache")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 300) {
-				intv = round_intv_to_time_interval(intv);
+				intv = round_intv_to_time_interval(name, intv);
 				variables.stats_mysql_query_cache=intv;
 				GloProxyStats->variables.stats_mysql_query_cache=intv;
 				return true;
@@ -3480,7 +3484,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (!strcasecmp(name,"stats_system_cpu")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 600) {
-				intv = round_intv_to_time_interval(intv);
+				intv = round_intv_to_time_interval(name, intv);
 				variables.stats_system_cpu=intv;
 				GloProxyStats->variables.stats_system_cpu=intv;
 				return true;
@@ -3492,7 +3496,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (!strcasecmp(name,"stats_system_memory")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 600) {
-				intv = round_intv_to_time_interval(intv);
+				intv = round_intv_to_time_interval(name, intv);
 				variables.stats_system_memory=intv;
 				GloProxyStats->variables.stats_system_memory=intv;
 				return true;

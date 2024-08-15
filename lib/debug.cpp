@@ -131,15 +131,22 @@ void proxy_debug_load_filters(std::set<std::string>& f) {
 	//pthread_mutex_unlock(&debug_mutex);
 }
 
+// REMINDER: This function should always save/restore 'errno', otherwise it could influence error handling.
 void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {
+	int saved_errno = errno;
 	assert(module<PROXY_DEBUG_UNKNOWN);
 	if (pretime == 0) { // never initialized
 		pretime=realtime_time();
 	}
-	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity)
+	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity) {
+		errno = saved_errno;
 		return;
-	if (filter_debug_entry(__file, __line, __func)) // check if the entry must be filtered
+	}
+	// check if the entry must be filtered
+	if (filter_debug_entry(__file, __line, __func)) {
+		errno = saved_errno;
 		return;
+	}
 	char origdebugbuff[DEBUG_MSG_MAXSIZE];
 	char debugbuff[DEBUG_MSG_MAXSIZE];
 	char longdebugbuff[DEBUG_MSG_MAXSIZE*8];
@@ -243,6 +250,8 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 	pthread_mutex_unlock(&debug_mutex);
 	if (curtime != 0)
 		pretime=curtime;
+
+	errno = saved_errno;
 };
 #endif
 

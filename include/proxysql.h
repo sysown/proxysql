@@ -108,6 +108,10 @@ void proxy_info_(const char* msg, ...);
 #ifdef DEBUG
 void init_debug_struct();
 void init_debug_struct_from_cmdline();
+/**
+ * @brief Add a debug entry in the error log. To be used through 'proxy_debug' macro.
+ * @details This function saves/restores the previous 'errno' value.
+ */
 __attribute__((__format__ (__printf__, 7, 8)))
 void proxy_debug_func(enum debug_module, int, int, const char *, int, const char *, const char *, ...);
 void proxy_debug_get_filters(std::set<std::string>&);

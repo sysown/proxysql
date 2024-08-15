@@ -2467,6 +2467,15 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 }
 
 void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, bool _lock) {
+	// 'libmariadbclient' only performs a cleanup of SSL error queue during connect when making use of
+	// 'auth_caching_sha2_client|auth_sha256_client' during connect. If any SSL errors took place during the
+	// previous operation, we must cleanup the queue to avoid polluting other backend conns.
+	int myerr=mysql_errno(c->mysql);
+	if (myerr >= 2000 && myerr < 3000 && c->mysql->options.use_ssl) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Client error %d detected on SSL connection, cleaning SSL error queue\n", myerr);
+		ERR_clear_error();
+	}
+
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {

@@ -13,7 +13,6 @@
 #include <unistd.h>
 
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "json.hpp"
 
@@ -74,7 +73,7 @@ int main(int argc, char** argv) {
 	// 1. Prepare the 'SQL_CALC_FOUND_ROWS' stmt in a connection
 	MYSQL* proxy_mysql = mysql_init(NULL);
 
-	diag("%s: Openning initial connection...", tap_curtime().c_str());
+	diag("Openning initial connection...");
 	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
@@ -84,7 +83,7 @@ int main(int argc, char** argv) {
 	MYSQL_STMT* stmt_2 = mysql_stmt_init(proxy_mysql);
 	MYSQL_STMT* stmt_3 = nullptr;
 
-	diag("%s: Issuing the prepare for `%s` in init conn", tap_curtime().c_str(), Q_CALC_FOUND_ROWS_1);
+	diag("Issuing the prepare for `%s` in init conn", Q_CALC_FOUND_ROWS_1);
 	int my_err = mysql_stmt_prepare(stmt_1, Q_CALC_FOUND_ROWS_1, strlen(Q_CALC_FOUND_ROWS_1));
 	if (my_err) {
 		diag(
@@ -94,7 +93,7 @@ int main(int argc, char** argv) {
 		goto cleanup;
 	}
 
-	diag("%s: Issuing the prepare for `%s` in init conn", tap_curtime().c_str(), Q_CALC_FOUND_ROWS_2);
+	diag("Issuing the prepare for `%s` in init conn", Q_CALC_FOUND_ROWS_2);
 	my_err = mysql_stmt_prepare(stmt_2, Q_CALC_FOUND_ROWS_2, strlen(Q_CALC_FOUND_ROWS_2));
 	if (my_err) {
 		diag(
@@ -107,13 +106,13 @@ int main(int argc, char** argv) {
 	mysql_stmt_close(stmt_1);
 	mysql_stmt_close(stmt_2);
 
-	diag("%s: Closing initial connection...", tap_curtime().c_str());
+	diag("Closing initial connection...");
 	mysql_close(proxy_mysql);
 
 	// 2. Open a new connection and prepare the stmts it again in a new connection
 	proxy_mysql = mysql_init(NULL);
 
-	diag("%s: Openning new connection for testing 'Multiplex' disabling", tap_curtime().c_str());
+	diag("Openning new connection for testing 'Multiplex' disabling");
 	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
@@ -123,7 +122,7 @@ int main(int argc, char** argv) {
 	stmt_2 = mysql_stmt_init(proxy_mysql);
 	stmt_3 = mysql_stmt_init(proxy_mysql);
 
-	diag("%s: Issuing the prepare for `%s` in new conn", tap_curtime().c_str(), Q_CALC_FOUND_ROWS_1);
+	diag("Issuing the prepare for `%s` in new conn", Q_CALC_FOUND_ROWS_1);
 	my_err = mysql_stmt_prepare(stmt_1, Q_CALC_FOUND_ROWS_1, strlen(Q_CALC_FOUND_ROWS_1));
 	if (my_err) {
 		diag(
@@ -134,7 +133,7 @@ int main(int argc, char** argv) {
 	}
 
 	{
-		diag("%s: Issuing execute for `%s` in new conn", tap_curtime().c_str(), Q_CALC_FOUND_ROWS_1);
+		diag("Issuing execute for `%s` in new conn", Q_CALC_FOUND_ROWS_1);
 		my_err = mysql_stmt_execute(stmt_1);
 		if (my_err) {
 			diag("'mysql_stmt_execute' at line %d failed: %s", __LINE__, mysql_stmt_error(stmt_1));
@@ -149,7 +148,7 @@ int main(int argc, char** argv) {
 		}
 	}
 	{
-		diag("%s: Issuing the prepare for `%s` in new conn", tap_curtime().c_str(), Q_CALC_FOUND_ROWS_2);
+		diag("Issuing the prepare for `%s` in new conn", Q_CALC_FOUND_ROWS_2);
 		my_err = mysql_stmt_prepare(stmt_2, Q_CALC_FOUND_ROWS_2, strlen(Q_CALC_FOUND_ROWS_2));
 		if (my_err) {
 			diag(
@@ -160,7 +159,7 @@ int main(int argc, char** argv) {
 		}
 
 		{
-			diag("%s: Issuing execute for `%s` in new conn", tap_curtime().c_str(), Q_CALC_FOUND_ROWS_2);
+			diag("Issuing execute for `%s` in new conn", Q_CALC_FOUND_ROWS_2);
 			my_err = mysql_stmt_execute(stmt_2);
 			if (my_err) {
 				diag("'mysql_stmt_execute' at line %d failed: %s", __LINE__, mysql_stmt_error(stmt_2));
@@ -175,7 +174,7 @@ int main(int argc, char** argv) {
 			}
 		}
 
-		diag("%s: Issuing the prepare for `%s` in new conn", tap_curtime().c_str(), Q_FOUND_ROWS);
+		diag("Issuing the prepare for `%s` in new conn", Q_FOUND_ROWS);
 		my_err = mysql_stmt_prepare(stmt_3, Q_FOUND_ROWS, strlen(Q_FOUND_ROWS));
 		if (my_err) {
 			diag(

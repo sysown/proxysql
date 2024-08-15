@@ -9,12 +9,30 @@
 #endif
 
 #include <sstream>
+#include "mysqld_error.h"
 
 
 static inline char is_digit(char c) {
 	if(c >= '0' && c <= '9')
 		return 1;
 	return 0;
+}
+
+var_track_err_st perm_track_errs[] {
+	// ERROR 1210 (HY000): Variable not supported in combination with Galera:
+	// - Changed by MySQL, previously 'ER_UNKNOWN_SYSTEM_VARIABLE'
+	{ ER_WRONG_ARGUMENTS, "sql_generate_invisible_primary_key" }
+};
+
+bool is_perm_track_err(int err, const char* varname) {
+	const size_t count = sizeof(perm_track_errs) / sizeof(var_track_err_st);
+
+	for (size_t i = 0; i < count; i++) {
+		if (perm_track_errs[i].err == err && (strcasecmp(varname, perm_track_errs[i].name) == 0)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 #include "proxysql_find_charset.h"
