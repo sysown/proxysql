@@ -12,8 +12,52 @@ index 2265ab5..56883ec 100644
 +    return psHandleRowData(conn, result);
 +}
 +
+diff --git src/interfaces/libpq/fe-misc.c src/interfaces/libpq/fe-misc.c
+index 488f7d6..65beb87 100644
+--- src/interfaces/libpq/fe-misc.c
++++ src/interfaces/libpq/fe-misc.c
+@@ -1344,3 +1344,39 @@ libpq_append_conn_error(PGconn *conn, const char *fmt,...)
+ 
+ 	appendPQExpBufferChar(&conn->errorMessage, '\n');
+ }
++
++/*
++ * psGetInt16
++ *	read 2 byte integer and convert from network byte order
++ *	to local byte order
++ */
++int
++psGetInt16(int *result, PGconn *conn)
++{
++	uint16 tmp2;
++
++	if (conn->inCursor + 2 > conn->inEnd)
++		return EOF;
++	memcpy(&tmp2, conn->inBuffer + conn->inCursor, 2);
++	conn->inCursor += 2;
++	*result = (int) pg_ntoh16(tmp2);
++	return 0;
++}
++
++/*
++ * psGetInt32
++ *	read 4 byte integer and convert from network byte order
++ *	to local byte order
++ */
++int
++psGetInt32(int *result, PGconn *conn)
++{
++	uint32 tmp4;
++
++	if (conn->inCursor + 4 > conn->inEnd)
++		return EOF;
++	memcpy(&tmp4, conn->inBuffer + conn->inCursor, 4);
++	conn->inCursor += 4;
++	*result = (int) pg_ntoh32(tmp4);
++	return 0;
++}
 diff --git src/interfaces/libpq/fe-protocol3.c src/interfaces/libpq/fe-protocol3.c
-index 9c4aa7e..eb08983 100644
+index 9c4aa7e..de0746c 100644
 --- src/interfaces/libpq/fe-protocol3.c
 +++ src/interfaces/libpq/fe-protocol3.c
 @@ -2299,3 +2299,102 @@ build_startup_packet(const PGconn *conn, char *packet,
@@ -40,6 +84,8 @@ index 9c4aa7e..eb08983 100644
 +	int		msgLength;
 +	int		avail;
 +	
++	if (conn->asyncStatus != PGASYNC_BUSY)
++        return 1;
 +	/*
 +	 * Try to read a message.  First get the type code and length. Return
 +	 * if not enough data.
@@ -47,7 +93,11 @@ index 9c4aa7e..eb08983 100644
 +	conn->inCursor = conn->inStart;
 +	if (pqGetc(&id, conn))
 +		return EOF;
-+	if (pqGetInt(&msgLength, 4, conn))
++
++	if (id != 'D') 
++		return 1;
++
++	if (psGetInt32(&msgLength, conn))
 +		return EOF;	
 +
 +	/*
@@ -69,52 +119,46 @@ index 9c4aa7e..eb08983 100644
 +	if (avail < msgLength) 
 +		return EOF;
 +
-+	if (conn->asyncStatus != PGASYNC_BUSY)
-+        return 1;
++	if (conn->result != NULL &&
++		conn->result->resultStatus == PGRES_TUPLES_OK)
++	{
++		PGresult   *res = conn->result;
++		int			nfields = res->numAttributes;
++		int			tupnfields;		/* # fields from tuple */
++		int			vlen;			/* length of the current field value */
++		int			i;
 +
-+	if (id == 'D') 
-+	{ 
-+		if (conn->result != NULL &&
-+			conn->result->resultStatus == PGRES_TUPLES_OK)
++
++		/* Get the field count and make sure it's what we expect */
++		if (psGetInt16(&tupnfields, conn))
++			return 1;
++
++		if (tupnfields != nfields)
++			return 1;
++
++		/* Scan the fields */
++		for (i = 0; i < nfields; i++)
 +		{
-+			PGresult   *res = conn->result;
-+			int			nfields = res->numAttributes;
-+			int			tupnfields;		/* # fields from tuple */
-+			int			vlen;			/* length of the current field value */
-+			int			i;
-+
-+
-+			/* Get the field count and make sure it's what we expect */
-+			if (pqGetInt(&tupnfields, 2, conn))
++			/* get the value length */
++			if (psGetInt32(&vlen, conn))
 +				return 1;
 +
-+			if (tupnfields != nfields)
-+				return 1;
-+
-+			/* Scan the fields */
-+			for (i = 0; i < nfields; i++)
++			/* Skip over the data value */
++			if (vlen > 0)
 +			{
-+				/* get the value length */
-+				if (pqGetInt(&vlen, 4, conn))
++				if (pqSkipnchar(vlen, conn))
 +					return 1;
-+	
-+				/* Skip over the data value */
-+				if (vlen > 0)
-+				{
-+					if (pqSkipnchar(vlen, conn))
-+						return 1;
-+				}
 +			}
-+
-+            result->id = 'D';
-+            result->len = msgLength + 5;
-+            result->data = conn->inBuffer + conn->inStart;
-+			conn->asyncStatus = PGASYNC_BUSY;
-+			/* trust the specified message length as what to skip */
-+			conn->inStart += 5 + msgLength;
-+			conn->inCursor = conn->inStart;
-+			return 0;
 +		}
++
++		result->id = 'D';
++		result->len = msgLength + 5;
++		result->data = conn->inBuffer + conn->inStart;
++		conn->asyncStatus = PGASYNC_BUSY;
++		/* trust the specified message length as what to skip */
++		conn->inStart += 5 + msgLength;
++		conn->inCursor = conn->inStart;
++		return 0;
 +	}
 +	return 1;
 +}
@@ -153,15 +197,32 @@ index c5170d1..3e3cc34 100644
  }
  #endif
 diff --git src/interfaces/libpq/libpq-int.h src/interfaces/libpq/libpq-int.h
-index a951f49..210fbc9 100644
+index a951f49..e1df8b5 100644
 --- src/interfaces/libpq/libpq-int.h
 +++ src/interfaces/libpq/libpq-int.h
-@@ -755,7 +755,7 @@ extern int	pqWaitTimed(int forRead, int forWrite, PGconn *conn,
- 						time_t finish_time);
+@@ -727,6 +727,11 @@ extern PGresult *pqFunctionCall3(PGconn *conn, Oid fnid,
+ 								 int result_is_int,
+ 								 const PQArgBlock *args, int nargs);
+ 
++ /*
++  * ProxySQL light weight routines
++  */
++extern int  psHandleRowData(PGconn *conn, PSresult* result);								 
++
+ /* === in fe-misc.c === */
+ 
+  /*
+@@ -756,6 +761,13 @@ extern int	pqWaitTimed(int forRead, int forWrite, PGconn *conn,
  extern int	pqReadReady(PGconn *conn);
  extern int	pqWriteReady(PGconn *conn);
--
-+extern int  psHandleRowData(PGconn *conn, PSresult* result); 
+ 
++ /*
++  * ProxySQL light weight routines
++  */
++extern int	psGetInt16(int *result, PGconn *conn);
++extern int	psGetInt32(int *result, PGconn *conn);
++ 
++
  /* === in fe-secure.c === */
  
  extern int	pqsecure_initialize(PGconn *, bool, bool);
