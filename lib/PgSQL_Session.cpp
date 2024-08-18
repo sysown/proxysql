@@ -7288,8 +7288,8 @@ void PgSQL_Session::Memory_Stats() {
 				internal += client_myds->PSarrayOUT->total_size();
 			}
 			else {
-				internal += client_myds->PSarrayOUT->total_size(RESULTSET_BUFLEN);
-				internal += client_myds->resultset->total_size(RESULTSET_BUFLEN);
+				internal += client_myds->PSarrayOUT->total_size(PGSQL_RESULTSET_BUFLEN);
+				internal += client_myds->resultset->total_size(PGSQL_RESULTSET_BUFLEN);
 			}
 		}
 	}

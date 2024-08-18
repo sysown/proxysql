@@ -1274,7 +1274,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 //	unsigned char* _ptr = NULL;
 //
 //	if (rs) {
-//		if (size <= (RESULTSET_BUFLEN - rs->buffer_used)) {
+//		if (size <= (PGSQL_RESULTSET_BUFLEN - rs->buffer_used)) {
 //			// there is space in the buffer, add the data to it
 //			_ptr = rs->buffer + rs->buffer_used;
 //			rs->buffer_used += size;
@@ -1282,7 +1282,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 //			// there is no space in the buffer, we flush the buffer and recreate it
 //			rs->buffer_to_PSarrayOut();
 //			// now we can check again if there is space in the buffer
-//			if (size <= (RESULTSET_BUFLEN - rs->buffer_used)) {
+//			if (size <= (PGSQL_RESULTSET_BUFLEN - rs->buffer_used)) {
 //				// there is space in the NEW buffer, add the data to it
 //				_ptr = rs->buffer + rs->buffer_used;
 //				rs->buffer_used += size;
@@ -1317,7 +1317,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 ////	if (dump_pkt) { __dump_pkt(__func__, _ptr, size); }
 ////#endif
 //	if (rs) {
-//		if (_ptr >= rs->buffer && _ptr < rs->buffer + RESULTSET_BUFLEN) {
+//		if (_ptr >= rs->buffer && _ptr < rs->buffer + PGSQL_RESULTSET_BUFLEN) {
 //			// we are writing within the buffer, do not add to PSarrayOUT
 //		} else {
 //			// we are writing outside the buffer, add to PSarrayOUT
@@ -1713,9 +1713,7 @@ unsigned int PgSQL_Protocol::copy_ready_status_to_PgSQL_Query_Result(bool send, 
 
 unsigned int PgSQL_Protocol::copy_buffer_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PSresult* result) {
 	assert(pg_query_result);
-	assert(result);
-	assert(result->len);
-	assert(result->data);
+	assert(result && result->len && result->data);
 
 	bool alloced_new_buffer = false;
 
@@ -1772,7 +1770,7 @@ PgSQL_Query_Result::~PgSQL_Query_Result() {
 
 void PgSQL_Query_Result::buffer_init() {
 	if (buffer == NULL) {
-		buffer = (unsigned char*)malloc(RESULTSET_BUFLEN);
+		buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
 	}
 	buffer_used = 0;
 }
@@ -1880,18 +1878,18 @@ bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
 void PgSQL_Query_Result::buffer_to_PSarrayOut() {
 	if (buffer_used == 0)
 		return;	// exit immediately if the buffer is empty
-	if (buffer_used < RESULTSET_BUFLEN / 2) {
+	if (buffer_used < PGSQL_RESULTSET_BUFLEN / 2) {
 		buffer = (unsigned char*)realloc(buffer, buffer_used);
 	}
 	PSarrayOUT.add(buffer, buffer_used);
-	buffer = (unsigned char*)malloc(RESULTSET_BUFLEN);
+	buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
 	buffer_used = 0;
 }
 
 unsigned long long PgSQL_Query_Result::current_size() {
 	unsigned long long intsize = 0;
 	intsize += sizeof(PgSQL_Query_Result);
-	intsize += RESULTSET_BUFLEN; // size of buffer
+	intsize += PGSQL_RESULTSET_BUFLEN; // size of buffer
 	if (PSarrayOUT.len == 0)	// see bug #699
 		return intsize;
 	intsize += sizeof(PtrSizeArray);
@@ -1899,11 +1897,11 @@ unsigned long long PgSQL_Query_Result::current_size() {
 	unsigned int i;
 	for (i = 0; i < PSarrayOUT.len; i++) {
 		PtrSize_t* pkt = PSarrayOUT.index(i);
-		if (pkt->size > RESULTSET_BUFLEN) {
+		if (pkt->size > PGSQL_RESULTSET_BUFLEN) {
 			intsize += pkt->size;
 		}
 		else {
-			intsize += RESULTSET_BUFLEN;
+			intsize += PGSQL_RESULTSET_BUFLEN;
 		}
 	}
 	return intsize;

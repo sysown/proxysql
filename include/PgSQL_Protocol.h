@@ -47,6 +47,8 @@
 /* new style V3 packet header len - type:1b, len:4b */
 #define NEW_HEADER_LEN  5
 
+#define PGSQL_RESULTSET_BUFLEN		(16 * 1024)
+
 class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
@@ -214,7 +216,7 @@ public:
 
 private:
 	void buffer_init();
-	inline unsigned int buffer_available_capacity() const { return (RESULTSET_BUFLEN - buffer_used); }
+	inline unsigned int buffer_available_capacity() const { return (PGSQL_RESULTSET_BUFLEN - buffer_used); }
 	unsigned char* buffer_reserve_space(unsigned int size);
 	void buffer_to_PSarrayOut();
 	void reset();
