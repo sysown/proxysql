@@ -60,7 +60,7 @@ diff --git src/interfaces/libpq/fe-protocol3.c src/interfaces/libpq/fe-protocol3
 index 9c4aa7e..de0746c 100644
 --- src/interfaces/libpq/fe-protocol3.c
 +++ src/interfaces/libpq/fe-protocol3.c
-@@ -2299,3 +2299,102 @@ build_startup_packet(const PGconn *conn, char *packet,
+@@ -2299,3 +2299,105 @@ build_startup_packet(const PGconn *conn, char *packet,
  
  	return packet_len;
  }
@@ -116,8 +116,11 @@ index 9c4aa7e..de0746c 100644
 +	 */
 +	msgLength -= 4;
 +	avail = conn->inEnd - conn->inCursor;
-+	if (avail < msgLength) 
-+		return EOF;
++	if (avail < msgLength) { 
++		if ((conn->inCursor+(size_t)msgLength) <= (size_t)conn->inBufSize) 
++           return EOF;
++       return 1;
++   }
 +
 +	if (conn->result != NULL &&
 +		conn->result->resultStatus == PGRES_TUPLES_OK)
@@ -180,7 +183,7 @@ index c5170d1..3e3cc34 100644
 +    char	    id;
 +    int		    len;
 +    const char* data;
-+    int		    fieldcount;
++    //int		    fieldcount;
 +} PSresult;
 +
  /* ----------------
