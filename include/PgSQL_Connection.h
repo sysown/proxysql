@@ -259,11 +259,6 @@ public:
 	char* param_value[PG_PARAM_SIZE]{};
 };
 
-struct Pkt_result {
-	char type;
-	PtrSize_t pkt;
-};
-
 class PgSQL_Variable {
 public:
 	char *value = (char*)"";

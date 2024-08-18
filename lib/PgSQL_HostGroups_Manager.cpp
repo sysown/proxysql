@@ -69,30 +69,6 @@ static pthread_mutex_t ev_loop_mutex;
 
 const int PgSQL_ERRORS_STATS_FIELD_NUM = 11;
 
-static int wait_for_pgsql(MYSQL *mysql, int status) {
-	struct pollfd pfd;
-	int timeout, res;
-
-	pfd.fd = mysql_get_socket(mysql);
-	pfd.events =
-		(status & MYSQL_WAIT_READ ? POLLIN : 0) |
-		(status & MYSQL_WAIT_WRITE ? POLLOUT : 0) |
-		(status & MYSQL_WAIT_EXCEPT ? POLLPRI : 0);
-	timeout = 1;
-	res = poll(&pfd, 1, timeout);
-	if (res == 0)
-		return MYSQL_WAIT_TIMEOUT | status;
-	else if (res < 0)
-		return MYSQL_WAIT_TIMEOUT;
-	else {
-		int status = 0;
-		if (pfd.revents & POLLIN) status |= MYSQL_WAIT_READ;
-		if (pfd.revents & POLLOUT) status |= MYSQL_WAIT_WRITE;
-		if (pfd.revents & POLLPRI) status |= MYSQL_WAIT_EXCEPT;
-		return status;
-	}
-}
-
 /**
  * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
  *

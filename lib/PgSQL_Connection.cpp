@@ -2733,30 +2733,6 @@ void PgSQL_Connection::next_multi_statement_result(PGresult* result) {
 	query_result->buffer_to_PSarrayOut();
 }
 
-static int wait_for_pgsql(PGconn* pgsql_conn, int wait_event) {
-	struct pollfd pfd;
-	int timeout, res;
-
-	pfd.fd = PQsocket(pgsql_conn);
-	pfd.events =
-		(wait_event & PG_EVENT_READ ? POLLIN : 0) |
-		(wait_event & PG_EVENT_WRITE ? POLLOUT : 0) |
-		(wait_event & PG_EVENT_EXCEPT ? POLLPRI : 0);
-	timeout = 1;
-	res = poll(&pfd, 1, timeout);
-	if (res == 0)
-		return PG_EVENT_TIMEOUT | wait_event;
-	else if (res < 0)
-		return PG_EVENT_TIMEOUT;
-	else {
-		int status = 0;
-		if (pfd.revents & POLLIN) status |= PG_EVENT_READ;
-		if (pfd.revents & POLLOUT) status |= PG_EVENT_WRITE;
-		if (pfd.revents & POLLPRI) status |= PG_EVENT_EXCEPT;
-		return status;
-	}
-}
-
 void PgSQL_Connection::reset_session_start() {
 	PROXY_TRACE();
 	assert(pgsql_conn);
