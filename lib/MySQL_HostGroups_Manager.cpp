@@ -5062,7 +5062,13 @@ bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, 
 	return ret;
 }
 
+/**
+ * @brief Dumps to stderr the current info for the monitored Galera hosts ('Galera_Hosts_Map').
+ * @details No action if `mysql_thread___hostgroup_manager_verbose=0`.
+ */
 void print_galera_nodes_last_status() {
+	if (!mysql_thread___hostgroup_manager_verbose) return;
+
 	std::unique_ptr<SQLite3_result> result { new SQLite3_result(13) };
 
 	result->add_column_definition(SQLITE_TEXT,"hostname");
