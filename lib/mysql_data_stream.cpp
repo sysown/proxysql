@@ -1150,12 +1150,14 @@ int MySQL_Data_Stream::buffer2array() {
 							addr.addr = strdup(PROXY_info->source_address);
 							addr.port = PROXY_info->source_port;
 						} else {
-							// TODO: error handling
-							// maybe just generate a warning
+							if (addr.addr) {
+								proxy_warning("Unable to parse PROXY header from IP %s . Skipping PROXY header\n", addr.addr);
+							}
 						}
 					} else { // the PROXY header was not accepted
-						// TODO: error handling
-						// maybe just generate a warning
+						if (addr.addr) {
+							proxy_warning("Skipping PROXY header from IP %s because not matching mysql-proxy_protocol_networks. Skipping PROXY header\n", addr.addr);
+						}
 					}
 
 
