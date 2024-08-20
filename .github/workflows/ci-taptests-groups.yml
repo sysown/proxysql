@@ -222,6 +222,7 @@ jobs:
         #rm -f test_mysql_connect_retries-t
 
         # fixes
+        sed -i '/TAP_MYSQLPORT/d' ${{ github.workspace }}/proxysql/test/tap/tests/reg_test_4556-ssl_error_queue-t.env
         cd ${{ github.workspace }}/proxysql/test/tap/tests
         ls -al
         
