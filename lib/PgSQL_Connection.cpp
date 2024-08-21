@@ -2817,3 +2817,59 @@ bool PgSQL_Connection::has_same_connection_options(const PgSQL_Connection* clien
 	}
 	return true;
 }
+
+const char* PgSQL_Connection::get_pg_server_version_str(char* buff, int buff_size) {
+	const int postgresql_version = get_pg_server_version();
+	snprintf(buff, buff_size, "%d.%d.%d", postgresql_version / 10000, (postgresql_version / 100) % 100, postgresql_version % 100);
+	return buff;
+}
+
+const char* PgSQL_Connection::get_pg_connection_status_str() {
+	switch (get_pg_connection_status()) {
+	case CONNECTION_OK:
+		return "OK";
+	case CONNECTION_BAD:
+		return "BAD";
+	case CONNECTION_STARTED:
+		return "STARTED";
+	case CONNECTION_MADE:
+		return "MADE";
+	case CONNECTION_AWAITING_RESPONSE:
+		return "AWAITING_RESPONSE";
+	case CONNECTION_AUTH_OK:
+		return "AUTH_OK";
+	case CONNECTION_SETENV:
+		return "SETENV";
+	case CONNECTION_SSL_STARTUP:
+		return "SSL_STARTUP";
+	case CONNECTION_NEEDED:
+		return "NEEDED";
+	case CONNECTION_CHECK_WRITABLE:
+		return "CHECK_WRITABLE";
+	case CONNECTION_CONSUME:
+		return "CONSUME";
+	case CONNECTION_GSS_STARTUP:
+		return "GSS_STARTUP";
+	case CONNECTION_CHECK_TARGET:
+		return "CHECK_TARGET";
+	case CONNECTION_CHECK_STANDBY:
+		return "CHECK_STANDBY";
+	}
+	return "UNKNOWN";
+}
+
+const char* PgSQL_Connection::get_pg_transaction_status_str() {
+	switch (get_pg_transaction_status()) {
+	case PQTRANS_IDLE:
+		return "IDLE";
+	case PQTRANS_ACTIVE:
+		return "ACTIVE";
+	case PQTRANS_INTRANS:
+		return "IN-TRANSACTION";
+	case PQTRANS_INERROR:
+		return "IN-ERROR-TRANSACTION";
+	case PQTRANS_UNKNOWN:
+		return "UNKNOWN";
+	}
+	return "INVALID";
+}
