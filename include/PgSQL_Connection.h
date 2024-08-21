@@ -599,7 +599,9 @@ public:
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
+	uint8_t result_type;
 	PGresult* pgsql_result;
+	PSresult  ps_result;
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
 	bool new_result;

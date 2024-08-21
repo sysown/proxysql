@@ -1530,6 +1530,7 @@ bool PgSQL_Connection_Placeholder::get_gtid(char *buff, uint64_t *trx_id) {
 
 PgSQL_Connection::PgSQL_Connection() {
 	pgsql_conn = NULL;
+	result_type = 0;
 	pgsql_result = NULL;
 	query_result = NULL;
 	query_result_reuse = NULL;
@@ -1738,8 +1739,7 @@ handler_again:
 				if (query_result_reuse == NULL) {
 					query_result = new PgSQL_Query_Result();
 					query_result->init(&myds->sess->client_myds->myprot, myds, this);
-				}
-				else {
+				} else {
 					query_result = query_result_reuse;
 					query_result_reuse = NULL;
 					query_result->init(&myds->sess->client_myds->myprot, myds, this);
@@ -1748,8 +1748,7 @@ handler_again:
 				if (query_result_reuse == NULL) {
 					query_result = new PgSQL_Query_Result();
 					query_result->init(NULL, myds, this);
-				}
-				else {
+				} else {
 					query_result = query_result_reuse;
 					query_result_reuse = NULL;
 					query_result->init(NULL, myds, this);
@@ -1762,11 +1761,11 @@ handler_again:
 		break;
 	case ASYNC_USE_RESULT_CONT:
 	{
-		if (myds->sess && myds->sess->client_myds && myds->sess->mirror == false &&
-			myds->sess->status != SHOW_WARNINGS) { // see issue#4072
+		if (myds->sess && myds->sess->client_myds && myds->sess->mirror == false /* &&
+			myds->sess->status != SHOW_WARNINGS*/) { // see issue#4072
 			unsigned int buffered_data = 0;
-			buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
-			buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+			buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
+			buffered_data += myds->sess->client_myds->resultset->len * PGSQL_RESULTSET_BUFLEN;
 			if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 8) {
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
 				break;
@@ -1779,20 +1778,20 @@ handler_again:
 			break;
 		}
 
-		//PGresult* result = get_result();
-		std::unique_ptr<PGresult, decltype(&PQclear)> result(get_result(), PQclear);
+		if (result_type == 1) {
+			std::unique_ptr<PGresult, decltype(&PQclear)> result(get_result(), PQclear);
 
-		if (result) {
+			if (result) {
 
-			const ExecStatusType exec_status_type = PQresultStatus(result.get());
+				const ExecStatusType exec_status_type = PQresultStatus(result.get());
 
-			if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR))) {
-				next_multi_statement_result(result.release());
-				next_event(ASYNC_USE_RESULT_START);
-				break;
-			}
+				if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR))) {
+					next_multi_statement_result(result.release());
+					next_event(ASYNC_USE_RESULT_START);
+					break;
+				}
 
-			switch (exec_status_type) {
+				switch (exec_status_type) {
 				case PGRES_COMMAND_OK:
 					query_result->add_command_completion(result.get());
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
@@ -1824,60 +1823,80 @@ handler_again:
 					// handle internal cleanup of libpq that might return residual protocol messages from the broken connection and 
 					// may add multiple final packets.
 					//if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
-						set_error_from_result(result.get(), PGSQL_ERROR_FIELD_ALL);
-						assert(is_error_present());
+					set_error_from_result(result.get(), PGSQL_ERROR_FIELD_ALL);
+					assert(is_error_present());
 
-						// we will not send FATAL error messages to the client
-						const PGSQL_ERROR_SEVERITY severity = get_error_severity();
-						if (severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR ||
-							severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_WARNING ||
-							severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_NOTICE) {
+					// we will not send FATAL error messages to the client
+					const PGSQL_ERROR_SEVERITY severity = get_error_severity();
+					if (severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR ||
+						severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_WARNING ||
+						severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_NOTICE) {
 
-							query_result->add_error(result.get());
-						}
-						
-						const PGSQL_ERROR_CATEGORY error_category = get_error_category();
-						if (error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_SYNTAX_ERROR &&
-							error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_STATUS &&
-							error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_DATA_ERROR) {
-							proxy_error("Error: %s, Multi-Statement: %d\n", get_error_code_with_message().c_str(), processing_multi_statement);
-						}
+						query_result->add_error(result.get());
+					}
+
+					const PGSQL_ERROR_CATEGORY error_category = get_error_category();
+					if (error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_SYNTAX_ERROR &&
+						error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_STATUS &&
+						error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_DATA_ERROR) {
+						proxy_error("Error: %s, Multi-Statement: %d\n", get_error_code_with_message().c_str(), processing_multi_statement);
+					}
 					//}
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+				}
+
+				if (new_result == true) {
+					query_result->add_row_description(result.get());
+					new_result = false;
+				}
+
+				if (PQntuples(result.get()) > 0) {
+					unsigned int br = query_result->add_row(result.get());
+					__sync_fetch_and_add(&parent->bytes_recv, br);
+					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
+					myds->bytes_info.bytes_recv += br;
+					bytes_info.bytes_recv += br;
+					processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
+					if (
+						(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
+						||
+						(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
+						) {
+						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+						break;
+					} else {
+						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping 
+					}
+				} else {
+					query_result->add_command_completion(result.get());
+					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+				}
 			}
-
-			if (new_result == true) {
-				query_result->add_row_description(result.get());
-				new_result = false;
-			}
-
-			/*if (state == PGRES_COMMAND_OK ||
-				state == PGRES_EMPTY_QUERY ||
-				state == PGRES_TUPLES_OK) {
-				new_result = true;
-			}*/
-
-			if (PQntuples(result.get()) > 0) {
-				unsigned int br = query_result->add_row(result.get());
+		} else if (result_type == 2) {
+			if (ps_result.id == 'D') {
+				unsigned int br = query_result->add_row(&ps_result);
 				__sync_fetch_and_add(&parent->bytes_recv, br);
 				myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
 				myds->bytes_info.bytes_recv += br;
 				bytes_info.bytes_recv += br;
 				processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
+
 				if (
 					(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
 					||
 					(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 					) {
 					next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+					break;
 				} else {
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
 				}
 			} else {
-				query_result->add_command_completion(result.get());
-				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+				assert(0);
 			}
-		} 
+		} else {
+			assert(0);
+		}
 
 		if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
 			// if we reach here we assume that error_info is already set in previous call
@@ -2023,6 +2042,13 @@ void PgSQL_Connection::connect_start() {
 		proxy_error("Connect failed. %s\n", get_error_code_with_message().c_str());
 		return;
 	}
+	if (PQsetnonblocking(pgsql_conn, 1) != 0) {
+		// WARNING: DO NOT RELEASE this PGresult
+		const PGresult* result = PQgetResultFromPGconn(pgsql_conn);
+		set_error_from_result(result);
+		proxy_error("Failed to set non-blocking mode: %s\n", get_error_code_with_message().c_str());
+		return;
+	}
 	fd = PQsocket(pgsql_conn);
 	async_exit_status = PG_EVENT_WRITE;
 }
@@ -2131,6 +2157,20 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	if (pgsql_result)
 		return;
 
+	switch (PShandleRowData(pgsql_conn, &ps_result)) {
+	case 0:
+		result_type = 2;
+		return;
+	case 1:
+		// we already have data available in buffer
+		if (PQisBusy(pgsql_conn) == 0) {
+			result_type = 1;
+			pgsql_result = PQgetResult(pgsql_conn);
+			return;
+		}
+		break;
+	}
+
 	if (PQconsumeInput(pgsql_conn) == 0) {
 		// WARNING: DO NOT RELEASE this PGresult
 		const PGresult* result = PQgetResultFromPGconn(pgsql_conn);
@@ -2145,11 +2185,21 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 		return;
 	}
 
-	if (PQisBusy(pgsql_conn)) {
+	switch (PShandleRowData(pgsql_conn, &ps_result)) {
+	case 0:
+		result_type = 2;
+		return;
+	case 1:
+		if (PQisBusy(pgsql_conn)) {
+			async_exit_status = PG_EVENT_READ;
+			return;
+		}
+		break;
+	default:
 		async_exit_status = PG_EVENT_READ;
 		return;
 	}
-
+	result_type = 1;
 	pgsql_result = PQgetResult(pgsql_conn);
 }
 
@@ -2681,30 +2731,6 @@ void PgSQL_Connection::next_multi_statement_result(PGresult* result) {
 	pgsql_result = result;
 	// copy buffer to PSarrayOut
 	query_result->buffer_to_PSarrayOut();
-}
-
-static int wait_for_pgsql(PGconn* pgsql_conn, int wait_event) {
-	struct pollfd pfd;
-	int timeout, res;
-
-	pfd.fd = PQsocket(pgsql_conn);
-	pfd.events =
-		(wait_event & PG_EVENT_READ ? POLLIN : 0) |
-		(wait_event & PG_EVENT_WRITE ? POLLOUT : 0) |
-		(wait_event & PG_EVENT_EXCEPT ? POLLPRI : 0);
-	timeout = 1;
-	res = poll(&pfd, 1, timeout);
-	if (res == 0)
-		return PG_EVENT_TIMEOUT | wait_event;
-	else if (res < 0)
-		return PG_EVENT_TIMEOUT;
-	else {
-		int status = 0;
-		if (pfd.revents & POLLIN) status |= PG_EVENT_READ;
-		if (pfd.revents & POLLOUT) status |= PG_EVENT_WRITE;
-		if (pfd.revents & POLLPRI) status |= PG_EVENT_EXCEPT;
-		return status;
-	}
 }
 
 void PgSQL_Connection::reset_session_start() {
