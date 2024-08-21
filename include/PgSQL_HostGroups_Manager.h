@@ -681,7 +681,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 */
 	void p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code);
 
-	wqueue<PgSQL_Connection *> queue;
 	// has_gtid_port is set to true if *any* of the servers in pgsql_servers has gtid_port enabled
 	// it is configured during commit()
 	// NOTE: this variable is currently NOT used, but in future will be able

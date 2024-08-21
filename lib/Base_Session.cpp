@@ -481,13 +481,10 @@ bool Base_Session<S,DS,B,T>::handler_special_queries_STATUS(PtrSize_t* pkt) {
 template<typename S, typename DS, typename B, typename T>
 void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 	bool thread___multiplexing = true;
-	int thread___reset_connection_algorithm = 0;
 	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		thread___multiplexing = mysql_thread___multiplexing;
-		thread___reset_connection_algorithm = mysql_thread___reset_connection_algorithm;
 	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 		thread___multiplexing = pgsql_thread___multiplexing;
-		thread___reset_connection_algorithm = pgsql_thread___reset_connection_algorithm;
 	} else {
 		assert(0);
 	}
@@ -499,10 +496,16 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 				DS * myds = mybe->server_myds;
 				// FIXME: NOTE: the logic for autocommit is relevant only for MYSQL
 				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-					if (thread___reset_connection_algorithm == 2) {
+					if constexpr (std::is_same_v<S, MySQL_Session>) {
+						if (mysql_thread___reset_connection_algorithm == 2) {
+							create_new_session_and_reset_connection(myds);
+						} else {
+							myds->destroy_MySQL_Connection_From_Pool(true);
+						}
+					} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 						create_new_session_and_reset_connection(myds);
 					} else {
-						myds->destroy_MySQL_Connection_From_Pool(true);
+						assert(0);
 					}
 				} else {
 					myds->return_MySQL_Connection_To_Pool();

@@ -136,125 +136,6 @@ T PgSQL_j_get_srv_default_int_val(
 	return static_cast<T>(-1);
 }
 
-//static void * HGCU_thread_run() {
-static void * HGCU_thread_run() {
-	PtrArray *conn_array=new PtrArray();
-	while(1) {
-		PgSQL_Connection *myconn= NULL;
-		myconn = (PgSQL_Connection *)PgHGM->queue.remove();
-		if (myconn==NULL) {
-			// intentionally exit immediately
-			delete conn_array;
-			return NULL;
-		}
-		conn_array->add(myconn);
-		while (PgHGM->queue.size()) {
-			myconn=(PgSQL_Connection *)PgHGM->queue.remove();
-			if (myconn==NULL) {
-				delete conn_array;
-				return NULL;
-			}
-			conn_array->add(myconn);
-		}
-		unsigned int l=conn_array->len;
-		int *errs=(int *)malloc(sizeof(int)*l);
-		int *statuses=(int *)malloc(sizeof(int)*l);
-		my_bool *ret=(my_bool *)malloc(sizeof(my_bool)*l);
-		int i;
-		for (i=0;i<(int)l;i++) {
-			myconn->reset();
-			PgHGM->increase_reset_counter();
-			myconn=(PgSQL_Connection *)conn_array->index(i);
-			if (myconn->pgsql && myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
-				PgSQL_Connection_userinfo *userinfo = myconn->userinfo;
-				char *auth_password = NULL;
-				if (userinfo->password) {
-					if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
-						auth_password=userinfo->sha1_pass;
-					} else {
-						auth_password=userinfo->password;
-					}
-				}
-				//async_exit_status = pgsql_change_user_start(&ret_bool,pgsql,_ui->username, auth_password, _ui->schemaname);
-				// we first reset the charset to a default one.
-				// this to solve the problem described here:
-				// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
-				if (myconn->pgsql->charset->nr >= 255)
-					mysql_options(myconn->pgsql, MYSQL_SET_CHARSET_NAME, myconn->pgsql->charset->csname);
-				statuses[i]=mysql_change_user_start(&ret[i], myconn->pgsql, myconn->userinfo->username, auth_password, myconn->userinfo->schemaname);
-				if (myconn->pgsql->net.pvio==NULL || myconn->pgsql->net.fd==0 || myconn->pgsql->net.buff==NULL) {
-					statuses[i]=0; ret[i]=1;
-				}
-			} else {
-				statuses[i]=0;
-				ret[i]=1;
-			}
-		}
-		for (i=0;i<(int)conn_array->len;i++) {
-			if (statuses[i]==0) {
-				myconn=(PgSQL_Connection *)conn_array->remove_index_fast(i);
-				if (!ret[i]) {
-					PgHGM->push_MyConn_to_pool(myconn);
-				} else {
-					myconn->send_quit=false;
-					PgHGM->destroy_MyConn_from_pool(myconn);
-				}
-				statuses[i]=statuses[conn_array->len];
-				ret[i]=ret[conn_array->len];
-				i--;
-			}
-		}
-		unsigned long long now=monotonic_time();
-		while (conn_array->len && ((monotonic_time() - now) < 1000000)) {
-			usleep(50);
-			for (i=0;i<(int)conn_array->len;i++) {
-				myconn=(PgSQL_Connection *)conn_array->index(i);
-				if (myconn->pgsql && myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
-					statuses[i]=wait_for_pgsql(myconn->pgsql, statuses[i]);
-					if (myconn->pgsql->net.pvio && myconn->pgsql->net.fd && myconn->pgsql->net.buff) {
-						if ((statuses[i] & MYSQL_WAIT_TIMEOUT) == 0) {
-							statuses[i]=mysql_change_user_cont(&ret[i], myconn->pgsql, statuses[i]);
-							if (myconn->pgsql->net.pvio==NULL || myconn->pgsql->net.fd==0 || myconn->pgsql->net.buff==NULL ) {
-								statuses[i]=0; ret[i]=1;
-							}
-						}
-					} else {
-						statuses[i]=0; ret[i]=1;
-					}
-				} else {
-					statuses[i]=0; ret[i]=1;
-				}
-			}
-			for (i=0;i<(int)conn_array->len;i++) {
-				if (statuses[i]==0) {
-					myconn=(PgSQL_Connection *)conn_array->remove_index_fast(i);
-					if (!ret[i]) {
-						myconn->reset();
-						PgHGM->push_MyConn_to_pool(myconn);
-					} else {
-						myconn->send_quit=false;
-						PgHGM->destroy_MyConn_from_pool(myconn);
-					}
-					statuses[i]=statuses[conn_array->len];
-					ret[i]=ret[conn_array->len];
-					i--;
-				}
-			}
-		}
-		while (conn_array->len) {
-			// we reached here, and there are still connections
-			myconn=(PgSQL_Connection *)conn_array->remove_index_fast(0);
-			myconn->send_quit=false;
-			PgHGM->destroy_MyConn_from_pool(myconn);
-		}
-		free(statuses);
-		free(errs);
-		free(ret);
-	}
-	delete conn_array;
-}
-
-
 PgSQL_Connection *PgSQL_SrvConnList::index(unsigned int _k) {
 	return (PgSQL_Connection *)conns->index(_k);
 }
@@ -885,11 +766,6 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 }
 
 void PgSQL_HostGroups_Manager::init() {
-	//conn_reset_queue = NULL;
-	//conn_reset_queue = new wqueue<PgSQL_Connection *>();
-	HGCU_thread = new std::thread(&HGCU_thread_run);
-	//pthread_create(&HGCU_thread_id, NULL, HGCU_thread_run , NULL);
-
 	// gtid initialization;
 	//GTID_syncer_thread = new std::thread(&GTID_syncer_run);
 	GTID_syncer_thread = nullptr;
@@ -898,7 +774,6 @@ void PgSQL_HostGroups_Manager::init() {
 }
 
 void PgSQL_HostGroups_Manager::shutdown() {
-	queue.add(NULL);
 	HGCU_thread->join();
 	delete HGCU_thread;
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
@@ -1484,7 +1359,7 @@ bool PgSQL_HostGroups_Manager::commit(
 
 				if (atoi(r->fields[4])!=atoi(r->fields[14])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
 					mysrvc->weight=atoi(r->fields[14]);
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
@@ -1964,8 +1839,8 @@ void PgSQL_HostGroups_Manager::push_MyConn_to_pool(PgSQL_Connection *c, bool _lo
 			if (c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying PgSQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 //				delete c;
-				mysrvc->ConnectionsUsed->add(c);
-				destroy_MyConn_from_pool(c, false);
+				mysrvc->ConnectionsUsed->add(c); // Add the connection back to the list of used connections
+				destroy_MyConn_from_pool(c, false); // Destroy the connection from the pool
 			} else {
 				c->optimize();
 				mysrvc->ConnectionsFree->add(c);
@@ -2348,18 +2223,17 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 //PgSQL_SrvC * PgSQL_SrvList::idx(unsigned int i) { return (PgSQL_SrvC *)servers->index(i); }
 
 void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const PgSQL_Connection * client_conn) {
-	char *schema = client_conn->userinfo->schemaname;
 	PgSQL_Connection * conn=NULL;
 	unsigned int k;
 	for (k = start;  k < end; k++) {
 		conn = (PgSQL_Connection *)conns->index(k);
-		if (conn->match_tracked_options(client_conn)) {
+		if (conn->has_same_connection_options(client_conn)) {
 			if (connection_quality_level == 0) {
 				// this is our best candidate so far
 				connection_quality_level = 1;
 				conn_found_idx = k;
 			}
-			if (conn->requires_CHANGE_USER(client_conn)==false) {
+			if (conn->requires_RESETTING_CONNECTION(client_conn)==false) {
 				if (connection_quality_level == 1) {
 					// this is our best candidate so far
 					connection_quality_level = 2;
@@ -2368,11 +2242,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 				unsigned int cnt_match = 0; // number of matching session variables
 				unsigned int not_match = 0; // number of not matching session variables
 				cnt_match = conn->number_of_matching_session_variables(client_conn, not_match);
-				if (strcmp(conn->userinfo->schemaname,schema)==0) {
-					cnt_match++;
-				} else {
-					not_match++;
-				}
+
 				if (not_match==0) {
 					// it seems we found the perfect connection
 					number_of_matching_session_variables = cnt_match;
@@ -2389,7 +2259,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 					}
 				}
 			} else {
-				if (connection_quality_level == 1) {
+				/*if (connection_quality_level == 1) {
 					int rca = pgsql_thread___reset_connection_algorithm;
 					if (rca==1) {
 						int ql = GloMTH->variables.connpoll_reset_queue_length;
@@ -2405,12 +2275,11 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 						}
 					}
 				}
+				*/
 			}
 		}
 	}
 }
-
-
 
 PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff) {
 	PgSQL_Connection * conn=NULL;
@@ -2421,9 +2290,9 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 	bool needs_warming = false;
 	// connection_quality_level:
 	// 0 : not found any good connection, tracked options are not OK
-	// 1 : tracked options are OK , but CHANGE USER is required
-	// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
-	// 3 : tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+	// 1 : tracked options are OK , but RESETTING SESSION is required
+	// 2 : tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
+	// 3 : tracked options are OK , RESETTING SESSION is not required, and it seems that SET statements or INIT_DB ARE not required
 	unsigned int number_of_matching_session_variables = 0; // this includes session variables AND schema
 	bool connection_warming = pgsql_thread___connection_warming;
 	int free_connections_pct = pgsql_thread___free_connections_pct;
@@ -2452,8 +2321,8 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			}
 			// connection_quality_level:
-			// 1 : tracked options are OK , but CHANGE USER is required
-			// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+			// 1 : tracked options are OK , but RESETTING SESSION is required
+			// 2 : tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
 			switch (connection_quality_level) {
 				case 0: // not found any good connection, tracked options are not OK
 					// we must check if connections need to be freed before
@@ -2488,10 +2357,10 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 						__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					}
 					break;
-				case 1: //tracked options are OK , but CHANGE USER is required
+				case 1: //tracked options are OK , but RESETTING SESSION is required
 					// we may consider creating a new connection
 					{
 					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
@@ -2502,14 +2371,14 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 						__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					} else {
 						conn=(PgSQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					}
 					}
 					break;
-				case 2: // tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
-				case 3: // tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+				case 2: // tracked options are OK , RESETTING SESSION is not required, but some SET statement or INIT_DB needs to be executed
+				case 3: // tracked options are OK , RESETTING SESSION is not required, and it seems that SET statements or INIT_DB ARE not required
 					// here we return the best connection we have, no matter if connection_quality_level is 2 or 3
 					conn=(PgSQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					break;
@@ -2522,7 +2391,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 		} else {
 			conn=(PgSQL_Connection *)conns->remove_index_fast(i);
 		}
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return conn;
 	} else {
 		unsigned long long curtime = monotonic_time();
@@ -2547,7 +2416,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 			conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 			__sync_fetch_and_add(&PgHGM->status.server_connections_created, 1);
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PostgreSQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 			return  conn;
 		}
 	}
@@ -2633,23 +2502,16 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, bool _lock) {
 	bool to_del=true; // the default, legacy behavior
 	PgSQL_SrvC *mysrvc=(PgSQL_SrvC *)c->parent;
-	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
-		if (c->async_state_machine==ASYNC_IDLE) {
-			// overall, the backend seems healthy and so it is the connection. Try to reset it
-			if (c->is_connection_in_reusable_state() == false) {
-				// client library error . We must not try to save the connection
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset PgSQL_Connection %p, server %s:%d . Error %s\n", c, mysrvc->address, mysrvc->port, c->get_error_code_with_message().c_str());
-			} else {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
-				to_del=false;
-				queue.add(c);
-			}
-		} else {
-		// the connection seems health, but we are trying to destroy it
-		// probably because there is a long running query
-		// therefore we will try to kill the connection
+	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit) {
+		if (c->async_state_machine!=ASYNC_IDLE) {
+			// the connection seems health, but we are trying to destroy it
+			// probably because there is a long running query
+			// therefore we will try to kill the connection
+
+			/* KILL BACKEND CONNECTION IS NOT IMPLEMENTED YET
 			if (pgsql_thread___kill_backend_connection_when_disconnect) {
-				int myerr=mysql_errno(c->pgsql);
+				 
+				int myerr = mysql_errno(c->pgsql);
 				switch (myerr) {
 					case 1231:
 						break;
@@ -2679,7 +2541,7 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 					}
 						break;
 				}
-			}
+			}*/
 		}
 	}
 	if (to_del) {
@@ -2687,10 +2549,11 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 		if (_lock) {
 			wrlock();
 		}
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying PgSQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying PgSQL_Connection %p, server %s:%d Error %s\n", c, mysrvc->address, mysrvc->port,
+			c->get_error_code_with_message().c_str());
 		mysrvc->ConnectionsUsed->remove(c);
 		status.myconnpoll_destroy++;
-                if (_lock) {
+        if (_lock) {
 			wrunlock();
 		}
 		delete c;
@@ -3080,7 +2943,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 	result->add_column_definition(SQLITE_TEXT,"srv_host");
 	result->add_column_definition(SQLITE_TEXT,"srv_port");
 	result->add_column_definition(SQLITE_TEXT,"user");
-	result->add_column_definition(SQLITE_TEXT,"schema");
+	result->add_column_definition(SQLITE_TEXT,"dbname");
 	result->add_column_definition(SQLITE_TEXT,"init_connect");
 	result->add_column_definition(SQLITE_TEXT,"time_zone");
 	result->add_column_definition(SQLITE_TEXT,"sql_mode");
@@ -3117,7 +2980,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 				sprintf(buf,"%d", mysrvc->port);
 				pta[3]=strdup(buf);
 				pta[4] = strdup(conn->userinfo->username);
-				pta[5] = strdup(conn->userinfo->schemaname);
+				pta[5] = strdup(conn->userinfo->dbname);
 				pta[6] = NULL;
 				if (conn->options.init_connect) {
 					pta[6] = strdup(conn->options.init_connect);
