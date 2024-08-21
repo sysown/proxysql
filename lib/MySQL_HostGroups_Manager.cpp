@@ -3314,12 +3314,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(
 		counter_id->second->Increment(value - cur_val);
 	} else {
 		auto& new_counter = status.p_dyn_counter_array[idx];
-		m_map.insert(
+		const auto& new_counter_it = m_map.insert(
 			{
 				endpoint_id,
 				std::addressof(new_counter->Add(labels))
 			}
 		);
+		new_counter_it.first->second->Increment(value);
 	}
 }
 
@@ -3332,12 +3333,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
 		counter_id->second->Set(value);
 	} else {
 		auto& new_counter = status.p_dyn_gauge_array[idx];
-		m_map.insert(
+		const auto& new_gauge_it = m_map.insert(
 			{
 				endpoint_id,
 				std::addressof(new_counter->Add(labels))
 			}
 		);
+		new_gauge_it.first->second->Set(value);
 	}
 }
 

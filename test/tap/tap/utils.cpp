@@ -1607,23 +1607,27 @@ json fetch_internal_session(MYSQL* proxy, bool verbose) {
 	}
 }
 
+pair<string, string> split_line_by_last(const string& ln, char c) {
+	size_t pos = ln.find_last_of(c);
+
+	if (pos == string::npos) {
+		return { ln, "" };
+	} else {
+		const string f { ln.substr(0, pos) };
+		const string s { ln.substr(pos + 1) };
+
+		return { f, s };
+	}
+}
+
 map<string, double> parse_prometheus_metrics(const string& s) {
-	vector<string> lines { split(s, '\n') };
+	const vector<string> lines { split(s, '\n') };
 	map<string, double> metrics_map {};
 
 	for (const string ln : lines) {
-		const vector<string> line_values { split(ln, ' ') };
-
 		if (ln.empty() == false && ln[0] != '#') {
-			if (line_values.size() > 2) {
-				size_t delim_pos_st = ln.rfind("} ");
-				string metric_key = ln.substr(0, delim_pos_st);
-				string metric_val = ln.substr(delim_pos_st + 2);
-
-				metrics_map.insert({metric_key, stod(metric_val)});
-			} else {
-				metrics_map.insert({line_values.front(), stod(line_values.back())});
-			}
+			pair<string, string> p_line_val { split_line_by_last(ln, ' ') };
+			metrics_map.insert({p_line_val.first, stod(p_line_val.second)});
 		}
 	}
 
