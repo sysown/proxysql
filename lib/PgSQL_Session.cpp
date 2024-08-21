@@ -783,22 +783,15 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 		sprintf(buff, "%p", thread);
 		j["thread"] = buff;
 	}
-	uint64_t age_ms = (thread->curtime - start_time) / 1000;
+	const uint64_t age_ms = (thread->curtime - start_time) / 1000;
 	j["age_ms"] = age_ms;
 	j["status"] = status;
-	j["autocommit"] = autocommit;
 	j["thread_session_id"] = thread_session_id;
 	j["current_hostgroup"] = current_hostgroup;
 	j["default_hostgroup"] = default_hostgroup;
 	j["locked_on_hostgroup"] = locked_on_hostgroup;
-	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
-	j["last_insert_id"] = last_insert_id;
-	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["active_transactions"] = active_transactions;
 	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
-	j["warning_in_hg"] = warning_in_hg;
-	j["gtid"]["hid"] = gtid_hid;
-	j["gtid"]["last"] = (strlen(gtid_buf) ? gtid_buf : "");
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
 	j["qpo"]["reconnect"] = qpo->reconnect;
 	j["qpo"]["sticky_conn"] = qpo->sticky_conn;
@@ -811,7 +804,6 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	j["qpo"]["timeout"] = qpo->timeout;
 	j["qpo"]["retries"] = qpo->retries;
 	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
-	j["default_schema"] = (default_schema ? default_schema : "");
 	j["user_attributes"] = (user_attributes ? user_attributes : "");
 	j["transaction_persistent"] = transaction_persistent;
 	if (client_myds != NULL) { // only if client_myds is defined
@@ -834,7 +826,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 			}
 		}
 		j["client"]["DSS"] = client_myds->DSS;
-		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
+		j["client"]["auth_method"] = AUTHENTICATION_METHOD_STR[(int)client_myds->auth_method];
 		if (client_myds->myconn != NULL) { // only if myconn is defined
 			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
 				j["client"]["userinfo"]["username"] = (client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "");
@@ -843,7 +835,6 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				j["client"]["userinfo"]["password"] = (client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "");
 #endif
 			}
-			j["conn"]["session_track_gtids"] = (client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "");
 			for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
 				client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 			}
@@ -853,24 +844,32 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 					c->variables[*it_c].fill_client_internal_session(j, *it_c);
 				}
 			}
+			//j["conn"]["autocommit"] = (client_myds->myconn->options.autocommit ? "ON" : "OFF");
+			//j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
+			//j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+			//j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+			//j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
+			//j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+			//j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
+			//j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+			//j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
+			{
+				const PgSQL_Conn_Param& c = client_myds->myconn->conn_params;
 
-			j["conn"]["autocommit"] = (client_myds->myconn->options.autocommit ? "ON" : "OFF");
-			j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
-			j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-			j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-			j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
-			j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-			j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
-			j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
+				for (size_t i = 0; i < c.param_set.size(); i++) {
+
+					if (c.param_value[c.param_set[i]] != NULL) {
+
+						j["client"]["conn"]["connection_options"][PgSQL_Param_Name_Str[c.param_set[i]]] = c.param_value[c.param_set[i]];
+					}
+				}
+			}
 		}
 	}
 	for (unsigned int i = 0; i < mybes->len; i++) {
 		PgSQL_Backend* _mybe = NULL;
 		_mybe = (PgSQL_Backend*)mybes->index(i);
-		//unsigned int i = _mybe->hostgroup_id;
 		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
-		j["backends"][i]["gtid"] = (strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "");
 		if (_mybe->server_myds) {
 			PgSQL_Data_Stream* _myds = _mybe->server_myds;
 			sprintf(buff, "%p", _myds);
@@ -902,24 +901,20 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
 				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
-				j["backends"][i]["conn"]["session_track_gtids"] = (_myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "");
+				//j["backends"][i]["conn"]["session_track_gtids"] = (_myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "");
 				j["backends"][i]["conn"]["init_connect"] = (_myconn->options.init_connect ? _myconn->options.init_connect : "");
 				j["backends"][i]["conn"]["init_connect_sent"] = _myds->myconn->options.init_connect_sent;
-				j["backends"][i]["conn"]["autocommit"] = (_myds->myconn->options.autocommit ? "ON" : "OFF");
-				j["backends"][i]["conn"]["last_set_autocommit"] = _myds->myconn->options.last_set_autocommit;
-				j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
-				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
-				j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
-				j["backends"][i]["conn"]["status"]["has_savepoint"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
-				j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
+				//j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
+				//j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
+				//j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
+				//j["backends"][i]["conn"]["status"]["has_savepoint"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+				//j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
 				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE);
-				j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS);
+				//j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS);
 				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 				j["backends"][i]["conn"]["status"]["no_multiplex_HG"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
-				j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
-				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
-				j["backends"][i]["conn"]["warning_count"] = _myconn->warning_count;
+				//j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+				//j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 				{
 					// MultiplexDisabled : status returned by PgSQL_Connection::MultiplexDisabled();
 					// MultiplexDisabled_ext : status returned by PgSQL_Connection::MultiplexDisabled() || PgSQL_Connection::isActiveTransaction()
@@ -932,39 +927,34 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 					}
 					j["backends"][i]["conn"]["MultiplexDisabled_ext"] = multiplex_disabled;
 				}
-				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
-				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
-				j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
-				j["backends"][i]["conn"]["client_flag"]["client_found_rows"] = (_myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-				j["backends"][i]["conn"]["client_flag"]["client_multi_statements"] = (_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-				j["backends"][i]["conn"]["client_flag"]["client_deprecate_eof"] = (_myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-				if (_myconn->pgsql && _myconn->ret_mysql) {
-					MYSQL* _my = _myconn->pgsql;
-					sprintf(buff, "%p", _my);
+				//j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
+				//j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
+				//j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
+				//j["backends"][i]["conn"]["client_flag"]["client_found_rows"] = (_myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+				//j["backends"][i]["conn"]["client_flag"]["client_multi_statements"] = (_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+				//j["backends"][i]["conn"]["client_flag"]["client_deprecate_eof"] = (_myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+				if (_myconn->is_connected()) {
+					sprintf(buff, "%p", _myconn->get_pg_connection());
 					j["backends"][i]["conn"]["pgsql"]["address"] = buff;
-					j["backends"][i]["conn"]["pgsql"]["host"] = (_my->host ? _my->host : "");
-					j["backends"][i]["conn"]["pgsql"]["host_info"] = (_my->host_info ? _my->host_info : "");
-					j["backends"][i]["conn"]["pgsql"]["port"] = _my->port;
-					j["backends"][i]["conn"]["pgsql"]["server_version"] = (_my->server_version ? _my->server_version : "");
-					j["backends"][i]["conn"]["pgsql"]["user"] = (_my->user ? _my->user : "");
-					j["backends"][i]["conn"]["pgsql"]["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
-					j["backends"][i]["conn"]["pgsql"]["db"] = (_my->db ? _my->db : "");
-					j["backends"][i]["conn"]["pgsql"]["affected_rows"] = _my->affected_rows;
-					j["backends"][i]["conn"]["pgsql"]["insert_id"] = _my->insert_id;
-					j["backends"][i]["conn"]["pgsql"]["thread_id"] = _my->thread_id;
-					j["backends"][i]["conn"]["pgsql"]["server_status"] = _my->server_status;
-					j["backends"][i]["conn"]["pgsql"]["charset"] = _my->charset->nr;
-					j["backends"][i]["conn"]["pgsql"]["charset_name"] = _my->charset->csname;
-					//j["backends"][i]["conn"]["pgsql"][""] = _my->;
-					//j["backends"][i]["conn"]["pgsql"][""] = _my->;
-					j["backends"][i]["conn"]["pgsql"]["options"]["charset_name"] = (_my->options.charset_name ? _my->options.charset_name : "");
-					j["backends"][i]["conn"]["pgsql"]["options"]["use_ssl"] = _my->options.use_ssl;
-					j["backends"][i]["conn"]["pgsql"]["net"]["last_errno"] = _my->net.last_errno;
-					j["backends"][i]["conn"]["pgsql"]["net"]["fd"] = _my->net.fd;
-					j["backends"][i]["conn"]["pgsql"]["net"]["max_packet_size"] = _my->net.max_packet_size;
-					j["backends"][i]["conn"]["pgsql"]["net"]["sqlstate"] = _my->net.sqlstate;
-					//j["backends"][i]["conn"]["pgsql"]["net"][""] = _my->net.;
-					//j["backends"][i]["conn"]["pgsql"]["net"][""] = _my->net.;
+					j["backends"][i]["conn"]["pgsql"]["host"] = _myconn->get_pg_host();
+					j["backends"][i]["conn"]["pgsql"]["host_addr"] = _myconn->get_pg_hostaddr();
+					j["backends"][i]["conn"]["pgsql"]["port"] = _myconn->get_pg_port();
+					j["backends"][i]["conn"]["pgsql"]["user"] = _myconn->get_pg_user();
+#ifdef DEBUG
+					j["backends"][i]["conn"]["pgsql"]["password"] = _myconn->get_pg_password();
+#endif
+					j["backends"][i]["conn"]["pgsql"]["db"] = _myconn->get_pg_dbname();
+					j["backends"][i]["conn"]["pgsql"]["backend_pid"] = _myconn->get_pg_backend_pid();
+					j["backends"][i]["conn"]["pgsql"]["using_ssl"] = _myconn->get_pg_ssl_in_use() ? "YES" : "NO";
+					j["backends"][i]["conn"]["pgsql"]["error_msg"] = _myconn->get_pg_error_message();
+					j["backends"][i]["conn"]["pgsql"]["options"] = _myconn->get_pg_options();
+					j["backends"][i]["conn"]["pgsql"]["fd"] = _myconn->get_pg_socket_fd();
+					j["backends"][i]["conn"]["pgsql"]["protocol_version"] = _myconn->get_pg_protocol_version();
+					j["backends"][i]["conn"]["pgsql"]["server_version"] = _myconn->get_pg_server_version_str(buff, sizeof(buff));
+					j["backends"][i]["conn"]["pgsql"]["transaction_status"] = _myconn->get_pg_transaction_status_str();
+					j["backends"][i]["conn"]["pgsql"]["connection_status"] = _myconn->get_pg_connection_status_str();
+					j["backends"][i]["conn"]["pgsql"]["client_encoding"] = _myconn->get_pg_client_encoding();
+					j["backends"][i]["conn"]["pgsql"]["is_nonblocking"] = _myconn->get_pg_is_nonblocking() ? "YES" : "NO";
 				}
 			}
 		}

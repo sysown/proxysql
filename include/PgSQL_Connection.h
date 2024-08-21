@@ -596,6 +596,82 @@ public:
 	bool set_single_row_mode();
 	void optimize() {}
 
+	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
+	inline int get_pg_server_version() { return PQserverVersion(pgsql_conn); }
+	inline const char* get_pg_server_version_str(char* buff, int buff_size) {
+		const int postgresql_version = get_pg_server_version();
+		snprintf(buff, buff_size, "%d.%d.%d", postgresql_version / 10000, (postgresql_version / 100) % 100, postgresql_version % 100);
+		return buff;
+	}
+	inline int get_pg_protocol_version() { return PQprotocolVersion(pgsql_conn); }
+	inline const char* get_pg_host() { return PQhost(pgsql_conn); }
+	inline const char* get_pg_hostaddr() { return PQhostaddr(pgsql_conn); }
+	inline const char* get_pg_port() { return PQport(pgsql_conn); }
+	inline const char* get_pg_dbname() { return PQdb(pgsql_conn); }
+	inline const char* get_pg_user() { return PQuser(pgsql_conn); }
+	inline const char* get_pg_password() { return PQpass(pgsql_conn); }
+	inline const char* get_pg_options() { return PQoptions(pgsql_conn); }
+	inline int get_pg_socket_fd() { return PQsocket(pgsql_conn); }
+	inline int get_pg_backend_pid() { return PQbackendPID(pgsql_conn); }
+	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
+	inline int get_pg_connection_used_password() { return PQconnectionUsedPassword(pgsql_conn); }
+	inline int get_pg_connection_used_gssapi() { return PQconnectionUsedGSSAPI(pgsql_conn); }
+	inline int get_pg_client_encoding() { return PQclientEncoding(pgsql_conn); }
+	inline int get_pg_ssl_in_use() { return PQsslInUse(pgsql_conn); }
+	inline ConnStatusType get_pg_connection_status() { return PQstatus(pgsql_conn); }
+	inline const char* get_pg_connection_status_str() {
+		switch (get_pg_connection_status()) {
+		case CONNECTION_OK:
+			return "OK";
+		case CONNECTION_BAD:
+			return "BAD";
+		case CONNECTION_STARTED:
+			return "STARTED";
+		case CONNECTION_MADE:
+			return "MADE";
+		case CONNECTION_AWAITING_RESPONSE:
+			return "AWAITING_RESPONSE";
+		case CONNECTION_AUTH_OK:
+			return "AUTH_OK";
+		case CONNECTION_SETENV:
+			return "SETENV";
+		case CONNECTION_SSL_STARTUP:
+			return "SSL_STARTUP";
+		case CONNECTION_NEEDED:
+			return "NEEDED";
+		case CONNECTION_CHECK_WRITABLE:
+			return "CHECK_WRITABLE";
+		case CONNECTION_CONSUME:
+			return "CONSUME";
+		case CONNECTION_GSS_STARTUP:
+			return "GSS_STARTUP";
+		case CONNECTION_CHECK_TARGET:
+			return "CHECK_TARGET";
+		case CONNECTION_CHECK_STANDBY:
+			return "CHECK_STANDBY";
+		}
+		return "UNKNOWN";
+	}
+	inline PGTransactionStatusType get_pg_transaction_status() { return PQtransactionStatus(pgsql_conn); }
+	inline const char* get_pg_transaction_status_str() {
+		switch (get_pg_transaction_status()) {
+		case PQTRANS_IDLE:
+			return "IDLE";
+		case PQTRANS_ACTIVE:
+			return "ACTIVE";
+		case PQTRANS_INTRANS:
+			return "IN-TRANSACTION";
+		case PQTRANS_INERROR:
+			return "IN-ERROR-TRANSACTION";
+		case PQTRANS_UNKNOWN:
+			return "UNKNOWN";
+		}
+		return "INVALID";
+	}
+	inline int get_pg_is_nonblocking() { return PQisnonblocking(pgsql_conn); }
+	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
+	inline const char* get_pg_error_message() { return PQerrorMessage(pgsql_conn); }
+
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
