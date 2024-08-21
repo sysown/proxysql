@@ -291,7 +291,7 @@ class PgSQL_Connection_userinfo {
 	~PgSQL_Connection_userinfo();
 	void set(char *, char *, char *, char *);
 	void set(PgSQL_Connection_userinfo *);
-	bool set_dbname(char *, int);
+	bool set_dbname(const char *);
 };
 
 class PgSQL_Connection_Placeholder {

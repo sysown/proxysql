@@ -372,34 +372,25 @@ void PgSQL_Connection_userinfo::set(PgSQL_Connection_userinfo *ui) {
 	set(ui->username, ui->password, ui->dbname, ui->sha1_pass);
 }
 
+bool PgSQL_Connection_userinfo::set_dbname(const char* db) {
+	assert(db);
+	const int new_db_len = db ? strlen(db) : 0;
+	const int old_db_len = dbname ? strlen(dbname) : 0;
 
-bool PgSQL_Connection_userinfo::set_dbname(char *_new, int l) {
-	int _l=0;
-	if (dbname) {
-		_l=strlen(dbname); // bug fix for #609
-	}
-	if ((dbname==NULL) || (l != _l) || (strncmp(_new, dbname, l ))) {
+	if (old_db_len == 0 ||
+		old_db_len != new_db_len ||
+		strncmp(db, dbname, new_db_len)) {
 		if (dbname) {
 			free(dbname);
-			dbname =NULL;
 		}
-		if (l) {
-			dbname=(char *)malloc(l+1);
-			memcpy(dbname,_new,l);
-			dbname[l]=0;
-		} else {
-			int k=strlen(pgsql_thread___default_schema);
-			dbname =(char *)malloc(k+1);
-			memcpy(dbname,pgsql_thread___default_schema,k);
-			dbname[k]=0;
-		}
+		dbname = (char*)malloc(new_db_len + 1);
+		memcpy(dbname, db, new_db_len);
+		dbname[new_db_len] = 0;
 		compute_hash();
 		return true;
 	}
 	return false;
 }
-
-
 
 PgSQL_Connection_Placeholder::PgSQL_Connection_Placeholder() {
 	pgsql=NULL;

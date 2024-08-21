@@ -946,11 +946,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		userinfo->password = strdup((const char*)password);
 
 		const char* db = (*myds)->myconn->conn_params.get_value(PG_DATABASE);
-
-		if (db)
-			userinfo->set_dbname((char*)db, strlen(db));
-		else
-			userinfo->set_dbname(userinfo->username, strlen(userinfo->username));
+		userinfo->set_dbname(db ? db : userinfo->username);
 
 		const char* charset = (*myds)->myconn->conn_params.get_value(PG_CLIENT_ENCODING);
 

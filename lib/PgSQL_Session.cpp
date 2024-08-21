@@ -5070,6 +5070,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		l_free(pkt->size, pkt->ptr);
 		//if (client_myds->encrypted==false) {
 		if (client_myds->myconn->userinfo->dbname == NULL) {
+#if 0
 #ifdef PROXYSQLCLICKHOUSE
 			if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				if (strlen(default_schema) == 0) {
@@ -5078,7 +5079,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 			}
 #endif /* PROXYSQLCLICKHOUSE */
-			client_myds->myconn->userinfo->set_dbname(default_schema, strlen(default_schema));
+#endif
+			client_myds->myconn->userinfo->set_dbname(default_schema);
 		}
 		int free_users = 0;
 		int used_users = 0;
@@ -5405,7 +5407,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
 		__sync_fetch_and_add(&PgHGM->status.frontend_init_db, 1);
-		client_myds->myconn->userinfo->set_dbname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
+		//client_myds->myconn->userinfo->set_dbname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTrx = NumActiveTransactions();
@@ -5446,7 +5448,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			schemanameptr[strlen(schemanameptr) - 1] = '\0';
 			schemanameptr++;
 		}
-		client_myds->myconn->userinfo->set_dbname(schemanameptr, strlen(schemanameptr));
+		//client_myds->myconn->userinfo->set_dbname(schemanameptr);
 		free(schemaname);
 		if (mirror == false) {
 			RequestEnd(NULL);
