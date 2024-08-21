@@ -930,10 +930,12 @@ __run_query:
 				if (resultset->rows_count == 0) {
 					PROXY_TRACE();
 				}
+#ifdef TEST_GALERA_RANDOM
 				if (rand() % 20 == 0) {
 					// randomly add some latency on 5% of the traffic
 					sleep(2);
 				}
+#endif
 			}
 #endif // TEST_GALERA
 #ifdef TEST_GROUPREP
