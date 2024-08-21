@@ -292,6 +292,11 @@ typedef struct {
 	char * default_value;       // default value
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
+
+typedef struct {
+	int err;
+	const char* name;
+} var_track_err_st;
 #endif
 
 enum mysql_data_stream_status {
@@ -1414,10 +1419,9 @@ mysql_variable_st mysql_tracked_variables[] {
 	session_track_system_variables
 	session_track_transaction_info
 	*/
-
-
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];
+extern var_track_err_st perm_track_errs[];
 #endif // PROXYSQL_EXTERN
 #endif // MYSQL_TRACKED_VARIABLES

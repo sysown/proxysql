@@ -3,9 +3,11 @@
 #include <string>
 #include <vector>
 #include <map>
-#ifdef PARSERDEBUG
+#include <cassert>
+#include <utility> // for std::pair
+//#ifdef PARSERDEBUG
 #include <iostream>
-#endif
+//#endif
 
 #ifdef DEBUG
 //#define VALGRIND_ENABLE_ERROR_REPORTING
@@ -515,3 +517,148 @@ std::string SetParser::parse_character_set() {
 	return value4;
 }
 
+std::string SetParser::parse_USE_query() {
+#ifdef DEBUG
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
+#endif // DEBUG
+
+	re2::RE2::Options opt2(RE2::Quiet);
+	opt2.set_case_sensitive(false);
+	opt2.set_longest_match(false);
+
+	std::string dbname = remove_comments(query);
+	re2::RE2 re0("^\\s*", opt2);
+	re2::RE2::Replace(&dbname, re0, "");
+	if (dbname.size() >= 4) {
+		if (
+			strncasecmp(dbname.c_str(), "USE ",4) == 0
+			||
+			strncasecmp(dbname.c_str(), "USE`",4) == 0
+		) {
+			re2::RE2 re1("^USE\\s*", opt2);
+			re2::RE2::Replace(&dbname, re1, "");
+			re2::RE2 re2("\\s*$", opt2);
+			re2::RE2::Replace(&dbname, re2, "");
+			if (dbname[0] == '`') {
+				if (dbname.length() > 2) {
+					if (dbname[dbname.length()-1] == '`') {
+						// Remove the first character
+						dbname.erase(0, 1);
+						// Remove the last character
+						dbname.erase(dbname.length() - 1);
+						return dbname;
+					}
+				}
+			} else {
+				return dbname;
+			}
+		}
+	} else {
+		return "";
+	}
+
+	return "";
+}
+
+
+std::string SetParser::remove_comments(const std::string& q) {
+    std::string result = "";
+    bool in_multiline_comment = false;
+
+    for (size_t i = 0; i < query.size(); ++i) {
+        char current_char = query[i];
+
+        // Check for multiline comment start
+        if (current_char == '/' && i + 1 < query.size() && query[i + 1] == '*') {
+            in_multiline_comment = true;
+            i++; // Skip the '*'
+            continue;
+        }   
+
+        // Check for multiline comment end
+        if (in_multiline_comment && current_char == '*' && i + 1 < query.size() && query[i + 1] == '/') {
+            in_multiline_comment = false;
+            i++; // Skip the '/'
+            continue;
+        }   
+
+        // Skip characters inside multiline comment
+        if (in_multiline_comment) {
+            continue;
+        }
+
+        // Check for single-line comments
+        if (current_char == '#' || (current_char == '-' && i + 1 < query.size() && query[i + 1] == '-')) {
+            // Skip until the end of the line
+            while (i < query.size() && query[i] != '\n') {
+                i++;
+            }
+            continue;
+        }
+
+        // Append the character to the result if it's not a comment
+        result += current_char;
+    }
+
+    return result;
+}
+
+
+#ifdef DEBUG
+void SetParser::test_parse_USE_query() {
+
+	// Define vector of pairs (query, expected dbname)
+	std::vector<std::pair<std::string, std::string>> testCases = {
+		{"USE my_database",    "my_database"},                   // Basic Case
+		{"USE   my_database",  "my_database"},                   // Basic Case
+		{"USE   my_database ", "my_database"},                   // Basic Case
+		{"/* comment */USE dbname /* comment */",   "dbname"}, // With Comments
+		{"/* comment */   USE   dbname",            "dbname"}, // With Comments
+		{"USE    dbname           /* comment */",   "dbname"}, // With Comments
+		{"/* comment */USE `dbname` /* comment */", "dbname"}, // With backtick
+		{"/* comment */USE `dbname`/* comment */",  "dbname"}, // With backtick
+		{"/* comment */USE`dbname` /* comment */",  "dbname"}, // With backtick
+		{"/* comment */USE `dbname`/* comment */",  "dbname"}, // With backtick
+		{"/* comment\nmultiline comment */USE dbname /* comment */", "dbname"}, // Multiline Comment
+		{"/* comment */USE dbname # comment",       "dbname"}, // Hash Comment
+		{"/* comment */USE dbname -- comment",      "dbname"}, // Double Dash Comment
+		{"/* comment */USE dbname   # comment",     "dbname"}, // Hash Comment
+		{"/* comment */USE dbname    -- comment",   "dbname"}, // Double Dash Comment
+		{"USE dbname   # comment",                  "dbname"}, // Hash Comment
+		{"USE dbname    -- comment",                "dbname"}, // Double Dash Comment
+		{"SELECT * FROM my_table", ""}, // No match
+		{"/*+ placeholder_comment */ USE test_use_comment", "test_use_comment"},
+
+		{"USE /*+ placeholder_comment */ `test_use_comment-a1`",  "test_use_comment-a1"},
+		{"USE /*+ placeholder_comment */   `test_use_comment_1`", "test_use_comment_1"},
+		{"USE/*+ placeholder_comment */ `test_use_comment_2`",    "test_use_comment_2"},
+		{"USE /*+ placeholder_comment */`test_use_comment_3`",    "test_use_comment_3"},
+		{"USE /*+ placeholder_comment */   test_use_comment_4",   "test_use_comment_4"},
+		{"USE/*+ placeholder_comment */ test_use_comment_5",      "test_use_comment_5"},
+		{"USE /*+ placeholder_comment */test_use_comment_6",      "test_use_comment_6"},
+		{"USE /*+ placeholder_comment */   `test_use_comment-1`", "test_use_comment-1"},
+		{"use my_database", "my_database"},
+		{"/* comment */  use dbname -- comment",        "dbname"},
+		{"/* comment\nmultiline comment */USE dbname /* comment\nmultiline comment */", "dbname"}, // Multiline Comment
+
+		{"USE/*+ placeholder_comment */ `test_use_comment-2`",      "test_use_comment-2"},
+		{"USE /*+ placeholder_comment */`test_use_comment-3`",      "test_use_comment-3"},
+		{"/*+ placeholder_comment */USE      `test_use_comment-4`", "test_use_comment-4"},
+		{"USE/*+ placeholder_comment */`test_use_comment-5`",       "test_use_comment-5"},
+		{"/* comment */USE`test_use_comment-6`",                    "test_use_comment-6"},
+		{"USE`test_use_comment-7`",                                 "test_use_comment-7"},
+	};
+
+	// Run tests for each pair
+	for (const auto& p : testCases) {
+		set_query(p.first);
+		std::string dbname = parse_USE_query();
+		if (dbname != p.second) {
+			// we call parse_USE_query() again just to make it easier to create a breakpoint
+			std::string s = parse_USE_query();
+			assert(s == p.second);
+		}
+	}
+
+}
+#endif // DEBUG

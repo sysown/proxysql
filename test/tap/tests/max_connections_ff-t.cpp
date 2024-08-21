@@ -18,14 +18,12 @@
 
 #include <cstring>
 #include <chrono>
-#include <iostream>
 #include <string>
 #include <stdio.h>
 #include <vector>
 #include <unistd.h>
 
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "json.hpp"
 
@@ -66,10 +64,10 @@ int set_max_conns(MYSQL* proxy_admin, int max_conns, int hg_id) {
 	string max_conn_query {};
 	string_format("UPDATE mysql_servers SET max_connections=%d WHERE hostgroup_id=%d", max_conn_query, max_conns, hg_id);
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), max_conn_query.c_str());
+	diag("Executing query `%s`...", max_conn_query.c_str());
 	MYSQL_QUERY(proxy_admin, max_conn_query.c_str());
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL SERVERS TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL SERVERS TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	return EXIT_SUCCESS;
@@ -79,10 +77,10 @@ int set_srv_conn_to(MYSQL* proxy_admin, int connect_to) {
 	string srv_conn_to_query {};
 	string_format("SET mysql-connect_timeout_server_max=%d", srv_conn_to_query, connect_to);
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), srv_conn_to_query.c_str());
+	diag("Executing query `%s`...", srv_conn_to_query.c_str());
 	MYSQL_QUERY(proxy_admin, srv_conn_to_query.c_str());
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	return EXIT_SUCCESS;
@@ -93,10 +91,10 @@ int set_ff_for_user(MYSQL* proxy_admin, const string& user, bool ff) {
 	string upd_ff_query {};
 	string_format("UPDATE mysql_users SET fast_forward=%d WHERE username='%s'", upd_ff_query, ff, user.c_str());
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), upd_ff_query.c_str());
+	diag("Executing query `%s`...", upd_ff_query.c_str());
 	MYSQL_QUERY(proxy_admin, upd_ff_query.c_str());
 
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
 
 	return EXIT_SUCCESS;
@@ -264,9 +262,9 @@ cleanup:
 
 	string reset_conn_to_srv {};
 	string_format("SET mysql-connect_timeout_server_max=%s", reset_conn_to_srv, str_connect_timeout_server_max.c_str());
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), reset_conn_to_srv.c_str());
+	diag("Executing query `%s`...", reset_conn_to_srv.c_str());
 	MYSQL_QUERY(proxy_admin, reset_conn_to_srv.c_str());
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	diag("Executing query `%s`...", "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	return EXIT_SUCCESS;
@@ -313,7 +311,7 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 
 	// Reset all the current stats for 'stats_mysql_connection_pool'
 	my_err = mysql_query(proxy_admin, reset_connpool_stats);
-	diag("%s: Executing query `%s` in new 'fast_forward' conn...", tap_curtime().c_str(), reset_connpool_stats);
+	diag("Executing query `%s` in new 'fast_forward' conn...", reset_connpool_stats);
 	if (my_err) {
 		diag("Query '%s' failed", reset_connpool_stats);
 		res = EXIT_FAILURE;
@@ -333,7 +331,7 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 		MYSQL* trx_conn = trx_conns.back();
 
 		diag("Freeing ONE connection by committing the transaction...");
-		diag("%s: Executing query `%s`...", tap_curtime().c_str(), "COMMIT");
+		diag("Executing query `%s`...", "COMMIT");
 		my_err = mysql_query(trx_conn, "COMMIT");
 		if (my_err) {
 			diag(
@@ -375,7 +373,7 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 		}
 
 		// 3.1 Issue a simple query into the new 'fast_forward' connection
-		diag("%s: Executing query `%s` in new 'fast_forward' conn...", tap_curtime().c_str(), "DO 1");
+		diag("Executing query `%s` in new 'fast_forward' conn...", "DO 1");
 		int q_my_err = mysql_query(proxy_ff, "DO 1");
 		if (q_my_err) {
 			diag(

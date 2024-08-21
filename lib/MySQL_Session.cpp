@@ -2566,6 +2566,8 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					(myerr == 1193) // variable is not found
 					||
 					(myerr == 1651) // Query cache is disabled
+					||
+					(is_perm_track_err(myerr, var_name)) // Special permitted tracking errors (~= '1193')
 				) {
 					int idx = SQL_NAME_LAST_HIGH_WM;
 					for (int i=0; i<SQL_NAME_LAST_HIGH_WM; i++) {
@@ -5692,30 +5694,27 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
 		string nq=string((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
-		RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)" ");
-		char *sn_tmp = (char *)nq.c_str();
-		while (sn_tmp < ( nq.c_str() + nq.length() - 4 ) && *sn_tmp == ' ')
-			sn_tmp++;
-		//char *schemaname=strdup(nq.c_str()+4);
-		char *schemaname=strdup(sn_tmp+3);
-		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
-		// handle cases like "USE `schemaname`
-		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
-			schemanameptr[strlen(schemanameptr)-1]='\0';
-			schemanameptr++;
-		}
-		client_myds->myconn->userinfo->set_schemaname(schemanameptr,strlen(schemanameptr));
-		free(schemaname);
-		if (mirror==false) {
+		SetParser parser(nq);
+		string schemaname = parser.parse_USE_query();
+		if (schemaname != "") {
+			client_myds->myconn->userinfo->set_schemaname((char *)schemaname.c_str(),schemaname.length());
+			if (mirror==false) {
+				RequestEnd(NULL);
+			}
+			l_free(pkt->size,pkt->ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			unsigned int nTrx=NumActiveTransactions();
+			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+			GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
+		} else {
+			l_free(pkt->size,pkt->ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			std::string msg = "Unable to parse: " + nq;
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000", msg.c_str());
 			RequestEnd(NULL);
 		}
-		l_free(pkt->size,pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		unsigned int nTrx=NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
