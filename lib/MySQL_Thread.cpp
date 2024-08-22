@@ -5112,30 +5112,40 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					}
 				}
 
-                                if (sess->mirror==false) {
-                                        switch (sess->client_myds->client_addr->sa_family) {
-                                        case AF_INET: {
-                                                struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
-                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-                                                pta[4] = strdup(buf);
-                                                sprintf(port, "%d", ntohs(ipv4->sin_port));
-                                                pta[5] = strdup(port);
-                                                break;
-                                                }
-                                        case AF_INET6: {
-                                                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
-                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-                                                pta[4] = strdup(buf);
-                                                sprintf(port, "%d", ntohs(ipv6->sin6_port));
-                                                pta[5] = strdup(port);
-                                                break;
-                                                }
-                                        default:
-                                                pta[4] = strdup("localhost");
-                                                pta[5] = NULL;
-                                                break;
-                                        }
-                                } else {
+				if (sess->mirror==false) {
+					switch (sess->client_myds->client_addr->sa_family) {
+						case AF_INET:
+							if (sess->client_myds->addr.addr != NULL) {
+								pta[4] = strdup(sess->client_myds->addr.addr);
+								sprintf(port, "%d", sess->client_myds->addr.port);
+								pta[5] = strdup(port);
+							} else {
+								struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
+								inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+								pta[4] = strdup(buf);
+								sprintf(port, "%d", ntohs(ipv4->sin_port));
+								pta[5] = strdup(port);
+							}
+							break;
+						case AF_INET6:
+							if (sess->client_myds->addr.addr != NULL) {
+								pta[4] = strdup(sess->client_myds->addr.addr);
+								sprintf(port, "%d", sess->client_myds->addr.port);
+								pta[5] = strdup(port);
+							} else {
+								struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
+								inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+								pta[4] = strdup(buf);
+								sprintf(port, "%d", ntohs(ipv6->sin6_port));
+								pta[5] = strdup(port);
+							}
+							break;
+						default:
+							pta[4] = strdup("localhost");
+							pta[5] = NULL;
+							break;
+					}
+				} else {
 					pta[4] = strdup("mirror_internal");
 					pta[5] = NULL;
 				}
@@ -5151,28 +5161,28 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					int rc;
 					rc=getsockname(mc->fd, &addr, &addr_len);
 					if (rc==0) {
-                                        switch (addr.sa_family) { 
-                                                case AF_INET: {
-                                                        struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
-                                                        inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-                                                        pta[7] = strdup(buf);
-                                                        sprintf(port, "%d", ntohs(ipv4->sin_port));
-                                                        pta[8] = strdup(port);
-                                                        break;
-                                                        }
-                                                case AF_INET6: {
-                                                        struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
-                                                        inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-                                                        pta[7] = strdup(buf);
-                                                        sprintf(port, "%d", ntohs(ipv6->sin6_port));
-                                                        pta[8] = strdup(port);
-                                                        break;
-                                                        }
-                                                default:
-                                                        pta[7] = strdup("localhost");
-                                                        pta[8] = NULL;
-                                                        break;
-                                                }
+						switch (addr.sa_family) {
+							case AF_INET: {
+								struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
+								inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+								pta[7] = strdup(buf);
+								sprintf(port, "%d", ntohs(ipv4->sin_port));
+								pta[8] = strdup(port);
+								break;
+								}
+							case AF_INET6: {
+								struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
+								inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+								pta[7] = strdup(buf);
+								sprintf(port, "%d", ntohs(ipv6->sin6_port));
+								pta[8] = strdup(port);
+								break;
+								}
+							default:
+								pta[7] = strdup("localhost");
+								pta[8] = NULL;
+								break;
+						}
 					} else {
 						pta[7]=NULL;
 						pta[8]=NULL;
