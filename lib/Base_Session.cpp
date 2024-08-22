@@ -316,7 +316,7 @@ void Base_Session<S, DS, B, T>::return_proxysql_internal(PtrSize_t* pkt) {
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1064, (char*)"42000", (char*)"Unknown PROXYSQL INTERNAL command", true);
 	}
 	else if constexpr (std::is_same_v<S, PgSQL_Session>) {
-		if (pkt->size == (5 + 2 + l) && strncasecmp((char*)"PROXYSQL INTERNAL SESSION", (char*)pkt->ptr + 5, l) == 0) {
+		if (pkt->size >= (5 + 1 + l) && strncasecmp((char*)"PROXYSQL INTERNAL SESSION", (char*)pkt->ptr + 5, l) == 0) {
 			json j;
 			generate_proxysql_internal_session_json(j);
 			std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
