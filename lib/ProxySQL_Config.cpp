@@ -1509,7 +1509,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 			const Setting& server = pgsql_servers[i];
 			std::string address;
 			std::string status = "ONLINE";
-			int port = 3306;
+			int port = 5432;
 			int gtid_port = 0;
 			int hostgroup;
 			int weight = 1;
