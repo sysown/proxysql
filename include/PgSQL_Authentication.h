@@ -17,7 +17,6 @@ struct _scram_keys {
 typedef struct _pgsql_account_details_t {
 	char* username;
 	char* password;
-	char* default_schema;
 	char* attributes;
 	char* comment;
 	void* sha1_pass;
@@ -27,7 +26,6 @@ typedef struct _pgsql_account_details_t {
 	int max_connections;
 	int num_connections_used;
 	bool use_ssl;
-	bool schema_locked;
 	bool transaction_persistent;
 	bool fast_forward;
 	bool __frontend;	// this is used only during the dump
@@ -76,12 +74,12 @@ class PgSQL_Authentication {
 	public:
 	PgSQL_Authentication();
 	~PgSQL_Authentication();
-	bool add(char *username, char *password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment);
+	bool add(char *username, char *password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment);
 	bool del(char *username, enum cred_username_type usertype, bool set_lock=true);
 	bool reset();
 	void print_version();
 	bool exists(char *username);
-	char * lookup(char *username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes);
+	char * lookup(char *username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes);
 	int dump_all_users(pgsql_account_details_t***, bool _complete=true);
 	int increase_frontend_user_connections(char *username, int *mc=NULL);
 	void decrease_frontend_user_connections(char *username);
@@ -94,8 +92,8 @@ class PgSQL_Authentication {
 	 * @brief Computes the checksum for the 'pgsql_users' table contained in the supplied resultset.
 	 *  It's UNSAFE to call this function with another resultset than the specified in @param doc.
 	 * @param resultset Assumed to be the result of hte following query against the Admin interface:
-	 *   - '"SELECT username, password, active, use_ssl, default_hostgroup, default_schema,
-	 *     schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections,
+	 *   - '"SELECT username, password, active, use_ssl, default_hostgroup,
+	 *     transaction_persistent, fast_forward, backend, frontend, max_connections,
 	 *     attributes, comment FROM runtime_pgsql_users"'
 	 *   The order isn't relevant in the query itself because ordering is performed while processing.
 	 * @param pgsql_users A 'unique_ptr' to be filled with the 'frontend' and 'backend' users found in the

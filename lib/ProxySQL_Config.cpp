@@ -1633,15 +1633,13 @@ int ProxySQL_Config::Write_PgSQL_Users_to_configfile(std::string& data) {
 				addField(data, "active", r->fields[2], "");
 				addField(data, "use_ssl", r->fields[3], "");
 				addField(data, "default_hostgroup", r->fields[4], "");
-				addField(data, "default_schema", r->fields[5]);
-				addField(data, "schema_locked", r->fields[6], "");
-				addField(data, "transaction_persistent", r->fields[7], "");
-				addField(data, "fast_forward", r->fields[8], "");
-				addField(data, "backend", r->fields[9], "");
-				addField(data, "frontend", r->fields[10], "");
-				addField(data, "max_connections", r->fields[11], "");
-				addField(data, "attributes", r->fields[12]);
-				addField(data, "comment", r->fields[13]);
+				addField(data, "transaction_persistent", r->fields[5], "");
+				addField(data, "fast_forward", r->fields[6], "");
+				addField(data, "backend", r->fields[7], "");
+				addField(data, "frontend", r->fields[8], "");
+				addField(data, "max_connections", r->fields[9], "");
+				addField(data, "attributes", r->fields[10]);
+				addField(data, "comment", r->fields[11]);
 				data += "\t}";
 				isNext = true;
 			}
@@ -1664,7 +1662,7 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 	int i;
 	int rows = 0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char* q = (char*)"INSERT OR REPLACE INTO pgsql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s','%s')";
+	char* q = (char*)"INSERT OR REPLACE INTO pgsql_users (username, password, active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, %d, %d, %d, '%s','%s')";
 	for (i = 0; i < count; i++) {
 		const Setting& user = pgsql_users[i];
 		std::string username;
@@ -1672,8 +1670,6 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 		int active = 1;
 		int use_ssl = 0;
 		int default_hostgroup = 0;
-		std::string default_schema = "";
-		int schema_locked = 0;
 		int transaction_persistent = 1;
 		int fast_forward = 0;
 		int max_connections = 10000;
@@ -1688,8 +1684,6 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 		user.lookupValue("active", active);
 		user.lookupValue("use_ssl", use_ssl);
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
-		user.lookupValue("default_schema", default_schema);
-		user.lookupValue("schema_locked", schema_locked);
 		user.lookupValue("transaction_persistent", transaction_persistent);
 		user.lookupValue("fast_forward", fast_forward);
 		user.lookupValue("max_connections", max_connections);
@@ -1698,7 +1692,7 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 		char* o1 = strdup(comment.c_str());
 		char* o = escape_string_single_quotes(o1, false);
 		char* query = (char*)malloc(strlen(q) + strlen(username.c_str()) + strlen(password.c_str()) + strlen(o) + strlen(attributes.c_str()) + 128);
-		sprintf(query, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
+		sprintf(query, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
