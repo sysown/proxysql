@@ -515,7 +515,6 @@ public:
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
-		int reset_connection_algorithm;
 		int auto_increment_delay_multiplex;
 		int auto_increment_delay_multiplex_timeout_ms;
 		int long_query_time;
@@ -533,7 +532,6 @@ public:
 		uint32_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
-		int connpoll_reset_queue_length;
 		char* eventslog_filename;
 		int eventslog_filesize;
 		int eventslog_default_log;

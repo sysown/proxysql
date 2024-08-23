@@ -118,6 +118,12 @@ enum ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CLOSE_START,
 	ASYNC_CLOSE_CONT,
 	ASYNC_CLOSE_END,
+	ASYNC_RESET_SESSION_START,
+	ASYNC_RESET_SESSION_CONT,
+	ASYNC_RESET_SESSION_END,
+	ASYNC_RESET_SESSION_SUCCESSFUL,
+	ASYNC_RESET_SESSION_FAILED,
+	ASYNC_RESET_SESSION_TIMEOUT,
 
 	ASYNC_IDLE
 };
@@ -252,6 +258,7 @@ enum session_status {
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
 	RESETTING_CONNECTION,
+	RESETTING_CONNECTION_V2,
 	SETTING_INIT_CONNECT,
 	SETTING_LDAP_USER_VARIABLE,
 	SETTING_ISOLATION_LEVEL,
@@ -850,7 +857,6 @@ __thread bool pgsql_thread___connection_warming;
 __thread bool pgsql_thread___log_unhealthy_connections;
 __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 __thread int pgsql_thread___throttle_ratio_server_to_client;
-__thread int pgsql_thread___reset_connection_algorithm;
 __thread int pgsql_thread___shun_on_failures;
 __thread int pgsql_thread___shun_recovery_time_sec;
 __thread int pgsql_thread___hostgroup_manager_verbose;
@@ -1099,7 +1105,6 @@ extern __thread bool pgsql_thread___connection_warming;
 extern __thread bool pgsql_thread___log_unhealthy_connections;
 extern __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 extern __thread int pgsql_thread___throttle_ratio_server_to_client;
-extern __thread int pgsql_thread___reset_connection_algorithm;
 extern __thread int pgsql_thread___shun_on_failures;
 extern __thread int pgsql_thread___shun_recovery_time_sec;
 extern __thread int pgsql_thread___hostgroup_manager_verbose;

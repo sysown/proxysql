@@ -308,7 +308,9 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a : libssl/openssl/libssl.a
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
 	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
-	cd postgresql/postgresql && LD_LIBRARY_PATH="$(shell pwd)/libssl/openssl" ./configure --with-ssl=openssl --with-includes="$(shell pwd)/libssl/openssl/include/" --with-libraries="$(shell pwd)/libssl/openssl/" --without-readline 
+	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch
+	#cd postgresql/postgresql && LD_LIBRARY_PATH="$(shell pwd)/libssl/openssl" ./configure --with-ssl=openssl --with-includes="$(shell pwd)/libssl/openssl/include/" --with-libraries="$(shell pwd)/libssl/openssl/" --without-readline --enable-debug  CFLAGS="-ggdb -O0 -fno-omit-frame-pointer" CPPFLAGS="-g -O0"
+	cd postgresql/postgresql && LD_LIBRARY_PATH="$(shell pwd)/libssl/openssl" ./configure --with-ssl=openssl --with-includes="$(shell pwd)/libssl/openssl/include/" --with-libraries="$(shell pwd)/libssl/openssl/" --without-readline
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
 	#cd postgresql/postgresql && CC=${CC} CXX=${CXX} ${MAKE} -f src/interfaces/libpq/Makefile all
 

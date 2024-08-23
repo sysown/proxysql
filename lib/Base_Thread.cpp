@@ -373,19 +373,21 @@ template<typename T, typename DS>
 bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsigned int n) {
 	T* thr = static_cast<T*>(this);
 	if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
-		unsigned int buffered_data=0;
-		buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
-		buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
 		// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
 		// but assuming that client isn't completely blocked, we will stop checking for data
 		// only at mysql_thread___threshold_resultset_size * 4
 		if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+			unsigned int buffered_data = 0;
+			buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
+			buffered_data += myds->sess->client_myds->resultset->len * PGSQL_RESULTSET_BUFLEN;
 			if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 4) {
 				thr->mypolls.fds[n].events = 0;
 				return true;
 			}
-		}
-		else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+		} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+			unsigned int buffered_data = 0;
+			buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
+			buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
 			if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size * 4) {
 				thr->mypolls.fds[n].events = 0;
 				return true;

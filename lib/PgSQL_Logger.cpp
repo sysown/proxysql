@@ -732,7 +732,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 
 	PgSQL_Event me(let,
-		sess->thread_session_id,ui->username,ui->schemaname,
+		sess->thread_session_id,ui->username,ui->dbname,
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
 		query_digest,
@@ -903,8 +903,8 @@ void PgSQL_Logger::log_audit_entry(log_event_type _et, PgSQL_Session *sess, PgSQ
 		if (ui->username) {
 			un = ui->username;
 		}
-		if (ui->schemaname) {
-			sn = ui->schemaname;
+		if (ui->dbname) {
+			sn = ui->dbname;
 		}
 	}
 	PgSQL_Event me(_et, sess->thread_session_id,

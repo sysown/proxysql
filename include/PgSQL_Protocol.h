@@ -47,6 +47,8 @@
 /* new style V3 packet header len - type:1b, len:4b */
 #define NEW_HEADER_LEN  5
 
+#define PGSQL_RESULTSET_BUFLEN		(16 * 1024)
+
 class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
@@ -198,6 +200,7 @@ public:
 	void init(PgSQL_Protocol* _proto, PgSQL_Data_Stream* _myds, PgSQL_Connection* _conn);
 	unsigned int add_row_description(const PGresult* result);
 	unsigned int add_row(const PGresult* result);
+	unsigned int add_row(const PSresult* result);
 	unsigned int add_command_completion(const PGresult* result);
 	unsigned int add_error(const PGresult* result);
 	unsigned int add_empty_query_response(const PGresult* result);
@@ -213,7 +216,7 @@ public:
 
 private:
 	void buffer_init();
-	inline unsigned int buffer_available_capacity() const { return (RESULTSET_BUFLEN - buffer_used); }
+	inline unsigned int buffer_available_capacity() const { return (PGSQL_RESULTSET_BUFLEN - buffer_used); }
 	unsigned char* buffer_reserve_space(unsigned int size);
 	void buffer_to_PSarrayOut();
 	void reset();
@@ -261,6 +264,7 @@ public:
 	unsigned int copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_empty_query_response_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_ready_status_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGTransactionStatusType txn_status);
+	unsigned int copy_buffer_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PSresult* result);
 
 private:
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);

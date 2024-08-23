@@ -383,7 +383,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"query_processor_regex",
 	(char*)"set_query_lock_on_hostgroup",
 	(char*)"set_parser_algorithm",
-	(char*)"reset_connection_algorithm",
 	(char*)"auto_increment_delay_multiplex",
 	(char*)"auto_increment_delay_multiplex_timeout_ms",
 	(char*)"long_query_time",
@@ -433,7 +432,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"ldap_user_variable",
 	(char*)"add_ldap_user_comment",
 	(char*)"default_session_track_gtids",
-	(char*)"connpoll_reset_queue_length",
 	(char*)"min_num_servers_lantency_awareness",
 	(char*)"aurora_max_lag_ms_only_read_from_replicas",
 	(char*)"stats_time_backend_query",
@@ -992,7 +990,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_processor_regex = 1;
 	variables.set_query_lock_on_hostgroup = 1;
 	variables.set_parser_algorithm = 2; // before 2.6.0 this was 1
-	variables.reset_connection_algorithm = 2;
 	variables.auto_increment_delay_multiplex = 5;
 	variables.auto_increment_delay_multiplex_timeout_ms = 10000;
 	variables.long_query_time = 1000;
@@ -1039,7 +1036,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_digests_track_hostname = false;
 	variables.query_digests_keep_comment = false;
 	variables.parse_failure_logs_digest = false;
-	variables.connpoll_reset_queue_length = 50;
 	variables.min_num_servers_lantency_awareness = 1000;
 	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
 	variables.stats_time_backend_query = false;
@@ -2127,12 +2123,10 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["throttle_max_bytes_per_second_to_client"] = make_tuple(&variables.throttle_max_bytes_per_second_to_client, 0, 2147483647, false);
 		VariablesPointers_int["throttle_ratio_server_to_client"] = make_tuple(&variables.throttle_ratio_server_to_client, 0, 100, false);
 		// backend management
-		VariablesPointers_int["connpoll_reset_queue_length"] = make_tuple(&variables.connpoll_reset_queue_length, 0, 10000, false);
 		VariablesPointers_int["default_max_latency_ms"] = make_tuple(&variables.default_max_latency_ms, 0, 20 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["free_connections_pct"] = make_tuple(&variables.free_connections_pct, 0, 100, false);
 		VariablesPointers_int["poll_timeout"] = make_tuple(&variables.poll_timeout, 10, 20000, false);
 		VariablesPointers_int["poll_timeout_on_failure"] = make_tuple(&variables.poll_timeout_on_failure, 10, 20000, false);
-		VariablesPointers_int["reset_connection_algorithm"] = make_tuple(&variables.reset_connection_algorithm, 1, 2, false);
 		VariablesPointers_int["shun_on_failures"] = make_tuple(&variables.shun_on_failures, 0, 10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"] = make_tuple(&variables.shun_recovery_time_sec, 0, 3600 * 24 * 365, false);
 		VariablesPointers_int["unshun_algorithm"] = make_tuple(&variables.unshun_algorithm, 0, 1, false);
@@ -3734,7 +3728,6 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___log_unhealthy_connections = (bool)GloPTH->get_variable_int((char*)"log_unhealthy_connections");
 	pgsql_thread___throttle_max_bytes_per_second_to_client = GloPTH->get_variable_int((char*)"throttle_max_bytes_per_second_to_client");
 	pgsql_thread___throttle_ratio_server_to_client = GloPTH->get_variable_int((char*)"throttle_ratio_server_to_client");
-	pgsql_thread___reset_connection_algorithm = GloPTH->get_variable_int((char*)"reset_connection_algorithm");
 	pgsql_thread___shun_on_failures = GloPTH->get_variable_int((char*)"shun_on_failures");
 	pgsql_thread___shun_recovery_time_sec = GloPTH->get_variable_int((char*)"shun_recovery_time_sec");
 	pgsql_thread___hostgroup_manager_verbose = GloPTH->get_variable_int((char*)"hostgroup_manager_verbose");
@@ -4549,8 +4542,8 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 					else {
 						pta[2] = strdup("unauthenticated user");
 					}
-					if (ui->schemaname) {
-						pta[3] = strdup(ui->schemaname);
+					if (ui->dbname) {
+						pta[3] = strdup(ui->dbname);
 					}
 				}
 
@@ -4681,6 +4674,9 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 					break;
 				case RESETTING_CONNECTION:
 					pta[11] = strdup("Resetting connection");
+					break;
+				case RESETTING_CONNECTION_V2:
+					pta[11] = strdup("Resetting connection V2");
 					break;
 				case CHANGING_SCHEMA:
 					pta[11] = strdup("InitDB");
@@ -5176,51 +5172,47 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 	PgSQL_Connection* c = NULL;
 	for (i = 0; i < cached_connections->len; i++) {
 		c = (PgSQL_Connection*)cached_connections->index(i);
-		if (c->parent->myhgc->hid == _hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
+		if (c->parent->myhgc->hid == _hid && sess->client_myds->myconn->has_same_connection_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used
 				(gtid_uuid && find(parents.begin(), parents.end(), c->parent) == parents.end()) // the server is currently not excluded
 				) {
 				PgSQL_Connection* client_conn = sess->client_myds->myconn;
-				if (c->requires_CHANGE_USER(client_conn) == false) { // CHANGE_USER is not required
-					char* schema = client_conn->userinfo->schemaname;
-					if (strcmp(c->userinfo->schemaname, schema) == 0) { // same schema
-						unsigned int not_match = 0; // number of not matching session variables
-						c->number_of_matching_session_variables(client_conn, not_match);
-						if (not_match == 0) { // all session variables match
-							if (gtid_uuid) { // gtid_uuid is used
-								// we first check if we already excluded this parent (MySQL Server)
-								PgSQL_SrvC* mysrvc = c->parent;
-								std::vector<PgSQL_SrvC*>::iterator it;
-								it = find(parents.begin(), parents.end(), mysrvc);
-								if (it != parents.end()) {
-									// we didn't exclude this server (yet?)
-									bool gtid_found = false;
+				if (c->requires_RESETTING_CONNECTION(client_conn) == false) { // RESETTING CONNECTION is not required
+					unsigned int not_match = 0; // number of not matching session variables
+					c->number_of_matching_session_variables(client_conn, not_match);
+					if (not_match == 0) { // all session variables match
+						if (gtid_uuid) { // gtid_uuid is used
+							// we first check if we already excluded this parent (MySQL Server)
+							PgSQL_SrvC* mysrvc = c->parent;
+							std::vector<PgSQL_SrvC*>::iterator it;
+							it = find(parents.begin(), parents.end(), mysrvc);
+							if (it != parents.end()) {
+								// we didn't exclude this server (yet?)
+								bool gtid_found = false;
 #if 0
-									gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
+								gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
 #endif // 0
-									if (gtid_found) { // this server has the correct GTID
-										c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
-										return c;
-									}
-									else {
-										parents.push_back(mysrvc); // stop evaluating this server
-									}
+								if (gtid_found) { // this server has the correct GTID
+									c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
+									return c;
+								} else {
+									parents.push_back(mysrvc); // stop evaluating this server
 								}
 							}
-							else { // gtid_is not used
-								if (max_lag_ms >= 0) {
-									if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
-										status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
-										continue;
-									}
+						} else { // gtid_is not used
+							if (max_lag_ms >= 0) {
+								if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
+									status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
+									continue;
 								}
-								// return the connection
-								c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
-								return c;
 							}
+							// return the connection
+							c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
+							return c;
 						}
 					}
+					
 				}
 			}
 		}

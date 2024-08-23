@@ -179,6 +179,8 @@ static const Param_Name_Validation* PgSQL_Param_Name_Accepted_Values[PG_PARAM_SI
 #define PG_EVENT_NONE	 0x00
 #define PG_EVENT_READ	 0x01
 #define PG_EVENT_WRITE	 0x02
+#define PG_EVENT_EXCEPT  0x04
+#define PG_EVENT_TIMEOUT 0x08
 
 class PgSQL_Conn_Param {
 private:
@@ -278,7 +280,10 @@ class PgSQL_Connection_userinfo {
 	uint64_t hash;
 	char *username;
 	char *password;
-	char *schemaname;
+	union {
+		char* dbname;
+		char* schemaname; // temporary fix. To avoid changes in Base_Session and Query_Processor
+	};
 	char *sha1_pass;
 	char *fe_username;
 	// TODO POSGRESQL: add client and server scram keys
@@ -286,7 +291,7 @@ class PgSQL_Connection_userinfo {
 	~PgSQL_Connection_userinfo();
 	void set(char *, char *, char *, char *);
 	void set(PgSQL_Connection_userinfo *);
-	bool set_schemaname(char *, int);
+	bool set_dbname(char *, int);
 };
 
 class PgSQL_Connection_Placeholder {
@@ -398,18 +403,10 @@ class PgSQL_Connection_Placeholder {
 	void set_status_sql_log_bin0(bool);
 	bool get_status(uint32_t status_flag);
 	bool get_status_sql_log_bin0();
-	void connect_start();
-	void connect_cont(short event);
-	void change_user_start();
-	void change_user_cont(short event);
-	void ping_start();
-	void ping_cont(short event);
 	void set_autocommit_start();
 	void set_autocommit_cont(short event);
 	void set_names_start();
 	void set_names_cont(short event);
-	void real_query_start();
-	void real_query_cont(short event);
 #ifndef PROXYSQL_USE_RESULT
 	void store_result_start();
 	void store_result_cont(short event);
@@ -419,17 +416,11 @@ class PgSQL_Connection_Placeholder {
 	void set_option_start();
 	void set_option_cont(short event);
 	void set_query(char *stmt, unsigned long length);
-	PG_ASYNC_ST handler(short event);
-	void next_event(PG_ASYNC_ST new_st);
-
-	int async_connect(short event);
-	int async_change_user(short event);
-	int async_select_db(short event);
+	
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, unsigned int nr);
 	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
-	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
-	int async_ping(short event);
+
 	int async_set_option(short event, bool mask);
 
 	void stmt_prepare_start();
@@ -468,31 +459,21 @@ class PgSQL_Connection_Placeholder {
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_tracked_options(const PgSQL_Connection *c);
-	bool requires_CHANGE_USER(const PgSQL_Connection *client_conn);
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return pgsql ? pgsql->thread_id : 0; }
 
-private:
-	// these will be removed
-	MySQL_ResultSet *MyRS;
-	MySQL_ResultSet *MyRS_reuse;
 
-	bool IsServerOffline();
-	/**
- * @brief Returns if the connection is **for sure**, known to be in an active transaction.
- * @details The function considers two things:
- *   1. If 'server_status' is flagged with 'SERVER_STATUS_IN_TRANS'.
- *   2. If the connection has 'autcommit=0' and 'autocommit_false_is_transaction' is set.
- * @return True if the connection is known to be in a transaction, or equivalent state.
- */
-	bool IsKnownActiveTransaction();
-	/**
-	 * @brief Returns if the connection is in a **potential transaction**.
-	 * @details This function is a more strict version of 'IsKnownActiveTransaction', which also considers
-	 *  connections which holds 'unknown_transaction_status' as potentially active transactions.
-	 * @return True if the connection is in potentially in an active transaction.
-	 */
-	bool IsActiveTransaction();
+	/********* These will be removed **********/
+	MySQL_ResultSet* MyRS;
+	MySQL_ResultSet* MyRS_reuse;
+	
+	// these method should not be called from this class
+	int async_select_db(short event) { assert(0); return -1; }
+	bool IsServerOffline() { assert(0); return false; }
+	bool IsKnownActiveTransaction() { assert(0); return false; }
+	bool IsActiveTransaction() { assert(0); return false; }
+	PG_ASYNC_ST handler(short event) { assert(0); return ASYNC_IDLE; }
+	/********* End of remove ******************/
 };
 
 class PgSQL_Connection : public PgSQL_Connection_Placeholder {
@@ -507,10 +488,15 @@ public:
 	void query_cont(short event);
 	void fetch_result_start();
 	void fetch_result_cont(short event);
+	void reset_session_start();
+	void reset_session_cont(short event);
+	
 	int  async_connect(short event);
 	int  async_set_autocommit(short event, bool ac);
 	int  async_query(short event, char* stmt, unsigned long length, MYSQL_STMT** _stmt = NULL, stmt_execute_metadata_t* _stmt_meta = NULL);
 	int  async_ping(short event);
+	int  async_reset_session(short event);
+	
 	void next_event(PG_ASYNC_ST new_st);
 	bool IsAutoCommit();
 	bool is_connected() const;
@@ -522,6 +508,10 @@ public:
 	bool IsServerOffline();
 	
 	bool is_connection_in_reusable_state() const;
+
+	bool requires_RESETTING_CONNECTION(const PgSQL_Connection* client_conn);
+	
+	bool has_same_connection_options(const PgSQL_Connection* c);
 
 	int get_server_version() {
 		return PQserverVersion(pgsql_conn);
@@ -599,6 +589,8 @@ public:
 
 	void reset_error() { reset_error_info(error_info, false); }
 
+	bool reset_session_in_txn = false;
+
 	PGresult* get_result();
 	void next_multi_statement_result(PGresult* result);
 	bool set_single_row_mode();
@@ -607,7 +599,9 @@ public:
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
+	uint8_t result_type;
 	PGresult* pgsql_result;
+	PSresult  ps_result;
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
 	bool new_result;
