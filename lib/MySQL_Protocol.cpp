@@ -1225,7 +1225,7 @@ bool MySQL_Protocol::verify_user_pass(
 			ret = false;
 		}
 	} else {
-		if (auth_plugin_id == 2) {
+		if (auth_plugin_id == 0) {
 			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {
