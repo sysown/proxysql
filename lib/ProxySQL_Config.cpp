@@ -1443,15 +1443,14 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 				addField(data, "hostgroup_id", r->fields[0], "");
 				addField(data, "hostname", r->fields[1]);
 				addField(data, "port", r->fields[2], "");
-				addField(data, "gtid_port", r->fields[3], "");
-				addField(data, "status", r->fields[4]);
-				addField(data, "weight", r->fields[5], "");
-				addField(data, "compression", r->fields[6], "");
-				addField(data, "max_connections", r->fields[7], "");
-				addField(data, "max_replication_lag", r->fields[8], "");
-				addField(data, "use_ssl", r->fields[9], "");
-				addField(data, "max_latency_ms", r->fields[10], "");
-				addField(data, "comment", r->fields[11]);
+				addField(data, "status", r->fields[3]);
+				addField(data, "weight", r->fields[4], "");
+				addField(data, "compression", r->fields[5], "");
+				addField(data, "max_connections", r->fields[6], "");
+				addField(data, "max_replication_lag", r->fields[7], "");
+				addField(data, "use_ssl", r->fields[8], "");
+				addField(data, "max_latency_ms", r->fields[9], "");
+				addField(data, "comment", r->fields[10]);
 
 				data += "\t}";
 				isNext = true;
@@ -1504,13 +1503,12 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 		const Setting& pgsql_servers = root["pgsql_servers"];
 		int count = pgsql_servers.getLength();
 		//fprintf(stderr, "Found %d servers\n",count);
-		char* q = (char*)"INSERT OR REPLACE INTO pgsql_servers (hostname, port, gtid_port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
+		char* q = (char*)"INSERT OR REPLACE INTO pgsql_servers (hostname, port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
 		for (i = 0; i < count; i++) {
 			const Setting& server = pgsql_servers[i];
 			std::string address;
 			std::string status = "ONLINE";
 			int port = 5432;
-			int gtid_port = 0;
 			int hostgroup;
 			int weight = 1;
 			int compression = 0;
@@ -1526,7 +1524,6 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 				}
 			}
 			server.lookupValue("port", port);
-			server.lookupValue("gtid_port", gtid_port);
 			if (server.lookupValue("hostgroup", hostgroup) == false) {
 				if (server.lookupValue("hostgroup_id", hostgroup) == false) {
 					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostgroup_id\n");
@@ -1552,7 +1549,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 			char* o1 = strdup(comment.c_str());
 			char* o = escape_string_single_quotes(o1, false);
 			char* query = (char*)malloc(strlen(q) + strlen(status.c_str()) + strlen(address.c_str()) + strlen(o) + 128);
-			sprintf(query, q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
+			sprintf(query, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);

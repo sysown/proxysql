@@ -987,7 +987,8 @@ void PgSQL_Protocol::welcome_client() {
 	pgpkt.set_multi_pkt_mode(true);
 	pgpkt.write_AuthenticationOk();
 	
-	pgpkt.write_ParameterStatus("is_superuser", "on"); // only for admin
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN)
+		pgpkt.write_ParameterStatus("is_superuser", "on"); // only for admin
 
 	const char* application_name = (*myds)->myconn->conn_params.get_value(PG_APPLICATION_NAME);
 	if (application_name)
