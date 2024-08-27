@@ -689,9 +689,9 @@ public:
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();
 #endif // IDLE_THREADS
-	unsigned long long get_mysql_backend_buffers_bytes();
-	unsigned long long get_mysql_frontend_buffers_bytes();
-	unsigned long long get_mysql_session_internal_bytes();
+	unsigned long long get_pgsql_backend_buffers_bytes();
+	unsigned long long get_pgsql_frontend_buffers_bytes();
+	unsigned long long get_pgsql_session_internal_bytes();
 	iface_info* MLM_find_iface_from_fd(int fd) {
 		return MLM->find_iface_from_fd(fd);
 	}

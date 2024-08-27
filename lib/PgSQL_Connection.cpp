@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <sstream>
 #include <atomic>
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -12,6 +13,7 @@ using json = nlohmann::json;
 #include "PgSQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_Variables.h"
+
 
 
 // some of the code that follows is from mariadb client library memory allocator
@@ -456,8 +458,8 @@ PgSQL_Connection_Placeholder::PgSQL_Connection_Placeholder() {
 	bytes_info.bytes_recv = 0;
 	bytes_info.bytes_sent = 0;
 	statuses.questions = 0;
-	statuses.myconnpoll_get = 0;
-	statuses.myconnpoll_put = 0;
+	statuses.pgconnpoll_get = 0;
+	statuses.pgconnpoll_put = 0;
 	memset(gtid_uuid,0,sizeof(gtid_uuid));
 	memset(&connected_host_details, 0, sizeof(connected_host_details));
 };
@@ -2825,4 +2827,10 @@ bool PgSQL_Connection::has_same_connection_options(const PgSQL_Connection* clien
 		}
 	}
 	return true;
+}
+
+unsigned int PgSQL_Connection::get_memory_usage() const {
+	// TODO: need to create new function in libpq
+	unsigned int memory_bytes = (16 * 1024) * 2; //PSgetMemoryUsage(pgsql_conn);
+	return /*sizeof(PGconn) +*/ memory_bytes;
 }

@@ -3026,6 +3026,22 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 	}
 	{
 		bool rc;
+		rc = RE2::PartialMatch(query_no_space, *(RE2*)(pa->match_regexes.re[1]));
+		if (rc) {
+			string* new_query = new std::string(query_no_space);
+			RE2::Replace(new_query, (char*)"^(\\w+)  *@@([0-9A-Za-z_-]+) *", (char*)"SELECT variable_value AS '@@\\2' FROM global_variables WHERE variable_name='\\2' COLLATE NOCASE UNION ALL SELECT variable_value AS '@@\\2' FROM stats.stats_pgsql_global WHERE variable_name='\\2' COLLATE NOCASE");
+			free(query);
+			query_length = new_query->length() + 1;
+			query = (char*)malloc(query_length);
+			memcpy(query, new_query->c_str(), query_length - 1);
+			query[query_length - 1] = '\0';
+			GloAdmin->stats___pgsql_global();
+			delete new_query;
+			goto __run_query;
+		}
+	}
+	{
+		bool rc;
 		rc=RE2::PartialMatch(query_no_space,*(RE2 *)(pa->match_regexes.re[2]));
 		if (rc) {
 			string *new_query=new std::string(query_no_space);
@@ -3476,13 +3492,13 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	/*if (query_no_space_length == strlen("SHOW PGSQL STATUS") && !strncasecmp("SHOW PGSQL STATUS", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == strlen("SHOW PGSQL STATUS") && !strncasecmp("SHOW PGSQL STATUS", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_pgsql_global ORDER BY variable_name");
 		query_length = strlen(query) + 1;
-		GloAdmin->stats___mysql_global();
+		GloAdmin->stats___pgsql_global();
 		goto __run_query;
-	}*/
+	}
 
 	strA=(char *)"SHOW CREATE TABLE ";
 	strB=(char *)"SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),'CREATE TABLE %s (','CREATE TABLE %s ('||X'0A20202020') AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";

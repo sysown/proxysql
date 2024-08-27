@@ -713,7 +713,7 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	char c = ((char*)pkt->ptr)[5];
 	bool ret = false;
 	if (c == 'c' || c == 'C') {
-		if (pkt->size == strlen("commit") + 5) {
+		if (pkt->size == strlen("commit") + 5 + 2) {
 			if (strncasecmp((char*)"commit", (char*)pkt->ptr + 5, 6) == 0) {
 				__sync_fetch_and_add(&PgHGM->status.commit_cnt, 1);
 				ret = true;
@@ -722,7 +722,7 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	}
 	else {
 		if (c == 'r' || c == 'R') {
-			if (pkt->size == strlen("rollback") + 5) {
+			if (pkt->size == strlen("rollback") + 5 + 2) {
 				if (strncasecmp((char*)"rollback", (char*)pkt->ptr + 5, 8) == 0) {
 					__sync_fetch_and_add(&PgHGM->status.rollback_cnt, 1);
 					ret = true;
@@ -752,21 +752,20 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	else {
 		// there is no active transaction, we will just reply OK
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		uint16_t setStatus = 0;
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
+		//uint16_t setStatus = 0;
+		//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		//client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
+		client_myds->myprot.generate_ok_packet(true, true, NULL, 0, (const char*)pkt->ptr + 5);
 		if (mirror == false) {
 			RequestEnd(NULL);
-		}
-		else {
+		} else {
 			client_myds->DSS = STATE_SLEEP;
 			status = WAITING_CLIENT_DATA;
 		}
 		l_free(pkt->size, pkt->ptr);
 		if (c == 'c' || c == 'C') {
 			__sync_fetch_and_add(&PgHGM->status.commit_cnt_filtered, 1);
-		}
-		else {
+		} else {
 			__sync_fetch_and_add(&PgHGM->status.rollback_cnt_filtered, 1);
 		}
 		return true;
@@ -876,8 +875,8 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 			sprintf(buff, "%p", _myds);
 			j["backends"][i]["stream"]["address"] = buff;
 			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
-			j["backends"][i]["stream"]["myconnpoll_get"] = _myds->statuses.myconnpoll_get;
-			j["backends"][i]["stream"]["myconnpoll_put"] = _myds->statuses.myconnpoll_put;
+			j["backends"][i]["stream"]["pgconnpoll_get"] = _myds->statuses.pgconnpoll_get;
+			j["backends"][i]["stream"]["pgconnpoll_put"] = _myds->statuses.pgconnpoll_put;
 			/* when fast_forward is not used, these metrics are always 0. Explicitly disabled
 			j["backend"][i]["stream"]["pkts_recv"] = _myds->pkts_recv;
 			j["backend"][i]["stream"]["pkts_sent"] = _myds->pkts_sent;
@@ -899,8 +898,8 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
 				j["backends"][i]["conn"]["bytes_sent"] = _myconn->bytes_info.bytes_sent;
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
-				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
-				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
+				j["backends"][i]["conn"]["pgconnpoll_get"] = _myconn->statuses.pgconnpoll_get;
+				j["backends"][i]["conn"]["pgconnpoll_put"] = _myconn->statuses.pgconnpoll_put;
 				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
 				j["backends"][i]["conn"]["session_track_gtids"] = (_myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "");
 				j["backends"][i]["conn"]["init_connect"] = (_myconn->options.init_connect ? _myconn->options.init_connect : "");
@@ -1207,7 +1206,7 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt) {
 				status = WAITING_CLIENT_DATA;
 			}
 			l_free(pkt->size, pkt->ptr);
-			__sync_fetch_and_add(&PgHGM->status.frontend_set_names, 1);
+			__sync_fetch_and_add(&PgHGM->status.frontend_set_client_encoding, 1);
 			return true;
 		}
 	}
@@ -1450,8 +1449,9 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	myconn->local_stmts = new MySQL_STMTs_local_v14(false); // false by default, it is a backend
 	int rc = myconn->async_reset_session(myds->revents);
 	if (rc == 0) {
-		//__sync_fetch_and_add(&PgHGM->status.backend_change_user, 1);
+		__sync_fetch_and_add(&PgHGM->status.backend_reset_connection, 1);
 		myds->myconn->reset();
+		PgHGM->increase_reset_counter();
 		myds->DSS = STATE_MARIADB_GENERIC;
 		myconn->async_state_machine = ASYNC_IDLE;
 		myds->return_MySQL_Connection_To_Pool();
@@ -2009,7 +2009,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_CHARSET(int* _rc) {
 	int rc = myconn->async_set_names(myds->revents, charset);
 
 	if (rc == 0) {
-		__sync_fetch_and_add(&PgHGM->status.backend_set_names, 1);
+		__sync_fetch_and_add(&PgHGM->status.backend_set_client_encoding, 1);
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st = previous_status.top();
 		previous_status.pop();
@@ -2354,7 +2354,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_SCHEMA(int* _rc) {
 	}
 	int rc = myconn->async_select_db(myds->revents);
 	if (rc == 0) {
-		__sync_fetch_and_add(&PgHGM->status.backend_init_db, 1);
+		//__sync_fetch_and_add(&PgHGM->status.backend_init_db, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st = previous_status.top();
@@ -2629,7 +2629,7 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 	}
 	int rc = myconn->async_reset_session(myds->revents);
 	if (rc == 0) {
-		//__sync_fetch_and_add(&PgHGM->status.backend_change_user, 1);
+		__sync_fetch_and_add(&PgHGM->status.backend_reset_connection, 1);
 		//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -5414,7 +5414,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	gtid_hid = -1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
-		__sync_fetch_and_add(&PgHGM->status.frontend_init_db, 1);
+		//__sync_fetch_and_add(&PgHGM->status.frontend_init_db, 1);
 		client_myds->myconn->userinfo->set_dbname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -5442,7 +5442,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	gtid_hid = -1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
-		__sync_fetch_and_add(&PgHGM->status.frontend_use_db, 1);
+		//__sync_fetch_and_add(&PgHGM->status.frontend_use_db, 1);
 		string nq = string((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
 		RE2::GlobalReplace(&nq, (char*)"(?U)/\\*.*\\*/", (char*)" ");
 		char* sn_tmp = (char*)nq.c_str();
@@ -7286,8 +7286,7 @@ void PgSQL_Session::Memory_Stats() {
 		if (client_myds->PSarrayIN) {
 			if (session_fast_forward == true) {
 				internal += client_myds->PSarrayOUT->total_size();
-			}
-			else {
+			} else {
 				internal += client_myds->PSarrayOUT->total_size(PGSQL_RESULTSET_BUFLEN);
 				internal += client_myds->resultset->total_size(PGSQL_RESULTSET_BUFLEN);
 			}
@@ -7305,10 +7304,11 @@ void PgSQL_Session::Memory_Stats() {
 			if (_mybe->server_myds->myconn) {
 				PgSQL_Connection* myconn = _mybe->server_myds->myconn;
 				internal += sizeof(PgSQL_Connection);
-				if (myconn->pgsql) {
-					backend += sizeof(MYSQL);
-					backend += myconn->pgsql->net.max_packet;
-					backend += (4096 * 15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
+				if (myconn->is_connected()) {
+					//backend += sizeof(MYSQL);
+					//backend += myconn->pgsql->net.max_packet;
+					backend += myconn->get_memory_usage();
+					//backend += (4096 * 15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
 				}
 				if (myconn->query_result) {
 					backend += myconn->query_result->current_size();

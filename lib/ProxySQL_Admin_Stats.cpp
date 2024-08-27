@@ -565,6 +565,167 @@ void ProxySQL_Admin::stats___mysql_global() {
 	statsdb->execute("COMMIT");
 }
 
+void ProxySQL_Admin::stats___pgsql_global() {
+	if (!GloPTH) return;
+	SQLite3_result* resultset = GloPTH->SQL3_GlobalStatus(true);
+	if (resultset == NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_pgsql_global");
+	char* a = (char*)"INSERT INTO stats_pgsql_global VALUES (\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int arg_len = 0;
+		for (int i = 0; i < 2; i++) {
+			arg_len += strlen(r->fields[i]);
+		}
+		char* query = (char*)malloc(strlen(a) + arg_len + 32);
+		sprintf(query, a, r->fields[0], r->fields[1]);
+		statsdb->execute(query);
+		free(query);
+	}
+	delete resultset;
+	resultset = NULL;
+
+	resultset = PgHGM->SQL3_Get_ConnPool_Stats();
+	if (resultset) {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			int arg_len = 0;
+			for (int i = 0; i < 2; i++) {
+				arg_len += strlen(r->fields[i]);
+			}
+			char* query = (char*)malloc(strlen(a) + arg_len + 32);
+			sprintf(query, a, r->fields[0], r->fields[1]);
+			statsdb->execute(query);
+			free(query);
+		}
+		delete resultset;
+		resultset = NULL;
+	}
+
+	int highwater;
+	int current;
+	(*proxy_sqlite3_status)(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
+	char bu[32];
+	char* vn = NULL;
+	char* query = NULL;
+	vn = (char*)"SQLite3_memory_bytes";
+	sprintf(bu, "%d", current);
+	query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+	sprintf(query, a, vn, bu);
+	statsdb->execute(query);
+	free(query);
+
+	unsigned long long connpool_mem = PgHGM->Get_Memory_Stats();
+	vn = (char*)"ConnPool_memory_bytes";
+	sprintf(bu, "%llu", connpool_mem);
+	query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+	sprintf(query, a, vn, bu);
+	statsdb->execute(query);
+	free(query);
+
+	/*if (GloMyStmt) {
+		uint64_t stmt_client_active_unique = 0;
+		uint64_t stmt_client_active_total = 0;
+		uint64_t stmt_max_stmt_id = 0;
+		uint64_t stmt_cached = 0;
+		uint64_t stmt_server_active_unique = 0;
+		uint64_t stmt_server_active_total = 0;
+		GloMyStmt->get_metrics(&stmt_client_active_unique, &stmt_client_active_total, &stmt_max_stmt_id, &stmt_cached, &stmt_server_active_unique, &stmt_server_active_total);
+		vn = (char*)"Stmt_Client_Active_Total";
+		sprintf(bu, "%lu", stmt_client_active_total);
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+		vn = (char*)"Stmt_Client_Active_Unique";
+		sprintf(bu, "%lu", stmt_client_active_unique);
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+		vn = (char*)"Stmt_Server_Active_Total";
+		sprintf(bu, "%lu", stmt_server_active_total);
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+		vn = (char*)"Stmt_Server_Active_Unique";
+		sprintf(bu, "%lu", stmt_server_active_unique);
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+		vn = (char*)"Stmt_Max_Stmt_id";
+		sprintf(bu, "%lu", stmt_max_stmt_id);
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+		vn = (char*)"Stmt_Cached";
+		sprintf(bu, "%lu", stmt_cached);
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+	}*/
+
+	if (GloQC && (resultset = GloQC->SQL3_getStats())) {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			int arg_len = 0;
+			for (int i = 0; i < 2; i++) {
+				arg_len += strlen(r->fields[i]);
+			}
+			char* query = (char*)malloc(strlen(a) + arg_len + 32);
+			sprintf(query, a, r->fields[0], r->fields[1]);
+			statsdb->execute(query);
+			free(query);
+		}
+		delete resultset;
+		resultset = NULL;
+	}
+
+	/*if (GloMyLdapAuth) {
+		resultset = GloMyLdapAuth->SQL3_getStats();
+		if (resultset) {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
+				int arg_len = 0;
+				for (int i = 0; i < 2; i++) {
+					arg_len += strlen(r->fields[i]);
+				}
+				char* query = (char*)malloc(strlen(a) + arg_len + 32);
+				sprintf(query, a, r->fields[0], r->fields[1]);
+				statsdb->execute(query);
+				free(query);
+			}
+			delete resultset;
+			resultset = NULL;
+		}
+	}*/
+
+	if (GloQPro) {
+		unsigned long long mu = GloQPro->get_new_req_conns_count();
+		vn = (char*)"new_req_conns_count";
+		sprintf(bu, "%llu", mu);
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+	}
+	{
+		vn = (char*)"pgsql_listener_paused";
+		sprintf(bu, "%s", (admin_proxysql_pgsql_paused == true ? "true" : "false"));
+		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
+		sprintf(query, a, vn, bu);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+}
+
+
 void ProxySQL_Admin::stats___mysql_processlist() {
 	int rc;
 	if (!GloMTH) return;

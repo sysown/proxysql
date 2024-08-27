@@ -1,6 +1,6 @@
 #ifndef __CLASS_PGSQL_CONNECTION_H
 #define __CLASS_PGSQL_CONNECTION_H
-
+#include "libpq-fe.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
@@ -9,7 +9,6 @@
 #define PROXYJSON
 namespace nlohmann { class json; }
 #endif // PROXYJSON
-
 
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
@@ -368,8 +367,8 @@ class PgSQL_Connection_Placeholder {
 	bytes_stats_t bytes_info; // bytes statistics
 	struct {
 		unsigned long long questions;
-		unsigned long long myconnpoll_get;
-		unsigned long long myconnpoll_put;
+		unsigned long long pgconnpoll_get;
+		unsigned long long pgconnpoll_put;
 	} statuses;
 
 	unsigned long largest_query_length;
@@ -596,6 +595,7 @@ public:
 	bool set_single_row_mode();
 	void optimize() {}
 
+	unsigned int get_memory_usage() const;
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;

@@ -1191,6 +1191,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_proxysql_message_metrics = false;
 	bool stats_proxysql_message_metrics_reset = false;
 
+	bool stats_pgsql_global = false;
+
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
 	if (strcasestr(query_no_space,"processlist"))
@@ -1230,6 +1232,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_errors_reset=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_global"))
 		{ stats_mysql_global=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_global")) 
+		{ stats_pgsql_global = true; refresh = true; }
 	if (strstr(query_no_space,"stats_memory_metrics"))
 		{ stats_memory_metrics=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_connection_pool_reset"))
@@ -1408,6 +1412,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_free_connections();
 		if (stats_mysql_global)
 			stats___mysql_global();
+		if (stats_pgsql_global)
+			stats___pgsql_global();
 		if (stats_memory_metrics)
 			stats___memory_metrics();
 		if (stats_mysql_query_rules)
@@ -1566,7 +1572,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_query_digest || stats_mysql_query_digest_reset || stats_mysql_errors ||
 		stats_mysql_errors_reset || stats_mysql_global || stats_memory_metrics || 
 		stats_mysql_commands_counters || stats_mysql_query_rules || stats_mysql_users ||
-		stats_mysql_gtid_executed || stats_mysql_free_connections
+		stats_mysql_gtid_executed || stats_mysql_free_connections || 
+		stats_pgsql_global
 	) {
 		ret = true;
 	}

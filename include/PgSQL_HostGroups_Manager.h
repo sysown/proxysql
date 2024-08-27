@@ -260,29 +260,29 @@ struct PgSQL_p_hg_counter {
 		server_connections_aborted,
 		client_connections_created,
 		client_connections_aborted,
-		com_autocommit,
-		com_autocommit_filtered,
+		//com_autocommit,
+		//com_autocommit_filtered,
 		com_rollback,
 		com_rollback_filtered,
-		com_backend_change_user,
-		com_backend_init_db,
+		com_backend_reset_connection,
+		//com_backend_init_db,
 		// TODO: https://github.com/sysown/proxysql/issues/2690
-		com_backend_set_names,
-		com_frontend_init_db,
-		com_frontend_set_names,
-		com_frontend_use_db,
+		com_backend_set_client_encoding,
+		//com_frontend_init_db,
+		com_frontend_set_client_encoding,
+		//com_frontend_use_db,
 		com_commit_cnt,
 		com_commit_cnt_filtered,
 		selects_for_update__autocommit0,
 		access_denied_wrong_password,
 		access_denied_max_connections,
 		access_denied_max_user_connections,
-		myhgm_myconnpool_get,
-		myhgm_myconnpool_get_ok,
-		myhgm_myconnpool_get_ping,
-		myhgm_myconnpool_push,
-		myhgm_myconnpool_reset,
-		myhgm_myconnpool_destroy,
+		pghgm_pgconnpool_get,
+		pghgm_pgconnpool_get_ok,
+		pghgm_pgconnpool_get_ping,
+		pghgm_pgconnpool_push,
+		pghgm_pgconnpool_reset,
+		pghgm_pgconnpool_destroy,
 		auto_increment_delay_multiplex,
 		__size
 	};
@@ -610,24 +610,24 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		unsigned long server_connections_created;
 		unsigned long server_connections_delayed;
 		unsigned long server_connections_connected;
-		unsigned long myconnpoll_get;
-		unsigned long myconnpoll_get_ok;
-		unsigned long myconnpoll_get_ping;
-		unsigned long myconnpoll_push;
-		unsigned long myconnpoll_reset;
-		unsigned long myconnpoll_destroy;
+		unsigned long pgconnpoll_get;
+		unsigned long pgconnpoll_get_ok;
+		unsigned long pgconnpoll_get_ping;
+		unsigned long pgconnpoll_push;
+		unsigned long pgconnpoll_reset;
+		unsigned long pgconnpoll_destroy;
 		unsigned long long autocommit_cnt;
 		unsigned long long commit_cnt;
 		unsigned long long rollback_cnt;
 		unsigned long long autocommit_cnt_filtered;
 		unsigned long long commit_cnt_filtered;
 		unsigned long long rollback_cnt_filtered;
-		unsigned long long backend_change_user;
-		unsigned long long backend_init_db;
-		unsigned long long backend_set_names;
-		unsigned long long frontend_init_db;
-		unsigned long long frontend_set_names;
-		unsigned long long frontend_use_db;
+		unsigned long long backend_reset_connection;
+		//unsigned long long backend_init_db;
+		unsigned long long backend_set_client_encoding;
+		//unsigned long long frontend_init_db;
+		unsigned long long frontend_set_client_encoding;
+		//unsigned long long frontend_use_db;
 		unsigned long long access_denied_wrong_password;
 		unsigned long long access_denied_max_connections;
 		unsigned long long access_denied_max_user_connections;

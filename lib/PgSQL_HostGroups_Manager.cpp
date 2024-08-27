@@ -393,18 +393,18 @@ hg_metrics_map = std::make_tuple(
 		),
 		// ====================================================================
 
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_autocommit,
 			"proxysql_com_autocommit_total",
 			"Total queries autocommited.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		std::make_tuple(
 			PgSQL_p_hg_counter::com_autocommit_filtered,
 			"proxysql_com_autocommit_filtered_total",
 			"Total queries filtered autocommit.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
 			PgSQL_p_hg_counter::com_rollback,
 			"proxysql_com_rollback_total",
@@ -418,41 +418,41 @@ hg_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::com_backend_change_user,
-			"proxysql_com_backend_change_user_total",
-			"Total CHANGE_USER queries backend.",
+			PgSQL_p_hg_counter::com_backend_reset_connection,
+			"proxysql_com_backend_reset_connection_total",
+			"Total backend_reset_connection queries backend.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_backend_init_db,
 			"proxysql_com_backend_init_db_total",
 			"Total queries backend INIT DB.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
-			PgSQL_p_hg_counter::com_backend_set_names,
-			"proxysql_com_backend_set_names_total",
-			"Total queries backend SET NAMES.",
+			PgSQL_p_hg_counter::com_backend_set_client_encoding,
+			"proxysql_com_backend_set_client_encoding_total",
+			"Total queries backend SET client_encoding.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_frontend_init_db,
 			"proxysql_com_frontend_init_db_total",
 			"Total INIT DB queries frontend.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
-			PgSQL_p_hg_counter::com_frontend_set_names,
-			"proxysql_com_frontend_set_names_total",
-			"Total SET NAMES frontend queries.",
+			PgSQL_p_hg_counter::com_frontend_set_client_encoding,
+			"proxysql_com_frontend_set_client_encoding_total",
+			"Total SET client_encoding frontend queries.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_frontend_use_db,
 			"proxysql_com_frontend_use_db_total",
 			"Total USE DB queries frontend.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
 			PgSQL_p_hg_counter::com_commit_cnt,
 			"proxysql_com_commit_cnt_total",
@@ -492,40 +492,40 @@ hg_metrics_map = std::make_tuple(
 
 		// ====================================================================
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_get,
-			"proxysql_myhgm_myconnpool_get_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_get,
+			"proxysql_pghgm_pgconnpool_get_total",
 			"The number of requests made to the connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_get_ok,
-			"proxysql_myhgm_myconnpool_get_ok_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_get_ok,
+			"proxysql_pghgm_pgconnpool_get_ok_total",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_get_ping,
-			"proxysql_myhgm_myconnpool_get_ping_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_get_ping,
+			"proxysql_pghgm_myconnpool_get_ping_total",
 			"The number of connections that were taken from the pool to run a ping to keep them alive.",
 			metric_tags {}
 		),
 		// ====================================================================
 
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_push,
-			"proxysql_myhgm_myconnpool_push_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_push,
+			"proxysql_pghgm_pgconnpool_push_total",
 			"The number of connections returned to the connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_reset,
-			"proxysql_myhgm_myconnpool_reset_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_reset,
+			"proxysql_pghgm_pgconnpool_reset_total",
 			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_destroy,
-			"proxysql_myhgm_myconnpool_destroy_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_destroy,
+			"proxysql_pghgm_pgconnpool_destroy_total",
 			"The number of connections considered unhealthy and therefore closed.",
 			metric_tags {}
 		),
@@ -669,24 +669,24 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 	status.servers_table_version=0;
 	pthread_mutex_init(&status.servers_table_version_lock, NULL);
 	pthread_cond_init(&status.servers_table_version_cond, NULL);
-	status.myconnpoll_get=0;
-	status.myconnpoll_get_ok=0;
-	status.myconnpoll_get_ping=0;
-	status.myconnpoll_push=0;
-	status.myconnpoll_destroy=0;
-	status.myconnpoll_reset=0;
+	status.pgconnpoll_get=0;
+	status.pgconnpoll_get_ok=0;
+	status.pgconnpoll_get_ping=0;
+	status.pgconnpoll_push=0;
+	status.pgconnpoll_destroy=0;
+	status.pgconnpoll_reset=0;
 	status.autocommit_cnt=0;
 	status.commit_cnt=0;
 	status.rollback_cnt=0;
 	status.autocommit_cnt_filtered=0;
 	status.commit_cnt_filtered=0;
 	status.rollback_cnt_filtered=0;
-	status.backend_change_user=0;
-	status.backend_init_db=0;
-	status.backend_set_names=0;
-	status.frontend_init_db=0;
-	status.frontend_set_names=0;
-	status.frontend_use_db=0;
+	status.backend_reset_connection=0;
+	//status.backend_init_db=0;
+	status.backend_set_client_encoding=0;
+	//status.frontend_init_db=0;
+	status.frontend_set_client_encoding=0;
+	//status.frontend_use_db=0;
 	status.access_denied_wrong_password=0;
 	status.access_denied_max_connections=0;
 	status.access_denied_max_user_connections=0;
@@ -1762,7 +1762,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 
 void PgSQL_HostGroups_Manager::increase_reset_counter() {
 	wrlock();
-	status.myconnpoll_reset++;
+	status.pgconnpoll_reset++;
 	wrunlock();
 }
 void PgSQL_HostGroups_Manager::push_MyConn_to_pool(PgSQL_Connection *c, bool _lock) {
@@ -1771,7 +1771,7 @@ void PgSQL_HostGroups_Manager::push_MyConn_to_pool(PgSQL_Connection *c, bool _lo
 	if (_lock)
 		wrlock();
 	c->auto_increment_delay_token = 0;
-	status.myconnpoll_push++;
+	status.pgconnpoll_push++;
 	mysrvc=(PgSQL_SrvC *)c->parent;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 	mysrvc->ConnectionsUsed->remove(c);
@@ -2427,7 +2427,7 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	PgSQL_Connection * conn=NULL;
 	wrlock();
-	status.myconnpoll_get++;
+	status.pgconnpoll_get++;
 	PgSQL_HGC *myhgc=MyHGC_lookup(_hid);
 	PgSQL_SrvC *mysrvc = NULL;
 #ifdef TEST_AURORA
@@ -2438,7 +2438,7 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
-			status.myconnpoll_get_ok++;
+			status.pgconnpoll_get_ok++;
 			mysrvc->update_max_connections_used();
 		}
 	}
@@ -2500,7 +2500,7 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying PgSQL_Connection %p, server %s:%d Error %s\n", c, mysrvc->address, mysrvc->port,
 			c->get_error_code_with_message().c_str());
 		mysrvc->ConnectionsUsed->remove(c);
-		status.myconnpoll_destroy++;
+		status.pgconnpoll_destroy++;
         if (_lock) {
 			wrunlock();
 		}
@@ -2827,7 +2827,7 @@ int PgSQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	}
 
 __exit_get_multiple_idle_connections:
-	status.myconnpoll_get_ping+=num_conn_current;
+	status.pgconnpoll_get_ping+=num_conn_current;
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning %d idle connections\n", num_conn_current);
 	return num_conn_current;
@@ -2954,8 +2954,8 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["age_ms"] = age_ms;
 					j["bytes_recv"] = conn->bytes_info.bytes_recv;
 					j["bytes_sent"] = conn->bytes_info.bytes_sent;
-					j["myconnpoll_get"] = conn->statuses.myconnpoll_get;
-					j["myconnpoll_put"] = conn->statuses.myconnpoll_put;
+					j["pgconnpoll_get"] = conn->statuses.pgconnpoll_get;
+					j["pgconnpoll_put"] = conn->statuses.pgconnpoll_put;
 					j["questions"] = conn->statuses.questions;
 					string s = j.dump();
 					pta[11] = strdup(s.c_str());
@@ -3860,26 +3860,26 @@ void PgSQL_HostGroups_Manager::p_update_metrics() {
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::selects_for_update__autocommit0], status.select_for_update_or_equivalent);
 
 	// Update *com_* related metrics
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit], status.autocommit_cnt);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit_filtered], status.autocommit_cnt_filtered);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit], status.autocommit_cnt);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit_filtered], status.autocommit_cnt_filtered);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_commit_cnt], status.commit_cnt);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_commit_cnt_filtered], status.commit_cnt_filtered);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_rollback], status.rollback_cnt);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_rollback_filtered], status.rollback_cnt_filtered);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_init_db], status.backend_init_db);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_change_user], status.backend_change_user);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_set_names], status.backend_set_names);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_init_db], status.frontend_init_db);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_set_names], status.frontend_set_names);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_use_db], status.frontend_use_db);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_init_db], status.backend_init_db);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_reset_connection], status.backend_reset_connection);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_set_client_encoding], status.backend_set_client_encoding);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_init_db], status.frontend_init_db);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_set_client_encoding], status.frontend_set_client_encoding);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_use_db], status.frontend_use_db);
 
 	// Update *myconnpoll* related metrics
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_get], status.myconnpoll_get);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_get_ok], status.myconnpoll_get_ok);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_get_ping], status.myconnpoll_get_ping);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_push], status.myconnpoll_push);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_reset], status.myconnpoll_reset);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_destroy], status.myconnpoll_destroy);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_get], status.pgconnpoll_get);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_get_ok], status.pgconnpoll_get_ok);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_get_ping], status.pgconnpoll_get_ping);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_push], status.pgconnpoll_push);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_reset], status.pgconnpoll_reset);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_destroy], status.pgconnpoll_destroy);
 
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::auto_increment_delay_multiplex], status.auto_increment_delay_multiplex);
 
@@ -3891,39 +3891,39 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 	const int colnum=2;
 	char buf[256];
 	char **pta=(char **)malloc(sizeof(char *)*colnum);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Global Status\n");
 	SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
 	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
 	wrlock();
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_get";
-		sprintf(buf,"%lu",status.myconnpoll_get);
+		pta[0]=(char *)"PgHGM_pgconnpoll_get";
+		sprintf(buf,"%lu",status.pgconnpoll_get);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_get_ok";
-		sprintf(buf,"%lu",status.myconnpoll_get_ok);
+		pta[0]=(char *)"PgHGM_pgconnpoll_get_ok";
+		sprintf(buf,"%lu",status.pgconnpoll_get_ok);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_push";
-		sprintf(buf,"%lu",status.myconnpoll_push);
+		pta[0]=(char *)"PgHGM_pgconnpoll_push";
+		sprintf(buf,"%lu",status.pgconnpoll_push);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_destroy";
-		sprintf(buf,"%lu",status.myconnpoll_destroy);
+		pta[0]=(char *)"PgHGM_pgconnpoll_destroy";
+		sprintf(buf,"%lu",status.pgconnpoll_destroy);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_reset";
-		sprintf(buf,"%lu",status.myconnpoll_reset);
+		pta[0]=(char *)"PgHGM_pgconnpoll_reset";
+		sprintf(buf,"%lu",status.pgconnpoll_reset);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -3939,7 +3939,7 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 	PgSQL_SrvC *mysrvc=NULL;
   for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		intsize+=sizeof(PgSQL_HGC);
-    PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
+		PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
 		unsigned int j,k;
 		unsigned int l=myhgc->mysrvs->cnt();
 		if (l) {
@@ -3950,9 +3950,9 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 				for (k=0; k<mysrvc->ConnectionsFree->conns_length(); k++) {
 					//PgSQL_Connection *myconn=(PgSQL_Connection *)mysrvc->ConnectionsFree->conns->index(k);
 					PgSQL_Connection *myconn=mysrvc->ConnectionsFree->index(k);
-					intsize+=sizeof(PgSQL_Connection)+sizeof(MYSQL);
-					intsize+=myconn->pgsql->net.max_packet;
-					intsize+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
+					intsize+= sizeof(PgSQL_Connection);
+					intsize+=myconn->get_memory_usage();
+					//intsize+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
 					if (myconn->query_result) {
 						intsize+=myconn->query_result->current_size();
 					}
