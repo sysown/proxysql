@@ -674,6 +674,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache_reset", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET);
 
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_global", STATS_SQLITE_TABLE_PGSQL_GLOBAL);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool_reset", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);

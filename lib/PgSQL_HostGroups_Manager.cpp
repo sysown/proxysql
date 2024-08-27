@@ -170,7 +170,6 @@ PgSQL_SrvC::PgSQL_SrvC(
 	bytes_sent=0;
 	bytes_recv=0;
 	max_connections_used=0;
-	queries_gtid_sync=0;
 	time_last_detected_error=0;
 	connect_ERR_at_time_last_detected_error=0;
 	shunned_automatic=false;
@@ -3140,7 +3139,7 @@ void PgSQL_HostGroups_Manager::p_update_connection_pool() {
 }
 
 SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int *hid) {
-  const int colnum=14;
+  const int colnum=13;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -3153,7 +3152,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
   result->add_column_definition(SQLITE_TEXT,"ConnERR");
   result->add_column_definition(SQLITE_TEXT,"MaxConnUsed");
   result->add_column_definition(SQLITE_TEXT,"Queries");
-  result->add_column_definition(SQLITE_TEXT,"Queries_GTID_sync");
   result->add_column_definition(SQLITE_TEXT,"Bytes_sent");
   result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
   result->add_column_definition(SQLITE_TEXT,"Latency_us");
@@ -3234,23 +3232,18 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 			if (_reset) {
 				mysrvc->queries_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->queries_gtid_sync);
-			pta[10]=strdup(buf);
-			if (_reset) {
-				mysrvc->queries_gtid_sync=0;
-			}
 			sprintf(buf,"%llu", mysrvc->bytes_sent);
-			pta[11]=strdup(buf);
+			pta[10]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_sent=0;
 			}
 			sprintf(buf,"%llu", mysrvc->bytes_recv);
-			pta[12]=strdup(buf);
+			pta[11]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_recv=0;
 			}
 			sprintf(buf,"%u", mysrvc->current_latency_us);
-			pta[13]=strdup(buf);
+			pta[12]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])

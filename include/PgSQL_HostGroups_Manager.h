@@ -191,7 +191,6 @@ class PgSQL_SrvC {	// MySQL Server Container
 	time_t time_last_detected_error;
 	unsigned int connect_ERR_at_time_last_detected_error;
 	unsigned long long queries_sent;
-	unsigned long long queries_gtid_sync;
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
 	bool shunned_automatic;

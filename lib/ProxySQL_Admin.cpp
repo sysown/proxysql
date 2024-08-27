@@ -1168,6 +1168,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_pgsql_query_rules = false;
 	bool runtime_pgsql_query_rules_fast_routing = false;
 
+	bool stats_pgsql_global = false;
+	bool stats_pgsql_connection_pool = false;
+	bool stats_pgsql_connection_pool_reset = false;
+
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
 
@@ -1190,8 +1194,6 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_proxysql_servers_metrics = false;
 	bool stats_proxysql_message_metrics = false;
 	bool stats_proxysql_message_metrics_reset = false;
-
-	bool stats_pgsql_global = false;
 
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
@@ -1236,13 +1238,19 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_pgsql_global = true; refresh = true; }
 	if (strstr(query_no_space,"stats_memory_metrics"))
 		{ stats_memory_metrics=true; refresh=true; }
-	if (strstr(query_no_space,"stats_mysql_connection_pool_reset"))
-		{
+	if (strstr(query_no_space,"stats_mysql_connection_pool_reset")) {
 			stats_mysql_connection_pool_reset=true; refresh=true;
-		} else {
-			if (strstr(query_no_space,"stats_mysql_connection_pool"))
-				{ stats_mysql_connection_pool=true; refresh=true; }
+	} else {
+		if (strstr(query_no_space,"stats_mysql_connection_pool"))
+			{ stats_mysql_connection_pool=true; refresh=true; }
+	}
+	if (strstr(query_no_space, "stats_pgsql_connection_pool_reset")) {
+		stats_pgsql_connection_pool_reset = true; refresh = true;
+	} else {
+		if (strstr(query_no_space, "stats_pgsql_connection_pool")) {
+			stats_pgsql_connection_pool = true; refresh = true;
 		}
+	}
 	if (strstr(query_no_space,"stats_mysql_free_connections"))
 		{ stats_mysql_free_connections=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_commands_counters"))
@@ -1407,6 +1415,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		} else {
 			if (stats_mysql_connection_pool)
 				stats___mysql_connection_pool(false);
+		}
+		if (stats_pgsql_connection_pool_reset) {
+			stats___pgsql_connection_pool(true);
+		}
+		else {
+			if (stats_pgsql_connection_pool)
+				stats___pgsql_connection_pool(false);
 		}
 		if (stats_mysql_free_connections)
 			stats___mysql_free_connections();
@@ -1573,7 +1588,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_errors_reset || stats_mysql_global || stats_memory_metrics || 
 		stats_mysql_commands_counters || stats_mysql_query_rules || stats_mysql_users ||
 		stats_mysql_gtid_executed || stats_mysql_free_connections || 
-		stats_pgsql_global
+		stats_pgsql_global || stats_pgsql_connection_pool || stats_pgsql_connection_pool_reset
 	) {
 		ret = true;
 	}
@@ -1770,6 +1785,8 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_mysql_free_connections",
 		"stats_mysql_connection_pool",
 		"stats_mysql_connection_pool_reset",
+		"stats_pgsql_connection_pool",
+		"stats_pgsql_connection_pool_reset",
 		"stats_mysql_prepared_statements_info",
 		"stats_mysql_processlist",
 		"stats_mysql_query_digest",

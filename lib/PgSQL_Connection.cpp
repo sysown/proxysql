@@ -1699,14 +1699,8 @@ handler_again:
 	case ASYNC_QUERY_START:
 		query_start();
 		__sync_fetch_and_add(&parent->queries_sent, 1);
-		__sync_fetch_and_add(&parent->bytes_sent, query.length);
+		update_bytes_sent(query.length + 5);
 		statuses.questions++;
-		myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent] += query.length;
-		myds->bytes_info.bytes_sent += query.length;
-		bytes_info.bytes_sent += query.length;
-		if (myds->sess->with_gtid == true) {
-			__sync_fetch_and_add(&parent->queries_gtid_sync, 1);
-		}
 		if (async_exit_status) {
 			next_event(ASYNC_QUERY_CONT);
 		} else {
@@ -1795,11 +1789,17 @@ handler_again:
 
 				switch (exec_status_type) {
 				case PGRES_COMMAND_OK:
-					query_result->add_command_completion(result.get());
+					{
+						const unsigned int bytes_recv = query_result->add_command_completion(result.get());
+						update_bytes_recv(bytes_recv);
+					}
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 					break;
 				case PGRES_EMPTY_QUERY:
-					query_result->add_empty_query_response(result.get());
+					{
+						const unsigned int bytes_recv = query_result->add_empty_query_response(result.get());
+						update_bytes_recv(bytes_recv);
+					}
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 					break;
 				case PGRES_TUPLES_OK:
@@ -1834,7 +1834,8 @@ handler_again:
 						severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_WARNING ||
 						severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_NOTICE) {
 
-						query_result->add_error(result.get());
+						const unsigned int bytes_recv = query_result->add_error(result.get());
+						update_bytes_recv(bytes_recv);
 					}
 
 					const PGSQL_ERROR_CATEGORY error_category = get_error_category();
@@ -1848,17 +1849,15 @@ handler_again:
 				}
 
 				if (new_result == true) {
-					query_result->add_row_description(result.get());
+					const unsigned int bytes_recv = query_result->add_row_description(result.get());
+					update_bytes_recv(bytes_recv);
 					new_result = false;
 				}
 
 				if (PQntuples(result.get()) > 0) {
-					unsigned int br = query_result->add_row(result.get());
-					__sync_fetch_and_add(&parent->bytes_recv, br);
-					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
-					myds->bytes_info.bytes_recv += br;
-					bytes_info.bytes_recv += br;
-					processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
+					const unsigned int bytes_recv = query_result->add_row(result.get());
+					update_bytes_recv(bytes_recv);
+					processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 					if (
 						(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
 						||
@@ -1870,18 +1869,16 @@ handler_again:
 						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping 
 					}
 				} else {
-					query_result->add_command_completion(result.get());
+					const unsigned int bytes_recv=query_result->add_command_completion(result.get());
+					update_bytes_recv(bytes_recv);
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 				}
 			}
 		} else if (result_type == 2) {
 			if (ps_result.id == 'D') {
-				unsigned int br = query_result->add_row(&ps_result);
-				__sync_fetch_and_add(&parent->bytes_recv, br);
-				myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
-				myds->bytes_info.bytes_recv += br;
-				bytes_info.bytes_recv += br;
-				processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
+				unsigned int bytes_recv=query_result->add_row(&ps_result);
+				update_bytes_recv(bytes_recv);
+				processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 
 				if (
 					(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
@@ -1910,6 +1907,7 @@ handler_again:
 
 		// finally add ready for query packet
 		query_result->add_ready_status(PQtransactionStatus(pgsql_conn));
+		update_bytes_recv(6);
 		//processing_multi_statement = false;
 		NEXT_IMMEDIATE(ASYNC_QUERY_END);
 	}
@@ -1926,6 +1924,7 @@ handler_again:
 		break;
 	case ASYNC_RESET_SESSION_START:
 		reset_session_start();
+		update_bytes_sent((reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5)));
 		if (async_exit_status) {
 			next_event(ASYNC_RESET_SESSION_CONT);
 		} else {
@@ -2833,4 +2832,18 @@ unsigned int PgSQL_Connection::get_memory_usage() const {
 	// TODO: need to create new function in libpq
 	unsigned int memory_bytes = (16 * 1024) * 2; //PSgetMemoryUsage(pgsql_conn);
 	return /*sizeof(PGconn) +*/ memory_bytes;
+}
+
+void PgSQL_Connection::update_bytes_recv(uint64_t bytes_recv) {
+	__sync_fetch_and_add(&parent->bytes_recv, bytes_recv);
+	myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += bytes_recv;
+	myds->bytes_info.bytes_recv += bytes_recv;
+	bytes_info.bytes_recv += bytes_recv;
+}
+
+void PgSQL_Connection::update_bytes_sent(uint64_t bytes_sent) {
+	__sync_fetch_and_add(&parent->bytes_sent, bytes_sent);
+	myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent] += bytes_sent;
+	myds->bytes_info.bytes_sent += bytes_sent;
+	bytes_info.bytes_sent += bytes_sent;
 }

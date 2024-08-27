@@ -594,6 +594,8 @@ public:
 	void next_multi_statement_result(PGresult* result);
 	bool set_single_row_mode();
 	void optimize() {}
+	void update_bytes_recv(uint64_t bytes_recv);
+	void update_bytes_sent(uint64_t bytes_sent);
 
 	unsigned int get_memory_usage() const;
 	//PgSQL_Conn_Param conn_params;

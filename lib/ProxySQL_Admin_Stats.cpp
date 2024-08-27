@@ -1072,6 +1072,32 @@ void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
 	delete resultset;
 }
 
+void ProxySQL_Admin::stats___pgsql_connection_pool(bool _reset) {
+	if (!PgHGM) return;
+	SQLite3_result* resultset = PgHGM->SQL3_Connection_Pool(_reset);
+	if (resultset == NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_pgsql_connection_pool");
+	char* a = (char*)"INSERT INTO stats_pgsql_connection_pool VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int arg_len = 0;
+		for (int i = 0; i < 13; i++) {
+			arg_len += strlen(r->fields[i]);
+		}
+		char* query = (char*)malloc(strlen(a) + arg_len + 32);
+		sprintf(query, a, r->fields[0], r->fields[1], r->fields[2], r->fields[3], r->fields[4], r->fields[5], r->fields[6], r->fields[7], r->fields[8], r->fields[9], r->fields[10], r->fields[11], r->fields[12]);
+		statsdb->execute(query);
+		free(query);
+	}
+	if (_reset) {
+		statsdb->execute("DELETE FROM stats_pgsql_connection_pool_reset");
+		statsdb->execute("INSERT INTO stats_pgsql_connection_pool_reset SELECT * FROM stats_pgsql_connection_pool");
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
 void ProxySQL_Admin::stats___mysql_free_connections() {
 	int rc;
 	if (!MyHGM) return;
