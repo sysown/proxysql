@@ -10373,11 +10373,9 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 	while (resultset ? i != resultset->rows_count : it != digest_umap->end()) {
 		QP_query_digest_stats *qds = (QP_query_digest_stats *)(resultset ? NULL : it->second);
 		SQLite3_row *row  = resultset ? resultset->rows[i] : NULL;
-		string digest_hex_str;
+		char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
 		if (!resultset) {
-			std::ostringstream digest_stream;
-			digest_stream << "0x" << std::hex << qds->digest;
-			digest_hex_str = digest_stream.str();
+			sprintf(digest_hex_str, "0x%16llX", (long long unsigned int)qds->digest);
 		}
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
@@ -10385,7 +10383,7 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+2, resultset ? row->fields[0] : qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+3, resultset ? row->fields[1] : qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+4, resultset ? row->fields[2] : qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+5, resultset ? row->fields[3] : digest_hex_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+5, resultset ? row->fields[3] : digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+6, resultset ? row->fields[4] : qds->get_digest_text(digest_text_umap), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+7, resultset ? atoll(row->fields[5]) : qds->count_star); ASSERT_SQLITE_OK(rc, statsdb);
 			{
@@ -10411,7 +10409,7 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 			rc=(*proxy_sqlite3_bind_text)(statement1, 2, resultset ? row->fields[0] : qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement1, 3, resultset ? row->fields[1] : qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement1, 4, resultset ? row->fields[2] : qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 5, resultset ? row->fields[3] : digest_hex_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 5, resultset ? row->fields[3] : digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement1, 6, resultset ? row->fields[4] : qds->get_digest_text(digest_text_umap), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, resultset ? atoll(row->fields[5]) : qds->count_star); ASSERT_SQLITE_OK(rc, statsdb);
 			{
