@@ -713,7 +713,7 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	char c = ((char*)pkt->ptr)[5];
 	bool ret = false;
 	if (c == 'c' || c == 'C') {
-		if (pkt->size == strlen("commit") + 5 + 2) {
+		if (pkt->size >= sizeof("commit") + 5) {
 			if (strncasecmp((char*)"commit", (char*)pkt->ptr + 5, 6) == 0) {
 				__sync_fetch_and_add(&PgHGM->status.commit_cnt, 1);
 				ret = true;
@@ -722,7 +722,7 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	}
 	else {
 		if (c == 'r' || c == 'R') {
-			if (pkt->size == strlen("rollback") + 5 + 2) {
+			if (pkt->size >= sizeof("rollback") + 5) {
 				if (strncasecmp((char*)"rollback", (char*)pkt->ptr + 5, 8) == 0) {
 					__sync_fetch_and_add(&PgHGM->status.rollback_cnt, 1);
 					ret = true;
