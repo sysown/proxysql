@@ -644,7 +644,6 @@ class ProxySQL_Admin {
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();
 	void stats___mysql_free_connections();
-	void stats___pgsql_free_connections();
 	void stats___mysql_connection_pool(bool _reset);
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
@@ -652,6 +651,8 @@ class ProxySQL_Admin {
 	void stats___mysql_users();
 
 	void stats___pgsql_global();
+	void stats___pgsql_users();
+	void stats___pgsql_free_connections();
 	void stats___pgsql_connection_pool(bool _reset);
 
 	void stats___proxysql_servers_checksums();

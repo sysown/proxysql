@@ -28,6 +28,7 @@
 extern bool admin_proxysql_mysql_paused;
 extern bool admin_proxysql_pgsql_paused;
 extern MySQL_Authentication *GloMyAuth;
+extern PgSQL_Authentication* GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
@@ -1929,6 +1930,55 @@ void ProxySQL_Admin::stats___mysql_users() {
 			}
 		}
 	}
+
+	free(ads);
+}
+
+void ProxySQL_Admin::stats___pgsql_users() {
+	pgsql_account_details_t** ads = NULL;
+	statsdb->execute("DELETE FROM stats_pgsql_users");
+
+	int num_users = GloPgAuth->dump_all_users(&ads, false);
+	if (num_users == 0) return;
+
+	const char q[] = "INSERT INTO stats_pgsql_users(username,frontend_connections,frontend_max_connections) VALUES ('%s',%d,%d)";
+
+	char buf[256] = { 0 };
+
+	for (int i = 0; i < num_users; i++) {
+		pgsql_account_details_t* ad = ads[i];
+		if (ad->default_hostgroup >= 0) { // only not admin/stats
+			cfmt_t q_fmt = cstr_format(buf, q, ad->username, ad->num_connections_used, ad->max_connections);
+
+			if (q_fmt.str.size()) {
+				statsdb->execute(q_fmt.str.c_str());
+			}
+			else {
+				statsdb->execute(buf);
+			}
+		}
+		free(ad->username);
+		free(ad);
+	}
+
+	/*if (GloMyLdapAuth) {
+		std::unique_ptr<SQLite3_result> ldap_users{ GloMyLdapAuth->dump_all_users() };
+
+		for (const SQLite3_row* row : ldap_users->rows) {
+			const char* username = row->fields[LDAP_USER_FIELD_IDX::USERNAME];
+			int f_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTEND_CONNECTIONS]);
+			int f_max_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTED_MAX_CONNECTIONS]);
+
+			cfmt_t q_fmt = cstr_format(buf, q, username, f_conns, f_max_conns);
+
+			if (q_fmt.str.size()) {
+				statsdb->execute(q_fmt.str.c_str());
+			}
+			else {
+				statsdb->execute(buf);
+			}
+		}
+	}*/
 
 	free(ads);
 }
