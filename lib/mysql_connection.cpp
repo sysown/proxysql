@@ -256,6 +256,7 @@ static char * session_vars[]= {
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
 	password=NULL;
+	passtype=PASSWORD_TYPE::PRIMARY;
 	sha1_pass=NULL;
 	schemaname=NULL;
 	fe_username=NULL;

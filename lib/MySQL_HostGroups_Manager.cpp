@@ -350,6 +350,12 @@ hg_metrics_map = std::make_tuple(
 			}
 		),
 		std::make_tuple (
+			p_hg_counter::client_connections_sha2cached,
+			"proxysql_client_connections_sha2cached_total",
+			"Total number of attempted client connections with known cached passwords.",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_hg_counter::client_connections_aborted,
 			"proxysql_client_connections_total",
 			"Total number of client failed connections (or closed improperly).",
@@ -518,6 +524,18 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_client_connections_connected",
 			"Client connections that are currently connected.",
 			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected_prim,
+			"proxysql_client_connections_connected_primary",
+			"Client connections that are currently connected using primary password.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected_addl,
+			"proxysql_client_connections_connected_additional",
+			"Client connections that are currently connected using additional password.",
+			metric_tags {}
 		)
 	},
 	// prometheus dynamic counters
@@ -625,8 +643,11 @@ hg_metrics_map = std::make_tuple(
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
+	status.client_connections_prim_pass=0;
+	status.client_connections_addl_pass=0;
 	status.client_connections_aborted=0;
 	status.client_connections_created=0;
+	status.client_connections_sha2cached=0;
 	status.server_connections_connected=0;
 	status.server_connections_aborted=0;
 	status.server_connections_created=0;
@@ -4080,7 +4101,10 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 	// Update *client_connections* related metrics
 	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_created], status.client_connections_created);
 	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_aborted], status.client_connections_aborted);
+	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_sha2cached], status.client_connections_sha2cached);
 	status.p_gauge_array[p_hg_gauge::client_connections_connected]->Set(status.client_connections);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected_prim]->Set(status.client_connections_prim_pass);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected_addl]->Set(status.client_connections_addl_pass);
 
 	// Update *acess_denied* related metrics
 	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_wrong_password], status.access_denied_wrong_password);

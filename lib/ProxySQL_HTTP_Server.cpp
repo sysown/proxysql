@@ -377,7 +377,6 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 
 	char *username;
-	char *password = NULL;
 	const char *realm = "Access to ProxySQL status page";
 
 	username = MHD_digest_auth_get_username(connection);
@@ -387,30 +386,14 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		MHD_destroy_response(response);
 		return ret;
 	}
+	account_details_t ad { GloMyAuth->lookup(username, USERNAME_FRONTEND, { false, false, false }) };
 	{
-		int default_hostgroup = -1;
-		char *default_schema = NULL;
-		bool schema_locked;
-		bool transaction_persistent;
-		bool fast_forward;
-		bool _ret_use_ssl = false;
-		int max_connections;
-		void *sha1_pass = NULL;
-		password=GloMyAuth->lookup(username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, NULL);
-		if (default_schema) { // unused
-			free(default_schema);
-		}
-		if (sha1_pass) { // unused
-			free(sha1_pass);
-		}
 		if (
-			(default_hostgroup != STATS_HOSTGROUP)
+			(ad.default_hostgroup != STATS_HOSTGROUP)
 			||
-			(password == NULL)
+			(ad.password == NULL)
 		) {
-			if (password) {
-				free(password); // cleanup
-			}
+			free_account_details(ad);
 			free(username); // cleanup
 			response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
 			ret = MHD_queue_auth_fail_response(connection, realm, OPAQUE, response, MHD_NO);
@@ -418,9 +401,9 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			return ret;
 		}
 	}
-	ret = MHD_digest_auth_check(connection, realm, username, password, 300);
+	ret = MHD_digest_auth_check(connection, realm, username, ad.password, 300);
 	free(username);
-	free(password);
+	free_account_details(ad);
 	if ( (ret == MHD_INVALID_NONCE) || (ret == MHD_NO) ) {
 		response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
 		if (NULL == response)

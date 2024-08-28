@@ -749,13 +749,26 @@ MySQL_Session::~MySQL_Session() {
 #endif /* PROXYSQLCLICKHOUSE */
 				default:
 					if (use_ldap_auth == false) {
-						GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+						GloMyAuth->decrease_frontend_user_connections(
+							client_myds->myconn->userinfo->username,
+							client_myds->myconn->userinfo->passtype
+						);
 					} else {
 						GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 					}
 					break;
 			}
+
+			if (client_myds->myconn) {
+				__sync_fetch_and_sub(
+					client_myds->myconn->userinfo->passtype == PASSWORD_TYPE::PRIMARY ?
+						&MyHGM->status.client_connections_prim_pass :
+						&MyHGM->status.client_connections_addl_pass,
+					1
+				);
+			}
 		}
+
 		delete client_myds;
 	}
 	if (default_schema) {
@@ -5438,7 +5451,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
 						if (use_ldap_auth == false) {
-							free_users = GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+							free_users = GloMyAuth->increase_frontend_user_connections(
+								client_myds->myconn->userinfo->username,
+								client_myds->myconn->userinfo->passtype,
+								&used_users
+							);
 						} else {
 							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->fe_username, &used_users);
 						}
@@ -6845,7 +6862,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		init();
 		if (client_authenticated) {
 			if (use_ldap_auth == false) {
-				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+				GloMyAuth->decrease_frontend_user_connections(
+					client_myds->myconn->userinfo->username,
+					client_myds->myconn->userinfo->passtype
+				);
 			} else {
 				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 			}
@@ -6860,7 +6880,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			client_authenticated=true;
 			//int free_users=0;
 			int used_users=0;
-			/*free_users */GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+			GloMyAuth->increase_frontend_user_connections(
+				client_myds->myconn->userinfo->username,
+				client_myds->myconn->userinfo->passtype,
+				&used_users
+			);
 			// FIXME: max_connections is not handled for CHANGE_USER
 		} else {
 			l_free(pkt->size,pkt->ptr);
@@ -6905,6 +6929,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
 			free(_s);
+			if (client_addr) { free(client_addr); }
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 		}
 	} else {
