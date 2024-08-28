@@ -3334,7 +3334,7 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 			}
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
-				GloPgAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
+				GloPgAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, 0, 0, 1000, (char*)"", (char*)"");
 			}
 		}
 
@@ -5063,6 +5063,12 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, scheduler_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	BQE1(admindb, restapi_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	BQE1(admindb, proxysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+
+	BQE1(admindb, pgsql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	BQE1(admindb, pgsql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	admindb->execute("INSERT OR REPLACE INTO disk.pgsql_users SELECT * FROM main.pgsql_users");
+	BQE1(admindb, pgsql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+
 #ifdef DEBUG
 	admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
 	admindb->execute("INSERT OR REPLACE INTO disk.debug_filters SELECT * FROM main.debug_filters");
@@ -5292,7 +5298,6 @@ void ProxySQL_Admin::__refresh_users(
 
 		if (no_resultset_supplied) {
 			uint64_t hash1 = GloMyAuth->get_runtime_checksum();
-			hash1 += GloPgAuth->get_runtime_checksum();
 			if (GloMyLdapAuth) {
 				hash1 += GloMyLdapAuth->get_ldap_mapping_runtime_checksum();
 			}
@@ -5583,7 +5588,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 			if constexpr (pt == SERVER_TYPE_MYSQL) {
 				str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment FROM main.mysql_users WHERE active=1 AND default_hostgroup>=0";
 			} else if constexpr (pt == SERVER_TYPE_PGSQL) {
-				str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment FROM main.pgsql_users WHERE active=1 AND default_hostgroup>=0";
+				str = (char*)"SELECT username,password,use_ssl,default_hostgroup,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment FROM main.pgsql_users WHERE active=1 AND default_hostgroup>=0";
 			}
 			admindb->execute_statement(str, &error, &cols, &affected_rows, &resultset);
 		} else {
@@ -5593,7 +5598,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 		if constexpr (pt == SERVER_TYPE_MYSQL) {
 			str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
-			str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.pgsql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
+			str = (char*)"SELECT username,password,use_ssl,default_hostgroup,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.pgsql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
 		}
 		query=(char *)malloc(strlen(str)+strlen(__user)+15);
 		sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"),__user);
@@ -5615,7 +5620,6 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 			}
 		}
 
-
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 	      SQLite3_row *r=*it;
 			char *password=NULL;
@@ -5631,25 +5635,47 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 			char* attributes = nullptr;
 			char* comment = nullptr;
 
-			if (__user != nullptr) {
-				usertypes.push_back(usertype);
+			if constexpr (pt == SERVER_TYPE_MYSQL) {
+				if (__user != nullptr) {
+					usertypes.push_back(usertype);
 
-				max_connections = r->fields[8];
-				attributes = r->fields[9];
-				comment = r->fields[10];
-			} else {
-				if (strcasecmp(r->fields[8], "1") == 0) {
-					usertypes.push_back(USERNAME_BACKEND);
+					max_connections = r->fields[8];
+					attributes = r->fields[9];
+					comment = r->fields[10];
 				}
-				if (strcasecmp(r->fields[9], "1") == 0) {
-					usertypes.push_back(USERNAME_FRONTEND);
-				}
+				else {
+					if (strcasecmp(r->fields[8], "1") == 0) {
+						usertypes.push_back(USERNAME_BACKEND);
+					}
+					if (strcasecmp(r->fields[9], "1") == 0) {
+						usertypes.push_back(USERNAME_FRONTEND);
+					}
 
-				max_connections = r->fields[10];
-				attributes = r->fields[11];
-				comment = r->fields[12];
+					max_connections = r->fields[10];
+					attributes = r->fields[11];
+					comment = r->fields[12];
+				}
+			} else if constexpr (pt == SERVER_TYPE_PGSQL) {
+				if (__user != nullptr) {
+					usertypes.push_back(usertype);
+
+					max_connections = r->fields[6];
+					attributes = r->fields[7];
+					comment = r->fields[8];
+				}
+				else {
+					if (strcasecmp(r->fields[6], "1") == 0) {
+						usertypes.push_back(USERNAME_BACKEND);
+					}
+					if (strcasecmp(r->fields[7], "1") == 0) {
+						usertypes.push_back(USERNAME_FRONTEND);
+					}
+
+					max_connections = r->fields[8];
+					attributes = r->fields[9];
+					comment = r->fields[10];
+				}
 			}
-
 			for (const enum cred_username_type usertype : usertypes) {
 				if constexpr (pt == SERVER_TYPE_MYSQL) {
 					GloMyAuth->add(
@@ -5673,10 +5699,8 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 						usertype, // backend/frontend
 						(strcmp(r->fields[2], "1") == 0 ? true : false), // use_ssl
 						atoi(r->fields[3]), // default_hostgroup
-						(r->fields[4] == NULL ? (char*)"" : r->fields[4]), //default_schema
-						(strcmp(r->fields[5], "1") == 0 ? true : false), // schema_locked
-						(strcmp(r->fields[6], "1") == 0 ? true : false), // transaction_persistent
-						(strcmp(r->fields[7], "1") == 0 ? true : false), // fast_forward
+						(strcmp(r->fields[4], "1") == 0 ? true : false), // transaction_persistent
+						(strcmp(r->fields[5], "1") == 0 ? true : false), // fast_forward
 						(atoi(max_connections) > 0 ? atoi(max_connections) : 0),  // max_connections
 						(attributes == NULL ? (char*)"" : attributes), // attributes
 						(comment == NULL ? (char*)"" : comment) //comment
@@ -6047,10 +6071,10 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 	//	char *qfr=(char *)"REPLACE INTO runtime_pgsql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username='%s' AND frontend=1),0),1,%d)";
 	//	char *qbr=(char *)"REPLACE INTO runtime_pgsql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username='%s' AND backend=1),0),%d)";
 
-	char* qf_stmt1 = (char*)"REPLACE INTO pgsql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11)";
-	char* qb_stmt1 = (char*)"REPLACE INTO pgsql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11)";
-	char* qfr_stmt1 = (char*)"REPLACE INTO runtime_pgsql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11)";
-	char* qbr_stmt1 = (char*)"REPLACE INTO runtime_pgsql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11)";
+	char* qf_stmt1 = (char*)"REPLACE INTO pgsql_users(username,password,active,use_ssl,default_hostgroup,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,0,1,?7,?8,?9)";
+	char* qb_stmt1 = (char*)"REPLACE INTO pgsql_users(username,password,active,use_ssl,default_hostgroup,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,1,0,?7,?8,?9)";
+	char* qfr_stmt1 = (char*)"REPLACE INTO runtime_pgsql_users(username,password,active,use_ssl,default_hostgroup,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,0,1,?7,?8,?9)";
+	char* qbr_stmt1 = (char*)"REPLACE INTO runtime_pgsql_users(username,password,active,use_ssl,default_hostgroup,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,1,0,?7,?8,?9)";
 	num_users = GloPgAuth->dump_all_users(&ads);
 	if (num_users == 0) return;
 	char* q_stmt1_f = NULL;
@@ -6115,20 +6139,17 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 			rc = (*proxy_sqlite3_bind_text)(statement1, 2, ad->password, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			rc = (*proxy_sqlite3_bind_int64)(statement1, 3, ad->use_ssl); ASSERT_SQLITE_OK(rc, admindb);
 			rc = (*proxy_sqlite3_bind_int64)(statement1, 4, ad->default_hostgroup); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(statement1, 5, ad->default_schema, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement1, 6, ad->schema_locked); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement1, 7, ad->transaction_persistent); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement1, 8, ad->fast_forward); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_int64)(statement1, 9, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(statement1, 10, ad->attributes, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc = (*proxy_sqlite3_bind_text)(statement1, 11, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 5, ad->transaction_persistent); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 6, ad->fast_forward); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 7, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 8, ad->attributes, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 9, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement1);
 			rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 		}
 		free(ad->username);
 		free(ad->password); // this is not initialized with dump_all_users( , false)
-		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
 		free(ad->comment);
 		free(ad->attributes);
 		free(ad);
@@ -6822,13 +6843,13 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 		char* query32 = NULL;
 		std::string query32s = "";
 		if (_runtime) {
-			query1 = (char*)"INSERT INTO runtime_pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-			query32s = "INSERT INTO runtime_pgsql_servers VALUES " + generate_multi_rows_query(32, 12);
+			query1 = (char*)"INSERT INTO runtime_pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+			query32s = "INSERT INTO runtime_pgsql_servers VALUES " + generate_multi_rows_query(32, 11);
 			query32 = (char*)query32s.c_str();
 		}
 		else {
-			query1 = (char*)"INSERT INTO pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-			query32s = "INSERT INTO pgsql_servers VALUES " + generate_multi_rows_query(32, 12);
+			query1 = (char*)"INSERT INTO pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+			query32s = "INSERT INTO pgsql_servers VALUES " + generate_multi_rows_query(32, 11);
 			query32 = (char*)query32s.c_str();
 		}
 		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
@@ -6844,18 +6865,17 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			SQLite3_row* r1 = *it;
 			int idx = row_idx % 32;
 			if (row_idx < max_bulk_row_idx) { // bulk
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 5, (_runtime ? r1->fields[4] : (strcmp(r1->fields[4], "SHUNNED") == 0 ? "ONLINE" : r1->fields[4])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[4], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				if (idx == 31) {
 					SAFE_SQLITE3_STEP2(statement32);
 					rc = (*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, admindb);
@@ -6864,17 +6884,16 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			}
 			else { // single row
 				rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement1,  2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement1, 5, (_runtime ? r1->fields[4] : (strcmp(r1->fields[4], "SHUNNED") == 0 ? "ONLINE" : r1->fields[4])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement1,  4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[3], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_int64)(statement1, 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_bind_int64)(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = (*proxy_sqlite3_bind_text)(statement1,  11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP2(statement1);
 				rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
@@ -7246,7 +7265,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	SQLite3_result* incoming_hostgroup_attributes = incoming_pgsql_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_pgsql_servers_v2 = incoming_pgsql_servers.incoming_pgsql_servers_v2;
 
-	const char* query = (char*)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.pgsql_servers ORDER BY hostgroup_id, hostname, port";
+	const char* query = (char*)"SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.pgsql_servers ORDER BY hostgroup_id, hostname, port";
 	if (runtime_pgsql_servers == nullptr) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_servers);

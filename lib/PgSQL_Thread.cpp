@@ -3046,8 +3046,6 @@ void PgSQL_Thread::run() {
 			maintenance_loop = true;
 			servers_table_version_previous = servers_table_version_current;
 			servers_table_version_current = PgHGM->get_servers_table_version();
-			// during a maintenance loop (every 1 second) we read has_gtid_port from PgHGM
-			retrieve_gtids_required = PgHGM->has_gtid_port;
 		}
 		else {
 			maintenance_loop = false;
@@ -3972,7 +3970,6 @@ PgSQL_Thread::PgSQL_Thread() {
 	last_maintenance_time = 0;
 	last_move_to_idle_thread_time = 0;
 	maintenance_loop = true;
-	retrieve_gtids_required = false;
 
 	servers_table_version_previous = 0;
 	servers_table_version_current = 0;

@@ -702,7 +702,6 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	char* pass = NULL;
 
 	char* password = NULL;
-	char* default_schema = NULL;
 	//char* db = NULL;
 	char* attributes = NULL;
 	void* sha1_pass = NULL;
@@ -710,7 +709,6 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	int default_hostgroup = -1;
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	bool using_password = false;
-	bool schema_locked;
 	bool transaction_persistent = true;
 	bool fast_forward = false;
 	bool _ret_use_ssl = false;
@@ -735,7 +733,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		goto __exit_process_pkt_handshake_response;
 	}
 
-	password = GloPgAuth->lookup((char*)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
+	password = GloPgAuth->lookup((char*)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 
 	if (password) {
 #ifdef DEBUG
@@ -748,9 +746,9 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		free(tmp_pass);
 #endif // debug
 		(*myds)->sess->default_hostgroup = default_hostgroup;
-		(*myds)->sess->default_schema = default_schema; // just the pointer is passed
+		//(*myds)->sess->default_schema = default_schema; // just the pointer is passed
 		(*myds)->sess->user_attributes = attributes; // just the pointer is passed
-		(*myds)->sess->schema_locked = schema_locked;
+		//(*myds)->sess->schema_locked = schema_locked;
 		(*myds)->sess->transaction_persistent = transaction_persistent;
 		(*myds)->sess->session_fast_forward = false; // default
 		if ((*myds)->sess->session_type == PROXYSQL_SESSION_PGSQL) {
@@ -989,7 +987,8 @@ void PgSQL_Protocol::welcome_client() {
 	pgpkt.set_multi_pkt_mode(true);
 	pgpkt.write_AuthenticationOk();
 	
-	pgpkt.write_ParameterStatus("is_superuser", "on"); // only for admin
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN)
+		pgpkt.write_ParameterStatus("is_superuser", "on"); // only for admin
 
 	const char* application_name = (*myds)->myconn->conn_params.get_value(PG_APPLICATION_NAME);
 	if (application_name)

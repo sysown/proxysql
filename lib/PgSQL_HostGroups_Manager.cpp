@@ -148,13 +148,12 @@ void PgSQL_SrvConnList::drop_all_connections() {
 
 
 PgSQL_SrvC::PgSQL_SrvC(
-	char* add, uint16_t p, uint16_t gp, int64_t _weight, enum MySerStatus _status, unsigned int _compression,
+	char* add, uint16_t p, int64_t _weight, enum MySerStatus _status, unsigned int _compression,
 	int64_t _max_connections, unsigned int _max_replication_lag, int32_t _use_ssl, unsigned int _max_latency_ms,
 	char* _comment
 ) {
 	address=strdup(add);
 	port=p;
-	gtid_port=gp;
 	weight=_weight;
 	status=_status;
 	compression=_compression;
@@ -835,8 +834,8 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	sqlite3_stmt *statement1=NULL;
 	sqlite3_stmt *statement32=NULL;
 	//sqlite3 *mydb3=mydb->get_db();
-	char *query1=(char *)"INSERT INTO pgsql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-	std::string query32s = "INSERT INTO pgsql_servers_incoming VALUES " + generate_multi_rows_query(32,12);
+	char *query1=(char *)"INSERT INTO pgsql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+	std::string query32s = "INSERT INTO pgsql_servers_incoming VALUES " + generate_multi_rows_query(32,11);
 	char *query32 = (char *)query32s.c_str();
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	rc = mydb->prepare_v2(query1, &statement1);
@@ -851,14 +850,14 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r1=*it;
 		status1=MYSQL_SERVER_STATUS_ONLINE;
-		if (strcasecmp(r1->fields[4],"ONLINE")) {
-			if (!strcasecmp(r1->fields[4],"SHUNNED")) {
+		if (strcasecmp(r1->fields[3],"ONLINE")) {
+			if (!strcasecmp(r1->fields[3],"SHUNNED")) {
 				status1=MYSQL_SERVER_STATUS_SHUNNED;
 			} else {
-				if (!strcasecmp(r1->fields[4],"OFFLINE_SOFT")) {
+				if (!strcasecmp(r1->fields[3],"OFFLINE_SOFT")) {
 					status1=MYSQL_SERVER_STATUS_OFFLINE_SOFT;
 				} else {
-					if (!strcasecmp(r1->fields[4],"OFFLINE_HARD")) {
+					if (!strcasecmp(r1->fields[3],"OFFLINE_HARD")) {
 						status1=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 					}
 				}
@@ -866,18 +865,17 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 		}
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+5, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+6, status1); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_text)(statement32,  (idx*11)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+4, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+5, status1); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*11)+10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_text)(statement32,  (idx*11)+11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
 				rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, mydb);
@@ -885,17 +883,16 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 			}
 		} else { // single row
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_text)(statement1,  2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 5, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 6, status1); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 5, status1); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, mydb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, mydb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, mydb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, mydb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, mydb);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc=(*proxy_sqlite3_bind_text)(statement1,  11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
@@ -1217,9 +1214,7 @@ bool PgSQL_HostGroups_Manager::commit(
 	wrlock();
 	// purge table
 	purge_pgsql_servers_table();
-	// if any server has gtid_port enabled, use_gtid is set to true
-	// and then has_gtid_port is set too
-	bool use_gtid = false;
+
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers\n");
 	mydb->execute("DELETE FROM pgsql_servers");
 	generate_pgsql_servers_table();
@@ -1270,10 +1265,10 @@ bool PgSQL_HostGroups_Manager::commit(
 	//mydb->execute("DELETE FROM pgsql_servers");
 	//generate_pgsql_servers_table();
 
-	mydb->execute("INSERT OR IGNORE INTO pgsql_servers(hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers_incoming");
+	mydb->execute("INSERT OR IGNORE INTO pgsql_servers(hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers_incoming");
 
 	// SELECT FROM pgsql_servers whatever is not identical in pgsql_servers_incoming, or where mem_pointer=0 (where there is no pointer yet)
-	query=(char *)"SELECT t1.*, t2.gtid_port, t2.weight, t2.status, t2.compression, t2.max_connections, t2.max_replication_lag, t2.use_ssl, t2.max_latency_ms, t2.comment FROM pgsql_servers t1 JOIN pgsql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE mem_pointer=0 OR t1.gtid_port<>t2.gtid_port OR t1.weight<>t2.weight OR t1.status<>t2.status OR t1.compression<>t2.compression OR t1.max_connections<>t2.max_connections OR t1.max_replication_lag<>t2.max_replication_lag OR t1.use_ssl<>t2.use_ssl OR t1.max_latency_ms<>t2.max_latency_ms or t1.comment<>t2.comment";
+	query=(char *)"SELECT t1.*, t2.weight, t2.status, t2.compression, t2.max_connections, t2.max_replication_lag, t2.use_ssl, t2.max_latency_ms, t2.comment FROM pgsql_servers t1 JOIN pgsql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE mem_pointer=0 OR t1.weight<>t2.weight OR t1.status<>t2.status OR t1.compression<>t2.compression OR t1.max_connections<>t2.max_connections OR t1.max_replication_lag<>t2.max_replication_lag OR t1.use_ssl<>t2.use_ssl OR t1.max_latency_ms<>t2.max_latency_ms or t1.comment<>t2.comment";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
@@ -1293,22 +1288,22 @@ bool PgSQL_HostGroups_Manager::commit(
 		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 		rc = mydb->prepare_v2(query1, &statement1);
 		ASSERT_SQLITE_OK(rc, mydb);
-		char *query2=(char *)"UPDATE pgsql_servers SET weight = ?1 , status = ?2 , compression = ?3 , max_connections = ?4 , max_replication_lag = ?5 , use_ssl = ?6 , max_latency_ms = ?7 , comment = ?8 , gtid_port = ?9 WHERE hostgroup_id = ?10 AND hostname = ?11 AND port = ?12";
+		char *query2=(char *)"UPDATE pgsql_servers SET weight = ?1 , status = ?2 , compression = ?3 , max_connections = ?4 , max_replication_lag = ?5 , use_ssl = ?6 , max_latency_ms = ?7 , comment = ?8 WHERE hostgroup_id = ?9 AND hostname = ?10 AND port = ?11";
 		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query2, -1, &statement2, 0);
 		rc = mydb->prepare_v2(query2, &statement2);
 		ASSERT_SQLITE_OK(rc, mydb);
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			long long ptr=atoll(r->fields[12]); // increase this index every time a new column is added
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d , weight=%d, status=%d, mem_pointer=%llu, hostgroup=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]), ptr, atoi(r->fields[0]), atoi(r->fields[6]));
+			long long ptr=atoll(r->fields[11]); // increase this index every time a new column is added
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d , weight=%d, status=%d, mem_pointer=%llu, hostgroup=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), ptr, atoi(r->fields[0]), atoi(r->fields[5]));
 			//fprintf(stderr,"%lld\n", ptr);
 			if (ptr==0) {
 				if (GloMTH->variables.hostgroup_manager_verbose) {
-					proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]));
+					proxy_info("Creating new server in HG %d : %s:%d , weight=%d, status=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]));
 				}
-				PgSQL_SrvC *mysrvc=new PgSQL_SrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]), atoi(r->fields[8]), atoi(r->fields[9]), atoi(r->fields[10]), r->fields[11]); // add new fields here if adding more columns in pgsql_servers
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]), mysrvc, atoi(r->fields[0]));
+				PgSQL_SrvC *mysrvc=new PgSQL_SrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]), atoi(r->fields[8]), atoi(r->fields[9]), r->fields[10]); // add new fields here if adding more columns in pgsql_servers
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), mysrvc, atoi(r->fields[0]));
 				add(mysrvc,atoi(r->fields[0]));
 				ptr=(uintptr_t)mysrvc;
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 1, ptr); ASSERT_SQLITE_OK(rc, mydb);
@@ -1318,48 +1313,38 @@ bool PgSQL_HostGroups_Manager::commit(
 				SAFE_SQLITE3_STEP2(statement1);
 				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
-				if (mysrvc->gtid_port) {
-					// this server has gtid_port configured, we set use_gtid
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address, mysrvc->port);
-					use_gtid = true;
-				}
 			} else {
 				bool run_update=false;
 				PgSQL_SrvC *mysrvc=(PgSQL_SrvC *)ptr;
 				// carefully increase the 2nd index by 1 for every new column added
-				if (atoi(r->fields[3])!=atoi(r->fields[13])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing gtid_port for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->gtid_port , atoi(r->fields[13]));
-					mysrvc->gtid_port=atoi(r->fields[13]);
-				}
 
-				if (atoi(r->fields[4])!=atoi(r->fields[14])) {
+				if (atoi(r->fields[3])!=atoi(r->fields[12])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
-					mysrvc->weight=atoi(r->fields[14]);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->weight , atoi(r->fields[12]));
+					mysrvc->weight=atoi(r->fields[12]);
 				}
-				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
+				if (atoi(r->fields[4])!=atoi(r->fields[13])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]) , mysrvc->status , atoi(r->fields[15]));
-					mysrvc->status=(MySerStatus)atoi(r->fields[15]);
+						proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->status , atoi(r->fields[13]));
+					mysrvc->status=(MySerStatus)atoi(r->fields[13]);
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 						mysrvc->shunned_automatic=false;
 					}
 				}
-				if (atoi(r->fields[6])!=atoi(r->fields[16])) {
+				if (atoi(r->fields[5])!=atoi(r->fields[14])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing compression for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[6]) , mysrvc->compression , atoi(r->fields[16]));
-					mysrvc->compression=atoi(r->fields[16]);
+						proxy_info("Changing compression for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]) , mysrvc->compression , atoi(r->fields[14]));
+					mysrvc->compression=atoi(r->fields[14]);
 				}
-				if (atoi(r->fields[7])!=atoi(r->fields[17])) {
+				if (atoi(r->fields[6])!=atoi(r->fields[15])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-					proxy_info("Changing max_connections for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[7]) , mysrvc->max_connections , atoi(r->fields[17]));
-					mysrvc->max_connections=atoi(r->fields[17]);
+					proxy_info("Changing max_connections for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[6]) , mysrvc->max_connections , atoi(r->fields[15]));
+					mysrvc->max_connections=atoi(r->fields[15]);
 				}
-				if (atoi(r->fields[8])!=atoi(r->fields[18])) {
+				if (atoi(r->fields[7])!=atoi(r->fields[16])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing max_replication_lag for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[8]) , mysrvc->max_replication_lag , atoi(r->fields[18]));
-					mysrvc->max_replication_lag=atoi(r->fields[18]);
+						proxy_info("Changing max_replication_lag for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[7]) , mysrvc->max_replication_lag , atoi(r->fields[16]));
+					mysrvc->max_replication_lag=atoi(r->fields[16]);
 					if (mysrvc->max_replication_lag == 0) { // we just changed it to 0
 						if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 							// the server is currently shunned due to replication lag
@@ -1369,21 +1354,21 @@ bool PgSQL_HostGroups_Manager::commit(
 						}
 					}
 				}
-				if (atoi(r->fields[9])!=atoi(r->fields[19])) {
+				if (atoi(r->fields[8])!=atoi(r->fields[17])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing use_ssl for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[9]) , mysrvc->use_ssl , atoi(r->fields[19]));
-					mysrvc->use_ssl=atoi(r->fields[19]);
+						proxy_info("Changing use_ssl for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[8]) , mysrvc->use_ssl , atoi(r->fields[17]));
+					mysrvc->use_ssl=atoi(r->fields[17]);
 				}
-				if (atoi(r->fields[10])!=atoi(r->fields[20])) {
+				if (atoi(r->fields[9])!=atoi(r->fields[18])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing max_latency_ms for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[10]) , mysrvc->max_latency_us/1000 , atoi(r->fields[20]));
-					mysrvc->max_latency_us=1000*atoi(r->fields[20]);
+						proxy_info("Changing max_latency_ms for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[9]) , mysrvc->max_latency_us/1000 , atoi(r->fields[18]));
+					mysrvc->max_latency_us=1000*atoi(r->fields[18]);
 				}
-				if (strcmp(r->fields[11],r->fields[21])) {
+				if (strcmp(r->fields[10],r->fields[19])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing comment for server %d:%s:%d (%s:%d) from '%s' to '%s'\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[11], r->fields[21]);
+						proxy_info("Changing comment for server %d:%s:%d (%s:%d) from '%s' to '%s'\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[10], r->fields[19]);
 					free(mysrvc->comment);
-					mysrvc->comment=strdup(r->fields[21]);
+					mysrvc->comment=strdup(r->fields[19]);
 				}
 				if (run_update) {
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 1, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
@@ -1393,29 +1378,18 @@ bool PgSQL_HostGroups_Manager::commit(
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 5, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 6, mysrvc->use_ssl); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_bind_int64)(statement2, 7, mysrvc->max_latency_us/1000); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_text)(statement2, 8,  mysrvc->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement2, 9, mysrvc->gtid_port); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement2, 10, mysrvc->myhgc->hid); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_text)(statement2, 11,  mysrvc->address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement2, 12, mysrvc->port); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_text)(statement2,  8,  mysrvc->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 9, mysrvc->myhgc->hid); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_text)(statement2,  10,  mysrvc->address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 11, mysrvc->port); ASSERT_SQLITE_OK(rc, mydb);
 					SAFE_SQLITE3_STEP2(statement2);
 					rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, mydb);
-				}
-				if (mysrvc->gtid_port) {
-					// this server has gtid_port configured, we set use_gtid
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address, mysrvc->port);
-					use_gtid = true;
 				}
 			}
 		}
 		(*proxy_sqlite3_finalize)(statement1);
 		(*proxy_sqlite3_finalize)(statement2);
-	}
-	if (use_gtid) {
-		has_gtid_port = true;
-	} else {
-		has_gtid_port = false;
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers_incoming\n");
@@ -1562,11 +1536,11 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 
 	PtrArray *lst=new PtrArray();
 	//sqlite3 *mydb3=mydb->get_db();
-	char *query1=(char *)"INSERT INTO pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+	char *query1=(char *)"INSERT INTO pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	rc = mydb->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, mydb);
-	std::string query32s = "INSERT INTO pgsql_servers VALUES " + generate_multi_rows_query(32,13);
+	std::string query32s = "INSERT INTO pgsql_servers VALUES " + generate_multi_rows_query(32,12);
 	char *query32 = (char *)query32s.c_str();
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
 	rc = mydb->prepare_v2(query32, &statement32);
@@ -1574,10 +1548,10 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		if (_onlyhg==NULL) {
-			proxy_info("Dumping current MySQL Servers structures for hostgroup ALL\n");
+			proxy_info("Dumping current PgSQL Servers structures for hostgroup ALL\n");
 		} else {
 			int hidonly=*_onlyhg;
-			proxy_info("Dumping current MySQL Servers structures for hostgroup %d\n", hidonly);
+			proxy_info("Dumping current PgSQL Servers structures for hostgroup %d\n", hidonly);
 		}
 	}
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
@@ -1610,7 +1584,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 						st=(char *)"SHUNNED";
 						break;
 				}
-				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
+				fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
 			lst->add(mysrvc);
 			if (lst->len==32) {
@@ -1619,19 +1593,18 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 					i--;
 					PgSQL_SrvC *mysrvc=(PgSQL_SrvC *)lst->remove_index_fast(0);
 					uintptr_t ptr=(uintptr_t)mysrvc;
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+1, mysrvc->myhgc->hid); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_text)(statement32, (i*13)+2, mysrvc->address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+3, mysrvc->port); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+4, mysrvc->gtid_port); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+5, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+6, mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+7, mysrvc->compression); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+8, mysrvc->max_connections); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+9, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+10, mysrvc->use_ssl); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+11, mysrvc->max_latency_us/1000); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_text)(statement32, (i*13)+12, mysrvc->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*13)+13, ptr); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+1, mysrvc->myhgc->hid); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_text)(statement32,  (i*12)+2, mysrvc->address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+3, mysrvc->port); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+4, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+5, mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+6, mysrvc->compression); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+7, mysrvc->max_connections); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+8, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+9, mysrvc->use_ssl); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+10, mysrvc->max_latency_us/1000); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_text)(statement32,  (i*12)+11, mysrvc->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc=(*proxy_sqlite3_bind_int64)(statement32, (i*12)+12, ptr); ASSERT_SQLITE_OK(rc, mydb);
 				}
 				SAFE_SQLITE3_STEP2(statement32);
 				rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, mydb);
@@ -1643,18 +1616,17 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 		PgSQL_SrvC *mysrvc=(PgSQL_SrvC *)lst->remove_index_fast(0);
 		uintptr_t ptr=(uintptr_t)mysrvc;
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, mysrvc->myhgc->hid); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement1, 2, mysrvc->address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement1,  2, mysrvc->address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, mysrvc->port); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 4, mysrvc->gtid_port); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 5, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 6, mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 7, mysrvc->compression); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 8, mysrvc->max_connections); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 9, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 10, mysrvc->use_ssl); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 11, mysrvc->max_latency_us/1000); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement1, 12, mysrvc->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 13, ptr); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 4, mysrvc->weight); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 5, mysrvc->status); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 6, mysrvc->compression); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 7, mysrvc->max_connections); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 8, mysrvc->max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 9, mysrvc->use_ssl); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 10, mysrvc->max_latency_us/1000); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement1,  11, mysrvc->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 12, ptr); ASSERT_SQLITE_OK(rc, mydb);
 
 		SAFE_SQLITE3_STEP2(statement1);
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
@@ -1668,11 +1640,11 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
 		if (_onlyhg==NULL) {
-			mydb->execute_statement((char *)"SELECT hostgroup_id hid, hostname, port, gtid_port gtid, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers", &error , &cols , &affected_rows , &resultset);
+			mydb->execute_statement((char *)"SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers", &error , &cols , &affected_rows , &resultset);
 		} else {
 			int hidonly=*_onlyhg;
 			char *q1 = (char *)malloc(256);
-			sprintf(q1,"SELECT hostgroup_id hid, hostname, port, gtid_port gtid, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers WHERE hostgroup_id=%d" , hidonly);
+			sprintf(q1,"SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers WHERE hostgroup_id=%d" , hidonly);
 			mydb->execute_statement(q1, &error , &cols , &affected_rows , &resultset);
 			free(q1);
 		}
@@ -3296,7 +3268,7 @@ void PgSQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM pgsql_replication_hostgroups JOIN pgsql_servers WHERE (hostgroup_id=writer_hostgroup) AND hostname='%s' AND port=%d UNION SELECT DISTINCT writer_hostgroup FROM pgsql_replication_hostgroups JOIN pgsql_servers WHERE (hostgroup_id=reader_hostgroup) AND hostname='%s' AND port=%d) LEFT JOIN pgsql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
 	const char *Q2A=(char *)"DELETE FROM pgsql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id) AND status='OFFLINE_HARD'";
 	const char *Q2B=(char *)"UPDATE OR IGNORE pgsql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE reader_hostgroup=pgsql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM pgsql_replication_hostgroups WHERE reader_hostgroup=pgsql_servers.hostgroup_id)";
-	const char *Q3A=(char *)"INSERT OR IGNORE INTO pgsql_servers(hostgroup_id, hostname, port, gtid_port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, gtid_port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers.comment FROM pgsql_servers JOIN pgsql_replication_hostgroups ON pgsql_servers.hostgroup_id=pgsql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
+	const char *Q3A=(char *)"INSERT OR IGNORE INTO pgsql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers.comment FROM pgsql_servers JOIN pgsql_replication_hostgroups ON pgsql_servers.hostgroup_id=pgsql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
 	const char *Q3B=(char *)"DELETE FROM pgsql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM pgsql_replication_hostgroups WHERE reader_hostgroup=pgsql_servers.hostgroup_id)";
 	const char *Q4=(char *)"UPDATE OR IGNORE pgsql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id)";
 	const char *Q5=(char *)"DELETE FROM pgsql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM pgsql_replication_hostgroups WHERE writer_hostgroup=pgsql_servers.hostgroup_id)";
@@ -4405,7 +4377,7 @@ int PgSQL_HostGroups_Manager::create_new_server_in_hg(
 	if (mysrvc == nullptr) {
 		char* c_hostname { const_cast<char*>(srv_info.addr.c_str()) };
 		PgSQL_SrvC* mysrvc = new PgSQL_SrvC(
-			c_hostname, srv_info.port, 0, srv_opts.weigth, MYSQL_SERVER_STATUS_ONLINE, 0, srv_opts.max_conns, 0,
+			c_hostname, srv_info.port, srv_opts.weigth, MYSQL_SERVER_STATUS_ONLINE, 0, srv_opts.max_conns, 0,
 			srv_opts.use_ssl, 0, const_cast<char*>("")
 		);
 		add(mysrvc,hid);
@@ -4603,7 +4575,6 @@ PgSQL_SrvC* PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsig
 		if (strcmp(mysrvc->address, srv->address) == 0 && mysrvc->port == srv->port) {
 			if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 				
-				mysrvc->gtid_port = srv->gtid_port;
 				mysrvc->weight = srv->weight;
 				mysrvc->compression = srv->compression;
 				mysrvc->max_connections = srv->max_connections;
@@ -4616,9 +4587,9 @@ PgSQL_SrvC* PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsig
 				if (GloMTH->variables.hostgroup_manager_verbose) {
 					proxy_info(
 						"Found server node in Host Group Container %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
-						" hostgroup_id=%d, gtid_port=%d, weight=%ld, compression=%d, max_connections=%ld, use_ssl=%d,"
+						" hostgroup_id=%d, weight=%ld, compression=%d, max_connections=%ld, use_ssl=%d,"
 						" max_replication_lag=%d, max_latency_ms=%d, comment=%s\n",
-						mysrvc->address, mysrvc->port, hostgroup_id, mysrvc->gtid_port, mysrvc->weight, mysrvc->compression,
+						mysrvc->address, mysrvc->port, hostgroup_id, mysrvc->weight, mysrvc->compression,
 						mysrvc->max_connections, mysrvc->use_ssl, mysrvc->max_replication_lag, (mysrvc->max_latency_us / 1000),
 						mysrvc->comment
 					);
@@ -4631,12 +4602,12 @@ PgSQL_SrvC* PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsig
 	
 	if (!ret_srv) {
 		if (GloMTH->variables.hostgroup_manager_verbose) {
-			proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%ld, status=%d\n", hostgroup_id, srv->address, srv->port, srv->gtid_port, srv->weight, srv->status);
+			proxy_info("Creating new server in HG %d : %s:%d , weight=%ld, status=%d\n", hostgroup_id, srv->address, srv->port, srv->weight, srv->status);
 		}
 
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%ld, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
 
-		ret_srv = new PgSQL_SrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
+		ret_srv = new PgSQL_SrvC(srv->address, srv->port, srv->weight, srv->status, srv->compression,
 			srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us / 1000), srv->comment);
 
 		myhgc->mysrvs->add(ret_srv);
