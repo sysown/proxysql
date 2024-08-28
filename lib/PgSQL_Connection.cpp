@@ -372,34 +372,25 @@ void PgSQL_Connection_userinfo::set(PgSQL_Connection_userinfo *ui) {
 	set(ui->username, ui->password, ui->dbname, ui->sha1_pass);
 }
 
+bool PgSQL_Connection_userinfo::set_dbname(const char* db) {
+	assert(db);
+	const int new_db_len = db ? strlen(db) : 0;
+	const int old_db_len = dbname ? strlen(dbname) : 0;
 
-bool PgSQL_Connection_userinfo::set_dbname(char *_new, int l) {
-	int _l=0;
-	if (dbname) {
-		_l=strlen(dbname); // bug fix for #609
-	}
-	if ((dbname==NULL) || (l != _l) || (strncmp(_new, dbname, l ))) {
+	if (old_db_len == 0 ||
+		old_db_len != new_db_len ||
+		strncmp(db, dbname, new_db_len)) {
 		if (dbname) {
 			free(dbname);
-			dbname =NULL;
 		}
-		if (l) {
-			dbname=(char *)malloc(l+1);
-			memcpy(dbname,_new,l);
-			dbname[l]=0;
-		} else {
-			int k=strlen(pgsql_thread___default_schema);
-			dbname =(char *)malloc(k+1);
-			memcpy(dbname,pgsql_thread___default_schema,k);
-			dbname[k]=0;
-		}
+		dbname = (char*)malloc(new_db_len + 1);
+		memcpy(dbname, db, new_db_len);
+		dbname[new_db_len] = 0;
 		compute_hash();
 		return true;
 	}
 	return false;
 }
-
-
 
 PgSQL_Connection_Placeholder::PgSQL_Connection_Placeholder() {
 	pgsql=NULL;
@@ -2825,4 +2816,60 @@ bool PgSQL_Connection::has_same_connection_options(const PgSQL_Connection* clien
 		}
 	}
 	return true;
+}
+
+const char* PgSQL_Connection::get_pg_server_version_str(char* buff, int buff_size) {
+	const int postgresql_version = get_pg_server_version();
+	snprintf(buff, buff_size, "%d.%d.%d", postgresql_version / 10000, (postgresql_version / 100) % 100, postgresql_version % 100);
+	return buff;
+}
+
+const char* PgSQL_Connection::get_pg_connection_status_str() {
+	switch (get_pg_connection_status()) {
+	case CONNECTION_OK:
+		return "OK";
+	case CONNECTION_BAD:
+		return "BAD";
+	case CONNECTION_STARTED:
+		return "STARTED";
+	case CONNECTION_MADE:
+		return "MADE";
+	case CONNECTION_AWAITING_RESPONSE:
+		return "AWAITING_RESPONSE";
+	case CONNECTION_AUTH_OK:
+		return "AUTH_OK";
+	case CONNECTION_SETENV:
+		return "SETENV";
+	case CONNECTION_SSL_STARTUP:
+		return "SSL_STARTUP";
+	case CONNECTION_NEEDED:
+		return "NEEDED";
+	case CONNECTION_CHECK_WRITABLE:
+		return "CHECK_WRITABLE";
+	case CONNECTION_CONSUME:
+		return "CONSUME";
+	case CONNECTION_GSS_STARTUP:
+		return "GSS_STARTUP";
+	case CONNECTION_CHECK_TARGET:
+		return "CHECK_TARGET";
+	case CONNECTION_CHECK_STANDBY:
+		return "CHECK_STANDBY";
+	}
+	return "UNKNOWN";
+}
+
+const char* PgSQL_Connection::get_pg_transaction_status_str() {
+	switch (get_pg_transaction_status()) {
+	case PQTRANS_IDLE:
+		return "IDLE";
+	case PQTRANS_ACTIVE:
+		return "ACTIVE";
+	case PQTRANS_INTRANS:
+		return "IN-TRANSACTION";
+	case PQTRANS_INERROR:
+		return "IN-ERROR-TRANSACTION";
+	case PQTRANS_UNKNOWN:
+		return "UNKNOWN";
+	}
+	return "INVALID";
 }
