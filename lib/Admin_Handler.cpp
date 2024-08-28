@@ -3558,6 +3558,20 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (query_no_space_length == strlen("SHOW FULL PGSQL PROCESSLIST") && !strncasecmp("SHOW FULL PGSQL PROCESSLIST", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT * FROM stats_pgsql_processlist");
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW PGSQL PROCESSLIST") && !strncasecmp("SHOW PGSQL PROCESSLIST", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT SessionID, user, database, hostgroup, command, time_ms, SUBSTR(info,0,100) info FROM stats_pgsql_processlist");
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
 __end_show_commands:
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {

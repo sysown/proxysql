@@ -1135,6 +1135,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool ret=false;
 	bool refresh=false;
 	bool stats_mysql_processlist=false;
+	bool stats_pgsql_processlist=false;
 	bool stats_mysql_free_connections=false;
 	bool stats_pgsql_free_connections=false;
 	bool stats_mysql_connection_pool=false;
@@ -1199,12 +1200,22 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
-	if (strcasestr(query_no_space,"processlist"))
+	if (strcasestr(query_no_space, "pgsql processlist") ||
+		strcasestr(query_no_space, "stats_pgsql_processlist"))
+		// This will match the following usecases:
+		// SHOW PGSQL PROCESSLIST
+		// SHOW FULL PGSQL PROCESSLIST
+		// SELECT * FROM stats_pgsql_processlist 
+	{ 
+		stats_pgsql_processlist = true; refresh = true; 
+	} else if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
 		// SHOW PROCESSLIST
 		// SHOW FULL PROCESSLIST
 		// SELECT * FROM stats_mysql_processlist
-		{ stats_mysql_processlist=true; refresh=true; }
+	{ 
+		stats_mysql_processlist=true; refresh=true; 
+	}
 	if (strstr(query_no_space,"stats_mysql_query_digest"))
 		{ stats_mysql_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
@@ -1404,6 +1415,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
+		if (stats_pgsql_processlist)
+			stats___pgsql_processlist();
 		if (stats_mysql_query_digest_reset) {
 			stats___mysql_query_digests_v2(true, stats_mysql_query_digest, false);
 		} else {
@@ -1599,7 +1612,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_commands_counters || stats_mysql_query_rules || stats_mysql_users ||
 		stats_mysql_gtid_executed || stats_mysql_free_connections || 
 		stats_pgsql_global || stats_pgsql_connection_pool || stats_pgsql_connection_pool_reset ||
-		stats_pgsql_free_connections || stats_pgsql_users
+		stats_pgsql_free_connections || stats_pgsql_users || stats_pgsql_processlist
 	) {
 		ret = true;
 	}
@@ -1801,6 +1814,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_pgsql_connection_pool_reset",
 		"stats_mysql_prepared_statements_info",
 		"stats_mysql_processlist",
+		"stats_pgsql_processlist",
 		"stats_mysql_query_digest",
 		"stats_mysql_query_digest_reset",
 		"stats_mysql_query_rules",

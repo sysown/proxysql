@@ -942,7 +942,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 #ifdef DEBUG
 					j["backends"][i]["conn"]["pgsql"]["password"] = _myconn->get_pg_password();
 #endif
-					j["backends"][i]["conn"]["pgsql"]["db"] = _myconn->get_pg_dbname();
+					j["backends"][i]["conn"]["pgsql"]["database"] = _myconn->get_pg_dbname();
 					j["backends"][i]["conn"]["pgsql"]["backend_pid"] = _myconn->get_pg_backend_pid();
 					j["backends"][i]["conn"]["pgsql"]["using_ssl"] = _myconn->get_pg_ssl_in_use() ? "YES" : "NO";
 					j["backends"][i]["conn"]["pgsql"]["error_msg"] = _myconn->get_pg_error_message();

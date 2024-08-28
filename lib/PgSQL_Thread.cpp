@@ -4113,7 +4113,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	if (_memory == true) {
 		Get_Memory_Stats();
 	}
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Global Status\n");
 	SQLite3_result* result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT, "Variable_Name");
 	result->add_column_definition(SQLITE_TEXT, "Variable_Value");
@@ -4480,12 +4480,12 @@ void PgSQL_Threads_Handler::Get_Memory_Stats() {
 SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 	const int colnum = 16;
 	char port[NI_MAXSERV];
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Processlist\n");
 	SQLite3_result* result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT, "ThreadID");
 	result->add_column_definition(SQLITE_TEXT, "SessionID");
 	result->add_column_definition(SQLITE_TEXT, "user");
-	result->add_column_definition(SQLITE_TEXT, "db");
+	result->add_column_definition(SQLITE_TEXT, "database");
 	result->add_column_definition(SQLITE_TEXT, "cli_host");
 	result->add_column_definition(SQLITE_TEXT, "cli_port");
 	result->add_column_definition(SQLITE_TEXT, "hostgroup");
@@ -4678,9 +4678,9 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				case RESETTING_CONNECTION_V2:
 					pta[11] = strdup("Resetting connection V2");
 					break;
-				case CHANGING_SCHEMA:
-					pta[11] = strdup("InitDB");
-					break;
+				//case CHANGING_SCHEMA:
+				//	pta[11] = strdup("InitDB");
+				//	break;
 				case PROCESSING_STMT_EXECUTE:
 					pta[11] = strdup("Execute");
 					break;
@@ -4696,12 +4696,12 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				case WAITING_SERVER_DATA:
 					pta[11] = strdup("Waiting server data");
 					break;
-				case CHANGING_CHARSET:
-					pta[11] = strdup("Changing charset");
-					break;
-				case CHANGING_AUTOCOMMIT:
-					pta[11] = strdup("Changing autocommit");
-					break;
+				//case CHANGING_CHARSET:
+				//	pta[11] = strdup("Changing charset");
+				//	break;
+				//case CHANGING_AUTOCOMMIT:
+				//	pta[11] = strdup("Changing autocommit");
+				//	break;
 				case SETTING_INIT_CONNECT:
 					pta[11] = strdup("Setting init connect");
 					break;

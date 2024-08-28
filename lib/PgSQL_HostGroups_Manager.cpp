@@ -2968,7 +2968,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["host_addr"] = conn->get_pg_hostaddr();
 					j["port"] = conn->get_pg_port();
 					j["user"] = conn->get_pg_user();
-					j["db"] = conn->get_pg_dbname();
+					j["database"] = conn->get_pg_dbname();
 					j["backend_pid"] = conn->get_pg_backend_pid();
 					j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
 					j["error_msg"] = conn->get_pg_error_message();

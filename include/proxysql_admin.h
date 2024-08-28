@@ -654,6 +654,7 @@ class ProxySQL_Admin {
 	void stats___pgsql_users();
 	void stats___pgsql_free_connections();
 	void stats___pgsql_connection_pool(bool _reset);
+	void stats___pgsql_processlist();
 
 	void stats___proxysql_servers_checksums();
 	void stats___proxysql_servers_metrics();
@@ -728,7 +729,6 @@ class ProxySQL_Admin {
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
-	void stats___pgsql_processlist();
 
 	void save_pgsql_users_runtime_to_database(bool _runtime);
 
