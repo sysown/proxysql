@@ -2882,7 +2882,7 @@ SQLite3_result* PgSQL_HostGroups_Manager::get_current_pgsql_table(const string& 
 
 
 SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
-	const int colnum=13;
+	const int colnum=12;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Free Connections in Pool\n");
 	SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"fd");
@@ -2894,7 +2894,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 	result->add_column_definition(SQLITE_TEXT,"init_connect");
 	result->add_column_definition(SQLITE_TEXT,"time_zone");
 	result->add_column_definition(SQLITE_TEXT,"sql_mode");
-	result->add_column_definition(SQLITE_TEXT,"autocommit");
+	//result->add_column_definition(SQLITE_TEXT,"autocommit");
 	result->add_column_definition(SQLITE_TEXT,"idle_ms");
 	result->add_column_definition(SQLITE_TEXT,"statistics");
 	result->add_column_definition(SQLITE_TEXT,"pgsql_info");
@@ -2933,17 +2933,17 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					pta[6] = strdup(conn->options.init_connect);
 				}
 				pta[7] = NULL;
-				if (conn->variables[SQL_TIME_ZONE].value) {
+				/*if (conn->variables[SQL_TIME_ZONE].value) {
 					pta[7] = strdup(conn->variables[SQL_TIME_ZONE].value);
-				}
+				}*/
 				pta[8] = NULL;
-				if (conn->variables[SQL_SQL_MODE].value) {
+				/*if (conn->variables[SQL_SQL_MODE].value) {
 					pta[8] = strdup(conn->variables[SQL_SQL_MODE].value);
-				}
-				sprintf(buf,"%d", conn->options.autocommit);
-				pta[9]=strdup(buf);
+				}*/
+				//sprintf(buf,"%d", conn->options.autocommit);
+				//pta[9]=strdup(buf);
 				sprintf(buf,"%llu", (curtime-conn->last_time_used)/1000);
-				pta[10]=strdup(buf);
+				pta[9]=strdup(buf);
 				{
 					json j;
 					char buff[32];
@@ -2956,40 +2956,32 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["pgconnpoll_get"] = conn->statuses.pgconnpoll_get;
 					j["pgconnpoll_put"] = conn->statuses.pgconnpoll_put;
 					j["questions"] = conn->statuses.questions;
-					string s = j.dump();
-					pta[11] = strdup(s.c_str());
+					const string s = j.dump();
+					pta[10] = strdup(s.c_str());
 				}
 				{
-					MYSQL *_my = conn->pgsql;
 					json j;
 					char buff[32];
-					sprintf(buff,"%p",_my);
+					sprintf(buff, "%p", conn->get_pg_connection());
 					j["address"] = buff;
-					j["host"] = _my->host;
-					j["host_info"] = _my->host_info;
-					j["port"] = _my->port;
-					j["server_version"] = _my->server_version;
-					j["user"] = _my->user;
-					j["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
-					j["db"] = (_my->db ? _my->db : "");
-					j["affected_rows"] = _my->affected_rows;
-					j["insert_id"] = _my->insert_id;
-					j["thread_id"] = _my->thread_id;
-					j["server_status"] = _my->server_status;
-					j["charset"] = _my->charset->nr;
-					j["charset_name"] = _my->charset->csname;
-
-					j["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );
-					j["options"]["use_ssl"] = _my->options.use_ssl;
-					j["client_flag"]["client_found_rows"] = (_my->client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-					j["client_flag"]["client_multi_statements"] = (_my->client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-					j["client_flag"]["client_multi_results"] = (_my->client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
-					j["net"]["last_errno"] = _my->net.last_errno;
-					j["net"]["fd"] = _my->net.fd;
-					j["net"]["max_packet_size"] = _my->net.max_packet_size;
-					j["net"]["sqlstate"] = _my->net.sqlstate;
-					string s = j.dump();
-					pta[12] = strdup(s.c_str());
+					j["host"] = conn->get_pg_host();
+					j["host_addr"] = conn->get_pg_hostaddr();
+					j["port"] = conn->get_pg_port();
+					j["user"] = conn->get_pg_user();
+					j["db"] = conn->get_pg_dbname();
+					j["backend_pid"] = conn->get_pg_backend_pid();
+					j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
+					j["error_msg"] = conn->get_pg_error_message();
+					j["options"] = conn->get_pg_options();
+					j["fd"] = conn->get_pg_socket_fd();
+					j["protocol_version"] = conn->get_pg_protocol_version();
+					j["server_version"] = conn->get_pg_server_version_str(buff, sizeof(buff));
+					j["transaction_status"] = conn->get_pg_transaction_status_str();
+					j["connection_status"] = conn->get_pg_connection_status_str();
+					j["client_encoding"] = conn->get_pg_client_encoding();
+					j["is_nonblocking"] = conn->get_pg_is_nonblocking() ? "YES" : "NO";
+					const string s = j.dump();
+					pta[11] = strdup(s.c_str());
 				}
 				result->add_row(pta);
 				for (k=0; k<colnum; k++) {

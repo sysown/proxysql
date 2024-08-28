@@ -1200,6 +1200,104 @@ void ProxySQL_Admin::stats___mysql_free_connections() {
 	delete resultset;
 }
 
+void ProxySQL_Admin::stats___pgsql_free_connections() {
+	int rc;
+	if (!PgHGM) return;
+	SQLite3_result* resultset = PgHGM->SQL3_Free_Connections();
+	if (resultset == NULL) return;
+
+	sqlite3_stmt* statement1 = NULL;
+	sqlite3_stmt* statement32 = NULL;
+	//sqlite3 *mydb3=statsdb->get_db();
+	char* query1 = NULL;
+	char* query32 = NULL;
+	std::string query32s = "";
+
+	query1 = (char*)"INSERT INTO stats_pgsql_free_connections VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+	query32s = "INSERT INTO stats_pgsql_free_connections VALUES " + generate_multi_rows_query(32, 12);
+	query32 = (char*)query32s.c_str();
+
+	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
+	rc = statsdb->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, statsdb);
+	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
+	rc = statsdb->prepare_v2(query32, &statement32);
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_pgsql_free_connections");
+
+	int row_idx = 0;
+	int max_bulk_row_idx = resultset->rows_count / 32;
+	max_bulk_row_idx = max_bulk_row_idx * 32;
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r1 = *it;
+		int idx = row_idx % 32;
+		if (row_idx < max_bulk_row_idx) { // bulk
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb); // FD
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb); // hostgroup
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // srv_host
+			if (r1->fields[3]) {
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 4, atoll(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb); // srv_port
+			}
+			else {
+				rc = (*proxy_sqlite3_bind_null)(statement32, (idx * 12) + 4); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // user
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // database
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 7, r1->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // init_connect
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 8, r1->fields[7], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // time_zone
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 9, r1->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // sql_mode
+			if (r1->fields[9]) {
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 12) + 10, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb); // idle_ms
+			}
+			else {
+				rc = (*proxy_sqlite3_bind_null)(statement32, (idx * 12) + 10); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // statistics
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 12) + 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // pgsql_info
+			if (idx == 31) {
+				SAFE_SQLITE3_STEP2(statement32);
+				rc = (*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+		}
+		else { // single row
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb); // FD
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb); // hostgroup
+			rc = (*proxy_sqlite3_bind_text)(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // srv_host
+			if (r1->fields[3]) {
+				rc = (*proxy_sqlite3_bind_int64)(statement1, 4, atoll(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb); // srv_port
+			}
+			else {
+				rc = (*proxy_sqlite3_bind_null)(statement1, 4); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			rc = (*proxy_sqlite3_bind_text)(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // user
+			rc = (*proxy_sqlite3_bind_text)(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // database
+			rc = (*proxy_sqlite3_bind_text)(statement1, 7, r1->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // init_connect
+			rc = (*proxy_sqlite3_bind_text)(statement1, 8, r1->fields[7], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // time_zone
+			rc = (*proxy_sqlite3_bind_text)(statement1, 9, r1->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // sql_mode
+			if (r1->fields[9]) {
+				rc = (*proxy_sqlite3_bind_int64)(statement1, 10, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb); // idle_ms
+			}
+			else {
+				rc = (*proxy_sqlite3_bind_null)(statement1, 10); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			rc = (*proxy_sqlite3_bind_text)(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // statistics
+			rc = (*proxy_sqlite3_bind_text)(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // pgsql_info
+			SAFE_SQLITE3_STEP2(statement1);
+			rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+		}
+		row_idx++;
+	}
+	statsdb->execute("COMMIT");
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement32);
+	delete resultset;
+}
+
+
 void ProxySQL_Admin::stats___mysql_commands_counters() {
 	if (!GloQPro) return;
 	SQLite3_result * resultset=GloQPro->get_stats_commands_counters();

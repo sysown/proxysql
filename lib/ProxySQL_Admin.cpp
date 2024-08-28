@@ -1136,6 +1136,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool refresh=false;
 	bool stats_mysql_processlist=false;
 	bool stats_mysql_free_connections=false;
+	bool stats_pgsql_free_connections=false;
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_connection_pool_reset=false;
 	bool stats_mysql_query_digest=false;
@@ -1253,6 +1254,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 	if (strstr(query_no_space,"stats_mysql_free_connections"))
 		{ stats_mysql_free_connections=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_free_connections")) 
+		{ stats_pgsql_free_connections=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_commands_counters"))
 		{ stats_mysql_commands_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_rules"))
@@ -1425,6 +1428,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_free_connections)
 			stats___mysql_free_connections();
+		if (stats_pgsql_free_connections)
+			stats___pgsql_free_connections();
 		if (stats_mysql_global)
 			stats___mysql_global();
 		if (stats_pgsql_global)
@@ -1588,7 +1593,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_errors_reset || stats_mysql_global || stats_memory_metrics || 
 		stats_mysql_commands_counters || stats_mysql_query_rules || stats_mysql_users ||
 		stats_mysql_gtid_executed || stats_mysql_free_connections || 
-		stats_pgsql_global || stats_pgsql_connection_pool || stats_pgsql_connection_pool_reset
+		stats_pgsql_global || stats_pgsql_connection_pool || stats_pgsql_connection_pool_reset ||
+		stats_pgsql_free_connections
 	) {
 		ret = true;
 	}
@@ -1783,6 +1789,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 	const vector<string> tablenames = {
 		"stats_mysql_commands_counters",
 		"stats_mysql_free_connections",
+		"stats_pgsql_free_connections",
 		"stats_mysql_connection_pool",
 		"stats_mysql_connection_pool_reset",
 		"stats_pgsql_connection_pool",
