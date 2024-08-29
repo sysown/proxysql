@@ -557,10 +557,10 @@ class ProxySQL_Admin {
 	void admin_shutdown();
 	bool is_command(std::string);
 
-	template <class T>
-	void send_ok_msg_to_client(Client_Session<T>& sess, const char *msg, int rows, const char* query);
-	template <class T>
-	void send_error_msg_to_client(Client_Session<T>& sess, const char *msg, uint16_t mysql_err_code=1045);
+	template <typename S>
+	void send_ok_msg_to_client(S* sess, const char *msg, int rows, const char* query);
+	template <typename S>
+	void send_error_msg_to_client(S* sess, const char *msg, uint16_t mysql_err_code=1045);
 #ifdef DEBUG
 	// these two following functions used to just call and return one function each
 	// this approach was replaced when we introduced debug filters
@@ -759,8 +759,8 @@ class ProxySQL_Admin {
 	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
 	void map_test_mysql_firewall_whitelist_rules_cleanup();
 
-	template<class T>
-	void ProxySQL_Test_Handler(ProxySQL_Admin *SPA, Client_Session<T>& sess, char *query_no_space, bool& run_query);
+	template<typename S>
+	void ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *query_no_space, bool& run_query);
 
 
 #ifdef TEST_AURORA
@@ -794,8 +794,8 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
 #endif
-	template<class T>
-	friend void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt);
+	template<typename S>
+	friend void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);
 
 	// FLUSH LOGS
 	void flush_logs();

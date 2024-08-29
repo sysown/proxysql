@@ -284,8 +284,8 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 }
 
 
-template <class T>
-bool FlushCommandWrapper(Client_Session<T> sess, const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length, const string& name, const string& direction) {
+template <typename S>
+bool FlushCommandWrapper(S* sess, const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length, const string& name, const string& direction) {
 	if ( is_admin_command_or_alias(cmds, query_no_space, query_no_space_length) ) {
 		ProxySQL_Admin *SPA = GloAdmin;
 		SPA->flush_GENERIC__from_to(name, direction);
@@ -306,8 +306,8 @@ bool FlushCommandWrapper(Client_Session<T> sess, const std::vector<std::string>&
 	return false;
 }
 
-template <class T>
-bool FlushCommandWrapper(Client_Session<T> sess, const string& modname, char *query_no_space, int query_no_space_length) {
+template <typename S>
+bool FlushCommandWrapper(S* sess, const string& modname, char *query_no_space, int query_no_space_length) {
 	assert(load_save_disk_commands.find(modname) != load_save_disk_commands.end());
 	tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 	if (FlushCommandWrapper(sess, get<1>(t), query_no_space, query_no_space_length, modname, "disk_to_memory") == true)
@@ -317,8 +317,8 @@ bool FlushCommandWrapper(Client_Session<T> sess, const string& modname, char *qu
 	return false;
 }
 
-template <class T>
-bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, Client_Session<T>& sess, ProxySQL_Admin *pa) {
+template <typename S>
+bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
 	uint32_t id=atoi(query_no_space+16);
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
 	bool rc=GloMTH->kill_session(id);
@@ -333,8 +333,8 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
 	return false;
 }
 
-template <class T>
-bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, Client_Session<T>& sess, ProxySQL_Admin *pa) {
+template <typename S>
+bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
 	// currently only support x86-32, x86-64, ARM, and MIPS on Linux
@@ -763,8 +763,8 @@ bool is_valid_global_variable(const char *var_name) {
 // multiple variables at once.
 //
 // It modifies the original query.
-template <class T>
-bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, Client_Session<T>& sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+template <typename S>
+bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	if (!strstr(query_no_space,(char *)"password")) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
@@ -826,8 +826,8 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 /* Note:
  * This function can modify the original query
  */
-template <class T>
-bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, Client_Session<T>& sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+template <typename S>
+bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 5, "Received command %s\n", query_no_space);
 
 #ifdef DEBUG
@@ -2174,8 +2174,8 @@ std::string timediff_timezone_offset() {
 
 
 
-template<class T>
-void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
+template<typename S>
+void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
 	bool needs_vacuum = false;
@@ -2190,12 +2190,11 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 	char *query=NULL;
 	unsigned int query_length = 0;
 
-	if constexpr (std::is_same<T, MySQL_Session*>::value) {
+	if constexpr (std::is_same_v<S,MySQL_Session>) {
 		query_length = pkt->size - sizeof(mysql_hdr);
 		query = (char*)l_alloc(query_length);
 		memcpy(query, (char*)pkt->ptr + sizeof(mysql_hdr) + 1, query_length - 1);
-	}
-	else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+	} else if constexpr (std::is_same_v<S,PgSQL_Session>) {
 		assert(sess->client_myds);
 
 		pgsql_hdr hdr{};
@@ -2219,6 +2218,8 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 		query_length = hdr.data.size;
 		query = (char*)l_alloc(query_length);
 		memcpy(query, (char*)hdr.data.ptr, query_length - 1);
+	} else {
+		assert(0);
 	}
 
 	query[query_length-1]=0;
@@ -2468,40 +2469,54 @@ void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt) {
 			}
 
 			if (c_res == true && i_hg != LONG_MIN && i_port != LONG_MIN && i_errcode != LONG_MIN) {
-				MyHGM->wrlock();
+				if constexpr (std::is_same_v<S, MySQL_Session>) {
+					MyHGM->wrlock();
 
-				MySrvC* mysrvc = MyHGM->find_server_in_hg(i_hg, srv_addr, i_port);
-				if (mysrvc != nullptr) {
-					int backup_shun_on_failures;
-					if constexpr (std::is_same<T, MySQL_Session*>::value) {
+					MySrvC* mysrvc = MyHGM->find_server_in_hg(i_hg, srv_addr, i_port);
+					if (mysrvc != nullptr) {
+						int backup_shun_on_failures;			
 						backup_shun_on_failures = mysql_thread___shun_on_failures;
 						mysql_thread___shun_on_failures = 1;
 						// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
 						mysrvc->connect_error(i_errcode, false);
 						mysrvc->connect_error(i_errcode, false);
 						mysql_thread___shun_on_failures = backup_shun_on_failures;
-					} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+						SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					} else {
+						std::string t_err_msg{ "Supplied server '%s:%d' wasn't found in hg '%d'" };
+						std::string err_msg{};
+						string_format(t_err_msg, err_msg, srv_addr.c_str(), i_port, i_hg);
+
+						proxy_info("%s\n", err_msg.c_str());
+						SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+					}
+					MyHGM->wrunlock();
+				} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+					PgHGM->wrlock();
+
+					PgSQL_SrvC* pgsrvc = PgHGM->find_server_in_hg(i_hg, srv_addr, i_port);
+
+					if (pgsrvc != nullptr) {
+						int backup_shun_on_failures;
 						backup_shun_on_failures = pgsql_thread___shun_on_failures;
 						pgsql_thread___shun_on_failures = 1;
 						// Set the error twice to surpass 'pgsql_thread___shun_on_failures' value.
-						mysrvc->connect_error(i_errcode, false);
-						mysrvc->connect_error(i_errcode, false);
+						pgsrvc->connect_error(i_errcode, false);
+						pgsrvc->connect_error(i_errcode, false);
 						pgsql_thread___shun_on_failures = backup_shun_on_failures;
+						SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					} else {
-						assert(0);
+						std::string t_err_msg{ "Supplied server '%s:%d' wasn't found in hg '%d'" };
+						std::string err_msg{};
+						string_format(t_err_msg, err_msg, srv_addr.c_str(), i_port, i_hg);
+
+						proxy_info("%s\n", err_msg.c_str());
+						SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
 					}
-
-					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					PgHGM->wrunlock();
 				} else {
-					std::string t_err_msg { "Supplied server '%s:%d' wasn't found in hg '%d'" };
-					std::string err_msg {};
-					string_format(t_err_msg, err_msg, srv_addr.c_str(), i_port, i_hg);
-
-					proxy_info("%s\n", err_msg.c_str());
-					SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+					assert(0);
 				}
-
-				MyHGM->wrunlock();
 			} else {
 				SPA->send_error_msg_to_client(sess, (char*)"Invalid arguments supplied with query 'PROXYSQL_SIMULATOR'");
 			}
@@ -3663,22 +3678,24 @@ __run_query:
 		}
 		if (error == NULL) {
 
-			if constexpr (std::is_same<T, MySQL_Session*>::value) {
+			if constexpr (std::is_same_v<S, MySQL_Session>) {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-			}
-			else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+			} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 				SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, resultset, error, affected_rows, query);
+			} else {
+				assert(0);
 			}
-		
 		} else {
 			char *a = (char *)"ProxySQL Admin Error: ";
 			char *new_msg = (char *)malloc(strlen(error)+strlen(a)+1);
 			sprintf(new_msg, "%s%s", a, error);
 
-			if constexpr (std::is_same<T, MySQL_Session*>::value) {
+			if constexpr (std::is_same_v<S, MySQL_Session>) {
 				sess->SQLite3_to_MySQL(resultset, new_msg, affected_rows, &sess->client_myds->myprot);
-			} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+			} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 				SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, resultset, new_msg, affected_rows, query);
+			} else {
+				assert(0);
 			}
 
 			free(new_msg);
@@ -3698,6 +3715,6 @@ __run_query:
 }
 
 // Explicitly instantiate the required template class and member functions
-template void admin_session_handler<MySQL_Session*>(Client_Session<MySQL_Session*> sess, void *_pa, PtrSize_t *pkt);
-template void admin_session_handler<PgSQL_Session*>(Client_Session<PgSQL_Session*> sess, void *_pa, PtrSize_t *pkt);
+template void admin_session_handler<MySQL_Session>(MySQL_Session* sess, void *_pa, PtrSize_t *pkt);
+template void admin_session_handler<PgSQL_Session>(PgSQL_Session* sess, void *_pa, PtrSize_t *pkt);
 

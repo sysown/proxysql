@@ -539,14 +539,6 @@ class PgSQL_Data_Stream;
 class MySQL_Connection_userinfo;
 class MySQL_Session;
 class PgSQL_Session;
-template<class T>
-class Client_Session;
-template<class T>
-class Query_Info_T;
-template<class T>
-class Data_Stream_T;
-template<class T>
-class Connection_Info_T;
 class MySQL_Backend;
 class PgSQL_Backend;
 class MySQL_Monitor;

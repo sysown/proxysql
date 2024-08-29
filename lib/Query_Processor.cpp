@@ -1468,8 +1468,8 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	return result;
 }
 
-template<class T, class U>
-Query_Processor_Output * Query_Processor::process_mysql_query(Client_Session<T> sess, void *ptr, unsigned int size, Query_Info_T<U> qi) {
+template<typename S, typename QI>
+Query_Processor_Output * Query_Processor::process_mysql_query(S* sess, void *ptr, unsigned int size, QI* qi) {
 	// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
 	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
 	Query_Processor_Output *ret=sess->qpo;
@@ -2091,8 +2091,8 @@ enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_
 	return ret;
 }
 
-template<class T>
-unsigned long long Query_Processor::query_parser_update_counters(Client_Session<T> sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
+template<typename S>
+unsigned long long Query_Processor::query_parser_update_counters(S* sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
@@ -2123,7 +2123,7 @@ unsigned long long Query_Processor::query_parser_update_counters(Client_Session<
 		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
 		myhash.Update(ca,strlen(ca));
 		myhash.Final(&qp->digest_total,&hash2);
-		update_query_digest(qp, sess->current_hostgroup, TO_CONNECTION_INFO(ui), t, sess->thread->curtime, NULL, sess);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, NULL, sess);
 	}
 	if (sess->CurrentQuery.stmt_info && sess->CurrentQuery.stmt_info->digest_text) {
 		uint64_t hash2;
@@ -2144,13 +2144,13 @@ unsigned long long Query_Processor::query_parser_update_counters(Client_Session<
 		myhash.Update(ca,strlen(ca));
 		myhash.Final(&qp->digest_total,&hash2);
 		//delete myhash;
-		update_query_digest(qp, sess->current_hostgroup, TO_CONNECTION_INFO(ui), t, sess->thread->curtime, stmt_info, sess);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, stmt_info, sess);
 	}
 	return ret;
 }
 
-template<class T, class U>
-void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, Connection_Info_T<U> ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, Client_Session<T> sess) {
+template<typename S, typename CI>
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, CI* ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, S* sess) {
 	pthread_rwlock_wrlock(&digest_rwlock);
 	QP_query_digest_stats *qds;
 
@@ -3423,14 +3423,14 @@ void Query_Processor_Output::get_info_json(json& j) {
 }
 
 template 
-Query_Processor_Output* Query_Processor::process_mysql_query<MySQL_Session*, Query_Info*>(Client_Session<MySQL_Session*>, void*, unsigned int, Query_Info_T<Query_Info*>);
+Query_Processor_Output* Query_Processor::process_mysql_query<MySQL_Session, Query_Info>(MySQL_Session*, void*, unsigned int, Query_Info*);
 
 template
-unsigned long long Query_Processor::query_parser_update_counters<MySQL_Session*>(Client_Session<MySQL_Session*>, MYSQL_COM_QUERY_command, __SQP_query_parser_t*, unsigned long long);
+unsigned long long Query_Processor::query_parser_update_counters<MySQL_Session>(MySQL_Session*, MYSQL_COM_QUERY_command, __SQP_query_parser_t*, unsigned long long);
 
 template
-Query_Processor_Output* Query_Processor::process_mysql_query<PgSQL_Session*, PgSQL_Query_Info*>(Client_Session<PgSQL_Session*>, void*, unsigned int, Query_Info_T<PgSQL_Query_Info*>);
+Query_Processor_Output* Query_Processor::process_mysql_query<PgSQL_Session, PgSQL_Query_Info>(PgSQL_Session*, void*, unsigned int, PgSQL_Query_Info*);
 
 template
-unsigned long long Query_Processor::query_parser_update_counters<PgSQL_Session*>(Client_Session<PgSQL_Session*>, MYSQL_COM_QUERY_command, __SQP_query_parser_t*, unsigned long long);
+unsigned long long Query_Processor::query_parser_update_counters<PgSQL_Session>(PgSQL_Session*, MYSQL_COM_QUERY_command, __SQP_query_parser_t*, unsigned long long);
 

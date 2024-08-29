@@ -191,10 +191,10 @@ void Base_Session<S,DS,B,T>::writeout() {
 	unsigned long long last_sent_=0;
 	int tmbpstc = 0; // throttle_max_bytes_per_second_to_client
 	enum proxysql_session_type _tmp_session_type_cmp1;
-	if constexpr (std::is_same<S, MySQL_Session>::value) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		tmbpstc = mysql_thread___throttle_max_bytes_per_second_to_client;
 		_tmp_session_type_cmp1 = PROXYSQL_SESSION_MYSQL;
-	} else if constexpr (std::is_same<S, PgSQL_Session>::value) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 		tmbpstc = pgsql_thread___throttle_max_bytes_per_second_to_client;
 		_tmp_session_type_cmp1 = PROXYSQL_SESSION_PGSQL;
 	} else {

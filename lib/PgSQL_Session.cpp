@@ -426,7 +426,7 @@ unsigned long long PgSQL_Query_Info::query_parser_update_counters() {
 	}
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	if (MyComQueryCmd == MYSQL_COM_QUERY__UNINITIALIZED) return 0; // this means that it was never initialized
-	unsigned long long ret=GloQPro->query_parser_update_counters(TO_CLIENT_SESSION(sess), MyComQueryCmd, &QueryParserArgs, end_time-start_time);
+	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
@@ -2719,7 +2719,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 		}
-		qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), pkt.ptr, pkt.size, TO_QUERY_INFO(&CurrentQuery));
+		qpo = GloQPro->process_mysql_query(this, pkt.ptr, pkt.size, &CurrentQuery);
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &endt);
 			thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
@@ -2862,7 +2862,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 		}
-		qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), NULL, 0, TO_QUERY_INFO(&CurrentQuery));
+		qpo = GloQPro->process_mysql_query(this, NULL, 0, &CurrentQuery);
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -2975,16 +2975,16 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	case PROXYSQL_SESSION_ADMIN:
 	case PROXYSQL_SESSION_STATS:
 		// this is processed by the admin module
-		handler_function(TO_CLIENT_SESSION(this), (void*)GloAdmin, &pkt);
+		handler_function(this, (void*)GloAdmin, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
 	case PROXYSQL_SESSION_SQLITE:
-		handler_function(TO_CLIENT_SESSION(this), (void*)GloSQLite3Server, &pkt);
+		handler_function(this, (void*)GloSQLite3Server, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
 #ifdef PROXYSQLCLICKHOUSE
 	case PROXYSQL_SESSION_CLICKHOUSE:
-		handler_function(TO_CLIENT_SESSION(this), (void*)GloClickHouseServer, &pkt);
+		handler_function(this, (void*)GloClickHouseServer, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -3359,7 +3359,7 @@ __get_pkts_from_client:
 								if (thread->variables.stats_time_query_processor) {
 									clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 								}
-								qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), pkt.ptr, pkt.size, TO_QUERY_INFO(&CurrentQuery));
+								qpo = GloQPro->process_mysql_query(this, pkt.ptr, pkt.size, &CurrentQuery);
 								if (thread->variables.stats_time_query_processor) {
 									clock_gettime(CLOCK_THREAD_CPUTIME_ID, &endt);
 									thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
@@ -3577,7 +3577,7 @@ __get_pkts_from_client:
 						if (thread->variables.stats_time_query_processor) {
 							clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 						}
-						qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), pkt.ptr, pkt.size, TO_QUERY_INFO(&CurrentQuery));
+						qpo = GloQPro->process_mysql_query(this, pkt.ptr, pkt.size, &CurrentQuery);
 						if (thread->variables.stats_time_query_processor) {
 							clock_gettime(CLOCK_THREAD_CPUTIME_ID, &endt);
 							thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +

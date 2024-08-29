@@ -276,8 +276,8 @@ private:
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Session* sess;
 	
-	template<class T>
-	friend void admin_session_handler(Client_Session<T> sess, void* _pa, PtrSize_t* pkt);
+	template<typename S>
+	friend void admin_session_handler(S* sess, void* _pa, PtrSize_t* pkt);
 };
 
 void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type);
