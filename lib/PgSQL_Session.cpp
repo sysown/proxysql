@@ -2567,8 +2567,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 				if (is_error_present) {
 					client_myds->myprot.generate_error_packet(true, true, myconn->error_info.message.c_str(), 
 						myconn->error_info.code, false, true);
-				}
-				else {
+				} else {
 					char buf[256];
 					sprintf(buf, "Max connect failure while reaching hostgroup %d", current_hostgroup);
 					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,

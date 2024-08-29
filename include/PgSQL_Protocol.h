@@ -149,8 +149,8 @@ public:
 	void write_AuthenticationRequest(uint32_t auth_type, const uint8_t* data, int len) {
 		write_generic('R', "ib", auth_type, data, len);
 	}
-	void write_ReadyForQuery() {
-		write_generic('Z', "c", 'I');
+	void write_ReadyForQuery(char txn_state = 'I') {
+		write_generic('Z', "c", txn_state);
 	}
 	void write_CommandComplete(const char* desc) {
 		write_generic('C', "s", desc);
