@@ -11,6 +11,7 @@
 
 using namespace std;
 
+#define MULTI_STATEMENTS_USE "Unable to parse multi-statements command with USE statement"
 
 static void remove_quotes(string& v) {
 	if (v.length() > 2) {
@@ -508,7 +509,7 @@ std::string SetParser::parse_character_set() {
 	return value4;
 }
 
-std::string SetParser::parse_USE_query() {
+std::string SetParser::parse_USE_query(std::string& errmsg) {
 #ifdef DEBUG
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
 #endif // DEBUG
@@ -518,6 +519,7 @@ std::string SetParser::parse_USE_query() {
 	opt2.set_longest_match(false);
 
 	std::string dbname = remove_comments(query);
+	dbname.erase(dbname.find_last_not_of(" ;") + 1); // remove trailing spaces and semicolumns
 	re2::RE2 re0("^\\s*", opt2);
 	re2::RE2::Replace(&dbname, re0, "");
 	if (dbname.size() >= 4) {
@@ -537,18 +539,22 @@ std::string SetParser::parse_USE_query() {
 						dbname.erase(0, 1);
 						// Remove the last character
 						dbname.erase(dbname.length() - 1);
-						return dbname;
 					}
 				}
-			} else {
-				return dbname;
 			}
+		} else {
+			dbname = "";
 		}
 	} else {
-		return "";
+		dbname = "";
 	}
 
-	return "";
+	if (dbname.find_first_of(';') != std::string::npos) {
+		errmsg = MULTI_STATEMENTS_USE;
+		dbname = "";
+	}
+
+	return dbname;
 }
 
 
@@ -638,18 +644,24 @@ void SetParser::test_parse_USE_query() {
 		{"USE/*+ placeholder_comment */`test_use_comment-5`",       "test_use_comment-5"},
 		{"/* comment */USE`test_use_comment-6`",                    "test_use_comment-6"},
 		{"USE`test_use_comment-7`",                                 "test_use_comment-7"},
+		{"USE test_use_comment-7 ;",                                "test_use_comment-7"},
+		{"USE`test_use_comment-2` ;  ",                             "test_use_comment-2"},
+		{"USE`test_use_comment-2` ; -- comment",                    "test_use_comment-2"},
+		{"USE test_use_comment-7 /* comment */ ; ",                 "test_use_comment-7"},
+		{"USE     /* comment */     test_use_comment-7  ; ",        "test_use_comment-7"},
+		{"USE dbame ; SELECT 1",                                    ""},
 	};
 
 	// Run tests for each pair
 	for (const auto& p : testCases) {
 		set_query(p.first);
-		std::string dbname = parse_USE_query();
+		std::string errmsg = "";
+		std::string dbname = parse_USE_query(errmsg);
 		if (dbname != p.second) {
 			// we call parse_USE_query() again just to make it easier to create a breakpoint
-			std::string s = parse_USE_query();
+			std::string s = parse_USE_query(errmsg);
 			assert(s == p.second);
 		}
 	}
-
 }
 #endif // DEBUG

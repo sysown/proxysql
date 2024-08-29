@@ -6139,7 +6139,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
 		string nq=string((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 		SetParser parser(nq);
-		string schemaname = parser.parse_USE_query();
+		string errmsg = "";
+		string schemaname = parser.parse_USE_query(errmsg);
 		if (schemaname != "") {
 			client_myds->myconn->userinfo->set_schemaname((char *)schemaname.c_str(),schemaname.length());
 			if (mirror==false) {
@@ -6156,6 +6157,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			l_free(pkt->size,pkt->ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			std::string msg = "Unable to parse: " + nq;
+			if (errmsg != "") {
+				msg = errmsg + ": " + nq;
+			}
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000", msg.c_str());
 			RequestEnd(NULL);
 		}
