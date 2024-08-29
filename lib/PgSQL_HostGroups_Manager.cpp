@@ -1319,7 +1319,7 @@ bool PgSQL_HostGroups_Manager::commit(
 
 				if (atoi(r->fields[3])!=atoi(r->fields[12])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->weight , atoi(r->fields[12]));
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->weight , atoi(r->fields[12]));
 					mysrvc->weight=atoi(r->fields[12]);
 				}
 				if (atoi(r->fields[4])!=atoi(r->fields[13])) {
@@ -3950,53 +3950,48 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 	return intsize;
 }
 
-class MySQL_Errors_stats {
-	public:
-	int hostgroup;
-	char *hostname;
-	int port;
-	char *username;
-	char *client_address;
-	char *schemaname;
-	int err_no;
-	char *last_error;
-	time_t first_seen;
-	time_t last_seen;
-	unsigned long long count_star;
-	MySQL_Errors_stats(int hostgroup_, char *hostname_, int port_, char *username_, char *address_, char *schemaname_, int err_no_, char *last_error_, time_t tn) {
-		hostgroup = hostgroup_;
-		if (hostname_) {
-			hostname = strdup(hostname_);
+class PgSQL_Errors_stats {
+public:
+	PgSQL_Errors_stats(int _hostgroup, const char *_hostname, int _port, const char *_username, const char *_address, const char *_dbname, 
+		const char* _sqlstate, const char *_errmsg, time_t tn) {
+		hostgroup = _hostgroup;
+		if (_hostname) {
+			hostname = strdup(_hostname);
 		} else {
 			hostname = strdup((char *)"");
 		}
-		port = port_;
-		if (username_) {
-			username = strdup(username_);
+		port = _port;
+		if (_username) {
+			username = strdup(_username);
 		} else {
 			username = strdup((char *)"");
 		}
-		if (address_) {
-			client_address = strdup(address_);
+		if (_address) {
+			client_address = strdup(_address);
 		} else {
 			client_address = strdup((char *)"");
 		}
-		if (schemaname_) {
-			schemaname = strdup(schemaname_);
+		if (_dbname) {
+			dbname = strdup(_dbname);
 		} else {
-			schemaname = strdup((char *)"");
+			dbname = strdup((char *)"");
 		}
-		err_no = err_no_;
-		if (last_error_) {
-			last_error = strdup(last_error_);
+		if (_sqlstate) {
+			strncpy(sqlstate, _sqlstate, 5);
+			sqlstate[5] = '\0';
 		} else {
-			last_error = strdup((char *)"");
+			sqlstate[0] = '\0';
+		}
+		if (_errmsg) {
+			errmsg = strdup(_errmsg);
+		} else {
+			_errmsg = strdup((char *)"");
 		}
 		last_seen = tn;
 		first_seen = tn;
 		count_star = 1;
 	}
-	~MySQL_Errors_stats() {
+	~PgSQL_Errors_stats() {
 		if (hostname) {
 			free(hostname);
 			hostname=NULL;
@@ -4009,13 +4004,13 @@ class MySQL_Errors_stats {
 			free(client_address);
 			client_address=NULL;
 		}
-		if (schemaname) {
-			free(schemaname);
-			schemaname=NULL;
+		if (dbname) {
+			free(dbname);
+			dbname=NULL;
 		}
-		if (last_error) {
-			free(last_error);
-			last_error=NULL;
+		if (errmsg) {
+			free(errmsg);
+			errmsg=NULL;
 		}
 	}
 	char **get_row() {
@@ -4031,33 +4026,28 @@ class MySQL_Errors_stats {
 		pta[3]=strdup(username);
 		assert(client_address);
 		pta[4]=strdup(client_address);
-		assert(schemaname);
-		pta[5]=strdup(schemaname);
-		sprintf(buf,"%d",err_no);
-		pta[6]=strdup(buf);
-
+		assert(dbname);
+		pta[5]=strdup(dbname);
+		pta[6]=strdup(sqlstate);
 		sprintf(buf,"%llu",count_star);
 		pta[7]=strdup(buf);
-
 		sprintf(buf,"%ld", first_seen);
 		pta[8]=strdup(buf);
-
 		sprintf(buf,"%ld", last_seen);
 		pta[9]=strdup(buf);
-
-		assert(last_error);
-		pta[10]=strdup(last_error);
+		assert(errmsg);
+		pta[10]=strdup(errmsg);
 		return pta;
 	}
-	void add_time(unsigned long long n, char *le) {
+	void add_time(unsigned long long n, const char *le) {
 		count_star++;
 		if (first_seen==0) {
 			first_seen=n;
 		}
 		last_seen=n;
-		if (strcmp(last_error,le)){
-			free(last_error);
-			last_error=strdup(le);
+		if (strcmp(errmsg,le)){
+			free(errmsg);
+			errmsg=strdup(le);
 		}
 	}
 	void free_row(char **pta) {
@@ -4068,13 +4058,25 @@ class MySQL_Errors_stats {
 		}
 		free(pta);
 	}
+private:
+	int hostgroup;
+	char *hostname;
+	int port;
+	char *username;
+	char *client_address;
+	char *dbname;
+	char sqlstate[5+1];
+	char *errmsg;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned long long count_star;
 };
 
-void PgSQL_HostGroups_Manager::add_pgsql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error) {
+void PgSQL_HostGroups_Manager::add_pgsql_errors(int hostgroup, const char *hostname, int port, const char *username, const char *address, 
+	const char *dbname, const char* sqlstate, const char *errmsg) {
 	SpookyHash myhash;
 	uint64_t hash1;
 	uint64_t hash2;
-	MySQL_Errors_stats *mes = NULL;
 	size_t rand_del_len=strlen(rand_del);
 	time_t tn = time(NULL);
 	myhash.Init(11,4);
@@ -4093,39 +4095,32 @@ void PgSQL_HostGroups_Manager::add_pgsql_errors(int hostgroup, char *hostname, i
 		myhash.Update(address,strlen(address));
 	}
 	myhash.Update(rand_del,rand_del_len);
-	if (schemaname) {
-		myhash.Update(schemaname,strlen(schemaname));
+	if (dbname) {
+		myhash.Update(dbname,strlen(dbname));
 	}
 	myhash.Update(rand_del,rand_del_len);
-	myhash.Update(&err_no,sizeof(err_no));
-
+	if (sqlstate) {
+		myhash.Update(sqlstate, strlen(sqlstate));
+	}
 	myhash.Final(&hash1,&hash2);
 
-	std::unordered_map<uint64_t, void *>::iterator it;
+	std::unordered_map<uint64_t, PgSQL_Errors_stats*>::iterator it;
 	pthread_mutex_lock(&pgsql_errors_mutex);
 
 	it=pgsql_errors_umap.find(hash1);
 
 	if (it != pgsql_errors_umap.end()) {
 		// found
-		mes=(MySQL_Errors_stats *)it->second;
-		mes->add_time(tn, last_error);
-/*
-		mes->last_seen = tn;
-		if (strcmp(mes->last_error,last_error)) {
-			free(mes->last_error);
-			mes->last_error = strdup(last_error);
-			mes->count_star++;
-		}
-*/
+		PgSQL_Errors_stats* err_stats = it->second;
+		err_stats->add_time(tn, errmsg);
 	} else {
-		mes = new MySQL_Errors_stats(hostgroup, hostname, port, username, address, schemaname, err_no, last_error, tn);
-		pgsql_errors_umap.insert(std::make_pair(hash1,(void *)mes));
+		PgSQL_Errors_stats* err_stats = new PgSQL_Errors_stats(hostgroup, hostname, port, username, address, dbname, sqlstate, errmsg, tn);
+		pgsql_errors_umap.insert(std::make_pair(hash1, err_stats));
 	}
 	pthread_mutex_unlock(&pgsql_errors_mutex);
 }
 
-SQLite3_result * PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
+SQLite3_result* PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
 	SQLite3_result *result=new SQLite3_result(PgSQL_ERRORS_STATS_FIELD_NUM);
 	pthread_mutex_lock(&pgsql_errors_mutex);
 	result->add_column_definition(SQLITE_TEXT,"hid");
@@ -4133,19 +4128,19 @@ SQLite3_result * PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
 	result->add_column_definition(SQLITE_TEXT,"port");
 	result->add_column_definition(SQLITE_TEXT,"username");
 	result->add_column_definition(SQLITE_TEXT,"client_address");
-	result->add_column_definition(SQLITE_TEXT,"schemaname");
-	result->add_column_definition(SQLITE_TEXT,"err_no");
+	result->add_column_definition(SQLITE_TEXT,"database");
+	result->add_column_definition(SQLITE_TEXT,"sqlstate");
 	result->add_column_definition(SQLITE_TEXT,"count_star");
 	result->add_column_definition(SQLITE_TEXT,"first_seen");
 	result->add_column_definition(SQLITE_TEXT,"last_seen");
 	result->add_column_definition(SQLITE_TEXT,"last_error");
-	for (std::unordered_map<uint64_t, void *>::iterator it=pgsql_errors_umap.begin(); it!=pgsql_errors_umap.end(); ++it) {
-		MySQL_Errors_stats *mes=(MySQL_Errors_stats *)it->second;
-		char **pta=mes->get_row();
+	for (std::unordered_map<uint64_t, PgSQL_Errors_stats*>::iterator it=pgsql_errors_umap.begin(); it!=pgsql_errors_umap.end(); ++it) {
+		PgSQL_Errors_stats *err_stats=it->second;
+		char **pta= err_stats->get_row();
 		result->add_row(pta);
-		mes->free_row(pta);
+		err_stats->free_row(pta);
 		if (reset) {
-			delete mes;
+			delete err_stats;
 		}
 	}
 	if (reset) {

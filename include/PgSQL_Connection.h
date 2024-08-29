@@ -546,7 +546,7 @@ public:
 	}
 
 	inline
-		const char* get_error_code_str() const {
+	const char* get_error_code_str() const {
 		return error_info.sqlstate;
 	}
 

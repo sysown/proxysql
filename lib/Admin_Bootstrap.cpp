@@ -679,6 +679,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_free_connections", STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_users", STATS_SQLITE_TABLE_PGSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_processlist", STATS_SQLITE_TABLE_PGSQL_PROCESSLIST);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_errors", STATS_SQLITE_TABLE_PGSQL_ERRORS);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_errors_reset", STATS_SQLITE_TABLE_PGSQL_ERRORS_RESET);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);

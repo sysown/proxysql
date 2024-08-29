@@ -100,14 +100,15 @@ namespace nlohmann { class json; }
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM main.pgsql_servers " \
 	"WHERE status != \"OFFLINE_HARD\" " \
-	"ORDER BY hostgroup_id, hostname, port" \
-
-typedef std::unordered_map<std::uint64_t, void *> umap_pgsql_errors;
+	"ORDER BY hostgroup_id, hostname, port"
 
 class PgSQL_SrvConnList;
 class PgSQL_SrvC;
 class PgSQL_SrvList;
 class PgSQL_HGC;
+class PgSQL_Errors_stats;
+
+typedef std::unordered_map<std::uint64_t, PgSQL_Errors_stats*> umap_pgsql_errors;
 
 class PgSQL_GTID_Server_Data {
 	public:
@@ -847,7 +848,8 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
 
-	void add_pgsql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error);
+	void add_pgsql_errors(int hostgroup, const char* hostname, int port, const char* username, const char* address,
+		const char* dbname, const char* sqlstate, const char* errmsg);
 	SQLite3_result *get_pgsql_errors(bool);
 
 	void shutdown();
