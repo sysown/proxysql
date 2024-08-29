@@ -119,7 +119,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			} else if (strcasecmp("transaction_read_only", value4.c_str()) == 0) {
 				value4 = "tx_read_only";
 			}
-			value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
+			size_t pos = value5.find_last_not_of(" \n\r\t,");
+			if (pos != value5.npos) {
+				value5.erase(pos+1);
+			}
 			key = value4;
 			if (value5 == "''" || value5 == "\"\"") {
 				op.push_back("");
@@ -405,7 +408,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			} else if (strcasecmp("transaction_read_only", value4.c_str()) == 0) {
 				value4 = "tx_read_only";
 			}
-			value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
+			size_t pos = value5.find_last_not_of(" \n\r\t,");
+			if (pos != value5.npos) {
+				value5.erase(pos+1);
+			}
 			key = value4;
 			if (value5 == "''" || value5 == "\"\"") {
 				op.push_back("");
@@ -519,7 +525,10 @@ std::string SetParser::parse_USE_query(std::string& errmsg) {
 	opt2.set_longest_match(false);
 
 	std::string dbname = remove_comments(query);
-	dbname.erase(dbname.find_last_not_of(" ;") + 1); // remove trailing spaces and semicolumns
+	size_t pos = dbname.find_last_not_of(" ;");
+	if (pos != dbname.npos) {
+		dbname.erase(pos + 1); // remove trailing spaces and semicolumns
+	}
 	re2::RE2 re0("^\\s*", opt2);
 	re2::RE2::Replace(&dbname, re0, "");
 	if (dbname.size() >= 4) {
