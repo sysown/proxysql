@@ -315,7 +315,7 @@ __exit_kill_query_thread:
 extern Query_Processor* GloQPro;
 extern Query_Cache* GloQC;
 extern ProxySQL_Admin* GloAdmin;
-extern MySQL_Threads_Handler* GloMTH;
+extern PgSQL_Threads_Handler* GloPTH;
 
 PgSQL_Query_Info::PgSQL_Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
@@ -699,8 +699,8 @@ PgSQL_Session::~PgSQL_Session() {
 	delete qpo;
 	match_regexes = NULL;
 	if (mirror) {
-		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1);
-		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+		__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
+		//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 	}
 	if (proxysql_node_address) {
 		delete proxysql_node_address;
@@ -1334,13 +1334,13 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->mirror_queue_mysql_sessions->len == 0) {
 			// there are no sessions in the queue, we try to execute immediately
 			// Only pgsql_thread___mirror_max_concurrency mirror session can run in parallel
-			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1) > (unsigned int)pgsql_thread___mirror_max_concurrency) {
+			if (__sync_add_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1) > (unsigned int)pgsql_thread___mirror_max_concurrency) {
 				// if the limit is reached, we queue it instead
-				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1);
+				__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
 				thread->mirror_queue_mysql_sessions->add(newsess);
 			}
 			else {
-				GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
+				//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
 				thread->register_session(thread,newsess);
 				newsess->handler(); // execute immediately
 				//newsess->to_process=0;
@@ -1356,8 +1356,8 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (to_cache) {
-							__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1);
-							GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+							__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
+							//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 							thread->mirror_queue_mysql_sessions_cache->add(newsess);
 						}
 						else {
@@ -5331,7 +5331,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	}
 
 	if (pgsql_thread___client_host_cache_size) {
-		GloMTH->update_client_host_cache(client_myds->client_addr, handshake_err);
+		GloPTH->update_client_host_cache(client_myds->client_addr, handshake_err);
 	}
 }
 
@@ -7384,7 +7384,7 @@ bool PgSQL_Session::handle_command_query_kill(PtrSize_t* pkt) {
 							}
 							if (tki >= 0) {
 								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "Killing %s %d\n", (tki == 0 ? "CONNECTION" : "QUERY"), id);
-								GloMTH->kill_connection_or_query(id, (tki == 0 ? false : true), mc->userinfo->username);
+								GloPTH->kill_connection_or_query(id, (tki == 0 ? false : true), mc->userinfo->username);
 								client_myds->DSS = STATE_QUERY_SENT_NET;
 								unsigned int nTrx = NumActiveTransactions();
 								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);

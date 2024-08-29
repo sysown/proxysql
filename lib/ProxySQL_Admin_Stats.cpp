@@ -1768,6 +1768,52 @@ void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
 	delete resultset;
 }
 
+void ProxySQL_Admin::stats___pgsql_client_host_cache(bool reset) {
+	if (!GloPTH) return;
+
+	SQLite3_result* resultset = GloPTH->get_client_host_cache(reset);
+	if (resultset == NULL) return;
+
+	statsdb->execute("BEGIN");
+
+	int rc = 0;
+	sqlite3_stmt* statement = NULL;
+	char* query = NULL;
+
+	if (reset) {
+		query = (char*)"INSERT INTO stats_pgsql_client_host_cache_reset VALUES (?1, ?2, ?3)";
+	} else {
+		query = (char*)"INSERT INTO stats_pgsql_client_host_cache VALUES (?1, ?2, ?3)";
+	}
+
+	statsdb->execute("DELETE FROM stats_pgsql_client_host_cache_reset");
+	statsdb->execute("DELETE FROM stats_pgsql_client_host_cache");
+
+	rc = statsdb->prepare_v2(query, &statement);
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* row = *it;
+
+		rc = (*proxy_sqlite3_bind_text)(statement, 1, row->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoll(row->fields[2])); ASSERT_SQLITE_OK(rc, statsdb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc = (*proxy_sqlite3_clear_bindings)(statement);
+		rc = (*proxy_sqlite3_reset)(statement);
+	}
+
+	(*proxy_sqlite3_finalize)(statement);
+
+	if (reset) {
+		statsdb->execute("INSERT INTO stats_pgsql_client_host_cache SELECT * FROM stats_pgsql_client_host_cache_reset");
+	}
+
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
 void ProxySQL_Admin::stats___mysql_errors(bool reset) {
 	if (!GloQPro) return;
 	SQLite3_result * resultset=NULL;

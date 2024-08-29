@@ -1155,6 +1155,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_gtid_executed=false;
 	bool stats_mysql_client_host_cache=false;
 	bool stats_mysql_client_host_cache_reset=false;
+	bool stats_pgsql_client_host_cache = false;
+	bool stats_pgsql_client_host_cache_reset = false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1288,7 +1290,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_client_host_cache=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_client_host_cache_reset"))
 		{ stats_mysql_client_host_cache_reset=true; refresh=true; }
-
+	if (strstr(query_no_space, "stats_pgsql_client_host_cache"))
+		{ stats_pgsql_client_host_cache = true; refresh = true; }
+	if (strstr(query_no_space, "stats_pgsql_client_host_cache_reset"))
+		{ stats_pgsql_client_host_cache_reset = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
@@ -1449,8 +1454,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_pgsql_connection_pool_reset) {
 			stats___pgsql_connection_pool(true);
-		}
-		else {
+		} else {
 			if (stats_pgsql_connection_pool)
 				stats___pgsql_connection_pool(false);
 		}
@@ -1503,6 +1507,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_client_host_cache_reset) {
 			stats___mysql_client_host_cache(true);
+		}
+		if (stats_pgsql_client_host_cache) {
+			stats___pgsql_client_host_cache(false);
+		}
+		if (stats_pgsql_client_host_cache_reset) {
+			stats___pgsql_client_host_cache(true);
 		}
 
 		if (admin) {

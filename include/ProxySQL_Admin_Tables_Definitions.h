@@ -303,12 +303,10 @@
 #define STATS_SQLITE_TABLE_PGSQL_PROCESSLIST "CREATE TABLE stats_pgsql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , database VARCHAR , cli_host VARCHAR , cli_port INT , hostgroup INT , l_srv_host VARCHAR , l_srv_port INT , srv_host VARCHAR , srv_port INT , command VARCHAR , time_ms INT NOT NULL , info VARCHAR , status_flags INT , extended_info VARCHAR)"
 #define STATS_SQLITE_TABLE_PGSQL_ERRORS "CREATE TABLE stats_pgsql_errors (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , database VARCHAR NOT NULL , sqlstate VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, database, sqlstate) )"
 #define STATS_SQLITE_TABLE_PGSQL_ERRORS_RESET "CREATE TABLE stats_pgsql_errors_reset (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , database VARCHAR NOT NULL , sqlstate VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, database, sqlstate) )"
+#define STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE "CREATE TABLE stats_pgsql_client_host_cache (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
+#define STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE_RESET "CREATE TABLE stats_pgsql_client_host_cache_reset (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
 
 //#define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
-/*
 
-#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE "CREATE TABLE stats_pgsql_client_host_cache (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
-#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET "CREATE TABLE stats_pgsql_client_host_cache_reset (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
-*/
 
 #endif // ProxySQL_Admin_Tables_Definitions
