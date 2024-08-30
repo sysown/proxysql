@@ -10,7 +10,6 @@
 #include <functional>
 #include <vector>
 
-#include "Client_Session.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"

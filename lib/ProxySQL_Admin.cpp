@@ -43,7 +43,6 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
-#include "Client_Session.h"
 
 #include <dirent.h>
 #include <search.h>
@@ -5508,8 +5507,8 @@ void ProxySQL_Admin::__refresh_pgsql_users(
  * (number of rows or query) to the client depending on its database
  * management system (MySQL or PostgreSQL).
  *
- * @tparam T The type of the Client_Session object passed as argument.
- * @param[in, out] sess A reference to a valid Client_Session object.
+ * @tparam S The type of session object passed as argument.
+ * @param[in, out] sess A reference to a valid session object.
  * @param msg An OK message string that will be sent to the client.
  * @param rows The number of rows affected by the query for MySQL clients.
  * @param query The query executed for PostgreSQL clients.
@@ -5541,8 +5540,8 @@ void ProxySQL_Admin::send_ok_msg_to_client(S* sess, const char* msg, int rows, c
  * (if applicable) to the client depending on its database management system
  * (MySQL or PostgreSQL).
  *
- * @tparam T The type of the Client_Session object passed as argument.
- * @param[in, out] sess A reference to a valid Client_Session object.
+ * @tparam S The type of the session object passed as argument.
+ * @param[in, out] sess A reference to a valid session object.
  * @param msg An error message that will be sent to the client.
  * @param mysqlerrcode (For MySQL clients) The error code associated with this
  * error message.

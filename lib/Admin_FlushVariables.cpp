@@ -43,7 +43,6 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
-#include "Client_Session.h"
 
 #include <dirent.h>
 #include <search.h>

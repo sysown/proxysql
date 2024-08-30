@@ -90,4 +90,6 @@ class Base_Thread {
 	friend class PgSQL_Thread;
 };
 
+std::string proxysql_session_type_str(enum proxysql_session_type session_type);
+
 #endif // CLASS_BASE_THREAD_H

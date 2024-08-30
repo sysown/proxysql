@@ -6,7 +6,6 @@
 #include "Base_Session.h"
 #include "MySQL_Session.h"
 #include "PgSQL_Session.h"
-#include "Client_Session.h"
 #include "mysql_backend.h"
 #include "PgSQL_Backend.h"
 #include "ProxySQL_Poll.h"

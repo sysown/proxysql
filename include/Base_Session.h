@@ -4,8 +4,6 @@ template<typename S, typename DSi, typename B, typename T> class Base_Session;
 //#define __CLASS_MYSQL_SESSION_H
 //#define __CLASS_PGSQL_SESSION_H
 
-
-#include "Client_Session.h"
 #include "proxysql.h"
 #include "cpp.h"
 
