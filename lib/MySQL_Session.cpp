@@ -728,6 +728,12 @@ MySQL_Session::MySQL_Session() {
 	use_ssl = false;
 	change_user_auth_switch = false;
 
+	// Session-level status of the sticky_backend
+	// 0 means non-sticky
+	// 1 means sticky, fallback to new server in case of server failure
+	// 2 means strictly sticky, throw an error in case of server failure
+	sticky_backend=0;
+
 	//gtid_trxid = 0;
 	gtid_hid = -1;
 	memset(gtid_buf,0,sizeof(gtid_buf));

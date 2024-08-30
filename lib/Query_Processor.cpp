@@ -2600,6 +2600,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 		remove_spaces(value);
 		if (strlen(key)) {
 			char c=value[0];
+			if (!strcasecmp(key,"sticky_backend")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->sticky_backend=t;
+				}
+			}
 			if (!strcasecmp(key,"cache_ttl")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);

@@ -131,6 +131,7 @@ class Query_Processor_Output {
 	int timeout;
 	int retries;
 	int delay;
+	int sticky_backend;
 	char *error_msg;
 	char *OK_msg;
 	int sticky_conn;
@@ -170,6 +171,7 @@ class Query_Processor_Output {
 		timeout=-1;
 		retries=-1;
 		delay=-1;
+		sticky_backend=-1;
 		sticky_conn=-1;
 		multiplex=-1;
 		gtid_from_hostgroup=-1;
