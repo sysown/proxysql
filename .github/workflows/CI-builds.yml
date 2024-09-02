@@ -1,13 +1,15 @@
 name: CI-builds
+env:
+  MAIN: refs/heads/${{ github.event.repository.default_branch }}
 
 on:
   push:
-    branches: [ "v2.x" ]
+    branches: [ $MAIN ]
     paths-ignore:
     - '.github/**'
     - '**.md'
   pull_request:
-    branches: [ "v2.x" ]
+    branches: [ $MAIN ]
     paths-ignore:
     - '.github/**'
     - '**.md'
