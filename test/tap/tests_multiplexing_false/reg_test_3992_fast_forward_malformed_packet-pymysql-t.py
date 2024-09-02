@@ -1,0 +1,1 @@
+../tests/reg_test_3992_fast_forward_malformed_packet-pymysql-t.py
