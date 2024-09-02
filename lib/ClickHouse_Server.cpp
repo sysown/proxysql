@@ -586,7 +586,7 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
-void ClickHouse_Server_session_handler(Client_Session<MySQL_Session*> sess, void *_pa, PtrSize_t *pkt) {
+void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *pkt) {
 	char *error=NULL;
 	int cols;
 	int affected_rows;

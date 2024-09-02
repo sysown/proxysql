@@ -541,13 +541,13 @@ source files, we must explicitly instantiate the template for those arguments
 in the source file where the function is defined. This ensures that the
 compiler generates the necessary code for those template instantiations
 */
-template void ProxySQL_Admin::ProxySQL_Test_Handler<MySQL_Session*>(ProxySQL_Admin*, Client_Session<MySQL_Session*>&, char*, bool&);
-template void ProxySQL_Admin::ProxySQL_Test_Handler<PgSQL_Session*>(ProxySQL_Admin*, Client_Session<PgSQL_Session*>&, char*, bool&);
+template void ProxySQL_Admin::ProxySQL_Test_Handler<MySQL_Session>(ProxySQL_Admin*, MySQL_Session*, char*, bool&);
+template void ProxySQL_Admin::ProxySQL_Test_Handler<PgSQL_Session>(ProxySQL_Admin*, PgSQL_Session*, char*, bool&);
 
-template<class T>
-void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, Client_Session<T>& sess, char *query_no_space, bool& run_query) {
-	if constexpr (std::is_same<T, MySQL_Session*>::value) {
-	} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+template<typename S>
+void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *query_no_space, bool& run_query) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 	} else {
 		assert(0);
 	}

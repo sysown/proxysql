@@ -8,7 +8,6 @@
 
 #include "proxysql.h"
 #include "Base_Session.h"
-#include "Client_Session.h"
 #include "cpp.h"
 #include "PgSQL_Variables.h"
 #include "Base_Session.h"
@@ -369,7 +368,7 @@ public:
 	void set_status(enum session_status e);
 	int handler();
 
-	void (*handler_function) (Client_Session<PgSQL_Session*> arg, void*, PtrSize_t* pkt);
+	void (*handler_function) (PgSQL_Session* sess, void*, PtrSize_t* pkt);
 	//PgSQL_Backend* find_backend(int);
 	//PgSQL_Backend* create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 	//PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);

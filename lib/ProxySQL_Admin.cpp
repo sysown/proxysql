@@ -43,7 +43,6 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
-#include "Client_Session.h"
 
 #include <dirent.h>
 #include <search.h>
@@ -1070,8 +1069,8 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 admin_main_loop_listeners S_amll;
 
 
-template <class T>
-bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, Client_Session<T>& sess, ProxySQL_Admin *pa) {
+template <typename S>
+bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
 	uint32_t id=atoi(query_no_space+16);
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
 	bool rc=GloMTH->kill_session(id);
@@ -1111,10 +1110,10 @@ void ProxySQL_Admin::flush_logs() {
 
 
 // Explicitly instantiate the required template class and member functions
-template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, int, char const*);
-template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, int, char const*);
-template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, unsigned short);
-template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, unsigned short);
+template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
+template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)1>(SQLite3DB*);
 
@@ -1135,21 +1134,28 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool ret=false;
 	bool refresh=false;
 	bool stats_mysql_processlist=false;
+	bool stats_pgsql_processlist=false;
 	bool stats_mysql_free_connections=false;
+	bool stats_pgsql_free_connections=false;
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_connection_pool_reset=false;
 	bool stats_mysql_query_digest=false;
 	bool stats_mysql_query_digest_reset=false;
 	bool stats_mysql_errors=false;
 	bool stats_mysql_errors_reset=false;
+	bool stats_pgsql_errors = false;
+	bool stats_pgsql_errors_reset = false;
 	bool stats_mysql_global=false;
 	bool stats_memory_metrics=false;
 	bool stats_mysql_commands_counters=false;
 	bool stats_mysql_query_rules=false;
 	bool stats_mysql_users=false;
+	bool stats_pgsql_users = false;
 	bool stats_mysql_gtid_executed=false;
 	bool stats_mysql_client_host_cache=false;
 	bool stats_mysql_client_host_cache_reset=false;
+	bool stats_pgsql_client_host_cache = false;
+	bool stats_pgsql_client_host_cache_reset = false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1167,6 +1173,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_pgsql_servers = false;
 	bool runtime_pgsql_query_rules = false;
 	bool runtime_pgsql_query_rules_fast_routing = false;
+
+	bool stats_pgsql_global = false;
+	bool stats_pgsql_connection_pool = false;
+	bool stats_pgsql_connection_pool_reset = false;
 
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
@@ -1193,12 +1203,22 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
-	if (strcasestr(query_no_space,"processlist"))
+	if (strcasestr(query_no_space, "pgsql processlist") ||
+		strcasestr(query_no_space, "stats_pgsql_processlist"))
+		// This will match the following usecases:
+		// SHOW PGSQL PROCESSLIST
+		// SHOW FULL PGSQL PROCESSLIST
+		// SELECT * FROM stats_pgsql_processlist 
+	{ 
+		stats_pgsql_processlist = true; refresh = true; 
+	} else if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
 		// SHOW PROCESSLIST
 		// SHOW FULL PROCESSLIST
 		// SELECT * FROM stats_mysql_processlist
-		{ stats_mysql_processlist=true; refresh=true; }
+	{ 
+		stats_mysql_processlist=true; refresh=true; 
+	}
 	if (strstr(query_no_space,"stats_mysql_query_digest"))
 		{ stats_mysql_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
@@ -1228,32 +1248,51 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_errors=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_errors_reset"))
 		{ stats_mysql_errors_reset=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_errors")) 
+		{ stats_pgsql_errors = true; refresh = true; }
+	if (strstr(query_no_space, "stats_pgsql_errors_reset"))
+		{ stats_pgsql_errors_reset = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_global"))
 		{ stats_mysql_global=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_global")) 
+		{ stats_pgsql_global = true; refresh = true; }
 	if (strstr(query_no_space,"stats_memory_metrics"))
 		{ stats_memory_metrics=true; refresh=true; }
-	if (strstr(query_no_space,"stats_mysql_connection_pool_reset"))
-		{
+	if (strstr(query_no_space,"stats_mysql_connection_pool_reset")) {
 			stats_mysql_connection_pool_reset=true; refresh=true;
-		} else {
-			if (strstr(query_no_space,"stats_mysql_connection_pool"))
-				{ stats_mysql_connection_pool=true; refresh=true; }
+	} else {
+		if (strstr(query_no_space,"stats_mysql_connection_pool"))
+			{ stats_mysql_connection_pool=true; refresh=true; }
+	}
+	if (strstr(query_no_space, "stats_pgsql_connection_pool_reset")) {
+		stats_pgsql_connection_pool_reset = true; refresh = true;
+	} else {
+		if (strstr(query_no_space, "stats_pgsql_connection_pool")) {
+			stats_pgsql_connection_pool = true; refresh = true;
 		}
+	}
 	if (strstr(query_no_space,"stats_mysql_free_connections"))
 		{ stats_mysql_free_connections=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_free_connections")) 
+		{ stats_pgsql_free_connections=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_commands_counters"))
 		{ stats_mysql_commands_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_rules"))
 		{ stats_mysql_query_rules=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_users"))
 		{ stats_mysql_users=true; refresh=true; }
+	if (strstr(query_no_space,"stats_pgsql_users"))
+		{ stats_pgsql_users = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_gtid_executed"))
 		{ stats_mysql_gtid_executed=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_client_host_cache"))
 		{ stats_mysql_client_host_cache=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_client_host_cache_reset"))
 		{ stats_mysql_client_host_cache_reset=true; refresh=true; }
-
+	if (strstr(query_no_space, "stats_pgsql_client_host_cache"))
+		{ stats_pgsql_client_host_cache = true; refresh = true; }
+	if (strstr(query_no_space, "stats_pgsql_client_host_cache_reset"))
+		{ stats_pgsql_client_host_cache_reset = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
@@ -1386,6 +1425,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
+		if (stats_pgsql_processlist)
+			stats___pgsql_processlist();
 		if (stats_mysql_query_digest_reset) {
 			stats___mysql_query_digests_v2(true, stats_mysql_query_digest, false);
 		} else {
@@ -1398,16 +1439,32 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mysql_errors_reset) {
 			stats___mysql_errors(true);
 		}
+		if (stats_pgsql_errors) {
+			stats___pgsql_errors(false);
+		}
+		if (stats_pgsql_errors_reset) {
+			stats___pgsql_errors(true);
+		}
 		if (stats_mysql_connection_pool_reset) {
 			stats___mysql_connection_pool(true);
 		} else {
 			if (stats_mysql_connection_pool)
 				stats___mysql_connection_pool(false);
 		}
+		if (stats_pgsql_connection_pool_reset) {
+			stats___pgsql_connection_pool(true);
+		} else {
+			if (stats_pgsql_connection_pool)
+				stats___pgsql_connection_pool(false);
+		}
 		if (stats_mysql_free_connections)
 			stats___mysql_free_connections();
+		if (stats_pgsql_free_connections)
+			stats___pgsql_free_connections();
 		if (stats_mysql_global)
 			stats___mysql_global();
+		if (stats_pgsql_global)
+			stats___pgsql_global();
 		if (stats_memory_metrics)
 			stats___memory_metrics();
 		if (stats_mysql_query_rules)
@@ -1416,6 +1473,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_commands_counters();
 		if (stats_mysql_users)
 			stats___mysql_users();
+		if (stats_pgsql_users)
+			stats___pgsql_users();
 		if (stats_mysql_gtid_executed)
 			stats___mysql_gtid_executed();
 
@@ -1447,6 +1506,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_client_host_cache_reset) {
 			stats___mysql_client_host_cache(true);
+		}
+		if (stats_pgsql_client_host_cache) {
+			stats___pgsql_client_host_cache(false);
+		}
+		if (stats_pgsql_client_host_cache_reset) {
+			stats___pgsql_client_host_cache(true);
 		}
 
 		if (admin) {
@@ -1566,7 +1631,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_query_digest || stats_mysql_query_digest_reset || stats_mysql_errors ||
 		stats_mysql_errors_reset || stats_mysql_global || stats_memory_metrics || 
 		stats_mysql_commands_counters || stats_mysql_query_rules || stats_mysql_users ||
-		stats_mysql_gtid_executed || stats_mysql_free_connections
+		stats_mysql_gtid_executed || stats_mysql_free_connections || 
+		stats_pgsql_global || stats_pgsql_connection_pool || stats_pgsql_connection_pool_reset ||
+		stats_pgsql_free_connections || stats_pgsql_users || stats_pgsql_processlist ||
+		stats_pgsql_errors || stats_pgsql_errors_reset 
 	) {
 		ret = true;
 	}
@@ -1751,8 +1819,8 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 }
 
 
-template<class T>
-void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt);
+template<typename S>
+void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);
 
 void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 	if (variables.vacuum_stats==false) {
@@ -1761,14 +1829,19 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 	const vector<string> tablenames = {
 		"stats_mysql_commands_counters",
 		"stats_mysql_free_connections",
+		"stats_pgsql_free_connections",
 		"stats_mysql_connection_pool",
 		"stats_mysql_connection_pool_reset",
+		"stats_pgsql_connection_pool",
+		"stats_pgsql_connection_pool_reset",
 		"stats_mysql_prepared_statements_info",
 		"stats_mysql_processlist",
+		"stats_pgsql_processlist",
 		"stats_mysql_query_digest",
 		"stats_mysql_query_digest_reset",
 		"stats_mysql_query_rules",
 		"stats_mysql_users",
+		"stats_pgsql_users",
 		"stats_proxysql_servers_checksums",
 		"stats_proxysql_servers_metrics",
 		"stats_proxysql_servers_status",
@@ -1829,7 +1902,7 @@ void *child_mysql(void *arg) {
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
-	sess->handler_function=admin_session_handler<MySQL_Session*>;
+	sess->handler_function=admin_session_handler<MySQL_Session>;
 	MySQL_Data_Stream *myds=sess->client_myds;
 	sess->start_time=mysql_thr->curtime;
 
@@ -1949,7 +2022,7 @@ void* child_postgres(void* arg) {
 	PgSQL_Session* sess = pgsql_thr->create_new_session_and_client_data_stream<PgSQL_Thread, PgSQL_Session*>(client);
 	sess->thread = pgsql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
-	sess->handler_function=admin_session_handler<PgSQL_Session*>;
+	sess->handler_function=admin_session_handler<PgSQL_Session>;
 	PgSQL_Data_Stream* myds = sess->client_myds;
 	sess->start_time = pgsql_thr->curtime;
 
@@ -5434,30 +5507,30 @@ void ProxySQL_Admin::__refresh_pgsql_users(
  * (number of rows or query) to the client depending on its database
  * management system (MySQL or PostgreSQL).
  *
- * @tparam T The type of the Client_Session object passed as argument.
- * @param[in, out] sess A reference to a valid Client_Session object.
+ * @tparam S The type of session object passed as argument.
+ * @param[in, out] sess A reference to a valid session object.
  * @param msg An OK message string that will be sent to the client.
  * @param rows The number of rows affected by the query for MySQL clients.
  * @param query The query executed for PostgreSQL clients.
  */
-template <class T>
-void ProxySQL_Admin::send_ok_msg_to_client(Client_Session<T>& sess, const char* msg, int rows, const char* query) {
+template <typename S>
+void ProxySQL_Admin::send_ok_msg_to_client(S* sess, const char* msg, int rows, const char* query) {
 	assert(sess->client_myds);
-	if constexpr (std::is_same<T, MySQL_Session*>::value) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		 // Code for MySQL clients
 		MySQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
 		myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, rows, 0, 2, 0, (char*)msg, false); 
 		myds->DSS = STATE_SLEEP;
-	} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 		// Code for PostgreSQL clients
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
 		myds->myprot.generate_ok_packet(true, true, msg, rows, query);
 		myds->DSS = STATE_SLEEP;
-	}
-	else
+	} else {
 		assert(0);
+	}
 }
 
 /*
@@ -5467,17 +5540,17 @@ void ProxySQL_Admin::send_ok_msg_to_client(Client_Session<T>& sess, const char* 
  * (if applicable) to the client depending on its database management system
  * (MySQL or PostgreSQL).
  *
- * @tparam T The type of the Client_Session object passed as argument.
- * @param[in, out] sess A reference to a valid Client_Session object.
+ * @tparam S The type of the session object passed as argument.
+ * @param[in, out] sess A reference to a valid session object.
  * @param msg An error message that will be sent to the client.
  * @param mysqlerrcode (For MySQL clients) The error code associated with this
  * error message.
 */
-template <class T>
-void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const char *msg, uint16_t mysql_err_code /*, bool fatal*/ ) {
+template <typename S>
+void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t mysql_err_code /*, bool fatal*/ ) {
 	assert(sess->client_myds);
 	const char prefix_msg[] = "ProxySQL Admin Error: ";
-	if constexpr (std::is_same<T, MySQL_Session*>::value) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		 // Code for MySQL clients
 		MySQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
@@ -5486,8 +5559,7 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, mysql_err_code, (char*)"28000", new_msg);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
-	}
-	else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 		// Code for PostgreSQL clients
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
@@ -5495,6 +5567,8 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		myds->myprot.generate_error_packet(true, true, new_msg, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
+	} else {
+		assert(0);
 	}
 }
 

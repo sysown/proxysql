@@ -1031,7 +1031,7 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 		'V', fatal ? "FATAL" : "ERROR",
 		'C', PgSQL_Error_Helper::get_error_code(code), 'M', msg, 0);
 
-	if (ready) {
+	if (ready == true) {
 		pgpkt.write_ReadyForQuery();
 		pgpkt.set_multi_pkt_mode(false);
 	}

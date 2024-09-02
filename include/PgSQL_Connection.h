@@ -1,6 +1,6 @@
 #ifndef __CLASS_PGSQL_CONNECTION_H
 #define __CLASS_PGSQL_CONNECTION_H
-
+#include "libpq-fe.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
@@ -9,7 +9,6 @@
 #define PROXYJSON
 namespace nlohmann { class json; }
 #endif // PROXYJSON
-
 
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
@@ -368,8 +367,8 @@ class PgSQL_Connection_Placeholder {
 	bytes_stats_t bytes_info; // bytes statistics
 	struct {
 		unsigned long long questions;
-		unsigned long long myconnpoll_get;
-		unsigned long long myconnpoll_put;
+		unsigned long long pgconnpoll_get;
+		unsigned long long pgconnpoll_put;
 	} statuses;
 
 	unsigned long largest_query_length;
@@ -547,7 +546,7 @@ public:
 	}
 
 	inline
-		const char* get_error_code_str() const {
+	const char* get_error_code_str() const {
 		return error_info.sqlstate;
 	}
 
@@ -595,6 +594,8 @@ public:
 	void next_multi_statement_result(PGresult* result);
 	bool set_single_row_mode();
 	void optimize() {}
+	void update_bytes_recv(uint64_t bytes_recv);
+	void update_bytes_sent(uint64_t bytes_sent);
 
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
 	inline int get_pg_server_version() { return PQserverVersion(pgsql_conn); }
@@ -621,6 +622,8 @@ public:
 	const char* get_pg_server_version_str(char* buff, int buff_size);
 	const char* get_pg_connection_status_str();
 	const char* get_pg_transaction_status_str();
+
+	unsigned int get_memory_usage() const;
 
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;

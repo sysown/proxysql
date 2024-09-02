@@ -326,8 +326,8 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	multi_pkt.size = 0;
 
 	statuses.questions = 0;
-	statuses.myconnpoll_get = 0;
-	statuses.myconnpoll_put = 0;
+	statuses.pgconnpoll_get = 0;
+	statuses.pgconnpoll_put = 0;
 
 	com_field_wild = NULL;
 	scram_state = nullptr;

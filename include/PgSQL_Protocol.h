@@ -149,8 +149,8 @@ public:
 	void write_AuthenticationRequest(uint32_t auth_type, const uint8_t* data, int len) {
 		write_generic('R', "ib", auth_type, data, len);
 	}
-	void write_ReadyForQuery() {
-		write_generic('Z', "c", 'I');
+	void write_ReadyForQuery(char txn_state = 'I') {
+		write_generic('Z', "c", txn_state);
 	}
 	void write_CommandComplete(const char* desc) {
 		write_generic('C', "s", desc);
@@ -276,8 +276,8 @@ private:
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Session* sess;
 	
-	template<class T>
-	friend void admin_session_handler(Client_Session<T> sess, void* _pa, PtrSize_t* pkt);
+	template<typename S>
+	friend void admin_session_handler(S* sess, void* _pa, PtrSize_t* pkt);
 };
 
 void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type);

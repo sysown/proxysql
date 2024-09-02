@@ -4113,7 +4113,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	if (_memory == true) {
 		Get_Memory_Stats();
 	}
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Global Status\n");
 	SQLite3_result* result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT, "Variable_Name");
 	result->add_column_definition(SQLITE_TEXT, "Variable_Value");
@@ -4185,25 +4185,25 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		result->add_row(pta);
 	}
 #endif // IDLE_THREADS
-	{	// MySQL Backend buffers bytes
-		pta[0] = (char*)"mysql_backend_buffers_bytes";
-		sprintf(buf, "%llu", get_mysql_backend_buffers_bytes());
+	{	// PgSQL Backend buffers bytes
+		pta[0] = (char*)"pgsql_backend_buffers_bytes";
+		sprintf(buf, "%llu", get_pgsql_backend_buffers_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// MySQL Frontend buffers bytes
-		pta[0] = (char*)"mysql_frontend_buffers_bytes";
-		sprintf(buf, "%llu", get_mysql_frontend_buffers_bytes());
+	{	// PgSQL Frontend buffers bytes
+		pta[0] = (char*)"pgsql_frontend_buffers_bytes";
+		sprintf(buf, "%llu", get_pgsql_frontend_buffers_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// MySQL Frontend buffers bytes
-		pta[0] = (char*)"mysql_session_internal_bytes";
-		sprintf(buf, "%llu", get_mysql_session_internal_bytes());
+	{	// PgSQL Frontend buffers bytes
+		pta[0] = (char*)"pgsql_session_internal_bytes";
+		sprintf(buf, "%llu", get_pgsql_session_internal_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries autocommit
+	/*{	// Queries autocommit
 		pta[0] = (char*)"Com_autocommit";
 		sprintf(buf, "%llu", PgHGM->status.autocommit_cnt);
 		pta[1] = buf;
@@ -4214,67 +4214,67 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		sprintf(buf, "%llu", PgHGM->status.autocommit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
+	}*/
 	{	// Queries commit
-		pta[0] = (char*)"Com_commit";
+		pta[0] = (char*)"Commit";
 		sprintf(buf, "%llu", PgHGM->status.commit_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered commit
-		pta[0] = (char*)"Com_commit_filtered";
+		pta[0] = (char*)"Commit_filtered";
 		sprintf(buf, "%llu", PgHGM->status.commit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries rollback
-		pta[0] = (char*)"Com_rollback";
+		pta[0] = (char*)"Rollback";
 		sprintf(buf, "%llu", PgHGM->status.rollback_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered rollback
-		pta[0] = (char*)"Com_rollback_filtered";
+		pta[0] = (char*)"Rollback_filtered";
 		sprintf(buf, "%llu", PgHGM->status.rollback_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries backend CHANGE_USER
-		pta[0] = (char*)"Com_backend_change_user";
-		sprintf(buf, "%llu", PgHGM->status.backend_change_user);
+	{	// Queries backend RESET_CONNECTION
+		pta[0] = (char*)"Backend_reset_connection";
+		sprintf(buf, "%llu", PgHGM->status.backend_reset_connection);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries backend INIT DB
+	/* {	// Queries backend INIT DB
 		pta[0] = (char*)"Com_backend_init_db";
 		sprintf(buf, "%llu", PgHGM->status.backend_init_db);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
-	{	// Queries backend SET NAMES
-		pta[0] = (char*)"Com_backend_set_names";
-		sprintf(buf, "%llu", PgHGM->status.backend_set_names);
+	}*/
+	{	// Queries backend SET client_encoding 
+		pta[0] = (char*)"Backend_set_client_encoding";
+		sprintf(buf, "%llu", PgHGM->status.backend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries frontend INIT DB
+	/* {	// Queries frontend INIT DB
 		pta[0] = (char*)"Com_frontend_init_db";
 		sprintf(buf, "%llu", PgHGM->status.frontend_init_db);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
-	{	// Queries frontend SET NAMES
-		pta[0] = (char*)"Com_frontend_set_names";
-		sprintf(buf, "%llu", PgHGM->status.frontend_set_names);
+	}*/
+	{	// Queries frontend SET client_encoding 
+		pta[0] = (char*)"Frontend_set_client_encoding";
+		sprintf(buf, "%llu", PgHGM->status.frontend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries frontend USE DB
+	/* {	// Queries frontend USE DB
 		pta[0] = (char*)"Com_frontend_use_db";
 		sprintf(buf, "%llu", PgHGM->status.frontend_use_db);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
+	}*/
 /*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
@@ -4358,7 +4358,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	if (GloMyMon) {
+	/*if (GloMyMon) {
 		{	// MySQL Monitor workers
 			pta[0] = (char*)"MySQL_Monitor_Workers";
 			sprintf(buf, "%d", (variables.monitor_enabled ? GloMyMon->num_threads : 0));
@@ -4443,7 +4443,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			pta[1] = buf;
 			result->add_row(pta);
 		}
-	}
+	}*/
 	free(pta);
 	return result;
 }
@@ -4480,12 +4480,12 @@ void PgSQL_Threads_Handler::Get_Memory_Stats() {
 SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 	const int colnum = 16;
 	char port[NI_MAXSERV];
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Processlist\n");
 	SQLite3_result* result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT, "ThreadID");
 	result->add_column_definition(SQLITE_TEXT, "SessionID");
 	result->add_column_definition(SQLITE_TEXT, "user");
-	result->add_column_definition(SQLITE_TEXT, "db");
+	result->add_column_definition(SQLITE_TEXT, "database");
 	result->add_column_definition(SQLITE_TEXT, "cli_host");
 	result->add_column_definition(SQLITE_TEXT, "cli_port");
 	result->add_column_definition(SQLITE_TEXT, "hostgroup");
@@ -4678,9 +4678,9 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				case RESETTING_CONNECTION_V2:
 					pta[11] = strdup("Resetting connection V2");
 					break;
-				case CHANGING_SCHEMA:
-					pta[11] = strdup("InitDB");
-					break;
+				//case CHANGING_SCHEMA:
+				//	pta[11] = strdup("InitDB");
+				//	break;
 				case PROCESSING_STMT_EXECUTE:
 					pta[11] = strdup("Execute");
 					break;
@@ -4696,12 +4696,12 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				case WAITING_SERVER_DATA:
 					pta[11] = strdup("Waiting server data");
 					break;
-				case CHANGING_CHARSET:
-					pta[11] = strdup("Changing charset");
-					break;
-				case CHANGING_AUTOCOMMIT:
-					pta[11] = strdup("Changing autocommit");
-					break;
+				//case CHANGING_CHARSET:
+				//	pta[11] = strdup("Changing charset");
+				//	break;
+				//case CHANGING_AUTOCOMMIT:
+				//	pta[11] = strdup("Changing autocommit");
+				//	break;
 				case SETTING_INIT_CONNECT:
 					pta[11] = strdup("Setting init connect");
 					break;
@@ -5020,7 +5020,7 @@ unsigned int PgSQL_Threads_Handler::get_non_idle_client_connections() {
 }
 #endif // IDLE_THREADS
 
-unsigned long long PgSQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
+unsigned long long PgSQL_Threads_Handler::get_pgsql_backend_buffers_bytes() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q = 0;
 	unsigned int i;
@@ -5037,7 +5037,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 	return q;
 }
 
-unsigned long long PgSQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
+unsigned long long PgSQL_Threads_Handler::get_pgsql_frontend_buffers_bytes() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q = 0;
 	unsigned int i;
@@ -5063,7 +5063,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 	return q;
 }
 
-unsigned long long PgSQL_Threads_Handler::get_mysql_session_internal_bytes() {
+unsigned long long PgSQL_Threads_Handler::get_pgsql_session_internal_bytes() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q = 0;
 	unsigned int i;
@@ -5093,9 +5093,9 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 #ifdef IDLE_THREADS
 	get_non_idle_client_connections();
 #endif // IDLE_THREADS
-	get_mysql_backend_buffers_bytes();
-	get_mysql_frontend_buffers_bytes();
-	get_mysql_session_internal_bytes();
+	get_pgsql_backend_buffers_bytes();
+	get_pgsql_frontend_buffers_bytes();
+	get_pgsql_session_internal_bytes();
 /*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {

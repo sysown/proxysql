@@ -99,8 +99,8 @@ public:
 
 	struct {
 		unsigned long long questions;
-		unsigned long long myconnpoll_get;
-		unsigned long long myconnpoll_put;
+		unsigned long long pgconnpoll_get;
+		unsigned long long pgconnpoll_put;
 	} statuses;
 
 	PtrSizeArray* PSarrayIN;
@@ -206,9 +206,9 @@ public:
 
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {
-		statuses.myconnpoll_get++;
+		statuses.pgconnpoll_get++;
 		myconn = mc;
-		myconn->statuses.myconnpoll_get++;
+		myconn->statuses.pgconnpoll_get++;
 		mc->myds = this;
 		encrypted = false; // this is the default
 		// PMC-10005
@@ -243,8 +243,8 @@ public:
 	// safe way to detach a MySQL Connection
 	void detach_connection() {
 		assert(myconn);
-		myconn->statuses.myconnpoll_put++;
-		statuses.myconnpoll_put++;
+		myconn->statuses.pgconnpoll_put++;
+		statuses.pgconnpoll_put++;
 		myconn->myds = NULL;
 		myconn = NULL;
 		if (encrypted == true) {
