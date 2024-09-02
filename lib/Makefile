@@ -130,6 +130,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	QP_rule_text.oo QP_query_digest_stats.oo \
 	GTID_Server_Data.oo MyHGC.oo MySrvConnList.oo MySrvList.oo MySrvC.oo \
 	MySQL_encode.oo MySQL_ResultSet.oo \
+	proxy_protocol_info.oo \
 	proxysql_find_charset.oo ProxySQL_Poll.oo
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
