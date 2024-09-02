@@ -1,0 +1,25 @@
+commit 3dab3a696e61c341029ad459608f2626e6e5547f
+Author: Miro Stauder <miro@proxysql.com>
+Date:   Mon Jan 9 12:06:29 2023 +0000
+
+    final_val_post_process.patch
+
+diff --git a/src/webserver.cpp b/src/webserver.cpp
+index 38542f2..e6ef554 100644
+--- a/src/webserver.cpp
++++ b/src/webserver.cpp
+@@ -674,6 +674,14 @@ MHD_Result webserver::finalize_answer(
+         {
+             if(hrm->is_allowed(method))
+             {
++                // NOTE: Here 'MHD_destroy_post_processor' is required for performing a final 'post_process'
++                // of the 'URL Encode'. This ensures ensures the processing of final key without value left
++                // at the end of the buffer. See function internal doc at 'postprocessor.c'.
++                if (mr->pp != NULL) {
++                    MHD_destroy_post_processor(mr->pp);
++                    mr->pp = NULL;
++                }
++
+                 mr->dhrs = ((hrm)->*(mr->callback))(*mr->dhr); //copy in memory (move in case)
+                 if (mr->dhrs->get_response_code() == -1)
+                 {

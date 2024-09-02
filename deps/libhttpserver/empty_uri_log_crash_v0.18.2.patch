@@ -1,0 +1,19 @@
+commit 2678fcf0bc7a645a4043f5c194dfc75da35ab072
+Author: Miro Stauder <miro@proxysql.com>
+Date:   Tue Jan 24 15:05:11 2023 +0000
+
+    webserver.patch
+
+diff --git a/src/webserver.cpp b/src/webserver.cpp
+index 38542f2..0ae69dc 100644
+--- a/src/webserver.cpp
++++ b/src/webserver.cpp
+@@ -441,7 +441,7 @@ MHD_Result policy_callback (void *cls, const struct sockaddr* addr, socklen_t ad
+ void* uri_log(void* cls, const char* uri)
+ {
+     struct details::modded_request* mr = new details::modded_request();
+-    mr->complete_uri = new string(uri);
++    mr->complete_uri = new string(uri == NULL ? "" : uri);
+     mr->second = false;
+     return ((void*)mr);
+ }

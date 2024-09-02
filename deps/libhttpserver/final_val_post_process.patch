@@ -1,17 +1,10 @@
-commit 3dab3a696e61c341029ad459608f2626e6e5547f
-Author: Miro Stauder <miro@proxysql.com>
-Date:   Mon Jan 9 12:06:29 2023 +0000
-
-    final_val_post_process.patch
-
-diff --git a/src/webserver.cpp b/src/webserver.cpp
-index 38542f2..e6ef554 100644
---- a/src/webserver.cpp
-+++ b/src/webserver.cpp
-@@ -674,6 +674,14 @@ MHD_Result webserver::finalize_answer(
-         {
-             if(hrm->is_allowed(method))
-             {
+diff -upr libhttpserver.clean/src/webserver.cpp libhttpserver/src/webserver.cpp
+--- libhttpserver.clean/src/webserver.cpp	2023-06-16 03:49:56.000000000 +0000
++++ libhttpserver/src/webserver.cpp	2023-10-17 10:03:00.696612945 +0000
+@@ -676,6 +676,14 @@ MHD_Result webserver::finalize_answer(MH
+     if (found) {
+         try {
+             if (hrm->is_allowed(method)) {
 +                // NOTE: Here 'MHD_destroy_post_processor' is required for performing a final 'post_process'
 +                // of the 'URL Encode'. This ensures ensures the processing of final key without value left
 +                // at the end of the buffer. See function internal doc at 'postprocessor.c'.
@@ -20,6 +13,6 @@ index 38542f2..e6ef554 100644
 +                    mr->pp = NULL;
 +                }
 +
-                 mr->dhrs = ((hrm)->*(mr->callback))(*mr->dhr); //copy in memory (move in case)
-                 if (mr->dhrs->get_response_code() == -1)
-                 {
+                 mr->dhrs = ((hrm)->*(mr->callback))(*mr->dhr);  // copy in memory (move in case)
+                 if (mr->dhrs.get() == nullptr || mr->dhrs->get_response_code() == -1) {
+                     mr->dhrs = internal_error_page(mr);

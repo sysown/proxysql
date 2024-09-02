@@ -7103,7 +7103,7 @@ std::map<string,string> request_headers(const httpserver::http_request& request)
 	std::map<string,string> result {};
 
 	for (const auto& header : req_headers) {
-		result.insert({header.first, header.second});
+		result.insert({(string) header.first, (string) header.second});
 	}
 
 	return result;
