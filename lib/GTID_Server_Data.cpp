@@ -442,6 +442,7 @@ void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
 void * GTID_syncer_run() {
 	//struct ev_loop * gtid_ev_loop;
 	//gtid_ev_loop = NULL;
+	set_thread_name("GTID");
 	MyHGM->gtid_ev_loop = ev_loop_new (EVBACKEND_POLL | EVFLAG_NOENV);
 	if (MyHGM->gtid_ev_loop == NULL) {
 		proxy_error("could not initialise GTID sync loop\n");

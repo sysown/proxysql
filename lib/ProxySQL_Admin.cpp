@@ -5696,6 +5696,7 @@ static void * admin_main_loop(void *arg)
 	int *callback_func=((struct _main_args *)arg)->callback_func;
 	volatile int *shutdown=((struct _main_args *)arg)->shutdown;
 	char *socket_names[MAX_ADMIN_LISTENERS];
+	set_thread_name("Admin");
 	for (i=0;i<MAX_ADMIN_LISTENERS;i++) { socket_names[i]=NULL; }
 	pthread_attr_t attr;
   pthread_attr_init(&attr);

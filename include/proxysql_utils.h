@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/resource.h>
+#include <assert.h>
 
 #include "sqlite3db.h"
 
@@ -257,5 +258,13 @@ void close_all_non_term_fd(std::vector<int> excludeFDs);
  * @return A pair of the shape '{err_code,err_msg}'.
  */
 std::pair<int,const char*> get_dollar_quote_error(const char* version);
+
+static inline void set_thread_name(const char name[16]) {
+#if defined(__linux__) || defined(__FreeBSD__)
+	int rc;
+	rc = pthread_setname_np(pthread_self(), name);
+	assert(!rc);
+#endif
+}
 
 #endif

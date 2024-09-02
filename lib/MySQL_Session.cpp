@@ -264,6 +264,7 @@ void* kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	//! It initializes a new MySQL_Thread object to handle MySQL-related operations.
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
+	set_thread_name("KillQuery");
 	//! Retrieves the current time and refreshes thread variables.
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();

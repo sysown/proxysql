@@ -1023,6 +1023,7 @@ static void *child_mysql(void *arg) {
 
 	int client = *(int *)arg;
 
+	set_thread_name("SQLiteChldMySQL");
 	GloMTH->wrlock();
 	{
 		char *s=GloMTH->get_variable((char *)"server_capabilities");
@@ -1135,6 +1136,7 @@ static void * sqlite3server_main_loop(void *arg)
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	set_thread_name("SQLite3_Main");
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
 		int *client;
