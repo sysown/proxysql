@@ -289,6 +289,10 @@ class ProxySQL_Admin {
 	ProxySQL_External_Scheduler *scheduler;
 
 	void dump_mysql_collations();
+	/**
+	 * @brief Dumps into the Admin SQLite3 table 'ssl_ciphers' currently available ciphers.
+	 */
+	void dump_ssl_ciphers();
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
