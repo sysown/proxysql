@@ -121,6 +121,7 @@ static const std::set<std::string> mysql_variables_strings = {
 	"lc_time_names",
 	"log_slow_filter",
 	"optimizer_switch",
+	"tidb_replica_read",
 	"wsrep_osu_method",
 };
 
@@ -7476,6 +7477,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				std::string def_trx_isolation_val =
 					j_user_attributes["default-transaction_isolation"].get<std::string>();
 				mysql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
+			}
+
+			auto default_tidb_replica_read = j_user_attributes.find("default-tidb_replica_read");
+			if (default_tidb_replica_read != j_user_attributes.end()) {
+				std::string def_tidb_replica_read_val = j_user_attributes["default-tidb_replica_read"].get<std::string>();
+				mysql_variables.client_set_value(this, SQL_TIDB_REPLICA_READ, def_tidb_replica_read_val.c_str());
 			}
 		}
 
