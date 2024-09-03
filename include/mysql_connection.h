@@ -82,12 +82,12 @@ class MySQL_Connection {
 		char * session_track_gtids;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
-		bool session_track_gtids_sent;
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
 		int8_t last_set_autocommit;
 		bool autocommit;
 		bool no_backslash_escapes;
+		bool is_mariadb;
 	} options;
 
 	Variable variables[SQL_NAME_LAST_HIGH_WM];
@@ -101,7 +101,7 @@ class MySQL_Connection {
 
 	struct {
 		unsigned long length;
-		char *ptr;
+		char const *ptr;
 		MYSQL_STMT *stmt;
 		MYSQL_RES *stmt_result;
 		stmt_execute_metadata_t *stmt_meta;
@@ -195,7 +195,7 @@ class MySQL_Connection {
 	void initdb_cont(short event);
 	void set_option_start();
 	void set_option_cont(short event);
-	void set_query(char *stmt, unsigned long length);
+	void set_query(const char *stmt, unsigned long length);
 	MDB_ASYNC_ST handler(short event);
 	void next_event(MDB_ASYNC_ST new_st);
 
@@ -204,7 +204,7 @@ class MySQL_Connection {
 	int async_select_db(short event);
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, unsigned int nr);
-	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
+	int async_send_simple_command(short event, const char *stmt, unsigned long length); // no result set expected
 	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);
 	int async_set_option(short event, bool mask);

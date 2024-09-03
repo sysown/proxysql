@@ -4,6 +4,7 @@
 //#include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
+#include <inttypes.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -446,11 +447,11 @@ MySQL_Connection::MySQL_Connection() {
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
 	options.session_track_gtids = NULL;
-	options.session_track_gtids_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.session_track_gtids_int=0;
+	options.is_mariadb=false;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -1060,7 +1061,7 @@ void MySQL_Connection::set_names_cont(short event) {
 	async_exit_status = mysql_set_character_set_cont(&interr,mysql, mysql_status(event, true));
 }
 
-void MySQL_Connection::set_query(char *stmt, unsigned long length) {
+void MySQL_Connection::set_query(const char *stmt, unsigned long length) {
 	query.length=length;
 	query.ptr=stmt;
 	if (length > largest_query_length) {
@@ -1247,6 +1248,7 @@ handler_again:
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
 			options.client_flag = mysql->client_flag;
+			options.is_mariadb = mariadb_connection(mysql);
 			//assert(mysql->net.vio->async_context);
 			//mysql->net.vio->async_context= mysql->options.extension->async_context;
 			//if (parent->use_ssl) {
@@ -2932,7 +2934,7 @@ void MySQL_Connection::close_mysql() {
 
 
 // this function is identical to async_query() , with the only exception that MyRS should never be set
-int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigned long length) {
+int MySQL_Connection::async_send_simple_command(short event, const char *stmt, unsigned long length) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
@@ -3032,12 +3034,11 @@ void MySQL_Connection::reset() {
 	if (options.session_track_gtids) {
 		free (options.session_track_gtids);
 		options.session_track_gtids = NULL;
-		options.session_track_gtids_sent = false;
 	}
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
-	// note: current implementation for for OWN GTID only!
+	// note: current implementation for for OWN GTID and MARIADB workaround only!
 	bool ret = false;
 	if (buff==NULL || trx_id == NULL) {
 		return ret;
@@ -3047,24 +3048,63 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
 				const char *data;
 				size_t length;
-				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
-					if (length >= (sizeof(gtid_uuid) - 1)) {
-						length = sizeof(gtid_uuid) - 1;
+				if (!options.is_mariadb) {
+					if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
+						if (length >= (sizeof(gtid_uuid) - 1)) {
+							length = sizeof(gtid_uuid) - 1;
+						}
+						if (memcmp(gtid_uuid,data,length)) {
+							// copy to local buffer in MySQL_Connection
+							memcpy(gtid_uuid,data,length);
+							gtid_uuid[length]=0;
+							// copy to external buffer in MySQL_Backend
+							memcpy(buff,data,length);
+							buff[length]=0;
+							ret = true;
+						}
 					}
-					if (memcmp(gtid_uuid,data,length)) {
-						// copy to local buffer in MySQL_Connection
-						memcpy(gtid_uuid,data,length);
-						gtid_uuid[length]=0;
-						// copy to external buffer in MySQL_Backend
-						memcpy(buff,data,length);
-						buff[length]=0;
-						__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
-						ret = true;
+				} else {
+					if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+						bool hit = false;
+						while (true) {
+							if (!strncmp(data, "last_gtid", length))
+								hit = true;
+							if (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) != 0)
+								break;
+							if (hit) {
+								// convert mariadb gtid (domain-server-id) to mysql-conform gtid (uuid:id)
+								char * endptr;
+								const char * p = data;
+								uint32_t domain = strtoul(p, &endptr, 10);
+								if (endptr == p || endptr >= p + length || *endptr != '-')
+									return ret;
+								p = endptr + 1;
+								uint32_t server_id = strtoul(p, &endptr, 10);
+								if (endptr == p || endptr >= p + length || *endptr != '-')
+									return ret;
+								p = endptr + 1;
+
+								char buf[22];
+								memcpy(buf, p, data + length - p); // unfortunately we can't modify data
+								buf[data + length - p] = '\0'; // and strtoull doesn't accept a maximum length - so we need a trailing \0
+								uint64_t id = strtoull(buf, &endptr, 10);
+								if (endptr == buf || endptr >= buf + sizeof(buf) || *endptr != '\0')
+									return ret;
+
+								sprintf(gtid_uuid, "%08" PRIX32 "-0000-0000-0000-%08" PRIX32 ":%" PRIu64, domain, server_id, id);
+								strcpy(buff, gtid_uuid);
+
+								ret = true;
+								break;
+							}
+						}
 					}
 				}
 			}
 		}
 	}
+	if (ret)
+		__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
 	return ret;
 }
 
