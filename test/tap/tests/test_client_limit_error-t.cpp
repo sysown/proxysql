@@ -47,7 +47,7 @@
 #include <iostream>
 #include <fstream>
 
-#include <libconfig.h>
+#include "libconfig.h"
 #include "proxysql_utils.h"
 #include "mysql.h"
 

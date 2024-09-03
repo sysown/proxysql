@@ -27,16 +27,16 @@
 #include "Web_Interface.hpp"
 #include "proxysql_utils.h"
 
-#include <libdaemon/dfork.h>
-#include <libdaemon/dsignal.h>
-#include <libdaemon/dlog.h>
-#include <libdaemon/dpid.h>
-#include <libdaemon/dexec.h>
+#include "libdaemon/dfork.h"
+#include "libdaemon/dsignal.h"
+#include "libdaemon/dlog.h"
+#include "libdaemon/dpid.h"
+#include "libdaemon/dexec.h"
 #include "ev.h"
 
 #include "curl/curl.h"
 
-#include <openssl/x509v3.h>
+#include "openssl/x509v3.h"
 
 #include <sys/mman.h>
 
@@ -71,7 +71,7 @@ char *binary_sha1 = NULL;
 #endif
 
 static pthread_mutex_t *lockarray;
-#include <openssl/crypto.h>
+#include "openssl/crypto.h"
 
 
 // this fuction will be called as a deatached thread
@@ -445,7 +445,6 @@ ClickHouse_Server *GloClickHouseServer;
 ProxySQL_Cluster *GloProxyCluster = NULL;
 
 ProxySQL_Statistics *GloProxyStats = NULL;
-
 
 void * mysql_worker_thread_func(void *arg) {
 
@@ -1977,6 +1976,13 @@ int main(int argc, const char * argv[]) {
 //		std::cerr << "Main init phase0 completed in ";
 #endif
 	}
+#ifdef DEBUG
+	{
+		// Automated testing
+		SetParser parser("");
+		parser.test_parse_USE_query();
+	}
+#endif // DEBUG
 	{
 		cpu_timer t;
 		ProxySQL_Main_process_global_variables(argc, argv);

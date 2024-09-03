@@ -210,10 +210,7 @@ int main(int argc, char** argv) {
 			port, NULL, 0
 		)
 	) {
-		string_format(
-			"Failed to connect to database: Error: %s\n", err_msg,
-			mysql_error(&mysql)
-		);
+		string_format("Failed to connect to database: Error: %s", err_msg, mysql_error(&mysql));
 		output["err_msg"] = err_msg;
 		res = EXIT_FAILURE;
 
@@ -234,10 +231,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (!conn_res) {
-		string_format(
-			"Failed to connect to database: Error: %s\n", err_msg,
-			mysql_error(&mysql)
-		);
+		string_format("Failed to connect to database: Error: %s", err_msg, mysql_error(&mysql));
 		output["err_msg"] = err_msg;
 		res = EXIT_FAILURE;
 
@@ -282,9 +276,7 @@ int main(int argc, char** argv) {
 
 			if (CHANGE_USER) {
 				if (mysql_change_user(&mysql, user.c_str(), pass.c_str(), "information_schema")) {
-					string_format(
-						"Failed to change user. Error: %s\n", err_msg, mysql_error(&mysql)
-					);
+					string_format("Failed to change user. Error: %s", err_msg, mysql_error(&mysql));
 					output["err_msg"] = err_msg;
 					tmp_res = EXIT_FAILURE;
 				}

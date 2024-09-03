@@ -35,16 +35,16 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 2.6.3
+CURVER ?= 2.6.5
 #export DEBUG
 #export EXTRALINK
 export MAKE
 export CURVER
 
 ### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
 ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}L')
 	LEGACY_BUILD := 1
 ifneq ($(CPLUSPLUS),201103L)
     $(error Compiler must support at least c++11)
@@ -64,8 +64,11 @@ OS := $(shell uname -s)
 ifeq ($(OS),Linux)
 	NPROCS := $(shell nproc)
 endif
-ifeq ($(OS),Darwin)
+ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	NPROCS := $(shell sysctl -n hw.ncpu)
+	LEGACY_BUILD := 1
+    export CC=gcc
+    export CXX=g++
 endif
 export MAKEOPT := -j${NPROCS}
 
@@ -305,17 +308,17 @@ amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensu
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
 amd64-centos: centos7 centos7-dbg centos8 centos8-clang centos8-dbg centos9 centos9-clang centos9-dbg
 amd64-debian: debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
-amd64-fedora: fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg
+amd64-fedora: fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg fedora40 fedora40-clang fedora40-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
-amd64-ubuntu: ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
+amd64-ubuntu: ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
 arm64-almalinux: almalinux8 almalinux9
 arm64-centos: centos7 centos8 centos9
 arm64-debian: debian10 debian11 debian12
-arm64-fedora: fedora38 fedora39
+arm64-fedora: fedora38 fedora39 fedora40
 arm64-opensuse: opensuse15
-arm64-ubuntu: ubuntu16 ubuntu18 ubuntu20 ubuntu22
+arm64-ubuntu: ubuntu16 ubuntu18 ubuntu20 ubuntu22 ubuntu24
 
 almalinux%: build-almalinux% ;
 centos%: build-centos% ;

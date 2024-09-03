@@ -10,8 +10,8 @@
 #include <mutex>
 
 // Headers for declaring Prometheus counters
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 #include "thread.h"
 #include "wqueue.h"
@@ -297,6 +297,7 @@ class MyHGC {	// MySQL Host Group Container
 		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
 		uint32_t max_num_online_servers;
 		uint32_t throttle_connections_per_sec;
+		int32_t monitor_slave_lag_when_null;
 		int8_t autocommit;
 		int8_t free_connections_pct;
 		int8_t handle_warnings;
@@ -315,6 +316,10 @@ class MyHGC {	// MySQL Host Group Container
 	inline
 	bool handle_warnings_enabled() const {
 		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
+	}
+	inline
+	int32_t get_monitor_slave_lag_when_null() const {
+		return attributes.configured == true && attributes.monitor_slave_lag_when_null != -1 ? attributes.monitor_slave_lag_when_null : mysql_thread___monitor_slave_lag_when_null;
 	}
 	MyHGC(int);
 	~MyHGC();
@@ -549,9 +554,10 @@ using address_t = std::string;
 using port_t = unsigned int;
 using read_only_t = int;
 using current_replication_lag = int;
+using override_replication_lag = bool;
 
 using read_only_server_t = std::tuple<hostname_t,port_t,read_only_t>;
-using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag>;
+using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag,override_replication_lag>;
 
 enum READ_ONLY_SERVER_T {
 	ROS_HOSTNAME = 0,
@@ -565,6 +571,7 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS_ADDRESS,
 	RLS_PORT,
 	RLS_CURRENT_REPLICATION_LAG,
+	RLS_OVERRIDE_REPLICATION_LAG,
 	RLS__SIZE
 };
 
@@ -1101,7 +1108,7 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
-	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int);
+	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
 	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);

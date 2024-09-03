@@ -879,11 +879,17 @@ __run_query:
 						// probably never initialized
 						GloSQLite3Server->load_replicationlag_table(sess);
 					}
-					const int rc = GloSQLite3Server->replicationlag_test_value(query_no_space + strlen("SELECT SLAVE STATUS "));
+					const int* rc = GloSQLite3Server->replicationlag_test_value(query_no_space + strlen("SELECT SLAVE STATUS "));
 					free(query);
-					char* a = (char*)"SELECT %d as Seconds_Behind_Master";
-					query = (char*)malloc(strlen(a) + 2);
-					sprintf(query, a, rc);
+					if (rc == nullptr) {
+						const char* a = (char*)"SELECT null as Seconds_Behind_Master";
+						query = (char*)malloc(strlen(a) + 2);
+						sprintf(query, a);
+					} else {
+						const char* a = (char*)"SELECT %d as Seconds_Behind_Master";
+						query = (char*)malloc(strlen(a) + 2);
+						sprintf(query, a, *rc);
+					}
 					pthread_mutex_unlock(&GloSQLite3Server->test_replicationlag_mutex);
 				}
 			}
@@ -924,10 +930,12 @@ __run_query:
 				if (resultset->rows_count == 0) {
 					PROXY_TRACE();
 				}
+#ifdef TEST_GALERA_RANDOM
 				if (rand() % 20 == 0) {
 					// randomly add some latency on 5% of the traffic
 					sleep(2);
 				}
+#endif
 			}
 #endif // TEST_GALERA
 #ifdef TEST_GROUPREP
@@ -1845,7 +1853,7 @@ bool SQLite3_Server::init() {
 	insert_into_tables_defs(tables_defs_replicationlag,
 		(const char*)"REPLICATIONLAG_HOST_STATUS",
 		(const char*)"CREATE TABLE REPLICATIONLAG_HOST_STATUS ("
-		"hostname VARCHAR NOT NULL, port INT NOT NULL, seconds_behind_master INT NOT NULL, PRIMARY KEY (hostname, port)"
+		"hostname VARCHAR NOT NULL, port INT NOT NULL, seconds_behind_master INT DEFAULT NULL, PRIMARY KEY (hostname, port)"
 		")"
 	);
 
@@ -2016,7 +2024,12 @@ void SQLite3_Server::load_replicationlag_table(MySQL_Session* sess) {
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 			const std::string& s = std::string(r->fields[0]) + ":" + std::string(r->fields[1]);
-			replicationlag_map[s] = atoi(r->fields[2]);
+
+			if (r->fields[2] == nullptr) {
+				replicationlag_map[s] = nullptr;
+			} else {
+				replicationlag_map[s] = std::make_unique<int>(atoi(r->fields[2]));
+			}
 		}
 	}
 	delete resultset;
@@ -2024,7 +2037,7 @@ void SQLite3_Server::load_replicationlag_table(MySQL_Session* sess) {
 		GloAdmin->admindb->execute_statement((char*)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE hostgroup_id BETWEEN 5202 AND 5700", &error, &cols, &affected_rows, &resultset);
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
-			const std::string& s = "INSERT INTO REPLICATIONLAG_HOST_STATUS VALUES ('" + std::string(r->fields[0]) + "'," + std::string(r->fields[1]) + ",0)";
+			const std::string& s = "INSERT INTO REPLICATIONLAG_HOST_STATUS VALUES ('" + std::string(r->fields[0]) + "'," + std::string(r->fields[1]) + ",null)";
 			sessdb->execute(s.c_str());
 		}
 		delete resultset;
@@ -2032,11 +2045,11 @@ void SQLite3_Server::load_replicationlag_table(MySQL_Session* sess) {
 	GloAdmin->mysql_servers_wrunlock();
 }
 
-int SQLite3_Server::replicationlag_test_value(const char* p) {
-	int rc = 0; // default
-	std::unordered_map<std::string, int>::iterator it = replicationlag_map.find(std::string(p));
+int* SQLite3_Server::replicationlag_test_value(const char* p) {
+	int* rc = 0; // default
+	std::unordered_map<std::string, std::unique_ptr<int>>::iterator it = replicationlag_map.find(std::string(p));
 	if (it != replicationlag_map.end()) {
-		rc = it->second;
+		rc = it->second.get();
 	}
 	return rc;
 }

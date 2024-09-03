@@ -141,9 +141,9 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 ### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
 ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}L')
 ifneq ($(CPLUSPLUS),201103L)
     $(error Compiler must support at least c++11)
 endif
@@ -188,6 +188,7 @@ tests: CUSTOMARGS += $(OPT)
 tests: tests-cpp \
 	tests-php \
 	tests-py \
+	tests-sh \
 	setparser_test \
 	reg_test_3504-change_user_libmariadb_helper \
 	reg_test_3504-change_user_libmysql_helper \
@@ -202,10 +203,14 @@ tests: tests-cpp \
 	prepare_statement_err3024_async-t \
 	reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
+tests:
+	@echo "Removing empty .gcno files ..."
+	find -L . -type f -name '*.gcno' -empty -ls -delete
 
 tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
+tests-sh: $(patsubst %,sh-%,$(wildcard *-t.sh))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -236,6 +241,10 @@ php-%:
 py-%:
 	cp $(patsubst py-%,%,$@) $(patsubst py-%.py,%,$@)
 	chmod +x $(patsubst py-%.py,%,$@)
+
+sh-%:
+	cp $(patsubst sh-%,%,$@) $(patsubst sh-%.sh,%,$@)
+	chmod +x $(patsubst sh-%.sh,%,$@)
 
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@

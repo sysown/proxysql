@@ -86,9 +86,9 @@ TEST_MYSQL_EDIR := $(TEST_MYSQL_PATH)/libbinlogevents/export
 TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
 
 ### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
 ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}L')
 ifneq ($(CPLUSPLUS),201103L)
     $(error Compiler must support at least c++11)
 endif
@@ -154,6 +154,9 @@ $(TEST_MYSQL_LDIR)/libmysqlclient.a:
 
 #tests: build_test_deps
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) ok_packet_mixed_queries-t fwd_eof_query fwd_eof_ok_query
+tests:
+	@echo "Removing empty .gcno files ..."
+	find -L . -type f -name '*.gcno' -empty -ls -delete
 
 COMMONARGS = $(OPT) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 

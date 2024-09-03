@@ -59,12 +59,12 @@
 
 #include <cstring>
 #include <unistd.h>
-#include <vector>
 #include <string>
 #include <stdio.h>
+#include <utility>
+#include <vector>
 
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "proxysql_utils.h"
 #include "tap.h"
@@ -74,14 +74,17 @@
 const uint32_t SHUN_RECOVERY_TIME = 1;
 const uint32_t VALID_RANGE = 1;
 const uint32_t SERVERS_COUNT = 10;
+const uint32_t SYNC_TIMEOUT = 10;
 
+using std::pair;
 using std::string;
+using std::vector;
 
 int shunn_server(MYSQL* proxysql_admin, uint32_t i, uint32_t j) {
 	std::string t_simulator_error_query { "PROXYSQL_SIMULATOR mysql_error %d 127.0.0.1:330%d 1234" };
 	std::string simulator_error_q_i {};
 	string_format(t_simulator_error_query, simulator_error_q_i, i, j);
-	diag("%s: running query: %s", tap_curtime().c_str(), simulator_error_q_i.c_str());
+	diag("running query: %s", simulator_error_q_i.c_str());
 	MYSQL_QUERY(proxysql_admin, simulator_error_q_i.c_str());
 
 	return EXIT_SUCCESS;
@@ -113,7 +116,7 @@ int wakup_target_server(MYSQL* proxysql_mysql, uint32_t i) {
 	string_format(t_simple_do_query, simple_do_query, i);
 
 	mysql_query(proxysql_mysql, simple_do_query.c_str());
-	diag("%s: running query: %s", tap_curtime().c_str(), simple_do_query.c_str());
+	diag("running query: %s", simple_do_query.c_str());
 
 	return EXIT_SUCCESS;
 }
@@ -124,7 +127,7 @@ int server_status_checker(MYSQL* admin, const string& f_st, const string& n_st, 
 	};
 	std::string server_status_query {};
 	string_format(t_server_status_query, server_status_query, i);
-	diag("%s: running query: %s", tap_curtime().c_str(), server_status_query.c_str());
+	diag("running query: %s", server_status_query.c_str());
 	MYSQL_QUERY(admin, server_status_query.c_str());
 
 	MYSQL_RES* status_res = mysql_store_result(admin);
@@ -190,9 +193,9 @@ int test_unshun_algorithm_variable(MYSQL* proxysql_admin) {
 	};
 
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES FROM DISK");
-	diag("%s: Line:%d running admin query to reload variables: LOAD MYSQL VARIABLES FROM DISK", tap_curtime().c_str(), __LINE__);
+	diag("Line:%d running admin query to reload variables: LOAD MYSQL VARIABLES FROM DISK", __LINE__);
 	MYSQL_QUERY(proxysql_admin, "SET mysql-hostgroup_manager_verbose=3");
-	diag("%s: Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", tap_curtime().c_str(), __LINE__);
+	diag("Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", __LINE__);
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	int32_t def_unshun_value = get_current_unshun_algorithm_val(proxysql_admin);
 	ok(def_unshun_value == 0, "Default 'mysql-unshun_algorithm' should be '0', actual: %d", def_unshun_value);
@@ -203,7 +206,7 @@ int test_unshun_algorithm_variable(MYSQL* proxysql_admin) {
 		std::string set_unshun {};
 		string_format(t_set_unshun, set_unshun, i);
 		MYSQL_QUERY(proxysql_admin, set_unshun.c_str());
-		diag("%s: Line:%d running admin query: %s", tap_curtime().c_str(), __LINE__, set_unshun.c_str());
+		diag("Line:%d running admin query: %s", __LINE__, set_unshun.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int32_t cur_unshun_val = get_current_unshun_algorithm_val(proxysql_admin);
@@ -214,7 +217,7 @@ int test_unshun_algorithm_variable(MYSQL* proxysql_admin) {
 		std::string set_unshun {};
 		string_format(t_set_unshun, set_unshun, VALID_RANGE + 1);
 		MYSQL_QUERY(proxysql_admin, set_unshun.c_str());
-		diag("%s: Line:%d running admin query: %s", tap_curtime().c_str(), __LINE__, set_unshun.c_str());
+		diag("Line:%d running admin query: %s", __LINE__, set_unshun.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int32_t cur_unshun_val = get_current_unshun_algorithm_val(proxysql_admin);
@@ -273,13 +276,13 @@ int test_proxysql_simulator_error(MYSQL* proxysql_admin) {
  */
 int configure_mysql_shunning_variables(MYSQL* proxysql_admin) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-shun_on_failures=3");
-	diag("%s: Line:%d running admin query: SET mysql-shun_on_failures=3", tap_curtime().c_str(), __LINE__);
+	diag("Line:%d running admin query: SET mysql-shun_on_failures=3", __LINE__);
 
 	MYSQL_QUERY(proxysql_admin, "SET mysql-connect_retries_on_failure=3");
-	diag("%s: Line:%d running admin query: SET mysql-connect_retries_on_failure=3", tap_curtime().c_str(), __LINE__);
+	diag("Line:%d running admin query: SET mysql-connect_retries_on_failure=3", __LINE__);
 
 	MYSQL_QUERY(proxysql_admin, "SET mysql-connect_retries_delay=1000");
-	diag("%s: Line:%d running admin query: SET mysql-connect_retries_delay=1000", tap_curtime().c_str(), __LINE__);
+	diag("Line:%d running admin query: SET mysql-connect_retries_delay=1000", __LINE__);
 
 	return EXIT_SUCCESS;
 }
@@ -287,11 +290,11 @@ int configure_mysql_shunning_variables(MYSQL* proxysql_admin) {
 int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
 	// Configure Admin variables with lower thresholds
 	MYSQL_QUERY(proxysql_admin, "SET mysql-shun_recovery_time_sec=1");
-	diag("%s: Line:%d running admin query: SET mysql-shun_recovery_time_sec=1", tap_curtime().c_str(), __LINE__);
+	diag("Line:%d running admin query: SET mysql-shun_recovery_time_sec=1", __LINE__);
 
 	// Set verbosity up for extra information in ProxySQL log
 	MYSQL_QUERY(proxysql_admin, "SET mysql-hostgroup_manager_verbose=3");
-	diag("%s: Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", tap_curtime().c_str(), __LINE__);
+	diag("Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", __LINE__);
 
 	// Configure the relevant variables for the desired UNSHUNNING behavior
 	if (configure_mysql_shunning_variables(proxysql_admin)) {
@@ -324,7 +327,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 	{
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=0");
-		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=0", tap_curtime().c_str(), __LINE__);
+		diag("Line:%d running admin query: SET mysql-unshun_algorithm=0", __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
@@ -344,7 +347,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 	{
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=1");
-		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=1", tap_curtime().c_str(), __LINE__);
+		diag("Line:%d running admin query: SET mysql-unshun_algorithm=1", __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
@@ -364,7 +367,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 	{
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=0");
-		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=0", tap_curtime().c_str(), __LINE__);
+		diag("Line:%d running admin query: SET mysql-unshun_algorithm=0", __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
@@ -376,7 +379,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 		diag(" "); // empty line
 
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=1");
-		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=1", tap_curtime().c_str(), __LINE__);
+		diag("Line:%d running admin query: SET mysql-unshun_algorithm=1", __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
@@ -426,8 +429,43 @@ int main(int argc, char** argv) {
 	}
 
 	// Disable Monitor for the following tests
-	MYSQL_QUERY(proxysql_admin, "SET mysql-monitor_enabled=0");
-	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	MYSQL_QUERY_T(proxysql_admin, "SET mysql-monitor_enabled=0");
+	MYSQL_QUERY_T(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	// We need to wait for synchronization in case 'admin-cluster_mysql_servers_sync_algorithm=1' to prevent
+	// circular fetches. If config is set to '2' we DO NOT wait, as circular fetches shouldn't be possible,
+	// this way a misbehavior **could** be detected by the test. We do not enforce failure either.
+	{
+		const char sync_algo_query[] {
+			"SELECT variable_value FROM global_variables"
+				" WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		};
+		ext_val_t<int32_t> servers_sync_algo { mysql_query_ext_val(proxysql_admin, sync_algo_query, 1) };
+		if (servers_sync_algo.err != EXIT_SUCCESS) {
+			const string err { get_ext_val_err(proxysql_admin, servers_sync_algo) };
+			diag("Failed getting variable   query:`%s`, err:`%s`", sync_algo_query, err.c_str());
+			goto cleanup;
+		}
+
+		// NOTE: '3' is a configuration thought for replicas, this test assumes it's connecting to a
+		// primary, so the same protection should be applied.
+		if (servers_sync_algo.val == 1 || servers_sync_algo.val == 3) {
+			const pair<int,vector<srv_addr_t>> core_nodes { fetch_cluster_nodes(proxysql_admin) };
+			if (core_nodes.first) {
+				diag("Cluster node fetching failed with mysql_errno=%d", core_nodes.first);
+				goto cleanup;
+			}
+
+			const char sync_query[] {
+				"SELECT CASE WHEN "
+					"(SELECT variable_value FROM runtime_global_variables WHERE"
+						" variable_name='mysql-monitor_enabled')='false'"
+					" THEN 1 ELSE 0 END"
+			};
+			int check_res = check_nodes_sync(cl, core_nodes.second, sync_query, SYNC_TIMEOUT);
+			if (check_res != EXIT_SUCCESS) { goto cleanup; }
+		}
+	}
 
 	{
 		int simulator_err = test_proxysql_simulator_error(proxysql_admin);

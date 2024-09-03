@@ -56,6 +56,18 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line);
 
 #endif 
 
+/**
+ * @brief Helper function to disable Core nodes scheduler from ProxySQL Cluster nodes.
+ * @details In the CI environment, 'Scheduler' is used to induce extra load via Admin interface on
+ *  all the cluster nodes. Disabling this allows for more accurate measurements on the primary.
+ * @param cl CommandLine arguments supplied to the test.
+ * @param admin Already opened Admin conn to the primary instance.
+ * @return On success, the opened Admin connections to the Core nodes used to change their config,
+ *  these conns should later be used to restore their original config. On failure, a pair of shape
+ *  '{ EXIT_FAILURE, {} }'.
+ */
+std::pair<int,std::vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl, MYSQL* admin);
+
 inline std::string get_formatted_time() {
 	time_t __timer;
 	char __buffer[30];
@@ -68,7 +80,18 @@ inline std::string get_formatted_time() {
 	return std::string(__buffer);
 }
 
-int mysql_query_t(MYSQL* mysql, const char* query);
+/**
+ * @brief Wrapper for 'mysql_query' with logging for convenience.
+ * @details Should be used through 'mysql_query_t' macro.
+ * @return Result of calling 'mysql_query'.
+ */
+int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, const char* fn);
+
+/**
+ * @brief Convenience macro with query logging.
+ */
+#define mysql_query_t(mysql, query)\
+	mysql_query_t__(mysql, query, __FILE__, __LINE__, __func__)
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \
@@ -89,8 +112,7 @@ int mysql_query_t(MYSQL* mysql, const char* query);
 
 #define MYSQL_QUERY_T(mysql, query) \
 	do { \
-		const std::string time { get_formatted_time() }; \
-		fprintf(stderr, "# %s: Issuing query '%s' to ('%s':%d)\n", time.c_str(), query, mysql->host, mysql->port); \
+		diag("Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port); \
 		if (mysql_query(mysql, query)) { \
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
 			return EXIT_FAILURE; \
@@ -220,7 +242,7 @@ std::string get_ext_val_err(MYSQL* mysql, const ext_val_t<T>& ext_val) {
 	} else if (ext_val.err == -2) {
 		return "Failed to parse response value '" + ext_val.str + "'";
 	} else {
-		return "Query failed with error '" + std::string { mysql_error(mysql) } + "'";
+		return std::string { mysql_error(mysql) };
 	}
 }
 
@@ -660,8 +682,18 @@ int64_t get_elem_idx(const T& e, const std::vector<T>& v) {
 /**
  * @brief Returns a 'JSON' object holding 'PROXYSQL INTERNAL SESSION' contents.
  * @param proxy And already openned connection to ProxySQL.
+ * @param verbose Wether to log or not the issued queries.
  */
-nlohmann::json fetch_internal_session(MYSQL* proxy);
+nlohmann::json fetch_internal_session(MYSQL* proxy, bool verbose=true);
+
+/**
+ * @brief Extract the metrics values from the output of:
+ *   - The admin command 'SHOW PROMETHEUS METRICS'.
+ *   - Querying the RESTAPI metrics endpoint.
+ * @param s ProxySQL prometheus exporter output.
+ * @return A map of metrics identifiers and values.
+ */
+std::map<std::string, double> parse_prometheus_metrics(const std::string& s);
 
 /**
  * @brief Returns a string table representation of the supplied resultset.
@@ -720,10 +752,55 @@ std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uin
  */
 int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout);
 
+using check_res_t = std::pair<int,std::string>;
+
+/**
+ * @brief Waits for multiple conditions to take place before returning.
+ * @param mysql Already oppened connection in which to execute the queries.
+ * @param qs Conditions represented as queries; must pass 'check_cond' requirements.
+ * @param to Timeout in which all the conditions should be accomplished.
+ * @return Vector of pairs of shape '{err, check}'.
+ */
+std::vector<check_res_t> wait_for_conds(MYSQL* mysql, const std::vector<std::string>& qs, uint32_t to);
+
+/**
+ * @brief Reduces a vector of 'check_res_t' to either success or failure.
+ * @param chks Vector to be fold into single value.
+ * @return -1 in case a check failed to execute, 1 if any check timedout, 0 for success.
+ */
+int proc_wait_checks(const std::vector<check_res_t>& chks);
+
+/**
+ * @brief Encapsulates a server address.
+ */
+struct srv_addr_t {
+	const std::string host;
+	const int port;
+};
+
 // Helpers using 'wait_for_cond' on 'stats_mysql_connection'
 void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
 void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
 void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
+
+/**
+ * @brief Fetches the ProxySQL nodes configured in the supplied instance.
+ * @param cl Parameters for performing the connection to the instance.
+ * @return Pair of shape '{err, {srv_addr}}'.
+ */
+std::pair<int,std::vector<srv_addr_t>> fetch_cluster_nodes(MYSQL* admin, bool dump_fetch=false);
+
+/**
+ * @brief Helper function that waits for a check in all the supplied nodes.
+ * @param cl Used for credentials to open conns to the nodes.
+ * @param nodes The nodes addresses in which to perform the checks.
+ * @param check The check itself to be performed in all the nodes. Must pass 'check_cond' requirements.
+ * @param to Timeout for synchronization to take place.
+ * @return 0 in case of success, 1 in case of timeout, and -1 in case of check failure.
+ */
+int check_nodes_sync(
+	const CommandLine& cl, const std::vector<srv_addr_t>& nodes, const std::string& check, uint32_t to
+);
 
 /**
  * @brief fetches and converts env var value to str/int/bool if possible otherwise uses default

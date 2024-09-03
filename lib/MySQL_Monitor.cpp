@@ -13,7 +13,7 @@
 #include <thread>
 #include <future>
 #include <sstream>
-#include <prometheus/counter.h>
+#include "prometheus/counter.h"
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
@@ -2756,6 +2756,7 @@ __exit_monitor_replication_lag_thread:
 			ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				// 'replication_lag' to be feed to 'replication_lag_action'
 				int repl_lag=-2;
+				bool override_repl_lag = true;
 				rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				unsigned long long time_now=realtime_time();
@@ -2792,16 +2793,16 @@ __exit_monitor_replication_lag_thread:
 							MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 							if (row) {
 								repl_lag=-1; // this is old behavior
-							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
+								override_repl_lag = true;
 								if (row[j]) { // if Seconds_Behind_Master is not NULL
 									repl_lag=atoi(row[j]);
+									override_repl_lag = false;
 								} else {
-									proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
 									MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
 								}
 							}
 						}
-						if (repl_lag>=0) {
+						if (/*repl_lag >= 0 ||*/ override_repl_lag == false) {
 							rc=(*proxy_sqlite3_bind_int64)(statement, 5, repl_lag); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 						} else {
 							rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -2822,7 +2823,7 @@ __exit_monitor_replication_lag_thread:
 				rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				MyHGM->replication_lag_action( std::list<replication_lag_server_t> {
-												replication_lag_server_t {mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag}
+												replication_lag_server_t {mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag, override_repl_lag }
 												} );
 			(*proxy_sqlite3_finalize)(statement);
 			if (mmsd->mysql_error_msg == NULL) {
@@ -3352,6 +3353,35 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 	}
 }
 
+/**
+* @brief Check if a list of servers is matching the description of an AWS RDS Multi-AZ DB Cluster.
+* @details This method takes a vector of discovered servers and checks that there are exactly three which are named "instance-[1|2|3]" respectively, as expected on an AWS RDS Multi-AZ DB Cluster.
+* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
+* @return Returns 'true' if all conditions are met and 'false' otherwise.
+*/
+bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const std::vector<MYSQL_ROW>& discovered_servers) {
+	if (discovered_servers.size() != 3) {
+		return false;
+	}
+
+	const std::vector<std::string> instance_names = {"-instance-1", "-instance-2", "-instance-3"};
+	int identified_hosts = 0;
+	for (const std::string& instance_str : instance_names) {
+		for (MYSQL_ROW server : discovered_servers) {
+			if (server[2] == NULL || (server[2][0] == '\0')) {
+				continue;
+			}
+
+			std::string current_discovered_hostname = server[2];
+			if (current_discovered_hostname.find(instance_str) != std::string::npos) {
+				++identified_hosts;
+				break;
+			}
+		}
+	}
+	return (identified_hosts == 3);
+}
+
 void * MySQL_Monitor::monitor_read_only() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3366,9 +3396,9 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	int topology_loop = 0;
-	int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
+		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 		bool do_discovery_check = false;
 
 		unsigned int glover;
@@ -3403,11 +3433,13 @@ void * MySQL_Monitor::monitor_read_only() {
 			goto __end_monitor_read_only_loop;
 		}
 
-		if (topology_loop >= topology_loop_max) {
-			do_discovery_check = true;
-			topology_loop = 0;
+		if (topology_loop_max > 0) { // if the discovery interval is set to zero, do not query for the topology
+			if (topology_loop >= topology_loop_max) {
+				do_discovery_check = true;
+				topology_loop = 0;
+			} 
+			topology_loop += 1;
 		}
-		topology_loop += 1;
 
 		// resultset must be initialized before calling monitor_read_only_async
 		monitor_read_only_async(resultset, do_discovery_check);
@@ -7385,8 +7417,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 					discovered_servers.push_back(row);
 				}
 
-				// Process the discovered servers and add them to 'runtime_mysql_servers'
-				if (!discovered_servers.empty()) {
+				// Process the discovered servers and add them to 'runtime_mysql_servers' (process only for AWS RDS Multi-AZ DB Clusters)
+				if (!discovered_servers.empty() && is_aws_rds_multi_az_db_cluster_topology(discovered_servers)) {
 					process_discovered_topology(originating_server_hostname, discovered_servers, mmsd->reader_hostgroup);
 				}
 			} else {
@@ -7749,8 +7781,7 @@ void MySQL_Monitor::monitor_gr_async_actions_handler(
 
 
 bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
-	
-	std::list<std::tuple<int, std::string, unsigned int, int>> mysql_servers;
+	std::list<replication_lag_server_t> mysql_servers;
 
 	for (auto& mmsd : mmsds) {
 
@@ -7792,6 +7823,7 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 		ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		// 'replication_lag' to be feed to 'replication_lag_action'
 		int repl_lag = -2;
+		bool override_repl_lag = true;
 		rc = (*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc = (*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		unsigned long long time_now = realtime_time();
@@ -7828,16 +7860,16 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 					MYSQL_ROW row = mysql_fetch_row(mmsd->result);
 					if (row) {
 						repl_lag = -1; // this is old behavior
-						repl_lag = mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
+						override_repl_lag = true;
 						if (row[j]) { // if Seconds_Behind_Master is not NULL
 							repl_lag = atoi(row[j]);
+							override_repl_lag = false;
 						} else {
-							proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
 							MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
 						}
 					}
 				}
-				if (repl_lag >= 0) {
+				if (/*repl_lag >= 0 ||*/ override_repl_lag == false) {
 					rc = (*proxy_sqlite3_bind_int64)(statement, 5, repl_lag); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				} else {
 					rc = (*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -7859,7 +7891,7 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		//MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
 		(*proxy_sqlite3_finalize)(statement);
-		mysql_servers.push_back( std::tuple<int,std::string,int,int> { mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag });
+		mysql_servers.push_back( replication_lag_server_t { mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag, override_repl_lag });
 	}
 
 	//executing replication lag action

@@ -4,16 +4,15 @@
  * @date 2021-03-01
  */
 
-#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <functional>
 #include <map>
 #include <string>
-#include <sstream>
 #include <stdio.h>
 #include <unistd.h>
 #include <utility>
+#include <set>
 #include <vector>
 
 #include "mysql.h"
@@ -39,35 +38,6 @@ int mysql_query_d(MYSQL* mysql, const char* query) {
 	return mysql_query(mysql, query);
 }
 
-/**
- * @brief Extract the metrics values from the output of the admin command
- *   'SHOW PROMETHEUS METRICS'.
- * @param metrics_output The output of the command 'SHOW PROMETHEUS METRICS'.
- * @return A map holding the metrics identifier and its current value.
- */
-std::map<std::string, double> get_metric_values(std::string metrics_output) {
-	std::vector<std::string> output_lines { split(metrics_output, '\n') };
-	std::map<std::string, double> metrics_map {};
-
-	for (const std::string line : output_lines) {
-		const std::vector<std::string> line_values { split(line, ' ') };
-
-		if (line.empty() == false && line[0] != '#') {
-			if (line_values.size() > 2) {
-				size_t delim_pos_st = line.rfind("} ");
-				string metric_key = line.substr(0, delim_pos_st);
-				string metric_val = line.substr(delim_pos_st + 2);
-
-				metrics_map.insert({metric_key, std::stod(metric_val)});
-			} else {
-				metrics_map.insert({line_values.front(), std::stod(line_values.back())});
-			}
-		}
-	}
-
-	return metrics_map;
-}
-
 int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
 	MYSQL_QUERY(admin, "SHOW PROMETHEUS METRICS\\G");
 	MYSQL_RES* p_resulset = mysql_store_result(admin);
@@ -81,7 +51,7 @@ int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
 	}
 
 	mysql_free_result(p_resulset);
-	metrics_vals =  get_metric_values(row_value);
+	metrics_vals = parse_prometheus_metrics(row_value);
 
 	return EXIT_SUCCESS;
 }
@@ -164,6 +134,8 @@ bool trigger_access_denied_wrong_password_total(MYSQL*, MYSQL*, const CommandLin
 		access_denied_error = false;
 	}
 
+	mysql_close(proxysql);
+
 	return access_denied_error;
 }
 
@@ -244,6 +216,7 @@ bool get_proxysql_version_info(MYSQL*, MYSQL* admin, const CommandLine&) {
 
 	MYSQL_RES* v_res = mysql_store_result(admin);
 	vector<mysql_res_row> res_rows = extract_mysql_rows(v_res);
+	mysql_free_result(v_res);
 
 	if (res_rows.size() != 1 && res_rows[0].size() != 1) {
 		diag("Invalid resulset received for 'SELECT @@version' at Line: %d", __LINE__);
@@ -355,7 +328,306 @@ bool trigger_message_count_parse_failure(MYSQL*, MYSQL*, const CommandLine& cl) 
 	return res;
 }
 
-#include <iostream>
+int NEW_SRV_HG = get_env_int("TAP_PROMETHEUS_METRICS__NEW_SRV_HG", 1724090);
+string NEW_SRV_HG_STR { std::to_string(NEW_SRV_HG) };
+
+string MY_PORT_STR {};
+string MY_HOST_STR {};
+
+int find_free_slot(const std::vector<int>& nums, int offset) {
+    std::set<int> num_set(nums.begin(), nums.end());
+
+	if (num_set.find(offset) != num_set.end()) {
+		auto it = num_set.end();
+		return *num_set.rbegin() + 1;
+	} else {
+		return offset;
+	}
+}
+
+int upd_tg_metric_hg(MYSQL* admin) {
+	// Forces a metrics refresh; all hostgroups from current servers should be present
+	map<string,double> cur_metrics {};
+	int m_res = get_cur_metrics(admin, cur_metrics);
+	if (m_res) {
+		diag("Failed to fetch current metrics   rc=%d", m_res);
+		return EXIT_FAILURE;
+	}
+
+	vector<string> str_hgs {};
+
+	// Build a map with the current hostgroups used
+	for (const pair<string,double>& p_metric_val : cur_metrics) {
+		if (p_metric_val.first.rfind("proxysql_connpool_conns") == 0) {
+			const map<string,string> metric_tags { extract_metric_tags(p_metric_val.first) };
+			str_hgs.push_back(metric_tags.at("hostgroup"));
+		}
+	}
+
+	vector<int> hgs {};
+	std::transform(str_hgs.begin(), str_hgs.end(), std::back_inserter(hgs),
+		[] (const string& s) -> int {
+			return std::atoi(s.c_str());
+		}
+	);
+
+	// Get a new hostgroup currently not present in the map
+	NEW_SRV_HG = find_free_slot(hgs, NEW_SRV_HG);
+	NEW_SRV_HG_STR = std::to_string(NEW_SRV_HG);
+
+	return EXIT_SUCCESS;
+}
+
+bool trigger_conn_in_new_backend_hg(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
+	MY_HOST_STR = cl.mysql_host;
+	MY_PORT_STR = std::to_string(cl.mysql_port);
+
+	// Update the target hostgroup
+	int m_res = upd_tg_metric_hg(admin);
+	if (m_res) {
+		diag("Failed to update target conn hostgroup   rc=%d", m_res);
+		return false;
+	}
+
+	// Destroy the previous hostgroup stats
+	MYSQL_QUERY(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id=" + NEW_SRV_HG_STR).c_str());
+	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	// Re-create the server
+	MYSQL_QUERY(admin,
+		("INSERT INTO mysql_servers (hostgroup_id,hostname,port) VALUES ("
+			+ NEW_SRV_HG_STR + ",'" + MY_HOST_STR + "'," + MY_PORT_STR + ")").c_str()
+	);
+	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	// Create backend connection; we keep the connection open intentionally (gauge)
+	MYSQL_QUERY(proxy, ("/* hostgroup=" + NEW_SRV_HG_STR + " */ BEGIN").c_str());
+
+	return true;
+}
+
+bool trigger_conn_in_prev_backend_hg(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
+	// Create backend connection; we keep the connection open intentionally (gauge)
+	MYSQL_QUERY(proxy, ("/* hostgroup=" + NEW_SRV_HG_STR + ";create_new_connection=1 */ BEGIN").c_str());
+	return true;
+}
+
+bool check_metric_creation(
+	map<string,double>::const_iterator prev_metric_it_free,
+	map<string,double>::const_iterator prev_metric_it_used,
+	map<string,double>::const_iterator after_metric_it_free,
+	map<string,double>::const_iterator after_metric_it_used,
+	const map<string, double>& prev_metrics,
+	const map<string, double>& after_metrics
+) {
+	bool metric_found =
+		prev_metric_it_free == prev_metrics.end() &&
+		prev_metric_it_used == prev_metrics.end() &&
+		after_metric_it_free != after_metrics.end() &&
+		after_metric_it_used != after_metrics.end();
+
+	ok(metric_found, "Metric was present ONLY after the action in 'SHOW PROMETHEUS METRICS'");
+
+	return metric_found;
+}
+
+bool check_metric_update(
+	map<string,double>::const_iterator prev_metric_it_free,
+	map<string,double>::const_iterator prev_metric_it_used,
+	map<string,double>::const_iterator after_metric_it_free,
+	map<string,double>::const_iterator after_metric_it_used,
+	const map<string, double>& prev_metrics,
+	const map<string, double>& after_metrics
+) {
+	bool metric_found =
+		prev_metric_it_free != prev_metrics.end() &&
+		prev_metric_it_used != prev_metrics.end() &&
+		after_metric_it_free != after_metrics.end() &&
+		after_metric_it_used != after_metrics.end();
+
+	ok(metric_found, "Metric was present ONLY after the action in 'SHOW PROMETHEUS METRICS'");
+
+	return metric_found;
+}
+
+bool (*check_metric_presence)(
+	map<string,double>::const_iterator prev_metric_it_free,
+	map<string,double>::const_iterator prev_metric_it_used,
+	map<string,double>::const_iterator after_metric_it_free,
+	map<string,double>::const_iterator after_metric_it_used,
+	const map<string, double>& prev_metrics,
+	const map<string, double>& after_metrics
+) = check_metric_creation;
+
+pair<bool,map<string,string>> check_matching_tags(
+	map<string,double>::const_iterator metric_key,
+	map<string,function<bool(string)>> tags_chcks
+) {
+	map<string,string> metric_tags = extract_metric_tags(metric_key->first);
+
+	// Find the matching metrics by key and using the check function for values
+	for (const auto& [tag, check] : tags_chcks) {
+		auto it = metric_tags.find(tag);
+		if (it == metric_tags.end() || !check(it->second)) {
+			return { false, {} };
+		}
+	}
+
+	return { true, metric_tags };
+}
+
+void check_conn_used_incr_on_hg(
+	const map<string, double>& prev_metrics, const map<string, double>& after_metrics
+) {
+	map<string,double>::const_iterator after_metric_it_free { after_metrics.end() };
+	map<string,double>::const_iterator after_metric_it_used { after_metrics.end() };
+	map<string,double>::const_iterator prev_metric_it_free { prev_metrics.end() };
+	map<string,double>::const_iterator prev_metric_it_used { prev_metrics.end() };
+
+	map<string,string> metric_tags_used {};
+	map<string,string> metric_tags_free {};
+
+	const map<string,function<bool(string)>> tags_chcks {
+		{ "endpoint", [&] (const string& s) { return s == MY_HOST_STR + ":" + MY_PORT_STR; } },
+		{ "hostgroup", [&] (const string& s) { return s == NEW_SRV_HG_STR; } },
+		{ "status", [&] (const string& s) { return s == "free" || s == "used"; } },
+	};
+
+	for (auto metric_key = after_metrics.begin(); metric_key != after_metrics.end(); metric_key++) {
+		if (metric_key->first.rfind("proxysql_connpool_conns") == 0) {
+			pair<bool,map<string,string>> match_res { check_matching_tags(metric_key, tags_chcks) };
+
+			if (match_res.first) {
+				if (match_res.second["status"] == "free") {
+					metric_tags_free = match_res.second;
+					after_metric_it_free = metric_key;
+				} else if (match_res.second["status"] == "used") {
+					metric_tags_used = match_res.second;
+					after_metric_it_used = metric_key;
+				}
+				if (
+					after_metric_it_free != after_metrics.end()
+					&& after_metric_it_used != after_metrics.end()
+				) {
+					break;
+				}
+			}
+		}
+	}
+	for (auto metric_key = prev_metrics.begin(); metric_key != prev_metrics.end(); metric_key++) {
+		if (metric_key->first.rfind("proxysql_connpool_conns") == 0) {
+			pair<bool,map<string,string>> match_res { check_matching_tags(metric_key, tags_chcks) };
+
+			if (match_res.first) {
+				if (match_res.second["status"] == "free") {
+					metric_tags_free = match_res.second;
+					prev_metric_it_free = metric_key;
+				} else if (match_res.second["status"] == "used") {
+					metric_tags_used = match_res.second;
+					prev_metric_it_used = metric_key;
+				}
+				if (
+					prev_metric_it_free != prev_metrics.end()
+					&& prev_metric_it_used != prev_metrics.end()
+				) {
+					break;
+				}
+			}
+		}
+	}
+
+	// Check the metric presence - origin vs update
+	bool metric_found = check_metric_presence(
+		prev_metric_it_free,
+		prev_metric_it_used,
+		after_metric_it_free,
+		after_metric_it_used,
+		prev_metrics,
+		after_metrics
+	);
+
+	if (metric_found) {
+		// Fallback to zero in case of first time being triggered
+		double prev_metric_val = 0;
+		if (prev_metric_it_used != prev_metrics.end()) {
+			prev_metric_val = prev_metric_it_used->second;
+		}
+
+		double after_metric_val = after_metric_it_used->second;
+		bool is_updated = fabs(prev_metric_val + 1 - after_metric_val) < 0.1;
+		const string tags_used { nlohmann::json(metric_tags_used).dump() };
+
+		ok(
+			metric_found && is_updated,
+			"Metric has a correct tags and updated value: { old_val: '%lf', new_val: '%lf', tags: '%s' }",
+			prev_metric_val, after_metric_val, tags_used.c_str()
+		);
+	} else {
+		ok(false, "Metric has a properly updated value");
+	}
+}
+
+pair<map<string,double>::const_iterator,map<string,string>> get_metric(
+	const map<string, double>& metrics,
+	const string& key,
+	const map<string,function<bool(string)>> tags_chcks
+) {
+	for (auto metric_key = metrics.begin(); metric_key != metrics.end(); metric_key++) {
+		if (metric_key->first.rfind(key) == 0) {
+			pair<bool,map<string,string>> match_res { check_matching_tags(metric_key, tags_chcks) };
+
+			if (match_res.first) {
+				return { metric_key, match_res.second };
+			}
+		}
+	}
+
+	return { metrics.end(), {} };
+}
+
+void check_conn_total_incr_on_hg(
+	const map<string, double>& prev_metrics, const map<string, double>& after_metrics
+) {
+
+	const map<string,function<bool(string)>> tags_chcks {
+		{ "endpoint", [&] (const string& s) { return s == MY_HOST_STR + ":" + MY_PORT_STR; } },
+		{ "hostgroup", [&] (const string& s) { return s == NEW_SRV_HG_STR; } },
+		{ "status", [&] (const string& s) { return s == "ok"; } },
+	};
+
+	const auto& p_prev_metric_tags { get_metric(prev_metrics, "proxysql_connpool_conns", tags_chcks) };
+	const auto& p_after_metric_tags { get_metric(after_metrics, "proxysql_connpool_conns", tags_chcks) };
+
+	// Check the metric presence - origin vs update
+	bool metric_found = check_metric_presence(
+		p_prev_metric_tags.first,
+		p_prev_metric_tags.first,
+		p_after_metric_tags.first,
+		p_after_metric_tags.first,
+		prev_metrics,
+		after_metrics
+	);
+
+	if (metric_found) {
+		// Fallback to zero in case of first time being triggered
+		double prev_metric_val = 0;
+		if (p_prev_metric_tags.first != prev_metrics.end()) {
+			prev_metric_val = p_prev_metric_tags.first->second;
+		}
+
+		double after_metric_val = p_after_metric_tags.first->second;
+		bool is_updated = fabs(prev_metric_val + 1 - after_metric_val) < 0.1;
+		const string tags { nlohmann::json(p_after_metric_tags.second).dump() };
+
+		ok(
+			metric_found && is_updated,
+			"Metric has a correct tags and updated value: { old_val: '%lf', new_val: '%lf', tags: '%s' }",
+			prev_metric_val, after_metric_val, tags.c_str()
+		);
+	} else {
+		ok(false, "Metric has a properly updated value");
+	}
+}
 
 void check_message_count_parse_failure(const map<string, double>& prev_metrics, const map<string, double>& after_metrics) {
 	map<string,double>::const_iterator after_metric_it { after_metrics.end() };
@@ -551,6 +823,16 @@ struct CHECK {
 
 bool placeholder_setup(MYSQL*, MYSQL*, const CommandLine&) { return true; }
 
+bool setup_metric_creation_check(MYSQL*, MYSQL*, const CommandLine&) {
+	check_metric_presence = check_metric_creation;
+	return true;
+}
+
+bool setup_metric_update_check(MYSQL*, MYSQL*, const CommandLine&) {
+	check_metric_presence = check_metric_update;
+	return true;
+}
+
 /**
  * @brief Map of test identifier and pair functions holding the metrics tests:
  *   - First function of the pair uses an open connection to ProxySQL and to ProxySQL Admin to perform
@@ -586,6 +868,26 @@ const vector<pair<string, tuple<setup, metric_trigger, metric_check>>> metric_te
 	{
 		"proxysql_message_count_parse_failure_inc",
 		{ placeholder_setup, trigger_message_count_parse_failure, check_message_count_parse_failure }
+	},
+	// Create a connection to a NEW backend server - proxysql_connpool_conns gauge
+	{
+		"proxysql_connpool_conns{endpoint/hostgroup/status} - Creation",
+		{ setup_metric_creation_check, trigger_conn_in_new_backend_hg, check_conn_used_incr_on_hg }
+	},
+	// Create a connection to the SAME (previous) backend server - proxysql_connpool_conns gauge
+	{
+		"proxysql_connpool_conns{endpoint/hostgroup/status} - Update",
+		{ setup_metric_update_check, trigger_conn_in_prev_backend_hg, check_conn_used_incr_on_hg }
+	},
+	// Create a connection to a NEW backend server - proxysql_connpool_conns_total counter
+	{
+		"proxysql_connpool_conns_total{endpoint/hostgroup/status} - Creation",
+		{ setup_metric_creation_check, trigger_conn_in_new_backend_hg, check_conn_total_incr_on_hg }
+	},
+	// Create a connection to a NEW backend server - proxysql_connpool_conns_total counter
+	{
+		"proxysql_connpool_conns_total{endpoint/hostgroup/status} - Update",
+		{ setup_metric_update_check, trigger_conn_in_prev_backend_hg, check_conn_total_incr_on_hg }
 	},
 };
 
