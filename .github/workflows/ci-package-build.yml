@@ -135,6 +135,7 @@ jobs:
     - name: Update release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GIT_VERSION: ${{ env.GIT_VERSION }}
       run: |
         gh release edit dev-head --draft --prerelease --repo ${{ github.repository }} --tag dev-head --notes-file - << EOF
         ## Development Snapshot
