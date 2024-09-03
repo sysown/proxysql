@@ -12,9 +12,9 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # gh release delete-asset v2.x-head
-        gh release delete v2.x-head --repo ${{ github.repository }} --cleanup-tag || true
-        gh release create v2.x-head --repo ${{ github.repository }} --title v2.x-head --draft --prerelease --notes-file - << EOF
+        # gh release delete-asset dev-head
+        gh release delete dev-head --repo ${{ github.repository }} --cleanup-tag || true
+        gh release create dev-head --repo ${{ github.repository }} --title dev-head --draft --prerelease --notes-file - << EOF
         ## Development Snapshot
         
         GH-Action Package-Build on PR merge into v2.x
@@ -77,7 +77,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         if [[ "${{ matrix.dist }}" = "centos7" ]] && [[ "${{ matrix.type }}" = "" ]]; then
-        gh release edit v2.x-head --draft --prerelease --repo ${{ github.repository }} --tag v2.x-head --title "v2.x-head - ${GIT_VERSION}" --notes-file - << EOF
+        gh release edit dev-head --draft --prerelease --repo ${{ github.repository }} --tag dev-head --title "dev-head - ${GIT_VERSION}" --notes-file - << EOF
         ## Development Snapshot
         
         GH-Action Package-Build on PR merge into v2.x
@@ -114,10 +114,10 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # git tag --force -a v2.x-head -m 'GH-Actions - Development Snapshot Build'
+        # git tag --force -a dev-head -m 'GH-Actions - Development Snapshot Build'
         # git push origin --tags
-        # gh release upload v2.x-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
-        gh release upload v2.x-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
+        # gh release upload dev-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
+        gh release upload dev-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
     
 #    - name: Archive artifacts
 #      if: ${{ failure() && !cancelled() }}
@@ -136,7 +136,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release edit v2.x-head --draft --prerelease --repo ${{ github.repository }} --tag v2.x-head --notes-file - << EOF
+        gh release edit dev-head --draft --prerelease --repo ${{ github.repository }} --tag dev-head --notes-file - << EOF
         ## Development Snapshot
         
         GH-Action Package-Build on PR merge into v2.x
