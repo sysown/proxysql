@@ -19,6 +19,8 @@ jobs:
         
         GH-Action Package-Build on PR merge into v2.x
         
+        Version : ${GIT_VERSION}
+        
         Started : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
         Status : **Build in progress**
@@ -80,6 +82,8 @@ jobs:
         
         GH-Action Package-Build on PR merge into v2.x
         
+        Version : ${GIT_VERSION}
+        
         Updated : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
         Status : **Build in progress**
@@ -136,6 +140,8 @@ jobs:
         ## Development Snapshot
         
         GH-Action Package-Build on PR merge into v2.x
+        
+        Version : ${GIT_VERSION}
         
         Finished : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
