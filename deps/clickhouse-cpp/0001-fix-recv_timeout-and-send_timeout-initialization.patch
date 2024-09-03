@@ -1,0 +1,29 @@
+From cfb12800e698a0e7273a9cb007d0d1658c1689f2 Mon Sep 17 00:00:00 2001
+From: Jia Yue Hua <3423893+jiayuehua@users.noreply.github.com>
+Date: Tue, 3 Oct 2023 15:24:35 +0800
+Subject: [PATCH] fix recv_timeout and send_timeout initialization
+
+---
+ clickhouse/base/socket.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/clickhouse/base/socket.cpp b/clickhouse/base/socket.cpp
+index 28be7b6..3c86629 100644
+--- a/clickhouse/base/socket.cpp
++++ b/clickhouse/base/socket.cpp
+@@ -129,10 +129,10 @@ void SetNonBlock(SOCKET fd, bool value) {
+ 
+ void SetTimeout(SOCKET fd, const SocketTimeoutParams& timeout_params) {
+ #if defined(_unix_)
+-    timeval recv_timeout{ timeout_params.recv_timeout.count() / 1000, static_cast<int>(timeout_params.recv_timeout.count() % 1000 * 1000) };
++    timeval recv_timeout{ static_cast<time_t>(timeout_params.recv_timeout.count() / 1000), static_cast<suseconds_t>(timeout_params.recv_timeout.count() % 1000 * 1000) };
+     auto recv_ret = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
+ 
+-    timeval send_timeout{ timeout_params.send_timeout.count() / 1000, static_cast<int>(timeout_params.send_timeout.count() % 1000 * 1000) };
++    timeval send_timeout{ static_cast<time_t>(timeout_params.send_timeout.count() / 1000), static_cast<suseconds_t>(timeout_params.send_timeout.count() % 1000 * 1000) };
+     auto send_ret = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout));
+ 
+     if (recv_ret == -1 || send_ret == -1) {
+-- 
+2.45.0
+

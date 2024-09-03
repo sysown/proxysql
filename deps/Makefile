@@ -164,6 +164,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-*/ clickhouse-cpp
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
+	patch -d clickhouse-cpp/clickhouse-cpp -p1 -i ../0001-fix-recv_timeout-and-send_timeout-initialization.patch
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
