@@ -62,7 +62,8 @@ class QP_query_digest_stats {
 	unsigned long long rows_affected;
 	unsigned long long rows_sent;
 	int hid;
-	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca);
+	QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
+		int _hid, const char* _client_addr);
 	void add_time(
 		unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
 		unsigned long long cnt = 1
