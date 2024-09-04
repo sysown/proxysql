@@ -4616,7 +4616,7 @@ handler_again:
 					//autocommit = myconn->pgsql->server_status & SERVER_STATUS_AUTOCOMMIT;
 				}
 
-				if (mirror == false && myconn->pgsql) {
+				/*if (mirror == false && myconn->pgsql) {
 					// Support for LAST_INSERT_ID()
 					if (myconn->pgsql->insert_id) {
 						last_insert_id = myconn->pgsql->insert_id;
@@ -4630,7 +4630,7 @@ handler_again:
 							}
 						}
 					}
-				}
+				}*/
 
 				switch (status) {
 				case PROCESSING_QUERY:
@@ -6921,8 +6921,13 @@ void PgSQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Conn
 	if (query_result) {
 		//assert(query_result->result);
 		//query_result->init_with_stmt(myconn);
-		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = query_result->get_num_rows();
+		const auto _affected_rows = query_result->get_affected_rows();
+		if (_affected_rows != -1) {
+			CurrentQuery.affected_rows = _affected_rows;
+			CurrentQuery.have_affected_rows = true;
+		}
+		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
 	}
 	else {
@@ -6965,8 +6970,13 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		bool transfer_started = query_result->is_transfer_started();
 		// if there is an error, it will be false so results are not cached
 		bool is_tuple = query_result->get_result_packet_type() == (PGSQL_QUERY_RESULT_TUPLE | PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY); 
-		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = query_result->get_num_rows();
+		const auto _affected_rows = query_result->get_affected_rows();
+		if (_affected_rows != -1) {
+			 CurrentQuery.affected_rows = _affected_rows;
+			 CurrentQuery.have_affected_rows = true;
+		}
+		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 		if (_conn->processing_multi_statement == false)
 			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
 		if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
