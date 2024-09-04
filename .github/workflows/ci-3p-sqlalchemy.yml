@@ -71,7 +71,7 @@ jobs:
         cd proxysql_3p_testing/
         git sparse-checkout list
         ./setup.sh test_sqlalchemy/sqlalchemy
-        (cd proxysql && git pull && git pull --tags)
+        (cd proxysql && git switch v2.7 && git pull && git pull --tags && git describe --tags)
         
         # extend timout
         cd test_sqlalchemy
