@@ -66,11 +66,12 @@ jobs:
     - name: Prepare
       run: |
         set +e
-        
+
+        git config --system --add safe.directory *
         cd proxysql_3p_testing/
         git sparse-checkout list
         ./setup.sh test_sqlalchemy/sqlalchemy
-        (cd proxysql && git pull --tags)
+        (cd proxysql && git pull && git pull --tags)
         
         # extend timout
         cd test_sqlalchemy
