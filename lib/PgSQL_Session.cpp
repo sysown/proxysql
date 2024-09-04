@@ -315,7 +315,7 @@ __exit_kill_query_thread:
 extern Query_Processor* GloQPro;
 extern Query_Cache* GloQC;
 extern ProxySQL_Admin* GloAdmin;
-extern MySQL_Threads_Handler* GloMTH;
+extern PgSQL_Threads_Handler* GloPTH;
 
 PgSQL_Query_Info::PgSQL_Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
@@ -426,7 +426,7 @@ unsigned long long PgSQL_Query_Info::query_parser_update_counters() {
 	}
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	if (MyComQueryCmd == MYSQL_COM_QUERY__UNINITIALIZED) return 0; // this means that it was never initialized
-	unsigned long long ret=GloQPro->query_parser_update_counters(TO_CLIENT_SESSION(sess), MyComQueryCmd, &QueryParserArgs, end_time-start_time);
+	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
@@ -699,8 +699,8 @@ PgSQL_Session::~PgSQL_Session() {
 	delete qpo;
 	match_regexes = NULL;
 	if (mirror) {
-		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1);
-		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+		__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
+		//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 	}
 	if (proxysql_node_address) {
 		delete proxysql_node_address;
@@ -713,7 +713,7 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	char c = ((char*)pkt->ptr)[5];
 	bool ret = false;
 	if (c == 'c' || c == 'C') {
-		if (pkt->size == strlen("commit") + 5) {
+		if (pkt->size >= sizeof("commit") + 5) {
 			if (strncasecmp((char*)"commit", (char*)pkt->ptr + 5, 6) == 0) {
 				__sync_fetch_and_add(&PgHGM->status.commit_cnt, 1);
 				ret = true;
@@ -722,7 +722,7 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	}
 	else {
 		if (c == 'r' || c == 'R') {
-			if (pkt->size == strlen("rollback") + 5) {
+			if (pkt->size >= sizeof("rollback") + 5) {
 				if (strncasecmp((char*)"rollback", (char*)pkt->ptr + 5, 8) == 0) {
 					__sync_fetch_and_add(&PgHGM->status.rollback_cnt, 1);
 					ret = true;
@@ -752,21 +752,20 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	else {
 		// there is no active transaction, we will just reply OK
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		uint16_t setStatus = 0;
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
+		//uint16_t setStatus = 0;
+		//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		//client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
+		client_myds->myprot.generate_ok_packet(true, true, NULL, 0, (const char*)pkt->ptr + 5);
 		if (mirror == false) {
 			RequestEnd(NULL);
-		}
-		else {
+		} else {
 			client_myds->DSS = STATE_SLEEP;
 			status = WAITING_CLIENT_DATA;
 		}
 		l_free(pkt->size, pkt->ptr);
 		if (c == 'c' || c == 'C') {
 			__sync_fetch_and_add(&PgHGM->status.commit_cnt_filtered, 1);
-		}
-		else {
+		} else {
 			__sync_fetch_and_add(&PgHGM->status.rollback_cnt_filtered, 1);
 		}
 		return true;
@@ -783,22 +782,15 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 		sprintf(buff, "%p", thread);
 		j["thread"] = buff;
 	}
-	uint64_t age_ms = (thread->curtime - start_time) / 1000;
+	const uint64_t age_ms = (thread->curtime - start_time) / 1000;
 	j["age_ms"] = age_ms;
 	j["status"] = status;
-	j["autocommit"] = autocommit;
 	j["thread_session_id"] = thread_session_id;
 	j["current_hostgroup"] = current_hostgroup;
 	j["default_hostgroup"] = default_hostgroup;
 	j["locked_on_hostgroup"] = locked_on_hostgroup;
-	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
-	j["last_insert_id"] = last_insert_id;
-	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["active_transactions"] = active_transactions;
 	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
-	j["warning_in_hg"] = warning_in_hg;
-	j["gtid"]["hid"] = gtid_hid;
-	j["gtid"]["last"] = (strlen(gtid_buf) ? gtid_buf : "");
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
 	j["qpo"]["reconnect"] = qpo->reconnect;
 	j["qpo"]["sticky_conn"] = qpo->sticky_conn;
@@ -811,7 +803,6 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	j["qpo"]["timeout"] = qpo->timeout;
 	j["qpo"]["retries"] = qpo->retries;
 	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
-	j["default_schema"] = (default_schema ? default_schema : "");
 	j["user_attributes"] = (user_attributes ? user_attributes : "");
 	j["transaction_persistent"] = transaction_persistent;
 	if (client_myds != NULL) { // only if client_myds is defined
@@ -834,7 +825,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 			}
 		}
 		j["client"]["DSS"] = client_myds->DSS;
-		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
+		j["client"]["auth_method"] = AUTHENTICATION_METHOD_STR[(int)client_myds->auth_method];
 		if (client_myds->myconn != NULL) { // only if myconn is defined
 			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
 				j["client"]["userinfo"]["username"] = (client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "");
@@ -843,7 +834,6 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				j["client"]["userinfo"]["password"] = (client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "");
 #endif
 			}
-			j["conn"]["session_track_gtids"] = (client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "");
 			for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
 				client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 			}
@@ -853,31 +843,39 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 					c->variables[*it_c].fill_client_internal_session(j, *it_c);
 				}
 			}
+			//j["conn"]["autocommit"] = (client_myds->myconn->options.autocommit ? "ON" : "OFF");
+			//j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
+			//j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+			//j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+			//j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
+			//j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+			//j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
+			//j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+			//j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
+			{
+				const PgSQL_Conn_Param& c = client_myds->myconn->conn_params;
 
-			j["conn"]["autocommit"] = (client_myds->myconn->options.autocommit ? "ON" : "OFF");
-			j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
-			j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-			j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-			j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
-			j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-			j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
-			j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
+				for (size_t i = 0; i < c.param_set.size(); i++) {
+
+					if (c.param_value[c.param_set[i]] != NULL) {
+
+						j["client"]["conn"]["connection_options"][PgSQL_Param_Name_Str[c.param_set[i]]] = c.param_value[c.param_set[i]];
+					}
+				}
+			}
 		}
 	}
 	for (unsigned int i = 0; i < mybes->len; i++) {
 		PgSQL_Backend* _mybe = NULL;
 		_mybe = (PgSQL_Backend*)mybes->index(i);
-		//unsigned int i = _mybe->hostgroup_id;
 		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
-		j["backends"][i]["gtid"] = (strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "");
 		if (_mybe->server_myds) {
 			PgSQL_Data_Stream* _myds = _mybe->server_myds;
 			sprintf(buff, "%p", _myds);
 			j["backends"][i]["stream"]["address"] = buff;
 			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
-			j["backends"][i]["stream"]["myconnpoll_get"] = _myds->statuses.myconnpoll_get;
-			j["backends"][i]["stream"]["myconnpoll_put"] = _myds->statuses.myconnpoll_put;
+			j["backends"][i]["stream"]["pgconnpoll_get"] = _myds->statuses.pgconnpoll_get;
+			j["backends"][i]["stream"]["pgconnpoll_put"] = _myds->statuses.pgconnpoll_put;
 			/* when fast_forward is not used, these metrics are always 0. Explicitly disabled
 			j["backend"][i]["stream"]["pkts_recv"] = _myds->pkts_recv;
 			j["backend"][i]["stream"]["pkts_sent"] = _myds->pkts_sent;
@@ -899,27 +897,23 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
 				j["backends"][i]["conn"]["bytes_sent"] = _myconn->bytes_info.bytes_sent;
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
-				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
-				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
+				j["backends"][i]["conn"]["pgconnpoll_get"] = _myconn->statuses.pgconnpoll_get;
+				j["backends"][i]["conn"]["pgconnpoll_put"] = _myconn->statuses.pgconnpoll_put;
 				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
-				j["backends"][i]["conn"]["session_track_gtids"] = (_myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "");
+				//j["backends"][i]["conn"]["session_track_gtids"] = (_myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "");
 				j["backends"][i]["conn"]["init_connect"] = (_myconn->options.init_connect ? _myconn->options.init_connect : "");
 				j["backends"][i]["conn"]["init_connect_sent"] = _myds->myconn->options.init_connect_sent;
-				j["backends"][i]["conn"]["autocommit"] = (_myds->myconn->options.autocommit ? "ON" : "OFF");
-				j["backends"][i]["conn"]["last_set_autocommit"] = _myds->myconn->options.last_set_autocommit;
-				j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
-				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
-				j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
+				j["backends"][i]["conn"]["standard_conforming_strings"] = _myconn->options.no_backslash_escapes;
+				//j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
+				//j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
 				j["backends"][i]["conn"]["status"]["has_savepoint"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
-				j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
+				//j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
 				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE);
-				j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS);
+				//j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS);
 				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 				j["backends"][i]["conn"]["status"]["no_multiplex_HG"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
-				j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
-				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
-				j["backends"][i]["conn"]["warning_count"] = _myconn->warning_count;
+				//j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+				//j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 				{
 					// MultiplexDisabled : status returned by PgSQL_Connection::MultiplexDisabled();
 					// MultiplexDisabled_ext : status returned by PgSQL_Connection::MultiplexDisabled() || PgSQL_Connection::isActiveTransaction()
@@ -932,39 +926,34 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 					}
 					j["backends"][i]["conn"]["MultiplexDisabled_ext"] = multiplex_disabled;
 				}
-				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
-				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
-				j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
-				j["backends"][i]["conn"]["client_flag"]["client_found_rows"] = (_myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-				j["backends"][i]["conn"]["client_flag"]["client_multi_statements"] = (_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-				j["backends"][i]["conn"]["client_flag"]["client_deprecate_eof"] = (_myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-				if (_myconn->pgsql && _myconn->ret_mysql) {
-					MYSQL* _my = _myconn->pgsql;
-					sprintf(buff, "%p", _my);
+				//j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
+				//j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
+				//j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
+				//j["backends"][i]["conn"]["client_flag"]["client_found_rows"] = (_myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+				//j["backends"][i]["conn"]["client_flag"]["client_multi_statements"] = (_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+				//j["backends"][i]["conn"]["client_flag"]["client_deprecate_eof"] = (_myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+				if (_myconn->is_connected()) {
+					sprintf(buff, "%p", _myconn->get_pg_connection());
 					j["backends"][i]["conn"]["pgsql"]["address"] = buff;
-					j["backends"][i]["conn"]["pgsql"]["host"] = (_my->host ? _my->host : "");
-					j["backends"][i]["conn"]["pgsql"]["host_info"] = (_my->host_info ? _my->host_info : "");
-					j["backends"][i]["conn"]["pgsql"]["port"] = _my->port;
-					j["backends"][i]["conn"]["pgsql"]["server_version"] = (_my->server_version ? _my->server_version : "");
-					j["backends"][i]["conn"]["pgsql"]["user"] = (_my->user ? _my->user : "");
-					j["backends"][i]["conn"]["pgsql"]["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
-					j["backends"][i]["conn"]["pgsql"]["db"] = (_my->db ? _my->db : "");
-					j["backends"][i]["conn"]["pgsql"]["affected_rows"] = _my->affected_rows;
-					j["backends"][i]["conn"]["pgsql"]["insert_id"] = _my->insert_id;
-					j["backends"][i]["conn"]["pgsql"]["thread_id"] = _my->thread_id;
-					j["backends"][i]["conn"]["pgsql"]["server_status"] = _my->server_status;
-					j["backends"][i]["conn"]["pgsql"]["charset"] = _my->charset->nr;
-					j["backends"][i]["conn"]["pgsql"]["charset_name"] = _my->charset->csname;
-					//j["backends"][i]["conn"]["pgsql"][""] = _my->;
-					//j["backends"][i]["conn"]["pgsql"][""] = _my->;
-					j["backends"][i]["conn"]["pgsql"]["options"]["charset_name"] = (_my->options.charset_name ? _my->options.charset_name : "");
-					j["backends"][i]["conn"]["pgsql"]["options"]["use_ssl"] = _my->options.use_ssl;
-					j["backends"][i]["conn"]["pgsql"]["net"]["last_errno"] = _my->net.last_errno;
-					j["backends"][i]["conn"]["pgsql"]["net"]["fd"] = _my->net.fd;
-					j["backends"][i]["conn"]["pgsql"]["net"]["max_packet_size"] = _my->net.max_packet_size;
-					j["backends"][i]["conn"]["pgsql"]["net"]["sqlstate"] = _my->net.sqlstate;
-					//j["backends"][i]["conn"]["pgsql"]["net"][""] = _my->net.;
-					//j["backends"][i]["conn"]["pgsql"]["net"][""] = _my->net.;
+					j["backends"][i]["conn"]["pgsql"]["host"] = _myconn->get_pg_host();
+					j["backends"][i]["conn"]["pgsql"]["host_addr"] = _myconn->get_pg_hostaddr();
+					j["backends"][i]["conn"]["pgsql"]["port"] = _myconn->get_pg_port();
+					j["backends"][i]["conn"]["pgsql"]["user"] = _myconn->get_pg_user();
+#ifdef DEBUG
+					j["backends"][i]["conn"]["pgsql"]["password"] = _myconn->get_pg_password();
+#endif
+					j["backends"][i]["conn"]["pgsql"]["database"] = _myconn->get_pg_dbname();
+					j["backends"][i]["conn"]["pgsql"]["backend_pid"] = _myconn->get_pg_backend_pid();
+					j["backends"][i]["conn"]["pgsql"]["using_ssl"] = _myconn->get_pg_ssl_in_use() ? "YES" : "NO";
+					j["backends"][i]["conn"]["pgsql"]["error_msg"] = _myconn->get_pg_error_message();
+					j["backends"][i]["conn"]["pgsql"]["options"] = _myconn->get_pg_options();
+					j["backends"][i]["conn"]["pgsql"]["fd"] = _myconn->get_pg_socket_fd();
+					j["backends"][i]["conn"]["pgsql"]["protocol_version"] = _myconn->get_pg_protocol_version();
+					j["backends"][i]["conn"]["pgsql"]["server_version"] = _myconn->get_pg_server_version_str(buff, sizeof(buff));
+					j["backends"][i]["conn"]["pgsql"]["transaction_status"] = _myconn->get_pg_transaction_status_str();
+					j["backends"][i]["conn"]["pgsql"]["connection_status"] = _myconn->get_pg_connection_status_str();
+					j["backends"][i]["conn"]["pgsql"]["client_encoding"] = _myconn->get_pg_client_encoding();
+					j["backends"][i]["conn"]["pgsql"]["is_nonblocking"] = _myconn->get_pg_is_nonblocking() ? "YES" : "NO";
 				}
 			}
 		}
@@ -1207,7 +1196,7 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt) {
 				status = WAITING_CLIENT_DATA;
 			}
 			l_free(pkt->size, pkt->ptr);
-			__sync_fetch_and_add(&PgHGM->status.frontend_set_names, 1);
+			__sync_fetch_and_add(&PgHGM->status.frontend_set_client_encoding, 1);
 			return true;
 		}
 	}
@@ -1345,13 +1334,13 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->mirror_queue_mysql_sessions->len == 0) {
 			// there are no sessions in the queue, we try to execute immediately
 			// Only pgsql_thread___mirror_max_concurrency mirror session can run in parallel
-			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1) > (unsigned int)pgsql_thread___mirror_max_concurrency) {
+			if (__sync_add_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1) > (unsigned int)pgsql_thread___mirror_max_concurrency) {
 				// if the limit is reached, we queue it instead
-				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1);
+				__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
 				thread->mirror_queue_mysql_sessions->add(newsess);
 			}
 			else {
-				GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
+				//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
 				thread->register_session(thread,newsess);
 				newsess->handler(); // execute immediately
 				//newsess->to_process=0;
@@ -1367,8 +1356,8 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (to_cache) {
-							__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current, 1);
-							GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+							__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
+							//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 							thread->mirror_queue_mysql_sessions_cache->add(newsess);
 						}
 						else {
@@ -1450,8 +1439,9 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	myconn->local_stmts = new MySQL_STMTs_local_v14(false); // false by default, it is a backend
 	int rc = myconn->async_reset_session(myds->revents);
 	if (rc == 0) {
-		//__sync_fetch_and_add(&PgHGM->status.backend_change_user, 1);
+		__sync_fetch_and_add(&PgHGM->status.backend_reset_connection, 1);
 		myds->myconn->reset();
+		PgHGM->increase_reset_counter();
 		myds->DSS = STATE_MARIADB_GENERIC;
 		myconn->async_state_machine = ASYNC_IDLE;
 		myds->return_MySQL_Connection_To_Pool();
@@ -2009,7 +1999,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_CHARSET(int* _rc) {
 	int rc = myconn->async_set_names(myds->revents, charset);
 
 	if (rc == 0) {
-		__sync_fetch_and_add(&PgHGM->status.backend_set_names, 1);
+		__sync_fetch_and_add(&PgHGM->status.backend_set_client_encoding, 1);
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st = previous_status.top();
 		previous_status.pop();
@@ -2354,7 +2344,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_SCHEMA(int* _rc) {
 	}
 	int rc = myconn->async_select_db(myds->revents);
 	if (rc == 0) {
-		__sync_fetch_and_add(&PgHGM->status.backend_init_db, 1);
+		//__sync_fetch_and_add(&PgHGM->status.backend_init_db, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st = previous_status.top();
@@ -2577,8 +2567,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 				if (is_error_present) {
 					client_myds->myprot.generate_error_packet(true, true, myconn->error_info.message.c_str(), 
 						myconn->error_info.code, false, true);
-				}
-				else {
+				} else {
 					char buf[256];
 					sprintf(buf, "Max connect failure while reaching hostgroup %d", current_hostgroup);
 					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
@@ -2629,7 +2618,7 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 	}
 	int rc = myconn->async_reset_session(myds->revents);
 	if (rc == 0) {
-		//__sync_fetch_and_add(&PgHGM->status.backend_change_user, 1);
+		__sync_fetch_and_add(&PgHGM->status.backend_reset_connection, 1);
 		//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -2730,7 +2719,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 		}
-		qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), pkt.ptr, pkt.size, TO_QUERY_INFO(&CurrentQuery));
+		qpo = GloQPro->process_mysql_query(this, pkt.ptr, pkt.size, &CurrentQuery);
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &endt);
 			thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
@@ -2873,7 +2862,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 		}
-		qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), NULL, 0, TO_QUERY_INFO(&CurrentQuery));
+		qpo = GloQPro->process_mysql_query(this, NULL, 0, &CurrentQuery);
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -2986,16 +2975,16 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	case PROXYSQL_SESSION_ADMIN:
 	case PROXYSQL_SESSION_STATS:
 		// this is processed by the admin module
-		handler_function(TO_CLIENT_SESSION(this), (void*)GloAdmin, &pkt);
+		handler_function(this, (void*)GloAdmin, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
 	case PROXYSQL_SESSION_SQLITE:
-		handler_function(TO_CLIENT_SESSION(this), (void*)GloSQLite3Server, &pkt);
+		handler_function(this, (void*)GloSQLite3Server, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
 #ifdef PROXYSQLCLICKHOUSE
 	case PROXYSQL_SESSION_CLICKHOUSE:
-		handler_function(TO_CLIENT_SESSION(this), (void*)GloClickHouseServer, &pkt);
+		handler_function(this, (void*)GloClickHouseServer, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -3370,7 +3359,7 @@ __get_pkts_from_client:
 								if (thread->variables.stats_time_query_processor) {
 									clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 								}
-								qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), pkt.ptr, pkt.size, TO_QUERY_INFO(&CurrentQuery));
+								qpo = GloQPro->process_mysql_query(this, pkt.ptr, pkt.size, &CurrentQuery);
 								if (thread->variables.stats_time_query_processor) {
 									clock_gettime(CLOCK_THREAD_CPUTIME_ID, &endt);
 									thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
@@ -3588,7 +3577,7 @@ __get_pkts_from_client:
 						if (thread->variables.stats_time_query_processor) {
 							clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 						}
-						qpo = GloQPro->process_mysql_query(TO_CLIENT_SESSION(this), pkt.ptr, pkt.size, TO_QUERY_INFO(&CurrentQuery));
+						qpo = GloQPro->process_mysql_query(this, pkt.ptr, pkt.size, &CurrentQuery);
 						if (thread->variables.stats_time_query_processor) {
 							clock_gettime(CLOCK_THREAD_CPUTIME_ID, &endt);
 							thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
@@ -4151,11 +4140,12 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 void PgSQL_Session::handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn) {
 	if (pgsql_thread___verbose_query_error) {
 		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , dbname \"%s\" , %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->dbname, myconn->get_error_code_with_message().c_str(), CurrentQuery.QueryParserArgs.digest_text);
-	}
-	else {
+	} else {
 		proxy_warning("Error during query on (%d,%s,%d,%lu): %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->get_error_code_with_message().c_str());
 	}
-	PgHGM->add_pgsql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->dbname, 9999, (char*)myconn->get_error_code_with_message().c_str());
+	PgHGM->add_pgsql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, 
+		(client_myds->addr.addr ? client_myds->addr.addr : "unknown"), client_myds->myconn->userinfo->dbname, 
+		myconn->get_error_code_str(), myconn->get_error_message().c_str());
 }
 
 
@@ -5080,6 +5070,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		l_free(pkt->size, pkt->ptr);
 		//if (client_myds->encrypted==false) {
 		if (client_myds->myconn->userinfo->dbname == NULL) {
+#if 0
 #ifdef PROXYSQLCLICKHOUSE
 			if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				if (strlen(default_schema) == 0) {
@@ -5088,7 +5079,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 			}
 #endif /* PROXYSQLCLICKHOUSE */
-			client_myds->myconn->userinfo->set_dbname(default_schema, strlen(default_schema));
+#endif
+			client_myds->myconn->userinfo->set_dbname(default_schema);
 		}
 		int free_users = 0;
 		int used_users = 0;
@@ -5339,7 +5331,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	}
 
 	if (pgsql_thread___client_host_cache_size) {
-		GloMTH->update_client_host_cache(client_myds->client_addr, handshake_err);
+		GloPTH->update_client_host_cache(client_myds->client_addr, handshake_err);
 	}
 }
 
@@ -5414,8 +5406,8 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	gtid_hid = -1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
-		__sync_fetch_and_add(&PgHGM->status.frontend_init_db, 1);
-		client_myds->myconn->userinfo->set_dbname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
+		//__sync_fetch_and_add(&PgHGM->status.frontend_init_db, 1);
+		//client_myds->myconn->userinfo->set_dbname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTrx = NumActiveTransactions();
@@ -5442,7 +5434,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	gtid_hid = -1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
-		__sync_fetch_and_add(&PgHGM->status.frontend_use_db, 1);
+		//__sync_fetch_and_add(&PgHGM->status.frontend_use_db, 1);
 		string nq = string((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
 		RE2::GlobalReplace(&nq, (char*)"(?U)/\\*.*\\*/", (char*)" ");
 		char* sn_tmp = (char*)nq.c_str();
@@ -5456,7 +5448,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			schemanameptr[strlen(schemanameptr) - 1] = '\0';
 			schemanameptr++;
 		}
-		client_myds->myconn->userinfo->set_dbname(schemanameptr, strlen(schemanameptr));
+		//client_myds->myconn->userinfo->set_dbname(schemanameptr);
 		free(schemaname);
 		if (mirror == false) {
 			RequestEnd(NULL);
@@ -7286,8 +7278,7 @@ void PgSQL_Session::Memory_Stats() {
 		if (client_myds->PSarrayIN) {
 			if (session_fast_forward == true) {
 				internal += client_myds->PSarrayOUT->total_size();
-			}
-			else {
+			} else {
 				internal += client_myds->PSarrayOUT->total_size(PGSQL_RESULTSET_BUFLEN);
 				internal += client_myds->resultset->total_size(PGSQL_RESULTSET_BUFLEN);
 			}
@@ -7305,10 +7296,11 @@ void PgSQL_Session::Memory_Stats() {
 			if (_mybe->server_myds->myconn) {
 				PgSQL_Connection* myconn = _mybe->server_myds->myconn;
 				internal += sizeof(PgSQL_Connection);
-				if (myconn->pgsql) {
-					backend += sizeof(MYSQL);
-					backend += myconn->pgsql->net.max_packet;
-					backend += (4096 * 15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
+				if (myconn->is_connected()) {
+					//backend += sizeof(MYSQL);
+					//backend += myconn->pgsql->net.max_packet;
+					backend += myconn->get_memory_usage();
+					//backend += (4096 * 15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
 				}
 				if (myconn->query_result) {
 					backend += myconn->query_result->current_size();
@@ -7392,7 +7384,7 @@ bool PgSQL_Session::handle_command_query_kill(PtrSize_t* pkt) {
 							}
 							if (tki >= 0) {
 								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "Killing %s %d\n", (tki == 0 ? "CONNECTION" : "QUERY"), id);
-								GloMTH->kill_connection_or_query(id, (tki == 0 ? false : true), mc->userinfo->username);
+								GloPTH->kill_connection_or_query(id, (tki == 0 ? false : true), mc->userinfo->username);
 								client_myds->DSS = STATE_QUERY_SENT_NET;
 								unsigned int nTrx = NumActiveTransactions();
 								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);

@@ -119,7 +119,7 @@ namespace nlohmann { class json; }
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM main.mysql_servers " \
 	"WHERE status != \"OFFLINE_HARD\" " \
-	"ORDER BY hostgroup_id, hostname, port" \
+	"ORDER BY hostgroup_id, hostname, port"
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 

@@ -191,10 +191,10 @@ void Base_Session<S,DS,B,T>::writeout() {
 	unsigned long long last_sent_=0;
 	int tmbpstc = 0; // throttle_max_bytes_per_second_to_client
 	enum proxysql_session_type _tmp_session_type_cmp1;
-	if constexpr (std::is_same<S, MySQL_Session>::value) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		tmbpstc = mysql_thread___throttle_max_bytes_per_second_to_client;
 		_tmp_session_type_cmp1 = PROXYSQL_SESSION_MYSQL;
-	} else if constexpr (std::is_same<S, PgSQL_Session>::value) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 		tmbpstc = pgsql_thread___throttle_max_bytes_per_second_to_client;
 		_tmp_session_type_cmp1 = PROXYSQL_SESSION_PGSQL;
 	} else {
@@ -292,31 +292,48 @@ void Base_Session<S,DS,B,T>::writeout() {
 }
 
 template<typename S, typename DS, typename B, typename T>
-void Base_Session<S,DS,B,T>::return_proxysql_internal(PtrSize_t* pkt) {
+void Base_Session<S, DS, B, T>::return_proxysql_internal(PtrSize_t* pkt) {
 	unsigned int l = 0;
 	l = strlen((char*)"PROXYSQL INTERNAL SESSION");
-	if (pkt->size == (5 + l) && strncasecmp((char*)"PROXYSQL INTERNAL SESSION", (char*)pkt->ptr + 5, l) == 0) {
-		json j;
-		generate_proxysql_internal_session_json(j);
-		std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
-		SQLite3_result* resultset = new SQLite3_result(1);
-		resultset->add_column_definition(SQLITE_TEXT, "session_info");
-		char* pta[1];
-		pta[0] = (char*)s.c_str();
-		resultset->add_row(pta);
-		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
-		delete resultset;
-		l_free(pkt->size, pkt->ptr);
-		return;
-	}
-	// default
-	client_myds->DSS = STATE_QUERY_SENT_NET;
 	if constexpr (std::is_same_v<S, MySQL_Session>) {
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1064,(char *)"42000",(char *)"Unknown PROXYSQL INTERNAL command",true);
-	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		if (pkt->size == (5 + l) && strncasecmp((char*)"PROXYSQL INTERNAL SESSION", (char*)pkt->ptr + 5, l) == 0) {
+			json j;
+			generate_proxysql_internal_session_json(j);
+			std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
+			SQLite3_result* resultset = new SQLite3_result(1);
+			resultset->add_column_definition(SQLITE_TEXT, "session_info");
+			char* pta[1];
+			pta[0] = (char*)s.c_str();
+			resultset->add_row(pta);
+			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+			delete resultset;
+			l_free(pkt->size, pkt->ptr);
+			return;
+		}
+		// default
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1064, (char*)"42000", (char*)"Unknown PROXYSQL INTERNAL command", true);
+	}
+	else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		if (pkt->size >= (5 + 1 + l) && strncasecmp((char*)"PROXYSQL INTERNAL SESSION", (char*)pkt->ptr + 5, l) == 0) {
+			json j;
+			generate_proxysql_internal_session_json(j);
+			std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
+			SQLite3_result* resultset = new SQLite3_result(1);
+			resultset->add_column_definition(SQLITE_TEXT, "session_info");
+			char* pta[1];
+			pta[0] = (char*)s.c_str();
+			resultset->add_row(pta);
+			SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset, nullptr, 0, (const char*)pkt->ptr + 5);
+			delete resultset;
+			l_free(pkt->size, pkt->ptr);
+			return;
+		}
+		client_myds->DSS = STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_error_packet(true, true, "Unknown PROXYSQL INTERNAL command", PGSQL_ERROR_CODES::ERRCODE_SYNTAX_ERROR, false, true);
-	} else {
+	}
+	else {
 		assert(0);
 	}
 	if (mirror == false) {
@@ -328,8 +345,6 @@ void Base_Session<S,DS,B,T>::return_proxysql_internal(PtrSize_t* pkt) {
 	}
 	l_free(pkt->size, pkt->ptr);
 }
-
-
 
 /**
  * @brief Check if any backend has an active MySQL connection.
@@ -670,3 +685,51 @@ int Base_Session<S,DS,B,T>::FindOneActiveTransaction(bool check_savepoint) {
 	}
 	return ret;
 }
+
+Session_Regex::Session_Regex(char* p) {
+	s = strdup(p);
+	re2::RE2::Options* opt2 = new re2::RE2::Options(RE2::Quiet);
+	opt2->set_case_sensitive(false);
+	opt = (void*)opt2;
+	re = (RE2*)new RE2(s, *opt2);
+}
+
+Session_Regex::~Session_Regex() {
+	free(s);
+	delete (RE2*)re;
+	delete (re2::RE2::Options*)opt;
+}
+
+bool Session_Regex::match(char* m) {
+	bool rc = false;
+	rc = RE2::PartialMatch(m, *(RE2*)re);
+	return rc;
+}
+
+
+std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
+	if (session_type == PROXYSQL_SESSION_MYSQL) {
+		return "PROXYSQL_SESSION_MYSQL";
+	}
+	else if (session_type == PROXYSQL_SESSION_ADMIN) {
+		return "PROXYSQL_SESSION_ADMIN";
+	}
+	else if (session_type == PROXYSQL_SESSION_STATS) {
+		return "PROXYSQL_SESSION_STATS";
+	}
+	else if (session_type == PROXYSQL_SESSION_SQLITE) {
+		return "PROXYSQL_SESSION_SQLITE";
+	}
+	else if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+		return "PROXYSQL_SESSION_CLICKHOUSE";
+	}
+	else if (session_type == PROXYSQL_SESSION_MYSQL_EMU) {
+		return "PROXYSQL_SESSION_MYSQL_EMU";
+	}
+	else if (session_type == PROXYSQL_SESSION_PGSQL) {
+		return "PROXYSQL_SESSION_PGSQL";
+	}
+	else {
+		return "PROXYSQL_SESSION_NONE";
+	}
+};

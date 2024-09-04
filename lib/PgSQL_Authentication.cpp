@@ -86,7 +86,7 @@ __loop_remove_inactives:
 #endif
 }
 
-bool PgSQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
+bool PgSQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
 	myhash.Init(1,2);
@@ -114,10 +114,6 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 				free(ad->sha1_pass);
 				ad->sha1_pass=NULL;
 			}
-		}
-		if (strcmp(ad->default_schema,default_schema)) {
-			free(ad->default_schema);
-			ad->default_schema=strdup(default_schema);
 		}
 		if (strcmp(ad->comment,comment)) {
 			free(ad->comment);
@@ -180,7 +176,6 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
   } else {
 		ad=(pgsql_account_details_t *)malloc(sizeof(pgsql_account_details_t ));
 		ad->username=strdup(username);
-		ad->default_schema=strdup(default_schema);
 		ad->comment=strdup(comment);
 		ad->password=strdup(password);
 		if (strlen(attributes)) {
@@ -203,7 +198,6 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 
 	ad->use_ssl=use_ssl;
 	ad->default_hostgroup=default_hostgroup;
-	ad->schema_locked=schema_locked;
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
@@ -237,7 +231,6 @@ unsigned int PgSQL_Authentication::memory_usage() {
 		if (ado->username) ret += strlen(ado->username) + 1;
 		if (ado->password) ret += strlen(ado->password) + 1;
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
-		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
 	}
@@ -250,7 +243,6 @@ unsigned int PgSQL_Authentication::memory_usage() {
 		if (ado->username) ret += strlen(ado->username) + 1;
 		if (ado->password) ret += strlen(ado->password) + 1;
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
-		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
 	}
@@ -293,7 +285,6 @@ int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _co
 		ad->default_hostgroup=ado->default_hostgroup;
 		if (_complete==false) {
 			ad->password=NULL;
-			ad->default_schema=NULL;
 			ad->attributes=NULL;
 			ad->comment=NULL;
 			ad->num_connections_used=ado->num_connections_used;
@@ -302,10 +293,8 @@ int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _co
 			ad->password=strdup(ado->password);
 			ad->sha1_pass=NULL;
 			ad->use_ssl=ado->use_ssl;
-			ad->default_schema=strdup(ado->default_schema);
 			ad->attributes=strdup(ado->attributes);
 			ad->comment=strdup(ado->comment);
-			ad->schema_locked=ado->schema_locked;
 			ad->transaction_persistent=ado->transaction_persistent;
 			ad->fast_forward=ado->fast_forward;
 			ad->__frontend=1;
@@ -324,10 +313,8 @@ int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _co
 		ad->sha1_pass=NULL;
 		ad->use_ssl=ado->use_ssl;
 		ad->default_hostgroup=ado->default_hostgroup;
-		ad->default_schema=strdup(ado->default_schema);
 		ad->attributes=strdup(ado->attributes);
 		ad->comment=strdup(ado->comment);
-		ad->schema_locked=ado->schema_locked;
 		ad->transaction_persistent=ado->transaction_persistent;
 		ad->fast_forward=ado->fast_forward;
 		ad->max_connections=ado->max_connections;
@@ -438,7 +425,6 @@ bool PgSQL_Authentication::del(char * username, enum cred_username_type usertype
 		free(ad->username);
 		free(ad->password);
 		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
-		free(ad->default_schema);
 		free(ad->attributes);
 		free(ad->comment);
 		free(ad);
@@ -507,7 +493,7 @@ bool PgSQL_Authentication::exists(char * username) {
 	return ret;
 }
 
-char * PgSQL_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes) {
+char * PgSQL_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes) {
 	char *ret=NULL;
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
@@ -529,8 +515,6 @@ char * PgSQL_Authentication::lookup(char * username, enum cred_username_type use
 		ret=l_strdup(ad->password);
 		if (use_ssl) *use_ssl=ad->use_ssl;
 		if (default_hostgroup) *default_hostgroup=ad->default_hostgroup;
-		if (default_schema) *default_schema=l_strdup(ad->default_schema);
-		if (schema_locked) *schema_locked=ad->schema_locked;
 		if (transaction_persistent) *transaction_persistent=ad->transaction_persistent;
 		if (fast_forward) *fast_forward=ad->fast_forward;
 		if (max_connections) *max_connections=ad->max_connections;
@@ -569,7 +553,6 @@ bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {
 			free(ad->username);
 			free(ad->password);
 			if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
-			free(ad->default_schema);
 			free(ad->comment);
 			free(ad->attributes);
 			//free(ad->scram_keys);
@@ -610,14 +593,11 @@ static uint64_t compute_accounts_hash(const umap_pgauth& accs_map) {
 			foundany = true;
 			acc_map_hash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
 			acc_map_hash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
-			acc_map_hash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
 			acc_map_hash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
 			acc_map_hash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
 			acc_map_hash.Update(&ad->max_connections,sizeof(ad->max_connections));
 			acc_map_hash.Update(ad->username,strlen(ad->username));
 			acc_map_hash.Update(ad->password,strlen(ad->password));
-			if (ad->default_schema)
-				acc_map_hash.Update(ad->default_schema,strlen(ad->default_schema));
 			if (ad->comment)
 				acc_map_hash.Update(ad->comment,strlen(ad->comment));
 			if (ad->attributes) {
@@ -676,15 +656,13 @@ static pair<umap_pgauth, umap_pgauth> extract_accounts_details(MYSQL_RES* result
 		acc_details->__active = true;
 		acc_details->use_ssl = strcmp(row[2], "1") == 0 ? true : false;
 		acc_details->default_hostgroup = atoi(row[3]);
-		acc_details->default_schema = row[4] ? row[4] : const_cast<char*>("");
-		acc_details->schema_locked = strcmp(row[5], "1") == 0 ? true : false;
-		acc_details->transaction_persistent = strcmp(row[6], "1") == 0 ? true : false;
-		acc_details->fast_forward = strcmp(row[7], "1") == 0 ? true : false;
-		acc_details->__backend = strcmp(row[8], "1") == 0 ? true : false;
-		acc_details->__frontend = strcmp(row[9], "1") == 0 ? true : false;
-		acc_details->max_connections = atoi(row[10]);
-		acc_details->attributes = row[11] ? row[11] : const_cast<char*>("");
-		acc_details->comment = row[12] ? row[12] : const_cast<char*>("");
+		acc_details->transaction_persistent = strcmp(row[4], "1") == 0 ? true : false;
+		acc_details->fast_forward = strcmp(row[5], "1") == 0 ? true : false;
+		acc_details->__backend = strcmp(row[6], "1") == 0 ? true : false;
+		acc_details->__frontend = strcmp(row[7], "1") == 0 ? true : false;
+		acc_details->max_connections = atoi(row[8]);
+		acc_details->attributes = row[9] ? row[9] : const_cast<char*>("");
+		acc_details->comment = row[10] ? row[10] : const_cast<char*>("");
 
 		return acc_details;
 	};
@@ -699,12 +677,12 @@ static pair<umap_pgauth, umap_pgauth> extract_accounts_details(MYSQL_RES* result
 		myhash.Final(&u_hash, &_u_hash2);
 
 		// is backend
-		if (strcmp(row[8], "1") == 0) {
+		if (strcmp(row[6], "1") == 0) {
 			pgsql_account_details_t* acc_details = create_account_details(row);
 			b_accs_map.insert({u_hash, acc_details});
 		}
 		// is frontend
-		if (strcmp(row[9], "1") == 0) {
+		if (strcmp(row[7], "1") == 0) {
 			pgsql_account_details_t* acc_details = create_account_details(row);
 			f_accs_map.insert({u_hash, acc_details});
 		}

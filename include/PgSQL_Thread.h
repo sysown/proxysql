@@ -26,6 +26,14 @@ enum class AUTHENTICATION_METHOD {
 	SASL_SCRAM_SHA_256_PLUS
 };
 
+constexpr const char* AUTHENTICATION_METHOD_STR[] = {
+	"NO_PASSWORD",
+	"CLEAR_TEXT_PASSWORD",
+	"MD5_PASSWORD",
+	"SASL_SCRAM_SHA_256",
+	"SASL_SCRAM_SHA_256_PLUS"
+};
+
 /*
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
@@ -120,7 +128,6 @@ private:
 	PgSQL_Connection** my_idle_conns;
 	bool processing_idles;
 	//bool maintenance_loop;
-	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray* cached_connections;
 
@@ -690,9 +697,9 @@ public:
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();
 #endif // IDLE_THREADS
-	unsigned long long get_mysql_backend_buffers_bytes();
-	unsigned long long get_mysql_frontend_buffers_bytes();
-	unsigned long long get_mysql_session_internal_bytes();
+	unsigned long long get_pgsql_backend_buffers_bytes();
+	unsigned long long get_pgsql_frontend_buffers_bytes();
+	unsigned long long get_pgsql_session_internal_bytes();
 	iface_info* MLM_find_iface_from_fd(int fd) {
 		return MLM->find_iface_from_fd(fd);
 	}

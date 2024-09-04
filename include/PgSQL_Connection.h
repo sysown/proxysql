@@ -1,6 +1,6 @@
 #ifndef __CLASS_PGSQL_CONNECTION_H
 #define __CLASS_PGSQL_CONNECTION_H
-
+#include "libpq-fe.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
@@ -9,7 +9,6 @@
 #define PROXYJSON
 namespace nlohmann { class json; }
 #endif // PROXYJSON
-
 
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
@@ -291,7 +290,7 @@ class PgSQL_Connection_userinfo {
 	~PgSQL_Connection_userinfo();
 	void set(char *, char *, char *, char *);
 	void set(PgSQL_Connection_userinfo *);
-	bool set_dbname(char *, int);
+	bool set_dbname(const char *);
 };
 
 class PgSQL_Connection_Placeholder {
@@ -368,8 +367,8 @@ class PgSQL_Connection_Placeholder {
 	bytes_stats_t bytes_info; // bytes statistics
 	struct {
 		unsigned long long questions;
-		unsigned long long myconnpoll_get;
-		unsigned long long myconnpoll_put;
+		unsigned long long pgconnpoll_get;
+		unsigned long long pgconnpoll_put;
 	} statuses;
 
 	unsigned long largest_query_length;
@@ -547,7 +546,7 @@ public:
 	}
 
 	inline
-		const char* get_error_code_str() const {
+	const char* get_error_code_str() const {
 		return error_info.sqlstate;
 	}
 
@@ -595,6 +594,36 @@ public:
 	void next_multi_statement_result(PGresult* result);
 	bool set_single_row_mode();
 	void optimize() {}
+	void update_bytes_recv(uint64_t bytes_recv);
+	void update_bytes_sent(uint64_t bytes_sent);
+
+	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
+	inline int get_pg_server_version() { return PQserverVersion(pgsql_conn); }
+	inline int get_pg_protocol_version() { return PQprotocolVersion(pgsql_conn); }
+	inline const char* get_pg_host() { return PQhost(pgsql_conn); }
+	inline const char* get_pg_hostaddr() { return PQhostaddr(pgsql_conn); }
+	inline const char* get_pg_port() { return PQport(pgsql_conn); }
+	inline const char* get_pg_dbname() { return PQdb(pgsql_conn); }
+	inline const char* get_pg_user() { return PQuser(pgsql_conn); }
+	inline const char* get_pg_password() { return PQpass(pgsql_conn); }
+	inline const char* get_pg_options() { return PQoptions(pgsql_conn); }
+	inline int get_pg_socket_fd() { return PQsocket(pgsql_conn); }
+	inline int get_pg_backend_pid() { return PQbackendPID(pgsql_conn); }
+	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
+	inline int get_pg_connection_used_password() { return PQconnectionUsedPassword(pgsql_conn); }
+	inline int get_pg_connection_used_gssapi() { return PQconnectionUsedGSSAPI(pgsql_conn); }
+	inline int get_pg_client_encoding() { return PQclientEncoding(pgsql_conn); }
+	inline int get_pg_ssl_in_use() { return PQsslInUse(pgsql_conn); }
+	inline ConnStatusType get_pg_connection_status() { return PQstatus(pgsql_conn); }
+	inline PGTransactionStatusType get_pg_transaction_status() { return PQtransactionStatus(pgsql_conn); }
+	inline int get_pg_is_nonblocking() { return PQisnonblocking(pgsql_conn); }
+	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
+	inline const char* get_pg_error_message() { return PQerrorMessage(pgsql_conn); }
+	const char* get_pg_server_version_str(char* buff, int buff_size);
+	const char* get_pg_connection_status_str();
+	const char* get_pg_transaction_status_str();
+
+	unsigned int get_memory_usage() const;
 
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
