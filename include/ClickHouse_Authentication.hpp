@@ -25,6 +25,11 @@ typedef struct _ch_account_details_t {
 	bool __active;
 } ch_account_details_t;
 
+struct ch_dup_account_details_t {
+	bool default_schema;
+	bool sha1_pass;
+};
+
 typedef std::map<uint64_t, ch_account_details_t *> ch_umap_auth;
 #endif  // CH_ACCOUNT_DETAILS_T
 
@@ -72,6 +77,7 @@ class ClickHouse_Authentication {
 	             bool *use_ssl, int *default_hostgroup, char **default_schema,
 	             bool *schema_locked, bool *transaction_persistent,
 	             bool *fast_forward, int *max_connections, void **sha1_pass);
+	ch_account_details_t lookup(char* username, enum cred_username_type usertype, const ch_dup_account_details_t& dup_details);
 	int dump_all_users(ch_account_details_t ***, bool _complete = true);
 	int increase_frontend_user_connections(char *username, int *mc = NULL);
 	void decrease_frontend_user_connections(char *username);

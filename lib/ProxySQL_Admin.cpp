@@ -5702,7 +5702,6 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 			} else {
 				password=(char *)"";
 			}
-//			}
 
 			std::vector<enum cred_username_type> usertypes {};
 			char* max_connections = nullptr;

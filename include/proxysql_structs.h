@@ -781,6 +781,14 @@ struct _mysql_session_t {
 	int net_failure;
 };
 
+// Enum for primary/secondary password
+struct PASSWORD_TYPE {
+	enum E {
+		PRIMARY = 0,
+		ADDITIONAL = 1
+	};
+};
+
 #endif /* PROXYSQL_STRUCTS */
 
 #ifndef EXTERN

@@ -4427,9 +4427,27 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Connections
+		pta[0]=(char *)"Client_Connections_connected_prim_pass";
+		sprintf(buf,"%d",MyHGM->status.client_connections_prim_pass);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Connections
+		pta[0]=(char *)"Client_Connections_connected_addl_pass";
+		sprintf(buf,"%d",MyHGM->status.client_connections_addl_pass);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Connections created
 		pta[0]=(char *)"Client_Connections_created";
 		sprintf(buf,"%lu",MyHGM->status.client_connections_created);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Connections created using cached 'clear_text_passwords'
+		pta[0]=(char *)"Client_Connections_sha2cached";
+		sprintf(buf,"%lu",MyHGM->status.client_connections_sha2cached);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

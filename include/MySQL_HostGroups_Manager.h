@@ -25,7 +25,7 @@
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
 #ifdef DEBUG
@@ -423,6 +423,7 @@ struct p_hg_counter {
 		server_connections_aborted,
 		client_connections_created,
 		client_connections_aborted,
+		client_connections_sha2cached,
 		com_autocommit,
 		com_autocommit_filtered,
 		com_rollback,
@@ -455,6 +456,8 @@ struct p_hg_gauge {
 	enum metric {
 		server_connections_connected = 0,
 		client_connections_connected,
+		client_connections_connected_prim,
+		client_connections_connected_addl,
 		__size
 	};
 };
@@ -813,7 +816,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		pthread_cond_t servers_table_version_cond;
 		unsigned long client_connections_aborted;
 		unsigned long client_connections_created;
+		unsigned long client_connections_sha2cached;
 		int client_connections;
+		int client_connections_prim_pass;
+		int client_connections_addl_pass;
 		unsigned long server_connections_aborted;
 		unsigned long server_connections_created;
 		unsigned long server_connections_delayed;
