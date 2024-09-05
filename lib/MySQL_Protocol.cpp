@@ -1415,6 +1415,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		(*myds)->sess->user_attributes = nullptr;
 	}
 	(*myds)->sess->user_attributes=account_details.attributes;
+	account_details.attributes = nullptr;
 	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
 	if (password==NULL) {
