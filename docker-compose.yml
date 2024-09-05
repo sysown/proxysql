@@ -179,6 +179,34 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  fedora41_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-fedora41-v2.7.1
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=fedora41
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora41_clang_build:
+    extends:
+      service: fedora41_build
+    image: proxysql/packaging:build-clang-fedora41-v2.7.1
+    environment:
+      - PKG_RELEASE=fedora41-clang
+
+  fedora41_dbg_build:
+    extends:
+      service: fedora41_build
+    environment:
+      - PKG_RELEASE=dbg-fedora41
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   debian10_build:
     extends:
