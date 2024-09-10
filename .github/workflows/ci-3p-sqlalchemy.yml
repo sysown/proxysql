@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         testdist: [ 'debian11' ]
-        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
 #        infradb: [ 'mysql57' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
@@ -99,7 +99,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_sqlalchemy
-        FAILS=$(cat logs/*run-tests.log | grep -oP '^===== \d+ failed, ' | awk '{ print $2 }')
+        FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
           echo "Baseline '${BASELINE}' WARN: no results found"
           exit 0
