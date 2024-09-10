@@ -68,11 +68,14 @@ jobs:
       run: |
         set +e
 
-        git config --system --add safe.directory '*'
+        #git config --system --add safe.directory '*'
         cd proxysql_3p_testing/
-        git sparse-checkout list
-        BRANCH=${{ github.sha }} ./setup.sh test_sqlalchemy/sqlalchemy
-        ln -fsT ../proxysql proxysql
+        #git sparse-checkout list
+        #BRANCH=${{ github.sha }} ./setup.sh proxysql test_sqlalchemy/sqlalchemy
+        ./setup.sh test_sqlalchemy/sqlalchemy
+        #ln -fsT ../proxysql proxysql
+        rm -rf ./proxysql
+        mv ../proxysql .
         #(cd proxysql && git switch v2.7 && git pull && git pull --tags && git describe --tags)
         
         # extend timout
