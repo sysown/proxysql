@@ -39,7 +39,7 @@ jobs:
         sparse-checkout: |
           infra-docker-hoster
           test_sqlalchemy
-          proxysql
+#          proxysql
 
     - name: Wait for cache
       env:
@@ -71,7 +71,8 @@ jobs:
         git config --system --add safe.directory '*'
         cd proxysql_3p_testing/
         git sparse-checkout list
-        ./setup.sh proxysql test_sqlalchemy/sqlalchemy
+        BRANCH=${{ github.sha }} ./setup.sh test_sqlalchemy/sqlalchemy
+        ln -fsT ../proxysql proxysql
         #(cd proxysql && git switch v2.7 && git pull && git pull --tags && git describe --tags)
         
         # extend timout
