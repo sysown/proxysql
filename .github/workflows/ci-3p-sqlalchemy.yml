@@ -95,13 +95,16 @@ jobs:
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
           echo "Baseline '${BASELINE}' WARN: no results found"
+          echo "Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_STEP_SUMMARY
           exit 0
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
           echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
+          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
           exit 1
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
+          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
           MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }} -b "${FAILS}"
