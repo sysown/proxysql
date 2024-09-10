@@ -100,6 +100,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_sqlalchemy
+        cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, '
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
           echo "Baseline '${BASELINE}' WARN: no results found"
