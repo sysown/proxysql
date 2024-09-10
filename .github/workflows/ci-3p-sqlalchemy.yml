@@ -118,7 +118,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_sqlalchemy/logs
           
