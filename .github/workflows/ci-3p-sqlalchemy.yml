@@ -68,7 +68,7 @@ jobs:
       run: |
         set +e
 
-        git config --system --add safe.directory *
+        git config --system --add safe.directory '*'
         cd proxysql_3p_testing/
         git sparse-checkout list
         ./setup.sh proxysql test_sqlalchemy/sqlalchemy
