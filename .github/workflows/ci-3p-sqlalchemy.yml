@@ -37,6 +37,7 @@ jobs:
         path: 'proxysql_3p_testing'
         token: ${{ secrets.GH_TOKEN }}
         sparse-checkout: |
+          infra-docker-hoster
           test_sqlalchemy
           proxysql
 
@@ -70,25 +71,25 @@ jobs:
         git config --system --add safe.directory *
         cd proxysql_3p_testing/
         git sparse-checkout list
-        ./setup.sh test_sqlalchemy/sqlalchemy
-        (cd proxysql && git switch v2.7 && git pull && git pull --tags && git describe --tags)
+        ./setup.sh proxysql test_sqlalchemy/sqlalchemy
+        #(cd proxysql && git switch v2.7 && git pull && git pull --tags && git describe --tags)
         
         # extend timout
         cd test_sqlalchemy
-        sed -i 's/timeout -v -s1 800 //' run-tests.bash
+        #sed -i 's/timeout -v -s1 800 //' run-tests.bash
         
         # set tested database infra
-        sed -i '/^#\?fn_test_direct [^({]/ d' run-tests.bash
-        sed -i '/^#\?fn_test_proxysql [^({]/ d' run-tests.bash
-        sed -i '/^#\?fn_test_proxysql_dev [^({]/ d' run-tests.bash
-        sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
+        #sed -i '/^#\?fn_test_direct [^({]/ d' run-tests.bash
+        #sed -i '/^#\?fn_test_proxysql [^({]/ d' run-tests.bash
+        #sed -i '/^#\?fn_test_proxysql_dev [^({]/ d' run-tests.bash
+        #sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
         
     - name: Run tests
       run: |
         set +e
         
         cd proxysql_3p_testing/test_sqlalchemy
-        ./run-tests.bash test/dialect
+        DB=${{ matrix.infradb }} ./run-tests.bash test/dialect
         RC=$?
         
         #sudo chmod -R 777 ${{ github.workspace }}/*
@@ -109,7 +110,8 @@ jobs:
           exit 1
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          if [[ ${{ github.ref_name }} == v2.x ]]; then
+          MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
+          if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }} -b "${FAILS}"
           fi
         fi
