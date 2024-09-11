@@ -6,9 +6,6 @@ on:
 
 env:
   TESTNAME: sqlalchemy
-#  TESTDIST: debian11
-#  INFRADB:  mysql57
-#  BASELINE: ${{ vars.BASELINE_3P_SQLALCHEMY }}
 
 jobs:
   test:
@@ -18,14 +15,14 @@ jobs:
       matrix:
         testdist: [ 'debian12' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
-        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
-        connector: [ 'mysql+pymysql', 'mysql+mysqldb', 'mysql+aiomysql', 'mysql+asyncmy', 'mariadb+mysqldb', 'mariadb+mariadbconnector' ]
+        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
+        connector: [ 'pymysql', 'mysqldb', 'aiomysql', 'asyncmy', 'mariadbconnector' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
       BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
-      BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}', matrix.infradb)] }}
+      BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}_{1}', matrix.infradb, matrix.connector)] }}
 
     steps:
         
@@ -108,7 +105,7 @@ jobs:
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
           MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }} -b "${FAILS}"
+            gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
     
@@ -116,7 +113,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_sqlalchemy/logs
           
