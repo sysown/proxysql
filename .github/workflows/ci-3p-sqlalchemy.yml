@@ -19,13 +19,11 @@ jobs:
         testdist: [ 'debian12' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
-        include:
-        - infradb: 'mysql57'
-          connector: [ 'pymysql', 'mysqldb' ]
+        connector: [ 'mysql+pymysql', 'mysql+mysqldb', 'mysql+aiomysql', 'mysql+asyncmy', 'mariadb+mysqldb', 'mariadb+mariadbconnector' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
+      CONNECTOR: ${{ matrix.connector }}
       BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
       BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}', matrix.infradb)] }}
 
@@ -82,8 +80,8 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/test_sqlalchemy
-        #DB=${{ matrix.infradb }} ./run-tests.bash test/dialect
-        DB=${{ matrix.infradb }} ./run-tests.bash
+        #DB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
+        DB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
         RC=$?
         
         #sudo chmod -R 777 ${{ github.workspace }}/*
