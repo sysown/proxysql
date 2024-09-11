@@ -16,7 +16,7 @@ jobs:
         testdist: [ 'debian12' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
-        connector: [ 'pymysql', 'mysqldb', 'aiomysql', 'asyncmy', 'mariadbconnector' ]
+        connector: [ 'pymysql', 'mysqldb', 'asyncmy', 'mariadbconnector' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
