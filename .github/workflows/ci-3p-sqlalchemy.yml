@@ -6,6 +6,7 @@ on:
 
 env:
   TESTNAME: sqlalchemy
+  TESTDIST: 'debian12'
 
 jobs:
   test:
@@ -13,15 +14,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'debian12' ]
+#        testdist: [ 'debian12' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
         connector: [ 'pymysql', 'mysqldb', 'asyncmy', 'mariadbconnector' ]
     env:
-      TESTDIST: ${{ matrix.testdist }}
+#      TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
-      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
+#      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
+      BLDCACHE: ${{ github.sha }}_${{ env.TESTDIST }}_bin
       BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}_{1}', matrix.infradb, matrix.connector)] }}
 
     steps:
