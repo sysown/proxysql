@@ -1,0 +1,120 @@
+name: CI-3p-sqlalchemy_mysql
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  TESTNAME: sqlalchemy
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        testdist: [ 'debian12' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
+        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
+        connector: [ 'pymysql', 'mysqldb', 'aiomysql', 'asyncmy', 'mariadbconnector' ]
+    env:
+      TESTDIST: ${{ matrix.testdist }}
+      INFRADB:  ${{ matrix.infradb }}
+      CONNECTOR: ${{ matrix.connector }}
+      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
+      BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}_{1}', matrix.infradb, matrix.connector)] }}
+
+    steps:
+        
+    - name: Checkout proxysql_3p_testing
+      uses: actions/checkout@v4
+      with:
+        repository: 'proxysql/proxysql_3p_testing'
+        ref: 'main'
+        fetch-depth: 1
+        path: 'proxysql_3p_testing'
+        token: ${{ secrets.GH_TOKEN }}
+        sparse-checkout: |
+          infra-docker-hoster
+          test_sqlalchemy
+#          proxysql
+
+    - name: Wait for cache
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
+      run: |
+        echo "BASELINE: '${BASELINE}'"
+        echo "Wating for cache '${BLDCACHE}' ..."
+        sleep $(( $RANDOM / 1024 ))
+        PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+        while [[ -z ${PROBE} ]]; do
+          echo "Wating for cache '${BLDCACHE}' ..."
+          sleep 30
+          PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+        done
+        echo "Cache available '${BLDCACHE}'"
+
+    - name: Cache restore bin
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ env.BLDCACHE }}
+        fail-on-cache-miss: true
+        path: |
+          proxysql/binaries/
+        
+    - name: Prepare
+      run: |
+        set +e
+
+        cd proxysql_3p_testing/
+        ./setup.sh test_sqlalchemy/sqlalchemy
+
+        # use cached build
+        rm -rf ./proxysql  && mv ../proxysql .
+                
+    - name: Run tests
+      run: |
+        set +e
+        
+        cd proxysql_3p_testing/test_sqlalchemy
+        #DB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
+        DB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
+        RC=$?
+        
+        #sudo chmod -R 777 ${{ github.workspace }}/*
+        exit $RC
+        
+    - name: Check baseline
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
+      run: |
+        cd proxysql_3p_testing/test_sqlalchemy
+        cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, '
+        FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
+        if [[ -z ${FAILS} ]]; then
+          echo "Baseline '${BASELINE}' WARN: no results found"
+          echo "Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_STEP_SUMMARY
+          exit 0
+        fi
+        if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
+          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
+          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        else
+          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
+          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
+          if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
+            gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
+          fi
+        fi
+    
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
+        path: |
+          proxysql_3p_testing/test_sqlalchemy/logs
+          
+          
