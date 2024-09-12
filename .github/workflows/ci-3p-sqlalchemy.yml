@@ -80,8 +80,8 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/test_sqlalchemy
-        #INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
-        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
+        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
+        #INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
         RC=$?
         
         #sudo chmod -R 777 ${{ github.workspace }}/*
