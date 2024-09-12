@@ -15,8 +15,9 @@ jobs:
       fail-fast: false
       matrix:
 #        testdist: [ 'debian12' ]
-#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
-        infradb: [ 'mariadb10', 'mariadb11' ]
+#       # https://mariadb.com/kb/en/mariadb-server-release-dates/
+        infradb: [ 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
+#        infradb: [ 'mariadb10', 'mariadb11' ]
         connector: [ 'pymysql', 'mysqldb', 'asyncmy', 'mariadbconnector' ]
     env:
 #      TESTDIST: ${{ matrix.testdist }}
@@ -74,6 +75,10 @@ jobs:
 
         # use cached build
         rm -rf ./proxysql  && mv ../proxysql .
+
+        # set minor DB image version
+        #sed -i "s/${INFRADB#.*}/${INFRADB}/" ./test_sqlalchemy/docker-compose.yml
+        sed -i "/image: ${INFRADB/[0-9]*/}:/ s/:[0-9].*/:${INFRADB/*[a-z]/}/" ./test_sqlalchemy/docker-compose.yml
                 
     - name: Run tests
       run: |
@@ -81,7 +86,7 @@ jobs:
         
         cd proxysql_3p_testing/test_sqlalchemy
         #INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
-        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
+        INFRADB=${INFRADB%.*} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
         RC=$?
         
         #sudo chmod -R 777 ${{ github.workspace }}/*
