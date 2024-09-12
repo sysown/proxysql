@@ -106,11 +106,12 @@ jobs:
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
-          MAIN=$(cd ./proxysql && git remote show origin | grep -Po '(?<=HEAD branch: ).*')
-          echo "Setting new BASELINE: ${FAILS} for '${MAIN}'"
+          #MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
+          #MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
+          MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             echo "Setting new BASELINE: ${FAILS} for '${MAIN}'"
-            gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
+            gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
     
