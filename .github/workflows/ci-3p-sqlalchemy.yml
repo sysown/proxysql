@@ -1,4 +1,4 @@
-name: CI-3p-sqlalchemy
+xname: CI-3p-sqlalchemy
 
 on:
   workflow_dispatch:
@@ -95,22 +95,22 @@ jobs:
         cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, '
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
-          echo "Baseline '${BASELINE}' WARN: no results found"
-          echo "Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_STEP_SUMMARY
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found"
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_STEP_SUMMARY
           exit 0
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
-          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
-          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
           exit 1
         else
-          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
           #MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
           #MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
           MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
-            echo "Setting new BASELINE: ${FAILS} for '${MAIN}'"
+            echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Setting new BASELINE: ${FAILS} for '${MAIN}'"
             gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
