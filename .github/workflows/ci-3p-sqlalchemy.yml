@@ -23,7 +23,8 @@ jobs:
       INFRADB:  ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
 #      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
-      BLDCACHE: ${{ github.sha }}_${{ env.TESTDIST }}_bin
+#      BLDCACHE: ${{ github.sha }}_${{ env.TESTDIST }}_bin
+      BLDCACHE: ${{ github.sha }}_debian12_bin
       BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}_{1}', matrix.infradb, matrix.connector)] }}
 
     steps:
