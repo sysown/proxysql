@@ -106,7 +106,7 @@ jobs:
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
-          MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
+          MAIN=$(cd ./proxysql && git remote show origin | grep -Po '(?<=HEAD branch: ).*')
           echo "Setting new BASELINE: ${FAILS} for '${MAIN}'"
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             echo "Setting new BASELINE: ${FAILS} for '${MAIN}'"
