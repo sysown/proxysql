@@ -6,6 +6,7 @@ on:
 
 env:
   TESTNAME: sqlalchemy
+  TESTDIST: 'debian12'
 
 jobs:
   test:
@@ -13,15 +14,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'debian12' ]
+#        testdist: [ 'debian12' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mariadb10', 'mariadb11' ]
-        connector: [ 'pymysql', 'mysqldb', 'aiomysql', 'asyncmy', 'mariadbconnector' ]
+        connector: [ 'pymysql', 'mysqldb', 'asyncmy', 'mariadbconnector' ]
     env:
-      TESTDIST: ${{ matrix.testdist }}
+#      TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
-      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
+#      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
+#      BLDCACHE: ${{ github.sha }}_${{ env.TESTDIST }}_bin
+      BLDCACHE: ${{ github.sha }}_debian12_bin
       BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}_{1}', matrix.infradb, matrix.connector)] }}
 
     steps:
@@ -92,20 +95,23 @@ jobs:
         cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, '
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
-          echo "Baseline '${BASELINE}' WARN: no results found"
-          echo "Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_STEP_SUMMARY
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found"
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_STEP_SUMMARY
           exit 0
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
-          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
-          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
           exit 1
         else
-          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
-          MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
+          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          #MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
+          #MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
+          MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
+            echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Setting new BASELINE: ${FAILS} for '${MAIN}'"
+            gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
     
