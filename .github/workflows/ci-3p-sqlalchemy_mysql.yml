@@ -1,4 +1,4 @@
-name: CI-3p-sqlalchemy
+name: CI-3p-sqlalchemy_mysql
 
 on:
   workflow_dispatch:
