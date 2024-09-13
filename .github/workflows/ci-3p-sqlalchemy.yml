@@ -99,16 +99,16 @@ jobs:
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found"
-          echo "SUMMARY=\${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_OUTPUT
+          echo "SUMMARY=INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_ENV
           exit 0
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
-          echo "SUMMARY=\${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
+          echo "SUMMARY=INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_ENV
           exit 1
         else
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          echo "SUMMARY=\${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
+          echo "SUMMARY=INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_ENV
           #MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
           #MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
           MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
@@ -118,6 +118,14 @@ jobs:
           fi
         fi
     
+    - name: Summary accumulator
+      uses: cloudposse/github-action-matrix-outputs-write@v1
+      id: out
+      with:
+        matrix-step-name: ${{ github.job }}
+        matrix-key: ${{ matrix.infradb }}_${{ matrix.connector }}
+        outputs: $SUMMARY
+      
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
@@ -131,6 +139,12 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [ test ]
     steps:
-    - name: Summarize tests
-      run:
-        echo "${{ needs.test.outputs.SUMMARY }}" >> $GITHUB_STEP_SUMMARY
+      - name: Collect summary
+        uses: cloudposse/github-action-matrix-outputs-read@v1
+        id: collect
+        with:
+          matrix-step-name: test
+      
+      - name: Output summary
+        run:
+          echo "${{ steps.collect.outputs.result }}" >> $GITHUB_STEP_SUMMARY
