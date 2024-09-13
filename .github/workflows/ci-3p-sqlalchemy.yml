@@ -99,16 +99,16 @@ jobs:
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found"
-          echo "SUMMARY=$${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_OUTPUT
+          echo "SUMMARY=\${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_OUTPUT
           exit 0
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
-          echo "SUMMARY=$${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
+          echo "SUMMARY=\${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
           exit 1
         else
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          echo "SUMMARY=$${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
+          echo "SUMMARY=\${SUMMARY}\nINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
           #MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
           #MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
           MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
