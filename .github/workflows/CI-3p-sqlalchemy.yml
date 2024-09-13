@@ -20,7 +20,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run:
-    uses: sysown/proxysql/.github/workflows/ci-3p-sqlalchemy.yml@GH-Actions
+  run-mysql:
+    uses: sysown/proxysql/.github/workflows/ci-3p-sqlalchemy_mysql.yml@GH-Actions
     secrets: inherit
-    
+  run-mariadb:
+    uses: sysown/proxysql/.github/workflows/ci-3p-sqlalchemy_mariadb.yml@GH-Actions
+    secrets: inherit
+      
