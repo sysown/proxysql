@@ -114,7 +114,7 @@ jobs:
             gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
-        SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':'${BASELINE:-10000}','FAILS':'${FAILS:-NAN}'}"
+        SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':${BASELINE:-10000},'FAILS':${FAILS:-1}}"
         #echo "SUMMARY="${SUM//\'/\"}
         echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
         #echo ${SUMMARY}
@@ -152,4 +152,4 @@ jobs:
         run:
           #echo '${{ steps.collect.outputs.result }}'
           #echo '${{ steps.collect.outputs.result }}' | jq
-          echo '${{ steps.collect.outputs.result }}' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.collect.outputs.result }}'  | jq -c '.[]' | sort >> $GITHUB_STEP_SUMMARY
