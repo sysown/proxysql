@@ -82,8 +82,8 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/test_sqlalchemy
-        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
-        #INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
+        #INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
+        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
         RC=$?
         
         #sudo chmod -R 777 ${{ github.workspace }}/*
@@ -115,10 +115,7 @@ jobs:
           fi
         fi
         SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':${BASELINE:-10000},'FAILS':${FAILS:-1}}"
-        #echo "SUMMARY="${SUM//\'/\"}
         echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
-        #echo ${SUMMARY}
-        #echo ${SUMMARY} | jq
         exit $RC
     
     - name: Summary output
@@ -150,6 +147,5 @@ jobs:
       
       - name: Output summary
         run:
-          #echo '${{ steps.collect.outputs.result }}'
-          #echo '${{ steps.collect.outputs.result }}' | jq
-          echo '${{ steps.collect.outputs.result }}'  | jq -c '.[]' | sort >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.collect.outputs.result }}' | jq -c '.[]' | sort
+          echo '${{ steps.collect.outputs.result }}' | jq -c '.[]' | sort >> $GITHUB_STEP_SUMMAR
