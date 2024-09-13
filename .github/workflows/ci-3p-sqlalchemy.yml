@@ -95,30 +95,33 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_sqlalchemy
-        cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, '
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
+        STATUS='PASS'
+        RC=0
         if [[ -z ${FAILS} ]]; then
-          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found"
-          echo "SUMMARY={STATUS:'ERROR',INFRADB:'${INFRADB}',CONNECTOR:'${CONNECTOR}',BASELINE:'${BASELINE:-10000}',FAILS:'${FAILS:-NAN}'}" | sed 's/\'/\"/g' >> $GITHUB_ENV
-          exit 0
+          STATUS='ERROR'
+          RC=1
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
-          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
-          echo "SUMMARY={STATUS:'FAIL',INFRADB:'${INFRADB}',CONNECTOR:'${CONNECTOR}',BASELINE:'${BASELINE:-10000}',FAILS:'${FAILS}'}" | sed 's/\'/\"/g' >> $GITHUB_ENV
-          exit 1
+          STATUS='FAIL'
+          RC=1
         else
-          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          echo "SUMMARY={STATUS:'PASS',INFRADB:'${INFRADB}',CONNECTOR:'${CONNECTOR}',BASELINE:'${BASELINE:-10000}',FAILS:'${FAILS}'}" | sed 's/\'/\"/g' >> $GITHUB_ENV
           #MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
-          #MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
-          MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
+          MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
+          #MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Setting new BASELINE: ${FAILS} for '${MAIN}'"
             gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
+        SUMMARY="{STATUS:'${STATUS}',INFRADB:'${INFRADB}',CONNECTOR:'${CONNECTOR}',BASELINE:'${BASELINE:-10000}',FAILS:'${FAILS:-NAN}'}"
+        SUMMARY=$(echo ${SUMMARY} | sed 's/\'/\"/g')
+        echo "SUMMARY='${SUMMARY}'"
+        echo "SUMMARY='${SUMMARY}'" >> $GITHUB_ENV
+        exit $RC
     
     - name: Summary output
+      if: ${{ !cancelled() }}
       uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@0.14.0
       with:
         value: ${{ env.SUMMARY }}
