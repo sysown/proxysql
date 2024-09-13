@@ -119,7 +119,7 @@ jobs:
         fi
     
     - name: Summary output
-      uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@v0.14.0
+      uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@0.14.0
       with:
         value: $SUMMARY
         artifact-name: "summary"
