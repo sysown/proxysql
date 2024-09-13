@@ -117,8 +117,8 @@ jobs:
         SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':'${BASELINE:-10000}','FAILS':'${FAILS:-NAN}'}"
         echo "SUMMARY="${SUM//\'/\"}
         echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
-        echo "${SUMMARY}"
-        echo "${SUMMARY}" | jq
+        echo ${SUMMARY}
+        echo ${SUMMARY} | jq
         exit $RC
     
     - name: Summary output
