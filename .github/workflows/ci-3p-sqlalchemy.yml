@@ -118,13 +118,11 @@ jobs:
           fi
         fi
     
-    - name: Summary accumulator
-      uses: cloudposse/github-action-matrix-outputs-write@v1
-      id: out
+    - name: Summary output
+      uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@v0.7.5
       with:
-        matrix-step-name: ${{ github.job }}
-        matrix-key: ${{ matrix.infradb }}_${{ matrix.connector }}
-        outputs: $SUMMARY
+        value: $SUMMARY
+        artifact-name: "summary"
       
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
@@ -140,10 +138,11 @@ jobs:
     needs: [ test ]
     steps:
       - name: Collect summary
-        uses: cloudposse/github-action-matrix-outputs-read@v1
         id: collect
+        uses: hoverkraft-tech/ci-github-common/actions/get-matrix-outputs
         with:
-          matrix-step-name: test
+          artifact-name: "summary"
+          remove-artifact: true
       
       - name: Output summary
         run:
