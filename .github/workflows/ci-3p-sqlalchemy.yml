@@ -150,6 +150,6 @@ jobs:
       
       - name: Output summary
         run:
-          echo "${{ steps.collect.outputs.result }}"
-          echo "${{ steps.collect.outputs.result }}" | jq
-          echo "${{ steps.collect.outputs.result }}" >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.collect.outputs.result }}'
+          echo '${{ steps.collect.outputs.result }}' | jq
+          echo '${{ steps.collect.outputs.result }}' >> $GITHUB_STEP_SUMMARY
