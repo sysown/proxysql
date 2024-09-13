@@ -121,7 +121,7 @@ jobs:
     - name: Summary output
       uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@0.14.0
       with:
-        value: $SUMMARY
+        value: ${{ env.SUMMARY }}
         artifact-name: "summary"
       
     - name: Archive artifacts logs
