@@ -114,9 +114,9 @@ jobs:
             gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
-        SUMMARY="{STATUS:'${STATUS}',INFRADB:'${INFRADB}',CONNECTOR:'${CONNECTOR}',BASELINE:'${BASELINE:-10000}',FAILS:'${FAILS:-NAN}'}"
-        echo "SUMMARY="${SUMMARY//\'/\"}
-        echo "SUMMARY="${SUMMARY//\'/\"} >> $GITHUB_ENV
+        SUMMARY="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':'${BASELINE:-10000}','FAILS':'${FAILS:-NAN}'}"
+        echo "SUMMARY="${SUMMARY//\'/\\\"}
+        echo "SUMMARY="${SUMMARY//\'/\\\"} >> $GITHUB_ENV
         exit $RC
     
     - name: Summary output
