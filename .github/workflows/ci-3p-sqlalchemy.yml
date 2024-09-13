@@ -115,7 +115,7 @@ jobs:
           fi
         fi
         SUMMARY="{STATUS:'${STATUS}',INFRADB:'${INFRADB}',CONNECTOR:'${CONNECTOR}',BASELINE:'${BASELINE:-10000}',FAILS:'${FAILS:-NAN}'}"
-        SUMMARY=$(echo ${SUMMARY} | sed 's/\'/\"/g')
+        SUMMARY="$(echo ${SUMMARY} | sed 's/\'/\"/g')"
         echo "SUMMARY='${SUMMARY}'"
         echo "SUMMARY='${SUMMARY}'" >> $GITHUB_ENV
         exit $RC
