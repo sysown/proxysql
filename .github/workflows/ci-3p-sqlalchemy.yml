@@ -114,9 +114,11 @@ jobs:
             gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
-        SUMMARY="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':'${BASELINE:-10000}','FAILS':'${FAILS:-NAN}'}"
-        echo "SUMMARY="${SUMMARY//\'/\\\"}
-        echo "SUMMARY="${SUMMARY//\'/\\\"} >> $GITHUB_ENV
+        SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':'${BASELINE:-10000}','FAILS':'${FAILS:-NAN}'}"
+        echo "SUMMARY="${SUM//\'/\"}
+        echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
+        echo "${SUMMARY}"
+        echo "${SUMMARY}" | jq
         exit $RC
     
     - name: Summary output
@@ -148,4 +150,6 @@ jobs:
       
       - name: Output summary
         run:
+          echo "${{ steps.collect.outputs.result }}"
+          echo "${{ steps.collect.outputs.result }}" | jq
           echo "${{ steps.collect.outputs.result }}" >> $GITHUB_STEP_SUMMARY
