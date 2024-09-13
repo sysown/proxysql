@@ -115,8 +115,8 @@ jobs:
           fi
         fi
         SUMMARY="{STATUS:'${STATUS}',INFRADB:'${INFRADB}',CONNECTOR:'${CONNECTOR}',BASELINE:'${BASELINE:-10000}',FAILS:'${FAILS:-NAN}'}"
-        echo "SUMMARY='${SUMMARY}'"
-        echo "SUMMARY='${SUMMARY/'/\\\"}'" >> $GITHUB_ENV
+        echo SUMMARY='${SUMMARY/'/"}'
+        echo SUMMARY='${SUMMARY/'/\\\"}' >> $GITHUB_ENV
         exit $RC
     
     - name: Summary output
