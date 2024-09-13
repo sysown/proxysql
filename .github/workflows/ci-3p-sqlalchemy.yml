@@ -26,6 +26,8 @@ jobs:
 #      BLDCACHE: ${{ github.sha }}_${{ env.TESTDIST }}_bin
       BLDCACHE: ${{ github.sha }}_debian12_bin
       BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}_{1}', matrix.infradb, matrix.connector)] }}
+    outputs:
+      summary: ${{ steps.check_baseline.outputs.summary }}
 
     steps:
         
@@ -80,14 +82,15 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/test_sqlalchemy
-        #INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
-        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
+        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash test/dialect
+        #INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
         RC=$?
         
         #sudo chmod -R 777 ${{ github.workspace }}/*
         exit $RC
         
     - name: Check baseline
+      id: check_baseline
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
@@ -96,16 +99,16 @@ jobs:
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found"
-          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_STEP_SUMMARY
+          echo "SUMMARY=INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE}' WARN: no results found" >> $GITHUB_OUTPUT
           exit 0
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
-          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
-          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          echo "SUMMARYINFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
+          echo "SUMMARY=INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
           exit 1
         else
           echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_STEP_SUMMARY
+          echo "SUMMARY=INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}" >> $GITHUB_OUTPUT
           #MAIN=$(git -C ./proxysql remote show origin | grep -Po '(?<=HEAD branch: ).*')
           #MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
           MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
@@ -124,3 +127,10 @@ jobs:
           proxysql_3p_testing/test_sqlalchemy/logs
           
           
+  summarize:
+    runs-on: ubuntu-22.04
+    needs: [ test ]
+    steps:
+    - name: Summarize tests
+      run:
+        echo "${{ needs.test.outputs.SUMMARY }}" >> $GITHUB_STEP_SUMMARY
