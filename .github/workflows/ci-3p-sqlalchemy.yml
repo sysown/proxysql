@@ -137,6 +137,7 @@ jobs:
   summarize:
     runs-on: ubuntu-22.04
     needs: [ test ]
+    if: ${{ !cancelled() }}
     steps:
       - name: Collect summary
         id: collect
