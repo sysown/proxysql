@@ -148,5 +148,5 @@ jobs:
       
       - name: Output summary
         run:
-          echo '${{ steps.collect.outputs.result }}' | jq -c '.[]' | sort
+          #echo '${{ steps.collect.outputs.result }}' | jq -c '.[]' | sort
           echo '${{ steps.collect.outputs.result }}' | jq -c '.[]' | sort >> $GITHUB_STEP_SUMMAR
