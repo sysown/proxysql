@@ -187,21 +187,29 @@ private:
 	void handler_again___new_thread_to_kill_connection();
 
 	bool handler_again___verify_init_connect();
+#if 0
 	bool handler_again___verify_ldap_user_variable();
-	//bool handler_again___verify_backend_autocommit();
+	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_multi_statement();
+#endif // 0
 	bool handler_again___verify_backend_user_db();
 	bool handler_again___status_SETTING_INIT_CONNECT(int*);
+#if 0
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int*);
 	bool handler_again___status_SETTING_SQL_MODE(int*);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int*);
+#endif // 0
 	bool handler_again___status_CHANGING_CHARSET(int* _rc);
+#if 0
 	bool handler_again___status_CHANGING_SCHEMA(int*);
+#endif // 0
 	bool handler_again___status_CONNECTING_SERVER(int*);
 	bool handler_again___status_RESETTING_CONNECTION(int*);
 	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
+#if 0
 	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
+#endif // 0
 	bool handler_again___multiple_statuses(int* rc);
 	//void init();
 	void reset();
@@ -248,7 +256,9 @@ private:
 
 public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
+#if 0
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
+#endif // 0
 	std::stack<enum session_status> previous_status;
 
 	PgSQL_Query_Info CurrentQuery;

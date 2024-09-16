@@ -1535,6 +1535,7 @@ void PgSQL_Session::handler_again___new_thread_to_kill_connection() {
 // true should jump to handler_again
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
+#if 0
 bool PgSQL_Session::handler_again___verify_backend_multi_statement() {
 	if ((client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)) {
 
@@ -1563,6 +1564,7 @@ bool PgSQL_Session::handler_again___verify_backend_multi_statement() {
 	}
 	return false;
 }
+#endif // 0
 
 bool PgSQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent == false) {
@@ -1585,6 +1587,7 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 	return false;
 }
 
+#if 0
 bool PgSQL_Session::handler_again___verify_backend_session_track_gtids() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.session_track_gtids, mybe->server_myds->myconn->options.session_track_gtids);
@@ -1693,6 +1696,7 @@ bool PgSQL_Session::handler_again___verify_ldap_user_variable() {
 	}
 	return false;
 }
+#endif // 0
 
 bool PgSQL_Session::handler_again___verify_backend_user_db() {
 	PgSQL_Data_Stream* myds = mybe->server_myds;
@@ -1793,6 +1797,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	return ret;
 }
 
+#if 0
 bool PgSQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int* _rc) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
@@ -1977,6 +1982,7 @@ bool PgSQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int* _rc) {
 	}
 	return ret;
 }
+#endif // 0
 
 bool PgSQL_Session::handler_again___status_CHANGING_CHARSET(int* _rc) {
 	assert(mybe->server_myds->myconn);
@@ -2259,6 +2265,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 	return ret;
 }
 
+#if 0
 bool PgSQL_Session::handler_again___status_SETTING_MULTI_STMT(int* _rc) {
 	assert(mybe->server_myds->myconn);
 	PgSQL_Data_Stream* myds = mybe->server_myds;
@@ -2398,7 +2405,7 @@ bool PgSQL_Session::handler_again___status_CHANGING_SCHEMA(int* _rc) {
 	}
 	return false;
 }
-
+#endif // 0
 
 bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 	//fprintf(stderr,"CONNECTING_SERVER\n");
@@ -4483,24 +4490,27 @@ handler_again:
 						if (handler_again___verify_init_connect()) {
 							goto handler_again;
 						}
+#if 0
 						if (use_ldap_auth) {
 							if (handler_again___verify_ldap_user_variable()) {
 								goto handler_again;
 							}
 						}
-						//if (handler_again___verify_backend_autocommit()) {
-						//	goto handler_again;
-						//}
+						if (handler_again___verify_backend_autocommit()) {
+							goto handler_again;
+						}
+#endif // 0
 						if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false) {
 
+#if 0
 							if (handler_again___verify_backend_multi_statement()) {
 								goto handler_again;
 							}
 
-							//if (handler_again___verify_backend_session_track_gtids()) {
-							//	goto handler_again;
-							//}
-
+							if (handler_again___verify_backend_session_track_gtids()) {
+								goto handler_again;
+							}
+#endif // 0
 							// Optimize network traffic when we can use 'SET NAMES'
 							//if (verify_set_names(this)) {
 							//	goto handler_again;
@@ -4870,24 +4880,28 @@ bool PgSQL_Session::handler_again___multiple_statuses(int* rc) {
 	case RESETTING_CONNECTION_V2:
 		ret = handler_again___status_RESETTING_CONNECTION(rc);
 		break;
-//	case CHANGING_AUTOCOMMIT:
-//		ret = handler_again___status_CHANGING_AUTOCOMMIT(rc);
-//		break;
+#if 0
+	case CHANGING_AUTOCOMMIT:
+		ret = handler_again___status_CHANGING_AUTOCOMMIT(rc);
+		break;
 	case CHANGING_SCHEMA:
 		ret = handler_again___status_CHANGING_SCHEMA(rc);
 		break;
 	case SETTING_LDAP_USER_VARIABLE:
 		ret = handler_again___status_SETTING_LDAP_USER_VARIABLE(rc);
 		break;
+#endif // 0
 	case SETTING_INIT_CONNECT:
 		ret = handler_again___status_SETTING_INIT_CONNECT(rc);
 		break;
+#if 0
 	case SETTING_MULTI_STMT:
 		ret = handler_again___status_SETTING_MULTI_STMT(rc);
 		break;
 	case SETTING_SESSION_TRACK_GTIDS:
 		ret = handler_again___status_SETTING_SESSION_TRACK_GTIDS(rc);
 		break;
+#endif // 0
 	case SETTING_SET_NAMES:
 		ret = handler_again___status_CHANGING_CHARSET(rc);
 		break;

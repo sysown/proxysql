@@ -61,8 +61,8 @@ PgSQL_Variables::PgSQL_Variables() {
 			PgSQL_Variables::verifiers[i] = NULL;
 		}
 		else if (i == SQL_SQL_LOG_BIN) {
-			PgSQL_Variables::verifiers[i] = verify_server_variable;
-			PgSQL_Variables::updaters[i] = logbin_update_server_variable;
+//			PgSQL_Variables::verifiers[i] = verify_server_variable;
+//			PgSQL_Variables::updaters[i] = logbin_update_server_variable;
 		} else {
 			PgSQL_Variables::verifiers[i] = verify_server_variable;
 			PgSQL_Variables::updaters[i] = update_server_variable;
@@ -559,10 +559,11 @@ inline bool verify_server_variable(PgSQL_Session* session, int idx, uint32_t cli
 	return false;
 }
 
+#if 0
 bool logbin_update_server_variable(PgSQL_Session* session, int idx, int &_rc) {
 	return session->handler_again___status_SETTING_SQL_LOG_BIN(&_rc);
 }
-
+#endif // 0
 
 bool PgSQL_Variables::parse_variable_boolean(PgSQL_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
