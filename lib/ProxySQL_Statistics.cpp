@@ -97,6 +97,8 @@ void ProxySQL_Statistics::init() {
 
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_digest", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_query_digest", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_DIGEST);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_status_variables", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_status_variables_lookup", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP);
 
 	disk_upgrade_mysql_connections();
 
