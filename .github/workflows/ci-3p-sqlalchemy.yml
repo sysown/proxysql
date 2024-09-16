@@ -117,6 +117,7 @@ jobs:
           fi
         fi
         SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':${BASELINE:-10000},'FAILS':${FAILS:-1}}"
+        echo "SUMMARY=${SUM}"
         echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
         exit $RC
     
