@@ -95,6 +95,8 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_sqlalchemy
+        GHUSER="$(id -u):$(id -g)"
+        sudo chown -R ${GHUSER} .logs
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
         STATUS='PASS'
         RC=0
