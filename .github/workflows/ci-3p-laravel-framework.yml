@@ -18,13 +18,14 @@ jobs:
 #        infradb: [ 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
 #        connector: [ 'pymysql', 'mysqldb', 'asyncmy', 'mariadbconnector' ]
         infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
-        connector: [ 'pymysql', 'mysqldb', 'asyncmy', 'mariadbconnector' ]
+        connector: [ 'mysql', 'mariadb' ]
     env:
 #      TESTDIST: ${{ matrix.testdist }}
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
 #      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
-      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
+#      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
+      BLDCACHE: ${{ github.sha }}_debian12_bin
       BASELINE: ${{ vars[format('BASELINE_3P_LARAVEL_FRAMEWORK_{0}_{1}', matrix.infradb, matrix.connector)] }}
 
     steps:
