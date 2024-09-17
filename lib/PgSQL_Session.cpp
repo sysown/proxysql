@@ -3506,6 +3506,7 @@ __get_pkts_from_client:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 								mybe->server_myds->killed_at = 0;
 								mybe->server_myds->kill_type = 0;
+#if 0
 								if (GloMyLdapAuth) {
 									if (session_type == PROXYSQL_SESSION_PGSQL) {
 										if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
@@ -3513,6 +3514,7 @@ __get_pkts_from_client:
 										}
 									}
 								}
+#endif // 0
 								mybe->server_myds->mysql_real_query.init(&pkt);
 								mybe->server_myds->statuses.questions++;
 								client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3724,6 +3726,7 @@ __get_pkts_from_client:
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 						mybe->server_myds->killed_at = 0;
 						mybe->server_myds->kill_type = 0;
+#if 0
 						if (GloMyLdapAuth) {
 							if (session_type == PROXYSQL_SESSION_PGSQL) {
 								if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
@@ -3731,6 +3734,7 @@ __get_pkts_from_client:
 								}
 							}
 						}
+#endif // 0
 						mybe->server_myds->mysql_real_query.init(&pkt);
 						mybe->server_myds->statuses.questions++;
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3740,6 +3744,7 @@ __get_pkts_from_client:
 					}
 					break;
 				case _MYSQL_COM_STMT_PREPARE:
+#if 0
 					if (GloMyLdapAuth) {
 						if (session_type == PROXYSQL_SESSION_PGSQL) {
 							if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
@@ -3747,11 +3752,13 @@ __get_pkts_from_client:
 							}
 						}
 					}
+#endif // 0
 					handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
 					break;
 				case _MYSQL_COM_STMT_EXECUTE:
 					handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(pkt);
 					break;
+#if 0
 				case _MYSQL_COM_STMT_RESET:
 					handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(pkt);
 					break;
@@ -3872,6 +3879,7 @@ __get_pkts_from_client:
 					handler_ret = -1;
 					return handler_ret;
 					break;
+#endif // 0
 				default:
 					// in this switch we only handle the most common commands.
 					// The not common commands are handled by "default" , that
@@ -7417,6 +7425,7 @@ bool PgSQL_Session::handle_command_query_kill(PtrSize_t* pkt) {
 	return false;
 }
 
+#if 0
 void PgSQL_Session::add_ldap_comment_to_pkt(PtrSize_t* _pkt) {
 	if (GloMyLdapAuth == NULL)
 		return;
@@ -7466,6 +7475,7 @@ void PgSQL_Session::add_ldap_comment_to_pkt(PtrSize_t* _pkt) {
 	CurrentQuery.QueryLength = _pkt->size - 5;
 	CurrentQuery.QueryPointer = (unsigned char*)_pkt->ptr + 5;
 }
+#endif // 0
 
 void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool prepared_stmt_with_no_params) {
 	myds->myconn->reduce_auto_increment_delay_token();
@@ -7619,6 +7629,7 @@ void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup) {
 	}
 }
 
+#if 0
 void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
 	uint32_t stmt_global_id = 0;
 	memcpy(&stmt_global_id, (char*)pkt.ptr + 5, sizeof(uint32_t));
@@ -7664,6 +7675,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	status = WAITING_CLIENT_DATA;
 	l_free(pkt.size, pkt.ptr);
 }
+#endif // 0
 
 void PgSQL_Session::detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, bool verbose) {
 	
