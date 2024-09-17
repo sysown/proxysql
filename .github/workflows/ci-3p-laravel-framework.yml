@@ -104,7 +104,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_laravel-framework
-        BASELINE=$(gh variable -R sysown/proxysql list | grep -i BASELINE_3P_LARAVEL_FRAMEWORK_${{ matrix.infradb }} | awk '{ print $2 }')
+        #BASELINE=$(gh variable -R sysown/proxysql list | grep -i BASELINE_3P_LARAVEL_FRAMEWORK_${{ matrix.infradb }}_${{ matrix.connector }} | awk '{ print $2 }')
         
         FAILS=$(cat logs/*run-tests.log | grep -oP '^There were \d+ failures:' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
@@ -123,7 +123,7 @@ jobs:
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           if [[ ${{ github.ref_name }} == v2.x ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_LARAVEL_FRAMEWORK_${{ matrix.infradb }} -b "${FAILS}"
+            gh variable -R sysown/proxysql set BASELINE_3P_LARAVEL_FRAMEWORK_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
     
@@ -131,7 +131,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_laravel-framework/logs
           
