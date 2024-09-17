@@ -399,21 +399,25 @@ class PgSQL_Connection_Placeholder {
 	unsigned int set_charset(unsigned int, enum pgsql_charset_action);
 
 	void set_status(bool set, uint32_t status_flag);
-	void set_status_sql_log_bin0(bool);
 	bool get_status(uint32_t status_flag);
+#if 0
+	void set_status_sql_log_bin0(bool);
 	bool get_status_sql_log_bin0();
 	void set_autocommit_start();
 	void set_autocommit_cont(short event);
+#endif // 0
 	void set_names_start();
 	void set_names_cont(short event);
 #ifndef PROXYSQL_USE_RESULT
 	void store_result_start();
 	void store_result_cont(short event);
 #endif // PROXYSQL_USE_RESULT
+#if 0
 	void initdb_start();
 	void initdb_cont(short event);
 	void set_option_start();
 	void set_option_cont(short event);
+#endif // 0
 	void set_query(char *stmt, unsigned long length);
 	
 	int async_set_autocommit(short event, bool);
@@ -429,6 +433,7 @@ class PgSQL_Connection_Placeholder {
 	void stmt_execute_store_result_start();
 	void stmt_execute_store_result_cont(short event);
 
+#if 0
 	/**
 	 * @brief Process the rows returned by 'async_stmt_execute_store_result'. Extracts all the received
 	 *   rows from 'query.stmt->result.data' but the last one, adds them to 'MyRS', frees the buffer
@@ -438,6 +443,7 @@ class PgSQL_Connection_Placeholder {
 	 *   that are being read and added to 'MyRS'.
 	 */
 	void process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes);
+#endif // 0
 
 	void async_free_result();
 
@@ -491,7 +497,9 @@ public:
 	void reset_session_cont(short event);
 	
 	int  async_connect(short event);
+#if 0
 	int  async_set_autocommit(short event, bool ac);
+#endif // 0
 	int  async_query(short event, char* stmt, unsigned long length, MYSQL_STMT** _stmt = NULL, stmt_execute_metadata_t* _stmt_meta = NULL);
 	int  async_ping(short event);
 	int  async_reset_session(short event);

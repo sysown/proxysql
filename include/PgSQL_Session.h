@@ -187,26 +187,34 @@ private:
 	void handler_again___new_thread_to_kill_connection();
 
 	bool handler_again___verify_init_connect();
+#if 0
 	bool handler_again___verify_ldap_user_variable();
-	//bool handler_again___verify_backend_autocommit();
+	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_multi_statement();
+#endif // 0
 	bool handler_again___verify_backend_user_db();
 	bool handler_again___status_SETTING_INIT_CONNECT(int*);
+#if 0
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int*);
 	bool handler_again___status_SETTING_SQL_MODE(int*);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int*);
+#endif // 0
 	bool handler_again___status_CHANGING_CHARSET(int* _rc);
+#if 0
 	bool handler_again___status_CHANGING_SCHEMA(int*);
+#endif // 0
 	bool handler_again___status_CONNECTING_SERVER(int*);
 	bool handler_again___status_RESETTING_CONNECTION(int*);
 	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
+#if 0
 	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
+#endif // 0
 	bool handler_again___multiple_statuses(int* rc);
 	//void init();
 	void reset();
-	void add_ldap_comment_to_pkt(PtrSize_t*);
 #if 0
+	void add_ldap_comment_to_pkt(PtrSize_t*);
 	/**
 	 * @brief Performs the required housekeeping operations over the session and its connections before
 	 *  performing any processing on received client packets.
@@ -214,9 +222,11 @@ private:
 	void housekeeping_before_pkts();
 #endif // 0
 	int get_pkts_from_client(bool&, PtrSize_t&);
+#if 0
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
+#endif // 0
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
 
@@ -248,7 +258,9 @@ private:
 
 public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
+#if 0
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
+#endif // 0
 	std::stack<enum session_status> previous_status;
 
 	PgSQL_Query_Info CurrentQuery;

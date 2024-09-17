@@ -15,7 +15,7 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 
 
-
+#if 0
 // some of the code that follows is from mariadb client library memory allocator
 typedef int     myf;    // Type of MyFlags in my_funcs
 #define MYF(v)      (myf) (v)
@@ -109,6 +109,7 @@ static void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
     root->free->next=0;
   }
 }
+#endif // 0
 
 extern char * binary_sha1;
 
@@ -602,6 +603,7 @@ bool PgSQL_Connection_Placeholder::get_status(uint32_t status_flag) {
 	return this->status_flags & status_flag;
 }
 
+#if 0
 void PgSQL_Connection_Placeholder::set_status_sql_log_bin0(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
@@ -613,6 +615,7 @@ void PgSQL_Connection_Placeholder::set_status_sql_log_bin0(bool v) {
 bool PgSQL_Connection_Placeholder::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
+#endif // 0
 
 unsigned int PgSQL_Connection_Placeholder::reorder_dynamic_variables_idx() {
 	dynamic_variables_idx.clear();
@@ -660,6 +663,7 @@ unsigned int PgSQL_Connection_Placeholder::number_of_matching_session_variables(
 	return ret;
 }
 
+#if 0
 void PgSQL_Connection_Placeholder::initdb_start() {
 	PROXY_TRACE();
 	PgSQL_Connection_userinfo *client_ui=myds->sess->client_myds->myconn->userinfo;
@@ -693,6 +697,7 @@ void PgSQL_Connection_Placeholder::set_autocommit_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_autocommit_cont(&ret_bool, pgsql, mysql_status(event, true));
 }
+#endif // 0
 
 void PgSQL_Connection_Placeholder::set_names_start() {
 	PROXY_TRACE();
@@ -785,6 +790,7 @@ void PgSQL_Connection_Placeholder::set_is_client() {
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
+#if 0
 void PgSQL_Connection_Placeholder::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes) {
 	PROXY_TRACE2();
 	// there is more than 1 row
@@ -893,6 +899,7 @@ int PgSQL_Connection_Placeholder::async_set_autocommit(short event, bool ac) {
 	}
 	return 1;
 }
+#endif // 0
 
 int PgSQL_Connection_Placeholder::async_set_names(short event, unsigned int c) {
 	PROXY_TRACE();
@@ -2338,6 +2345,7 @@ void PgSQL_Connection::async_free_result() {
 	new_result = false;
 }
 
+#if 0
 int PgSQL_Connection::async_set_autocommit(short event, bool ac) {
 	PROXY_TRACE();
 	assert(pgsql_conn);
@@ -2379,6 +2387,7 @@ int PgSQL_Connection::async_set_autocommit(short event, bool ac) {
 	}
 	return 1;
 }
+#endif // 0
 
 bool PgSQL_Connection::IsAutoCommit() {
 	bool ret = true;
