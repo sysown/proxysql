@@ -1441,7 +1441,8 @@ unsigned int PgSQL_Protocol::copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Que
 	return total_size;
 }
 
-unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result) {
+unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result, 
+	bool extract_affected_rows) {
 	assert(pg_query_result);
 	assert(result);
 
@@ -1478,10 +1479,14 @@ unsigned int PgSQL_Protocol::copy_command_completion_to_PgSQL_Query_Result(bool 
 		pg_query_result->PSarrayOUT.add(_ptr, size);
 	}
 	pg_query_result->pkt_count++;
-	const char* extracted_affect_rows = PQcmdTuples(const_cast<PGresult*>(result));
-	if (*extracted_affect_rows)
-		pg_query_result->affected_rows = strtoull(extracted_affect_rows, NULL, 10);
 
+    // To prevent rows sent from being considered as affected rows,
+    // we avoid extracting affected rows for SELECT queries.
+	if (extract_affected_rows) {
+		const char* extracted_affect_rows = PQcmdTuples(const_cast<PGresult*>(result));
+		if (*extracted_affect_rows)
+			pg_query_result->affected_rows = strtoull(extracted_affect_rows, NULL, 10);
+	}
 	return size;
 }
 
@@ -1912,8 +1917,8 @@ unsigned long long PgSQL_Query_Result::current_size() {
 	return intsize;
 }
 
-unsigned int PgSQL_Query_Result::add_command_completion(const PGresult* result) {
-	const unsigned int bytes = proto->copy_command_completion_to_PgSQL_Query_Result(false, this, result);
+unsigned int PgSQL_Query_Result::add_command_completion(const PGresult* result, bool extract_affected_rows) {
+	const unsigned int bytes = proto->copy_command_completion_to_PgSQL_Query_Result(false, this, result, extract_affected_rows);
 	result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 	/*if (affected_rows) {
 		myds->sess->CurrentQuery.have_affected_rows = true; // if affected rows is set, last_insert_id is set too
