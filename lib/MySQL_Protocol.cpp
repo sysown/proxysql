@@ -1302,14 +1302,24 @@ bool MySQL_Protocol::verify_user_pass(
 				ret=true;
 			}
 		} else if (auth_plugin_id == 2) { // caching_sha2_password
-			// FIXME: not supported yet
-			// we assert() here because auth_plugin_id should never be 3 unless it is fully implemented
-			assert(0);
+			// ## FIXME: Current limitation
+			// For now, if a 'COM_CHANGE_USER' is received with a hashed 'password' for
+			// 'caching_sha2_password', we fail to authenticate. This is part of the broader limitation of
+			// 'Auth Switch' support for 'caching_sha2_password' (See
+			// https://proxysql.com/documentation/authentication-methods/#limitations).
+			//
+			// ## Future Fix
+			// The right approach is to perform an 'Auth Switch Request' or to accept the hash if the clear
+			// text password is already known and the hash can be verified. This processing is now performed
+			// in 'process_pkt_COM_CHANGE_USER', state at which it should be determine if we can accept the
+			// hash, or if we should prepare the state machine for a 'Auth Switch Request'. Progress for this
+			// is tracked in https://github.com/sysown/proxysql/issues/4618.
+			ret = false;
 		} else {
 			ret = false;
 		}
 	} else {
-		if (auth_plugin_id == 2) {
+		if (auth_plugin_id == 0) {
 			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {

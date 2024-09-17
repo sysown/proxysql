@@ -228,6 +228,7 @@ void* kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	//! It initializes a new MySQL_Thread object to handle MySQL-related operations.
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
+	set_thread_name("KillQuery");
 	//! Retrieves the current time and refreshes thread variables.
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
@@ -5712,7 +5713,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
 		string nq=string((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 		SetParser parser(nq);
-		string schemaname = parser.parse_USE_query();
+		string errmsg = "";
+		string schemaname = parser.parse_USE_query(errmsg);
 		if (schemaname != "") {
 			client_myds->myconn->userinfo->set_schemaname((char *)schemaname.c_str(),schemaname.length());
 			if (mirror==false) {
@@ -5729,6 +5731,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			l_free(pkt->size,pkt->ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			std::string msg = "Unable to parse: " + nq;
+			if (errmsg != "") {
+				msg = errmsg + ": " + nq;
+			}
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000", msg.c_str());
 			RequestEnd(NULL);
 		}
@@ -5970,7 +5975,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
 			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
 			// remove trailing space and semicolon if present. See issue#4380
-			nq.erase(nq.find_last_not_of(" ;") + 1);
+			size_t pos = nq.find_last_not_of(" ;");
+			if (pos != nq.npos) {
+				nq.erase(pos + 1); // remove trailing spaces and semicolumns
+			}
 			if (
 				(
 					match_regexes && (match_regexes[1]->match(dig))

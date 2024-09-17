@@ -50,6 +50,11 @@ using json = nlohmann::json;
 #include <uuid/uuid.h>
 #include <atomic>
 
+#ifdef DEBUG
+#include "proxy_protocol_info.h"
+#endif // DEBUG
+
+
 /*
 extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 	return NULL;
@@ -94,6 +99,7 @@ static pthread_mutex_t *lockarray;
 static void * waitpid_thread(void *arg) {
 	pid_t *cpid_ptr=(pid_t *)arg;
 	int status;
+	set_thread_name("waitpid");
 	waitpid(*cpid_ptr, &status, 0);
 	free(cpid_ptr);
 	return NULL;
@@ -211,6 +217,7 @@ static char * main_check_latest_version() {
  * @return NULL.
  */
 void * main_check_latest_version_thread(void *arg) {
+	set_thread_name("CheckLatestVers");
 	// Fetch the latest version information
 	char * latest_version = main_check_latest_version();
 	// we check for potential invalid data , see issue #4042
@@ -2146,6 +2153,17 @@ int main(int argc, const char * argv[]) {
 		int rc = print_jemalloc_conf();
 		if (rc) { exit(EXIT_FAILURE); }
 	}
+
+
+#ifdef DEBUG
+	{
+		// This run some ProxyProtocolInfo tests.
+		// It will assert() if any test fails
+		ProxyProtocolInfo ppi;
+		ppi.run_tests();
+	}
+#endif // DEBUG
+
 
 	{
 		MYSQL *my = mysql_init(NULL);

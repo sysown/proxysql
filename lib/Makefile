@@ -145,7 +145,9 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	ProxySQL_Admin_Tests.oo ProxySQL_Admin_Tests2.oo ProxySQL_Admin_Scheduler.oo ProxySQL_Admin_Disk_Upgrade.oo ProxySQL_Admin_Stats.oo \
 	Admin_Handler.oo Admin_FlushVariables.oo Admin_Bootstrap.oo \
 	Base_Session.oo Base_Thread.oo \
-  proxysql_find_charset.oo ProxySQL_Poll.oo sha256crypt.oo PgSQL_Protocol.oo PgSQL_Thread.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo
+	proxy_protocol_info.oo \
+	proxysql_find_charset.oo ProxySQL_Poll.oo \
+	PgSQL_Protocol.oo PgSQL_Thread.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
