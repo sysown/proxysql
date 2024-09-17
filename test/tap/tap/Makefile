@@ -180,3 +180,6 @@ clean:
 	find . -name '*.o' -delete || true
 	find . -name '*.so' -delete || true
 	find . -name '*.so.*' -delete || true
+	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
+	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
+
