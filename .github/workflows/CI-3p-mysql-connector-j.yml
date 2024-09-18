@@ -21,6 +21,6 @@ concurrency:
 
 jobs:
   run:
-    uses: sysown/proxysql/.github/workflows/ci-3p-mysql-connector-j.yml@GH-Actions
+    uses: mirostauder/proxysql/.github/workflows/ci-3p-mysql-connector-j.yml@GH-Actions
     secrets: inherit
     
