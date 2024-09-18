@@ -48,11 +48,11 @@ jobs:
         echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         sleep $(( $RANDOM / 1024 ))
-        PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         while [[ -z ${PROBE} ]]; do
           echo "Wating for cache '${BLDCACHE}' ..."
           sleep 30
-          PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         done
         echo "Cache available '${BLDCACHE}'"
 
@@ -81,9 +81,9 @@ jobs:
 #      env:
 #        GH_TOKEN: ${{ github.token }}
 #      run: |
-#        export VERS=$(git ls-remote https://github.com/sysown/proxysql.git "refs/tags/*" | grep -v 'refs/tags/v' | sed -e 's|.*/||g' | tail -2 | head -1)
-#        export HASH=$(gh api repos/sysown/proxysql/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
-#        export CMTS=$(gh api repos/sysown/proxysql/compare/${VERS}...v2.x | jq '.ahead_by')
+#        export VERS=$(git ls-remote https://github.com/${{ github.repository }}.git "refs/tags/*" | grep -v 'refs/tags/v' | sed -e 's|.*/||g' | tail -2 | head -1)
+#        export HASH=$(gh api repos/${{ github.repository }}/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
+#        export CMTS=$(gh api repos/${{ github.repository }}/compare/${VERS}...v2.x | jq '.ahead_by')
 #        echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
 #        echo "GIT_VERSION=${VERS}-${CMTS}-g${HASH}" >> $GITHUB_ENV
     

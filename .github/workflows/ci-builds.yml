@@ -22,16 +22,16 @@ jobs:
 #      run: |
 #        # lock fast
 #        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-#        gh variable -R sysown/proxysql list | grep -i ${LOCK} >/dev/null || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}' >/dev/null
+#        gh variable -R ${{ github.repository }} list | grep -i ${LOCK} >/dev/null || gh variable -R ${{ github.repository }} set ${LOCK} -b '${{ github.workflow }}' >/dev/null
 #
 #        # wait for unlock
 #        sleep 5
-#        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+#        PROBE="$(gh variable -R ${{ github.repository }} list | grep -i ${LOCK} || echo '')"
 #        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
 #          while [[ ! -z ${PROBE} ]]; do
 #            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
 #            sleep 15
-#            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+#            PROBE="$(gh variable -R ${{ github.repository }} list | grep -i ${LOCK} || echo '')"
 #          done
 #        else
 #          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
@@ -89,7 +89,7 @@ jobs:
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       uses: actions/checkout@v4
       with:
-#        repository: 'sysown/proxysql'
+#        repository: '${{ github.repository }}'
 #        ref: 'v2.x'
         fetch-depth: 0
         path: 'proxysql'
@@ -217,10 +217,10 @@ jobs:
 #    - name: Concurency unlock
 #      run: |
 #        # delete lock
-#        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+#        PROBE="$(gh variable -R ${{ github.repository }} list | grep -i ${LOCK} || echo '')"
 #        if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
 #          echo "Releasing lock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-#          gh variable -R sysown/proxysql delete ${LOCK} || true
+#          gh variable -R ${{ github.repository }} delete ${LOCK} || true
 #        elif [[ ! -z ${PROBE} ]]; then
 #          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
 #        #  exit -1

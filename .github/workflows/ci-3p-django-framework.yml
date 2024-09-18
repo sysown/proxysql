@@ -6,9 +6,7 @@ on:
 
 env:
   TESTNAME: django-framework
-#  TESTDIST: debian11
-#  INFRADB:  mysql80
-#  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
+  TESTDIST: debian12
 
 jobs:
   test:
@@ -16,14 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'debian11' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
         infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+        connector: [ 'pymysql' ]
     env:
-      TESTDIST: ${{ matrix.testdist }}
       INFRADB: ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
-      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
-      BASELINE: ${{ vars[format('BASELINE_3P_DJANGO_FRAMEWORK_{0}', matrix.infradb)] }}
+      CONNECTOR: ${{ matrix.connector }}
+      BLDCACHE: ${{ github.sha }}_debian12_bin
 
     steps:
         
@@ -34,7 +31,7 @@ jobs:
         ref: 'main'
         fetch-depth: 1
         path: 'proxysql_3p_testing'
-        token: ${{ secrets.GH_TOKEN }}
+        token: ${{ secrets.gh_token }}
         sparse-checkout: |
           test_django-framework
 #          proxysql
@@ -43,14 +40,13 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
-        echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         sleep $(( $RANDOM / 1024 ))
-        PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         while [[ -z ${PROBE} ]]; do
           echo "Wating for cache '${BLDCACHE}' ..."
           sleep 30
-          PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         done
         echo "Cache available '${BLDCACHE}'"
 
@@ -102,7 +98,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_django-framework
-        BASELINE=$(gh variable -R sysown/proxysql list | grep -i BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} | awk '{ print $2 }')
+        BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_DJANGO_FRAMEWORK_${INFRADB/./}_${CONNECTOR/./} | awk '{ print $2 }')
 
         FAILS=$(cat logs/*run-tests.log | grep -oP 'FAILED \(failures=\d+' | tr '=' ' ' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
@@ -120,8 +116,9 @@ jobs:
           exit 1
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          if [[ ${{ github.ref_name }} == v2.x ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} -b "${FAILS}"
+          MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
+          if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
+            gh variable -R ${{ github.repository }} set BASELINE_3P_DJANGO_FRAMEWORK_${INFRADB/./}_${CONNECTOR/./} -b "${FAILS}"
           fi
         fi
     
@@ -129,7 +126,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_django-framework/logs
           

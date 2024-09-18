@@ -7,8 +7,6 @@ on:
 env:
   TESTNAME: mysql-connector-j
   TESTDIST: debian12
-#  INFRADB:  mysql57
-#  BASELINE: ${{ vars.BASELINE_3P_MYSQL_CONNECTOR_J }}
 
 jobs:
   test:
@@ -16,17 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-#        testdist: [ 'debian11' ]
-        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
+        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
         connector: [ '8.0.33' ]
     env:
-#      TESTDIST: ${{ matrix.testdist }}
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
-#      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
       BLDCACHE: ${{ github.sha }}_debian12_bin
-      BASELINE: ${{ vars[format('BASELINE_3P_MYSQL_CONNECTOR_J_{0}_{1}', matrix.infradb, matrix.connector)] }}
 
     steps:
         
@@ -37,7 +31,7 @@ jobs:
         ref: 'main'
         fetch-depth: 1
         path: 'proxysql_3p_testing'
-        token: ${{ secrets.GH_TOKEN }}
+        token: ${{ secrets.gh_token }}
         sparse-checkout: |
           test_mysql-connector-j
           proxysql
@@ -46,7 +40,6 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
-        echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         sleep $(( $RANDOM / 1024 ))
         PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
@@ -93,6 +86,8 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_mysql-connector-j
+        BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_MYSQL_CONNECTOR_J_${INFRADB/./}_${CONNECTOR/./} | awk '{ print $2 }')
+
         FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
         if [[ -z ${FAILS} ]]; then
           echo "Baseline '${BASELINE:-10000}' WARN: no results found"
@@ -105,7 +100,7 @@ jobs:
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
-            gh variable -R ${{ github.repository }} set BASELINE_3P_MYSQL_CONNECTOR_J_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
+            gh variable -R ${{ github.repository }} set BASELINE_3P_MYSQL_CONNECTOR_J_${INFRADB/./}_${CONNECTOR/./} -b "${FAILS}"
           fi
         fi
     

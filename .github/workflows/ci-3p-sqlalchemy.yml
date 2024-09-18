@@ -6,7 +6,7 @@ on:
 
 env:
   TESTNAME: sqlalchemy
-  TESTDIST: 'debian12'
+  TESTDIST: debian12
 
 jobs:
   test:
@@ -14,18 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-#        testdist: [ 'debian12' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mysql83', 'mysql84', 'mysql90', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
         connector: [ 'pymysql', 'mysqldb', 'asyncmy', 'mariadbconnector' ]
     env:
-#      TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
-#      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
-#      BLDCACHE: ${{ github.sha }}_${{ env.TESTDIST }}_bin
       BLDCACHE: ${{ github.sha }}_debian12_bin
-      BASELINE: ${{ vars[format('BASELINE_3P_SQLALCHEMY_{0}_{1}', matrix.infradb, matrix.connector)] }}
     outputs:
       summary: ${{ steps.check_baseline.outputs.summary }}
 
@@ -38,7 +33,7 @@ jobs:
         ref: 'main'
         fetch-depth: 1
         path: 'proxysql_3p_testing'
-        token: ${{ secrets.GH_TOKEN }}
+        token: ${{ secrets.gh_token }}
         sparse-checkout: |
           infra-docker-hoster
           test_sqlalchemy
@@ -48,7 +43,6 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
-        echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         sleep $(( $RANDOM / 1024 ))
         PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
@@ -95,6 +89,8 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_sqlalchemy
+        BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_SQLALCHEMY_${INFRADB/./}_${CONNECTOR/./} | awk '{ print $2 }')
+
         GHUSER="$(id -u):$(id -g)"
         sudo chown -R ${GHUSER} ./logs
         FAILS=$(cat logs/*run-tests.log | grep -oP '^=+ \d+ failed, ' | awk '{ print $2 }')
@@ -113,7 +109,7 @@ jobs:
           #MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Setting new BASELINE: ${FAILS} for '${MAIN}'"
-            gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
+            gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${INFRADB/./}_${CONNECTOR/./} -b "${FAILS}"
           fi
         fi
         SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':${BASELINE:-10000},'FAILS':${FAILS:-1}}"

@@ -30,11 +30,11 @@ jobs:
         echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         sleep $(( $RANDOM / 1024 ))
-        PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         while [[ -z ${PROBE} ]]; do
           echo "Wating for cache '${BLDCACHE}' ..."
           sleep 30
-          PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         done
         echo "Cache available '${BLDCACHE}'"
 
