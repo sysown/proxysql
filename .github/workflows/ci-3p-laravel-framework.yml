@@ -122,7 +122,8 @@ jobs:
           exit 1
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
-          if [[ ${{ github.ref_name }} == v2.x ]]; then
+          MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
+          if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             gh variable -R sysown/proxysql set BASELINE_3P_LARAVEL_FRAMEWORK_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
