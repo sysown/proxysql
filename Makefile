@@ -344,6 +344,12 @@ build-%:
 
 .NOTPARALLEL: binaries/proxysql%
 binaries/proxysql%:
+	cd deps && ${MAKE} cleanall
+	cd lib && ${MAKE} clean
+	cd src && ${MAKE} clean
+	cd test/tap && ${MAKE} clean
+	cd test/deps && ${MAKE} cleanall
+	find . -not -path "./binaries/*" -not -path "./.git/*" -exec touch -h --date=@`git show -s --format=%ct HEAD` {} \;
 	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
 	@docker compose -p "${GIT_VERSION/./}" up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
 	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
