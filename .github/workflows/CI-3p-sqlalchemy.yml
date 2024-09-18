@@ -20,15 +20,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-build:
+  run-builds:
     uses: mirostauder/proxysql/.github/workflows/ci-builds.yml@GH-Actions
     secrets: inherit
   run-mysql:
-    needs: [ run-build ]
+    needs: [ run-builds ]
     uses: mirostauder/proxysql/.github/workflows/ci-3p-sqlalchemy_mysql.yml@GH-Actions
     secrets: inherit
   run-mariadb:
-    needs: [ run-build ]
+    needs: [ run-builds ]
     uses: mirostauder/proxysql/.github/workflows/ci-3p-sqlalchemy_mariadb.yml@GH-Actions
     secrets: inherit
     
