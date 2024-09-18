@@ -6,7 +6,7 @@ on:
 
 env:
   TESTNAME: mysql-connector-j
-  TESTDIST: debian11
+  TESTDIST: debian12
 #  INFRADB:  mysql57
 #  BASELINE: ${{ vars.BASELINE_3P_MYSQL_CONNECTOR_J }}
 
@@ -25,7 +25,7 @@ jobs:
       CONNECTOR: ${{ matrix.connector }}
 #      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
 #      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
-      BLDCACHE: ${{ github.sha }}_debian11_bin
+      BLDCACHE: ${{ github.sha }}_debian12_bin
       BASELINE: ${{ vars[format('BASELINE_3P_MYSQL_CONNECTOR_J_{0}_{1}', matrix.infradb, matrix.connector)] }}
 
     steps:
