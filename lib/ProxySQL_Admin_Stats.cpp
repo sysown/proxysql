@@ -1519,7 +1519,7 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 		SQLite3_row *row  = resultset ? resultset->rows[i] : NULL;
 		char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
 		if (!resultset) {
-			sprintf(digest_hex_str, "0x%16llX", (long long unsigned int)qds->digest);
+			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)qds->digest);
 		}
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
