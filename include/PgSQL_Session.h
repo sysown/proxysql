@@ -77,7 +77,7 @@ public:
 	MySQL_STMT_Global_info* stmt_info;
 
 	int QueryLength;
-	enum MYSQL_COM_QUERY_command MyComQueryCmd;
+	enum PGSQL_QUERY_command PgQueryCmd;
 	bool bool_is_select_NOT_for_update;
 	bool bool_is_select_NOT_for_update_computed;
 	bool have_affected_rows; // if affected rows is set, last_insert_id is set too
@@ -91,7 +91,7 @@ public:
 	~PgSQL_Query_Info();
 	void init(unsigned char* _p, int len, bool mysql_header = false);
 	void query_parser_init();
-	enum MYSQL_COM_QUERY_command query_parser_command_type();
+	enum PGSQL_QUERY_command query_parser_command_type();
 	void query_parser_free();
 	unsigned long long query_parser_update_counters();
 	void begin(unsigned char* _p, int len, bool mysql_header = false);
@@ -266,7 +266,7 @@ public:
 	// pointers
 	PgSQL_Thread* thread;
 #endif // 0
-	Query_Processor_Output* qpo;
+	PgSQL_Query_Processor_Output* qpo;
 	StatCounters* command_counters;
 #if 0
 	PgSQL_Backend* mybe;
@@ -342,12 +342,6 @@ public:
 	 *   This flag was introduced for issue #3504.
 	 */
 	bool change_user_auth_switch;
-
-	bool with_gtid;
-
-	char gtid_buf[128];
-	//uint64_t gtid_trxid;
-	int gtid_hid;
 
 //	MySQL_STMTs_meta* sess_STMTs_meta;
 //	StmtLongDataHandler* SLDH;

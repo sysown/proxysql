@@ -31,7 +31,8 @@ using json = nlohmann::json;
 
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
@@ -138,7 +139,8 @@ extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
+extern PgSQL_Query_Processor* GloPgQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger* GloPgSQL_Logger;
@@ -2330,11 +2332,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES))) {
-			GloQPro->wrlock();
-			resultset = GloQPro->get_current_query_rules_inner();
+			GloMyQPro->wrlock();
+			resultset = GloMyQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
-				GloQPro->wrunlock(); // unlock first
-				resultset = GloQPro->get_current_query_rules();
+				GloMyQPro->wrunlock(); // unlock first
+				resultset = GloMyQPro->get_current_query_rules();
 				if (resultset) {
 					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 					delete resultset;
@@ -2344,17 +2346,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			} else {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 				//delete resultset; // DO NOT DELETE . This is the inner resultset of Query_Processor
-				GloQPro->wrunlock();
+				GloMyQPro->wrunlock();
 				run_query=false;
 				goto __run_query;
 			}
 		}
 		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING))) {
-			GloQPro->wrlock();
-			resultset = GloQPro->get_current_query_rules_fast_routing_inner();
+			GloMyQPro->wrlock();
+			resultset = GloMyQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
-				GloQPro->wrunlock(); // unlock first
-				resultset = GloQPro->get_current_query_rules_fast_routing();
+				GloMyQPro->wrunlock(); // unlock first
+				resultset = GloMyQPro->get_current_query_rules_fast_routing();
 				if (resultset) {
 					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 					delete resultset;
@@ -2364,7 +2366,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			} else {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 				//delete resultset; // DO NOT DELETE . This is the inner resultset of Query_Processor
-				GloQPro->wrunlock();
+				GloMyQPro->wrunlock();
 				run_query=false;
 				goto __run_query;
 			}
@@ -2375,7 +2377,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
 	// we just return the count
 	if (strcmp("SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing", query_no_space)==0) {
-		int cnt = GloQPro->get_current_query_rules_fast_routing_count();
+		int cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
 		l_free(query_length,query);
 		char buf[256];
 		sprintf(buf,"SELECT %d AS 'COUNT(*)'", cnt);

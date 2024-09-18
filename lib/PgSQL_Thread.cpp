@@ -19,7 +19,7 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 
 #include "PgSQL_Data_Stream.h"
-#include "query_processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_Logger.hpp"
@@ -42,7 +42,7 @@ static PgSQL_Session* sess_stopat;
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
 
-extern Query_Processor* GloQPro;
+extern PgSQL_Query_Processor* GloPgQPro;
 extern PgSQL_Threads_Handler* GloPTH;
 extern MySQL_Monitor* GloMyMon;
 extern PgSQL_Logger* GloPgSQL_Logger;
@@ -1534,12 +1534,12 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 				}
 			}
 			if (nameS == "query_rules_fast_routing_algorithm") {
-				if (GloQPro) {
+				if (GloPgQPro) {
 					int intv = atoi(value);
 					if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
-						GloQPro->wrlock();
-						GloQPro->query_rules_fast_routing_algorithm = intv;
-						GloQPro->wrunlock();
+						GloPgQPro->wrlock();
+						GloPgQPro->query_rules_fast_routing_algorithm = intv;
+						GloPgQPro->wrunlock();
 					}
 				}
 			}
@@ -2623,7 +2623,7 @@ PgSQL_Thread::~PgSQL_Thread() {
 		}
 		delete mysql_sessions;
 		mysql_sessions = NULL;
-		GloQPro->end_thread(); // only for real threads
+		GloPgQPro->end_thread(); // only for real threads
 	}
 
 	if (mirror_queue_mysql_sessions) {
@@ -2703,13 +2703,13 @@ PgSQL_Thread::~PgSQL_Thread() {
 		free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
 		mysql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
 	}
-	if (pgsql_thread___default_schema) { free(pgsql_thread___default_schema); pgsql_thread___default_schema = NULL; }
+	//if (pgsql_thread___default_schema) { free(pgsql_thread___default_schema); pgsql_thread___default_schema = NULL; }
 	if (pgsql_thread___keep_multiplexing_variables) { free(pgsql_thread___keep_multiplexing_variables); pgsql_thread___keep_multiplexing_variables = NULL; }
-	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg = NULL; }
+	if (pgsql_thread___firewall_whitelist_errormsg) { free(pgsql_thread___firewall_whitelist_errormsg); pgsql_thread___firewall_whitelist_errormsg = NULL; }
 	if (pgsql_thread___init_connect) { free(pgsql_thread___init_connect); pgsql_thread___init_connect = NULL; }
-	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable = NULL; }
-	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment = NULL; }
-	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
+	//if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable = NULL; }
+	//if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment = NULL; }
+	//if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
 	
 	if (pgsql_thread___server_version) { free(pgsql_thread___server_version); pgsql_thread___server_version = NULL; }
 	if (pgsql_thread___default_client_encoding) { free(pgsql_thread___default_client_encoding); pgsql_thread___default_client_encoding = NULL; }
@@ -2721,8 +2721,8 @@ PgSQL_Thread::~PgSQL_Thread() {
 		}
 	}
 
-	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename = NULL; }
-	if (mysql_thread___auditlog_filename) { free(mysql_thread___auditlog_filename); mysql_thread___auditlog_filename = NULL; }
+	if (pgsql_thread___eventslog_filename) { free(pgsql_thread___eventslog_filename); pgsql_thread___eventslog_filename = NULL; }
+	if (pgsql_thread___auditlog_filename) { free(pgsql_thread___auditlog_filename); pgsql_thread___auditlog_filename = NULL; }
 	if (pgsql_thread___ssl_p2s_ca) { free(pgsql_thread___ssl_p2s_ca); pgsql_thread___ssl_p2s_ca = NULL; }
 	if (pgsql_thread___ssl_p2s_capath) { free(pgsql_thread___ssl_p2s_capath); pgsql_thread___ssl_p2s_capath = NULL; }
 	if (pgsql_thread___ssl_p2s_cert) { free(pgsql_thread___ssl_p2s_cert); pgsql_thread___ssl_p2s_cert = NULL; }
@@ -2778,7 +2778,7 @@ bool PgSQL_Thread::init() {
 	shutdown = 0;
 	my_idle_conns = (PgSQL_Connection**)malloc(sizeof(PgSQL_Connection*) * SESSIONS_FOR_CONNECTIONS_HANDLER);
 	memset(my_idle_conns, 0, sizeof(PgSQL_Connection*) * SESSIONS_FOR_CONNECTIONS_HANDLER);
-	GloQPro->init_thread();
+	GloPgQPro->init_thread();
 	refresh_variables();
 	i = pipe(pipefd);
 	ioctl_FIONBIO(pipefd[0], 1);
@@ -3067,7 +3067,7 @@ void PgSQL_Thread::run() {
 			) {
 			// house keeping
 			run___cleanup_mirror_queue();
-			GloQPro->update_query_processor_stats();
+			GloPgQPro->update_query_processor_stats();
 		}
 
 		if (rc == -1 && errno == EINTR)
@@ -3760,11 +3760,11 @@ void PgSQL_Thread::refresh_variables() {
 	
 	pgsql_thread___automatic_detect_sqli = (bool)GloPTH->get_variable_int((char*)"automatic_detect_sqli");
 	
-	mysql_thread___firewall_whitelist_enabled = (bool)GloPTH->get_variable_int((char*)"firewall_whitelist_enabled");
-	mysql_thread___query_digests_max_digest_length = GloPTH->get_variable_int((char*)"query_digests_max_digest_length");
-	mysql_thread___query_digests_max_query_length = GloPTH->get_variable_int((char*)"query_digests_max_query_length");
-	mysql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
-	mysql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
+	pgsql_thread___firewall_whitelist_enabled = (bool)GloPTH->get_variable_int((char*)"firewall_whitelist_enabled");
+	pgsql_thread___query_digests_max_digest_length = GloPTH->get_variable_int((char*)"query_digests_max_digest_length");
+	pgsql_thread___query_digests_max_query_length = GloPTH->get_variable_int((char*)"query_digests_max_query_length");
+	pgsql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
+	pgsql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
 
 	mysql_thread___query_cache_size_MB = GloPTH->get_variable_int((char*)"query_cache_size_MB");
 	mysql_thread___query_cache_soft_ttl_pct = GloPTH->get_variable_int((char*)"query_cache_soft_ttl_pct");
@@ -3816,8 +3816,8 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_local_dns_cache_refresh_interval = GloPTH->get_variable_int((char*)"monitor_local_dns_cache_refresh_interval");
 	mysql_thread___monitor_local_dns_resolver_queue_maxsize = GloPTH->get_variable_int((char*)"monitor_local_dns_resolver_queue_maxsize");
 	*/
-	if (mysql_thread___firewall_whitelist_errormsg) free(mysql_thread___firewall_whitelist_errormsg);
-	mysql_thread___firewall_whitelist_errormsg = GloPTH->get_variable_string((char*)"firewall_whitelist_errormsg");
+	if (pgsql_thread___firewall_whitelist_errormsg) free(pgsql_thread___firewall_whitelist_errormsg);
+	pgsql_thread___firewall_whitelist_errormsg = GloPTH->get_variable_string((char*)"firewall_whitelist_errormsg");
 	/*
 	if (mysql_thread___ldap_user_variable) free(mysql_thread___ldap_user_variable);
 	mysql_thread___ldap_user_variable = GloPTH->get_variable_string((char*)"ldap_user_variable");
@@ -3864,20 +3864,20 @@ void PgSQL_Thread::refresh_variables() {
 
 	pgsql_thread___have_ssl = (bool)GloPTH->get_variable_int((char*)"have_ssl");
 
-	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
-	mysql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
-	mysql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
-	mysql_thread___eventslog_format = GloPTH->get_variable_int((char*)"eventslog_format");
-	mysql_thread___eventslog_filename = GloPTH->get_variable_string((char*)"eventslog_filename");
-	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
-	mysql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
-	mysql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
+	if (pgsql_thread___eventslog_filename) free(pgsql_thread___eventslog_filename);
+	pgsql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
+	pgsql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
+	pgsql_thread___eventslog_format = GloPTH->get_variable_int((char*)"eventslog_format");
+	pgsql_thread___eventslog_filename = GloPTH->get_variable_string((char*)"eventslog_filename");
+	if (pgsql_thread___auditlog_filename) free(pgsql_thread___auditlog_filename);
+	pgsql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
+	pgsql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
 
 	GloPgSQL_Logger->events_set_base_filename(); // both filename and filesize are set here
 	GloPgSQL_Logger->audit_set_base_filename(); // both filename and filesize are set here
 
-	if (pgsql_thread___default_schema) free(pgsql_thread___default_schema);
-	pgsql_thread___default_schema = GloPTH->get_variable_string((char*)"default_schema");
+	//if (pgsql_thread___default_schema) free(pgsql_thread___default_schema);
+	//pgsql_thread___default_schema = GloPTH->get_variable_string((char*)"default_schema");
 	if (pgsql_thread___keep_multiplexing_variables) free(pgsql_thread___keep_multiplexing_variables);
 	pgsql_thread___keep_multiplexing_variables = GloPTH->get_variable_string((char*)"keep_multiplexing_variables");
 
@@ -3890,16 +3890,16 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___autocommit_false_not_reusable = (bool)GloPTH->get_variable_int((char*)"autocommit_false_not_reusable");
 	mysql_thread___autocommit_false_is_transaction = (bool)GloPTH->get_variable_int((char*)"autocommit_false_is_transaction");
 	*/
-	mysql_thread___commands_stats = (bool)GloPTH->get_variable_int((char*)"commands_stats");
-	mysql_thread___query_digests = (bool)GloPTH->get_variable_int((char*)"query_digests");
-	mysql_thread___query_digests_lowercase = (bool)GloPTH->get_variable_int((char*)"query_digests_lowercase");
-	mysql_thread___query_digests_replace_null = (bool)GloPTH->get_variable_int((char*)"query_digests_replace_null");
-	mysql_thread___query_digests_no_digits = (bool)GloPTH->get_variable_int((char*)"query_digests_no_digits");
-	mysql_thread___query_digests_normalize_digest_text = (bool)GloPTH->get_variable_int((char*)"query_digests_normalize_digest_text");
-	mysql_thread___query_digests_track_hostname = (bool)GloPTH->get_variable_int((char*)"query_digests_track_hostname");
-	mysql_thread___query_digests_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_grouping_limit");
-	mysql_thread___query_digests_groups_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_groups_grouping_limit");
-	mysql_thread___query_digests_keep_comment = (bool)GloPTH->get_variable_int((char*)"query_digests_keep_comment");
+	pgsql_thread___commands_stats = (bool)GloPTH->get_variable_int((char*)"commands_stats");
+	pgsql_thread___query_digests = (bool)GloPTH->get_variable_int((char*)"query_digests");
+	pgsql_thread___query_digests_lowercase = (bool)GloPTH->get_variable_int((char*)"query_digests_lowercase");
+	pgsql_thread___query_digests_replace_null = (bool)GloPTH->get_variable_int((char*)"query_digests_replace_null");
+	pgsql_thread___query_digests_no_digits = (bool)GloPTH->get_variable_int((char*)"query_digests_no_digits");
+	pgsql_thread___query_digests_normalize_digest_text = (bool)GloPTH->get_variable_int((char*)"query_digests_normalize_digest_text");
+	pgsql_thread___query_digests_track_hostname = (bool)GloPTH->get_variable_int((char*)"query_digests_track_hostname");
+	pgsql_thread___query_digests_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_grouping_limit");
+	pgsql_thread___query_digests_groups_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_groups_grouping_limit");
+	pgsql_thread___query_digests_keep_comment = (bool)GloPTH->get_variable_int((char*)"query_digests_keep_comment");
 	/*
 	variables.min_num_servers_lantency_awareness = GloPTH->get_variable_int((char*)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas = GloPTH->get_variable_int((char*)"aurora_max_lag_ms_only_read_from_replicas");
@@ -3916,7 +3916,7 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___enable_client_deprecate_eof = (bool)GloPTH->get_variable_int((char*)"enable_client_deprecate_eof");
 	mysql_thread___enable_server_deprecate_eof = (bool)GloPTH->get_variable_int((char*)"enable_server_deprecate_eof");
 	*/
-	mysql_thread___enable_load_data_local_infile = (bool)GloPTH->get_variable_int((char*)"enable_load_data_local_infile");
+	pgsql_thread___enable_load_data_local_infile = (bool)GloPTH->get_variable_int((char*)"enable_load_data_local_infile");
 	/*mysql_thread___log_mysql_warnings_enabled = (bool)GloPTH->get_variable_int((char*)"log_mysql_warnings_enabled");
 	mysql_thread___client_host_cache_size = GloPTH->get_variable_int((char*)"client_host_cache_size");
 	mysql_thread___client_host_error_counts = GloPTH->get_variable_int((char*)"client_host_error_counts");
@@ -3951,12 +3951,12 @@ PgSQL_Thread::PgSQL_Thread() {
 	pgsql_thread___server_version = NULL;
 	pgsql_thread___default_client_encoding = NULL;
 	pgsql_thread___have_ssl = true;
-	pgsql_thread___default_schema = NULL;
+	//pgsql_thread___default_schema = NULL;
 	pgsql_thread___init_connect = NULL;
-	mysql_thread___ldap_user_variable = NULL;
-	mysql_thread___add_ldap_user_comment = NULL;
-	mysql_thread___eventslog_filename = NULL;
-	mysql_thread___auditlog_filename = NULL;
+	//pgsql_thread___ldap_user_variable = NULL;
+	//pgsql_thread___add_ldap_user_comment = NULL;
+	pgsql_thread___eventslog_filename = NULL;
+	pgsql_thread___auditlog_filename = NULL;
 
 	// SSL proxy to server
 	pgsql_thread___ssl_p2s_ca = NULL;

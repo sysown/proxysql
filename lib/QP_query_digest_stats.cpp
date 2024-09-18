@@ -26,11 +26,11 @@ static void my_itoa(char s[], unsigned long long n)
 
 
 QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
-	int _hid, const char* _client_addr) {
+	int _hid, const char* _client_addr, int query_digests_max_digest_length) {
 	digest=_digest;
 	digest_text=NULL;
 	if (_digest_text) {
-		digest_text=strndup(_digest_text, mysql_thread___query_digests_max_digest_length);
+		digest_text=strndup(_digest_text, query_digests_max_digest_length);
 	}
 	if (strlen(_user) < sizeof(username_buf)) {
 		strcpy(username_buf, _user);

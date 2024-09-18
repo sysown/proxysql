@@ -11,7 +11,7 @@ using json = nlohmann::json;
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
 #include <atomic>
 
