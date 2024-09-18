@@ -15,12 +15,15 @@ on:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
 
+env:
+  REPOSITORY: ${{ github.repository }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   run:
-    uses: ${{ github.repository }}/.github/workflows/ci-3p-laravel-framework.yml@GH-Actions
+    uses: ${REPOSITORY}/.github/workflows/ci-3p-laravel-framework.yml@GH-Actions
     secrets: inherit
     
