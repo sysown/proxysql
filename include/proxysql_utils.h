@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/resource.h>
+#include <assert.h>
 
 #include "sqlite3db.h"
 #include "../deps/json/json.hpp"
@@ -305,5 +306,13 @@ struct free_deleter {
 
 template <typename T>
 using mf_unique_ptr = std::unique_ptr<T, free_deleter>;
+
+static inline void set_thread_name(const char name[16]) {
+#if defined(__linux__) || defined(__FreeBSD__)
+	int rc;
+	rc = pthread_setname_np(pthread_self(), name);
+	assert(!rc);
+#endif
+}
 
 #endif
