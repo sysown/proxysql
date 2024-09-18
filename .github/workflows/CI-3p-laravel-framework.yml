@@ -20,7 +20,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run:
-    uses: mirostauder/proxysql/.github/workflows/ci-3p-laravel-framework.yml@GH-Actions
+  run-builds:
+    uses: mirostauder/proxysql/.github/workflows/ci-builds.yml@GH-Actions
+    secrets: inherit
+  run-mysql:
+    needs: [ run-builds ]
+    uses: mirostauder/proxysql/.github/workflows/ci-3p-laravel-framework_mysql.yml@GH-Actions
+    secrets: inherit
+  run-mariadb:
+    needs: [ run-builds ]
+    uses: mirostauder/proxysql/.github/workflows/ci-3p-laravel-framework_mariadb.yml@GH-Actions
     secrets: inherit
     
