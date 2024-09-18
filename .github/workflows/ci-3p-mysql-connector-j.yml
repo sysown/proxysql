@@ -49,11 +49,11 @@ jobs:
         echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         sleep $(( $RANDOM / 1024 ))
-        PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         while [[ -z ${PROBE} ]]; do
           echo "Wating for cache '${BLDCACHE}' ..."
           sleep 30
-          PROBE="$(gh cache list --limit 300 --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
+          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
         done
         echo "Cache available '${BLDCACHE}'"
 
@@ -105,7 +105,7 @@ jobs:
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_MYSQL_CONNECTOR_J_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
+            gh variable -R ${{ github.repository }} set BASELINE_3P_MYSQL_CONNECTOR_J_${{ matrix.infradb }}_${{ matrix.connector }} -b "${FAILS}"
           fi
         fi
     
