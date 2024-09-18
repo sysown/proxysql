@@ -21,6 +21,6 @@ concurrency:
 
 jobs:
   run:
-    uses: sysown/proxysql/.github/workflows/ci-3p-laravel-framework.yml@GH-Actions
+    uses: .github/workflows/ci-3p-laravel-framework.yml@GH-Actions
     secrets: inherit
     
