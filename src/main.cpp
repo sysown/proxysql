@@ -1477,6 +1477,13 @@ bool ProxySQL_daemonize_phase3() {
 		// automatic reload of TLS certificates after a crash , see #4658
 		std::string msg;
 		ProxySQL_create_or_load_TLS(false, msg);
+		//  Honor --initial after a crash , see #4659
+		if (GloVars.__cmd_proxysql_initial==true) {
+			std::cerr << "Renaming database file " << GloVars.admindb << endl;
+			char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
+			sprintf(newpath,"%s.bak",GloVars.admindb);
+			rename(GloVars.admindb,newpath);	// FIXME: should we check return value, or ignore whatever it successed or not?
+		}
 		parent_close_error_log();
 		return false;
 	}
