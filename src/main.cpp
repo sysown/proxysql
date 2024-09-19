@@ -1668,6 +1668,9 @@ bool ProxySQL_daemonize_phase3() {
 			proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
 		}
 		call_execute_on_exit_failure();
+		// automatic reload of TLS certificates after a crash , see #4658
+		std::string msg;
+		ProxySQL_create_or_load_TLS(false, msg);
 		parent_close_error_log();
 		return false;
 	}
