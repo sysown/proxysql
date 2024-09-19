@@ -473,6 +473,8 @@ public:
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
 	~KillArgs();
 	const char* get_host_address() const;
+	void resolve_hostname();
+	void remove_dns_record();
 
 private:
 	char* ip_addr;

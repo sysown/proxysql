@@ -104,6 +104,7 @@ public:
 	~ProxySQL_Node_Address();
 	const char* get_host_address() const;
 	void resolve_hostname();
+	void remove_dns_record();
 private:
 	char* ip_addr;
 };
