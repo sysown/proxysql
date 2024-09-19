@@ -1574,14 +1574,14 @@ bool ProxySQL_daemonize_phase2() {
  * @note This function does not return if an error occurs; it exits the process.
  */
 void call_execute_on_exit_failure() {
+	// Log a message indicating the attempt to call the external script
+	proxy_info("Trying to call external script after exit failure: %s\n", GloVars.execute_on_exit_failure ? GloVars.execute_on_exit_failure : "(null)");
+
 	// Check if the global variable execute_on_exit_failure is NULL
 	if (GloVars.execute_on_exit_failure == NULL) {
 		// Exit the function if the variable is not set
 		return;
 	}
-
-	// Log a message indicating the attempt to call the external script
-	proxy_error("Trying to call external script after exit failure: %s\n", GloVars.execute_on_exit_failure);
 
 	// Fork a child process
 	pid_t cpid;
