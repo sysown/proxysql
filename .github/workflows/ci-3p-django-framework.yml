@@ -63,31 +63,30 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/
-        git sparse-checkout list
-        ./setup.sh
-        rm -rf ./proxysql
-        mv ../proxysql .
+        #git sparse-checkout list
+        ./setup.sh test_django-framework
+        rm -rf ./proxysql && mv ../proxysql .
         
         # extend timout
         cd test_django-framework
-        sed -i 's/timeout -v -s1 800 //' run-tests.bash
+        #sed -i 's/timeout -v -s1 800 //' run-tests.bash
 
         # fix permissions
         mkdir django/cache
         chmod -R 777 django/cache
 
         # set tested database infra
-        sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
-        sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
-        sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
+        #sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
+        #sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
+        #sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
         
     - name: Run tests
       run: |
         set +e
         
         cd proxysql_3p_testing/test_django-framework
-        sed -i 's/docker-compose/docker compose/g' run-tests.bash
-        ./run-tests.bash
+        #sed -i 's/docker-compose/docker compose/g' run-tests.bash
+        INFRADB=${{ matrix.infradb }} CONNECTOR=${{ matrix.connector }} ./run-tests.bash
         RC=$?
         
         #sudo chmod -R 777 ${{ github.workspace }}/*
@@ -97,6 +96,8 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
+        set +e
+        
         cd proxysql_3p_testing/test_django-framework
         BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_DJANGO_FRAMEWORK_${INFRADB/./}_${CONNECTOR/./} | awk '{ print $2 }')
 
