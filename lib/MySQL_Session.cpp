@@ -3938,6 +3938,14 @@ __get_pkts_from_client:
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
 		}
+
+		if (pkt.size <= sizeof(mysql_hdr)) {
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Malformed packet received\n");
+			l_free(pkt.size, pkt.ptr);
+			handler_ret = -1;
+			return handler_ret;
+		}
+
 		switch (status) {
 			case WAITING_CLIENT_DATA:
 				if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // we are handling a multi-packet
