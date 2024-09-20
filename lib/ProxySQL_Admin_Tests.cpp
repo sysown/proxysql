@@ -8,19 +8,21 @@
 
 #include "MySQL_Data_Stream.h"
 
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
 
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
+extern PgSQL_Query_Processor* GloPgQPro;
 
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
-	if (!GloQPro) return 0;
+	if (!GloMyQPro) return 0;
 	if (use_swap == false) {
 		SQLite3_result * resultset=NULL;
 		if (reset==true) {
-			resultset=GloQPro->get_query_digests_reset();
+			resultset=GloMyQPro->get_query_digests_reset();
 		} else {
-			resultset=GloQPro->get_query_digests();
+			resultset=GloMyQPro->get_query_digests();
 		}
 		if (resultset==NULL) return 0;
 		r = resultset->rows_count;
@@ -28,7 +30,7 @@ int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	} else {
 		umap_query_digest uqd;
 		umap_query_digest_text uqdt;
-		GloQPro->get_query_digests_reset(&uqd, &uqdt);
+		GloMyQPro->get_query_digests_reset(&uqd, &uqdt);
 		r = uqd.size();
 		for (std::unordered_map<uint64_t, void *>::iterator it=uqd.begin(); it!=uqd.end(); ++it) {
 			QP_query_digest_stats * qds = (QP_query_digest_stats *)it->second;
@@ -55,7 +57,7 @@ bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
 
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
 	int r = 0;
-	r = GloQPro->purge_query_digests(async_purge, parallel, msg);
+	r = GloMyQPro->purge_query_digests(async_purge, parallel, msg);
 	return r;
 }
 
@@ -129,7 +131,8 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 					myhash.Update(&hg,sizeof(hg));
 					myhash.Final(&qp.digest_total,&hash2);
 					//update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, NULL, sess);
-					GloQPro->update_query_digest(&qp,hg, &ui,fastrand(),0,NULL,sess);
+					GloMyQPro->update_query_digest(qp.digest_total,qp.digest,qp.digest_text,hg,&ui,fastrand(),0,"",
+						sess->CurrentQuery.affected_rows, sess->CurrentQuery.rows_sent);
 				}
 			}
 		}

@@ -201,15 +201,16 @@ public:
 	unsigned int add_row_description(const PGresult* result);
 	unsigned int add_row(const PGresult* result);
 	unsigned int add_row(const PSresult* result);
-	unsigned int add_command_completion(const PGresult* result);
+	unsigned int add_command_completion(const PGresult* result, bool extract_affected_rows = true);
 	unsigned int add_error(const PGresult* result);
 	unsigned int add_empty_query_response(const PGresult* result);
 	unsigned int add_ready_status(PGTransactionStatusType txn_status);
-	bool get_resultset(PtrSizeArray* PSarrayFinal);
+	bool get_resultset(PtrSizeArray* PSarrayFinal); // this also calls reset 
 	
 	unsigned long long current_size();
 	inline bool is_transfer_started() const { return transfer_started; }
 	inline unsigned long long get_num_rows() const { return num_rows; }
+	inline unsigned long long get_affected_rows() const { return affected_rows; }
 	inline unsigned int get_num_fields() const { return num_fields; }
 	inline unsigned long long get_resultset_size() const { return resultset_size; }
 	inline uint8_t get_result_packet_type() const { return result_packet_type; }
@@ -225,6 +226,7 @@ private:
 	unsigned long long resultset_size;
 	unsigned long long num_rows;
 	unsigned long long pkt_count;
+	unsigned long long affected_rows;
 	unsigned int num_fields;
 	unsigned int buffer_used;
 	unsigned char* buffer;
@@ -260,7 +262,7 @@ public:
 	
 	unsigned int copy_row_description_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_row_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
-	unsigned int copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
+	unsigned int copy_command_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result, bool extract_affected_rows);
 	unsigned int copy_error_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_empty_query_response_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, const PGresult* result);
 	unsigned int copy_ready_status_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, PGTransactionStatusType txn_status);

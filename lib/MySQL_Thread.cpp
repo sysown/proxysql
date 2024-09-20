@@ -19,7 +19,7 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
@@ -106,7 +106,7 @@ static MySQL_Session *sess_stopat;
 		mysql_thread___ ## name =       GloMTH->get_variable_string((char *)STRINGIFY(name)); \
 	} while (0)
 
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
@@ -1623,12 +1623,12 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				}
 			}
 			if (nameS == "query_rules_fast_routing_algorithm") {
-				if (GloQPro) {
+				if (GloMyQPro) {
 					int intv = atoi(value);
 					if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
-						GloQPro->wrlock();
-						GloQPro->query_rules_fast_routing_algorithm = intv;
-						GloQPro->wrunlock();
+						GloMyQPro->wrlock();
+						GloMyQPro->query_rules_fast_routing_algorithm = intv;
+						GloMyQPro->wrunlock();
 					}
 				}
 			}
@@ -2783,7 +2783,7 @@ MySQL_Thread::~MySQL_Thread() {
 			}
 		delete mysql_sessions;
 		mysql_sessions=NULL;
-		GloQPro->end_thread(); // only for real threads
+		GloMyQPro->end_thread(); // only for real threads
 	}
 
 	if (mirror_queue_mysql_sessions) {
@@ -2939,7 +2939,7 @@ bool MySQL_Thread::init() {
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	memset(my_idle_conns,0,sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
-	GloQPro->init_thread();
+	GloMyQPro->init_thread();
 	refresh_variables();
 	i=pipe(pipefd);
 	ioctl_FIONBIO(pipefd[0],1);
@@ -3317,7 +3317,7 @@ __run_skip_1:
 		) {
 			// house keeping
 			run___cleanup_mirror_queue();
-			GloQPro->update_query_processor_stats();
+			GloMyQPro->update_query_processor_stats();
 		}
 
 			if (rc == -1 && errno == EINTR)

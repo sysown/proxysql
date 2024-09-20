@@ -288,7 +288,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// pointers
 	MySQL_Thread *thread;
 #endif // 0
-	Query_Processor_Output *qpo;
+	MySQL_Query_Processor_Output *qpo;
 	StatCounters *command_counters;
 #if 0
 	MySQL_Backend *mybe;

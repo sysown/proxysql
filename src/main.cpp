@@ -26,7 +26,8 @@ using json = nlohmann::json;
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
@@ -448,7 +449,8 @@ MySQL_LDAP_Authentication *GloMyLdapAuth;
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth;
 #endif /* PROXYSQLCLICKHOUSE */
-Query_Processor *GloQPro;
+MySQL_Query_Processor* GloMyQPro;
+PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
@@ -811,7 +813,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 
 void ProxySQL_Main_init_main_modules() {
 	GloQC=NULL;
-	GloQPro=NULL;
+	GloMyQPro=NULL;
 	GloMTH=NULL;
 	GloMyAuth=NULL;
 	GloPgAuth=NULL;
@@ -880,10 +882,14 @@ void ProxySQL_Main_init_Auth_module() {
 }
 
 void ProxySQL_Main_init_Query_module() {
-	GloQPro = new Query_Processor();
-	GloQPro->print_version();
+	GloMyQPro = new MySQL_Query_Processor();
+	GloMyQPro->print_version();
+	GloPgQPro = new PgSQL_Query_Processor();
+	GloPgQPro->print_version();
 	GloAdmin->init_mysql_query_rules();
 	GloAdmin->init_mysql_firewall();
+	GloAdmin->init_pgsql_query_rules();
+	GloAdmin->init_pgsql_firewall();
 //	if (GloWebInterface) {
 //		GloWebInterface->print_version();
 //	}
@@ -1044,12 +1050,20 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloQC shutdown in ";
 #endif
 	}
-	if (GloQPro) {
+	if (GloMyQPro) {
 		cpu_timer t;
-		delete GloQPro;
-		GloQPro=NULL;
+		delete GloMyQPro;
+		GloMyQPro=NULL;
 #ifdef DEBUG
-		std::cerr << "GloQPro shutdown in ";
+		std::cerr << "GloMyQPro shutdown in ";
+#endif
+	}
+	if (GloPgQPro) {
+		cpu_timer t;
+		delete GloPgQPro;
+		GloPgQPro=NULL;
+#ifdef DEBUG
+		std::cerr << "GloPgQPro shutdown in ";
 #endif
 	}
 #ifdef PROXYSQLCLICKHOUSE

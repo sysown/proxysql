@@ -11,7 +11,7 @@ using json = nlohmann::json;
 #include "cpp.h"
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_Data_Stream.h"
-#include "query_processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "MySQL_Variables.h"
 
 
@@ -578,7 +578,7 @@ void PgSQL_Connection_Placeholder::update_warning_count_from_statement() {
 	// To prevent this, we will check the digest text in conjunction with 'mysql_thread_query_digest' to verify whether it 
 	// is enabled or disabled.
 	if (myds && myds->sess && myds->sess->CurrentQuery.stmt_info && myds->sess->CurrentQuery.stmt_info->digest_text &&
-		mysql_thread___query_digests == true) {
+		pgsql_thread___query_digests == true) {
 		if (parent->myhgc->handle_warnings_enabled()) {
 			warning_count = mysql_stmt_warning_count(query.stmt);
 		}
@@ -1867,7 +1867,7 @@ handler_again:
 						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping 
 					}
 				} else {
-					const unsigned int bytes_recv=query_result->add_command_completion(result.get());
+					const unsigned int bytes_recv=query_result->add_command_completion(result.get(), false);
 					update_bytes_recv(bytes_recv);
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 				}

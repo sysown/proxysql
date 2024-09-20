@@ -12,7 +12,7 @@ using json = nlohmann::json;
 #include "mysqld_error.h"
 
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
@@ -332,7 +332,7 @@ __exit_kill_query_thread:
 	return NULL;
 }
 
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
 extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
@@ -366,7 +366,7 @@ Query_Info::Query_Info() {
  * Frees resources associated with QueryParserArgs and stmt_info.
  */
 Query_Info::~Query_Info() {
-	GloQPro->query_parser_free(&QueryParserArgs);
+	GloMyQPro->query_parser_free(&QueryParserArgs);
 	if (stmt_info) {
 		stmt_info=NULL;
 	}
@@ -457,7 +457,7 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
  * @brief Initializes the query parser.
  */
 void Query_Info::query_parser_init() {
-	GloQPro->query_parser_init(&QueryParserArgs,(char *)QueryPointer,QueryLength,0);
+	GloMyQPro->query_parser_init(&QueryParserArgs,(char *)QueryPointer,QueryLength,0);
 }
 
 /**
@@ -465,7 +465,7 @@ void Query_Info::query_parser_init() {
  * @return The command type of the query.
  */
 enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
-	MyComQueryCmd=GloQPro->query_parser_command_type(&QueryParserArgs);
+	MyComQueryCmd= GloMyQPro->query_parser_command_type(&QueryParserArgs);
 	return MyComQueryCmd;
 }
 
@@ -473,7 +473,7 @@ enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
  * @brief Frees resources associated with the query parser.
  */
 void Query_Info::query_parser_free() {
-	GloQPro->query_parser_free(&QueryParserArgs);
+	GloMyQPro->query_parser_free(&QueryParserArgs);
 }
 
 /**
@@ -486,7 +486,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
 	}
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	if (MyComQueryCmd == MYSQL_COM_QUERY__UNINITIALIZED) return 0; // this means that it was never initialized
-	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
+	unsigned long long ret= GloMyQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
@@ -498,7 +498,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
  * @return The digest text of the query.
  */
 char * Query_Info::get_digest_text() {
-	return GloQPro->get_digest_text(&QueryParserArgs);
+	return GloMyQPro->get_digest_text(&QueryParserArgs);
 }
 
 /**
@@ -612,7 +612,8 @@ MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	//handler_ret = 0;
 	pause_until=0;
-	qpo=new Query_Processor_Output();
+	qpo=new MySQL_Query_Processor_Output();
+	qpo->init();
 	start_time=0;
 	command_counters=new StatCounters(15,10);
 	healthy=1;
@@ -3184,14 +3185,14 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+		qpo= GloMyQPro->process_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 			thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
 				(endt.tv_sec*1000000000+endt.tv_nsec) -
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
-		assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+		assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
 		// setting 'prepared' to prevent fetching results from the cache if the digest matches
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_prepare_stmt);
 		if (rc_break==true) {
@@ -3328,7 +3329,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,NULL,0,&CurrentQuery);
+		qpo= GloMyQPro->process_query(this,NULL,0,&CurrentQuery);
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -3338,7 +3339,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				(endt.tv_sec*1000000000+endt.tv_nsec) -
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
-		assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+		assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
 		// we now take the metadata associated with STMT_EXECUTE from MySQL_STMTs_meta
 		bool stmt_meta_found=true; // let's be optimistic and we assume we will found it
 		stmt_execute_metadata_t *stmt_meta=sess_STMTs_meta->find(stmt_global_id);
@@ -3479,7 +3480,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			issqli = libinjection_is_sqli(&state);
 			if (issqli) {
 				bool allow_sqli = false;
-				allow_sqli = GloQPro->mysql_whitelisted_sqli_fingerprint(state.fingerprint);
+				allow_sqli = GloMyQPro->whitelisted_sqli_fingerprint(state.fingerprint);
 				if (allow_sqli) {
 					thread->status_variables.stvar[st_var_mysql_whitelisted_sqli_fingerprint]++;
 				} else {
@@ -4065,14 +4066,14 @@ __get_pkts_from_client:
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
-									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									qpo= GloMyQPro->process_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +
 											(endt.tv_sec*1000000000+endt.tv_nsec) -
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
-									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+									assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
 
 									{
 										bool need_break = GPFC_QueryUSE(pkt, handler_ret);
@@ -7447,7 +7448,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 			break;
 	}
 
-	GloQPro->delete_QP_out(qpo);
+	GloMyQPro->delete_QP_out(qpo);
 	// if there is an associated myds, clean its status
 	if (myds) {
 		// if there is a mysql connection, clean its status
@@ -7576,7 +7577,8 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 				MySQL_Connection *mc = client_myds->myconn;
 				if (mc->userinfo && mc->userinfo->username) {
 					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
-						char *qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr));
+						char* qu = query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
+							mysql_thread___query_digests_lowercase);
 						string nq=string(qu,strlen(qu));
 						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 						opt2->set_case_sensitive(false);
