@@ -1278,11 +1278,19 @@ handler_again:
 			//}
 			MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
 			break;
-		case ASYNC_CONNECT_FAILED:
+		case ASYNC_CONNECT_FAILED: 
+			// port == 0 means we are connecting to a unix socket
+			if (parent->port) {
+				MySQL_Monitor::remove_dns_record_from_dns_cache(parent->address);
+			}
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(mysql));
 			parent->connect_error(mysql_errno(mysql));
 			break;
 		case ASYNC_CONNECT_TIMEOUT:
+			// port == 0 means we are connecting to a unix socket
+			if (parent->port) {
+				MySQL_Monitor::remove_dns_record_from_dns_cache(parent->address);
+			}
 			//proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(mysql));
