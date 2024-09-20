@@ -398,7 +398,9 @@ struct DNS_Cache_Record {
 class DNS_Cache {
 
 public:
-	DNS_Cache() : enabled(true) {
+	// By default, the DNS cache is disabled.
+	// This handles the case when ProxySQL is executed with the -M/--no-monitor option.
+	DNS_Cache() : enabled(false) {
 		int rc = pthread_rwlock_init(&rwlock_, NULL);
 		assert(rc == 0);
 	}
@@ -445,6 +447,7 @@ class MySQL_Monitor {
 	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
 	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
+	static void remove_dns_record_from_dns_cache(const std::string& hostname);
 	static void trigger_dns_cache_update();
 
 	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, int reader_hostgroup);
@@ -457,6 +460,7 @@ class MySQL_Monitor {
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	static bool _dns_cache_update(const std::string& hostname, std::vector<std::string>&& ip_address);
+	static void _remove_dns_record_from_dns_cache(const std::string& hostname);
 
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
