@@ -9,11 +9,11 @@
 #ifndef ACCOUNT_DETAILS_T
 #define ACCOUNT_DETAILS_T
 typedef struct _account_details_t {
-	char *username;
-	char *password;
-	void *sha1_pass;
-	char *clear_text_password;
-	char *default_schema;
+	char *username = nullptr;
+	char *password = nullptr;
+	void *sha1_pass = nullptr;
+	char *clear_text_password[2] = { nullptr };
+	char *default_schema = nullptr;
 	int default_hostgroup;
 	bool use_ssl;
 	bool schema_locked;
@@ -21,13 +21,24 @@ typedef struct _account_details_t {
 	bool fast_forward;
 	int max_connections;
 	int num_connections_used;
-	bool __frontend;	// this is used only during the dump
-	bool __backend;	// this is used only during the dump
+	int num_connections_used_addl_pass;
+	bool __frontend; // this is used only during the dump
+	bool __backend;	 // this is used only during the dump
 	bool __active;
-	char *attributes;
-	char *comment;
+	char *attributes = nullptr;
+	char *comment = nullptr;
 } account_details_t;
 
+/**
+ * @brief Free all resources from an 'account_details_t' object.
+ */
+void free_account_details(account_details_t&);
+
+struct dup_account_details_t {
+	bool default_schema;
+	bool sha1_pass;
+	bool attributes;
+};
 typedef std::map<uint64_t, account_details_t *> umap_auth;
 #endif // ACCOUNT_DETAILS_T
 
@@ -73,14 +84,14 @@ class MySQL_Authentication {
 	bool reset();
 	void print_version();
 	bool exists(char *username);
-	char * lookup(char *username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes);
+	account_details_t lookup(char* username, enum cred_username_type usertype, const dup_account_details_t& dup_details);
 	int dump_all_users(account_details_t ***, bool _complete=true);
-	int increase_frontend_user_connections(char *username, int *mc=NULL);
-	void decrease_frontend_user_connections(char *username);
+	int increase_frontend_user_connections(char *username, PASSWORD_TYPE::E passtype, int *mc=NULL);
+	void decrease_frontend_user_connections(char *username, PASSWORD_TYPE::E passtype);
 	void set_all_inactive(enum cred_username_type usertype);
 	void remove_inactives(enum cred_username_type usertype);
 	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
-	bool set_clear_text_password(char *username, enum cred_username_type usertype, const char *clear_text_password);
+	bool set_clear_text_password(char* username, enum cred_username_type usertype, const char* clear_text_password, PASSWORD_TYPE::E passtype);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();
 	/**

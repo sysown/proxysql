@@ -89,9 +89,20 @@ EV_PATH := $(DEPS_PATH)/libev/libev/
 EV_IDIR := $(EV_PATH)
 EV_LDIR := $(EV_PATH)/.libs
 
+POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/src
+POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/include -I$(POSTGRESQL_PATH)/interfaces/libpq
+POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBCONFIG_IDIR) -I$(LIBDAEMON_IDIR) -I$(RE2_IDIR) -L$(PCRE_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)  -I$(SQLITE3_IDIR) -I$(CLICKHOUSE_CPP_IDIR) -I$(CLICKHOUSE_CPP_CDIR) -I$(0)
-LDIRS := -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) -L$(LIBCONFIG_LDIR) -L$(LIBDAEMON_LDIR) -L$(RE2_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
+LIBUSUAL_PATH=$(DEPS_PATH)/libusual/libusual
+LIBUSUAL_IDIR=$(LIBUSUAL_PATH)
+LIBUSUAL_LDIR=$(LIBUSUAL_PATH)/.libs/
+
+LIBSCRAM_PATH=$(DEPS_PATH)/libscram/
+LIBSCRAM_IDIR=$(LIBSCRAM_PATH)/include/
+LIBSCRAM_LDIR=$(LIBSCRAM_PATH)/lib/
+
+IDIRS := -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBCONFIG_IDIR) -I$(LIBDAEMON_IDIR) -I$(RE2_IDIR) -L$(PCRE_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(SQLITE3_IDIR) -I$(CLICKHOUSE_CPP_IDIR) -I$(CLICKHOUSE_CPP_CDIR) -I$(0)
+LDIRS := -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) -L$(LIBCONFIG_LDIR) -L$(LIBDAEMON_LDIR) -L$(RE2_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR) -L$(POSTGRESQL_LDIR) -L$(LIBUSUAL_LDIR) -L$(LIBSCRAM_LDIR)
 
 
 UNAME_S := $(shell uname -s)
@@ -163,7 +174,7 @@ endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
-STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev
+STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -lscram -lusual -lpq -lpgcommon -lpgport
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc
 endif
@@ -173,7 +184,7 @@ endif
 
 MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS :=-lre2 -lmariadbclient -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
+	MYLIBS :=-lre2 -lmariadbclient -lpq -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include

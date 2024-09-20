@@ -1,4 +1,9 @@
 #define MAIN_PROXY_SQLITE3
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <iostream>
 #include <thread>
 #include "btree_map.h"
@@ -19,9 +24,12 @@
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Logger.hpp"
+#include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "MySQL_Authentication.hpp"
+#include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
@@ -41,6 +49,7 @@
 #include <sys/mman.h>
 
 #include <uuid/uuid.h>
+#include <atomic>
 
 #ifdef DEBUG
 #include "proxy_protocol_info.h"
@@ -57,6 +66,14 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 using std::map;
 using std::string;
 using std::vector;
+
+
+void sleep_iter(unsigned int iter) {
+	usleep(50*iter);
+#ifdef RUNNING_ON_VALGRIND
+	usleep((1000+rand()%1000)*iter);
+#endif // RUNNING_ON_VALGRIND
+}
 
 
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
@@ -408,7 +425,7 @@ using namespace std;
 //__cmd_proxysql_config_file=NULL;
 #define MAX_EVENTS 100
 
-static volatile int load_;
+std::atomic<int> load_;
 
 //__thread l_sfp *__thr_sfp=NULL;
 //#ifdef DEBUG
@@ -427,13 +444,16 @@ int socket_fd;
 
 Query_Cache *GloQC;
 MySQL_Authentication *GloMyAuth;
+PgSQL_Authentication* GloPgAuth;
 MySQL_LDAP_Authentication *GloMyLdapAuth;
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth;
 #endif /* PROXYSQLCLICKHOUSE */
-Query_Processor *GloQPro;
+MySQL_Query_Processor* GloMyQPro;
+PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
+PgSQL_Threads_Handler* GloPTH = NULL;
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
 
@@ -441,8 +461,9 @@ MySQL_Monitor *GloMyMon;
 std::thread *MyMon_thread = NULL;
 
 MySQL_Logger *GloMyLogger;
+PgSQL_Logger* GloPgSQL_Logger;
 MySQL_Variables mysql_variables;
-
+PgSQL_Variables pgsql_variables;
 SQLite3_Server *GloSQLite3Server;
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Server *GloClickHouseServer;
@@ -471,8 +492,9 @@ void * mysql_worker_thread_func(void *arg) {
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
-	__sync_fetch_and_sub(&load_,1);
-	do { usleep(50); } while (load_);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
 	//delete worker;
@@ -502,8 +524,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
-	__sync_fetch_and_sub(&load_,1);
-	do { usleep(50); } while (load_);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
 	//delete worker;
@@ -511,6 +534,71 @@ void * mysql_worker_thread_func_idles(void *arg) {
 //	l_mem_destroy(__thr_sfp);
 
 	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_mysql_threads,tmp_stack_size);
+
+	return NULL;
+}
+#endif // IDLE_THREADS
+
+void* pgsql_worker_thread_func(void* arg) {
+
+	//	__thr_sfp=l_mem_init();
+
+	pthread_attr_t thread_attr;
+	size_t tmp_stack_size = 0;
+	if (!pthread_attr_init(&thread_attr)) {
+		if (!pthread_attr_getstacksize(&thread_attr, &tmp_stack_size)) {
+			__sync_fetch_and_add(&GloVars.statuses.stack_memory_pgsql_threads, tmp_stack_size);
+		}
+	}
+
+	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
+	PgSQL_Thread* worker = new PgSQL_Thread();
+	pgsql_thread->worker = worker;
+	worker->init();
+	//	worker->poll_listener_add(listen_fd);
+	//	worker->poll_listener_add(socket_fd);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
+
+	worker->run();
+	//delete worker;
+	delete worker;
+	pgsql_thread->worker = NULL;
+	//	l_mem_destroy(__thr_sfp);
+	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_pgsql_threads, tmp_stack_size);
+	return NULL;
+}
+
+#ifdef IDLE_THREADS
+void* pgsql_worker_thread_func_idles(void* arg) {
+
+	pthread_attr_t thread_attr;
+	size_t tmp_stack_size = 0;
+	if (!pthread_attr_init(&thread_attr)) {
+		if (!pthread_attr_getstacksize(&thread_attr, &tmp_stack_size)) {
+			__sync_fetch_and_add(&GloVars.statuses.stack_memory_pgsql_threads, tmp_stack_size);
+		}
+	}
+
+	//	__thr_sfp=l_mem_init();
+	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
+	PgSQL_Thread* worker = new PgSQL_Thread();
+	pgsql_thread->worker = worker;
+	worker->epoll_thread = true;
+	worker->init();
+	//	worker->poll_listener_add(listen_fd);
+	//	worker->poll_listener_add(socket_fd);
+	load_ -= 1;
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_);
+
+	worker->run();
+	//delete worker;
+	delete worker;
+	//	l_mem_destroy(__thr_sfp);
+
+	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_pgsql_threads, tmp_stack_size);
 
 	return NULL;
 }
@@ -725,14 +813,17 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 
 void ProxySQL_Main_init_main_modules() {
 	GloQC=NULL;
-	GloQPro=NULL;
+	GloMyQPro=NULL;
 	GloMTH=NULL;
 	GloMyAuth=NULL;
+	GloPgAuth=NULL;
+	GloPTH=NULL;
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
 	GloMyMon=NULL;
 	GloMyLogger=NULL;
+	GloPgSQL_Logger = NULL;
 	GloMyStmt=NULL;
 
 	// initialize libev
@@ -743,12 +834,21 @@ void ProxySQL_Main_init_main_modules() {
 
 	MyHGM=new MySQL_HostGroups_Manager();
 	MyHGM->init();
+
 	MySQL_Threads_Handler * _tmp_GloMTH = NULL;
 	_tmp_GloMTH=new MySQL_Threads_Handler();
 	GloMTH = _tmp_GloMTH;
 	GloMyLogger = new MySQL_Logger();
 	GloMyLogger->print_version();
+	GloPgSQL_Logger = new PgSQL_Logger();
+	GloPgSQL_Logger->print_version();
 	GloMyStmt=new MySQL_STMT_Manager_v14();
+
+	PgHGM = new PgSQL_HostGroups_Manager();
+	PgHGM->init();
+	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;
+	_tmp_GloPTH = new PgSQL_Threads_Handler();
+	GloPTH = _tmp_GloPTH;
 }
 
 
@@ -771,7 +871,10 @@ void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 void ProxySQL_Main_init_Auth_module() {
 	GloMyAuth = new MySQL_Authentication();
 	GloMyAuth->print_version();
+	GloPgAuth = new PgSQL_Authentication();
+	GloPgAuth->print_version();
 	GloAdmin->init_users();
+	GloAdmin->init_pgsql_users();
 	//GloMyLdapAuth = create_MySQL_LDAP_Authentication();
 	if (GloMyLdapAuth) {
 		GloMyLdapAuth->print_version();
@@ -779,10 +882,14 @@ void ProxySQL_Main_init_Auth_module() {
 }
 
 void ProxySQL_Main_init_Query_module() {
-	GloQPro = new Query_Processor();
-	GloQPro->print_version();
+	GloMyQPro = new MySQL_Query_Processor();
+	GloMyQPro->print_version();
+	GloPgQPro = new PgSQL_Query_Processor();
+	GloPgQPro->print_version();
 	GloAdmin->init_mysql_query_rules();
 	GloAdmin->init_mysql_firewall();
+	GloAdmin->init_pgsql_query_rules();
+	GloAdmin->init_pgsql_firewall();
 //	if (GloWebInterface) {
 //		GloWebInterface->print_version();
 //	}
@@ -806,6 +913,30 @@ void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
 			GloMTH->create_thread(i,mysql_worker_thread_func_idles, true);
+		}
+#endif // IDLE_THREADS
+	}
+}
+
+void ProxySQL_Main_init_PgSQL_Threads_Handler_module() {
+	unsigned int i;
+	GloPTH->init();
+	//load_ = 1;
+	load_ += GloPTH->num_threads;
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		load_ += GloPTH->num_threads;
+	}
+	else {
+		proxy_warning("proxysql instance running without --idle-threads : most workloads benefit from this option\n");
+		proxy_warning("proxysql instance running without --idle-threads : enabling it can potentially improve performance\n");
+	}
+#endif // IDLE_THREADS
+	for (i = 0; i < GloPTH->num_threads; i++) {
+		GloPTH->create_thread(i, pgsql_worker_thread_func, false);
+#ifdef IDLE_THREADS
+		if (GloVars.global.idle_threads) {
+			GloPTH->create_thread(i, pgsql_worker_thread_func_idles, true);
 		}
 #endif // IDLE_THREADS
 	}
@@ -862,6 +993,13 @@ void ProxySQL_Main_join_all_threads() {
 		std::cerr << "GloMTH joined in ";
 #endif
 	}
+	if (GloPTH) {
+		cpu_timer t;
+		GloPTH->shutdown_threads();
+#ifdef DEBUG
+		std::cerr << "GloPTH joined in ";
+#endif
+	}
 	if (GloQC) {
 		GloQC->shutdown=1;
 	}
@@ -912,12 +1050,20 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloQC shutdown in ";
 #endif
 	}
-	if (GloQPro) {
+	if (GloMyQPro) {
 		cpu_timer t;
-		delete GloQPro;
-		GloQPro=NULL;
+		delete GloMyQPro;
+		GloMyQPro=NULL;
 #ifdef DEBUG
-		std::cerr << "GloQPro shutdown in ";
+		std::cerr << "GloMyQPro shutdown in ";
+#endif
+	}
+	if (GloPgQPro) {
+		cpu_timer t;
+		delete GloPgQPro;
+		GloPgQPro=NULL;
+#ifdef DEBUG
+		std::cerr << "GloPgQPro shutdown in ";
 #endif
 	}
 #ifdef PROXYSQLCLICKHOUSE
@@ -954,6 +1100,14 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloMyAuth shutdown in ";
 #endif
 	}
+	if (GloPgAuth) {
+		cpu_timer t;
+		delete GloPgAuth;
+		GloPgAuth = NULL;
+#ifdef DEBUG
+		std::cerr << "GloPgAuth shutdown in ";
+#endif
+	}
 	if (GloMTH) {
 		cpu_timer t;
 		pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
@@ -970,6 +1124,14 @@ void ProxySQL_Main_shutdown_all_modules() {
 		GloMyLogger=NULL;
 #ifdef DEBUG
 		std::cerr << "GloMyLogger shutdown in ";
+#endif
+	}
+	if (GloPgSQL_Logger) {
+		cpu_timer t;
+		delete GloPgSQL_Logger;
+		GloPgSQL_Logger = NULL;
+#ifdef DEBUG
+		std::cerr << "GloPgSQL_Logger shutdown in ";
 #endif
 	}
 
@@ -1117,6 +1279,14 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 		std::cerr << "Main phase3 : GloMyLogger initialized in ";
 #endif
 	}
+	{
+		cpu_timer t;
+		GloPgSQL_Logger->events_set_datadir(GloVars.datadir);
+		GloPgSQL_Logger->audit_set_datadir(GloVars.datadir);
+#ifdef DEBUG
+		std::cerr << "Main phase3 : GloPgSQL_Logger initialized in ";
+#endif
+	}
 	if (GloVars.configfile_open) {
 		GloVars.confFile->CloseFile();
 	}
@@ -1143,12 +1313,21 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : GloMyLogger initialized in ";
 #endif
 	}
+	{
+		cpu_timer t;
+		GloPgSQL_Logger->events_set_datadir(GloVars.datadir);
+		GloPgSQL_Logger->audit_set_datadir(GloVars.datadir);
+#ifdef DEBUG
+		std::cerr << "Main phase3 : GloPgSQL_Logger initialized in ";
+#endif
+	}
 	// Initialized monitor, no matter if it will be started or not
 	GloMyMon = new MySQL_Monitor();
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;
 		GloAdmin->init_mysql_servers();
+		GloAdmin->init_pgsql_servers();
 		GloAdmin->init_proxysql_servers();
 		GloAdmin->load_scheduler_to_runtime();
 #ifdef DEBUG
@@ -1169,6 +1348,15 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : MySQL Threads Handler initialized in ";
 #endif
 	}
+
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_PgSQL_Threads_Handler_module();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : PgSQL Threads Handler initialized in ";
+#endif
+	}
+
 	{
 		cpu_timer t;
 		ProxySQL_Main_init_Query_Cache_module();
@@ -1177,14 +1365,11 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 
-	do { /* nothing */
-#ifdef DEBUG
-		usleep(5+rand()%10);
-#endif
-	} while (load_ != 1);
+	unsigned int iter = 0;
+	do { sleep_iter(++iter); } while (load_ != 1);
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
-
+	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
 	{
 		cpu_timer t;
 		GloMTH->start_listeners();
@@ -1192,6 +1377,15 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : MySQL Threads Handler listeners started in ";
 #endif
 	}
+
+	{
+		cpu_timer t;
+		GloPTH->start_listeners();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : PgSQL Threads Handler listeners started in ";
+#endif
+	}
+
 	if ( GloVars.global.sqlite3_server == true ) {
 		cpu_timer t;
 		ProxySQL_Main_init_SQLite3Server();
@@ -1380,14 +1574,14 @@ bool ProxySQL_daemonize_phase2() {
  * @note This function does not return if an error occurs; it exits the process.
  */
 void call_execute_on_exit_failure() {
-	// Log a message indicating the attempt to call the external script
-	proxy_info("Trying to call external script after exit failure: %s\n", GloVars.execute_on_exit_failure ? GloVars.execute_on_exit_failure : "(null)");
-
 	// Check if the global variable execute_on_exit_failure is NULL
 	if (GloVars.execute_on_exit_failure == NULL) {
 		// Exit the function if the variable is not set
 		return;
 	}
+
+	// Log a message indicating the attempt to call the external script
+	proxy_error("Trying to call external script after exit failure: %s\n", GloVars.execute_on_exit_failure);
 
 	// Fork a child process
 	pid_t cpid;
@@ -1474,16 +1668,6 @@ bool ProxySQL_daemonize_phase3() {
 			proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
 		}
 		call_execute_on_exit_failure();
-		// automatic reload of TLS certificates after a crash , see #4658
-		std::string msg;
-		ProxySQL_create_or_load_TLS(false, msg);
-		//  Honor --initial after a crash , see #4659
-		if (GloVars.__cmd_proxysql_initial==true) {
-			std::cerr << "Renaming database file " << GloVars.admindb << endl;
-			char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
-			sprintf(newpath,"%s.bak",GloVars.admindb);
-			rename(GloVars.admindb,newpath);	// FIXME: should we check return value, or ignore whatever it successed or not?
-		}
 		parent_close_error_log();
 		return false;
 	}

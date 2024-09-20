@@ -52,7 +52,6 @@
 
 #include "mysql.h"
 #include "mariadb_com.h"
-
 #include "proxysql_mem.h"
 
 #include "proxysql_structs.h"
@@ -70,16 +69,7 @@
 #endif // __APPLE__ and __MACH__
 #endif // NOJEM
 
-#ifdef DEBUG
-//#define VALGRIND_ENABLE_ERROR_REPORTING
-//#define VALGRIND_DISABLE_ERROR_REPORTING
-#include "valgrind.h"
-#else
-#define VALGRIND_ENABLE_ERROR_REPORTING
-#define VALGRIND_DISABLE_ERROR_REPORTING
-#endif /* DEBUG */
-
-#include "sqlite3.h"
+//#include "sqlite3.h"
 
 #include "c_tokenizer.h"
 

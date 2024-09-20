@@ -9,6 +9,15 @@
 #include <iostream>
 //#endif
 
+#ifdef DEBUG
+//#define VALGRIND_ENABLE_ERROR_REPORTING
+//#define VALGRIND_DISABLE_ERROR_REPORTING
+#include "valgrind.h"
+#else
+#define VALGRIND_ENABLE_ERROR_REPORTING
+#define VALGRIND_DISABLE_ERROR_REPORTING
+#endif // DEBUG
+
 using namespace std;
 
 #define MULTI_STATEMENTS_USE "Unable to parse multi-statements command with USE statement"

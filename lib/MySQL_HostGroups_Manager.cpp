@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -53,9 +57,10 @@ class MySrvC;
 class MySrvList;
 class MyHGC;
 
+const int MYSQL_ERRORS_STATS_FIELD_NUM = 11;
+
 struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port);
 void * GTID_syncer_run();
-
 
 static int wait_for_mysql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
@@ -79,6 +84,49 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 		if (pfd.revents & POLLPRI) status |= MYSQL_WAIT_EXCEPT;
 		return status;
 	}
+}
+
+/**
+ * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
+ *
+ * @param j JSON object constructed from 'servers_defaults' field.
+ * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
+ *  error logging.
+ * @param key The key for the value to be extracted.
+ * @param val_check A validation function, checks if the value is within a expected range.
+ *
+ * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
+ */
+template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
+T j_get_srv_default_int_val(
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+) {
+	if (j.find(key) != j.end()) {
+		const json::value_t val_type = j[key].type();
+		const char* type_name = j[key].type_name();
+
+		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
+			T val = j[key].get<T>();
+
+			if (val_check(val)) {
+				return val;
+			} else {
+				proxy_error(
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+						" Value NOT UPDATED.\n",
+					static_cast<int64_t>(val), key.c_str(), hid
+				);
+			}
+		} else {
+			proxy_error(
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					" Value NOT UPDATED.\n",
+				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+			);
+		}
+	}
+
+	return static_cast<T>(-1);
 }
 
 
@@ -303,6 +351,12 @@ hg_metrics_map = std::make_tuple(
 			}
 		),
 		std::make_tuple (
+			p_hg_counter::client_connections_sha2cached,
+			"proxysql_client_connections_sha2cached_total",
+			"Total number of attempted client connections with known cached passwords.",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_hg_counter::client_connections_aborted,
 			"proxysql_client_connections_total",
 			"Total number of client failed connections (or closed improperly).",
@@ -471,6 +525,18 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_client_connections_connected",
 			"Client connections that are currently connected.",
 			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected_prim,
+			"proxysql_client_connections_connected_primary",
+			"Client connections that are currently connected using primary password.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected_addl,
+			"proxysql_client_connections_connected_additional",
+			"Client connections that are currently connected using additional password.",
+			metric_tags {}
 		)
 	},
 	// prometheus dynamic counters
@@ -578,8 +644,11 @@ hg_metrics_map = std::make_tuple(
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
+	status.client_connections_prim_pass=0;
+	status.client_connections_addl_pass=0;
 	status.client_connections_aborted=0;
 	status.client_connections_created=0;
+	status.client_connections_sha2cached=0;
 	status.server_connections_connected=0;
 	status.server_connections_aborted=0;
 	status.server_connections_created=0;
@@ -610,17 +679,17 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.access_denied_max_user_connections=0;
 	status.select_for_update_or_equivalent=0;
 	status.auto_increment_delay_multiplex=0;
+#if 0
 	pthread_mutex_init(&readonly_mutex, NULL);
+#endif // 0
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);
 	pthread_mutex_init(&AWS_Aurora_Info_mutex, NULL);
-#ifdef MHM_PTHREAD_MUTEX
+#if 0
 	pthread_mutex_init(&lock, NULL);
-#else
-	spinlock_rwlock_init(&rwlock);
-#endif
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
+#endif // 0
 #ifdef DEBUG
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
@@ -709,21 +778,7 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 		ev_loop_destroy(gtid_ev_loop);
 	if (gtid_ev_timer)
 		free(gtid_ev_timer);
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
-#endif
-}
-
-// wrlock() is only required during commit()
-void MySQL_HostGroups_Manager::wrlock() {
-#ifdef MHM_PTHREAD_MUTEX
-	pthread_mutex_lock(&lock);
-#else
-	spin_wrlock(&rwlock);
-#endif
-#ifdef DEBUG
-	is_locked = true;
-#endif
 }
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
@@ -756,18 +811,6 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 
 	pthread_mutex_unlock(&mysql_errors_mutex);
 }
-
-void MySQL_HostGroups_Manager::wrunlock() {
-#ifdef DEBUG
-	is_locked = false;
-#endif
-#ifdef MHM_PTHREAD_MUTEX
-	pthread_mutex_unlock(&lock);
-#else
-	spin_wrunlock(&rwlock);
-#endif
-}
-
 
 void MySQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
 	struct timespec ts;
@@ -868,29 +911,6 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	(*proxy_sqlite3_finalize)(statement1);
 	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
-}
-
-/**
- * @brief Execute a SQL query and retrieve the resultset.
- *
- * This function executes a SQL query using the provided query string and returns the resultset obtained from the
- * database operation. It also provides an optional error parameter to capture any error messages encountered during
- * query execution.
- *
- * @param query A pointer to a null-terminated string containing the SQL query to be executed.
- * @param error A pointer to a char pointer where any error message encountered during query execution will be stored.
- *              Pass nullptr if error handling is not required.
- * @return A pointer to a SQLite3_result object representing the resultset obtained from the query execution. This
- *         pointer may be nullptr if the query execution fails or returns an empty result.
- */
-SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	wrlock();
-	mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
 }
 
 /**
@@ -1076,7 +1096,7 @@ unique_ptr<SQLite3_result> get_mysql_servers_v2() {
 	return unique_ptr<SQLite3_result>(resultset);
 }
 
-void update_glovars_checksum_with_peers(
+static void update_glovars_checksum_with_peers(
 	ProxySQL_Checksum_Value& module_checksum,
 	const string& new_checksum,
 	const string& peer_checksum_value,
@@ -1113,7 +1133,7 @@ void update_glovars_checksum_with_peers(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-void update_glovars_mysql_servers_checksum(
+static void update_glovars_mysql_servers_checksum(
 	const string& new_checksum,
 	const runtime_mysql_servers_checksum_t& peer_checksum = {},
 	bool update_version = false
@@ -1144,7 +1164,7 @@ void update_glovars_mysql_servers_checksum(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-void update_glovars_mysql_servers_v2_checksum(
+static void update_glovars_mysql_servers_v2_checksum(
 	const string& new_checksum,
 	const mysql_servers_v2_checksum_t& peer_checksum = {},
 	bool update_version = false
@@ -1236,6 +1256,10 @@ std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint6
 
 	string mysrvs_checksum { get_checksum_from_hash(hash_1) };
 	return mysrvs_checksum;
+}
+
+bool MySQL_HostGroups_Manager::commit() {
+	return commit({},{});
 }
 
 bool MySQL_HostGroups_Manager::commit(
@@ -2155,7 +2179,7 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 	int cols = 0;
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
-	char* query = const_cast<char*>("SELECT hostname, port, status, use_ssl FROM mysql_servers WHERE status != 3 GROUP BY hostname, port");
+	const char* query = "SELECT hostname, port, status, use_ssl FROM mysql_servers WHERE status != 3 GROUP BY hostname, port";
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -2226,78 +2250,6 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	return resultset;
-}
-
-/**
- * @brief Create a new MySQL host group container.
- *
- * This function creates a new instance of the MySQL host group container (`MyHGC`) with
- * the specified host group ID and returns a pointer to it.
- *
- * @param _hid The host group ID for the new container.
- * @return A pointer to the newly created `MyHGC` instance.
- */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
-	MyHGC *myhgc=new MyHGC(_hid);
-	return myhgc;
-}
-
-/**
- * @brief Find a MySQL host group container by host group ID.
- *
- * This function searches for a MySQL host group container with the specified host group ID
- * in the list of host groups. If found, it returns a pointer to the container; otherwise,
- * it returns a null pointer.
- *
- * @param _hid The host group ID to search for.
- * @return A pointer to the found `MyHGC` instance if found; otherwise, a null pointer.
- */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
-	if (MyHostGroups->len < 100) {
-		// for few HGs, we use the legacy search
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-			if (myhgc->hid==_hid) {
-				return myhgc;
-			}
-		}
-	} else {
-		// for a large number of HGs, we use the unordered_map
-		// this search is slower for a small number of HGs, therefore we use
-		// it only for large number of HGs
-		std::unordered_map<unsigned int, MyHGC *>::const_iterator it = MyHostGroups_map.find(_hid);
-		if (it != MyHostGroups_map.end()) {
-			MyHGC *myhgc = it->second;
-			return myhgc;
-		}
-	}
-	return NULL;
-}
-
-/**
- * @brief Lookup or create a MySQL host group container by host group ID.
- *
- * This function looks up a MySQL host group container with the specified host group ID. If
- * found, it returns a pointer to the existing container; otherwise, it creates a new container
- * with the specified host group ID, adds it to the list of host groups, and returns a pointer
- * to it.
- *
- * @param _hid The host group ID to lookup or create.
- * @return A pointer to the found or newly created `MyHGC` instance.
- * @note The function assertion fails if a newly created container is not found.
- */
-MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
-	MyHGC *myhgc=NULL;
-	myhgc=MyHGC_find(_hid);
-	if (myhgc==NULL) {
-		myhgc=MyHGC_create(_hid);
-	} else {
-		return myhgc;
-	}
-	assert(myhgc);
-	MyHostGroups->add(myhgc);
-	MyHostGroups_map.emplace(_hid,myhgc);
-	return myhgc;
 }
 
 void MySQL_HostGroups_Manager::increase_reset_counter() {
@@ -4152,7 +4104,10 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 	// Update *client_connections* related metrics
 	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_created], status.client_connections_created);
 	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_aborted], status.client_connections_aborted);
+	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_sha2cached], status.client_connections_sha2cached);
 	status.p_gauge_array[p_hg_gauge::client_connections_connected]->Set(status.client_connections);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected_prim]->Set(status.client_connections_prim_pass);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected_addl]->Set(status.client_connections_addl_pass);
 
 	// Update *acess_denied* related metrics
 	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_wrong_password], status.access_denied_wrong_password);
@@ -5069,7 +5024,7 @@ bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, 
  * @brief Dumps to stderr the current info for the monitored Galera hosts ('Galera_Hosts_Map').
  * @details No action if `mysql_thread___hostgroup_manager_verbose=0`.
  */
-void print_galera_nodes_last_status() {
+static void print_galera_nodes_last_status() {
 	if (!mysql_thread___hostgroup_manager_verbose) return;
 
 	std::unique_ptr<SQLite3_result> result { new SQLite3_result(13) };
@@ -5981,7 +5936,7 @@ class MySQL_Errors_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*11);
+		char **pta=(char **)malloc(sizeof(char *)*MYSQL_ERRORS_STATS_FIELD_NUM);
 		sprintf(buf,"%d",hostgroup);
 		pta[0]=strdup(buf);
 		assert(hostname);
@@ -6023,7 +5978,7 @@ class MySQL_Errors_stats {
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<11;i++) {
+		for (i=0;i<MYSQL_ERRORS_STATS_FIELD_NUM;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -6087,7 +6042,7 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
-	SQLite3_result *result=new SQLite3_result(11);
+	SQLite3_result *result=new SQLite3_result(MYSQL_ERRORS_STATS_FIELD_NUM);
 	pthread_mutex_lock(&mysql_errors_mutex);
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"hostname");
@@ -6404,14 +6359,16 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		if (myhgc->attributes.ignore_session_variables_text == NULL) {
 			myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
 			if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
-				myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+				if (myhgc->attributes.ignore_session_variables_json != nullptr) { delete myhgc->attributes.ignore_session_variables_json; }
+				myhgc->attributes.ignore_session_variables_json = new json(json::parse(ignore_session_variables));
 			}
 		} else {
 			if (strcmp(myhgc->attributes.ignore_session_variables_text, ignore_session_variables) != 0) {
 				free(myhgc->attributes.ignore_session_variables_text);
 				myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
 				if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
-					myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+					if (myhgc->attributes.ignore_session_variables_json != nullptr) { delete myhgc->attributes.ignore_session_variables_json; }
+					myhgc->attributes.ignore_session_variables_json = new json(json::parse(ignore_session_variables));
 				}
 				// TODO: assign the variables
 			}

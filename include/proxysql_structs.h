@@ -10,6 +10,10 @@
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
 
+#define MIN_POLL_LEN 8
+#define MIN_POLL_DELETE_RATIO  8
+#define MY_EPOLL_THREAD_MAXEVENTS 128
+
 enum MySerStatus {
 	MYSQL_SERVER_STATUS_ONLINE,
 	MYSQL_SERVER_STATUS_SHUNNED,
@@ -43,7 +47,7 @@ enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND, USERNAME_NONE };
 
 #define PROXYSQL_USE_RESULT
 
-enum MDB_ASYNC_ST { // MariaDB Async State Machine
+enum ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CONNECT_START,
 	ASYNC_CONNECT_CONT,
 	ASYNC_CONNECT_END,
@@ -114,9 +118,19 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CLOSE_START,
 	ASYNC_CLOSE_CONT,
 	ASYNC_CLOSE_END,
+	ASYNC_RESET_SESSION_START,
+	ASYNC_RESET_SESSION_CONT,
+	ASYNC_RESET_SESSION_END,
+	ASYNC_RESET_SESSION_SUCCESSFUL,
+	ASYNC_RESET_SESSION_FAILED,
+	ASYNC_RESET_SESSION_TIMEOUT,
 
 	ASYNC_IDLE
 };
+
+using MDB_ASYNC_ST = ASYNC_ST;
+using PG_ASYNC_ST = ASYNC_ST;
+
 
 // list of possible debugging modules
 enum debug_module {
@@ -244,6 +258,7 @@ enum session_status {
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
 	RESETTING_CONNECTION,
+	RESETTING_CONNECTION_V2,
 	SETTING_INIT_CONNECT,
 	SETTING_LDAP_USER_VARIABLE,
 	SETTING_ISOLATION_LEVEL,
@@ -445,6 +460,161 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY___NONE // Special marker.
 };
 
+enum PGSQL_QUERY_command {
+	PGSQL_QUERY_SELECT,
+	PGSQL_QUERY_INSERT,
+	PGSQL_QUERY_UPDATE,
+	PGSQL_QUERY_DELETE,
+	PGSQL_QUERY_MERGE,
+	PGSQL_QUERY_CREATE_TABLE,
+	PGSQL_QUERY_ALTER_TABLE,
+	PGSQL_QUERY_DROP_TABLE,
+	PGSQL_QUERY_TRUNCATE,
+	PGSQL_QUERY_COPY,
+	PGSQL_QUERY_CREATE_INDEX,
+	PGSQL_QUERY_DROP_INDEX,
+	PGSQL_QUERY_ALTER_INDEX,
+	PGSQL_QUERY_CREATE_VIEW,
+	PGSQL_QUERY_DROP_VIEW,
+	PGSQL_QUERY_ALTER_VIEW,
+	PGSQL_QUERY_CREATE_MATERIALIZED_VIEW,
+	PGSQL_QUERY_ALTER_MATERIALIZED_VIEW,
+	PGSQL_QUERY_REFRESH_MATERIALIZED_VIEW,
+	PGSQL_QUERY_DROP_MATERIALIZED_VIEW,
+	PGSQL_QUERY_CREATE_SEQUENCE,
+	PGSQL_QUERY_ALTER_SEQUENCE,
+	PGSQL_QUERY_DROP_SEQUENCE,
+	PGSQL_QUERY_CREATE_SCHEMA,
+	PGSQL_QUERY_DROP_SCHEMA,
+	PGSQL_QUERY_ALTER_SCHEMA,
+	PGSQL_QUERY_CREATE_FUNCTION,
+	PGSQL_QUERY_ALTER_FUNCTION,
+	PGSQL_QUERY_DROP_FUNCTION,
+	PGSQL_QUERY_CREATE_PROCEDURE,
+	PGSQL_QUERY_ALTER_PROCEDURE,
+	PGSQL_QUERY_CALL,
+	PGSQL_QUERY_DROP_PROCEDURE,
+	PGSQL_QUERY_CREATE_AGGREGATE,
+	PGSQL_QUERY_ALTER_AGGREGATE,
+	PGSQL_QUERY_DROP_AGGREGATE,
+	PGSQL_QUERY_CREATE_OPERATOR,
+	PGSQL_QUERY_ALTER_OPERATOR,
+	PGSQL_QUERY_DROP_OPERATOR,
+	PGSQL_QUERY_CREATE_TYPE,
+	PGSQL_QUERY_ALTER_TYPE,
+	PGSQL_QUERY_DROP_TYPE,
+	PGSQL_QUERY_CREATE_DOMAIN,
+	PGSQL_QUERY_ALTER_DOMAIN,
+	PGSQL_QUERY_DROP_DOMAIN,
+	PGSQL_QUERY_CREATE_TRIGGER,
+	PGSQL_QUERY_ALTER_TRIGGER,
+	PGSQL_QUERY_DROP_TRIGGER,
+	PGSQL_QUERY_CREATE_RULE,
+	PGSQL_QUERY_ALTER_RULE,
+	PGSQL_QUERY_DROP_RULE,
+	PGSQL_QUERY_CREATE_EXTENSION,
+	PGSQL_QUERY_ALTER_EXTENSION,
+	PGSQL_QUERY_DROP_EXTENSION,
+	PGSQL_QUERY_CREATE_POLICY,
+	PGSQL_QUERY_ALTER_POLICY,
+	PGSQL_QUERY_DROP_POLICY,
+	PGSQL_QUERY_CREATE_ROLE,
+	PGSQL_QUERY_ALTER_ROLE,
+	PGSQL_QUERY_DROP_ROLE,
+	PGSQL_QUERY_CREATE_USER,
+	PGSQL_QUERY_ALTER_USER,
+	PGSQL_QUERY_DROP_USER,
+	PGSQL_QUERY_GRANT,
+	PGSQL_QUERY_REVOKE,
+	PGSQL_QUERY_COMMENT,
+	PGSQL_QUERY_NOTIFY,
+	PGSQL_QUERY_LISTEN,
+	PGSQL_QUERY_UNLISTEN,
+	PGSQL_QUERY_LOCK,
+	PGSQL_QUERY_CHECKPOINT,
+	PGSQL_QUERY_REINDEX,
+	PGSQL_QUERY_VACUUM,
+	PGSQL_QUERY_ANALYZE,
+	PGSQL_QUERY_EXPLAIN,
+	PGSQL_QUERY_EXECUTE,
+	PGSQL_QUERY_PREPARE,
+	PGSQL_QUERY_DEALLOCATE,
+	PGSQL_QUERY_FETCH,
+	PGSQL_QUERY_MOVE,
+	PGSQL_QUERY_SAVEPOINT,
+	PGSQL_QUERY_ROLLBACK_TO_SAVEPOINT,
+	PGSQL_QUERY_RELEASE_SAVEPOINT,
+	PGSQL_QUERY_BEGIN,
+	PGSQL_QUERY_COMMIT,
+	PGSQL_QUERY_ROLLBACK,
+	PGSQL_QUERY_DECLARE_CURSOR,
+	PGSQL_QUERY_CLOSE_CURSOR,
+	PGSQL_QUERY_DISCARD,
+	PGSQL_QUERY_SHOW,
+	PGSQL_QUERY_SET,
+	PGSQL_QUERY_RESET,
+	PGSQL_QUERY_ALTER_DATABASE,
+	PGSQL_QUERY_CREATE_DATABASE,
+	PGSQL_QUERY_DROP_DATABASE,
+	PGSQL_QUERY_CREATE_COLLATION,
+	PGSQL_QUERY_ALTER_COLLATION,
+	PGSQL_QUERY_DROP_COLLATION,
+	PGSQL_QUERY_CREATE_TEXT_SEARCH_CONFIGURATION,
+	PGSQL_QUERY_ALTER_TEXT_SEARCH_CONFIGURATION,
+	PGSQL_QUERY_DROP_TEXT_SEARCH_CONFIGURATION,
+	PGSQL_QUERY_CREATE_TEXT_SEARCH_DICTIONARY,
+	PGSQL_QUERY_ALTER_TEXT_SEARCH_DICTIONARY,
+	PGSQL_QUERY_DROP_TEXT_SEARCH_DICTIONARY,
+	PGSQL_QUERY_CREATE_TEXT_SEARCH_TEMPLATE,
+	PGSQL_QUERY_ALTER_TEXT_SEARCH_TEMPLATE,
+	PGSQL_QUERY_DROP_TEXT_SEARCH_TEMPLATE,
+	PGSQL_QUERY_CREATE_TEXT_SEARCH_PARSER,
+	PGSQL_QUERY_ALTER_TEXT_SEARCH_PARSER,
+	PGSQL_QUERY_DROP_TEXT_SEARCH_PARSER,
+	PGSQL_QUERY_CREATE_FOREIGN_TABLE,
+	PGSQL_QUERY_ALTER_FOREIGN_TABLE,
+	PGSQL_QUERY_DROP_FOREIGN_TABLE,
+	PGSQL_QUERY_IMPORT_FOREIGN_SCHEMA,
+	PGSQL_QUERY_CREATE_SERVER,
+	PGSQL_QUERY_ALTER_SERVER,
+	PGSQL_QUERY_DROP_SERVER,
+	PGSQL_QUERY_CREATE_USER_MAPPING,
+	PGSQL_QUERY_ALTER_USER_MAPPING,
+	PGSQL_QUERY_DROP_USER_MAPPING,
+	PGSQL_QUERY_CREATE_PUBLICATION,
+	PGSQL_QUERY_ALTER_PUBLICATION,
+	PGSQL_QUERY_DROP_PUBLICATION,
+	PGSQL_QUERY_CREATE_SUBSCRIPTION,
+	PGSQL_QUERY_ALTER_SUBSCRIPTION,
+	PGSQL_QUERY_DROP_SUBSCRIPTION,
+	PGSQL_QUERY_CREATE_ACCESS_METHOD,
+	PGSQL_QUERY_ALTER_ACCESS_METHOD,
+	PGSQL_QUERY_DROP_ACCESS_METHOD,
+	PGSQL_QUERY_CREATE_EVENT_TRIGGER,
+	PGSQL_QUERY_ALTER_EVENT_TRIGGER,
+	PGSQL_QUERY_DROP_EVENT_TRIGGER,
+	PGSQL_QUERY_CREATE_TRANSFORM,
+	PGSQL_QUERY_ALTER_TRANSFORM,
+	PGSQL_QUERY_DROP_TRANSFORM,
+	PGSQL_QUERY_CREATE_CAST,
+	PGSQL_QUERY_ALTER_CAST,
+	PGSQL_QUERY_DROP_CAST,
+	PGSQL_QUERY_CREATE_OPERATOR_CLASS,
+	PGSQL_QUERY_ALTER_OPERATOR_CLASS,
+	PGSQL_QUERY_DROP_OPERATOR_CLASS,
+	PGSQL_QUERY_CREATE_OPERATOR_FAMILY,
+	PGSQL_QUERY_ALTER_OPERATOR_FAMILY,
+	PGSQL_QUERY_DROP_OPERATOR_FAMILY,
+	PGSQL_QUERY_CREATE_TABLESPACE,
+	PGSQL_QUERY_ALTER_TABLESPACE,
+	PGSQL_QUERY_DROP_TABLESPACE,
+	PGSQL_QUERY_CLUSTER,
+	PGSQL_QUERY_UNKNOWN,
+	PGSQL_QUERY__UNINITIALIZED,
+	PGSQL_QUERY___NONE // Special marker.
+};
+
+
 enum handle_unknown_charset {
 	HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT,
 	HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE,
@@ -479,6 +649,17 @@ enum PROXYSQL_MYSQL_ERR {
 	ER_PROXYSQL_SRV_NULL_REPLICATION_LAG              = 9019,
 };
 
+enum proxysql_session_type {
+	PROXYSQL_SESSION_MYSQL,
+	PROXYSQL_SESSION_ADMIN,
+	PROXYSQL_SESSION_STATS,
+	PROXYSQL_SESSION_SQLITE,
+	PROXYSQL_SESSION_CLICKHOUSE,
+	PROXYSQL_SESSION_MYSQL_EMU,
+	PROXYSQL_SESSION_PGSQL,
+	PROXYSQL_SESSION_NONE
+};
+
 #endif /* PROXYSQL_ENUMS */
 
 
@@ -500,6 +681,7 @@ typedef unsigned spinlock;
 typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
+typedef struct _proxysql_pgsql_thread_t proxysql_pgsql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 typedef struct __SQP_query_parser_t SQP_par_t;
 #endif /* PROXYSQL_TYPEDEFS */
@@ -508,19 +690,25 @@ typedef struct __SQP_query_parser_t SQP_par_t;
 #ifndef PROXYSQL_CLASSES
 #define PROXYSQL_CLASSES
 class MySQL_Data_Stream;
+class PgSQL_Data_Stream;
 class MySQL_Connection_userinfo;
 class MySQL_Session;
+class PgSQL_Session;
 class MySQL_Backend;
+class PgSQL_Backend;
 class MySQL_Monitor;
+class PgSQL_Thread;
 class MySQL_Thread;
 class MySQL_Threads_Handler;
 class SQLite3DB;
 class SimpleKV;
 class AdvancedKV;
+template <class T>
 class ProxySQL_Poll;
 class Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
+class PgSQL_Connection;
 class MySQL_Protocol;
 class PtrArray;
 class PtrSizeArray;
@@ -531,13 +719,15 @@ class SQLite3_result;
 class stmt_execute_metadata_t;
 class MySQL_STMTs_meta;
 class MySQL_HostGroups_Manager;
+class PgSQL_HostGroups_Manager;
 class ProxySQL_HTTP_Server;
 class MySQL_STMTs_local_v14;
 class MySQL_STMT_Global_info;
 class StmtLongDataHandler;
 class ProxySQL_Cluster;
 class MySQL_ResultSet;
-class Query_Processor_Output;
+class MySQL_Query_Processor_Output;
+class PgSQL_Query_Processor_Output;
 class MySrvC;
 class Web_Interface_plugin;
 class ProxySQL_Node_Address;
@@ -638,6 +828,10 @@ struct _proxysql_mysql_thread_t {
 	pthread_t thread_id;
 };
 
+struct _proxysql_pgsql_thread_t {
+	PgSQL_Thread* worker;
+	pthread_t thread_id;
+};
 
 /* Every communication between client and proxysql, and between proxysql and mysql server is
  * performed within a mysql_data_stream_t
@@ -743,6 +937,14 @@ struct _mysql_session_t {
 	int net_failure;
 };
 
+// Enum for primary/secondary password
+struct PASSWORD_TYPE {
+	enum E {
+		PRIMARY = 0,
+		ADDITIONAL = 1
+	};
+};
+
 #endif /* PROXYSQL_STRUCTS */
 
 #ifndef EXTERN
@@ -778,6 +980,107 @@ ProxySQL_GlobalVariables GloVars {};
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
 MySQL_HostGroups_Manager *MyHGM;
+PgSQL_HostGroups_Manager* PgHGM;
+
+// PostgreSQL thread variables
+__thread int pgsql_thread___authentication_method;
+__thread int pgsql_thread___show_processlist_extended;
+__thread char *pgsql_thread___server_version;
+__thread char *pgsql_thread___default_client_encoding;
+__thread bool pgsql_thread___have_ssl;
+__thread int pgsql_thread___max_connections;
+__thread bool pgsql_thread___use_tcp_keepalive;
+__thread int pgsql_thread___tcp_keepalive_time;
+__thread int pgsql_thread___throttle_connections_per_sec_to_hostgroup;
+__thread int pgsql_thread___max_transaction_idle_time;
+__thread int pgsql_thread___max_transaction_time;
+__thread int pgsql_thread___threshold_query_length;
+__thread int pgsql_thread___threshold_resultset_size;
+__thread int pgsql_thread___poll_timeout;
+__thread int pgsql_thread___poll_timeout_on_failure;
+__thread int pgsql_thread___wait_timeout;
+__thread int pgsql_thread___client_host_cache_size;
+__thread int pgsql_thread___client_host_error_counts;
+__thread int pgsql_thread___connect_retries_on_failure;
+__thread int pgsql_thread___connect_retries_delay;
+__thread bool pgsql_thread___multiplexing;
+__thread int pgsql_thread___connection_delay_multiplex_ms;
+__thread int pgsql_thread___connection_max_age_ms;
+__thread int pgsql_thread___connect_timeout_client;
+__thread int pgsql_thread___connect_timeout_server;
+__thread int pgsql_thread___connect_timeout_server_max;
+__thread bool pgsql_thread___connection_warming;
+__thread bool pgsql_thread___log_unhealthy_connections;
+__thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
+__thread int pgsql_thread___throttle_ratio_server_to_client;
+__thread int pgsql_thread___shun_on_failures;
+__thread int pgsql_thread___shun_recovery_time_sec;
+__thread int pgsql_thread___hostgroup_manager_verbose;
+__thread int pgsql_thread___default_max_latency_ms;
+__thread int pgsql_thread___unshun_algorithm;
+__thread int pgsql_thread___free_connections_pct;
+__thread bool pgsql_thread___kill_backend_connection_when_disconnect;
+__thread int pgsql_thread___max_allowed_packet;
+
+/* variables used for SSL , from proxy to server (p2s) */
+__thread char* pgsql_thread___ssl_p2s_ca;
+__thread char* pgsql_thread___ssl_p2s_capath;
+__thread char* pgsql_thread___ssl_p2s_cert;
+__thread char* pgsql_thread___ssl_p2s_key;
+__thread char* pgsql_thread___ssl_p2s_cipher;
+__thread char* pgsql_thread___ssl_p2s_crl;
+__thread char* pgsql_thread___ssl_p2s_crlpath;
+
+//__thread char* pgsql_thread___default_schema;
+
+__thread int pgsql_thread___set_query_lock_on_hostgroup;
+__thread bool pgsql_thread___verbose_query_error;
+__thread char* pgsql_thread___keep_multiplexing_variables;
+__thread int pgsql_thread___session_idle_ms;
+__thread int pgsql_thread___long_query_time;
+__thread int pgsql_thread___set_parser_algorithm;
+__thread bool pgsql_thread___parse_failure_logs_digest;
+__thread int pgsql_thread___auto_increment_delay_multiplex;
+__thread int pgsql_thread___auto_increment_delay_multiplex_timeout_ms;
+__thread int pgsql_thread___default_query_delay;
+__thread int pgsql_thread___default_query_timeout;
+__thread int pgsql_thread___query_retries_on_failure;
+__thread int pgsql_thread___ping_interval_server_msec;
+__thread int pgsql_thread___ping_timeout_server;
+__thread int pgsql_thread___mirror_max_concurrency;
+__thread int pgsql_thread___mirror_max_queue_length;
+__thread char* pgsql_thread___init_connect;
+__thread bool pgsql_thread___sessions_sort;
+__thread bool pgsql_thread___servers_stats;
+__thread bool pgsql_thread___default_reconnect;
+__thread bool pgsql_thread___automatic_detect_sqli;
+
+__thread bool pgsql_thread___commands_stats;
+__thread bool pgsql_thread___query_digests;
+__thread bool pgsql_thread___query_digests_lowercase;
+__thread bool pgsql_thread___query_digests_no_digits;
+__thread bool pgsql_thread___query_digests_replace_null;
+__thread bool pgsql_thread___query_digests_normalize_digest_text;
+__thread bool pgsql_thread___query_digests_track_hostname;
+__thread bool pgsql_thread___query_digests_keep_comment;
+__thread int  pgsql_thread___query_digests_max_digest_length;
+__thread int  pgsql_thread___query_digests_max_query_length;
+__thread int  pgsql_thread___query_digests_grouping_limit;
+__thread int  pgsql_thread___query_digests_groups_grouping_limit;
+
+__thread bool pgsql_thread___enable_load_data_local_infile;
+__thread char* pgsql_thread___auditlog_filename;
+__thread int pgsql_thread___auditlog_filesize;
+__thread char* pgsql_thread___eventslog_filename;
+__thread int pgsql_thread___eventslog_filesize;
+__thread int pgsql_thread___eventslog_default_log;
+__thread int pgsql_thread___eventslog_format;
+__thread char* pgsql_thread___firewall_whitelist_errormsg;
+__thread bool pgsql_thread___firewall_whitelist_enabled;
+__thread int pgsql_thread___query_processor_iterations;
+__thread int pgsql_thread___query_processor_regex;
+//---------------------------
+
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___keep_multiplexing_variables;
@@ -951,6 +1254,105 @@ __thread unsigned int g_seed;
 #else
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_HostGroups_Manager *MyHGM;
+extern PgSQL_HostGroups_Manager *PgHGM;
+
+//PostgreSQL Thread Variables
+extern __thread int pgsql_thread___authentication_method;
+extern __thread int pgsql_thread___show_processlist_extended;
+extern __thread char *pgsql_thread___server_version;
+extern __thread char* pgsql_thread___default_client_encoding;
+extern __thread bool pgsql_thread___have_ssl;
+extern __thread int pgsql_thread___max_connections;
+extern __thread bool pgsql_thread___use_tcp_keepalive;
+extern __thread int pgsql_thread___tcp_keepalive_time;
+extern __thread int pgsql_thread___throttle_connections_per_sec_to_hostgroup;
+extern __thread int pgsql_thread___max_transaction_idle_time;
+extern __thread int pgsql_thread___max_transaction_time;
+extern __thread int pgsql_thread___threshold_query_length;
+extern __thread int pgsql_thread___threshold_resultset_size;
+extern __thread int pgsql_thread___poll_timeout;
+extern __thread int pgsql_thread___poll_timeout_on_failure;
+extern __thread int pgsql_thread___wait_timeout;
+extern __thread int pgsql_thread___client_host_cache_size;
+extern __thread int pgsql_thread___client_host_error_counts;
+extern __thread int pgsql_thread___connect_retries_on_failure;
+extern __thread int pgsql_thread___connect_retries_delay;
+extern __thread bool pgsql_thread___multiplexing;
+extern __thread int pgsql_thread___connection_delay_multiplex_ms;
+extern __thread int pgsql_thread___connection_max_age_ms;
+extern __thread int pgsql_thread___connect_timeout_client;
+extern __thread int pgsql_thread___connect_timeout_server;
+extern __thread int pgsql_thread___connect_timeout_server_max;
+extern __thread bool pgsql_thread___connection_warming;
+extern __thread bool pgsql_thread___log_unhealthy_connections;
+extern __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
+extern __thread int pgsql_thread___throttle_ratio_server_to_client;
+extern __thread int pgsql_thread___shun_on_failures;
+extern __thread int pgsql_thread___shun_recovery_time_sec;
+extern __thread int pgsql_thread___hostgroup_manager_verbose;
+extern __thread int pgsql_thread___default_max_latency_ms;
+extern __thread int pgsql_thread___unshun_algorithm;
+extern __thread int pgsql_thread___free_connections_pct;
+extern __thread bool pgsql_thread___kill_backend_connection_when_disconnect;
+extern __thread int pgsql_thread___max_allowed_packet;
+
+extern __thread char* pgsql_thread___ssl_p2s_ca;
+extern __thread char* pgsql_thread___ssl_p2s_capath;
+extern __thread char* pgsql_thread___ssl_p2s_cert;
+extern __thread char* pgsql_thread___ssl_p2s_key;
+extern __thread char* pgsql_thread___ssl_p2s_cipher;
+extern __thread char* pgsql_thread___ssl_p2s_crl;
+extern __thread char* pgsql_thread___ssl_p2s_crlpath;
+
+//extern __thread char* pgsql_thread___default_schema;
+extern __thread int pgsql_thread___set_query_lock_on_hostgroup;
+extern __thread bool pgsql_thread___verbose_query_error;
+extern __thread char* pgsql_thread___keep_multiplexing_variables;
+extern __thread int pgsql_thread___session_idle_ms;
+extern __thread int pgsql_thread___long_query_time;
+extern __thread int pgsql_thread___set_parser_algorithm;
+extern __thread bool pgsql_thread___parse_failure_logs_digest;
+extern __thread int pgsql_thread___auto_increment_delay_multiplex;
+extern __thread int pgsql_thread___auto_increment_delay_multiplex_timeout_ms;
+extern __thread int pgsql_thread___default_query_delay;
+extern __thread int pgsql_thread___default_query_timeout;
+extern __thread int pgsql_thread___query_retries_on_failure;
+extern __thread int pgsql_thread___ping_interval_server_msec;
+extern __thread int pgsql_thread___ping_timeout_server;
+extern __thread int pgsql_thread___mirror_max_concurrency;
+extern __thread int pgsql_thread___mirror_max_queue_length;
+extern __thread char* pgsql_thread___init_connect;
+extern __thread bool pgsql_thread___sessions_sort;
+extern __thread bool pgsql_thread___servers_stats;
+extern __thread bool pgsql_thread___default_reconnect;
+extern __thread bool pgsql_thread___automatic_detect_sqli;
+
+extern __thread bool pgsql_thread___commands_stats;
+extern __thread bool pgsql_thread___query_digests;
+extern __thread bool pgsql_thread___query_digests_lowercase;
+extern __thread bool pgsql_thread___query_digests_no_digits;
+extern __thread bool pgsql_thread___query_digests_replace_null;
+extern __thread bool pgsql_thread___query_digests_normalize_digest_text;
+extern __thread bool pgsql_thread___query_digests_track_hostname;
+extern __thread bool pgsql_thread___query_digests_keep_comment;
+extern __thread int  pgsql_thread___query_digests_max_digest_length;
+extern __thread int  pgsql_thread___query_digests_max_query_length;
+extern __thread int  pgsql_thread___query_digests_grouping_limit;
+extern __thread int  pgsql_thread___query_digests_groups_grouping_limit;
+
+extern __thread bool pgsql_thread___enable_load_data_local_infile;
+extern __thread char* pgsql_thread___auditlog_filename;
+extern __thread int pgsql_thread___auditlog_filesize;
+extern __thread char* pgsql_thread___eventslog_filename;
+extern __thread int pgsql_thread___eventslog_filesize;
+extern __thread int pgsql_thread___eventslog_default_log;
+extern __thread int pgsql_thread___eventslog_format;
+extern __thread char* pgsql_thread___firewall_whitelist_errormsg;
+extern __thread bool pgsql_thread___firewall_whitelist_enabled;
+extern __thread int pgsql_thread___query_processor_iterations;
+extern __thread int pgsql_thread___query_processor_regex;
+//---------------------------
+
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___keep_multiplexing_variables;

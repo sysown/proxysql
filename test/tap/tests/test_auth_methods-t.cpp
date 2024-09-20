@@ -223,8 +223,8 @@ using auth_reg_t = std::unordered_map<string, user_auth_stats_t>;
 
 struct user_creds_t {
 	user_def_t user_def;
-	mf_unique_ptr<char> hashed_prim_pass_bin;
-	mf_unique_ptr<char> hashed_addl_pass_bin;
+	mf_unique_ptr<char> hashed_prim_pass_bin { nullptr };
+	mf_unique_ptr<char> hashed_addl_pass_bin { nullptr };
 
 	user_creds_t(const user_creds_t&) = delete;
 	user_creds_t(user_creds_t&&) noexcept(false) = default;
@@ -1288,9 +1288,12 @@ const vector<user_def_t> backend_users {
  * @brief Minimal test cases for default backend users.
  */
 const vector<test_creds_t> tests_creds {
+	{ "dualpass1", MF_CHAR_("USE_PRIM_RAND_PASS") },
 	{ "dualpass1", MF_CHAR_(nullptr) },
 	{ "dualpass1", MF_CHAR_("") },
 	{ "dualpass1", MF_CHAR_("inv_pass") },
+	{ "dualpass1", MF_CHAR_("USE_PRIM_RAND_PASS") },
+	{ "dualpass1", MF_CHAR_("USE_ADDL_RAND_PASS") },
 
 	{ "dualpass2", MF_CHAR_(nullptr) },
 	{ "dualpass2", MF_CHAR_("") },
@@ -1309,6 +1312,10 @@ const vector<test_creds_t> tests_creds {
 	{ "dualpass5", MF_CHAR_(nullptr) },
 	{ "dualpass5", MF_CHAR_("") },
 	{ "dualpass5", MF_CHAR_("inv_pass") },
+	// Failure unless in RAND mode - Use fetched RAND_PASS
+	{ "dualpass5", MF_CHAR_("USE_PRIM_RAND_PASS") },
+	{ "dualpass5", MF_CHAR_("USE_PRIM_RAND_PASS") },
+	{ "dualpass5", MF_CHAR_("USE_ADDL_RAND_PASS") },
 
 	{ "dualpass6", MF_CHAR_(nullptr) },
 	{ "dualpass6", MF_CHAR_("") },
@@ -1319,23 +1326,33 @@ const vector<test_creds_t> tests_creds {
 	{ "dualpass7", MF_CHAR_(nullptr) },
 	{ "dualpass7", MF_CHAR_("") },
 	{ "dualpass7", MF_CHAR_("inv_pass") },
-	// { "dualpass7", MF_CHAR_("oldpass7") },
+	{ "dualpass7", MF_CHAR_("oldpass7") },
+	// Failure unless in RAND mode - Use fetched RAND_PASS
+	{ "dualpass7", MF_CHAR_("USE_PRIM_RAND_PASS") },
+	{ "dualpass7", MF_CHAR_("USE_PRIM_RAND_PASS") },
+	{ "dualpass7", MF_CHAR_("USE_ADDL_RAND_PASS") },
 
 	{ "dualpass8", MF_CHAR_(nullptr) },
 	{ "dualpass8", MF_CHAR_("") },
 	{ "dualpass8", MF_CHAR_("inv_pass") },
-	// { "dualpass8", MF_CHAR_("oldpass8") },
+	{ "dualpass8", MF_CHAR_("oldpass8") },
 
 	{ "dualpass9", MF_CHAR_(nullptr) },
 	{ "dualpass9", MF_CHAR_("") },
 	{ "dualpass9", MF_CHAR_("inv_pass") },
-	// { "dualpass9", MF_CHAR_("oldpass9") },
+	{ "dualpass9", MF_CHAR_("oldpass9") },
 	{ "dualpass9", MF_CHAR_("newpass9") },
 	{ "dualpass9", MF_CHAR_("newpass9") },
+	{ "dualpass9", MF_CHAR_("USE_RAND_PASS") },
 
 	{ "dualpass11", MF_CHAR_(nullptr) },
 	{ "dualpass11", MF_CHAR_("") },
 	{ "dualpass11", MF_CHAR_("inv_pass") },
+	// Failure unless in RAND mode - Use fetched RAND_PASS
+	{ "dualpass11", MF_CHAR_("USE_ADDL_RAND_PASS") },
+	// Triggers limitation on 'full_auth' again; this should be improved
+	{ "dualpass11", MF_CHAR_("USE_ADDL_RAND_PASS") },
+	{ "dualpass11", MF_CHAR_("USE_PRIM_RAND_PASS") },
 
 	{ "dualpass12", MF_CHAR_(nullptr) },
 	{ "dualpass12", MF_CHAR_("") },
@@ -1364,12 +1381,16 @@ const vector<test_creds_t> tests_creds {
 	{ "dualpass17", MF_CHAR_(nullptr) },
 	{ "dualpass17", MF_CHAR_("") },
 	{ "dualpass17", MF_CHAR_("inv_pass") },
-	// { "dualpass17", MF_CHAR_("oldpass17") },
+	{ "dualpass17", MF_CHAR_("oldpass17") },
+	// Failure unless in RAND mode - Use fetched RAND_PASS
+	{ "dualpass17", MF_CHAR_("USE_ADDL_RAND_PASS") },
+	{ "dualpass17", MF_CHAR_("USE_ADDL_RAND_PASS") },
+	{ "dualpass17", MF_CHAR_("USE_PRIM_RAND_PASS") },
 
 	{ "dualpass18", MF_CHAR_(nullptr) },
 	{ "dualpass18", MF_CHAR_("") },
 	{ "dualpass18", MF_CHAR_("inv_pass") },
-	// { "dualpass18", MF_CHAR_("oldpass18") },
+	{ "dualpass18", MF_CHAR_("oldpass18") },
 
 	{ "dualpass19", MF_CHAR_(nullptr) },
 	{ "dualpass19", MF_CHAR_("") },
@@ -1667,18 +1688,21 @@ int main(int argc, char** argv) {
 
 	vector<test_creds_t> rnd_tests_creds { ::tests_creds };
 
-
 	for (test_creds_t& creds : rnd_tests_creds) {
 		creds.name = "rnd" + creds.name;
 
-		auto it = std::find_if(cbres.second.begin(), cbres.second.end(),
+		auto it = std::find_if(rnd_cbres.second.begin(), rnd_cbres.second.end(),
 			[&creds] (const user_creds_t& user_creds) {
 				return creds.name == user_creds.user_def.name;
 			}
 		);
 
-		if (it != cbres.second.end()) {
-			creds.pass = it->user_def.prim_pass ? MF_CHAR_(it->user_def.prim_pass.get()) : nullptr;
+		if (it != rnd_cbres.second.end()) {
+			if (creds.pass && strcasecmp(creds.pass.get(), "USE_PRIM_RAND_PASS") == 0) {
+				creds.pass = it->user_def.prim_pass ? MF_CHAR_(it->user_def.prim_pass.get()) : nullptr;
+			} else if (creds.pass && strcasecmp(creds.pass.get(), "USE_ADDL_RAND_PASS") == 0) {
+				creds.pass = it->user_def.addl_pass ? MF_CHAR_(it->user_def.addl_pass.get()) : nullptr;
+			}
 		}
 	}
 

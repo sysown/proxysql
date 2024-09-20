@@ -9,7 +9,7 @@
 #include "MySQL_Logger.hpp"
 #include "MySQL_Data_Stream.h"
 #include "proxysql_utils.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "SQLite3_Server.h"
 
 #include <search.h>
@@ -102,7 +102,7 @@ static int __SQLite3_Server_refresh_interval=1000;
 extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
@@ -357,7 +357,7 @@ vector<aurora_hg_info_t> get_hgs_info(SQLite3DB* db) {
 
 #endif
 
-void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
+void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *pkt) {
 
 	char *error=NULL;
 	int cols;
@@ -1042,9 +1042,9 @@ static void *child_mysql(void *arg) {
 	SQLite3_Session *sqlite_sess = new SQLite3_Session();
 	mysql_thr->gen_args = (void *)sqlite_sess;
 
-	GloQPro->init_thread();
+	GloMyQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function=SQLite3_Server_session_handler;

@@ -382,8 +382,11 @@ bool ClickHouse_Authentication::exists(char * username) {
 }
 */
 
-char * ClickHouse_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass) {
-	char *ret=NULL;
+ch_account_details_t ClickHouse_Authentication::lookup(
+	char* username, enum cred_username_type usertype, const ch_dup_account_details_t& dup_details
+) {
+	ch_account_details_t ret {};
+
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
 	myhash.Init(1,2);
@@ -397,32 +400,39 @@ char * ClickHouse_Authentication::lookup(char * username, enum cred_username_typ
 #else
 	spin_rdlock(&cg.lock);
 #endif
-	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
-	lookup = cg.bt_map.find(hash1);
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup = cg.bt_map.find(hash1);
+
 	if (lookup != cg.bt_map.end()) {
-		ch_account_details_t *ad=lookup->second;
-		ret=l_strdup(ad->password);
-		if (use_ssl) *use_ssl=ad->use_ssl;
-		if (default_hostgroup) *default_hostgroup=ad->default_hostgroup;
-		if (default_schema) *default_schema=l_strdup(ad->default_schema);
-		if (schema_locked) *schema_locked=ad->schema_locked;
-		if (transaction_persistent) *transaction_persistent=ad->transaction_persistent;
-		if (fast_forward) *fast_forward=ad->fast_forward;
-		if (max_connections) *max_connections=ad->max_connections;
-		if (sha1_pass) {
+		ch_account_details_t* ad = lookup->second;
+
+		ret.password = strdup(ad->password);
+		ret.use_ssl = ad->use_ssl;
+		ret.default_hostgroup = ad->default_hostgroup;
+
+		if (dup_details.default_schema) {
+			ret.default_schema = l_strdup(ad->default_schema);
+		}
+
+		ret.schema_locked = ad->schema_locked;
+		ret.transaction_persistent = ad->transaction_persistent;
+		ret.fast_forward = ad->fast_forward;
+		ret.max_connections = ad->max_connections;
+
+		if (dup_details.sha1_pass) {
 			if (ad->sha1_pass) {
-				*sha1_pass=malloc(SHA_DIGEST_LENGTH);
-				memcpy(*sha1_pass,ad->sha1_pass,SHA_DIGEST_LENGTH);
+				ret.sha1_pass = malloc(SHA_DIGEST_LENGTH);
+				memcpy(ret.sha1_pass,ad->sha1_pass,SHA_DIGEST_LENGTH);
 			}
 		}
 	}
+
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
 	spin_rdunlock(&cg.lock);
 #endif
-	return ret;
 
+	return ret;
 }
 
 bool ClickHouse_Authentication::_reset(enum cred_username_type usertype) {

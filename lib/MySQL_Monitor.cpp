@@ -7,6 +7,11 @@
 	0.2.0902
 		* original implementation
 */
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include <map>
 #include <memory>
 #include <mutex>
@@ -33,6 +38,15 @@
 #define DEB ""
 #endif /* DEBUG */
 #define MYSQL_MONITOR_VERSION "2.0.1226" DEB
+
+#ifdef DEBUG
+//#define VALGRIND_ENABLE_ERROR_REPORTING
+//#define VALGRIND_DISABLE_ERROR_REPORTING
+#include "valgrind.h"
+#else
+#define VALGRIND_ENABLE_ERROR_REPORTING
+#define VALGRIND_DISABLE_ERROR_REPORTING
+#endif // DEBUG
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
@@ -1564,10 +1578,6 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 			myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
 		}
 		if (myrc==NULL) {
-			// port == 0 means we are connecting to a unix socket
-			if (port) {
-				MySQL_Monitor::remove_dns_record_from_dns_cache(hostname);
-			}
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
@@ -6674,15 +6684,6 @@ bool MySQL_Monitor::update_dns_cache_from_mysql_conn(const MYSQL* mysql)
 	return result;
 }
 
-void MySQL_Monitor::remove_dns_record_from_dns_cache(const std::string& hostname) {
-
-	// if IP was provided, no need to update dns cache
-	if (hostname.empty() || validate_ip(hostname))
-		return;
-
-	_remove_dns_record_from_dns_cache(hostname);
-}
-
 bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<std::string>&& ip_address) {
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
 
@@ -6697,18 +6698,6 @@ bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<s
 	}
 
 	return false;
-}
-
-void MySQL_Monitor::_remove_dns_record_from_dns_cache(const std::string& hostname) {
-	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
-
-	if (!dns_cache_thread && GloMyMon)
-		dns_cache_thread = GloMyMon->dns_cache;
-
-	if (dns_cache_thread) {
-		dns_cache_thread->remove(trim(hostname));
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache record removed. (Hostname:[%s])\n", hostname.c_str());
-	}
 }
 
 void MySQL_Monitor::trigger_dns_cache_update() {
@@ -6739,7 +6728,7 @@ bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips)
 
 bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips) {
 	if (!enabled) return false;
-	bool item_added = false;
+
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
 	if (records.find(hostname) == records.end()) {
@@ -6747,12 +6736,11 @@ bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::s
 		auto& ip_addr = records[hostname];
 		ip_addr.ips = std::move(ips);
 		__sync_fetch_and_and(&ip_addr.counter, 0);
-		item_added = true;
 	}
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
 
-	if (item_added && GloMyMon)
+	if (GloMyMon)
 		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
 
 	return true;
