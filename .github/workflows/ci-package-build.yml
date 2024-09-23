@@ -45,7 +45,7 @@ jobs:
       fail-fast: false
       matrix:
 #        dist: [ 'centos7' ]
-        dist: [ 'almalinux8','almalinux9','centos7','centos8','centos9','debian10','debian11','debian12','fedora38','fedora39','fedora40','opensuse15','ubuntu16','ubuntu18','ubuntu20','ubuntu22','ubuntu24' ]
+        dist: [ 'almalinux8','almalinux9','centos7','centos8','centos9','debian10','debian11','debian12','fedora38','fedora39','fedora40','fedora41','opensuse15','ubuntu16','ubuntu18','ubuntu20','ubuntu22','ubuntu24' ]
         type: [ '','-dbg','-clang' ]
         exclude:
 #         broken - clang too old
