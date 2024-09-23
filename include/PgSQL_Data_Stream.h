@@ -136,7 +136,7 @@ public:
 	AUTHENTICATION_METHOD auth_method = AUTHENTICATION_METHOD::NO_PASSWORD;
 	uint32_t auth_next_pkt_type = 0;
 	bool auth_received_startup = false;
-	
+	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
 
 	unsigned int connect_tries;

@@ -3323,7 +3323,7 @@ __get_pkts_from_client:
 							return handler_ret;
 						}
 						else {
-							proxy_error("Not implemented yet");
+							proxy_error("Not implemented yet\n");
 							assert(0);
 						}
 					}
@@ -3521,7 +3521,7 @@ __get_pkts_from_client:
 							return handler_ret;
 							break;
 						default:
-							proxy_error("Not implemented yet");
+							proxy_error("Not implemented yet\n");
 							assert(0);
 						}
 					}
@@ -5069,19 +5069,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		l_free(pkt->size, pkt->ptr);
 		//if (client_myds->encrypted==false) {
-		if (client_myds->myconn->userinfo->dbname == NULL) {
-#if 0
-#ifdef PROXYSQLCLICKHOUSE
-			if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
-				if (strlen(default_schema) == 0) {
-					free(default_schema);
-					default_schema = strdup((char*)"default");
-				}
-			}
-#endif /* PROXYSQLCLICKHOUSE */
-#endif
-			client_myds->myconn->userinfo->set_dbname(default_schema);
-		}
+		assert(client_myds->myconn->userinfo->dbname);
+
 		int free_users = 0;
 		int used_users = 0;
 		if (
