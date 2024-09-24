@@ -1308,6 +1308,28 @@ void ProxySQL_Admin::stats___mysql_commands_counters() {
 	delete resultset;
 }
 
+void ProxySQL_Admin::stats___pgsql_commands_counters() {
+	if (!GloPgQPro) return;
+	SQLite3_result* resultset = GloPgQPro->get_stats_commands_counters();
+	if (resultset == NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_pgsql_commands_counters");
+	char* a = (char*)"INSERT INTO stats_pgsql_commands_counters VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int arg_len = 0;
+		for (int i = 0; i < 15; i++) {
+			arg_len += strlen(r->fields[i]);
+		}
+		char* query = (char*)malloc(strlen(a) + arg_len + 32);
+		sprintf(query, a, r->fields[0], r->fields[1], r->fields[2], r->fields[3], r->fields[4], r->fields[5], r->fields[6], r->fields[7], r->fields[8], r->fields[9], r->fields[10], r->fields[11], r->fields[12], r->fields[13], r->fields[14]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
 void ProxySQL_Admin::stats___mysql_query_rules() {
 	if (!GloMyQPro) return;
 	SQLite3_result * resultset=GloMyQPro->get_stats_query_rules();
@@ -1323,6 +1345,28 @@ void ProxySQL_Admin::stats___mysql_query_rules() {
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,r->fields[0],r->fields[1]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___pgsql_query_rules() {
+	if (!GloPgQPro) return;
+	SQLite3_result* resultset = GloPgQPro->get_stats_query_rules();
+	if (resultset == NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_pgsql_query_rules");
+	char* a = (char*)"INSERT INTO stats_pgsql_query_rules VALUES (\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int arg_len = 0;
+		for (int i = 0; i < 2; i++) {
+			arg_len += strlen(r->fields[i]);
+		}
+		char* query = (char*)malloc(strlen(a) + arg_len + 32);
+		sprintf(query, a, r->fields[0], r->fields[1]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1735,6 +1779,24 @@ int ProxySQL_Admin::stats___mysql_query_digests_v2(bool reset, bool copy, bool u
 		return res.second;
 
 	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(reset, copy, res.first, NULL, NULL);
+	delete res.first;
+
+	return num_rows;
+}
+
+int ProxySQL_Admin::stats___pgsql_query_digests_v2(bool reset, bool copy, bool use_resultset) {
+	if (!GloPgQPro) return 0;
+	std::pair<SQLite3_result*, int> res;
+	if (reset == true) {
+		res = GloPgQPro->get_query_digests_reset_v2(copy, use_resultset);
+	} else {
+		res = GloPgQPro->get_query_digests_v2(use_resultset);
+	}
+
+	if (res.first == NULL)
+		return res.second;
+
+	int num_rows = GloAdmin->stats___save_pgsql_query_digest_to_sqlite(reset, copy, res.first, NULL, NULL);
 	delete res.first;
 
 	return num_rows;
