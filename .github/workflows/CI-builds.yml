@@ -6,7 +6,7 @@ on:
 #    paths-ignore:
 #    - '.github/**'
 #    - '**.md'
-#  pull_request:
+  pull_request:
 #    branches: [ "v2.7" ]
     paths-ignore:
     - '.github/**'
