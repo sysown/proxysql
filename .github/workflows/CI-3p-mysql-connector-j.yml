@@ -1,7 +1,7 @@
 name: CI-3p-mysql-connector-j
 
 on:
-  push:
+#  push:
 #    branches: [ "v2.x" ]
 #    paths-ignore:
 #    - '.github/**'
