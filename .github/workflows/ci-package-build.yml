@@ -12,12 +12,12 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # gh release delete-asset dev-head
-        gh release delete dev-head --repo ${{ github.repository }} --cleanup-tag || true
-        gh release create dev-head --repo ${{ github.repository }} --title dev-head --draft --prerelease --notes-file - << EOF
+        # gh release delete-asset ${{ github.ref_name }}-head
+        gh release delete ${{ github.ref_name }}-head --repo ${{ github.repository }} --cleanup-tag || true
+        gh release create ${{ github.ref_name }}-head --repo ${{ github.repository }} --title ${{ github.ref_name }}-head --draft --prerelease --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into v2.x
+        GH-Action Package-Build on PR merge into ${{ github.ref_name }}
         
         Version : **${GIT_VERSION}**
         
@@ -77,10 +77,10 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         if [[ "${{ matrix.dist }}" = "centos7" ]] && [[ "${{ matrix.type }}" = "" ]]; then
-        gh release edit dev-head --draft --prerelease --repo ${{ github.repository }} --tag dev-head --title "dev-head - ${GIT_VERSION}" --notes-file - << EOF
+        gh release edit ${{ github.ref_name }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ github.ref_name }}-head --title "${{ github.ref_name }}-head - ${GIT_VERSION}" --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into v2.x
+        GH-Action Package-Build on PR merge into ${{ github.ref_name }}
         
         Version : **${GIT_VERSION}**
         
@@ -114,10 +114,10 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # git tag --force -a dev-head -m 'GH-Actions - Development Snapshot Build'
+        # git tag --force -a ${{ github.ref_name }}-head -m 'GH-Actions - Development Snapshot Build'
         # git push origin --tags
-        # gh release upload dev-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
-        gh release upload dev-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
+        # gh release upload ${{ github.ref_name }}-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
+        gh release upload ${{ github.ref_name }}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
     
 #    - name: Archive artifacts
 #      if: ${{ failure() && !cancelled() }}
@@ -136,11 +136,11 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        GIT_VERSION=$(gh release --repo ${{ github.repository }} view dev-head | tr -d '*' | grep -Po "(?<=Version : ).*")
-        gh release edit dev-head --draft --prerelease --repo ${{ github.repository }} --tag dev-head --notes-file - << EOF
+        GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${{ github.ref_name }}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
+        gh release edit ${{ github.ref_name }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ github.ref_name }}-head --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into v2.x
+        GH-Action Package-Build on PR merge into ${{ github.ref_name }}
         
         Version : **${GIT_VERSION}**
         
