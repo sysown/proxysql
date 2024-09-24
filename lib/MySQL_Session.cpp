@@ -173,13 +173,7 @@ std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt) :
 	KillArgs(u, p, h, P, _hid, i, kt, _use_ssl, _mt, NULL) {
 	// resolving DNS if available in Cache
-	if (h && P) {
-		const std::string& ip = MySQL_Monitor::dns_lookup(h, false);
-
-		if (ip.empty() == false) {
-			ip_addr = strdup(ip.c_str());
-		}
-	}
+	resolve_hostname();
 }
 
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread *_mt, char *ip) {
@@ -214,6 +208,25 @@ const char* KillArgs::get_host_address() const {
 	return host_address;
 }
 
+void KillArgs::resolve_hostname() {
+	if (ip_addr) {
+		free(ip_addr);
+		ip_addr = NULL;
+	}
+	if (hostname && port) {
+		const std::string& ip = MySQL_Monitor::dns_lookup(hostname, false);
+
+		if (ip.empty() == false) {
+			ip_addr = strdup(ip.c_str());
+		}
+	}
+}
+
+void KillArgs::remove_dns_record() {
+	if (hostname && port) {
+		MySQL_Monitor::remove_dns_record_from_dns_cache(hostname);
+	}
+}
 
 /**
  * @brief Thread function to kill a query or connection on a MySQL server.
@@ -289,6 +302,8 @@ void* kill_query_thread(void *arg) {
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
+		ka->remove_dns_record();
+		//ka->resolve_hostname();
 		int myerr = mysql_errno(mysql);
 		if (ssl_params != NULL && myerr == 2026) {
 			proxy_error("Failed to connect to server %s:%d to run KILL %s %lu.  SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
