@@ -959,6 +959,24 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt) {
 			return true;
 		}
 	}
+	// Unsupported Features:
+	// COPY
+	if (pkt->size > (5 + 5) && strncasecmp((char*)"COPY ", (char*)pkt->ptr + 5, 5) == 0) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_error_packet(true, true, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+			false, true);
+		//client_myds->DSS = STATE_SLEEP;
+		//status = WAITING_CLIENT_DATA;
+		if (mirror == false) {
+			RequestEnd(NULL);
+		} else {
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+		}
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
+	//
 	if (pkt->size > (5 + 18) && strncasecmp((char*)"PROXYSQL INTERNAL ", (char*)pkt->ptr + 5, 18) == 0) {
 		return_proxysql_internal(pkt);
 		return true;
@@ -3307,17 +3325,24 @@ __get_pkts_from_client:
 						c = *((unsigned char*)pkt.ptr + 0);
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
-						}
-						else if (c == 'X') {
+						} else if (c == 'X') {
 							//proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 							//if (GloPgSQL_Logger) { GloPgSQL_Logger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
 							l_free(pkt.size, pkt.ptr);
 							handler_ret = -1;
 							return handler_ret;
-						}
-						else {
-							proxy_error("Not implemented yet");
-							assert(0);
+						} else if (c == 'P' || c == 'B' || c == 'D' || c == 'E') {
+							l_free(pkt.size, pkt.ptr);
+							continue;
+						} else {
+							proxy_error("Not implemented yet. Message type:'%c'\n", c);
+							client_myds->setDSS_STATE_QUERY_SENT_NET();
+							client_myds->myprot.generate_error_packet(true, true, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+								false, true);
+							l_free(pkt.size, pkt.ptr);
+							client_myds->DSS = STATE_SLEEP;
+							//handler_ret = -1;
+							return handler_ret;
 						}
 					}
 					else {
@@ -3515,9 +3540,22 @@ __get_pkts_from_client:
 							handler_ret = -1;
 							return handler_ret;
 							break;
+						case 'P':
+						case 'B':
+						case 'D':
+						case 'E':
+							//ignore
+							l_free(pkt.size, pkt.ptr);
+							continue;
+						case 'S':
 						default:
-							proxy_error("Not implemented yet");
-							assert(0);
+							proxy_error("Not implemented yet. Message type:'%c'\n", c);
+							client_myds->setDSS_STATE_QUERY_SENT_NET();
+							client_myds->myprot.generate_error_packet(true, true, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+								false, true);
+							l_free(pkt.size, pkt.ptr);
+							client_myds->DSS = STATE_SLEEP;
+							return handler_ret;
 						}
 					}
 					break;
