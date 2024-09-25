@@ -141,6 +141,8 @@ test/tap/tests_with_deps/deprecate_eof_support/fwd_eof_query
 
 test/cluster/node??/*
 
+#pkgroot
+pkgroot/
 
 #files generated during CI run
 proxysql-save.cfg
