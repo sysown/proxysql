@@ -46,8 +46,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - dist: 'centos7'
-            type: ''
+#          - dist: 'centos7'
+#            type: ''
           - dist: 'debian10'
             type: ''
           # debian11 is needed for 3p testing
@@ -58,8 +58,8 @@ jobs:
             type: ''
           - dist: 'opensuse15'
             type: '-clang'
-          - dist: 'ubuntu16'
-            type: ''
+#          - dist: 'ubuntu16'
+#            type: ''
           - dist: 'ubuntu22'
             type: '-tap'
           - dist: 'ubuntu22'
