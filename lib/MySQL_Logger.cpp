@@ -7,7 +7,7 @@ using json = nlohmann::json;
 #include "cpp.h"
 
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
 
@@ -466,7 +466,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	return total_bytes; // always 0
 }
 
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
 
 MySQL_Logger::MySQL_Logger() {
 	events.enabled=false;
@@ -725,7 +725,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	uint64_t query_digest = 0;
 
 	if (sess->status != PROCESSING_STMT_EXECUTE) {
-		query_digest = GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs);
+		query_digest = GloMyQPro->get_digest(&sess->CurrentQuery.QueryParserArgs);
 	} else {
 		query_digest = sess->CurrentQuery.stmt_info->digest;
 	}

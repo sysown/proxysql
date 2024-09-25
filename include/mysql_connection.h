@@ -9,7 +9,7 @@
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
 //#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001 // DEPRECATED
@@ -49,6 +49,7 @@ class MySQL_Connection_userinfo {
 	uint64_t hash;
 	char *username;
 	char *password;
+	PASSWORD_TYPE::E passtype;
 	char *schemaname;
 	char *sha1_pass;
 	char *fe_username;

@@ -25,7 +25,7 @@
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
 #ifdef DEBUG
@@ -100,14 +100,15 @@ namespace nlohmann { class json; }
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM main.pgsql_servers " \
 	"WHERE status != \"OFFLINE_HARD\" " \
-	"ORDER BY hostgroup_id, hostname, port" \
-
-typedef std::unordered_map<std::uint64_t, void *> umap_pgsql_errors;
+	"ORDER BY hostgroup_id, hostname, port"
 
 class PgSQL_SrvConnList;
 class PgSQL_SrvC;
 class PgSQL_SrvList;
 class PgSQL_HGC;
+class PgSQL_Errors_stats;
+
+typedef std::unordered_map<std::uint64_t, PgSQL_Errors_stats*> umap_pgsql_errors;
 
 class PgSQL_GTID_Server_Data {
 	public:
@@ -191,7 +192,6 @@ class PgSQL_SrvC {	// MySQL Server Container
 	time_t time_last_detected_error;
 	unsigned int connect_ERR_at_time_last_detected_error;
 	unsigned long long queries_sent;
-	unsigned long long queries_gtid_sync;
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
 	bool shunned_automatic;
@@ -260,29 +260,29 @@ struct PgSQL_p_hg_counter {
 		server_connections_aborted,
 		client_connections_created,
 		client_connections_aborted,
-		com_autocommit,
-		com_autocommit_filtered,
+		//com_autocommit,
+		//com_autocommit_filtered,
 		com_rollback,
 		com_rollback_filtered,
-		com_backend_change_user,
-		com_backend_init_db,
+		com_backend_reset_connection,
+		//com_backend_init_db,
 		// TODO: https://github.com/sysown/proxysql/issues/2690
-		com_backend_set_names,
-		com_frontend_init_db,
-		com_frontend_set_names,
-		com_frontend_use_db,
+		com_backend_set_client_encoding,
+		//com_frontend_init_db,
+		com_frontend_set_client_encoding,
+		//com_frontend_use_db,
 		com_commit_cnt,
 		com_commit_cnt_filtered,
 		selects_for_update__autocommit0,
 		access_denied_wrong_password,
 		access_denied_max_connections,
 		access_denied_max_user_connections,
-		myhgm_myconnpool_get,
-		myhgm_myconnpool_get_ok,
-		myhgm_myconnpool_get_ping,
-		myhgm_myconnpool_push,
-		myhgm_myconnpool_reset,
-		myhgm_myconnpool_destroy,
+		pghgm_pgconnpool_get,
+		pghgm_pgconnpool_get_ok,
+		pghgm_pgconnpool_get_ping,
+		pghgm_pgconnpool_push,
+		pghgm_pgconnpool_reset,
+		pghgm_pgconnpool_destroy,
 		auto_increment_delay_multiplex,
 		__size
 	};
@@ -610,24 +610,24 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		unsigned long server_connections_created;
 		unsigned long server_connections_delayed;
 		unsigned long server_connections_connected;
-		unsigned long myconnpoll_get;
-		unsigned long myconnpoll_get_ok;
-		unsigned long myconnpoll_get_ping;
-		unsigned long myconnpoll_push;
-		unsigned long myconnpoll_reset;
-		unsigned long myconnpoll_destroy;
+		unsigned long pgconnpoll_get;
+		unsigned long pgconnpoll_get_ok;
+		unsigned long pgconnpoll_get_ping;
+		unsigned long pgconnpoll_push;
+		unsigned long pgconnpoll_reset;
+		unsigned long pgconnpoll_destroy;
 		unsigned long long autocommit_cnt;
 		unsigned long long commit_cnt;
 		unsigned long long rollback_cnt;
 		unsigned long long autocommit_cnt_filtered;
 		unsigned long long commit_cnt_filtered;
 		unsigned long long rollback_cnt_filtered;
-		unsigned long long backend_change_user;
-		unsigned long long backend_init_db;
-		unsigned long long backend_set_names;
-		unsigned long long frontend_init_db;
-		unsigned long long frontend_set_names;
-		unsigned long long frontend_use_db;
+		unsigned long long backend_reset_connection;
+		//unsigned long long backend_init_db;
+		unsigned long long backend_set_client_encoding;
+		//unsigned long long frontend_init_db;
+		unsigned long long frontend_set_client_encoding;
+		//unsigned long long frontend_use_db;
 		unsigned long long access_denied_wrong_password;
 		unsigned long long access_denied_max_connections;
 		unsigned long long access_denied_max_user_connections;
@@ -848,7 +848,8 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
 
-	void add_pgsql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error);
+	void add_pgsql_errors(int hostgroup, const char* hostname, int port, const char* username, const char* address,
+		const char* dbname, const char* sqlstate, const char* errmsg);
 	SQLite3_result *get_pgsql_errors(bool);
 
 	void shutdown();

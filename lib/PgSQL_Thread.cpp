@@ -19,7 +19,7 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 
 #include "PgSQL_Data_Stream.h"
-#include "query_processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_Logger.hpp"
@@ -42,7 +42,7 @@ static PgSQL_Session* sess_stopat;
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
 
-extern Query_Processor* GloQPro;
+extern PgSQL_Query_Processor* GloPgQPro;
 extern PgSQL_Threads_Handler* GloPTH;
 extern MySQL_Monitor* GloMyMon;
 extern PgSQL_Logger* GloPgSQL_Logger;
@@ -1534,12 +1534,12 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 				}
 			}
 			if (nameS == "query_rules_fast_routing_algorithm") {
-				if (GloQPro) {
+				if (GloPgQPro) {
 					int intv = atoi(value);
 					if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
-						GloQPro->wrlock();
-						GloQPro->query_rules_fast_routing_algorithm = intv;
-						GloQPro->wrunlock();
+						GloPgQPro->wrlock();
+						GloPgQPro->query_rules_fast_routing_algorithm = intv;
+						GloPgQPro->wrunlock();
 					}
 				}
 			}
@@ -2623,7 +2623,7 @@ PgSQL_Thread::~PgSQL_Thread() {
 		}
 		delete mysql_sessions;
 		mysql_sessions = NULL;
-		GloQPro->end_thread(); // only for real threads
+		GloPgQPro->end_thread(); // only for real threads
 	}
 
 	if (mirror_queue_mysql_sessions) {
@@ -2703,13 +2703,13 @@ PgSQL_Thread::~PgSQL_Thread() {
 		free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
 		mysql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
 	}
-	if (pgsql_thread___default_schema) { free(pgsql_thread___default_schema); pgsql_thread___default_schema = NULL; }
+	//if (pgsql_thread___default_schema) { free(pgsql_thread___default_schema); pgsql_thread___default_schema = NULL; }
 	if (pgsql_thread___keep_multiplexing_variables) { free(pgsql_thread___keep_multiplexing_variables); pgsql_thread___keep_multiplexing_variables = NULL; }
-	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg = NULL; }
+	if (pgsql_thread___firewall_whitelist_errormsg) { free(pgsql_thread___firewall_whitelist_errormsg); pgsql_thread___firewall_whitelist_errormsg = NULL; }
 	if (pgsql_thread___init_connect) { free(pgsql_thread___init_connect); pgsql_thread___init_connect = NULL; }
-	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable = NULL; }
-	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment = NULL; }
-	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
+	//if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable = NULL; }
+	//if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment = NULL; }
+	//if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
 	
 	if (pgsql_thread___server_version) { free(pgsql_thread___server_version); pgsql_thread___server_version = NULL; }
 	if (pgsql_thread___default_client_encoding) { free(pgsql_thread___default_client_encoding); pgsql_thread___default_client_encoding = NULL; }
@@ -2721,8 +2721,8 @@ PgSQL_Thread::~PgSQL_Thread() {
 		}
 	}
 
-	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename = NULL; }
-	if (mysql_thread___auditlog_filename) { free(mysql_thread___auditlog_filename); mysql_thread___auditlog_filename = NULL; }
+	if (pgsql_thread___eventslog_filename) { free(pgsql_thread___eventslog_filename); pgsql_thread___eventslog_filename = NULL; }
+	if (pgsql_thread___auditlog_filename) { free(pgsql_thread___auditlog_filename); pgsql_thread___auditlog_filename = NULL; }
 	if (pgsql_thread___ssl_p2s_ca) { free(pgsql_thread___ssl_p2s_ca); pgsql_thread___ssl_p2s_ca = NULL; }
 	if (pgsql_thread___ssl_p2s_capath) { free(pgsql_thread___ssl_p2s_capath); pgsql_thread___ssl_p2s_capath = NULL; }
 	if (pgsql_thread___ssl_p2s_cert) { free(pgsql_thread___ssl_p2s_cert); pgsql_thread___ssl_p2s_cert = NULL; }
@@ -2778,7 +2778,7 @@ bool PgSQL_Thread::init() {
 	shutdown = 0;
 	my_idle_conns = (PgSQL_Connection**)malloc(sizeof(PgSQL_Connection*) * SESSIONS_FOR_CONNECTIONS_HANDLER);
 	memset(my_idle_conns, 0, sizeof(PgSQL_Connection*) * SESSIONS_FOR_CONNECTIONS_HANDLER);
-	GloQPro->init_thread();
+	GloPgQPro->init_thread();
 	refresh_variables();
 	i = pipe(pipefd);
 	ioctl_FIONBIO(pipefd[0], 1);
@@ -3067,7 +3067,7 @@ void PgSQL_Thread::run() {
 			) {
 			// house keeping
 			run___cleanup_mirror_queue();
-			GloQPro->update_query_processor_stats();
+			GloPgQPro->update_query_processor_stats();
 		}
 
 		if (rc == -1 && errno == EINTR)
@@ -3760,11 +3760,11 @@ void PgSQL_Thread::refresh_variables() {
 	
 	pgsql_thread___automatic_detect_sqli = (bool)GloPTH->get_variable_int((char*)"automatic_detect_sqli");
 	
-	mysql_thread___firewall_whitelist_enabled = (bool)GloPTH->get_variable_int((char*)"firewall_whitelist_enabled");
-	mysql_thread___query_digests_max_digest_length = GloPTH->get_variable_int((char*)"query_digests_max_digest_length");
-	mysql_thread___query_digests_max_query_length = GloPTH->get_variable_int((char*)"query_digests_max_query_length");
-	mysql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
-	mysql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
+	pgsql_thread___firewall_whitelist_enabled = (bool)GloPTH->get_variable_int((char*)"firewall_whitelist_enabled");
+	pgsql_thread___query_digests_max_digest_length = GloPTH->get_variable_int((char*)"query_digests_max_digest_length");
+	pgsql_thread___query_digests_max_query_length = GloPTH->get_variable_int((char*)"query_digests_max_query_length");
+	pgsql_thread___query_processor_iterations = GloPTH->get_variable_int((char*)"query_processor_iterations");
+	pgsql_thread___query_processor_regex = GloPTH->get_variable_int((char*)"query_processor_regex");
 
 	mysql_thread___query_cache_size_MB = GloPTH->get_variable_int((char*)"query_cache_size_MB");
 	mysql_thread___query_cache_soft_ttl_pct = GloPTH->get_variable_int((char*)"query_cache_soft_ttl_pct");
@@ -3816,8 +3816,8 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_local_dns_cache_refresh_interval = GloPTH->get_variable_int((char*)"monitor_local_dns_cache_refresh_interval");
 	mysql_thread___monitor_local_dns_resolver_queue_maxsize = GloPTH->get_variable_int((char*)"monitor_local_dns_resolver_queue_maxsize");
 	*/
-	if (mysql_thread___firewall_whitelist_errormsg) free(mysql_thread___firewall_whitelist_errormsg);
-	mysql_thread___firewall_whitelist_errormsg = GloPTH->get_variable_string((char*)"firewall_whitelist_errormsg");
+	if (pgsql_thread___firewall_whitelist_errormsg) free(pgsql_thread___firewall_whitelist_errormsg);
+	pgsql_thread___firewall_whitelist_errormsg = GloPTH->get_variable_string((char*)"firewall_whitelist_errormsg");
 	/*
 	if (mysql_thread___ldap_user_variable) free(mysql_thread___ldap_user_variable);
 	mysql_thread___ldap_user_variable = GloPTH->get_variable_string((char*)"ldap_user_variable");
@@ -3864,20 +3864,20 @@ void PgSQL_Thread::refresh_variables() {
 
 	pgsql_thread___have_ssl = (bool)GloPTH->get_variable_int((char*)"have_ssl");
 
-	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
-	mysql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
-	mysql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
-	mysql_thread___eventslog_format = GloPTH->get_variable_int((char*)"eventslog_format");
-	mysql_thread___eventslog_filename = GloPTH->get_variable_string((char*)"eventslog_filename");
-	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
-	mysql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
-	mysql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
+	if (pgsql_thread___eventslog_filename) free(pgsql_thread___eventslog_filename);
+	pgsql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
+	pgsql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
+	pgsql_thread___eventslog_format = GloPTH->get_variable_int((char*)"eventslog_format");
+	pgsql_thread___eventslog_filename = GloPTH->get_variable_string((char*)"eventslog_filename");
+	if (pgsql_thread___auditlog_filename) free(pgsql_thread___auditlog_filename);
+	pgsql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
+	pgsql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
 
 	GloPgSQL_Logger->events_set_base_filename(); // both filename and filesize are set here
 	GloPgSQL_Logger->audit_set_base_filename(); // both filename and filesize are set here
 
-	if (pgsql_thread___default_schema) free(pgsql_thread___default_schema);
-	pgsql_thread___default_schema = GloPTH->get_variable_string((char*)"default_schema");
+	//if (pgsql_thread___default_schema) free(pgsql_thread___default_schema);
+	//pgsql_thread___default_schema = GloPTH->get_variable_string((char*)"default_schema");
 	if (pgsql_thread___keep_multiplexing_variables) free(pgsql_thread___keep_multiplexing_variables);
 	pgsql_thread___keep_multiplexing_variables = GloPTH->get_variable_string((char*)"keep_multiplexing_variables");
 
@@ -3890,16 +3890,16 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___autocommit_false_not_reusable = (bool)GloPTH->get_variable_int((char*)"autocommit_false_not_reusable");
 	mysql_thread___autocommit_false_is_transaction = (bool)GloPTH->get_variable_int((char*)"autocommit_false_is_transaction");
 	*/
-	mysql_thread___commands_stats = (bool)GloPTH->get_variable_int((char*)"commands_stats");
-	mysql_thread___query_digests = (bool)GloPTH->get_variable_int((char*)"query_digests");
-	mysql_thread___query_digests_lowercase = (bool)GloPTH->get_variable_int((char*)"query_digests_lowercase");
-	mysql_thread___query_digests_replace_null = (bool)GloPTH->get_variable_int((char*)"query_digests_replace_null");
-	mysql_thread___query_digests_no_digits = (bool)GloPTH->get_variable_int((char*)"query_digests_no_digits");
-	mysql_thread___query_digests_normalize_digest_text = (bool)GloPTH->get_variable_int((char*)"query_digests_normalize_digest_text");
-	mysql_thread___query_digests_track_hostname = (bool)GloPTH->get_variable_int((char*)"query_digests_track_hostname");
-	mysql_thread___query_digests_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_grouping_limit");
-	mysql_thread___query_digests_groups_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_groups_grouping_limit");
-	mysql_thread___query_digests_keep_comment = (bool)GloPTH->get_variable_int((char*)"query_digests_keep_comment");
+	pgsql_thread___commands_stats = (bool)GloPTH->get_variable_int((char*)"commands_stats");
+	pgsql_thread___query_digests = (bool)GloPTH->get_variable_int((char*)"query_digests");
+	pgsql_thread___query_digests_lowercase = (bool)GloPTH->get_variable_int((char*)"query_digests_lowercase");
+	pgsql_thread___query_digests_replace_null = (bool)GloPTH->get_variable_int((char*)"query_digests_replace_null");
+	pgsql_thread___query_digests_no_digits = (bool)GloPTH->get_variable_int((char*)"query_digests_no_digits");
+	pgsql_thread___query_digests_normalize_digest_text = (bool)GloPTH->get_variable_int((char*)"query_digests_normalize_digest_text");
+	pgsql_thread___query_digests_track_hostname = (bool)GloPTH->get_variable_int((char*)"query_digests_track_hostname");
+	pgsql_thread___query_digests_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_grouping_limit");
+	pgsql_thread___query_digests_groups_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_groups_grouping_limit");
+	pgsql_thread___query_digests_keep_comment = (bool)GloPTH->get_variable_int((char*)"query_digests_keep_comment");
 	/*
 	variables.min_num_servers_lantency_awareness = GloPTH->get_variable_int((char*)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas = GloPTH->get_variable_int((char*)"aurora_max_lag_ms_only_read_from_replicas");
@@ -3916,7 +3916,7 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___enable_client_deprecate_eof = (bool)GloPTH->get_variable_int((char*)"enable_client_deprecate_eof");
 	mysql_thread___enable_server_deprecate_eof = (bool)GloPTH->get_variable_int((char*)"enable_server_deprecate_eof");
 	*/
-	mysql_thread___enable_load_data_local_infile = (bool)GloPTH->get_variable_int((char*)"enable_load_data_local_infile");
+	pgsql_thread___enable_load_data_local_infile = (bool)GloPTH->get_variable_int((char*)"enable_load_data_local_infile");
 	/*mysql_thread___log_mysql_warnings_enabled = (bool)GloPTH->get_variable_int((char*)"log_mysql_warnings_enabled");
 	mysql_thread___client_host_cache_size = GloPTH->get_variable_int((char*)"client_host_cache_size");
 	mysql_thread___client_host_error_counts = GloPTH->get_variable_int((char*)"client_host_error_counts");
@@ -3951,12 +3951,12 @@ PgSQL_Thread::PgSQL_Thread() {
 	pgsql_thread___server_version = NULL;
 	pgsql_thread___default_client_encoding = NULL;
 	pgsql_thread___have_ssl = true;
-	pgsql_thread___default_schema = NULL;
+	//pgsql_thread___default_schema = NULL;
 	pgsql_thread___init_connect = NULL;
-	mysql_thread___ldap_user_variable = NULL;
-	mysql_thread___add_ldap_user_comment = NULL;
-	mysql_thread___eventslog_filename = NULL;
-	mysql_thread___auditlog_filename = NULL;
+	//pgsql_thread___ldap_user_variable = NULL;
+	//pgsql_thread___add_ldap_user_comment = NULL;
+	pgsql_thread___eventslog_filename = NULL;
+	pgsql_thread___auditlog_filename = NULL;
 
 	// SSL proxy to server
 	pgsql_thread___ssl_p2s_ca = NULL;
@@ -4113,7 +4113,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	if (_memory == true) {
 		Get_Memory_Stats();
 	}
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Global Status\n");
 	SQLite3_result* result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT, "Variable_Name");
 	result->add_column_definition(SQLITE_TEXT, "Variable_Value");
@@ -4185,25 +4185,25 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		result->add_row(pta);
 	}
 #endif // IDLE_THREADS
-	{	// MySQL Backend buffers bytes
-		pta[0] = (char*)"mysql_backend_buffers_bytes";
-		sprintf(buf, "%llu", get_mysql_backend_buffers_bytes());
+	{	// PgSQL Backend buffers bytes
+		pta[0] = (char*)"pgsql_backend_buffers_bytes";
+		sprintf(buf, "%llu", get_pgsql_backend_buffers_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// MySQL Frontend buffers bytes
-		pta[0] = (char*)"mysql_frontend_buffers_bytes";
-		sprintf(buf, "%llu", get_mysql_frontend_buffers_bytes());
+	{	// PgSQL Frontend buffers bytes
+		pta[0] = (char*)"pgsql_frontend_buffers_bytes";
+		sprintf(buf, "%llu", get_pgsql_frontend_buffers_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// MySQL Frontend buffers bytes
-		pta[0] = (char*)"mysql_session_internal_bytes";
-		sprintf(buf, "%llu", get_mysql_session_internal_bytes());
+	{	// PgSQL Frontend buffers bytes
+		pta[0] = (char*)"pgsql_session_internal_bytes";
+		sprintf(buf, "%llu", get_pgsql_session_internal_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries autocommit
+	/*{	// Queries autocommit
 		pta[0] = (char*)"Com_autocommit";
 		sprintf(buf, "%llu", PgHGM->status.autocommit_cnt);
 		pta[1] = buf;
@@ -4214,67 +4214,67 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		sprintf(buf, "%llu", PgHGM->status.autocommit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
+	}*/
 	{	// Queries commit
-		pta[0] = (char*)"Com_commit";
+		pta[0] = (char*)"Commit";
 		sprintf(buf, "%llu", PgHGM->status.commit_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered commit
-		pta[0] = (char*)"Com_commit_filtered";
+		pta[0] = (char*)"Commit_filtered";
 		sprintf(buf, "%llu", PgHGM->status.commit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries rollback
-		pta[0] = (char*)"Com_rollback";
+		pta[0] = (char*)"Rollback";
 		sprintf(buf, "%llu", PgHGM->status.rollback_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered rollback
-		pta[0] = (char*)"Com_rollback_filtered";
+		pta[0] = (char*)"Rollback_filtered";
 		sprintf(buf, "%llu", PgHGM->status.rollback_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries backend CHANGE_USER
-		pta[0] = (char*)"Com_backend_change_user";
-		sprintf(buf, "%llu", PgHGM->status.backend_change_user);
+	{	// Queries backend RESET_CONNECTION
+		pta[0] = (char*)"Backend_reset_connection";
+		sprintf(buf, "%llu", PgHGM->status.backend_reset_connection);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries backend INIT DB
+	/* {	// Queries backend INIT DB
 		pta[0] = (char*)"Com_backend_init_db";
 		sprintf(buf, "%llu", PgHGM->status.backend_init_db);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
-	{	// Queries backend SET NAMES
-		pta[0] = (char*)"Com_backend_set_names";
-		sprintf(buf, "%llu", PgHGM->status.backend_set_names);
+	}*/
+	{	// Queries backend SET client_encoding 
+		pta[0] = (char*)"Backend_set_client_encoding";
+		sprintf(buf, "%llu", PgHGM->status.backend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries frontend INIT DB
+	/* {	// Queries frontend INIT DB
 		pta[0] = (char*)"Com_frontend_init_db";
 		sprintf(buf, "%llu", PgHGM->status.frontend_init_db);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
-	{	// Queries frontend SET NAMES
-		pta[0] = (char*)"Com_frontend_set_names";
-		sprintf(buf, "%llu", PgHGM->status.frontend_set_names);
+	}*/
+	{	// Queries frontend SET client_encoding 
+		pta[0] = (char*)"Frontend_set_client_encoding";
+		sprintf(buf, "%llu", PgHGM->status.frontend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	{	// Queries frontend USE DB
+	/* {	// Queries frontend USE DB
 		pta[0] = (char*)"Com_frontend_use_db";
 		sprintf(buf, "%llu", PgHGM->status.frontend_use_db);
 		pta[1] = buf;
 		result->add_row(pta);
-	}
+	}*/
 /*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
@@ -4358,7 +4358,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1] = buf;
 		result->add_row(pta);
 	}
-	if (GloMyMon) {
+	/*if (GloMyMon) {
 		{	// MySQL Monitor workers
 			pta[0] = (char*)"MySQL_Monitor_Workers";
 			sprintf(buf, "%d", (variables.monitor_enabled ? GloMyMon->num_threads : 0));
@@ -4443,7 +4443,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			pta[1] = buf;
 			result->add_row(pta);
 		}
-	}
+	}*/
 	free(pta);
 	return result;
 }
@@ -4480,12 +4480,12 @@ void PgSQL_Threads_Handler::Get_Memory_Stats() {
 SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 	const int colnum = 16;
 	char port[NI_MAXSERV];
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Processlist\n");
 	SQLite3_result* result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT, "ThreadID");
 	result->add_column_definition(SQLITE_TEXT, "SessionID");
 	result->add_column_definition(SQLITE_TEXT, "user");
-	result->add_column_definition(SQLITE_TEXT, "db");
+	result->add_column_definition(SQLITE_TEXT, "database");
 	result->add_column_definition(SQLITE_TEXT, "cli_host");
 	result->add_column_definition(SQLITE_TEXT, "cli_port");
 	result->add_column_definition(SQLITE_TEXT, "hostgroup");
@@ -4678,9 +4678,9 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				case RESETTING_CONNECTION_V2:
 					pta[11] = strdup("Resetting connection V2");
 					break;
-				case CHANGING_SCHEMA:
-					pta[11] = strdup("InitDB");
-					break;
+				//case CHANGING_SCHEMA:
+				//	pta[11] = strdup("InitDB");
+				//	break;
 				case PROCESSING_STMT_EXECUTE:
 					pta[11] = strdup("Execute");
 					break;
@@ -4696,12 +4696,12 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				case WAITING_SERVER_DATA:
 					pta[11] = strdup("Waiting server data");
 					break;
-				case CHANGING_CHARSET:
-					pta[11] = strdup("Changing charset");
-					break;
-				case CHANGING_AUTOCOMMIT:
-					pta[11] = strdup("Changing autocommit");
-					break;
+				//case CHANGING_CHARSET:
+				//	pta[11] = strdup("Changing charset");
+				//	break;
+				//case CHANGING_AUTOCOMMIT:
+				//	pta[11] = strdup("Changing autocommit");
+				//	break;
 				case SETTING_INIT_CONNECT:
 					pta[11] = strdup("Setting init connect");
 					break;
@@ -5020,7 +5020,7 @@ unsigned int PgSQL_Threads_Handler::get_non_idle_client_connections() {
 }
 #endif // IDLE_THREADS
 
-unsigned long long PgSQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
+unsigned long long PgSQL_Threads_Handler::get_pgsql_backend_buffers_bytes() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q = 0;
 	unsigned int i;
@@ -5037,7 +5037,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 	return q;
 }
 
-unsigned long long PgSQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
+unsigned long long PgSQL_Threads_Handler::get_pgsql_frontend_buffers_bytes() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q = 0;
 	unsigned int i;
@@ -5063,7 +5063,7 @@ unsigned long long PgSQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 	return q;
 }
 
-unsigned long long PgSQL_Threads_Handler::get_mysql_session_internal_bytes() {
+unsigned long long PgSQL_Threads_Handler::get_pgsql_session_internal_bytes() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q = 0;
 	unsigned int i;
@@ -5093,9 +5093,9 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 #ifdef IDLE_THREADS
 	get_non_idle_client_connections();
 #endif // IDLE_THREADS
-	get_mysql_backend_buffers_bytes();
-	get_mysql_frontend_buffers_bytes();
-	get_mysql_session_internal_bytes();
+	get_pgsql_backend_buffers_bytes();
+	get_pgsql_frontend_buffers_bytes();
+	get_pgsql_session_internal_bytes();
 /*
 	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
@@ -5190,9 +5190,6 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 							if (it != parents.end()) {
 								// we didn't exclude this server (yet?)
 								bool gtid_found = false;
-#if 0
-								gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
-#endif // 0
 								if (gtid_found) { // this server has the correct GTID
 									c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
 									return c;

@@ -31,7 +31,8 @@ using json = nlohmann::json;
 
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
@@ -43,7 +44,6 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
-#include "Client_Session.h"
 
 #include <dirent.h>
 #include <search.h>
@@ -311,7 +311,8 @@ extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
+extern PgSQL_Query_Processor* GloPgQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger* GloPgSQL_Logger;
@@ -574,7 +575,7 @@ admin_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Check why 'global_mysql_firewall_whitelist_users_result___size' never updated
+			// TODO: Check why 'global_firewall_whitelist_users_result___size' never updated
 			p_admin_gauge::mysql_firewall_users_config,
 			"proxysql_mysql_firewall_users_config_bytes",
 			"Full 'mysql_firewall_users' config 'resultset' size.",
@@ -924,12 +925,17 @@ ProxySQL_Restapi& ProxySQL_Admin::proxysql_restapi() {
 
 template <enum SERVER_TYPE pt>
 int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
-	int r = 0;
-	if (!GloQPro) return 0;
+	
 	umap_query_digest uqd;
 	umap_query_digest_text uqdt;
-	GloQPro->get_query_digests_reset(&uqd, &uqdt);
-	r = uqd.size();
+	if constexpr (pt == SERVER_TYPE_MYSQL) {
+		if (!GloMyQPro) return 0;
+		GloMyQPro->get_query_digests_reset(&uqd, &uqdt);
+	} else if constexpr (pt == SERVER_TYPE_PGSQL) {
+		if (!GloPgQPro) return 0;
+		GloPgQPro->get_query_digests_reset(&uqd, &uqdt);
+	}
+	int r = uqd.size();
 	SQLite3DB * sdb = _db;
 	sdb->execute("BEGIN");
 	int rc;
@@ -1070,8 +1076,8 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 admin_main_loop_listeners S_amll;
 
 
-template <class T>
-bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, Client_Session<T>& sess, ProxySQL_Admin *pa) {
+template <typename S>
+bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
 	uint32_t id=atoi(query_no_space+16);
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
 	bool rc=GloMTH->kill_session(id);
@@ -1111,10 +1117,10 @@ void ProxySQL_Admin::flush_logs() {
 
 
 // Explicitly instantiate the required template class and member functions
-template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, int, char const*);
-template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, int, char const*);
-template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session*>(Client_Session<MySQL_Session*>&, char const*, unsigned short);
-template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session*>(Client_Session<PgSQL_Session*>&, char const*, unsigned short);
+template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
+template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)1>(SQLite3DB*);
 
@@ -1135,21 +1141,28 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool ret=false;
 	bool refresh=false;
 	bool stats_mysql_processlist=false;
+	bool stats_pgsql_processlist=false;
 	bool stats_mysql_free_connections=false;
+	bool stats_pgsql_free_connections=false;
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_connection_pool_reset=false;
 	bool stats_mysql_query_digest=false;
 	bool stats_mysql_query_digest_reset=false;
 	bool stats_mysql_errors=false;
 	bool stats_mysql_errors_reset=false;
+	bool stats_pgsql_errors = false;
+	bool stats_pgsql_errors_reset = false;
 	bool stats_mysql_global=false;
 	bool stats_memory_metrics=false;
 	bool stats_mysql_commands_counters=false;
 	bool stats_mysql_query_rules=false;
 	bool stats_mysql_users=false;
+	bool stats_pgsql_users = false;
 	bool stats_mysql_gtid_executed=false;
 	bool stats_mysql_client_host_cache=false;
 	bool stats_mysql_client_host_cache_reset=false;
+	bool stats_pgsql_client_host_cache = false;
+	bool stats_pgsql_client_host_cache_reset = false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1167,6 +1180,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_pgsql_servers = false;
 	bool runtime_pgsql_query_rules = false;
 	bool runtime_pgsql_query_rules_fast_routing = false;
+
+	bool stats_pgsql_global = false;
+	bool stats_pgsql_connection_pool = false;
+	bool stats_pgsql_connection_pool_reset = false;
 
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
@@ -1193,12 +1210,22 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
-	if (strcasestr(query_no_space,"processlist"))
+	if (strcasestr(query_no_space, "pgsql processlist") ||
+		strcasestr(query_no_space, "stats_pgsql_processlist"))
+		// This will match the following usecases:
+		// SHOW PGSQL PROCESSLIST
+		// SHOW FULL PGSQL PROCESSLIST
+		// SELECT * FROM stats_pgsql_processlist 
+	{ 
+		stats_pgsql_processlist = true; refresh = true; 
+	} else if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
 		// SHOW PROCESSLIST
 		// SHOW FULL PROCESSLIST
 		// SELECT * FROM stats_mysql_processlist
-		{ stats_mysql_processlist=true; refresh=true; }
+	{ 
+		stats_mysql_processlist=true; refresh=true; 
+	}
 	if (strstr(query_no_space,"stats_mysql_query_digest"))
 		{ stats_mysql_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
@@ -1228,32 +1255,51 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_errors=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_errors_reset"))
 		{ stats_mysql_errors_reset=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_errors")) 
+		{ stats_pgsql_errors = true; refresh = true; }
+	if (strstr(query_no_space, "stats_pgsql_errors_reset"))
+		{ stats_pgsql_errors_reset = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_global"))
 		{ stats_mysql_global=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_global")) 
+		{ stats_pgsql_global = true; refresh = true; }
 	if (strstr(query_no_space,"stats_memory_metrics"))
 		{ stats_memory_metrics=true; refresh=true; }
-	if (strstr(query_no_space,"stats_mysql_connection_pool_reset"))
-		{
+	if (strstr(query_no_space,"stats_mysql_connection_pool_reset")) {
 			stats_mysql_connection_pool_reset=true; refresh=true;
-		} else {
-			if (strstr(query_no_space,"stats_mysql_connection_pool"))
-				{ stats_mysql_connection_pool=true; refresh=true; }
+	} else {
+		if (strstr(query_no_space,"stats_mysql_connection_pool"))
+			{ stats_mysql_connection_pool=true; refresh=true; }
+	}
+	if (strstr(query_no_space, "stats_pgsql_connection_pool_reset")) {
+		stats_pgsql_connection_pool_reset = true; refresh = true;
+	} else {
+		if (strstr(query_no_space, "stats_pgsql_connection_pool")) {
+			stats_pgsql_connection_pool = true; refresh = true;
 		}
+	}
 	if (strstr(query_no_space,"stats_mysql_free_connections"))
 		{ stats_mysql_free_connections=true; refresh=true; }
+	if (strstr(query_no_space, "stats_pgsql_free_connections")) 
+		{ stats_pgsql_free_connections=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_commands_counters"))
 		{ stats_mysql_commands_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_rules"))
 		{ stats_mysql_query_rules=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_users"))
 		{ stats_mysql_users=true; refresh=true; }
+	if (strstr(query_no_space,"stats_pgsql_users"))
+		{ stats_pgsql_users = true; refresh = true; }
 	if (strstr(query_no_space,"stats_mysql_gtid_executed"))
 		{ stats_mysql_gtid_executed=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_client_host_cache"))
 		{ stats_mysql_client_host_cache=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_client_host_cache_reset"))
 		{ stats_mysql_client_host_cache_reset=true; refresh=true; }
-
+	if (strstr(query_no_space, "stats_pgsql_client_host_cache"))
+		{ stats_pgsql_client_host_cache = true; refresh = true; }
+	if (strstr(query_no_space, "stats_pgsql_client_host_cache_reset"))
+		{ stats_pgsql_client_host_cache_reset = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
@@ -1386,6 +1432,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
+		if (stats_pgsql_processlist)
+			stats___pgsql_processlist();
 		if (stats_mysql_query_digest_reset) {
 			stats___mysql_query_digests_v2(true, stats_mysql_query_digest, false);
 		} else {
@@ -1398,16 +1446,32 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mysql_errors_reset) {
 			stats___mysql_errors(true);
 		}
+		if (stats_pgsql_errors) {
+			stats___pgsql_errors(false);
+		}
+		if (stats_pgsql_errors_reset) {
+			stats___pgsql_errors(true);
+		}
 		if (stats_mysql_connection_pool_reset) {
 			stats___mysql_connection_pool(true);
 		} else {
 			if (stats_mysql_connection_pool)
 				stats___mysql_connection_pool(false);
 		}
+		if (stats_pgsql_connection_pool_reset) {
+			stats___pgsql_connection_pool(true);
+		} else {
+			if (stats_pgsql_connection_pool)
+				stats___pgsql_connection_pool(false);
+		}
 		if (stats_mysql_free_connections)
 			stats___mysql_free_connections();
+		if (stats_pgsql_free_connections)
+			stats___pgsql_free_connections();
 		if (stats_mysql_global)
 			stats___mysql_global();
+		if (stats_pgsql_global)
+			stats___pgsql_global();
 		if (stats_memory_metrics)
 			stats___memory_metrics();
 		if (stats_mysql_query_rules)
@@ -1416,6 +1480,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_commands_counters();
 		if (stats_mysql_users)
 			stats___mysql_users();
+		if (stats_pgsql_users)
+			stats___pgsql_users();
 		if (stats_mysql_gtid_executed)
 			stats___mysql_gtid_executed();
 
@@ -1447,6 +1513,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_client_host_cache_reset) {
 			stats___mysql_client_host_cache(true);
+		}
+		if (stats_pgsql_client_host_cache) {
+			stats___pgsql_client_host_cache(false);
+		}
+		if (stats_pgsql_client_host_cache_reset) {
+			stats___pgsql_client_host_cache(true);
 		}
 
 		if (admin) {
@@ -1566,7 +1638,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_query_digest || stats_mysql_query_digest_reset || stats_mysql_errors ||
 		stats_mysql_errors_reset || stats_mysql_global || stats_memory_metrics || 
 		stats_mysql_commands_counters || stats_mysql_query_rules || stats_mysql_users ||
-		stats_mysql_gtid_executed || stats_mysql_free_connections
+		stats_mysql_gtid_executed || stats_mysql_free_connections || 
+		stats_pgsql_global || stats_pgsql_connection_pool || stats_pgsql_connection_pool_reset ||
+		stats_pgsql_free_connections || stats_pgsql_users || stats_pgsql_processlist ||
+		stats_pgsql_errors || stats_pgsql_errors_reset 
 	) {
 		ret = true;
 	}
@@ -1751,8 +1826,8 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 }
 
 
-template<class T>
-void admin_session_handler(Client_Session<T> sess, void *_pa, PtrSize_t *pkt);
+template<typename S>
+void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);
 
 void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 	if (variables.vacuum_stats==false) {
@@ -1761,14 +1836,19 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 	const vector<string> tablenames = {
 		"stats_mysql_commands_counters",
 		"stats_mysql_free_connections",
+		"stats_pgsql_free_connections",
 		"stats_mysql_connection_pool",
 		"stats_mysql_connection_pool_reset",
+		"stats_pgsql_connection_pool",
+		"stats_pgsql_connection_pool_reset",
 		"stats_mysql_prepared_statements_info",
 		"stats_mysql_processlist",
+		"stats_pgsql_processlist",
 		"stats_mysql_query_digest",
 		"stats_mysql_query_digest_reset",
 		"stats_mysql_query_rules",
 		"stats_mysql_users",
+		"stats_pgsql_users",
 		"stats_proxysql_servers_checksums",
 		"stats_proxysql_servers_metrics",
 		"stats_proxysql_servers_status",
@@ -1824,12 +1904,12 @@ void *child_mysql(void *arg) {
 	pthread_mutex_unlock(&sock_mutex);
 	MySQL_Thread *mysql_thr=new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
-	GloQPro->init_thread();
+	GloMyQPro->init_thread();
 	mysql_thr->refresh_variables();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
-	sess->handler_function=admin_session_handler<MySQL_Session*>;
+	sess->handler_function=admin_session_handler<MySQL_Session>;
 	MySQL_Data_Stream *myds=sess->client_myds;
 	sess->start_time=mysql_thr->curtime;
 
@@ -1944,12 +2024,12 @@ void* child_postgres(void* arg) {
 	pthread_mutex_unlock(&sock_mutex);
 	PgSQL_Thread* pgsql_thr = new PgSQL_Thread();
 	pgsql_thr->curtime = monotonic_time();
-	GloQPro->init_thread();
+	GloPgQPro->init_thread();
 	pgsql_thr->refresh_variables();
 	PgSQL_Session* sess = pgsql_thr->create_new_session_and_client_data_stream<PgSQL_Thread, PgSQL_Session*>(client);
 	sess->thread = pgsql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
-	sess->handler_function=admin_session_handler<PgSQL_Session*>;
+	sess->handler_function=admin_session_handler<PgSQL_Session>;
 	PgSQL_Data_Stream* myds = sess->client_myds;
 	sess->start_time = pgsql_thr->curtime;
 
@@ -2101,6 +2181,7 @@ void * admin_main_loop(void *arg) {
 	int *callback_func=((struct _main_args *)arg)->callback_func;
 	volatile int *shutdown=((struct _main_args *)arg)->shutdown;
 	char *socket_names[MAX_ADMIN_LISTENERS];
+	set_thread_name("Admin");
 	for (i=0;i<MAX_ADMIN_LISTENERS;i++) { socket_names[i]=NULL; }
 	pthread_attr_t attr;
   pthread_attr_init(&attr);
@@ -4117,7 +4198,7 @@ void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runt
 	} else {
 		admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
 	}
-	SQLite3_result * resultset=GloQPro->get_current_query_rules_fast_routing();
+	SQLite3_result * resultset=GloMyQPro->get_current_query_rules_fast_routing();
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;
@@ -4183,7 +4264,7 @@ void ProxySQL_Admin::save_pgsql_query_rules_fast_routing_from_runtime(bool _runt
 	else {
 		admindb->execute("DELETE FROM pgsql_query_rules_fast_routing");
 	}
-	SQLite3_result* resultset = GloQPro->get_current_query_rules_fast_routing();
+	SQLite3_result* resultset = GloPgQPro->get_current_query_rules_fast_routing();
 	if (resultset) {
 		int rc;
 		sqlite3_stmt* statement1 = NULL;
@@ -4251,7 +4332,7 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	} else {
 		admindb->execute("DELETE FROM mysql_query_rules");
 	}
-	SQLite3_result * resultset=GloQPro->get_current_query_rules();
+	SQLite3_result * resultset=GloMyQPro->get_current_query_rules();
 	if (resultset==NULL) return;
 	//char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	char *a=NULL;
@@ -4337,21 +4418,20 @@ void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
 	else {
 		admindb->execute("DELETE FROM pgsql_query_rules");
 	}
-	SQLite3_result* resultset = GloQPro->get_current_query_rules();
+	SQLite3_result* resultset = GloPgQPro->get_current_query_rules();
 	if (resultset == NULL) return;
 	//char *a=(char *)"INSERT INTO pgsql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	char* a = NULL;
 	if (_runtime) {
-		a = (char*)"INSERT INTO runtime_pgsql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
-	}
-	else {
-		a = (char*)"INSERT INTO pgsql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		a = (char*)"INSERT INTO runtime_pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+	} else {
+		a = (char*)"INSERT INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	}
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
 		int arg_len = 0;
-		char* buffs[35]; // number of fields
-		for (int i = 0; i < 35; i++) {
+		char* buffs[34]; // number of fields
+		for (int i = 0; i < 34; i++) {
 			if (r->fields[i]) {
 				char* o = escape_string_single_quotes(r->fields[i], false);
 				int l = strlen(o) + 4;
@@ -4402,15 +4482,14 @@ void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
 			buffs[27], // OK_msg
 			(strcmp(r->fields[28], "-1") == 0 ? "NULL" : r->fields[28]), // sticky_conn
 			(strcmp(r->fields[29], "-1") == 0 ? "NULL" : r->fields[29]), // multiplex
-			(strcmp(r->fields[30], "-1") == 0 ? "NULL" : r->fields[30]), // gtid_from_hostgroup
-			(strcmp(r->fields[31], "-1") == 0 ? "NULL" : r->fields[31]), // log
-			(strcmp(r->fields[32], "-1") == 0 ? "NULL" : r->fields[32]), // apply
-			buffs[33], // attributes
-			buffs[34]  // comment
+			(strcmp(r->fields[30], "-1") == 0 ? "NULL" : r->fields[30]), // log
+			(strcmp(r->fields[31], "-1") == 0 ? "NULL" : r->fields[31]), // apply
+			buffs[32], // attributes
+			buffs[33]  // comment
 		);
 		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
-		for (int i = 0; i < 35; i++) {
+		for (int i = 0; i < 34; i++) {
 			free(buffs[i]);
 		}
 		free(query);
@@ -4772,7 +4851,7 @@ void ProxySQL_Admin::save_mysql_firewall_from_runtime(bool _runtime) {
 	SQLite3_result * resultset_users = NULL;
 	SQLite3_result * resultset_sqli_fingerprints = NULL;
 
-	GloQPro->get_current_mysql_firewall_whitelist(&resultset_users, &resultset_rules, &resultset_sqli_fingerprints);
+	GloMyQPro->get_current_firewall_whitelist(&resultset_users, &resultset_rules, &resultset_sqli_fingerprints);
 
 	if (resultset_users) {
 		save_mysql_firewall_whitelist_users_from_runtime(_runtime, resultset_users);
@@ -4810,7 +4889,7 @@ void ProxySQL_Admin::save_pgsql_firewall_from_runtime(bool _runtime) {
 	SQLite3_result* resultset_users = NULL;
 	SQLite3_result* resultset_sqli_fingerprints = NULL;
 
-	GloQPro->get_current_pgsql_firewall_whitelist(&resultset_users, &resultset_rules, &resultset_sqli_fingerprints);
+	GloPgQPro->get_current_firewall_whitelist(&resultset_users, &resultset_rules, &resultset_sqli_fingerprints);
 
 	if (resultset_users) {
 		save_pgsql_firewall_whitelist_users_from_runtime(_runtime, resultset_users);
@@ -5255,6 +5334,14 @@ void ProxySQL_Admin::init_mysql_firewall() {
 	load_mysql_firewall_to_runtime();
 }
 
+void ProxySQL_Admin::init_pgsql_query_rules() {
+	load_pgsql_query_rules_to_runtime();
+}
+
+void ProxySQL_Admin::init_pgsql_firewall() {
+	load_pgsql_firewall_to_runtime();
+}
+
 template<enum SERVER_TYPE pt>
 void ProxySQL_Admin::add_admin_users() {
 #ifdef DEBUG
@@ -5434,30 +5521,30 @@ void ProxySQL_Admin::__refresh_pgsql_users(
  * (number of rows or query) to the client depending on its database
  * management system (MySQL or PostgreSQL).
  *
- * @tparam T The type of the Client_Session object passed as argument.
- * @param[in, out] sess A reference to a valid Client_Session object.
+ * @tparam S The type of session object passed as argument.
+ * @param[in, out] sess A reference to a valid session object.
  * @param msg An OK message string that will be sent to the client.
  * @param rows The number of rows affected by the query for MySQL clients.
  * @param query The query executed for PostgreSQL clients.
  */
-template <class T>
-void ProxySQL_Admin::send_ok_msg_to_client(Client_Session<T>& sess, const char* msg, int rows, const char* query) {
+template <typename S>
+void ProxySQL_Admin::send_ok_msg_to_client(S* sess, const char* msg, int rows, const char* query) {
 	assert(sess->client_myds);
-	if constexpr (std::is_same<T, MySQL_Session*>::value) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		 // Code for MySQL clients
 		MySQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
 		myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, rows, 0, 2, 0, (char*)msg, false); 
 		myds->DSS = STATE_SLEEP;
-	} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 		// Code for PostgreSQL clients
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
 		myds->myprot.generate_ok_packet(true, true, msg, rows, query);
 		myds->DSS = STATE_SLEEP;
-	}
-	else
+	} else {
 		assert(0);
+	}
 }
 
 /*
@@ -5467,17 +5554,17 @@ void ProxySQL_Admin::send_ok_msg_to_client(Client_Session<T>& sess, const char* 
  * (if applicable) to the client depending on its database management system
  * (MySQL or PostgreSQL).
  *
- * @tparam T The type of the Client_Session object passed as argument.
- * @param[in, out] sess A reference to a valid Client_Session object.
+ * @tparam S The type of the session object passed as argument.
+ * @param[in, out] sess A reference to a valid session object.
  * @param msg An error message that will be sent to the client.
  * @param mysqlerrcode (For MySQL clients) The error code associated with this
  * error message.
 */
-template <class T>
-void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const char *msg, uint16_t mysql_err_code /*, bool fatal*/ ) {
+template <typename S>
+void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t mysql_err_code /*, bool fatal*/ ) {
 	assert(sess->client_myds);
 	const char prefix_msg[] = "ProxySQL Admin Error: ";
-	if constexpr (std::is_same<T, MySQL_Session*>::value) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
 		 // Code for MySQL clients
 		MySQL_Data_Stream* myds = sess->client_myds;
 		myds->DSS = STATE_QUERY_SENT_DS;
@@ -5486,8 +5573,7 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, mysql_err_code, (char*)"28000", new_msg);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
-	}
-	else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 		// Code for PostgreSQL clients
 		PgSQL_Data_Stream* myds = sess->client_myds;
 		char* new_msg = (char*)malloc(strlen(msg) + sizeof(prefix_msg));
@@ -5495,6 +5581,8 @@ void ProxySQL_Admin::send_error_msg_to_client(Client_Session<T>& sess, const cha
 		myds->myprot.generate_error_packet(true, true, new_msg, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
 		free(new_msg);
 		myds->DSS = STATE_SLEEP;
+	} else {
+		assert(0);
 	}
 }
 
@@ -5628,7 +5716,6 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 			} else {
 				password=(char *)"";
 			}
-//			}
 
 			std::vector<enum cred_username_type> usertypes {};
 			char* max_connections = nullptr;
@@ -7376,7 +7463,7 @@ char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {
 	int cols_sqli_fingerprints=0;
 	int affected_rows_sqli_fingerprints=0;
 	bool success = false;
-	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
+	if (GloMyQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	char *query_users = (char *)"SELECT * FROM mysql_firewall_whitelist_users";
 	char *query_rules = (char *)"SELECT * FROM mysql_firewall_whitelist_rules";
 	char *query_sqli_fingerprints = (char *)"SELECT * FROM mysql_firewall_whitelist_sqli_fingerprints";
@@ -7394,7 +7481,7 @@ char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {
 		proxy_error("Error on %s : %s\n", query_sqli_fingerprints, error_sqli_fingerprints);
 	} else {
 		success = true;
-		GloQPro->load_mysql_firewall(resultset_users, resultset_rules, resultset_sqli_fingerprints);
+		GloMyQPro->load_firewall(resultset_users, resultset_rules, resultset_sqli_fingerprints);
 	}
 	if (success == false) {
 		// clean up
@@ -7431,7 +7518,7 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 	int cols_sqli_fingerprints = 0;
 	int affected_rows_sqli_fingerprints = 0;
 	bool success = false;
-	if (GloQPro == NULL) return (char*)"Global Query Processor not started: command impossible to run";
+	if (GloPgQPro == NULL) return (char*)"Global Query Processor not started: command impossible to run";
 	char* query_users = (char*)"SELECT * FROM pgsql_firewall_whitelist_users";
 	char* query_rules = (char*)"SELECT * FROM pgsql_firewall_whitelist_rules";
 	char* query_sqli_fingerprints = (char*)"SELECT * FROM pgsql_firewall_whitelist_sqli_fingerprints";
@@ -7452,7 +7539,7 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 	}
 	else {
 		success = true;
-		GloQPro->load_pgsql_firewall(resultset_users, resultset_rules, resultset_sqli_fingerprints);
+		GloPgQPro->load_firewall(resultset_users, resultset_rules, resultset_sqli_fingerprints);
 	}
 	if (success == false) {
 		// clean up
@@ -7482,7 +7569,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
-	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
+	if (GloMyQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM main.mysql_query_rules WHERE active=1 ORDER BY rule_id";
 	if (SQLite3_query_rules_resultset==NULL) {
@@ -7509,7 +7596,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	} else if (error2) {
 		proxy_error("Error on %s : %s\n", query2, error2);
 	} else {
-		fast_routing_hashmap_t fast_routing_hashmap( GloQPro->create_fast_routing_hashmap(resultset2) );
+		fast_routing_hashmap_t fast_routing_hashmap(GloMyQPro->create_fast_routing_hashmap(resultset2) );
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		for (int i=0; i<10; i++) {
 #endif // BENCHMARK_FASTROUTING_LOAD
@@ -7526,7 +7613,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 		}
 
 		unsigned long long curtime1 = monotonic_time();
-		GloQPro->wrlock();
+		GloMyQPro->wrlock();
 		// Checksums are always generated - 'admin-checksum_*' deprecated
 		{
 			pthread_mutex_lock(&GloVars.checksum_mutex);
@@ -7575,7 +7662,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 				GloVars.checksums_values.mysql_query_rules.checksum, GloVars.checksums_values.mysql_query_rules.epoch
 			);
 		}
-		rules_mem_sts_t prev_rules_data( GloQPro->reset_all(false) );
+		rules_mem_sts_t prev_rules_data(GloMyQPro->reset_all(false) );
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -7595,7 +7682,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 					}
 				}
 			}
-			nqpr=GloQPro->new_query_rule(
+			nqpr=GloMyQPro->new_query_rule(
 				atoi(r->fields[0]), // rule_id
 				true,
 				r->fields[1],	// username
@@ -7632,25 +7719,25 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 				r->fields[32], // attributes
 				r->fields[33]  // comment
 			);
-			GloQPro->insert(nqpr, false);
+			GloMyQPro->insert(nqpr, false);
 		}
-		GloQPro->sort(false);
+		GloMyQPro->sort(false);
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		// load a copy of resultset and resultset2
 		SQLite3_result *resultset3 = new SQLite3_result(resultset);
-		GloQPro->save_query_rules(resultset3);
+		GloMyQPro->save_query_rules(resultset3);
 		SQLite3_result *resultset4 = new SQLite3_result(resultset2);
-		GloQPro->load_fast_routing(resultset4);
+		GloMyQPro->load_fast_routing(resultset4);
 #else
 		// load the original resultset and resultset2
-		GloQPro->save_query_rules(resultset);
-		SQLite3_result* prev_fast_routing_resultset = GloQPro->load_fast_routing(fast_routing_hashmap);
+		GloMyQPro->save_query_rules(resultset);
+		SQLite3_result* prev_fast_routing_resultset=GloMyQPro->load_fast_routing(fast_routing_hashmap);
 #endif // BENCHMARK_FASTROUTING_LOAD
-		GloQPro->commit();
+		GloMyQPro->commit();
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		}
 #endif // BENCHMARK_FASTROUTING_LOAD
-		GloQPro->wrunlock();
+		GloMyQPro->wrunlock();
 		unsigned long long curtime2 = monotonic_time();
 		unsigned long long elapsed_ms = (curtime2/1000) - (curtime1/1000);
 		if (elapsed_ms > 5) {
@@ -7669,8 +7756,8 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			__reset_rules(&prev_rules_data.query_rules);
 		}
 	}
-	// if (resultset) delete resultset; // never delete it. GloQPro saves it
-	// if (resultset2) delete resultset2; // never delete it. GloQPro saves it
+	// if (resultset) delete resultset; // never delete it. GloMyQPro saves it
+	// if (resultset2) delete resultset2; // never delete it. GloMyQPro saves it
 	return NULL;
 }
 
@@ -7680,9 +7767,9 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
-	if (GloQPro == NULL) return (char*)"Global Query Processor not started: command impossible to run";
+	if (GloPgQPro == NULL) return (char*)"Global Query Processor not started: command impossible to run";
 	SQLite3_result* resultset = NULL;
-	char* query = (char*)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM main.pgsql_query_rules WHERE active=1 ORDER BY rule_id";
+	char* query = (char*)"SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment FROM main.pgsql_query_rules WHERE active=1 ORDER BY rule_id";
 	if (SQLite3_query_rules_resultset == NULL) {
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	}
@@ -7695,7 +7782,7 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	int cols2 = 0;
 	int affected_rows2 = 0;
 	SQLite3_result* resultset2 = NULL;
-	char* query2 = (char*)"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM main.pgsql_query_rules_fast_routing ORDER BY username, schemaname, flagIN";
+	char* query2 = (char*)"SELECT username, database, flagIN, destination_hostgroup, comment FROM main.pgsql_query_rules_fast_routing ORDER BY username, database, flagIN";
 	if (SQLite3_query_rules_fast_routing_resultset == NULL) {
 		admindb->execute_statement(query2, &error2, &cols2, &affected_rows2, &resultset2);
 	}
@@ -7711,7 +7798,7 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 		proxy_error("Error on %s : %s\n", query2, error2);
 	}
 	else {
-		fast_routing_hashmap_t fast_routing_hashmap(GloQPro->create_fast_routing_hashmap(resultset2));
+		fast_routing_hashmap_t fast_routing_hashmap(GloPgQPro->create_fast_routing_hashmap(resultset2));
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		for (int i = 0; i < 10; i++) {
 #endif // BENCHMARK_FASTROUTING_LOAD
@@ -7728,7 +7815,7 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			}
 
 			unsigned long long curtime1 = monotonic_time();
-			GloQPro->wrlock();
+			GloPgQPro->wrlock();
 			// Checksums are always generated - 'admin-checksum_*' deprecated
 			{
 				pthread_mutex_lock(&GloVars.checksum_mutex);
@@ -7779,7 +7866,7 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 					GloVars.checksums_values.pgsql_query_rules.checksum, GloVars.checksums_values.pgsql_query_rules.epoch
 				);
 			}
-			rules_mem_sts_t prev_rules_data(GloQPro->reset_all(false));
+			rules_mem_sts_t prev_rules_data(GloPgQPro->reset_all(false));
 			QP_rule_t* nqpr;
 			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 				SQLite3_row* r = *it;
@@ -7800,7 +7887,7 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 						}
 					}
 				}
-				nqpr = GloQPro->new_query_rule(
+				nqpr = GloPgQPro->new_query_rule(
 					atoi(r->fields[0]), // rule_id
 					true,
 					r->fields[1],	// username
@@ -7831,31 +7918,30 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 					r->fields[26], // OK_msg
 					(r->fields[27] == NULL ? -1 : atol(r->fields[27])),	// sticky_conn
 					(r->fields[28] == NULL ? -1 : atol(r->fields[28])),	// multiplex
-					(r->fields[29] == NULL ? -1 : atol(r->fields[29])),	// gtid_from_hostgroup
-					(r->fields[30] == NULL ? -1 : atol(r->fields[30])),	// log
-					(atoi(r->fields[31]) == 1 ? true : false),
-					r->fields[32], // attributes
-					r->fields[33]  // comment
+					(r->fields[29] == NULL ? -1 : atol(r->fields[29])),	// log
+					(atoi(r->fields[30]) == 1 ? true : false),
+					r->fields[31], // attributes
+					r->fields[32]  // comment
 				);
-				GloQPro->insert(nqpr, false);
+				GloPgQPro->insert(nqpr, false);
 			}
-			GloQPro->sort(false);
+			GloPgQPro->sort(false);
 #ifdef BENCHMARK_FASTROUTING_LOAD
 			// load a copy of resultset and resultset2
 			SQLite3_result* resultset3 = new SQLite3_result(resultset);
-			GloQPro->save_query_rules(resultset3);
+			GloPgQPro->save_query_rules(resultset3);
 			SQLite3_result* resultset4 = new SQLite3_result(resultset2);
-			GloQPro->load_fast_routing(resultset4);
+			GloPgQPro->load_fast_routing(resultset4);
 #else
 			// load the original resultset and resultset2
-			GloQPro->save_query_rules(resultset);
-			SQLite3_result* prev_fast_routing_resultset = GloQPro->load_fast_routing(fast_routing_hashmap);
+			GloPgQPro->save_query_rules(resultset);
+			SQLite3_result* prev_fast_routing_resultset = GloPgQPro->load_fast_routing(fast_routing_hashmap);
 #endif // BENCHMARK_FASTROUTING_LOAD
-			GloQPro->commit();
+			GloPgQPro->commit();
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		}
 #endif // BENCHMARK_FASTROUTING_LOAD
-		GloQPro->wrunlock();
+		GloPgQPro->wrunlock();
 		unsigned long long curtime2 = monotonic_time();
 		unsigned long long elapsed_ms = (curtime2 / 1000) - (curtime1 / 1000);
 		if (elapsed_ms > 5) {
@@ -7874,8 +7960,8 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			__reset_rules(&prev_rules_data.query_rules);
 		}
 	}
-	// if (resultset) delete resultset; // never delete it. GloQPro saves it
-	// if (resultset2) delete resultset2; // never delete it. GloQPro saves it
+	// if (resultset) delete resultset; // never delete it. GloPgQPro saves it
+	// if (resultset2) delete resultset2; // never delete it. GloPgQPro saves it
 	return NULL;
 }
 

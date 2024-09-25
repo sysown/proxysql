@@ -6,7 +6,8 @@
 #include <vector>       // std::vector
 #include <unordered_set>
 
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
 
 #include "MySQL_Data_Stream.h"
 
@@ -18,7 +19,8 @@ static int int_cmp(const void *a, const void *b) {
 	return 0;
 }
 
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
+extern PgSQL_Query_Processor* GloPgQPro;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -224,7 +226,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 
 	if (maps_per_thread) {
 		for (uint32_t i = 0; i < static_cast<uint32_t>(ths); i++) {
-			th_hashmaps.push_back(GloQPro->create_fast_routing_hashmap(resultset2));
+			th_hashmaps.push_back(GloMyQPro->create_fast_routing_hashmap(resultset2));
 		}
 	}
 
@@ -238,11 +240,11 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 			int dest_HG = atoi(r->fields[3]);
 			int ret_HG = -1;
 			if (dual) {
-				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing_dual(
+				ret_HG = GloMyQPro->testing___find_HG_in_mysql_query_rules_fast_routing_dual(
 					hashmap, r->fields[0], r->fields[1], atoi(r->fields[2]), lock
 				);
 			} else {
-				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(
+				ret_HG = GloMyQPro->testing___find_HG_in_mysql_query_rules_fast_routing(
 					r->fields[0], r->fields[1], atoi(r->fields[2])
 				);
 			}
@@ -541,13 +543,13 @@ source files, we must explicitly instantiate the template for those arguments
 in the source file where the function is defined. This ensures that the
 compiler generates the necessary code for those template instantiations
 */
-template void ProxySQL_Admin::ProxySQL_Test_Handler<MySQL_Session*>(ProxySQL_Admin*, Client_Session<MySQL_Session*>&, char*, bool&);
-template void ProxySQL_Admin::ProxySQL_Test_Handler<PgSQL_Session*>(ProxySQL_Admin*, Client_Session<PgSQL_Session*>&, char*, bool&);
+template void ProxySQL_Admin::ProxySQL_Test_Handler<MySQL_Session>(ProxySQL_Admin*, MySQL_Session*, char*, bool&);
+template void ProxySQL_Admin::ProxySQL_Test_Handler<PgSQL_Session>(ProxySQL_Admin*, PgSQL_Session*, char*, bool&);
 
-template<class T>
-void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, Client_Session<T>& sess, char *query_no_space, bool& run_query) {
-	if constexpr (std::is_same<T, MySQL_Session*>::value) {
-	} else if constexpr (std::is_same<T, PgSQL_Session*>::value) {
+template<typename S>
+void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *query_no_space, bool& run_query) {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 	} else {
 		assert(0);
 	}

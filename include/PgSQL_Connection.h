@@ -1,15 +1,14 @@
 #ifndef __CLASS_PGSQL_CONNECTION_H
 #define __CLASS_PGSQL_CONNECTION_H
-
+#include "libpq-fe.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
-
 
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
@@ -368,8 +367,8 @@ class PgSQL_Connection_Placeholder {
 	bytes_stats_t bytes_info; // bytes statistics
 	struct {
 		unsigned long long questions;
-		unsigned long long myconnpoll_get;
-		unsigned long long myconnpoll_put;
+		unsigned long long pgconnpoll_get;
+		unsigned long long pgconnpoll_put;
 	} statuses;
 
 	unsigned long largest_query_length;
@@ -400,21 +399,25 @@ class PgSQL_Connection_Placeholder {
 	unsigned int set_charset(unsigned int, enum pgsql_charset_action);
 
 	void set_status(bool set, uint32_t status_flag);
-	void set_status_sql_log_bin0(bool);
 	bool get_status(uint32_t status_flag);
+#if 0
+	void set_status_sql_log_bin0(bool);
 	bool get_status_sql_log_bin0();
 	void set_autocommit_start();
 	void set_autocommit_cont(short event);
+#endif // 0
 	void set_names_start();
 	void set_names_cont(short event);
 #ifndef PROXYSQL_USE_RESULT
 	void store_result_start();
 	void store_result_cont(short event);
 #endif // PROXYSQL_USE_RESULT
+#if 0
 	void initdb_start();
 	void initdb_cont(short event);
 	void set_option_start();
 	void set_option_cont(short event);
+#endif // 0
 	void set_query(char *stmt, unsigned long length);
 	
 	int async_set_autocommit(short event, bool);
@@ -430,6 +433,7 @@ class PgSQL_Connection_Placeholder {
 	void stmt_execute_store_result_start();
 	void stmt_execute_store_result_cont(short event);
 
+#if 0
 	/**
 	 * @brief Process the rows returned by 'async_stmt_execute_store_result'. Extracts all the received
 	 *   rows from 'query.stmt->result.data' but the last one, adds them to 'MyRS', frees the buffer
@@ -439,6 +443,7 @@ class PgSQL_Connection_Placeholder {
 	 *   that are being read and added to 'MyRS'.
 	 */
 	void process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes);
+#endif // 0
 
 	void async_free_result();
 
@@ -492,7 +497,9 @@ public:
 	void reset_session_cont(short event);
 	
 	int  async_connect(short event);
+#if 0
 	int  async_set_autocommit(short event, bool ac);
+#endif // 0
 	int  async_query(short event, char* stmt, unsigned long length, MYSQL_STMT** _stmt = NULL, stmt_execute_metadata_t* _stmt_meta = NULL);
 	int  async_ping(short event);
 	int  async_reset_session(short event);
@@ -547,7 +554,7 @@ public:
 	}
 
 	inline
-		const char* get_error_code_str() const {
+	const char* get_error_code_str() const {
 		return error_info.sqlstate;
 	}
 
@@ -595,6 +602,8 @@ public:
 	void next_multi_statement_result(PGresult* result);
 	bool set_single_row_mode();
 	void optimize() {}
+	void update_bytes_recv(uint64_t bytes_recv);
+	void update_bytes_sent(uint64_t bytes_sent);
 
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
 	inline int get_pg_server_version() { return PQserverVersion(pgsql_conn); }
@@ -621,6 +630,8 @@ public:
 	const char* get_pg_server_version_str(char* buff, int buff_size);
 	const char* get_pg_connection_status_str();
 	const char* get_pg_transaction_status_str();
+
+	unsigned int get_memory_usage() const;
 
 	//PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;

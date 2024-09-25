@@ -133,6 +133,7 @@ T j_get_srv_default_int_val(
 //static void * HGCU_thread_run() {
 static void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
+	set_thread_name("MyHGCU");
 	while(1) {
 		MySQL_Connection *myconn= NULL;
 		myconn = (MySQL_Connection *)MyHGM->queue.remove();
@@ -350,6 +351,12 @@ hg_metrics_map = std::make_tuple(
 			}
 		),
 		std::make_tuple (
+			p_hg_counter::client_connections_sha2cached,
+			"proxysql_client_connections_sha2cached_total",
+			"Total number of attempted client connections with known cached passwords.",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_hg_counter::client_connections_aborted,
 			"proxysql_client_connections_total",
 			"Total number of client failed connections (or closed improperly).",
@@ -518,6 +525,18 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_client_connections_connected",
 			"Client connections that are currently connected.",
 			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected_prim,
+			"proxysql_client_connections_connected_primary",
+			"Client connections that are currently connected using primary password.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected_addl,
+			"proxysql_client_connections_connected_additional",
+			"Client connections that are currently connected using additional password.",
+			metric_tags {}
 		)
 	},
 	// prometheus dynamic counters
@@ -617,7 +636,7 @@ hg_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_status,
 			"proxysql_connpool_conns_status",
-			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
+			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD, 5 - SHUNNED_REPLICATION_LAG).",
 			metric_tags {}
 		)
 	}
@@ -625,8 +644,11 @@ hg_metrics_map = std::make_tuple(
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
+	status.client_connections_prim_pass=0;
+	status.client_connections_addl_pass=0;
 	status.client_connections_aborted=0;
 	status.client_connections_created=0;
+	status.client_connections_sha2cached=0;
 	status.server_connections_connected=0;
 	status.server_connections_aborted=0;
 	status.server_connections_created=0;
@@ -3245,12 +3267,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(
 		counter_id->second->Increment(value - cur_val);
 	} else {
 		auto& new_counter = status.p_dyn_counter_array[idx];
-		m_map.insert(
+		const auto& new_counter_it = m_map.insert(
 			{
 				endpoint_id,
 				std::addressof(new_counter->Add(labels))
 			}
 		);
+		new_counter_it.first->second->Increment(value);
 	}
 }
 
@@ -3263,12 +3286,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
 		counter_id->second->Set(value);
 	} else {
 		auto& new_counter = status.p_dyn_gauge_array[idx];
-		m_map.insert(
+		const auto& new_gauge_it = m_map.insert(
 			{
 				endpoint_id,
 				std::addressof(new_counter->Add(labels))
 			}
 		);
+		new_gauge_it.first->second->Set(value);
 	}
 }
 
@@ -4080,7 +4104,10 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 	// Update *client_connections* related metrics
 	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_created], status.client_connections_created);
 	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_aborted], status.client_connections_aborted);
+	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_sha2cached], status.client_connections_sha2cached);
 	status.p_gauge_array[p_hg_gauge::client_connections_connected]->Set(status.client_connections);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected_prim]->Set(status.client_connections_prim_pass);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected_addl]->Set(status.client_connections_addl_pass);
 
 	// Update *acess_denied* related metrics
 	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_wrong_password], status.access_denied_wrong_password);
@@ -4993,7 +5020,13 @@ bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, 
 	return ret;
 }
 
+/**
+ * @brief Dumps to stderr the current info for the monitored Galera hosts ('Galera_Hosts_Map').
+ * @details No action if `mysql_thread___hostgroup_manager_verbose=0`.
+ */
 static void print_galera_nodes_last_status() {
+	if (!mysql_thread___hostgroup_manager_verbose) return;
+
 	std::unique_ptr<SQLite3_result> result { new SQLite3_result(13) };
 
 	result->add_column_definition(SQLITE_TEXT,"hostname");

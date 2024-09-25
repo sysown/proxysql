@@ -25,39 +25,40 @@ static void my_itoa(char s[], unsigned long long n)
 }
 
 
-QP_query_digest_stats::QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
-	digest=d;
+QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
+	int _hid, const char* _client_addr, int query_digests_max_digest_length) {
+	digest=_digest;
 	digest_text=NULL;
-	if (dt) {
-		digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
+	if (_digest_text) {
+		digest_text=strndup(_digest_text, query_digests_max_digest_length);
 	}
-	if (strlen(u) < sizeof(username_buf)) {
-		strcpy(username_buf,u);
+	if (strlen(_user) < sizeof(username_buf)) {
+		strcpy(username_buf, _user);
 		username = username_buf;
 	} else {
-		username=strdup(u);
+		username = strdup(_user);
 	}
-	if (strlen(s) < sizeof(schemaname_buf)) {
-		strcpy(schemaname_buf,s);
+	if (strlen(_schema) < sizeof(schemaname_buf)) {
+		strcpy(schemaname_buf, _schema);
 		schemaname = schemaname_buf;
 	} else {
-		schemaname=strdup(s);
+		schemaname = strdup(_schema);
 	}
-	if (strlen(ca) < sizeof(client_address_buf)) {
-		strcpy(client_address_buf,ca);
+	if (strlen(_client_addr) < sizeof(client_address_buf)) {
+		strcpy(client_address_buf, _client_addr);
 		client_address = client_address_buf;
 	} else {
-		client_address=strdup(ca);
+		client_address = strdup(_client_addr);
 	}
-	count_star=0;
-	first_seen=0;
-	last_seen=0;
-	sum_time=0;
-	min_time=0;
-	max_time=0;
-	rows_affected=0;
-	rows_sent=0;
-	hid=h;
+	count_star = 0;
+	first_seen = 0;
+	last_seen = 0;
+	sum_time = 0;
+	min_time = 0;
+	max_time = 0;
+	rows_affected = 0;
+	rows_sent = 0;
+	hid = _hid;
 }
 void QP_query_digest_stats::add_time(
 	unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,

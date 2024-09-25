@@ -11,7 +11,7 @@ using json = nlohmann::json;
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
 #include <atomic>
 
@@ -256,6 +256,7 @@ static char * session_vars[]= {
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
 	password=NULL;
+	passtype=PASSWORD_TYPE::PRIMARY;
 	sha1_pass=NULL;
 	schemaname=NULL;
 	fe_username=NULL;

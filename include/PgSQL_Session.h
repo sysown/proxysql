@@ -8,7 +8,6 @@
 
 #include "proxysql.h"
 #include "Base_Session.h"
-#include "Client_Session.h"
 #include "cpp.h"
 #include "PgSQL_Variables.h"
 #include "Base_Session.h"
@@ -20,7 +19,7 @@ class PgSQL_Query_Result;
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
 extern class PgSQL_Variables pgsql_variables;
@@ -78,7 +77,7 @@ public:
 	MySQL_STMT_Global_info* stmt_info;
 
 	int QueryLength;
-	enum MYSQL_COM_QUERY_command MyComQueryCmd;
+	enum PGSQL_QUERY_command PgQueryCmd;
 	bool bool_is_select_NOT_for_update;
 	bool bool_is_select_NOT_for_update_computed;
 	bool have_affected_rows; // if affected rows is set, last_insert_id is set too
@@ -92,7 +91,7 @@ public:
 	~PgSQL_Query_Info();
 	void init(unsigned char* _p, int len, bool mysql_header = false);
 	void query_parser_init();
-	enum MYSQL_COM_QUERY_command query_parser_command_type();
+	enum PGSQL_QUERY_command query_parser_command_type();
 	void query_parser_free();
 	unsigned long long query_parser_update_counters();
 	void begin(unsigned char* _p, int len, bool mysql_header = false);
@@ -188,26 +187,34 @@ private:
 	void handler_again___new_thread_to_kill_connection();
 
 	bool handler_again___verify_init_connect();
+#if 0
 	bool handler_again___verify_ldap_user_variable();
-	//bool handler_again___verify_backend_autocommit();
+	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_multi_statement();
+#endif // 0
 	bool handler_again___verify_backend_user_db();
 	bool handler_again___status_SETTING_INIT_CONNECT(int*);
+#if 0
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int*);
 	bool handler_again___status_SETTING_SQL_MODE(int*);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int*);
+#endif // 0
 	bool handler_again___status_CHANGING_CHARSET(int* _rc);
+#if 0
 	bool handler_again___status_CHANGING_SCHEMA(int*);
+#endif // 0
 	bool handler_again___status_CONNECTING_SERVER(int*);
 	bool handler_again___status_RESETTING_CONNECTION(int*);
 	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
+#if 0
 	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
+#endif // 0
 	bool handler_again___multiple_statuses(int* rc);
 	//void init();
 	void reset();
-	void add_ldap_comment_to_pkt(PtrSize_t*);
 #if 0
+	void add_ldap_comment_to_pkt(PtrSize_t*);
 	/**
 	 * @brief Performs the required housekeeping operations over the session and its connections before
 	 *  performing any processing on received client packets.
@@ -215,9 +222,11 @@ private:
 	void housekeeping_before_pkts();
 #endif // 0
 	int get_pkts_from_client(bool&, PtrSize_t&);
+#if 0
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
+#endif // 0
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
 
@@ -249,7 +258,9 @@ private:
 
 public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
+#if 0
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
+#endif // 0
 	std::stack<enum session_status> previous_status;
 
 	PgSQL_Query_Info CurrentQuery;
@@ -267,7 +278,7 @@ public:
 	// pointers
 	PgSQL_Thread* thread;
 #endif // 0
-	Query_Processor_Output* qpo;
+	PgSQL_Query_Processor_Output* qpo;
 	StatCounters* command_counters;
 #if 0
 	PgSQL_Backend* mybe;
@@ -344,12 +355,6 @@ public:
 	 */
 	bool change_user_auth_switch;
 
-	bool with_gtid;
-
-	char gtid_buf[128];
-	//uint64_t gtid_trxid;
-	int gtid_hid;
-
 //	MySQL_STMTs_meta* sess_STMTs_meta;
 //	StmtLongDataHandler* SLDH;
 
@@ -369,7 +374,7 @@ public:
 	void set_status(enum session_status e);
 	int handler();
 
-	void (*handler_function) (Client_Session<PgSQL_Session*> arg, void*, PtrSize_t* pkt);
+	void (*handler_function) (PgSQL_Session* sess, void*, PtrSize_t* pkt);
 	//PgSQL_Backend* find_backend(int);
 	//PgSQL_Backend* create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 	//PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);

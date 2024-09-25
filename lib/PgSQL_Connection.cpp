@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <sstream>
 #include <atomic>
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -10,10 +11,11 @@ using json = nlohmann::json;
 #include "cpp.h"
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_Data_Stream.h"
-#include "query_processor.h"
+#include "PgSQL_Query_Processor.h"
 #include "MySQL_Variables.h"
 
 
+#if 0
 // some of the code that follows is from mariadb client library memory allocator
 typedef int     myf;    // Type of MyFlags in my_funcs
 #define MYF(v)      (myf) (v)
@@ -107,6 +109,7 @@ static void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
     root->free->next=0;
   }
 }
+#endif // 0
 
 extern char * binary_sha1;
 
@@ -447,8 +450,8 @@ PgSQL_Connection_Placeholder::PgSQL_Connection_Placeholder() {
 	bytes_info.bytes_recv = 0;
 	bytes_info.bytes_sent = 0;
 	statuses.questions = 0;
-	statuses.myconnpoll_get = 0;
-	statuses.myconnpoll_put = 0;
+	statuses.pgconnpoll_get = 0;
+	statuses.pgconnpoll_put = 0;
 	memset(gtid_uuid,0,sizeof(gtid_uuid));
 	memset(&connected_host_details, 0, sizeof(connected_host_details));
 };
@@ -575,7 +578,7 @@ void PgSQL_Connection_Placeholder::update_warning_count_from_statement() {
 	// To prevent this, we will check the digest text in conjunction with 'mysql_thread_query_digest' to verify whether it 
 	// is enabled or disabled.
 	if (myds && myds->sess && myds->sess->CurrentQuery.stmt_info && myds->sess->CurrentQuery.stmt_info->digest_text &&
-		mysql_thread___query_digests == true) {
+		pgsql_thread___query_digests == true) {
 		if (parent->myhgc->handle_warnings_enabled()) {
 			warning_count = mysql_stmt_warning_count(query.stmt);
 		}
@@ -600,6 +603,7 @@ bool PgSQL_Connection_Placeholder::get_status(uint32_t status_flag) {
 	return this->status_flags & status_flag;
 }
 
+#if 0
 void PgSQL_Connection_Placeholder::set_status_sql_log_bin0(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
@@ -611,6 +615,7 @@ void PgSQL_Connection_Placeholder::set_status_sql_log_bin0(bool v) {
 bool PgSQL_Connection_Placeholder::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
+#endif // 0
 
 unsigned int PgSQL_Connection_Placeholder::reorder_dynamic_variables_idx() {
 	dynamic_variables_idx.clear();
@@ -658,6 +663,7 @@ unsigned int PgSQL_Connection_Placeholder::number_of_matching_session_variables(
 	return ret;
 }
 
+#if 0
 void PgSQL_Connection_Placeholder::initdb_start() {
 	PROXY_TRACE();
 	PgSQL_Connection_userinfo *client_ui=myds->sess->client_myds->myconn->userinfo;
@@ -691,6 +697,7 @@ void PgSQL_Connection_Placeholder::set_autocommit_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_autocommit_cont(&ret_bool, pgsql, mysql_status(event, true));
 }
+#endif // 0
 
 void PgSQL_Connection_Placeholder::set_names_start() {
 	PROXY_TRACE();
@@ -783,6 +790,7 @@ void PgSQL_Connection_Placeholder::set_is_client() {
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
+#if 0
 void PgSQL_Connection_Placeholder::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes) {
 	PROXY_TRACE2();
 	// there is more than 1 row
@@ -891,6 +899,7 @@ int PgSQL_Connection_Placeholder::async_set_autocommit(short event, bool ac) {
 	}
 	return 1;
 }
+#endif // 0
 
 int PgSQL_Connection_Placeholder::async_set_names(short event, unsigned int c) {
 	PROXY_TRACE();
@@ -1688,14 +1697,8 @@ handler_again:
 	case ASYNC_QUERY_START:
 		query_start();
 		__sync_fetch_and_add(&parent->queries_sent, 1);
-		__sync_fetch_and_add(&parent->bytes_sent, query.length);
+		update_bytes_sent(query.length + 5);
 		statuses.questions++;
-		myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent] += query.length;
-		myds->bytes_info.bytes_sent += query.length;
-		bytes_info.bytes_sent += query.length;
-		if (myds->sess->with_gtid == true) {
-			__sync_fetch_and_add(&parent->queries_gtid_sync, 1);
-		}
 		if (async_exit_status) {
 			next_event(ASYNC_QUERY_CONT);
 		} else {
@@ -1784,11 +1787,17 @@ handler_again:
 
 				switch (exec_status_type) {
 				case PGRES_COMMAND_OK:
-					query_result->add_command_completion(result.get());
+					{
+						const unsigned int bytes_recv = query_result->add_command_completion(result.get());
+						update_bytes_recv(bytes_recv);
+					}
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 					break;
 				case PGRES_EMPTY_QUERY:
-					query_result->add_empty_query_response(result.get());
+					{
+						const unsigned int bytes_recv = query_result->add_empty_query_response(result.get());
+						update_bytes_recv(bytes_recv);
+					}
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 					break;
 				case PGRES_TUPLES_OK:
@@ -1823,7 +1832,8 @@ handler_again:
 						severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_WARNING ||
 						severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_NOTICE) {
 
-						query_result->add_error(result.get());
+						const unsigned int bytes_recv = query_result->add_error(result.get());
+						update_bytes_recv(bytes_recv);
 					}
 
 					const PGSQL_ERROR_CATEGORY error_category = get_error_category();
@@ -1837,17 +1847,15 @@ handler_again:
 				}
 
 				if (new_result == true) {
-					query_result->add_row_description(result.get());
+					const unsigned int bytes_recv = query_result->add_row_description(result.get());
+					update_bytes_recv(bytes_recv);
 					new_result = false;
 				}
 
 				if (PQntuples(result.get()) > 0) {
-					unsigned int br = query_result->add_row(result.get());
-					__sync_fetch_and_add(&parent->bytes_recv, br);
-					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
-					myds->bytes_info.bytes_recv += br;
-					bytes_info.bytes_recv += br;
-					processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
+					const unsigned int bytes_recv = query_result->add_row(result.get());
+					update_bytes_recv(bytes_recv);
+					processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 					if (
 						(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
 						||
@@ -1859,18 +1867,16 @@ handler_again:
 						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping 
 					}
 				} else {
-					query_result->add_command_completion(result.get());
+					const unsigned int bytes_recv=query_result->add_command_completion(result.get(), false);
+					update_bytes_recv(bytes_recv);
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 				}
 			}
 		} else if (result_type == 2) {
 			if (ps_result.id == 'D') {
-				unsigned int br = query_result->add_row(&ps_result);
-				__sync_fetch_and_add(&parent->bytes_recv, br);
-				myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += br;
-				myds->bytes_info.bytes_recv += br;
-				bytes_info.bytes_recv += br;
-				processed_bytes += br;	// issue #527 : this variable will store the amount of bytes processed during this event
+				unsigned int bytes_recv=query_result->add_row(&ps_result);
+				update_bytes_recv(bytes_recv);
+				processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 
 				if (
 					(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
@@ -1899,6 +1905,7 @@ handler_again:
 
 		// finally add ready for query packet
 		query_result->add_ready_status(PQtransactionStatus(pgsql_conn));
+		update_bytes_recv(6);
 		//processing_multi_statement = false;
 		NEXT_IMMEDIATE(ASYNC_QUERY_END);
 	}
@@ -1915,6 +1922,7 @@ handler_again:
 		break;
 	case ASYNC_RESET_SESSION_START:
 		reset_session_start();
+		update_bytes_sent((reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5)));
 		if (async_exit_status) {
 			next_event(ASYNC_RESET_SESSION_CONT);
 		} else {
@@ -2337,6 +2345,7 @@ void PgSQL_Connection::async_free_result() {
 	new_result = false;
 }
 
+#if 0
 int PgSQL_Connection::async_set_autocommit(short event, bool ac) {
 	PROXY_TRACE();
 	assert(pgsql_conn);
@@ -2378,6 +2387,7 @@ int PgSQL_Connection::async_set_autocommit(short event, bool ac) {
 	}
 	return 1;
 }
+#endif // 0
 
 bool PgSQL_Connection::IsAutoCommit() {
 	bool ret = true;
@@ -2816,6 +2826,26 @@ bool PgSQL_Connection::has_same_connection_options(const PgSQL_Connection* clien
 		}
 	}
 	return true;
+}
+
+unsigned int PgSQL_Connection::get_memory_usage() const {
+	// TODO: need to create new function in libpq
+	unsigned int memory_bytes = (16 * 1024) * 2; //PSgetMemoryUsage(pgsql_conn);
+	return /*sizeof(PGconn) +*/ memory_bytes;
+}
+
+void PgSQL_Connection::update_bytes_recv(uint64_t bytes_recv) {
+	__sync_fetch_and_add(&parent->bytes_recv, bytes_recv);
+	myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv] += bytes_recv;
+	myds->bytes_info.bytes_recv += bytes_recv;
+	bytes_info.bytes_recv += bytes_recv;
+}
+
+void PgSQL_Connection::update_bytes_sent(uint64_t bytes_sent) {
+	__sync_fetch_and_add(&parent->bytes_sent, bytes_sent);
+	myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent] += bytes_sent;
+	myds->bytes_info.bytes_sent += bytes_sent;
+	bytes_info.bytes_sent += bytes_sent;
 }
 
 const char* PgSQL_Connection::get_pg_server_version_str(char* buff, int buff_size) {

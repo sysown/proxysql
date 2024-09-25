@@ -10,7 +10,6 @@
 #include <functional>
 #include <vector>
 
-#include "Client_Session.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
@@ -18,7 +17,7 @@
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
 extern class MySQL_Variables mysql_variables;
@@ -289,7 +288,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// pointers
 	MySQL_Thread *thread;
 #endif // 0
-	Query_Processor_Output *qpo;
+	MySQL_Query_Processor_Output *qpo;
 	StatCounters *command_counters;
 #if 0
 	MySQL_Backend *mybe;
@@ -391,7 +390,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void set_status(enum session_status e);
 	int handler();
 
-	void (*handler_function) (Client_Session<MySQL_Session*> arg, void *, PtrSize_t *pkt);
+	void (*handler_function) (MySQL_Session* sess, void *, PtrSize_t *pkt);
 	//MySQL_Backend * find_backend(int);
 	//MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	//MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
@@ -445,7 +444,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute=true);
 
-	friend void SQLite3_Server_session_handler(Client_Session<MySQL_Session*>, void *_pa, PtrSize_t *pkt);
+	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
 };
 
 #define KILL_QUERY       1

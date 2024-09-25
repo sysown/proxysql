@@ -54,11 +54,11 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	S sess = NULL;
 	bool use_tcp_keepalive = false;
 	int tcp_keepalive_time = 0;
-	if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 		sess = new PgSQL_Session();
 		use_tcp_keepalive = pgsql_thread___use_tcp_keepalive;
 		tcp_keepalive_time = pgsql_thread___tcp_keepalive_time;
-	} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+	} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 		sess = new MySQL_Session();
 		use_tcp_keepalive = mysql_thread___use_tcp_keepalive;
 		tcp_keepalive_time = mysql_thread___tcp_keepalive_time;
@@ -66,9 +66,9 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 		assert(0);
 	}
 	register_session(static_cast<T*>(this), sess);
-	if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 		sess->client_myds = new PgSQL_Data_Stream();
-	} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+	} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 		sess->client_myds = new MySQL_Data_Stream();
 	} else {
 		assert(0);
@@ -122,10 +122,10 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 #ifdef DEBUG
 	sess->client_myds->myprot.dump_pkt = true;
 #endif
-	if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 		PgSQL_Connection* myconn = new PgSQL_Connection();
 		sess->client_myds->attach_connection(myconn);
-	} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+	} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 		MySQL_Connection* myconn = new MySQL_Connection();
 		sess->client_myds->attach_connection(myconn);
 	} else {
@@ -138,7 +138,7 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-	if constexpr (std::is_same<T, MySQL_Thread>::value) {	
+	if constexpr (std::is_same_v<T, MySQL_Thread>) {	
 		uint32_t session_track_gtids_int = SpookyHash::Hash32(mysql_thread___default_session_track_gtids, strlen(mysql_thread___default_session_track_gtids), 10);
 		sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
 		if (sess->client_myds->myconn->options.session_track_gtids) {
@@ -351,11 +351,11 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 			myds->remove_pollout();
 		}
 		if (myds->myds_type==MYDS_BACKEND) {
-			if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+			if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 				if (pgsql_thread___throttle_ratio_server_to_client) {
 					thr->mypolls.fds[n].events = 0;
 				}
-			} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+			} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 				if (mysql_thread___throttle_ratio_server_to_client) {
 					thr->mypolls.fds[n].events = 0;
 				}
@@ -376,7 +376,7 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 		// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
 		// but assuming that client isn't completely blocked, we will stop checking for data
 		// only at mysql_thread___threshold_resultset_size * 4
-		if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+		if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 			unsigned int buffered_data = 0;
 			buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
 			buffered_data += myds->sess->client_myds->resultset->len * PGSQL_RESULTSET_BUFLEN;
@@ -384,7 +384,7 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 				thr->mypolls.fds[n].events = 0;
 				return true;
 			}
-		} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+		} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 			unsigned int buffered_data = 0;
 			buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 			buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
@@ -419,9 +419,9 @@ bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n)
 
 	int session_idle_ms = 0;
 
-	if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 		session_idle_ms = pgsql_thread___session_idle_ms;
-	} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+	} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 		session_idle_ms = mysql_thread___session_idle_ms;
 	} else {
 		assert(0);
@@ -472,9 +472,9 @@ void Base_Thread::ProcessAllMyDS_BeforePoll() {
 
 		int session_idle_ms = 0;
 
-		if constexpr (std::is_same<T, PgSQL_Thread>::value) {
+		if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 			session_idle_ms = pgsql_thread___session_idle_ms;
-		} else if constexpr (std::is_same<T, MySQL_Thread>::value) {
+		} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 			session_idle_ms = mysql_thread___session_idle_ms;
 		} else {
 			assert(0);

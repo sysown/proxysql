@@ -633,7 +633,7 @@ static pair<umap_pgauth, umap_pgauth> extract_accounts_details(MYSQL_RES* result
 	if (resultset == nullptr) { return { umap_pgauth {}, umap_pgauth {} }; }
 
 	// The following order is assumed for the resulset received fields:
-	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, 
+	//  - username, password, active, use_ssl, default_hostgroup,
 	// 	  transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment.
 	umap_pgauth f_accs_map {};
 	umap_pgauth b_accs_map {};

@@ -10,7 +10,7 @@
 
 #include "MySQL_Logger.hpp"
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 
 #include <search.h>
 #include <stdlib.h>
@@ -444,7 +444,7 @@ static int __ClickHouse_Server_refresh_interval=1000;
 extern Query_Cache *GloQC;
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ProxySQL_Admin *GloAdmin;
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
@@ -586,7 +586,7 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
-void ClickHouse_Server_session_handler(Client_Session<MySQL_Session*> sess, void *_pa, PtrSize_t *pkt) {
+void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *pkt) {
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -1395,7 +1395,7 @@ static void *child_mysql(void *arg) {
 	sqlite_sess->init();
 	mysql_thr->gen_args = (void *)sqlite_sess;
 
-	GloQPro->init_thread();
+	GloMyQPro->init_thread();
 	mysql_thr->refresh_variables();
 	sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
@@ -1477,6 +1477,7 @@ static void * sqlite3server_main_loop(void *arg)
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	set_thread_name("ClickHouseMain");
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
 		int *client;

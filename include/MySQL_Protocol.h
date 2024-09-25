@@ -10,6 +10,9 @@
 
 extern MySQL_Variables mysql_variables;
 
+/** @brief Forward declaration. */
+typedef struct _account_details_t account_details_t;
+
 /* The default mariadb-connecter 3.1.4 does not yet implement CLIENT_DEPRECATE_EOF
  * flag.
  */
@@ -96,7 +99,8 @@ class MyProt_tmp_auth_vars {
 	char *db = NULL;
 	char *db_tmp = NULL;
 	unsigned char *pass = NULL;
-	char *password = NULL;
+	char* password { nullptr };
+	PASSWORD_TYPE::E passtype = PASSWORD_TYPE::PRIMARY;
 	unsigned char *auth_plugin = NULL;
 	void *sha1_pass=NULL;
 	unsigned char *_ptr = NULL;;
@@ -181,14 +185,18 @@ class MySQL_Protocol {
 	void PPHR_3(MyProt_tmp_auth_vars& vars1);
 	bool PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
 	bool PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
-	void PPHR_5passwordTrue(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1);
-	void PPHR_5passwordFalse_0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1);
-	void PPHR_5passwordFalse_auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
+	void PPHR_5passwordTrue(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
+	void PPHR_5passwordFalse_0(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
+	void PPHR_5passwordFalse_auth2(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_6auth2(bool& ret, MyProt_tmp_auth_vars& vars1);
-	void PPHR_sha2full(bool& ret, MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat);
-	void PPHR_7auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
-	void PPHR_7auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
-	void PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, MyProt_tmp_auth_attrs& attr1);
+	bool PPHR_verify_sha2(MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
+	void PPHR_sha2full(bool& ret, MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
+	void PPHR_7auth1(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
+	void PPHR_7auth2(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
+	void PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_TYPE::E passtype);
+	void PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_details_t& attr1);
+	bool PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
+	bool PPHR_verify_password_2(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 
 	void generate_one_byte_pkt(unsigned char b);
 

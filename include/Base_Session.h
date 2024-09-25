@@ -4,8 +4,6 @@ template<typename S, typename DSi, typename B, typename T> class Base_Session;
 //#define __CLASS_MYSQL_SESSION_H
 //#define __CLASS_PGSQL_SESSION_H
 
-
-#include "Client_Session.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -14,7 +12,7 @@ template<typename S, typename DSi, typename B, typename T> class Base_Session;
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
 class MySQL_STMTs_meta;

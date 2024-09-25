@@ -170,7 +170,6 @@ PgSQL_SrvC::PgSQL_SrvC(
 	bytes_sent=0;
 	bytes_recv=0;
 	max_connections_used=0;
-	queries_gtid_sync=0;
 	time_last_detected_error=0;
 	connect_ERR_at_time_last_detected_error=0;
 	shunned_automatic=false;
@@ -393,18 +392,18 @@ hg_metrics_map = std::make_tuple(
 		),
 		// ====================================================================
 
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_autocommit,
 			"proxysql_com_autocommit_total",
 			"Total queries autocommited.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		std::make_tuple(
 			PgSQL_p_hg_counter::com_autocommit_filtered,
 			"proxysql_com_autocommit_filtered_total",
 			"Total queries filtered autocommit.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
 			PgSQL_p_hg_counter::com_rollback,
 			"proxysql_com_rollback_total",
@@ -418,41 +417,41 @@ hg_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::com_backend_change_user,
-			"proxysql_com_backend_change_user_total",
-			"Total CHANGE_USER queries backend.",
+			PgSQL_p_hg_counter::com_backend_reset_connection,
+			"proxysql_com_backend_reset_connection_total",
+			"Total backend_reset_connection queries backend.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_backend_init_db,
 			"proxysql_com_backend_init_db_total",
 			"Total queries backend INIT DB.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
-			PgSQL_p_hg_counter::com_backend_set_names,
-			"proxysql_com_backend_set_names_total",
-			"Total queries backend SET NAMES.",
+			PgSQL_p_hg_counter::com_backend_set_client_encoding,
+			"proxysql_com_backend_set_client_encoding_total",
+			"Total queries backend SET client_encoding.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_frontend_init_db,
 			"proxysql_com_frontend_init_db_total",
 			"Total INIT DB queries frontend.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
-			PgSQL_p_hg_counter::com_frontend_set_names,
-			"proxysql_com_frontend_set_names_total",
-			"Total SET NAMES frontend queries.",
+			PgSQL_p_hg_counter::com_frontend_set_client_encoding,
+			"proxysql_com_frontend_set_client_encoding_total",
+			"Total SET client_encoding frontend queries.",
 			metric_tags {}
 		),
-		std::make_tuple (
+		/*std::make_tuple(
 			PgSQL_p_hg_counter::com_frontend_use_db,
 			"proxysql_com_frontend_use_db_total",
 			"Total USE DB queries frontend.",
 			metric_tags {}
-		),
+		),*/
 		std::make_tuple (
 			PgSQL_p_hg_counter::com_commit_cnt,
 			"proxysql_com_commit_cnt_total",
@@ -492,40 +491,40 @@ hg_metrics_map = std::make_tuple(
 
 		// ====================================================================
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_get,
-			"proxysql_myhgm_myconnpool_get_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_get,
+			"proxysql_pghgm_pgconnpool_get_total",
 			"The number of requests made to the connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_get_ok,
-			"proxysql_myhgm_myconnpool_get_ok_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_get_ok,
+			"proxysql_pghgm_pgconnpool_get_ok_total",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_get_ping,
-			"proxysql_myhgm_myconnpool_get_ping_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_get_ping,
+			"proxysql_pghgm_myconnpool_get_ping_total",
 			"The number of connections that were taken from the pool to run a ping to keep them alive.",
 			metric_tags {}
 		),
 		// ====================================================================
 
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_push,
-			"proxysql_myhgm_myconnpool_push_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_push,
+			"proxysql_pghgm_pgconnpool_push_total",
 			"The number of connections returned to the connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_reset,
-			"proxysql_myhgm_myconnpool_reset_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_reset,
+			"proxysql_pghgm_pgconnpool_reset_total",
 			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
 			metric_tags {}
 		),
 		std::make_tuple (
-			PgSQL_p_hg_counter::myhgm_myconnpool_destroy,
-			"proxysql_myhgm_myconnpool_destroy_total",
+			PgSQL_p_hg_counter::pghgm_pgconnpool_destroy,
+			"proxysql_pghgm_pgconnpool_destroy_total",
 			"The number of connections considered unhealthy and therefore closed.",
 			metric_tags {}
 		),
@@ -669,24 +668,24 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 	status.servers_table_version=0;
 	pthread_mutex_init(&status.servers_table_version_lock, NULL);
 	pthread_cond_init(&status.servers_table_version_cond, NULL);
-	status.myconnpoll_get=0;
-	status.myconnpoll_get_ok=0;
-	status.myconnpoll_get_ping=0;
-	status.myconnpoll_push=0;
-	status.myconnpoll_destroy=0;
-	status.myconnpoll_reset=0;
+	status.pgconnpoll_get=0;
+	status.pgconnpoll_get_ok=0;
+	status.pgconnpoll_get_ping=0;
+	status.pgconnpoll_push=0;
+	status.pgconnpoll_destroy=0;
+	status.pgconnpoll_reset=0;
 	status.autocommit_cnt=0;
 	status.commit_cnt=0;
 	status.rollback_cnt=0;
 	status.autocommit_cnt_filtered=0;
 	status.commit_cnt_filtered=0;
 	status.rollback_cnt_filtered=0;
-	status.backend_change_user=0;
-	status.backend_init_db=0;
-	status.backend_set_names=0;
-	status.frontend_init_db=0;
-	status.frontend_set_names=0;
-	status.frontend_use_db=0;
+	status.backend_reset_connection=0;
+	//status.backend_init_db=0;
+	status.backend_set_client_encoding=0;
+	//status.frontend_init_db=0;
+	status.frontend_set_client_encoding=0;
+	//status.frontend_use_db=0;
 	status.access_denied_wrong_password=0;
 	status.access_denied_max_connections=0;
 	status.access_denied_max_user_connections=0;
@@ -1320,7 +1319,7 @@ bool PgSQL_HostGroups_Manager::commit(
 
 				if (atoi(r->fields[3])!=atoi(r->fields[12])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->weight , atoi(r->fields[12]));
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->weight , atoi(r->fields[12]));
 					mysrvc->weight=atoi(r->fields[12]);
 				}
 				if (atoi(r->fields[4])!=atoi(r->fields[13])) {
@@ -1762,7 +1761,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 
 void PgSQL_HostGroups_Manager::increase_reset_counter() {
 	wrlock();
-	status.myconnpoll_reset++;
+	status.pgconnpoll_reset++;
 	wrunlock();
 }
 void PgSQL_HostGroups_Manager::push_MyConn_to_pool(PgSQL_Connection *c, bool _lock) {
@@ -1771,7 +1770,7 @@ void PgSQL_HostGroups_Manager::push_MyConn_to_pool(PgSQL_Connection *c, bool _lo
 	if (_lock)
 		wrlock();
 	c->auto_increment_delay_token = 0;
-	status.myconnpoll_push++;
+	status.pgconnpoll_push++;
 	mysrvc=(PgSQL_SrvC *)c->parent;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 	mysrvc->ConnectionsUsed->remove(c);
@@ -2427,7 +2426,7 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	PgSQL_Connection * conn=NULL;
 	wrlock();
-	status.myconnpoll_get++;
+	status.pgconnpoll_get++;
 	PgSQL_HGC *myhgc=MyHGC_lookup(_hid);
 	PgSQL_SrvC *mysrvc = NULL;
 #ifdef TEST_AURORA
@@ -2438,7 +2437,7 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
-			status.myconnpoll_get_ok++;
+			status.pgconnpoll_get_ok++;
 			mysrvc->update_max_connections_used();
 		}
 	}
@@ -2500,7 +2499,7 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying PgSQL_Connection %p, server %s:%d Error %s\n", c, mysrvc->address, mysrvc->port,
 			c->get_error_code_with_message().c_str());
 		mysrvc->ConnectionsUsed->remove(c);
-		status.myconnpoll_destroy++;
+		status.pgconnpoll_destroy++;
         if (_lock) {
 			wrunlock();
 		}
@@ -2827,7 +2826,7 @@ int PgSQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	}
 
 __exit_get_multiple_idle_connections:
-	status.myconnpoll_get_ping+=num_conn_current;
+	status.pgconnpoll_get_ping+=num_conn_current;
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning %d idle connections\n", num_conn_current);
 	return num_conn_current;
@@ -2883,7 +2882,7 @@ SQLite3_result* PgSQL_HostGroups_Manager::get_current_pgsql_table(const string& 
 
 
 SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
-	const int colnum=13;
+	const int colnum=12;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Free Connections in Pool\n");
 	SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"fd");
@@ -2895,7 +2894,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 	result->add_column_definition(SQLITE_TEXT,"init_connect");
 	result->add_column_definition(SQLITE_TEXT,"time_zone");
 	result->add_column_definition(SQLITE_TEXT,"sql_mode");
-	result->add_column_definition(SQLITE_TEXT,"autocommit");
+	//result->add_column_definition(SQLITE_TEXT,"autocommit");
 	result->add_column_definition(SQLITE_TEXT,"idle_ms");
 	result->add_column_definition(SQLITE_TEXT,"statistics");
 	result->add_column_definition(SQLITE_TEXT,"pgsql_info");
@@ -2934,17 +2933,17 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					pta[6] = strdup(conn->options.init_connect);
 				}
 				pta[7] = NULL;
-				if (conn->variables[SQL_TIME_ZONE].value) {
+				/*if (conn->variables[SQL_TIME_ZONE].value) {
 					pta[7] = strdup(conn->variables[SQL_TIME_ZONE].value);
-				}
+				}*/
 				pta[8] = NULL;
-				if (conn->variables[SQL_SQL_MODE].value) {
+				/*if (conn->variables[SQL_SQL_MODE].value) {
 					pta[8] = strdup(conn->variables[SQL_SQL_MODE].value);
-				}
-				sprintf(buf,"%d", conn->options.autocommit);
-				pta[9]=strdup(buf);
+				}*/
+				//sprintf(buf,"%d", conn->options.autocommit);
+				//pta[9]=strdup(buf);
 				sprintf(buf,"%llu", (curtime-conn->last_time_used)/1000);
-				pta[10]=strdup(buf);
+				pta[9]=strdup(buf);
 				{
 					json j;
 					char buff[32];
@@ -2954,43 +2953,35 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["age_ms"] = age_ms;
 					j["bytes_recv"] = conn->bytes_info.bytes_recv;
 					j["bytes_sent"] = conn->bytes_info.bytes_sent;
-					j["myconnpoll_get"] = conn->statuses.myconnpoll_get;
-					j["myconnpoll_put"] = conn->statuses.myconnpoll_put;
+					j["pgconnpoll_get"] = conn->statuses.pgconnpoll_get;
+					j["pgconnpoll_put"] = conn->statuses.pgconnpoll_put;
 					j["questions"] = conn->statuses.questions;
-					string s = j.dump();
-					pta[11] = strdup(s.c_str());
+					const string s = j.dump();
+					pta[10] = strdup(s.c_str());
 				}
 				{
-					MYSQL *_my = conn->pgsql;
 					json j;
 					char buff[32];
-					sprintf(buff,"%p",_my);
+					sprintf(buff, "%p", conn->get_pg_connection());
 					j["address"] = buff;
-					j["host"] = _my->host;
-					j["host_info"] = _my->host_info;
-					j["port"] = _my->port;
-					j["server_version"] = _my->server_version;
-					j["user"] = _my->user;
-					j["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
-					j["db"] = (_my->db ? _my->db : "");
-					j["affected_rows"] = _my->affected_rows;
-					j["insert_id"] = _my->insert_id;
-					j["thread_id"] = _my->thread_id;
-					j["server_status"] = _my->server_status;
-					j["charset"] = _my->charset->nr;
-					j["charset_name"] = _my->charset->csname;
-
-					j["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );
-					j["options"]["use_ssl"] = _my->options.use_ssl;
-					j["client_flag"]["client_found_rows"] = (_my->client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-					j["client_flag"]["client_multi_statements"] = (_my->client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-					j["client_flag"]["client_multi_results"] = (_my->client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
-					j["net"]["last_errno"] = _my->net.last_errno;
-					j["net"]["fd"] = _my->net.fd;
-					j["net"]["max_packet_size"] = _my->net.max_packet_size;
-					j["net"]["sqlstate"] = _my->net.sqlstate;
-					string s = j.dump();
-					pta[12] = strdup(s.c_str());
+					j["host"] = conn->get_pg_host();
+					j["host_addr"] = conn->get_pg_hostaddr();
+					j["port"] = conn->get_pg_port();
+					j["user"] = conn->get_pg_user();
+					j["database"] = conn->get_pg_dbname();
+					j["backend_pid"] = conn->get_pg_backend_pid();
+					j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
+					j["error_msg"] = conn->get_pg_error_message();
+					j["options"] = conn->get_pg_options();
+					j["fd"] = conn->get_pg_socket_fd();
+					j["protocol_version"] = conn->get_pg_protocol_version();
+					j["server_version"] = conn->get_pg_server_version_str(buff, sizeof(buff));
+					j["transaction_status"] = conn->get_pg_transaction_status_str();
+					j["connection_status"] = conn->get_pg_connection_status_str();
+					j["client_encoding"] = conn->get_pg_client_encoding();
+					j["is_nonblocking"] = conn->get_pg_is_nonblocking() ? "YES" : "NO";
+					const string s = j.dump();
+					pta[11] = strdup(s.c_str());
 				}
 				result->add_row(pta);
 				for (k=0; k<colnum; k++) {
@@ -3140,7 +3131,7 @@ void PgSQL_HostGroups_Manager::p_update_connection_pool() {
 }
 
 SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int *hid) {
-  const int colnum=14;
+  const int colnum=13;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -3153,7 +3144,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
   result->add_column_definition(SQLITE_TEXT,"ConnERR");
   result->add_column_definition(SQLITE_TEXT,"MaxConnUsed");
   result->add_column_definition(SQLITE_TEXT,"Queries");
-  result->add_column_definition(SQLITE_TEXT,"Queries_GTID_sync");
   result->add_column_definition(SQLITE_TEXT,"Bytes_sent");
   result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
   result->add_column_definition(SQLITE_TEXT,"Latency_us");
@@ -3234,23 +3224,18 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 			if (_reset) {
 				mysrvc->queries_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->queries_gtid_sync);
-			pta[10]=strdup(buf);
-			if (_reset) {
-				mysrvc->queries_gtid_sync=0;
-			}
 			sprintf(buf,"%llu", mysrvc->bytes_sent);
-			pta[11]=strdup(buf);
+			pta[10]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_sent=0;
 			}
 			sprintf(buf,"%llu", mysrvc->bytes_recv);
-			pta[12]=strdup(buf);
+			pta[11]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_recv=0;
 			}
 			sprintf(buf,"%u", mysrvc->current_latency_us);
-			pta[13]=strdup(buf);
+			pta[12]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])
@@ -3860,26 +3845,26 @@ void PgSQL_HostGroups_Manager::p_update_metrics() {
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::selects_for_update__autocommit0], status.select_for_update_or_equivalent);
 
 	// Update *com_* related metrics
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit], status.autocommit_cnt);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit_filtered], status.autocommit_cnt_filtered);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit], status.autocommit_cnt);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_autocommit_filtered], status.autocommit_cnt_filtered);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_commit_cnt], status.commit_cnt);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_commit_cnt_filtered], status.commit_cnt_filtered);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_rollback], status.rollback_cnt);
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_rollback_filtered], status.rollback_cnt_filtered);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_init_db], status.backend_init_db);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_change_user], status.backend_change_user);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_set_names], status.backend_set_names);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_init_db], status.frontend_init_db);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_set_names], status.frontend_set_names);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_use_db], status.frontend_use_db);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_init_db], status.backend_init_db);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_reset_connection], status.backend_reset_connection);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_backend_set_client_encoding], status.backend_set_client_encoding);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_init_db], status.frontend_init_db);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_set_client_encoding], status.frontend_set_client_encoding);
+	//p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::com_frontend_use_db], status.frontend_use_db);
 
 	// Update *myconnpoll* related metrics
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_get], status.myconnpoll_get);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_get_ok], status.myconnpoll_get_ok);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_get_ping], status.myconnpoll_get_ping);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_push], status.myconnpoll_push);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_reset], status.myconnpoll_reset);
-	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::myhgm_myconnpool_destroy], status.myconnpoll_destroy);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_get], status.pgconnpoll_get);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_get_ok], status.pgconnpoll_get_ok);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_get_ping], status.pgconnpoll_get_ping);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_push], status.pgconnpoll_push);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_reset], status.pgconnpoll_reset);
+	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::pghgm_pgconnpool_destroy], status.pgconnpoll_destroy);
 
 	p_update_counter(status.p_counter_array[PgSQL_p_hg_counter::auto_increment_delay_multiplex], status.auto_increment_delay_multiplex);
 
@@ -3891,39 +3876,39 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 	const int colnum=2;
 	char buf[256];
 	char **pta=(char **)malloc(sizeof(char *)*colnum);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Global Status\n");
 	SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
 	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
 	wrlock();
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_get";
-		sprintf(buf,"%lu",status.myconnpoll_get);
+		pta[0]=(char *)"PgHGM_pgconnpoll_get";
+		sprintf(buf,"%lu",status.pgconnpoll_get);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_get_ok";
-		sprintf(buf,"%lu",status.myconnpoll_get_ok);
+		pta[0]=(char *)"PgHGM_pgconnpoll_get_ok";
+		sprintf(buf,"%lu",status.pgconnpoll_get_ok);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_push";
-		sprintf(buf,"%lu",status.myconnpoll_push);
+		pta[0]=(char *)"PgHGM_pgconnpoll_push";
+		sprintf(buf,"%lu",status.pgconnpoll_push);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_destroy";
-		sprintf(buf,"%lu",status.myconnpoll_destroy);
+		pta[0]=(char *)"PgHGM_pgconnpoll_destroy";
+		sprintf(buf,"%lu",status.pgconnpoll_destroy);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
-		pta[0]=(char *)"MyHGM_myconnpoll_reset";
-		sprintf(buf,"%lu",status.myconnpoll_reset);
+		pta[0]=(char *)"PgHGM_pgconnpoll_reset";
+		sprintf(buf,"%lu",status.pgconnpoll_reset);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -3939,7 +3924,7 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 	PgSQL_SrvC *mysrvc=NULL;
   for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		intsize+=sizeof(PgSQL_HGC);
-    PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
+		PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
 		unsigned int j,k;
 		unsigned int l=myhgc->mysrvs->cnt();
 		if (l) {
@@ -3950,9 +3935,9 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 				for (k=0; k<mysrvc->ConnectionsFree->conns_length(); k++) {
 					//PgSQL_Connection *myconn=(PgSQL_Connection *)mysrvc->ConnectionsFree->conns->index(k);
 					PgSQL_Connection *myconn=mysrvc->ConnectionsFree->index(k);
-					intsize+=sizeof(PgSQL_Connection)+sizeof(MYSQL);
-					intsize+=myconn->pgsql->net.max_packet;
-					intsize+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
+					intsize+= sizeof(PgSQL_Connection);
+					intsize+=myconn->get_memory_usage();
+					//intsize+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
 					if (myconn->query_result) {
 						intsize+=myconn->query_result->current_size();
 					}
@@ -3965,53 +3950,48 @@ unsigned long long PgSQL_HostGroups_Manager::Get_Memory_Stats() {
 	return intsize;
 }
 
-class MySQL_Errors_stats {
-	public:
-	int hostgroup;
-	char *hostname;
-	int port;
-	char *username;
-	char *client_address;
-	char *schemaname;
-	int err_no;
-	char *last_error;
-	time_t first_seen;
-	time_t last_seen;
-	unsigned long long count_star;
-	MySQL_Errors_stats(int hostgroup_, char *hostname_, int port_, char *username_, char *address_, char *schemaname_, int err_no_, char *last_error_, time_t tn) {
-		hostgroup = hostgroup_;
-		if (hostname_) {
-			hostname = strdup(hostname_);
+class PgSQL_Errors_stats {
+public:
+	PgSQL_Errors_stats(int _hostgroup, const char *_hostname, int _port, const char *_username, const char *_address, const char *_dbname, 
+		const char* _sqlstate, const char *_errmsg, time_t tn) {
+		hostgroup = _hostgroup;
+		if (_hostname) {
+			hostname = strdup(_hostname);
 		} else {
 			hostname = strdup((char *)"");
 		}
-		port = port_;
-		if (username_) {
-			username = strdup(username_);
+		port = _port;
+		if (_username) {
+			username = strdup(_username);
 		} else {
 			username = strdup((char *)"");
 		}
-		if (address_) {
-			client_address = strdup(address_);
+		if (_address) {
+			client_address = strdup(_address);
 		} else {
 			client_address = strdup((char *)"");
 		}
-		if (schemaname_) {
-			schemaname = strdup(schemaname_);
+		if (_dbname) {
+			dbname = strdup(_dbname);
 		} else {
-			schemaname = strdup((char *)"");
+			dbname = strdup((char *)"");
 		}
-		err_no = err_no_;
-		if (last_error_) {
-			last_error = strdup(last_error_);
+		if (_sqlstate) {
+			strncpy(sqlstate, _sqlstate, 5);
+			sqlstate[5] = '\0';
 		} else {
-			last_error = strdup((char *)"");
+			sqlstate[0] = '\0';
+		}
+		if (_errmsg) {
+			errmsg = strdup(_errmsg);
+		} else {
+			_errmsg = strdup((char *)"");
 		}
 		last_seen = tn;
 		first_seen = tn;
 		count_star = 1;
 	}
-	~MySQL_Errors_stats() {
+	~PgSQL_Errors_stats() {
 		if (hostname) {
 			free(hostname);
 			hostname=NULL;
@@ -4024,13 +4004,13 @@ class MySQL_Errors_stats {
 			free(client_address);
 			client_address=NULL;
 		}
-		if (schemaname) {
-			free(schemaname);
-			schemaname=NULL;
+		if (dbname) {
+			free(dbname);
+			dbname=NULL;
 		}
-		if (last_error) {
-			free(last_error);
-			last_error=NULL;
+		if (errmsg) {
+			free(errmsg);
+			errmsg=NULL;
 		}
 	}
 	char **get_row() {
@@ -4046,33 +4026,28 @@ class MySQL_Errors_stats {
 		pta[3]=strdup(username);
 		assert(client_address);
 		pta[4]=strdup(client_address);
-		assert(schemaname);
-		pta[5]=strdup(schemaname);
-		sprintf(buf,"%d",err_no);
-		pta[6]=strdup(buf);
-
+		assert(dbname);
+		pta[5]=strdup(dbname);
+		pta[6]=strdup(sqlstate);
 		sprintf(buf,"%llu",count_star);
 		pta[7]=strdup(buf);
-
 		sprintf(buf,"%ld", first_seen);
 		pta[8]=strdup(buf);
-
 		sprintf(buf,"%ld", last_seen);
 		pta[9]=strdup(buf);
-
-		assert(last_error);
-		pta[10]=strdup(last_error);
+		assert(errmsg);
+		pta[10]=strdup(errmsg);
 		return pta;
 	}
-	void add_time(unsigned long long n, char *le) {
+	void add_time(unsigned long long n, const char *le) {
 		count_star++;
 		if (first_seen==0) {
 			first_seen=n;
 		}
 		last_seen=n;
-		if (strcmp(last_error,le)){
-			free(last_error);
-			last_error=strdup(le);
+		if (strcmp(errmsg,le)){
+			free(errmsg);
+			errmsg=strdup(le);
 		}
 	}
 	void free_row(char **pta) {
@@ -4083,13 +4058,25 @@ class MySQL_Errors_stats {
 		}
 		free(pta);
 	}
+private:
+	int hostgroup;
+	char *hostname;
+	int port;
+	char *username;
+	char *client_address;
+	char *dbname;
+	char sqlstate[5+1];
+	char *errmsg;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned long long count_star;
 };
 
-void PgSQL_HostGroups_Manager::add_pgsql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error) {
+void PgSQL_HostGroups_Manager::add_pgsql_errors(int hostgroup, const char *hostname, int port, const char *username, const char *address, 
+	const char *dbname, const char* sqlstate, const char *errmsg) {
 	SpookyHash myhash;
 	uint64_t hash1;
 	uint64_t hash2;
-	MySQL_Errors_stats *mes = NULL;
 	size_t rand_del_len=strlen(rand_del);
 	time_t tn = time(NULL);
 	myhash.Init(11,4);
@@ -4108,39 +4095,32 @@ void PgSQL_HostGroups_Manager::add_pgsql_errors(int hostgroup, char *hostname, i
 		myhash.Update(address,strlen(address));
 	}
 	myhash.Update(rand_del,rand_del_len);
-	if (schemaname) {
-		myhash.Update(schemaname,strlen(schemaname));
+	if (dbname) {
+		myhash.Update(dbname,strlen(dbname));
 	}
 	myhash.Update(rand_del,rand_del_len);
-	myhash.Update(&err_no,sizeof(err_no));
-
+	if (sqlstate) {
+		myhash.Update(sqlstate, strlen(sqlstate));
+	}
 	myhash.Final(&hash1,&hash2);
 
-	std::unordered_map<uint64_t, void *>::iterator it;
+	std::unordered_map<uint64_t, PgSQL_Errors_stats*>::iterator it;
 	pthread_mutex_lock(&pgsql_errors_mutex);
 
 	it=pgsql_errors_umap.find(hash1);
 
 	if (it != pgsql_errors_umap.end()) {
 		// found
-		mes=(MySQL_Errors_stats *)it->second;
-		mes->add_time(tn, last_error);
-/*
-		mes->last_seen = tn;
-		if (strcmp(mes->last_error,last_error)) {
-			free(mes->last_error);
-			mes->last_error = strdup(last_error);
-			mes->count_star++;
-		}
-*/
+		PgSQL_Errors_stats* err_stats = it->second;
+		err_stats->add_time(tn, errmsg);
 	} else {
-		mes = new MySQL_Errors_stats(hostgroup, hostname, port, username, address, schemaname, err_no, last_error, tn);
-		pgsql_errors_umap.insert(std::make_pair(hash1,(void *)mes));
+		PgSQL_Errors_stats* err_stats = new PgSQL_Errors_stats(hostgroup, hostname, port, username, address, dbname, sqlstate, errmsg, tn);
+		pgsql_errors_umap.insert(std::make_pair(hash1, err_stats));
 	}
 	pthread_mutex_unlock(&pgsql_errors_mutex);
 }
 
-SQLite3_result * PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
+SQLite3_result* PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
 	SQLite3_result *result=new SQLite3_result(PgSQL_ERRORS_STATS_FIELD_NUM);
 	pthread_mutex_lock(&pgsql_errors_mutex);
 	result->add_column_definition(SQLITE_TEXT,"hid");
@@ -4148,19 +4128,19 @@ SQLite3_result * PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
 	result->add_column_definition(SQLITE_TEXT,"port");
 	result->add_column_definition(SQLITE_TEXT,"username");
 	result->add_column_definition(SQLITE_TEXT,"client_address");
-	result->add_column_definition(SQLITE_TEXT,"schemaname");
-	result->add_column_definition(SQLITE_TEXT,"err_no");
+	result->add_column_definition(SQLITE_TEXT,"database");
+	result->add_column_definition(SQLITE_TEXT,"sqlstate");
 	result->add_column_definition(SQLITE_TEXT,"count_star");
 	result->add_column_definition(SQLITE_TEXT,"first_seen");
 	result->add_column_definition(SQLITE_TEXT,"last_seen");
 	result->add_column_definition(SQLITE_TEXT,"last_error");
-	for (std::unordered_map<uint64_t, void *>::iterator it=pgsql_errors_umap.begin(); it!=pgsql_errors_umap.end(); ++it) {
-		MySQL_Errors_stats *mes=(MySQL_Errors_stats *)it->second;
-		char **pta=mes->get_row();
+	for (std::unordered_map<uint64_t, PgSQL_Errors_stats*>::iterator it=pgsql_errors_umap.begin(); it!=pgsql_errors_umap.end(); ++it) {
+		PgSQL_Errors_stats *err_stats=it->second;
+		char **pta= err_stats->get_row();
 		result->add_row(pta);
-		mes->free_row(pta);
+		err_stats->free_row(pta);
 		if (reset) {
-			delete mes;
+			delete err_stats;
 		}
 	}
 	if (reset) {

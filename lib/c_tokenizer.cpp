@@ -1,13 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <ctype.h>
 #include "c_tokenizer.h"
 
-extern __thread int mysql_thread___query_digests_max_query_length;
-
-#include <ctype.h>
-#define bool char
+extern __thread int  mysql_thread___query_digests_max_query_length;
 extern __thread bool mysql_thread___query_digests_lowercase;
 extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
@@ -231,17 +228,6 @@ static inline void replace_with_q_mark(
 	}
 }
 
-/**
- * @brief Struct for holding all the configuration options used for query digests generation.
- */
-typedef struct options {
-	bool lowercase;
-	bool replace_null;
-	bool replace_number;
-	bool keep_comment;
-	int grouping_limit;
-	int groups_grouping_limit;
-} options;
 
 /**
  * @brief Helper functiont that initializes the supplied 'options' struct with the configuration variables
@@ -249,13 +235,14 @@ typedef struct options {
  *
  * @param opts The options struct to be initialized.
  */
-static inline void get_options(struct options* opts) {
+static inline void get_mysql_options(options* opts) {
 	opts->lowercase = mysql_thread___query_digests_lowercase;
 	opts->replace_null = mysql_thread___query_digests_replace_null;
 	opts->replace_number = mysql_thread___query_digests_no_digits;
 	opts->grouping_limit = mysql_thread___query_digests_grouping_limit;
 	opts->groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
 	opts->keep_comment = mysql_thread___query_digests_keep_comment;
+	opts->max_query_length = mysql_thread___query_digests_max_query_length;
 }
 
 /**
@@ -420,11 +407,11 @@ void init_stage_1_st(struct stage_1_st* fst_stage_st) {
 	fst_stage_st->literal_digit_st.first_digit = 1;
 }
 
-static inline int get_digest_max_len(int len) {
+static inline int get_digest_max_len(int len, int max_query_length) {
 	int digest_max_len = 0;
 
-	if (len > mysql_thread___query_digests_max_query_length) {
-		digest_max_len = mysql_thread___query_digests_max_query_length;
+	if (len > max_query_length) {
+		digest_max_len = max_query_length;
 	} else {
 		digest_max_len = len;
 	}
@@ -453,7 +440,7 @@ static inline char* get_result_buffer(int len, char* buf) {
  * @return The next processing state.
  */
 static __attribute__((always_inline)) inline
-enum p_st get_next_st(const struct options* opts, struct shared_st* shared_st) {
+enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 	char prev_char = shared_st->prev_char;
 	enum p_st st = st_no_mark_found;
 
@@ -520,7 +507,7 @@ void inc_proc_pos(shared_st* shared_st) {
  * @param shared_st The shared state to modify.
  */
 static __attribute__((always_inline)) inline
-void copy_next_char(shared_st* shared_st, options* opts) {
+void copy_next_char(shared_st* shared_st, const options* opts) {
 	// copy the next character; translating any space char into ' '
 	if (opts->lowercase==0) {
 		*shared_st->res_cur_pos++ = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
@@ -603,7 +590,7 @@ static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
  *   - 'st_no_mark_found' if the comment has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
 	enum p_st next_st = st_cmnt_type_1;
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
@@ -958,7 +945,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
  *   - 'st_no_mark_found' if the literal number has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st, options* opts) {
+enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st, const options* opts) {
 	enum p_st next_state = st_literal_number;
 
 	// process the first digit
@@ -1053,7 +1040,7 @@ enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_s
  * @param opts Options to be used for the copying of the current char.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_replace_null(shared_st* shared_st, options* opts) {
+enum p_st process_replace_null(shared_st* shared_st, const options* opts) {
 	enum p_st next_st = st_no_mark_found;
 	char null_found = 0;
 
@@ -1210,7 +1197,7 @@ void end_compression_stage_it(shared_st* shared_st, char* digest_end, stage_1_st
  * @param fst_cmnt Pointer to be updated with the found first comment, left unmodified otherwise.
  */
 static __attribute__((always_inline)) inline
-void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts, char** fst_cmnt) {
+void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options* opts, char** fst_cmnt) {
 	// state required between different iterations of special parsing states
 	char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
 	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
@@ -1490,7 +1477,7 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
  * @param opts Options used for deciding how to perform the group collapsing.
  */
 static __attribute__((always_inline)) inline
-void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* stage_3_st, options* opts) {
+void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* stage_3_st, const options* opts) {
 	if (opts->grouping_limit == 0) { return; }
 
 	// compute the 'digest_end' for the stage 3
@@ -1948,12 +1935,12 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
  */
 char* mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
 	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len);
+	int d_max_len = get_digest_max_len(q_len, mysql_thread___query_digests_max_query_length);
 	char* res = get_result_buffer(d_max_len, buf);
 
 	// global options
-	struct options opts;
-	get_options(&opts);
+	options opts;
+	get_mysql_options(&opts);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
@@ -1984,12 +1971,12 @@ char* mysql_query_digest_first_stage(const char* const q, int q_len, char** cons
  */
 char* mysql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
 	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len);
+	int d_max_len = get_digest_max_len(q_len, mysql_thread___query_digests_max_query_length);
 	char* res = get_result_buffer(d_max_len, buf);
 
 	// global options
-	struct options opts;
-	get_options(&opts);
+	options opts;
+	get_mysql_options(&opts);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
@@ -2031,7 +2018,7 @@ char* mysql_query_digest_second_stage(const char* const q, int q_len, char** con
  *
  * @return A pointer to the start of the supplied buffer, or the allocated memory containing the digest.
  */
-char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
+char* query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts) {
 #ifdef DEBUG
 	if (buf != NULL) {
 		memset(buf, 0, 127);
@@ -2039,16 +2026,12 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 #endif
 
 	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len);
+	int d_max_len = get_digest_max_len(q_len, opts->max_query_length);
 	char* res = get_result_buffer(d_max_len, buf);
 
 #ifdef DEBUG
 	res[d_max_len] = 0;
 #endif
-
-	// global options
-	struct options opts;
-	get_options(&opts);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
@@ -2085,10 +2068,10 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 	// collapsed. Due to this, we might want to offer a way or limit to stop the iteration and offer a
 	// trade off between compression and performance for very big queries.
 	while (min_digest_size == 0) {
-		stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
-		stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, &opts);
-		stage_3_parsing(&shared_st, &stage_1_st, &stage_3_st, &opts);
-		stage_4_parsing(&shared_st, &stage_1_st, &stage_4_st, &opts);
+		stage_1_parsing(&shared_st, &stage_1_st, opts, fst_cmnt);
+		stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, opts);
+		stage_3_parsing(&shared_st, &stage_1_st, &stage_3_st, opts);
+		stage_4_parsing(&shared_st, &stage_1_st, &stage_4_st, opts);
 
 		// compute the compression offset of the whole iteration
 		shared_st.gl_c_offset = stage_1_st.pre_it_pos - shared_st.res_cur_pos;
@@ -2107,9 +2090,17 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 		}
 	}
 
-	final_stage(&shared_st, &stage_1_st, &opts);
+	final_stage(&shared_st, &stage_1_st, opts);
 
 	return res;
+}
+
+// For TAP tests
+char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
+	// global options
+	options opts;
+	get_mysql_options(&opts);
+	return query_digest_and_first_comment_2(q, q_len, fst_cmnt, buf, &opts);
 }
 
 static __attribute__((always_inline)) inline
@@ -2340,12 +2331,12 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	}
 #endif
 
-	int d_max_len = get_digest_max_len(q_len);
+	int d_max_len = get_digest_max_len(q_len, mysql_thread___query_digests_max_query_length);
 	char* res = get_result_buffer(d_max_len, buf);
 
 	// global options
-	struct options opts;
-	get_options(&opts);
+	options opts;
+	get_mysql_options(&opts);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
@@ -2541,7 +2532,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	return res;
 }
 
-char *mysql_query_strip_comments(char *s, int _len) {
+char *query_strip_comments(char *s, int _len, bool lowercase) {
 	int i = 0;
 	int len = _len;
 	char *r = (char *) malloc(len + SIZECHAR);
@@ -2553,9 +2544,6 @@ char *mysql_query_strip_comments(char *s, int _len) {
 	char flag = 0;
 
 	char fns=0;
-
-	bool lowercase=0;
-	lowercase=mysql_thread___query_digests_lowercase;
 
 	while(i < len)
 	{
@@ -2639,7 +2627,7 @@ char *mysql_query_strip_comments(char *s, int _len) {
 		// COPY CHAR
 		// =================================================
 		// convert every space char to ' '
-		if (lowercase==0) {
+		if (lowercase==false) {
 			*p_r++ = !is_space_char(*s) ? *s : ' ';
 		} else {
 			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';

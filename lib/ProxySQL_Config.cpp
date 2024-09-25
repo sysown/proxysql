@@ -1724,7 +1724,7 @@ int ProxySQL_Config::Write_PgSQL_Query_Rules_to_configfile(std::string& data) {
 				addField(data, "rule_id", r->fields[0], "");
 				addField(data, "active", r->fields[1], "");
 				addField(data, "username", r->fields[2]);
-				addField(data, "schemaname", r->fields[3]);
+				addField(data, "database", r->fields[3]);
 				addField(data, "flagIN", r->fields[4], "");
 				addField(data, "client_addr", r->fields[5]);
 				addField(data, "proxy_addr", r->fields[6]);
@@ -1751,11 +1751,10 @@ int ProxySQL_Config::Write_PgSQL_Query_Rules_to_configfile(std::string& data) {
 				addField(data, "OK_msg", r->fields[27]);
 				addField(data, "sticky_conn", r->fields[28], "");
 				addField(data, "multiplex", r->fields[29], "");
-				addField(data, "gtid_from_hostgroup", r->fields[30], "");
-				addField(data, "log", r->fields[31], "");
-				addField(data, "apply", r->fields[32], "");
-				addField(data, "attributes", r->fields[33]);
-				addField(data, "comment", r->fields[34]);
+				addField(data, "log", r->fields[30], "");
+				addField(data, "apply", r->fields[31], "");
+				addField(data, "attributes", r->fields[32]);
+				addField(data, "comment", r->fields[33]);
 
 				data += "\t}";
 				isNext = true;
@@ -1780,15 +1779,15 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 	int i;
 	int rows = 0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char* q = (char*)"INSERT OR REPLACE INTO pgsql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
+	char* q = (char*)"INSERT OR REPLACE INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
 	for (i = 0; i < count; i++) {
 		const Setting& rule = pgsql_query_rules[i];
 		int rule_id;
 		int active = 1;
 		bool username_exists = false;
 		std::string username;
-		bool schemaname_exists = false;
-		std::string schemaname;
+		bool database_exists = false;
+		std::string database;
 		int flagIN = 0;
 
 		// variables for parsing client_addr
@@ -1837,7 +1836,6 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 
 		int sticky_conn = -1;
 		int multiplex = -1;
-		int gtid_from_hostgroup = -1;
 
 		// variable for parsing log
 		int log = -1;
@@ -1858,7 +1856,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		}
 		rule.lookupValue("active", active);
 		if (rule.lookupValue("username", username)) username_exists = true;
-		if (rule.lookupValue("schemaname", schemaname)) schemaname_exists = true;
+		if (rule.lookupValue("database", database)) database_exists = true;
 		rule.lookupValue("flagIN", flagIN);
 
 		if (rule.lookupValue("client_addr", client_addr)) client_addr_exists = true;
@@ -1894,7 +1892,6 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 
 		rule.lookupValue("sticky_conn", sticky_conn);
 		rule.lookupValue("multiplex", multiplex);
-		rule.lookupValue("gtid_from_hostgroup", gtid_from_hostgroup);
 
 		rule.lookupValue("log", log);
 
@@ -1909,7 +1906,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			strlen(std::to_string(rule_id).c_str()) +
 			strlen(std::to_string(active).c_str()) +
 			(username_exists ? strlen(username.c_str()) : 0) + 4 +
-			(schemaname_exists ? strlen(schemaname.c_str()) : 0) + 4 +
+			(database_exists ? strlen(database.c_str()) : 0) + 4 +
 			strlen(std::to_string(flagIN).c_str()) + 4 +
 
 			(client_addr_exists ? strlen(client_addr.c_str()) : 0) + 4 +
@@ -1937,7 +1934,6 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			(OK_msg_exists ? strlen(OK_msg.c_str()) : 0) + 4 +
 			strlen(std::to_string(sticky_conn).c_str()) + 4 +
 			strlen(std::to_string(multiplex).c_str()) + 4 +
-			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
 			strlen(std::to_string(log).c_str()) + 4 +
 			strlen(std::to_string(apply).c_str()) + 4 +
 			(attributes_exists ? strlen(attributes.c_str()) : 0) + 4 +
@@ -1948,10 +1944,10 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			username = "\"" + username + "\"";
 		else
 			username = "NULL";
-		if (schemaname_exists)
-			schemaname = "\"" + schemaname + "\"";
+		if (database_exists)
+			database = "\"" + database + "\"";
 		else
-			schemaname = "NULL";
+			database = "NULL";
 
 		if (client_addr_exists)
 			client_addr = "\"" + client_addr + "\"";
@@ -2003,7 +1999,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		sprintf(query, q,
 			rule_id, active,
 			username.c_str(),
-			schemaname.c_str(),
+			database.c_str(),
 			(flagIN >= 0 ? std::to_string(flagIN).c_str() : "NULL"),
 			client_addr.c_str(),
 			proxy_addr.c_str(),
@@ -2030,7 +2026,6 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			OK_msg.c_str(),
 			(sticky_conn >= 0 ? std::to_string(sticky_conn).c_str() : "NULL"),
 			(multiplex >= 0 ? std::to_string(multiplex).c_str() : "NULL"),
-			(gtid_from_hostgroup >= 0 ? std::to_string(gtid_from_hostgroup).c_str() : "NULL"),
 			(log >= 0 ? std::to_string(log).c_str() : "NULL"),
 			(apply == 0 ? 0 : 1),
 			attributes.c_str(),

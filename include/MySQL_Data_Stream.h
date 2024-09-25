@@ -5,10 +5,11 @@
 #include "cpp.h"
 
 #include "MySQL_Protocol.h"
+#include "proxy_protocol_info.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
-namespace nlohmann { class json; }
+#include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
 #ifndef uchar
@@ -145,6 +146,7 @@ class MySQL_Data_Stream
 		char *addr;
 		int port;
 	} proxy_addr;
+	ProxyProtocolInfo * PROXY_info;
 
 	unsigned int connect_tries;
 	int query_retries_on_failure;
