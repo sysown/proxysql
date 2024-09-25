@@ -112,6 +112,7 @@ extern struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
 
+template<enum SERVER_TYPE>
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
 
 extern char *ssl_key_fp;
@@ -684,6 +685,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_errors_reset", STATS_SQLITE_TABLE_PGSQL_ERRORS_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_client_host_cache", STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_client_host_cache_reset", STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_rules", STATS_SQLITE_TABLE_PGSQL_QUERY_RULES);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_commands_counters", STATS_SQLITE_TABLE_PGSQL_COMMANDS_COUNTERS);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest_reset", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST_RESET);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);

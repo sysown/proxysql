@@ -2057,7 +2057,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	// initialize VariablesPointers_int
 	// it is safe to do it here because get_variables_list() is the first function called during start time
 	if (VariablesPointers_int.size() == 0) {
-		VariablesPointers_int["authentication_method"] = make_tuple(&variables.authentication_method, 0, 4, false);
+		VariablesPointers_int["authentication_method"] = make_tuple(&variables.authentication_method, 1, 3, false);
 		// Monitor variables
 		VariablesPointers_int["monitor_history"] = make_tuple(&variables.monitor_history, 1000, 7 * 24 * 3600 * 1000, false);
 
@@ -5190,9 +5190,6 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 							if (it != parents.end()) {
 								// we didn't exclude this server (yet?)
 								bool gtid_found = false;
-#if 0
-								gtid_found = PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
-#endif // 0
 								if (gtid_found) { // this server has the correct GTID
 									c = (PgSQL_Connection*)cached_connections->remove_index_fast(i);
 									return c;

@@ -55,9 +55,14 @@ bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
 	return true;
 }
 
+template <enum SERVER_TYPE ST>
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
 	int r = 0;
-	r = GloMyQPro->purge_query_digests(async_purge, parallel, msg);
+	if constexpr (ST == SERVER_TYPE_MYSQL) {
+		r = GloMyQPro->purge_query_digests(async_purge, parallel, msg);
+	} else if constexpr (ST == SERVER_TYPE_PGSQL) {
+		r = GloPgQPro->purge_query_digests(async_purge, parallel, msg);
+	}
 	return r;
 }
 
@@ -141,3 +146,6 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	mysql_thread___query_digests_normalize_digest_text = orig_norm;
 	return n*1000;
 }
+
+template int ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(bool async_purge, bool parallel, char** msg);
+template int ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_PGSQL>(bool async_purge, bool parallel, char** msg);
