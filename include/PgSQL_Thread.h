@@ -6,7 +6,6 @@
 
 #include "proxysql.h"
 #include "Base_Thread.h"
-#include "cpp.h"
 #include "ProxySQL_Poll.h"
 #include "PgSQL_Variables.h"
 #ifdef IDLE_THREADS
@@ -825,6 +824,7 @@ public:
 		//! Read only check timeout. Unit: 'ms'.
 		int monitor_replication_lag_timeout;
 		int monitor_replication_lag_count;
+/* TODO: Remove
 		int monitor_groupreplication_healthcheck_interval;
 		int monitor_groupreplication_healthcheck_timeout;
 		int monitor_groupreplication_healthcheck_max_timeout_count;
@@ -836,9 +836,13 @@ public:
 		int monitor_query_interval;
 		int monitor_query_timeout;
 		int monitor_slave_lag_when_null;
+*/
+		int monitor_threads;
+/* TODO: Remove
 		int monitor_threads_min;
 		int monitor_threads_max;
 		int monitor_threads_queue_maxsize;
+*/
 		int monitor_local_dns_cache_ttl;
 		int monitor_local_dns_cache_refresh_interval;
 		int monitor_local_dns_resolver_queue_maxsize;

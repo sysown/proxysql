@@ -53,6 +53,7 @@ template void Base_HostGroups_Manager<PgSQL_HGC>::wrlock();
 template void Base_HostGroups_Manager<PgSQL_HGC>::wrunlock();
 
 template SQLite3_result * Base_HostGroups_Manager<MyHGC>::execute_query(char*, char**);
+template SQLite3_result * Base_HostGroups_Manager<PgSQL_HGC>::execute_query(char*, char**);
 
 #if 0
 #define SAFE_SQLITE3_STEP(_stmt) do {\

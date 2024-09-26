@@ -647,6 +647,7 @@ enum PROXYSQL_MYSQL_ERR {
 	ER_PROXYSQL_AWS_HEALTH_CHECK_CONN_TIMEOUT         = 9017,
 	ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT              = 9018,
 	ER_PROXYSQL_SRV_NULL_REPLICATION_LAG              = 9019,
+	ER_PROXYSQL_CONNECT_TIMEOUT                       = 9020,
 };
 
 enum proxysql_session_type {
@@ -1079,6 +1080,21 @@ __thread char* pgsql_thread___firewall_whitelist_errormsg;
 __thread bool pgsql_thread___firewall_whitelist_enabled;
 __thread int pgsql_thread___query_processor_iterations;
 __thread int pgsql_thread___query_processor_regex;
+
+__thread bool pgsql_thread___monitor_enabled;
+__thread int pgsql_thread___monitor_history;
+__thread int pgsql_thread___monitor_connect_interval;
+__thread int pgsql_thread___monitor_connect_timeout;
+__thread int pgsql_thread___monitor_ping_interval;
+__thread int pgsql_thread___monitor_ping_max_failures;
+__thread int pgsql_thread___monitor_ping_timeout;
+__thread int pgsql_thread___monitor_read_only_interval;
+__thread int pgsql_thread___monitor_read_only_timeout;
+__thread int pgsql_thread___monitor_read_only_max_timeout_count;
+__thread int pgsql_thread___monitor_threads;
+__thread char* pgsql_thread___monitor_username;
+__thread char* pgsql_thread___monitor_password;
+
 //---------------------------
 
 __thread char *mysql_thread___default_schema;
@@ -1351,6 +1367,21 @@ extern __thread char* pgsql_thread___firewall_whitelist_errormsg;
 extern __thread bool pgsql_thread___firewall_whitelist_enabled;
 extern __thread int pgsql_thread___query_processor_iterations;
 extern __thread int pgsql_thread___query_processor_regex;
+
+extern __thread bool pgsql_thread___monitor_enabled;
+extern __thread int pgsql_thread___monitor_history;
+extern __thread int pgsql_thread___monitor_connect_interval;
+extern __thread int pgsql_thread___monitor_connect_timeout;
+extern __thread int pgsql_thread___monitor_ping_interval;
+extern __thread int pgsql_thread___monitor_ping_max_failures;
+extern __thread int pgsql_thread___monitor_ping_timeout;
+extern __thread int pgsql_thread___monitor_read_only_interval;
+extern __thread int pgsql_thread___monitor_read_only_timeout;
+extern __thread int pgsql_thread___monitor_read_only_max_timeout_count;
+extern __thread int pgsql_thread___monitor_threads;
+extern __thread char* pgsql_thread___monitor_username;
+extern __thread char* pgsql_thread___monitor_password;
+
 //---------------------------
 
 extern __thread char *mysql_thread___default_schema;

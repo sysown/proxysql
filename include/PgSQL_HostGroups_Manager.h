@@ -585,7 +585,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	/**
 	 * @brief Mutex used to guard 'pgsql_servers_to_monitor' resulset.
 	 */
-	std::mutex pgsql_servers_to_monitor_mutex;
+	std::mutex pgsql_servers_to_monitor_mutex {};
 	/**
 	 * @brief Resulset containing the latest 'pgsql_servers' present in 'mydb'.
 	 * @details This resulset should be updated via 'update_table_pgsql_servers_for_monitor' each time actions
