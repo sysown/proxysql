@@ -21,6 +21,15 @@ jobs:
 
     steps:
 
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ runner.name }} github.ref_name'
+        conclusion: ${{ job.status }}
+#        output: |
+#          {"summary":"${{ steps.test.outputs.summary }}"}
+
     - name: Wait for cache
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
