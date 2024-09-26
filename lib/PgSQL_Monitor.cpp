@@ -643,7 +643,9 @@ pair<bool,pgsql_conn_t> get_task_conn(conn_pool_t& conn_pool, task_st_t& task_st
 }
 
 pgsql_conn_t create_conn(task_st_t& task_st) {
+#ifdef DEBUG
 	const mon_srv_t& srv { task_st.op_st.srv_info };
+#endif
 
 	// Initialize connection parameters
 	const string conn_str { build_conn_str(task_st) };
@@ -1410,12 +1412,10 @@ void* worker_thread(void* args) {
 		static_cast<pair<task_queue_t, result_queue_t>*>(args)
 	};
 
-#ifdef DEBUG
 	pthread_t self = pthread_self();
-#endif
-
 	task_queue_t& tasks_queue = queues->first;
-	result_queue_t& _ = queues->second;
+	// TODO: Not used for now; results should be used by scheduler
+	// result_queue_t& _ = queues->second;
 	bool recv_stop_signal = 0;
 
 	queue<task_st_t> next_tasks {};
