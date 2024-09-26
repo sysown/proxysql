@@ -112,6 +112,7 @@ extern struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
 
+template<enum SERVER_TYPE>
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
 
 extern char *ssl_key_fp;
@@ -1198,7 +1199,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		unsigned long long curtime2 = monotonic_time();
 		curtime1 = curtime1 / 1000;
 		curtime2 = curtime2 / 1000;
-		proxy_info("Saved stats_mysql_query_digest to disk: %llums to write %u entries\n", curtime2 - curtime1, r1);
+		proxy_info("Saved stats_pgsql_query_digest to disk: %llums to write %u entries\n", curtime2 - curtime1, r1);
 		SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 		return false;
 	}
@@ -2386,6 +2387,19 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	// if the client simply executes:
+	// SELECT COUNT(*) FROM runtime_pgsql_query_rules_fast_routing
+	// we just return the count
+	if (strcmp("SELECT COUNT(*) FROM runtime_pgsql_query_rules_fast_routing", query_no_space) == 0) {
+		int cnt = GloPgQPro->get_current_query_rules_fast_routing_count();
+		l_free(query_length, query);
+		char buf[256];
+		sprintf(buf, "SELECT %d AS 'COUNT(*)'", cnt);
+		query = l_strdup(buf);
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
 	if (!strncasecmp("TRUNCATE ", query_no_space, strlen("TRUNCATE "))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			if (strstr(query_no_space,"stats_mysql_query_digest")) {
@@ -2416,10 +2430,46 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
 					char *msg = NULL;
-					int r1 = ProxySQL_Test___PurgeDigestTable(true, false, &msg);
+					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, &msg);
 					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
 					free(msg);
 					run_query=false;
+					goto __run_query;
+				}
+			}
+
+			if (strstr(query_no_space, "stats_pgsql_query_digest")) {
+				bool truncate_digest_table = false;
+				static char* truncate_digest_table_queries[] = {
+					(char*)"TRUNCATE TABLE stats.stats_pgsql_query_digest",
+					(char*)"TRUNCATE TABLE stats.stats_pgsql_query_digest_reset",
+					(char*)"TRUNCATE TABLE stats_pgsql_query_digest",
+					(char*)"TRUNCATE TABLE stats_pgsql_query_digest_reset",
+					(char*)"TRUNCATE stats.stats_pgsql_query_digest",
+					(char*)"TRUNCATE stats.stats_pgsql_query_digest_reset",
+					(char*)"TRUNCATE stats_pgsql_query_digest",
+					(char*)"TRUNCATE stats_pgsql_query_digest_reset"
+				};
+				size_t l = sizeof(truncate_digest_table_queries) / sizeof(char*);
+				unsigned int i;
+				for (i = 0; i < l; i++) {
+					if (truncate_digest_table == false) {
+						if (strcasecmp(truncate_digest_table_queries[i], query_no_space) == 0) {
+							truncate_digest_table = true;
+						}
+					}
+				}
+				if (truncate_digest_table == true) {
+					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+					SPA->admindb->execute("DELETE FROM stats.stats_pgsql_query_digest");
+					SPA->admindb->execute("DELETE FROM stats.stats_pgsql_query_digest_reset");
+					SPA->vacuum_stats(true);
+					// purge the digest map, asynchronously, in single thread
+					char* msg = NULL;
+					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_PGSQL>(true, false, &msg);
+					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
+					free(msg);
+					run_query = false;
 					goto __run_query;
 				}
 			}

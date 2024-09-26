@@ -1807,6 +1807,7 @@ handler_again:
 				case PGRES_COPY_IN:
 				case PGRES_COPY_BOTH:
 					// NOT IMPLEMENTED
+					proxy_error("COPY not supported\n");
 					assert(0);
 					break;
 				case PGRES_BAD_RESPONSE:
