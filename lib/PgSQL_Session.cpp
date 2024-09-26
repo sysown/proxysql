@@ -5830,6 +5830,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return true;
 	}
 	//}
+	/* Query Cache is not supported for PgSQL 
 	if (qpo->cache_ttl > 0 && ((prepare_stmt_type & PgSQL_ps_type_prepare_stmt) == 0)) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		uint32_t resbuf = 0;
@@ -5855,7 +5856,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			l_free(pkt->size, pkt->ptr);
 			return true;
 		}
-	}
+	}*/
 
 __exit_set_destination_hostgroup:
 
