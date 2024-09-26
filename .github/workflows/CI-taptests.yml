@@ -14,4 +14,6 @@ jobs:
   run:
     uses: sysown/proxysql/.github/workflows/ci-taptests.yml@GH-Actions
     secrets: inherit
-    
+    with:
+      trigger: ${{ toJson(github) }}
+      testgroup: ${{ vars.MATRIX_TAP_GROUPS_testgroup }}
