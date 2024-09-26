@@ -14,4 +14,6 @@ jobs:
   run:
     uses: sysown/proxysql/.github/workflows/ci-maketest.yml@GH-Actions
     secrets: inherit
-    
+    with:
+      trigger: ${{ toJson(github) }}
+      target: ${{ vars.MATRIX_MAKETEST_target }}

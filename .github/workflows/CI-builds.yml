@@ -23,4 +23,5 @@ jobs:
   run:
     uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
     secrets: inherit
-    
+    with:
+      trigger: ${{ toJson(github) }}
