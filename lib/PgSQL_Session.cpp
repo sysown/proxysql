@@ -4785,15 +4785,15 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 	if (thread->variables.stats_time_query_processor) {
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &begint);
 	}
-	pkt->size = sizeof(mysql_hdr) + 1 + qpo->new_query->length();
-	pkt->ptr = l_alloc(pkt->size);
-	mysql_hdr hdr;
-	hdr.pkt_id = 0;
-	hdr.pkt_length = pkt->size - sizeof(mysql_hdr);
-	memcpy((unsigned char*)pkt->ptr, &hdr, sizeof(mysql_hdr)); // copy header
-	unsigned char* c = (unsigned char*)pkt->ptr + sizeof(mysql_hdr);
-	*c = (unsigned char)_MYSQL_COM_QUERY; // set command type
-	memcpy((unsigned char*)pkt->ptr + sizeof(mysql_hdr) + 1, qpo->new_query->data(), qpo->new_query->length()); // copy query
+
+	PG_pkt pgpkt(1 + 4 + qpo->new_query->length() + 1);
+	pgpkt.put_char('Q');
+	pgpkt.put_uint32(4 + qpo->new_query->length() + 1);
+	pgpkt.put_bytes(qpo->new_query->data(), qpo->new_query->length());
+	pgpkt.put_char('\0');
+	auto buff = pgpkt.detach();
+	pkt->ptr = buff.first;
+	pkt->size = buff.second;
 	CurrentQuery.query_parser_free();
 	CurrentQuery.begin((unsigned char*)pkt->ptr, pkt->size, true);
 	delete qpo->new_query;
@@ -4811,9 +4811,8 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt) {
 	
 	client_myds->DSS = STATE_QUERY_SENT_NET;
 	unsigned int nTrx = NumActiveTransactions();
-	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
-	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, client_myds->pkt_sid + 1, 0, 0, setStatus, 0, qpo->OK_msg);
+	const char trx_state = (nTrx ? 'T' : 'I');
+	client_myds->myprot.generate_ok_packet(true, true, qpo->OK_msg, 0, (const char*)pkt->ptr + 5, trx_state);
 	RequestEnd(NULL);
 	l_free(pkt->size, pkt->ptr);
 }
@@ -4821,7 +4820,8 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt) {
 // this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
 void PgSQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt) {
 	client_myds->DSS = STATE_QUERY_SENT_NET;
-	client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 1148, (char*)"42000", qpo->error_msg);
+	client_myds->myprot.generate_error_packet(true, true, qpo->error_msg, 
+		PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false);
 	RequestEnd(NULL);
 	l_free(pkt->size, pkt->ptr);
 }
@@ -4830,7 +4830,8 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt) {
 void PgSQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t* pkt) {
 	// ER_NET_PACKET_TOO_LARGE
 	client_myds->DSS = STATE_QUERY_SENT_NET;
-	client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, client_myds->pkt_sid + 1, 1153, (char*)"08S01", (char*)"Got a packet bigger than 'max_allowed_packet' bytes", true);
+	client_myds->myprot.generate_error_packet(true, true, "Got a packet bigger than 'max_allowed_packet' bytes",
+		PGSQL_ERROR_CODES::ERRCODE_PROGRAM_LIMIT_EXCEEDED, false);
 	RequestEnd(NULL);
 	l_free(pkt->size, pkt->ptr);
 }
