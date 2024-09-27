@@ -15,36 +15,15 @@ using std::string;
 using std::unordered_map;
 
 #ifdef DEBUG
-#ifdef DEBUG_EXTERN
-#undef DEBUG_EXTERN
-#endif /* DEBUG_EXTERN */
-#endif /* DEBUG */
 
-#ifndef CLOCK_MONOTONIC
-#define CLOCK_MONOTONIC SYSTEM_CLOCK
-#endif // CLOCK_MONOTONIC
-
-#ifdef DEBUG
 __thread unsigned long long pretime=0;
 static pthread_mutex_t debug_mutex;
 static pthread_rwlock_t filters_rwlock;
 static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
 static unsigned int debug_output = 1;
-#endif /* DEBUG */
-
-/*
-static inline unsigned long long debug_monotonic_time() {
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
-}
-*/
 
 #define DEBUG_MSG_MAXSIZE	1024
-
-#ifdef DEBUG
-
 
 /**
  * @brief Contains all filters related to debug.
@@ -58,7 +37,6 @@ static inline unsigned long long debug_monotonic_time() {
 std::set<std::string>* debug_filters = nullptr;
 
 static bool filter_debug_entry(const char *__file, int __line, const char *__func) {
-	//pthread_mutex_lock(&debug_mutex);
 	pthread_rwlock_rdlock(&filters_rwlock);
 	bool to_filter = false;
 	if (debug_filters && debug_filters->size()) { // if the set is empty we aren't performing any filter, so we won't search
@@ -99,7 +77,6 @@ static bool filter_debug_entry(const char *__file, int __line, const char *__fun
 			}
 		}
 	}
-	//pthread_mutex_unlock(&debug_mutex);
 	pthread_rwlock_unlock(&filters_rwlock);
 	return to_filter;
 }
@@ -107,19 +84,16 @@ static bool filter_debug_entry(const char *__file, int __line, const char *__fun
 // we use this function to sent the filters to Admin
 // we hold here the lock on filters_rwlock
 void proxy_debug_get_filters(std::set<std::string>& f) {
-	//pthread_mutex_lock(&debug_mutex);
 	pthread_rwlock_rdlock(&filters_rwlock);
 	if (debug_filters) {
 		f = *debug_filters;
 	}
 	pthread_rwlock_unlock(&filters_rwlock);
-	//pthread_mutex_unlock(&debug_mutex);
 }
 
 // we use this function to get the filters from Admin
 // we hold here the lock on filters_rwlock
 void proxy_debug_load_filters(std::set<std::string>& f) {
-	//pthread_mutex_lock(&debug_mutex);
 	pthread_rwlock_wrlock(&filters_rwlock);
 	if (debug_filters) {
 		debug_filters->erase(debug_filters->begin(), debug_filters->end());
@@ -128,11 +102,19 @@ void proxy_debug_load_filters(std::set<std::string>& f) {
 		debug_filters = new std::set<std::string>(f);
 	}
 	pthread_rwlock_unlock(&filters_rwlock);
-	//pthread_mutex_unlock(&debug_mutex);
 }
 
 // REMINDER: This function should always save/restore 'errno', otherwise it could influence error handling.
-void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {
+void proxy_debug_func(
+	enum debug_module module,
+	int verbosity,
+	int thr,
+	const char *__file,
+	int __line,
+	const char *__func,
+	const char *fmt,
+	...
+) {
 	int saved_errno = errno;
 	assert(module<PROXY_DEBUG_UNKNOWN);
 	if (pretime == 0) { // never initialized
@@ -147,17 +129,22 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		errno = saved_errno;
 		return;
 	}
+
 	char origdebugbuff[DEBUG_MSG_MAXSIZE];
 	char debugbuff[DEBUG_MSG_MAXSIZE];
 	char longdebugbuff[DEBUG_MSG_MAXSIZE*8];
 	char longdebugbuff2[DEBUG_MSG_MAXSIZE*8];
+
 	longdebugbuff[0]=0;
 	longdebugbuff2[0]=0;
+
 	unsigned long long curtime=realtime_time();
 	bool write_to_disk = false;
+
 	if (debugdb_disk != NULL && (debug_output == 2 || debug_output == 3)) {
 		write_to_disk = true;
 	}
+
 	if (
 		GloVars.global.foreground
 		||
@@ -167,7 +154,6 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		va_start(ap, fmt);
 		vsnprintf(origdebugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
-		//fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
 		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, origdebugbuff);
 	}
 #ifdef __GLIBC__
@@ -176,14 +162,12 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		char **strings;
 		int s;
 		s = backtrace(arr, 20);
-		//backtrace_symbols_fd(arr, s, STDERR_FILENO);
 		strings=backtrace_symbols(arr,s);
 		if (strings == NULL) {
 			perror("backtrace_symbols");
 			exit(EXIT_FAILURE);
 		}
 		for (int i=0; i<s; i++) {
-			//printf("%s\n", strings[i]);
 			debugbuff[0]=0;
 			sscanf(strings[i], "%*[^(](%100[^+]", debugbuff);
 			int status;
@@ -194,11 +178,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 				strcat(longdebugbuff2,debugbuff);
 			}
 		}
-		//printf("\n");
-		//strcat(longdebugbuff2,"\n");
 		free(strings);
-//	} else {
-//		fprintf(stderr, "%s", longdebugbuff);
 	}
 #endif
 	pthread_mutex_lock(&debug_mutex);
@@ -518,4 +498,5 @@ void proxysql_set_admin_debugdb_disk(SQLite3DB * _db) {
 void proxysql_set_admin_debug_output(unsigned int _do) {
 	debug_output = _do;
 }
+
 #endif /* DEBUG */

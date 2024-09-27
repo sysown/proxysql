@@ -15,6 +15,7 @@
 #include "sqlite3db.h"
 //#include "StatCounters.h"
 #include "MySQL_Monitor.hpp"
+#include "PgSQL_Monitor.hpp"
 //#include "MySQL_Protocol.h"
 //#include "MySQL_Authentication.hpp"
 //#include "MySQL_LDAP_Authentication.hpp"

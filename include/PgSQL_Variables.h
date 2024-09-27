@@ -2,7 +2,6 @@
 #define PGSQL_VARIABLES_H
 
 #include "proxysql.h"
-#include "cpp.h"
 
 #include <cstdint>
 #include <vector>

@@ -34,6 +34,7 @@ using json = nlohmann::json;
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
 #include "proxysql_utils.h"
+#include "PgSQL_Monitor.hpp"
 
 #include "libdaemon/dfork.h"
 #include "libdaemon/dsignal.h"
@@ -82,6 +83,7 @@ void * __mysql_ldap_auth;
 volatile create_Web_Interface_t * create_Web_Interface = NULL;
 void * __web_interface;
 
+std::thread* pgsql_monitor_thread = nullptr;
 
 extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
@@ -458,6 +460,7 @@ Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
 
 MySQL_Monitor *GloMyMon;
+PgSQL_Monitor *GloPgMon;
 std::thread *MyMon_thread = NULL;
 
 MySQL_Logger *GloMyLogger;
@@ -1007,7 +1010,9 @@ void ProxySQL_Main_join_all_threads() {
 	if (GloMyMon) {
 		GloMyMon->shutdown=true;
 	}
-
+	if (GloPgMon) {
+		GloPgMon->shutdown=true;
+	}
 	// join GloMyMon thread
 	if (GloMyMon && MyMon_thread) {
 		cpu_timer t;
@@ -1018,7 +1023,15 @@ void ProxySQL_Main_join_all_threads() {
 		std::cerr << "GloMyMon joined in ";
 #endif
 	}
-
+	if (GloPgMon && pgsql_monitor_thread) {
+		cpu_timer t;
+		pgsql_monitor_thread->join();
+		delete pgsql_monitor_thread;
+		pgsql_monitor_thread = NULL;
+#ifdef DEBUG
+		std::cerr << "GloPgMon joined in ";
+#endif
+	}
 	// join GloQC thread
 	if (GloQC) {
 		cpu_timer t;
@@ -1041,7 +1054,14 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloMyMon shutdown in ";
 #endif
 	}
-
+	if (GloPgMon) {
+		cpu_timer t;
+		delete GloPgMon;
+		GloPgMon=NULL;
+#ifdef DEBUG
+		std::cerr << "GloPgMon shutdown in ";
+#endif
+	}
 	if (GloQC) {
 		cpu_timer t;
 		delete GloQC;
@@ -1302,7 +1322,6 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 }
 
-
 void ProxySQL_Main_init_phase3___start_all() {
 
 	{
@@ -1323,6 +1342,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 	}
 	// Initialized monitor, no matter if it will be started or not
 	GloMyMon = new MySQL_Monitor();
+	GloPgMon = new PgSQL_Monitor();
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;
@@ -1427,6 +1447,8 @@ void ProxySQL_Main_init_phase3___start_all() {
 	// Load the config not previously loaded for these modules
 	GloAdmin->load_http_server();
 	GloAdmin->load_restapi_server();
+
+	pgsql_monitor_thread = new std::thread(&PgSQL_monitor_scheduler_thread);
 }
 
 
