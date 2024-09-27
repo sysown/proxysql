@@ -642,7 +642,7 @@ SQLite3_result* PgSQL_Query_Processor::get_stats_commands_counters() {
 	result->add_column_definition(SQLITE_TEXT, "cnt_5s");
 	result->add_column_definition(SQLITE_TEXT, "cnt_10s");
 	result->add_column_definition(SQLITE_TEXT, "cnt_INFs");
-	for (int i = 0; i < MYSQL_COM_QUERY__UNINITIALIZED; i++) {
+	for (int i = 0; i < PGSQL_QUERY__UNINITIALIZED; i++) {
 		char** pta = commands_counters[i]->get_row();
 		result->add_row(pta);
 		commands_counters[i]->free_row(pta);
