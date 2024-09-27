@@ -1,9 +1,9 @@
 #ifndef __CLASS_QUERY_PROCESSOR_H
 #define __CLASS_QUERY_PROCESSOR_H
-#include "proxysql.h"
-#include "cpp.h"
 #include <type_traits>
 #include <set>
+#include "proxysql.h"
+#include "cpp.h"
 
 // Optimization introduced in 2.0.6
 // to avoid a lot of unnecessary copy

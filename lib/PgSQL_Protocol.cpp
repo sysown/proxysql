@@ -692,6 +692,27 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 	return true;
 }
 
+char* extract_password(const pgsql_hdr* hdr, uint32_t* len) {
+	char* pass = NULL;
+	uint32_t pass_len = hdr->data.size;
+
+	if (pass_len == 0) 
+		return NULL;
+
+	pass = (char*)malloc(pass_len + 1);
+	memcpy(pass, hdr->data.ptr, pass_len);
+	pass[pass_len] = 0;
+
+	if (pass_len) {
+		if (pass[pass_len - 1] == 0) {
+			pass_len--; // remove the extra 0 if present
+		}
+	}
+
+	if (len) *len = pass_len;
+	return pass;
+}
+
 EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char* pkt, unsigned int len) {
 #ifdef DEBUG
 	//if (dump_pkt) { __dump_pkt(__func__, pkt, len); }
@@ -764,31 +785,24 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
 			) {
 			if (strcmp((const char*)user, mysql_thread___monitor_username) == 0) {
-				if (strcmp(password, mysql_thread___monitor_password) == 0) {
-					(*myds)->sess->default_hostgroup = STATS_HOSTGROUP;
-					(*myds)->sess->default_schema = strdup((char*)"main"); // just the pointer is passed
-					(*myds)->sess->schema_locked = false;
-					(*myds)->sess->transaction_persistent = false;
-					(*myds)->sess->session_fast_forward = false;
-					(*myds)->sess->user_max_connections = 0;
-					password = l_strdup(mysql_thread___monitor_password);
-					ret = EXECUTION_STATE::SUCCESSFUL;
-				}
+				(*myds)->sess->default_hostgroup = STATS_HOSTGROUP;
+				(*myds)->sess->default_schema = strdup((char*)"main"); // just the pointer is passed
+				(*myds)->sess->schema_locked = false;
+				(*myds)->sess->transaction_persistent = false;
+				(*myds)->sess->session_fast_forward = false;
+				(*myds)->sess->user_max_connections = 0;
+				password = l_strdup(mysql_thread___monitor_password);
 			}
 		}
 	}
-
 
 	if (password) {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%s\n", (*myds), (*myds)->sess, user, AUTHENTICATION_METHOD_STR[(int)(*myds)->auth_method]);
 		switch ((*myds)->auth_method) {
 		case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		{
-			uint32_t pass_len = hdr.data.size;
-			pass = (char*)malloc(pass_len + 1);
-			memcpy(pass, hdr.data.ptr, pass_len);
-			pass[pass_len] = 0;
-
+			uint32_t pass_len = 0;
+			pass = extract_password(&hdr, &pass_len);
 			using_password = (pass_len > 0);
 
 			if (pass_len) {
@@ -831,18 +845,9 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		break;
 		case AUTHENTICATION_METHOD::CLEAR_TEXT_PASSWORD:
 		{
-			uint32_t pass_len = hdr.data.size;
-			pass = (char*)malloc(pass_len + 1);
-			memcpy(pass, hdr.data.ptr, pass_len);
-			pass[pass_len] = 0;
-
+			uint32_t pass_len = 0;
+			pass = extract_password(&hdr, &pass_len);
 			using_password = (pass_len > 0);
-
-			if (pass_len) {
-				if (pass[pass_len - 1] == 0) {
-					pass_len--; // remove the extra 0 if present
-				}
-			}
 
 			if (!pass || *pass == '\0') {
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds), (*myds)->sess, user);
@@ -1261,7 +1266,7 @@ char* extract_tag_from_query(const char* query) {
 }
 
 
-bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, PtrSize_t* _ptr) {
+bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
 
@@ -1293,7 +1298,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 	}
 	
 	if (ready == true) {
-		pgpkt.write_ReadyForQuery();
+		pgpkt.write_ReadyForQuery(trx_state);
 		pgpkt.set_multi_pkt_mode(false);
 	}
 

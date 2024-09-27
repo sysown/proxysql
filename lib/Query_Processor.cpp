@@ -30,12 +30,6 @@ using json = nlohmann::json;
 #define GET_THREAD_VARIABLE(VARIABLE_NAME) \
 ({((std::is_same_v<QP_DERIVED,MySQL_Query_Processor>) ? mysql_thread___##VARIABLE_NAME : pgsql_thread___##VARIABLE_NAME) ;})
 
-template
-class Query_Processor<MySQL_Query_Processor>;
-
-template
-class Query_Processor<PgSQL_Query_Processor>;
-
 extern MySQL_Threads_Handler *GloMTH;
 extern PgSQL_Threads_Handler* GloPTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -68,7 +62,7 @@ static bool rules_sort_comp_function (QP_rule_t * a, QP_rule_t * b) {
 }
 
 static unsigned long long mem_used_rule(QP_rule_t *qr) {
-	unsigned long long s = sizeof(QP_rule_t);
+	unsigned long long s = 0;
 	if (qr->username)
 		s+=strlen(qr->username);
 	if (qr->schemaname)
@@ -384,6 +378,7 @@ bool Query_Processor<QP_DERIVED>::insert(QP_rule_t *qr, bool lock) {
 	if (lock)
 		wrlock();
 	rules.push_back(qr);
+	rules_mem_used += sizeof(TypeQueryRule);
 	rules_mem_used += mem_used_rule(qr);
 	if (lock)
 		wrunlock();
@@ -2435,3 +2430,8 @@ void Query_Processor_Output::get_info_json(json& j) {
 	j["retries"] = retries;
 	j["max_lag_ms"] = max_lag_ms;
 }
+template
+class Query_Processor<MySQL_Query_Processor>;
+
+template
+class Query_Processor<PgSQL_Query_Processor>;

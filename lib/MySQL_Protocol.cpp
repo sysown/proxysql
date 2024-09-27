@@ -1173,6 +1173,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	return true;
 }
 
+#ifdef PROXYSQLCLICKHOUSE
 void ch_account_to_my(account_details_t& account, ch_account_details_t& ch_account) {
     account.username = ch_account.username;
     account.password = ch_account.password;
@@ -1196,6 +1197,7 @@ void ch_account_to_my(account_details_t& account, ch_account_details_t& ch_accou
     account.attributes = nullptr;                 // No attributes by default
     account.comment = nullptr;                    // No comment by default
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;

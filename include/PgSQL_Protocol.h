@@ -694,7 +694,35 @@ public:
 	 *       updates the output buffer with the generated packet. If `ready` is 
 	 *       true, it also generates and sends a ready-for-query packet.
 	 */
-	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, PtrSize_t* _ptr = NULL);
+	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state = 'I', PtrSize_t* _ptr = NULL);
+
+	// temporary overriding generate_pkt_OK to avoid crash. FIXME remove this
+	bool generate_pkt_OK(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, unsigned int affected_rows, 
+		uint64_t last_insert_id, uint16_t status, uint16_t warnings, char* msg, bool eof_identifier = false) {
+		char txn_state = 'I';
+		if (status & SERVER_STATUS_IN_TRANS) {
+			txn_state = 'T';
+		}
+		return generate_ok_packet(send, true, msg, affected_rows, "OK 1", txn_state);
+	}
+
+	// temporary overriding generate_pkt_EOF to avoid crash. FIXME remove this
+	bool generate_pkt_EOF(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, uint16_t warnings, 
+		uint16_t status, MySQL_ResultSet* myrs = NULL) {
+		char txn_state = 'I';
+		if (status & SERVER_STATUS_IN_TRANS) {
+			txn_state = 'T';
+		}
+		return generate_ok_packet(send, true, NULL, 0, "OK 1", txn_state);
+	}
+
+	// temporary overriding generate_pkt_ERR to avoid crash. FIXME remove this
+	bool generate_pkt_ERR(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, uint16_t error_code, 
+		char* sql_state, const char* sql_message, bool track = false) {
+			
+		generate_error_packet(send, true, sql_message, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false, track);
+		return true;
+	}
 
 	//bool generate_row_description(bool send, PgSQL_Query_Result* rs, const PG_Fields& fields, unsigned int size);
 
