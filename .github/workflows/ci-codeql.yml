@@ -8,7 +8,7 @@ on:
         type: string
 
 env:
-  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
   analyze:
@@ -28,8 +28,7 @@ jobs:
         # Learn more about CodeQL language support at https://git.io/codeql-language-support
     env:
       TESTDIST: ${{ matrix.testdist }}
-#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
 
     steps:
     - name: Update

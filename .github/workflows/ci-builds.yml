@@ -10,8 +10,8 @@ on:
 permissions: write-all
 
 env:
-  LOCK: CI_BUILDS_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  LOCK: CI_BUILDS_${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
 
@@ -75,8 +75,7 @@ jobs:
 #          - dist: 'ubuntu22'
 #            type: '-clang-tap-asan'
     env:
-#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
 
     steps:
 

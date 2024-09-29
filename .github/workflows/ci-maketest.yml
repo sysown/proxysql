@@ -10,7 +10,7 @@ on:
         type: string
 
 env:
-  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
   builds:

@@ -14,7 +14,7 @@ on:
 env:
   TESTNAME: laravel-framework
   TESTDIST: debian12
-  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
   test:
@@ -28,7 +28,7 @@ jobs:
     env:
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12_bin
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12_bin
 
     steps:
         

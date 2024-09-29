@@ -9,7 +9,7 @@ on:
 
 env:
   TAPGROUP: tests_group_asan
-  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
   select:
@@ -25,8 +25,7 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_matrix
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_matrix
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_matrix
 
     steps:
 
@@ -95,7 +94,7 @@ jobs:
       TESTDIST: ${{ matrix.testdist }}
       TESTGROUP: ${{ matrix.testgroup }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}
 
     steps:
 
