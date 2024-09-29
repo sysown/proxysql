@@ -1,7 +1,13 @@
 name: CI-maketest
+
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      trigger:
+        type: string
+      target:
+        type: string
 
 jobs:
   builds:
@@ -16,9 +22,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-#        repository: 'sysown/proxysql'
+        repository: ${{ github.repository }}
 #        ref: 'v2.x'
-#        ref: ${{ github.head_ref }}
+        ref: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}
         fetch-depth: 0
         path: 'proxysql'
         
@@ -47,7 +53,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ matrix.target }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-logs-run#${{ github.run_number }}-${{ matrix.target }}
         path: |
           ./build-*.log
           

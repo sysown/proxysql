@@ -3,11 +3,14 @@ name: CI-builds
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      trigger:
+        type: string
 
 permissions: write-all
 
 env:
-  LOCK: CI_BUILDS_${{ github.sha }}
+  LOCK: CI_BUILDS_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}
 
 jobs:
 
@@ -71,8 +74,8 @@ jobs:
 #          - dist: 'ubuntu22'
 #            type: '-clang-tap-asan'
     env:
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
-      BLDCACHE: ${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
+#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.dist }}${{ matrix.type }}
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.dist }}${{ matrix.type }}
 
     steps:
 
@@ -201,7 +204,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ci-builds-${{ github.sha }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
+        name: ci-builds-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
         path: |
           proxysql/
 

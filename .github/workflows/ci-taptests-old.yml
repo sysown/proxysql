@@ -4,6 +4,9 @@ name: CI-taptests
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      trigger:
+        type: string
 
 jobs:
   build:
@@ -134,7 +137,7 @@ jobs:
       if: ${{ always() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-run#${{ github.run_number }}
         path: |
           proxysql/src/
           proxysql/test/
@@ -301,7 +304,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/ci_*_logs/
 
@@ -309,7 +312,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/binaries/
           proxysql/src/
@@ -320,7 +323,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/test/tap/tests*
           

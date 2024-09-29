@@ -3,6 +3,9 @@ name: CI-taptests-ssl-compress
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      trigger:
+        type: string
 
 env:
   TAPGROUP: tests_group_ssl-matrix
@@ -21,8 +24,8 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_matrix
-      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_matrix
+#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_matrix
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_matrix
 
     steps:
 
@@ -76,8 +79,8 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}
-      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}
+#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}
 
     steps:
 
@@ -318,7 +321,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.TAPTESTS }}-${{ matrix.usessl }}-${{ matrix.compress }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-logs-run#${{ github.run_number }}-${{ env.TAPTESTS }}-${{ matrix.usessl }}-${{ matrix.compress }}
         path: |
           proxysql/ci_*_logs/
 
@@ -326,7 +329,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.TAPTESTS }}-${{ matrix.usessl }}-${{ matrix.compress }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-bins-run#${{ github.run_number }}-${{ env.TAPTESTS }}-${{ matrix.usessl }}-${{ matrix.compress }}
         path: |
           proxysql/binaries/
           proxysql/src/
@@ -337,7 +340,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.TAPTESTS }}-${{ matrix.usessl }}-${{ matrix.compress }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-tests-run#${{ github.run_number }}-${{ env.TAPTESTS }}-${{ matrix.usessl }}-${{ matrix.compress }}
         path: |
           proxysql/test/tap/tests*
           

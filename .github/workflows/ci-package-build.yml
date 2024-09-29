@@ -3,6 +3,9 @@ name: CI-package-build
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      trigger:
+        type: string
 
 jobs:
   clean:
@@ -12,12 +15,12 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # gh release delete-asset ${{ github.ref_name }}-head
-        gh release delete ${{ github.ref_name }}-head --repo ${{ github.repository }} --cleanup-tag || true
-        gh release create ${{ github.ref_name }}-head --repo ${{ github.repository }} --title ${{ github.ref_name }}-head --draft --prerelease --notes-file - << EOF
+        # gh release delete-asset ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head
+        gh release delete ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --cleanup-tag || true
+        gh release create ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --title ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --draft --prerelease --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into ${{ github.ref_name }}
+        GH-Action Package-Build on PR merge into ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}
         
         Version : **${GIT_VERSION}**
         
@@ -77,10 +80,10 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         if [[ "${{ matrix.dist }}" = "centos7" ]] && [[ "${{ matrix.type }}" = "" ]]; then
-        gh release edit ${{ github.ref_name }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ github.ref_name }}-head --title "${{ github.ref_name }}-head - ${GIT_VERSION}" --notes-file - << EOF
+        gh release edit ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --title "${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head - ${GIT_VERSION}" --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into ${{ github.ref_name }}
+        GH-Action Package-Build on PR merge into ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}
         
         Version : **${GIT_VERSION}**
         
@@ -114,10 +117,10 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # git tag --force -a ${{ github.ref_name }}-head -m 'GH-Actions - Development Snapshot Build'
+        # git tag --force -a ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head -m 'GH-Actions - Development Snapshot Build'
         # git push origin --tags
-        # gh release upload ${{ github.ref_name }}-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
-        gh release upload ${{ github.ref_name }}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
+        # gh release upload ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
+        gh release upload ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
     
 #    - name: Archive artifacts
 #      if: ${{ failure() && !cancelled() }}
@@ -136,11 +139,11 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${{ github.ref_name }}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
-        gh release edit ${{ github.ref_name }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ github.ref_name }}-head --notes-file - << EOF
+        GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
+        gh release edit ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into ${{ github.ref_name }}
+        GH-Action Package-Build on PR merge into ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}
         
         Version : **${GIT_VERSION}**
         

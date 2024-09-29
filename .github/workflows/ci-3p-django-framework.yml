@@ -3,10 +3,18 @@ name: CI-3p-django-framework
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      trigger:
+        type: string
+      infradb:
+        type: string
+      connector:
+        type: string
 
 env:
   TESTNAME: django-framework
   TESTDIST: debian12
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}
 
 jobs:
   test:
@@ -20,7 +28,8 @@ jobs:
     env:
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
-      BLDCACHE: ${{ github.sha }}_debian12_bin
+#      BLDCACHE: ${{ github.sha }}_debian12_bin
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_debian12_bin
 
     steps:
         
@@ -127,7 +136,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_django-framework/logs
           

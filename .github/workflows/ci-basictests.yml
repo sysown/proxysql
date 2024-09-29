@@ -3,6 +3,9 @@ name: CI-basictests
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      trigger:
+        type: string
 
 jobs:
 
@@ -17,8 +20,8 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_src
-      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_src
+#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_src
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_src
 
     steps:
     
@@ -178,7 +181,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-logs-run#${{ github.run_number }}
         path: |
           proxysql/ci_*_logs/
           
@@ -186,7 +189,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-bin-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-bin-run#${{ github.run_number }}
         path: |
           proxysql/binaries/
           proxysql/src/
