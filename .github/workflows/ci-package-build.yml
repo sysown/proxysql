@@ -7,6 +7,10 @@ on:
       trigger:
         type: string
 
+env:
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  BIN_PKG:
+
 jobs:
   clean:
     runs-on: ubuntu-22.04
@@ -15,12 +19,12 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # gh release delete-asset ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head
-        gh release delete ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --cleanup-tag || true
-        gh release create ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --title ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --draft --prerelease --notes-file - << EOF
+        # gh release delete-asset ${SHA}-head
+        gh release delete ${SHA}-head --repo ${{ github.repository }} --cleanup-tag || true
+        gh release create ${SHA}-head --repo ${{ github.repository }} --title ${SHA}-head --draft --prerelease --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}
+        GH-Action Package-Build on PR merge into ${SHA}
         
         Version : **${GIT_VERSION}**
         
@@ -31,16 +35,7 @@ jobs:
         [![CI-Package-Build](https://github.com/${{ github.repository }}/actions/workflows/CI-package-build.yml/badge.svg)](https://github.com/${{ github.repository }}/actions/workflows/CI-package-build.yml)
         
         EOF
-
-#    - name: Clean repo
-#      uses: appleboy/ssh-action@v0.1.8
-#      with:
-#        host: ${{ secrets.REPO_HOST }}
-#        username: ${{ secrets.REPO_USER }}
-#        key: ${{ secrets.REPO_PRIVATE_KEY }}
-#        script: |
-#          ls -1 ${{ secrets.REPO_TARGET }} | sort -rV | tail +6 | xargs -n1 rm -rf
-    
+   
   build:
     runs-on: ubuntu-22.04
     needs: [ clean ]
@@ -65,8 +60,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        repository: 'sysown/proxysql'
-#        ref: 'v2.x'
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
         fetch-depth: 0
       
     - name: Set GIT_VERSION
@@ -79,11 +74,11 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        if [[ "${{ matrix.dist }}" = "centos7" ]] && [[ "${{ matrix.type }}" = "" ]]; then
-        gh release edit ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --title "${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head - ${GIT_VERSION}" --notes-file - << EOF
+        if [[ "${{ matrix.dist }}" = "centos9" ]] && [[ "${{ matrix.type }}" = "" ]]; then
+        gh release edit ${SHA}-head --draft --prerelease --repo ${{ github.repository }} --tag ${SHA}-head --title "${SHA}-head - ${GIT_VERSION}" --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}
+        GH-Action Package-Build on PR merge into ${SHA}
         
         Version : **${GIT_VERSION}**
         
@@ -101,36 +96,16 @@ jobs:
         make ${{ matrix.dist }}${{ matrix.type }}
         echo "BIN_PKG=$(ls -1 binaries/*[mb])" >> $GITHUB_ENV
         echo "BIN_HASH=$(ls -1 binaries/*.id-hash)" >> $GITHUB_ENV
-    
-#    - name: Deploy to Repo
-#      uses: easingthemes/ssh-deploy@main
-#      env:
-#          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
-#          ARGS: "-aic"
-#          SOURCE: ${{ env.BIN_PKG }}
-#          REMOTE_HOST: ${{ secrets.REPO_HOST }}
-#          REMOTE_USER: ${{ secrets.REPO_USER }}
-#          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}/
-#          EXCLUDE: binaries/.gitignore
-    
+
     - name: Push packages
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # git tag --force -a ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head -m 'GH-Actions - Development Snapshot Build'
+        # git tag --force -a ${SHA}-head -m 'GH-Actions - Development Snapshot Build'
         # git push origin --tags
-        # gh release upload ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
-        gh release upload ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
-    
-#    - name: Archive artifacts
-#      if: ${{ failure() && !cancelled() }}
-#      uses: actions/upload-artifact@v4
-#      with:
-#        name: ${{ github.workflow }}-${{ env.GIT_VERSION }}-${{ matrix.dist }}
-#        path: |
-#          ./binaries/
-#          !./**/.gitignore
-    
+        # gh release upload ${SHA}-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
+        gh release upload ${SHA}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
+ 
   finalize:
     runs-on: ubuntu-22.04
     needs: [ build ]
@@ -139,11 +114,11 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
-        gh release edit ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --draft --prerelease --repo ${{ github.repository }} --tag ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}-head --notes-file - << EOF
+        GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${SHA}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
+        gh release edit ${SHA}-head --draft --prerelease --repo ${{ github.repository }} --tag ${SHA}-head --notes-file - << EOF
         ## Development Snapshot
         
-        GH-Action Package-Build on PR merge into ${{ fromJson(inputs.trigger).event.workflow_run.head_branch }}
+        GH-Action Package-Build on PR merge into ${SHA}
         
         Version : **${GIT_VERSION}**
         

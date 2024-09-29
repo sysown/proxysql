@@ -9,6 +9,7 @@ on:
 
 env:
   TAPGROUP: tests_group_asan
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
   select:
@@ -24,8 +25,8 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_matrix
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_matrix
+#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_matrix
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_matrix
 
     steps:
 
@@ -92,9 +93,9 @@ jobs:
         testgroup: ${{ fromJson(needs.select.outputs.matrix) }}
     env:
       TESTDIST: ${{ matrix.testdist }}
+      TESTGROUP: ${{ matrix.testgroup }}
       INFRADB:  ${{ matrix.infradb }}
-#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}
 
     steps:
 
@@ -305,7 +306,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/ci_*_logs/
 
@@ -313,7 +314,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/binaries/
           proxysql/src/
@@ -324,7 +325,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/test/tap/tests*
           

@@ -8,6 +8,9 @@ on:
       trigger:
         type: string
 
+env:
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -43,7 +46,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: 'sysown/proxysql'
-#        ref: 'v2.x'
+        ref: ${{ env.SHA }}
         fetch-depth: 0
         path: 'proxysql'
 
@@ -137,7 +140,7 @@ jobs:
       if: ${{ always() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-run#${{ github.run_number }}
         path: |
           proxysql/src/
           proxysql/test/
@@ -158,6 +161,10 @@ jobs:
 #        testgroup: [ '' ]
 #        testgroup: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
         testgroup: ${{ fromJson(needs.build.outputs.matrix) }}
+    env:
+      TESTGROUP: ${{ matrix.testgroup }}
+      GIT_VERSION:
+
     steps:
     
     - name: Install dependencies
@@ -185,8 +192,8 @@ jobs:
     - name: Checkout proxysql
       uses: actions/checkout@v4
       with:
-        repository: 'sysown/proxysql'
-#        ref: 'v2.x'
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
         fetch-depth: 0
         path: 'proxysql'
         
@@ -199,7 +206,7 @@ jobs:
     - name: Download build
       uses: actions/download-artifact@v4
       with:
-        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
         path: proxysql
         
     - name: Fix build
@@ -304,7 +311,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/ci_*_logs/
 
@@ -312,7 +319,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/binaries/
           proxysql/src/
@@ -323,7 +330,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/test/tap/tests*
           

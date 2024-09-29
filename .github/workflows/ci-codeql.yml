@@ -7,6 +7,9 @@ on:
       trigger:
         type: string
 
+env:
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
 jobs:
   analyze:
     name: Analyze
@@ -25,8 +28,8 @@ jobs:
         # Learn more about CodeQL language support at https://git.io/codeql-language-support
     env:
       TESTDIST: ${{ matrix.testdist }}
-#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_src
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.testdist }}_src
+#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
 
     steps:
     - name: Update
@@ -41,6 +44,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
         fetch-depth: 0
         path: 'proxysql'
 

@@ -10,7 +10,8 @@ on:
 permissions: write-all
 
 env:
-  LOCK: CI_BUILDS_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}
+  LOCK: CI_BUILDS_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
 
@@ -74,8 +75,8 @@ jobs:
 #          - dist: 'ubuntu22'
 #            type: '-clang-tap-asan'
     env:
-#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.dist }}${{ matrix.type }}
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_${{ matrix.dist }}${{ matrix.type }}
+#      BLDCACHE: CI-builds_${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
 
     steps:
 
@@ -92,8 +93,8 @@ jobs:
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       uses: actions/checkout@v4
       with:
-#        repository: '${{ github.repository }}'
-#        ref: 'v2.x'
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
         fetch-depth: 0
         path: 'proxysql'
 
@@ -128,7 +129,7 @@ jobs:
           #make ${{ matrix.dist }} | tee ci_build_log/build-deps.log
           # build tap tests
           sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && ${ASAN} make -j$(nproc) build_tap_test_debug'" docker-compose.yml
+          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
           make ${{ matrix.dist }}-dbg | tee ci_build_log/build-tap.log
           
           # create matrix of all test folders containing *-t
@@ -204,7 +205,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ci-builds-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
+        name: ci-builds-${{ env.SHA }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
         path: |
           proxysql/
 

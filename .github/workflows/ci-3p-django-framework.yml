@@ -14,7 +14,7 @@ on:
 env:
   TESTNAME: django-framework
   TESTDIST: debian12
-  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
   test:
@@ -29,7 +29,7 @@ jobs:
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
 #      BLDCACHE: ${{ github.sha }}_debian12_bin
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_debian12_bin
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12_bin
 
     steps:
         
@@ -74,6 +74,8 @@ jobs:
         cd proxysql_3p_testing/
         #git sparse-checkout list
         ./setup.sh test_django-framework
+        
+        # use cached build
         rm -rf ./proxysql && mv ../proxysql .
         
         # extend timout
@@ -136,7 +138,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_django-framework/logs
           

@@ -9,6 +9,9 @@ on:
       target:
         type: string
 
+env:
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
 jobs:
   builds:
     runs-on: ubuntu-22.04
@@ -23,8 +26,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: ${{ github.repository }}
-#        ref: 'v2.x'
-        ref: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}
+        ref: ${{ env.SHA }}
         fetch-depth: 0
         path: 'proxysql'
         
@@ -53,7 +55,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-logs-run#${{ github.run_number }}-${{ matrix.target }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ matrix.target }}
         path: |
           ./build-*.log
           

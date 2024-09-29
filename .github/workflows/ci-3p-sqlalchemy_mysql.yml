@@ -7,6 +7,7 @@ on:
 env:
   TESTNAME: sqlalchemy
   TESTDIST: debian12
+  SHA: ${{ github.sha }}
 
 jobs:
   test:
@@ -67,7 +68,7 @@ jobs:
         ./setup.sh test_sqlalchemy/sqlalchemy
 
         # use cached build
-        rm -rf ./proxysql  && mv ../proxysql .
+        rm -rf ./proxysql && mv ../proxysql .
                 
     - name: Run tests
       run: |
@@ -114,7 +115,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_sqlalchemy/logs
           

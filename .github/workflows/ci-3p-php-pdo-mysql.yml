@@ -14,6 +14,7 @@ on:
 env:
   TESTNAME: php-pdo-mysql
   TESTDIST: debian12
+  SHA: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
   test:
@@ -27,7 +28,7 @@ jobs:
     env:
       INFRADB:  ${{ matrix.infradb }}
       CONNECTOR:  ${{ matrix.connector }}
-      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}_debian12_bin
+      BLDCACHE: ${{ fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12_bin
 
     steps:
         
@@ -41,7 +42,7 @@ jobs:
         token: ${{ secrets.gh_token }}
         sparse-checkout: |
           test_php-pdo-mysql
-          proxysql
+#          proxysql
 
     - name: Wait for cache
       env:
@@ -73,6 +74,9 @@ jobs:
         git sparse-checkout list
         ./setup.sh
         
+        # use cached build
+        rm -rf ./proxysql && mv ../proxysql .
+
         # extend timout
         cd test_php-pdo-mysql
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
@@ -115,7 +119,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ fromJson(inputs.trigger).event.workflow_run.head_sha }}-${{ matrix.infradb }}-${{ matrix.connector }}logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_php-pdo-mysql/logs
           
