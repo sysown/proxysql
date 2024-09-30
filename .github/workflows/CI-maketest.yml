@@ -1,4 +1,5 @@
 name: CI-maketest
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
 on:
   workflow_dispatch:
@@ -7,11 +8,12 @@ on:
     types: [ completed ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   run:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     uses: sysown/proxysql/.github/workflows/ci-maketest.yml@GH-Actions
     secrets: inherit
     with:
