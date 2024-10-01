@@ -1987,30 +1987,62 @@ void PgSQL_Connection::connect_start() {
 	async_exit_status = PG_EVENT_NONE;
 
 	std::ostringstream conninfo;
-	conninfo << "user=" << userinfo->username << " "; // username
-	conninfo << "password=" << userinfo->password << " "; // password
-	conninfo << "host=" << parent->address << " "; // backend address
+	char* escaped_str = escape_string_single_quotes_and_backslashes(userinfo->username, false);
+	conninfo << "user='" << escaped_str << "' "; // username
+	if (escaped_str != userinfo->username)
+		free(escaped_str);
+
+	escaped_str = escape_string_single_quotes_and_backslashes(userinfo->password, false);
+	conninfo << "password='" << escaped_str << "' "; // password
+	if (escaped_str != userinfo->password)
+		free(escaped_str);
+
+	escaped_str = escape_string_single_quotes_and_backslashes(userinfo->dbname, false);
+	conninfo << "dbname='" << escaped_str << "' ";
+	if (escaped_str != userinfo->dbname)
+		free(escaped_str);
+
+	conninfo << "host='" << parent->address << "' "; // backend address
 	conninfo << "port=" << parent->port << " "; // backend port
-	conninfo << "dbname=" << userinfo->dbname << " ";
 	conninfo << "application_name=proxysql "; // application name
 	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
 	if (parent->use_ssl) {
 		conninfo << "sslmode=require "; // SSL required
-		if (pgsql_thread___ssl_p2s_key)
-			conninfo << "sslkey=" << pgsql_thread___ssl_p2s_key << " ";
-		if (pgsql_thread___ssl_p2s_cert)
-			conninfo << "sslcert=" << pgsql_thread___ssl_p2s_cert << " ";
-		if (pgsql_thread___ssl_p2s_ca)
-			conninfo << "sslrootcert=" << pgsql_thread___ssl_p2s_ca << " ";
-		if (pgsql_thread___ssl_p2s_crl)
-			conninfo << "sslcrl=" << pgsql_thread___ssl_p2s_crl << " ";
-		if (pgsql_thread___ssl_p2s_crlpath)
-			conninfo << "sslcrldir=" << pgsql_thread___ssl_p2s_crlpath << " ";
+		if (pgsql_thread___ssl_p2s_key) {
+			escaped_str = escape_string_single_quotes_and_backslashes(pgsql_thread___ssl_p2s_key, false);
+			conninfo << "sslkey='" << escaped_str << "' ";
+			if (escaped_str != pgsql_thread___ssl_p2s_key)
+				free(escaped_str);
+		}
+		if (pgsql_thread___ssl_p2s_cert) {
+			escaped_str = escape_string_single_quotes_and_backslashes(pgsql_thread___ssl_p2s_cert, false);
+			conninfo << "sslcert='" << escaped_str << "' ";
+			if (escaped_str != pgsql_thread___ssl_p2s_cert)
+				free(escaped_str);
+		}
+		if (pgsql_thread___ssl_p2s_ca) {
+			escaped_str = escape_string_single_quotes_and_backslashes(pgsql_thread___ssl_p2s_ca, false);
+			conninfo << "sslrootcert='" << escaped_str << "' ";
+			if (escaped_str != pgsql_thread___ssl_p2s_ca)
+				free(escaped_str);
+		}
+		if (pgsql_thread___ssl_p2s_crl) {
+			escaped_str = escape_string_single_quotes_and_backslashes(pgsql_thread___ssl_p2s_crl, false);
+			conninfo << "sslcrl='" << escaped_str << "' ";
+			if (escaped_str != pgsql_thread___ssl_p2s_crl)
+				free(escaped_str);
+		}
+		if (pgsql_thread___ssl_p2s_crlpath) {
+			escaped_str = escape_string_single_quotes_and_backslashes(pgsql_thread___ssl_p2s_crlpath, false);
+			conninfo << "sslcrldir='" << escaped_str << "' ";
+			if (escaped_str != pgsql_thread___ssl_p2s_crlpath)
+				free(escaped_str);
+		}
 		// Only supported in PostgreSQL Server
 		// if (pgsql_thread___ssl_p2s_cipher)
 		//	  conninfo << "sslcipher=" << pgsql_thread___ssl_p2s_cipher << " ";
 	} else {
-		conninfo << "sslmode=disable "; // not supporting SSL
+		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
 
 	/*conninfo << "postgres://";
