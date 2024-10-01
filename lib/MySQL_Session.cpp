@@ -1,3 +1,7 @@
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+#define PROXYJSON
+
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Thread.h"
 #include "proxysql.h"
@@ -8,7 +12,7 @@
 #include "mysqld_error.h"
 
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
@@ -25,9 +29,9 @@
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
-#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
+//#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
 #define SELECT_DB_USER_LEN 33
-#define SELECT_CHARSET_STATUS "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
+//#define SELECT_CHARSET_STATUS "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
 #define SELECT_CHARSET_STATUS_LEN 115
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
 #define PROXYSQL_VERSION_COMMENT_LEN 81
@@ -139,12 +143,12 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
 
-
 /**
  * @brief Converts session type to a human-readable string.
  * @param session_type The session type to convert.
  * @return A string representing the session type.
  */
+/*
 std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		return "PROXYSQL_SESSION_MYSQL";
@@ -161,50 +165,10 @@ std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 	} else {
 		return "PROXYSQL_SESSION_NONE";
 	}
-};
-
-/**
- * @brief Constructs a Session_Regex object with the specified pattern.
- * 
- * This constructor initializes a Session_Regex object with the provided pattern.
- * It sets up the regular expression engine with case insensitivity.
- * 
- * @param[in] p The regular expression pattern.
- */
-Session_Regex::Session_Regex(char *p) {
-	s=strdup(p);
-	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-	opt2->set_case_sensitive(false);
-	opt=(void *)opt2;
-	re=(RE2 *)new RE2(s, *opt2);
-}
+};*/
 
 
-/**
- * @brief Destroys the Session_Regex object.
- * 
- * This destructor releases the memory allocated for the regular expression pattern,
- * the regular expression object, and its associated options.
- */
-Session_Regex::~Session_Regex() {
-	free(s);
-	delete (RE2 *)re;
-	delete (re2::RE2::Options *)opt;
-}
 
-/**
- * @brief Matches the given input against the regular expression pattern.
- * 
- * This function attempts to match the input string against the regular expression pattern.
- * 
- * @param[in] m The input string to match.
- * @return true if the input matches the pattern, false otherwise.
- */
-bool Session_Regex::match(char *m) {
-	bool rc=false;
-	rc=RE2::PartialMatch(m,*(RE2 *)re);
-	return rc;
-}
 
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt) :
 	KillArgs(u, p, h, P, _hid, i, kt, _use_ssl, _mt, NULL) {
@@ -368,7 +332,7 @@ __exit_kill_query_thread:
 	return NULL;
 }
 
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
 extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
@@ -402,7 +366,7 @@ Query_Info::Query_Info() {
  * Frees resources associated with QueryParserArgs and stmt_info.
  */
 Query_Info::~Query_Info() {
-	GloQPro->query_parser_free(&QueryParserArgs);
+	GloMyQPro->query_parser_free(&QueryParserArgs);
 	if (stmt_info) {
 		stmt_info=NULL;
 	}
@@ -493,7 +457,7 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
  * @brief Initializes the query parser.
  */
 void Query_Info::query_parser_init() {
-	GloQPro->query_parser_init(&QueryParserArgs,(char *)QueryPointer,QueryLength,0);
+	GloMyQPro->query_parser_init(&QueryParserArgs,(char *)QueryPointer,QueryLength,0);
 }
 
 /**
@@ -501,7 +465,7 @@ void Query_Info::query_parser_init() {
  * @return The command type of the query.
  */
 enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
-	MyComQueryCmd=GloQPro->query_parser_command_type(&QueryParserArgs);
+	MyComQueryCmd= GloMyQPro->query_parser_command_type(&QueryParserArgs);
 	return MyComQueryCmd;
 }
 
@@ -509,7 +473,7 @@ enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
  * @brief Frees resources associated with the query parser.
  */
 void Query_Info::query_parser_free() {
-	GloQPro->query_parser_free(&QueryParserArgs);
+	GloMyQPro->query_parser_free(&QueryParserArgs);
 }
 
 /**
@@ -522,7 +486,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
 	}
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	if (MyComQueryCmd == MYSQL_COM_QUERY__UNINITIALIZED) return 0; // this means that it was never initialized
-	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
+	unsigned long long ret= GloMyQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
@@ -534,7 +498,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
  * @return The digest text of the query.
  */
 char * Query_Info::get_digest_text() {
-	return GloQPro->get_digest_text(&QueryParserArgs);
+	return GloMyQPro->get_digest_text(&QueryParserArgs);
 }
 
 /**
@@ -592,16 +556,6 @@ bool Query_Info::is_select_NOT_for_update() {
 				// let simplify. If NOWAIT is used, we assume FOR UPDATE|SHARE is used
 				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
 				return false;
-/*
-				if (strcasestr(QP," FOR UPDATE ")==NULL) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-				if (strcasestr(QP," FOR SHARE ")==NULL) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-*/
 			}
 			p=QP;
 			p+=ql-12;
@@ -609,16 +563,6 @@ bool Query_Info::is_select_NOT_for_update() {
 				// let simplify. If SKIP LOCKED is used, we assume FOR UPDATE|SHARE is used
 				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
 				return false;
-/*
-				if (strcasestr(QP," FOR UPDATE ")) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-				if (strcasestr(QP," FOR SHARE ")) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-*/
 			}
 			p=QP;
 			char buf[129];
@@ -646,14 +590,6 @@ bool Query_Info::is_select_NOT_for_update() {
 	return true;
 }
 
-void * MySQL_Session::operator new(size_t size) {
-	return l_alloc(size);
-}
-
-void MySQL_Session::operator delete(void *ptr) {
-	l_free(sizeof(MySQL_Session),ptr);
-}
-
 
 void MySQL_Session::set_status(enum session_status e) {
 	if (e==session_status___NONE) {
@@ -676,7 +612,8 @@ MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	//handler_ret = 0;
 	pause_until=0;
-	qpo=new Query_Processor_Output();
+	qpo=new MySQL_Query_Processor_Output();
+	qpo->init();
 	start_time=0;
 	command_counters=new StatCounters(15,10);
 	healthy=1;
@@ -742,17 +679,6 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
-}
-
-/**
- * @brief Initializes the MySQL session.
- */
-void MySQL_Session::init() {
-	transaction_persistent_hostgroup=-1;
-	transaction_persistent=false;
-	mybes= new PtrArray(4);
-	sess_STMTs_meta=new MySQL_STMTs_meta();
-	SLDH=new StmtLongDataHandler();
 }
 
 /**
@@ -825,13 +751,26 @@ MySQL_Session::~MySQL_Session() {
 #endif /* PROXYSQLCLICKHOUSE */
 				default:
 					if (use_ldap_auth == false) {
-						GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+						GloMyAuth->decrease_frontend_user_connections(
+							client_myds->myconn->userinfo->username,
+							client_myds->myconn->userinfo->passtype
+						);
 					} else {
 						GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 					}
 					break;
 			}
+
+			if (client_myds->myconn) {
+				__sync_fetch_and_sub(
+					client_myds->myconn->userinfo->passtype == PASSWORD_TYPE::PRIMARY ?
+						&MyHGM->status.client_connections_prim_pass :
+						&MyHGM->status.client_connections_addl_pass,
+					1
+				);
+			}
 		}
+
 		delete client_myds;
 	}
 	if (default_schema) {
@@ -857,243 +796,6 @@ MySQL_Session::~MySQL_Session() {
 		delete proxysql_node_address;
 		proxysql_node_address = NULL;
 	}
-}
-
-
-/**
- * @brief Find a backend associated with the specified hostgroup ID.
- * 
- * @param hostgroup_id The ID of the hostgroup to search for.
- * @return A pointer to the MySQL backend associated with the specified hostgroup ID, or nullptr if not found.
- */
-MySQL_Backend * MySQL_Session::find_backend(int hostgroup_id) {
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->hostgroup_id==hostgroup_id) {
-			return _mybe;
-		}
-	}
-	return NULL; // NULL = backend not found
-};
-
-/**
- * @brief Update expired connections based on specified checks.
- * 
- * This function iterates through the list of backends and their connections
- * to determine if any connections have expired based on the provided checks.
- * If a connection is found to be expired, its hostgroup ID is added to the
- * list of expired connections for further processing.
- * 
- * @param checks A vector of function objects representing checks to determine if a connection has expired.
- */
-void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connection*)>>& checks) {
-	for (uint32_t i = 0; i < mybes->len; i++) { // iterate through the list of backends 
-		MySQL_Backend* mybe = static_cast<MySQL_Backend*>(mybes->index(i));
-		MySQL_Data_Stream* myds = mybe != nullptr ? mybe->server_myds : nullptr;
-		MySQL_Connection* myconn = myds != nullptr ? myds->myconn : nullptr;
-
-		//!  it performs a series of checks to determine if it has expired
-		if (myconn != nullptr) {
-			const bool is_active_transaction = myconn->IsActiveTransaction();
-			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
-			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
-
-			// Make sure the connection is reusable before performing any check
-			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false && is_idle) {
-				for (const function<bool(MySQL_Connection*)>& check : checks) {
-					if (check(myconn)) {
-						// If a connection is found to be expired based on the provided checks,
-						// its hostgroup ID is added to the list of expired connections (hgs_expired_conns)
-						// for further processing.
-						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
-						break;
-					}
-				}
-			}
-		}
-	}
-}
-
-/**
- * @brief Create a new MySQL backend associated with the specified hostgroup ID and data stream.
- * 
- * This function creates a new MySQL backend object and associates it with the provided hostgroup ID
- * and data stream. If the data stream is not provided (_myds is nullptr), a new MySQL_Data_Stream
- * object is created and initialized.
- * 
- * @param hostgroup_id The ID of the hostgroup to which the backend belongs.
- * @param _myds The MySQL data stream associated with the backend.
- * @return A pointer to the newly created MySQL_Backend object.
- */
-MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
-	MySQL_Backend *_mybe=new MySQL_Backend();
-	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
-	_mybe->hostgroup_id=hostgroup_id;
-	if (_myds) {
-		_mybe->server_myds=_myds;
-	} else {
-		_mybe->server_myds = new MySQL_Data_Stream();
-		_mybe->server_myds->DSS=STATE_NOT_INITIALIZED;
-		_mybe->server_myds->init(MYDS_BACKEND_NOT_CONNECTED, this, 0);
-	}
-	// the newly created backend is added to the session's list of backends (mybes) and a pointer to it is returned.
-	mybes->add(_mybe);
-	return _mybe;
-};
-
-/**
- * @brief Find or create a MySQL backend associated with the specified hostgroup ID and data stream.
- * 
- * This function first attempts to find an existing MySQL backend associated with the provided
- * hostgroup ID. If a backend is found, its pointer is returned. Otherwise, a new MySQL backend
- * is created and associated with the hostgroup ID and data stream. If the data stream is not provided
- * (_myds is nullptr), a new MySQL_Data_Stream object is created and initialized for the new backend.
- * 
- * @param hostgroup_id The ID of the hostgroup to which the backend belongs.
- * @param _myds The MySQL data stream associated with the backend.
- * @return A pointer to the MySQL_Backend object found or created.
- */
-MySQL_Backend * MySQL_Session::find_or_create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
-	MySQL_Backend *_mybe=find_backend(hostgroup_id);
-	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
-	// The pointer to the found or newly created backend is returned.
-	return ( _mybe ? _mybe : create_backend(hostgroup_id, _myds) );
-};
-
-/**
- * @brief Reset all MySQL backends associated with this session.
- * 
- * This function resets all MySQL backends associated with the current session.
- * It iterates over all backends stored in the session, resets each backend, and then deletes it.
- * 
- */
-void MySQL_Session::reset_all_backends() {
-	MySQL_Backend *mybe;
-	while(mybes->len) {
-		mybe=(MySQL_Backend *)mybes->remove_index_fast(0);
-		mybe->reset();
-		delete mybe;
-	}
-};
-
-/**
- * @brief Writes data from the session to the network with optional throttling and flow control.
- *
- * The writeout() function in the MySQL_Session class is responsible for writing data from the session to the network.
- * It supports throttling, which limits the rate at which data is sent to the client. Throttling is controlled by the
- * mysql_thread___throttle_max_bytes_per_second_to_client configuration parameter. If throttling is disabled (the parameter
- * is set to 0), the function bypasses throttling.
- *
- * This function first ensures that any pending data in the session's data stream (client_myds) is written to the network.
- * This ensures that the network buffers are emptied, allowing new data to be sent.
- *
- * After writing data to the network, the function checks if flow control is necessary. If the total amount of data written
- * exceeds the maximum allowed per call (mwpl), or if the data is sent too quickly, the function pauses writing for a brief
- * period to control the flow of data.
- *
- * If throttling is enabled, the function adjusts the throttle based on the amount of data written and the configured maximum
- * bytes per second. If the current throughput exceeds the configured limit, the function increases the pause duration to
- * regulate the flow of data.
- *
- * Finally, if the session has a backend associated with it (mybe), and the backend has a server data stream (server_myds),
- * the function also writes data from the server data stream to the network.
- *
- * @note This function assumes that necessary session and network structures are properly initialized.
- *
- * @see mysql_thread___throttle_max_bytes_per_second_to_client
- * @see MySQL_Session::client_myds
- * @see MySQL_Session::mybe
- * @see MySQL_Backend::server_myds
- */
-void MySQL_Session::writeout() {
-	int tps = 10; // throttling per second , by default every 100ms
-	int total_written = 0;
-	unsigned long long last_sent_=0;
-	bool disable_throttle = mysql_thread___throttle_max_bytes_per_second_to_client == 0;
-	int mwpl = mysql_thread___throttle_max_bytes_per_second_to_client; // max writes per call
-	mwpl = mwpl/tps;
-	if (session_type!=PROXYSQL_SESSION_MYSQL) {
-		disable_throttle = true;
-	}
-	if (client_myds) client_myds->array2buffer_full();
-	if (mybe && mybe->server_myds && mybe->server_myds->myds_type==MYDS_BACKEND) {
-		if (session_type==PROXYSQL_SESSION_MYSQL) {
-			if (mybe->server_myds->net_failure==false) {
-				if (mybe->server_myds->poll_fds_idx>-1) { // NOTE: attempt to force writes
-					mybe->server_myds->array2buffer_full();
-				}
-			}
-		} else {
-			mybe->server_myds->array2buffer_full();
-		}
-	}
-	if (client_myds && thread->curtime >= client_myds->pause_until) {
-		if (mirror==false) {
-			bool runloop=false;
-			if (client_myds->mypolls) {
-				last_sent_ = client_myds->mypolls->last_sent[client_myds->poll_fds_idx];
-			}
-			int retbytes=client_myds->write_to_net_poll();
-			total_written+=retbytes;
-			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
-				runloop=true;
-			}
-			while (runloop && (disable_throttle || total_written < mwpl)) {
-				runloop=false; // the default
-				client_myds->array2buffer_full();
-				struct pollfd fds;
-				fds.fd=client_myds->fd;
-				fds.events=POLLOUT;
-				fds.revents=0;
-				int retpoll=poll(&fds, 1, 0);
-				if (retpoll>0) {
-					if (fds.revents==POLLOUT) {
-						retbytes=client_myds->write_to_net_poll();
-						total_written+=retbytes;
-						if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
-							runloop=true;
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// flow control
-	if (!disable_throttle && total_written > 0) {
-	   if (total_written > mwpl) {
-			unsigned long long add_ = 1000000/tps + 1000000/tps*((unsigned long long)total_written - (unsigned long long)mwpl)/mwpl;
-			pause_until = thread->curtime + add_;
-			client_myds->remove_pollout();
-			client_myds->pause_until = thread->curtime + add_;
-		} else {
-			if (total_written >= QUEUE_T_DEFAULT_SIZE) {
-				unsigned long long time_diff = thread->curtime - last_sent_;
-				if (time_diff == 0) { // sending data really too fast!
-					unsigned long long add_ = 1000000/tps + 1000000/tps*((unsigned long long)total_written - (unsigned long long)mwpl)/mwpl;
-					pause_until = thread->curtime + add_;
-					client_myds->remove_pollout();
-					client_myds->pause_until = thread->curtime + add_;
-				} else {
-					float current_Bps = (float)total_written*1000*1000/time_diff;
-					if (current_Bps > mysql_thread___throttle_max_bytes_per_second_to_client) {
-						unsigned long long add_ = 1000000/tps;
-						pause_until = thread->curtime + add_;
-						assert(pause_until > thread->curtime);
-						client_myds->remove_pollout();
-						client_myds->pause_until = thread->curtime + add_;
-					}
-				}
-			}
-		}
-	}
-
-	if (mybe) {
-		if (mybe->server_myds) mybe->server_myds->write_to_net_poll();
-	}
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
 
 /**
@@ -1415,102 +1117,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			}
 		}
 	}
-}
-
-void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
-	unsigned int l = 0;
-	l = strlen((char *)"PROXYSQL INTERNAL SESSION");
-	if (pkt->size==(5+l) && strncasecmp((char *)"PROXYSQL INTERNAL SESSION", (char *)pkt->ptr+5, l)==0) {
-		json j;
-		generate_proxysql_internal_session_json(j);
-		std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
-		SQLite3_result *resultset = new SQLite3_result(1);
-		resultset->add_column_definition(SQLITE_TEXT,"session_info");
-		char *pta[1];
-		pta[0] = (char *)s.c_str();
-		resultset->add_row(pta);
-		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
-		delete resultset;
-		l_free(pkt->size,pkt->ptr);
-		return;
-	}
-	// default
-	client_myds->DSS=STATE_QUERY_SENT_NET;
-	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1064,(char *)"42000",(char *)"Unknown PROXYSQL INTERNAL command",true);
-	if (mirror==false) {
-		RequestEnd(NULL);
-	} else {
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
-	}
-	l_free(pkt->size,pkt->ptr);
-}
-
-/**
- * @brief Handles special queries executed by the STATUS command in mysql cli .
- *   Specifically:
- *   "select DATABASE(), USER() limit 1"
- *   "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
- *   See Github issues 4396 and 4426
- *
- * @param PtrSize_t The packet from the client
- *
- * @return True if the queries are handled
- */
-bool MySQL_Session::handler_special_queries_STATUS(PtrSize_t *pkt) {
-	if (pkt->size == (SELECT_DB_USER_LEN+5)) {
-		if (strncasecmp(SELECT_DB_USER,(char *)pkt->ptr+5, SELECT_DB_USER_LEN)==0) {
-			SQLite3_result *resultset = new SQLite3_result(2);
-			resultset->add_column_definition(SQLITE_TEXT,"DATABASE()");
-			resultset->add_column_definition(SQLITE_TEXT,"USER()");
-			char *pta[2];
-			pta[0] = client_myds->myconn->userinfo->username;
-			pta[1] = client_myds->myconn->userinfo->schemaname;
-			resultset->add_row(pta);
-			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
-			delete resultset;
-			l_free(pkt->size,pkt->ptr);
-			return true;
-		}
-	}
-	if (pkt->size == (SELECT_CHARSET_STATUS_LEN+5)) {
-		if (strncasecmp(SELECT_CHARSET_STATUS,(char *)pkt->ptr+5, SELECT_CHARSET_STATUS_LEN)==0) {
-			SQLite3_result *resultset = new SQLite3_result(4);
-			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_client");
-			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_connection");
-			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_server");
-			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_database");
-
-			string vals[4];
-			json j = {};
-			json& jc = j["conn"];
-			MySQL_Connection *conn = client_myds->myconn;
-			// here we do a bit back and forth to and from JSON to reuse existing code instead of writing new code.
-			// This is not great for performance, but this query is rarely executed.
-			conn->variables[SQL_CHARACTER_SET_CLIENT].fill_client_internal_session(jc, SQL_CHARACTER_SET_CLIENT);
-			conn->variables[SQL_CHARACTER_SET_CONNECTION].fill_client_internal_session(jc, SQL_CHARACTER_SET_CONNECTION);
-			conn->variables[SQL_CHARACTER_SET_DATABASE].fill_client_internal_session(jc, SQL_CHARACTER_SET_DATABASE);
-
-			vals[0] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_CLIENT].internal_variable_name];
-			vals[1] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_CONNECTION].internal_variable_name];
-			vals[2] = string(mysql_thread___default_variables[SQL_CHARACTER_SET]);
-			vals[3] = jc[mysql_tracked_variables[SQL_CHARACTER_SET_DATABASE].internal_variable_name];
-
-			const char *pta[4];
-			for (int i=0; i<4; i++) {
-				pta[i] = vals[i].c_str();
-			}
-			resultset->add_row(pta);
-			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
-			delete resultset;
-			l_free(pkt->size,pkt->ptr);
-			return true;
-		}
-	}
-	return false;
 }
 
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
@@ -1878,7 +1484,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				thread->mirror_queue_mysql_sessions->add(newsess);
 			}	else {
 				GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
-				thread->register_session(newsess);
+				thread->register_session(thread,newsess);
 				newsess->handler(); // execute immediately
 				//newsess->to_process=0;
 				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
@@ -3579,14 +3185,14 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+		qpo= GloMyQPro->process_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 			thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
 				(endt.tv_sec*1000000000+endt.tv_nsec) -
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
-		assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+		assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
 		// setting 'prepared' to prevent fetching results from the cache if the digest matches
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_prepare_stmt);
 		if (rc_break==true) {
@@ -3723,7 +3329,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,NULL,0,&CurrentQuery);
+		qpo= GloMyQPro->process_query(this,NULL,0,&CurrentQuery);
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -3733,7 +3339,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				(endt.tv_sec*1000000000+endt.tv_nsec) -
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
-		assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+		assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
 		// we now take the metadata associated with STMT_EXECUTE from MySQL_STMTs_meta
 		bool stmt_meta_found=true; // let's be optimistic and we assume we will found it
 		stmt_execute_metadata_t *stmt_meta=sess_STMTs_meta->find(stmt_global_id);
@@ -3874,9 +3480,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			issqli = libinjection_is_sqli(&state);
 			if (issqli) {
 				bool allow_sqli = false;
-				allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
+				allow_sqli = GloMyQPro->whitelisted_sqli_fingerprint(state.fingerprint);
 				if (allow_sqli) {
-					thread->status_variables.stvar[st_var_whitelisted_sqli_fingerprint]++;
+					thread->status_variables.stvar[st_var_mysql_whitelisted_sqli_fingerprint]++;
 				} else {
 					thread->status_variables.stvar[st_var_automatic_detected_sqli]++;
 					char * username = client_myds->myconn->userinfo->username;
@@ -4347,6 +3953,14 @@ __get_pkts_from_client:
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
 		}
+
+		if (pkt.size <= sizeof(mysql_hdr)) {
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Malformed packet received\n");
+			l_free(pkt.size, pkt.ptr);
+			handler_ret = -1;
+			return handler_ret;
+		}
+
 		switch (status) {
 			case WAITING_CLIENT_DATA:
 				if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // we are handling a multi-packet
@@ -4383,6 +3997,33 @@ __get_pkts_from_client:
 							return handler_ret;
 						}
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+
+
+						/*if (client_myds != NULL && client_myds->is_postgres == true) {
+							if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+								c = *((unsigned char*)pkt.ptr + 0);
+								if (c == 'Q') {
+									handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
+								}
+								else if (c == 'X') {
+									//proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+									//if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
+									l_free(pkt.size, pkt.ptr);
+									handler_ret = -1;
+									return handler_ret;
+								}
+								else {
+									proxy_error("Experimental feature");
+									//assert(0);
+								}
+							}
+							else {
+								proxy_error("Experimental feature");
+								assert(0);
+							}
+							break;
+						}*/
+
 
 						if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 							if ((enum_mysql_command)c == _MYSQL_COM_INIT_DB) {
@@ -4433,14 +4074,14 @@ __get_pkts_from_client:
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
-									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									qpo= GloMyQPro->process_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +
 											(endt.tv_sec*1000000000+endt.tv_nsec) -
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
-									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+									assert(qpo);	// GloMyQPro->process_mysql_query() should always return a qpo
 
 									{
 										bool need_break = GPFC_QueryUSE(pkt, handler_ret);
@@ -5052,71 +4693,8 @@ int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 // this function was inline
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 // NOTE: Maintenance of 'multiplex_delayed' has been moved to 'housekeeping_before_pkts'. The previous impl
-// is left below as an example of how to perform a more passive maintenance over session connections.
-/*
-	if (mybes) {
-		MySQL_Backend *_mybe;
-		unsigned int i;
-		for (i=0; i < mybes->len; i++) {
-			_mybe=(MySQL_Backend *)mybes->index(i);
-			if (_mybe->server_myds) {
-				MySQL_Data_Stream *_myds=_mybe->server_myds;
-				if (_myds->myconn) {
-					if (_myds->myconn->multiplex_delayed) {
-						if (_myds->wait_until <= thread->curtime) {
-							_myds->wait_until=0;
-							_myds->myconn->multiplex_delayed=false;
-							_myds->DSS=STATE_NOT_INITIALIZED;
-							_myds->return_MySQL_Connection_To_Pool();
-						}
-					}
-				}
-			}
-		}
-	}
-*/
 }
 
-/**
- * @brief Perform housekeeping tasks before processing packets.
- *
- * This function is responsible for performing necessary housekeeping tasks
- * before processing packets. These tasks include handling expired connections
- * for multiplexing scenarios. If multiplexing is enabled, it iterates over
- * the list of expired backend connections and either returns them to the connection pool
- * or destroys them based on certain conditions.
- *
- * @note This function assumes that the `hgs_expired_conns` vector contains the IDs
- *       of the backend connections that have expired.
- *
- * @return None.
- */
-void MySQL_Session::housekeeping_before_pkts() {
-	if (mysql_thread___multiplexing) {
-		for (const int hg_id : hgs_expired_conns) {
-			MySQL_Backend* mybe = find_backend(hg_id);
-
-			if (mybe != nullptr) {
-				MySQL_Data_Stream* myds = mybe->server_myds;
-
-				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-					if (mysql_thread___reset_connection_algorithm == 2) {
-						create_new_session_and_reset_connection(myds);
-					} else {
-						myds->destroy_MySQL_Connection_From_Pool(true);
-					}
-				} else {
-					myds->return_MySQL_Connection_To_Pool();
-				}
-			}
-		}
-		// We are required to perform a cleanup after consuming the elements, thus preventing any subsequent
-		// 'handler' call to perform recomputing of the already processed elements.
-		if (hgs_expired_conns.empty() == false) {
-			hgs_expired_conns.clear();
-		}
-	}
-}
 
 // this function was inline
 /**
@@ -5883,7 +5461,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
 						if (use_ldap_auth == false) {
-							free_users = GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+							free_users = GloMyAuth->increase_frontend_user_connections(
+								client_myds->myconn->userinfo->username,
+								client_myds->myconn->userinfo->passtype,
+								&used_users
+							);
 						} else {
 							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->fe_username, &used_users);
 						}
@@ -6270,84 +5852,6 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-/*
-// this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
-// returned values:
-// 0 : no action
-// 1 : return false
-// 2 : return true
-int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq) {
-	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-	opt2->set_case_sensitive(false);
-	char *pattern=(char *)"(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_LOG_BIN *(?:|:)= *(\\d+) *(?:(|;|-- .*|#.*))$";
-	re2::RE2 *re=new RE2(pattern, *opt2);
-	int i;
-	int rc=RE2::PartialMatch(nq, *re, &i);
-	delete re;
-	delete opt2;
-	if (rc && ( i==0 || i==1) ) {
-		//fprintf(stderr,"sql_log_bin=%d\n", i);
-		if (i == 1) {
-			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "1"))
-				return 1;
-		}
-		else if (i == 0) {
-			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "0"))
-				return 1;
-		}
-
-#ifdef DEBUG
-		proxy_info("Setting SQL_LOG_BIN to %d\n", i);
-#endif
-#ifdef DEBUG
-		{
-			string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Setting SQL_LOG_BIN to %d for query: %s\n", i, nqn.c_str());
-		}
-#endif
-		// we recompute command_type instead of taking it from the calling function
-		unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
-		if (command_type == _MYSQL_COM_QUERY) {
-			client_myds->DSS=STATE_QUERY_SENT_NET;
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
-			RequestEnd(NULL);
-			l_free(pkt->size,pkt->ptr);
-			return 2;
-		}
-	} else {
-		int kq = 0;
-		kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"SET @@SESSION.SQL_LOG_BIN = @MYSQLDUMP_TEMP_LOG_BIN;" , CurrentQuery.QueryLength);
-#ifdef DEBUG
-		{
-			string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Setting SQL_LOG_BIN to %d for query: %s\n", i, nqn.c_str());
-		}
-#endif
-		if (kq == 0) {
-			client_myds->DSS=STATE_QUERY_SENT_NET;
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
-			RequestEnd(NULL);
-			l_free(pkt->size,pkt->ptr);
-			return 2;
-		} else {
-			string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
-			unable_to_parse_set_statement(lock_hostgroup);
-			return 1;
-		}
-	}
-	return 0;
-}
-*/
-
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, ps_type prepare_stmt_type) {
 /*
 	lock_hostgroup:
@@ -6484,15 +5988,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			if (pos != nq.npos) {
 				nq.erase(pos + 1); // remove trailing spaces and semicolumns
 			}
-/*
-			// we do not threat SET SQL_LOG_BIN as a special case
-			if (match_regexes && match_regexes[0]->match(dig)) {
-				int rc = handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(pkt, lock_hostgroup, nTrx, nq);
-				if (rc == 1) return false;
-				if (rc == 2) return true;
-				// if rc == 0 , continue as normal
-			}
-*/
 			if (
 				(
 					match_regexes && (match_regexes[1]->match(dig))
@@ -7384,7 +6879,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		init();
 		if (client_authenticated) {
 			if (use_ldap_auth == false) {
-				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+				GloMyAuth->decrease_frontend_user_connections(
+					client_myds->myconn->userinfo->username,
+					client_myds->myconn->userinfo->passtype
+				);
 			} else {
 				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 			}
@@ -7399,7 +6897,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			client_authenticated=true;
 			//int free_users=0;
 			int used_users=0;
-			/*free_users */GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+			GloMyAuth->increase_frontend_user_connections(
+				client_myds->myconn->userinfo->username,
+				client_myds->myconn->userinfo->passtype,
+				&used_users
+			);
 			// FIXME: max_connections is not handled for CHANGE_USER
 		} else {
 			l_free(pkt->size,pkt->ptr);
@@ -7444,6 +6946,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
 			free(_s);
+			if (client_addr) { free(client_addr); }
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 		}
 	} else {
@@ -7893,102 +7396,6 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 	}
 }
 
-void MySQL_Session::set_unhealthy() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p\n", this);
-	healthy=0;
-}
-
-
-unsigned int MySQL_Session::NumActiveTransactions(bool check_savepoint) {
-	unsigned int ret=0;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds) {
-			if (_mybe->server_myds->myconn) {
-				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
-					ret++;
-				} else {
-					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
-					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
-					// SAVEPOINT and autocommit=0
-					if (check_savepoint) {
-						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
-							ret++;
-						}
-					}
-				}
-			}
-		}
-	}
-	return ret;
-}
-
-bool MySQL_Session::HasOfflineBackends() {
-	bool ret=false;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsServerOffline()) {
-					ret=true;
-					return ret;
-				}
-	}
-	return ret;
-}
-
-bool MySQL_Session::SetEventInOfflineBackends() {
-	bool ret=false;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsServerOffline()) {
-					_mybe->server_myds->revents|=POLLIN;
-					ret = true;
-				}
-	}
-	return ret;
-}
-
-int MySQL_Session::FindOneActiveTransaction(bool check_savepoint) {
-	int ret=-1;
-	if (mybes==0) return ret;
-	MySQL_Backend *_mybe;
-	unsigned int i;
-	for (i=0; i < mybes->len; i++) {
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds) {
-			if (_mybe->server_myds->myconn) {
-				if (_mybe->server_myds->myconn->IsKnownActiveTransaction()) {
-					return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
-				} else if (_mybe->server_myds->myconn->IsActiveTransaction()) {
-					ret = (int)_mybe->server_myds->myconn->parent->myhgc->hid;
-				} else {
-					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
-					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
-					// SAVEPOINT and autocommit=0
-					if (check_savepoint) {
-						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
-							return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
-						}
-					}
-				}
-			}
-		}
-	}
-	return ret;
-}
-
 unsigned long long MySQL_Session::IdleTime() {
 	unsigned long long ret = 0;
 	if (client_myds==0) return 0;
@@ -8002,7 +7409,6 @@ unsigned long long MySQL_Session::IdleTime() {
 	}
 	return ret;
 }
-
 
 
 // this is called either from RequestEnd(), or at the end of executing
@@ -8050,7 +7456,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 			break;
 	}
 
-	GloQPro->delete_QP_out(qpo);
+	GloMyQPro->delete_QP_out(qpo);
 	// if there is an associated myds, clean its status
 	if (myds) {
 		// if there is a mysql connection, clean its status
@@ -8179,7 +7585,8 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 				MySQL_Connection *mc = client_myds->myconn;
 				if (mc->userinfo && mc->userinfo->username) {
 					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
-						char *qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr));
+						char* qu = query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
+							mysql_thread___query_digests_lowercase);
 						string nq=string(qu,strlen(qu));
 						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 						opt2->set_case_sensitive(false);
@@ -8418,25 +7825,6 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
 					"Unable to parse SET query but NOT setting lock_hostgroup %s\n", query_str.c_str());
 	}
-}
-
-/**
- * @brief Check if any backend has an active MySQL connection.
- *
- * This function iterates through all backends associated with the session and checks if any backend has an
- * active MySQL connection. If any backend has an active connection, it returns true; otherwise, it returns false.
- *
- * @return true if any backend has an active MySQL connection, otherwise false.
- */
-bool MySQL_Session::has_any_backend() {
-	for (unsigned int j=0;j < mybes->len;j++) {
-		MySQL_Backend *tmp_mybe=(MySQL_Backend *)mybes->index(j);
-		MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
-		if (__myds->myconn) {
-			return true;
-		}
-	}
-	return false;
 }
 
 /**

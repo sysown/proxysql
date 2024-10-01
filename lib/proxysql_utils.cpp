@@ -504,3 +504,19 @@ std::pair<int,const char*> get_dollar_quote_error(const char* version) {
 		}
 	}
 }
+
+const nlohmann::json* get_nested_elem(const nlohmann::json& j, const vector<string>& p) {
+	if (j.is_discarded()) { return nullptr; }
+	const nlohmann::json* next_step = &j;
+
+	for (const auto& e : p) {
+		if (next_step->contains(e)) {
+			next_step = &next_step->at(e);
+		} else {
+			next_step = nullptr;
+			break;
+		}
+	}
+
+	return next_step;
+}

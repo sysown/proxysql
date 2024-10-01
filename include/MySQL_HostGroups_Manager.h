@@ -23,8 +23,10 @@
 #define SPOOKYV2
 #endif
 
-#include "../deps/json/json.hpp"
-using json = nlohmann::json;
+#ifndef PROXYJSON
+#define PROXYJSON
+#include "../deps/json/json_fwd.hpp"
+#endif // PROXYJSON
 
 #ifdef DEBUG
 /* */
@@ -33,8 +35,8 @@ using json = nlohmann::json;
 //#define STRESSTEST_POOL
 #endif // DEBUG
 
-#define MHM_PTHREAD_MUTEX
 
+#include "Base_HostGroups_Manager.h"
 
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
@@ -117,7 +119,7 @@ using json = nlohmann::json;
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM main.mysql_servers " \
 	"WHERE status != \"OFFLINE_HARD\" " \
-	"ORDER BY hostgroup_id, hostname, port" \
+	"ORDER BY hostgroup_id, hostname, port"
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
@@ -126,6 +128,8 @@ class MySrvC;
 class MySrvList;
 class MyHGC;
 
+struct peer_runtime_mysql_servers_t;
+struct peer_mysql_servers_v2_t;
 
 std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
 void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
@@ -269,68 +273,16 @@ private:
 	enum MySerStatus status;
 };
 
-class MySrvList {	// MySQL Server List
-	private:
-	MyHGC *myhgc;
-	int find_idx(MySrvC *);
+class MySrvList: public BaseSrvList<MyHGC> { // MySQL Server List
 	public:
-	PtrArray *servers;
-	unsigned int cnt() { return servers->len; }
-	MySrvList(MyHGC *);
-	~MySrvList();
-	void add(MySrvC *);
-	void remove(MySrvC *);
-	MySrvC * idx(unsigned int i) {return (MySrvC *)servers->index(i); }
+	MySrvList(MyHGC* hgc) : BaseSrvList<MyHGC>(hgc) {}
 };
 
-class MyHGC {	// MySQL Host Group Container
+
+class MyHGC: public BaseHGC<MyHGC> {
 	public:
-	unsigned int hid;
-	std::atomic<uint32_t> num_online_servers;
-	time_t last_log_time_num_online_servers;
-	unsigned long long current_time_now;
-	uint32_t new_connections_now;
-	MySrvList *mysrvs;
-	struct { // this is a series of attributes specific for each hostgroup
-		char * init_connect;
-		char * comment;
-		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
-		uint32_t max_num_online_servers;
-		uint32_t throttle_connections_per_sec;
-		int32_t monitor_slave_lag_when_null;
-		int8_t autocommit;
-		int8_t free_connections_pct;
-		int8_t handle_warnings;
-		bool multiplex;
-		bool connection_warming;
-		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
-		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
-		json ignore_session_variables_json; // the JSON format of ignore_session_variables
-	} attributes;
-	struct {
-		int64_t weight;
-		int64_t max_connections;
-		int32_t use_ssl;
-	} servers_defaults;
-	void reset_attributes();
-	inline
-	bool handle_warnings_enabled() const {
-		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
-	}
-	inline
-	int32_t get_monitor_slave_lag_when_null() const {
-		return attributes.configured == true && attributes.monitor_slave_lag_when_null != -1 ? attributes.monitor_slave_lag_when_null : mysql_thread___monitor_slave_lag_when_null;
-	}
-	MyHGC(int);
-	~MyHGC();
+	MyHGC(int _hid) : BaseHGC<MyHGC>(_hid) {}
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
-	void refresh_online_server_count();
-	void log_num_online_server_count_error();
-	inline
-	bool online_servers_within_threshold() const {
-		if (num_online_servers.load(std::memory_order_relaxed) <= attributes.max_num_online_servers) return true;
-		return false;
-	}
 };
 
 class Group_Replication_Info {
@@ -471,6 +423,7 @@ struct p_hg_counter {
 		server_connections_aborted,
 		client_connections_created,
 		client_connections_aborted,
+		client_connections_sha2cached,
 		com_autocommit,
 		com_autocommit_filtered,
 		com_rollback,
@@ -503,6 +456,8 @@ struct p_hg_gauge {
 	enum metric {
 		server_connections_connected = 0,
 		client_connections_connected,
+		client_connections_connected_prim,
+		client_connections_connected_addl,
 		__size
 	};
 };
@@ -596,19 +551,16 @@ struct srv_opts_t {
 	int32_t use_ssl;
 };
 
-class MySQL_HostGroups_Manager {
+class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	private:
+#if 0
 	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
 	pthread_mutex_t readonly_mutex;
 	std::set<std::string> read_only_set1;
 	std::set<std::string> read_only_set2;
-#ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_t lock;
-#else
-	rwlock_t rwlock;
-#endif
-
+#endif // 0
 	enum HGM_TABLES {
 		MYSQL_SERVERS_V2 = 0,
 		MYSQL_REPLICATION_HOSTGROUPS,
@@ -723,15 +675,16 @@ class MySQL_HostGroups_Manager {
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 
 
+#if 0
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, MyHGC *>MyHostGroups_map;
-
+#endif // 0
 	std::mutex Servers_SSL_Params_map_mutex;
 	std::unordered_map<std::string, MySQLServers_SslParams> Servers_SSL_Params_map;
-
+#if 0
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);
-
+#endif // 0
 	void add(MySrvC *, unsigned int);
 	void purge_mysql_servers_table();
 	void generate_mysql_servers_table(int *_onlyhg=NULL);
@@ -863,7 +816,10 @@ class MySQL_HostGroups_Manager {
 		pthread_cond_t servers_table_version_cond;
 		unsigned long client_connections_aborted;
 		unsigned long client_connections_created;
+		unsigned long client_connections_sha2cached;
 		int client_connections;
+		int client_connections_prim_pass;
+		int client_connections_addl_pass;
 		unsigned long server_connections_aborted;
 		unsigned long server_connections_created;
 		unsigned long server_connections_delayed;
@@ -948,11 +904,13 @@ class MySQL_HostGroups_Manager {
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 	void init();
+#if 0
 	void wrlock();
 	void wrunlock();
 #ifdef DEBUG
 	bool is_locked = false;
 #endif
+#endif // 0
 	int servers_add(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.
@@ -960,9 +918,10 @@ class MySQL_HostGroups_Manager {
 	 * @return Checksum computed using the provided hash, and 'mysql_servers' config tables hashes.
 	 */
 	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
+	bool commit();
 	bool commit(
-		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers = {},
-		const peer_mysql_servers_v2_t& peer_mysql_servers_v2 = {},
+		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers = true,
 		bool update_version = false
 	);
@@ -1036,7 +995,7 @@ class MySQL_HostGroups_Manager {
 	void save_incoming_mysql_table(SQLite3_result *, const string&);
 	SQLite3_result* get_current_mysql_table(const string& name);
 
-	SQLite3_result * execute_query(char *query, char **error);
+	//SQLite3_result * execute_query(char *query, char **error);
 	/**
 	 * @brief Creates a resultset with the current full content of the target table.
 	 * @param string The target table. Valid values are:
@@ -1065,7 +1024,6 @@ class MySQL_HostGroups_Manager {
 	 * @param lock When supplied the function calls 'wrlock()' and 'wrunlock()' functions for accessing the db.
 	 */
 	void update_table_mysql_servers_for_monitor(bool lock=false);
-	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 	/**
@@ -1224,47 +1182,5 @@ private:
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };
 
-/**
- * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
- *
- * @param j JSON object constructed from 'servers_defaults' field.
- * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
- *  error logging.
- * @param key The key for the value to be extracted.
- * @param val_check A validation function, checks if the value is within a expected range.
- *
- * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
- */
-template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
-T j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
-) {
-	if (j.find(key) != j.end()) {
-		const json::value_t val_type = j[key].type();
-		const char* type_name = j[key].type_name();
-
-		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
-			T val = j[key].get<T>();
-
-			if (val_check(val)) {
-				return val;
-			} else {
-				proxy_error(
-					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
-						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
-				);
-			}
-		} else {
-			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
-					" Value NOT UPDATED.\n",
-				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
-			);
-		}
-	}
-
-	return static_cast<T>(-1);
-}
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

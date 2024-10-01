@@ -8,7 +8,7 @@
 
 #include "MySQL_Logger.hpp"
 #include "MySQL_Data_Stream.h"
-#include "query_processor.h"
+#include "MySQL_Query_Processor.h"
 #include "SQLite3_Server.h"
 
 #include <search.h>
@@ -76,7 +76,7 @@ static int testLag = 10;
 extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
-extern Query_Processor *GloQPro;
+extern MySQL_Query_Processor* GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;

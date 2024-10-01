@@ -14,6 +14,7 @@
 #include <assert.h>
 
 #include "sqlite3db.h"
+#include "../deps/json/json.hpp"
 
 #ifndef ProxySQL_Checksum_Value_LENGTH
 #define ProxySQL_Checksum_Value_LENGTH 20
@@ -258,6 +259,53 @@ void close_all_non_term_fd(std::vector<int> excludeFDs);
  * @return A pair of the shape '{err_code,err_msg}'.
  */
 std::pair<int,const char*> get_dollar_quote_error(const char* version);
+
+/**
+ * @brief Extracts a nested JSON element from the supplied path.
+ * @param j The JSON from which to extract the element.
+ * @param p The path to trasverse to find the element.
+ * @return Pointer to the element if found, 'nullptr' otherwise.
+ */
+const nlohmann::json* get_nested_elem(const nlohmann::json& j, const std::vector<std::string>& p);
+
+/**
+ * @brief Retrieves the value of a nested JSON element given a path of keys.
+ *
+ * @tparam T The type of the value to retrieve from the JSON element.
+ *
+ * @param j The JSON object to search through.
+ * @param p A vector of strings representing the path to the nested element.
+ * @param def_val The default value to return if the nested element is not found,
+ *                is null, or cannot be converted to type `T`.
+ *
+ * @return The value of the nested JSON element as type `T` if it exists and is
+ *         of the correct type, otherwise returns `def_val`.
+ */
+template <typename T>
+T get_nested_elem_val(const nlohmann::json& j, const std::vector<std::string>& p, const T def_val) {
+	const nlohmann::json* next_step = get_nested_elem(j, p);
+
+	try {
+		if (next_step != nullptr && !next_step->is_null()) {
+			return next_step->get<T>();
+		} else {
+			return def_val;
+		}
+	} catch (std::exception&) {
+		return def_val;
+	}
+}
+
+/**
+ * @brief Helper type for freeing memory allocated by 'malloc' managed by smart pointers.
+ */
+struct free_deleter {
+	void operator()(void* x) { free(x); }
+	void operator()(const void* x) { free(const_cast<void*>(x)); }
+};
+
+template <typename T>
+using mf_unique_ptr = std::unique_ptr<T, free_deleter>;
 
 static inline void set_thread_name(const char name[16]) {
 #if defined(__linux__) || defined(__FreeBSD__)
