@@ -84,6 +84,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         key: ${{ env.BLDCACHE }}_bin
+        enableCrossOsArchive: true
         lookup-only: true
         path: |
           proxysql/binaries/
@@ -170,6 +171,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_bin
+        enableCrossOsArchive: true
         path: |
           proxysql/binaries/
 
@@ -179,6 +181,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_src
+        enableCrossOsArchive: true
         path: |
           proxysql/src/
 
@@ -188,6 +191,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_test
+        enableCrossOsArchive: true
         path: |
           proxysql/test/
 
@@ -197,6 +201,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         key: ${{ env.BLDCACHE }}_matrix
+        enableCrossOsArchive: true
         path: |
           proxysql/tap-matrix*
 
