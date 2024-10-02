@@ -1,0 +1,29 @@
+name: CI-trigger
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Trigger workflow_run[in_progress]
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
+      run: |
+        sleep 5
+        RUNID=$(gh -R ${{ github.repository }} run list | grep '${{ github.ref_name }} CI-builds ${{ github.sha }}' | grep -Po '(?<=workflow_run)\s+\d+')
+        while [[ -z ${RUNID} ]]; do
+          sleep 5
+          RUNID=$(gh -R ${{ github.repository }} run list | grep '${{ github.ref_name }} CI-builds ${{ github.sha }}' | grep -Po '(?<=workflow_run)\s+\d+')
+        done
+        
+        echo "Trigger workflow_run[in_progress]: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'"
+        gh -R ${{ github.repository }} run watch -i 30 ${RUNID} >/dev/null
+
+    - name: Trigger workflow_run[completed]
+      run: |
+        echo "Triggered workflow_run[completed]: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'"
+        
