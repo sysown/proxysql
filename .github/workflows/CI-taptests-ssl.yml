@@ -4,7 +4,7 @@ run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branc
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: [ CI-builds ]
+    workflows: [ CI-trigger ]
     types: [ completed ]
 
 concurrency:
