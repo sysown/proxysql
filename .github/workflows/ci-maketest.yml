@@ -18,10 +18,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        testdist: [ 'ubuntu22' ]
         target: [ 'testaurora','testgalera','testgrouprep','testreadonly','testreplicationlag','testall' ]
+    env:
+      TESTDIST: ${{ matrix.testdist }}
+      TARGET: ${{ matrix.target }}
+      MATRIX: '(${{ matrix.target }})'
 
     steps:
          
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
@@ -45,7 +61,7 @@ jobs:
         
         echo "TARGET: ${{ matrix.target }}"
         sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make cleanall && make -j$(nproc) ${{ matrix.target }}'" docker-compose.yml
-        make ubuntu22-dbg | tee ../build.log
+        make ${TESTDIST}-dbg | tee ../build.log
         
     - name: Check build
       run: |
@@ -59,3 +75,13 @@ jobs:
         path: |
           ./build-*.log
           
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

@@ -34,7 +34,6 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
-        echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         sleep $(( $RANDOM / 1024 ))
         PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
@@ -98,9 +97,21 @@ jobs:
       INFRADB:  ${{ matrix.infradb }}
       TESTGROUP: ${{ matrix.testgroup }}
       BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}
+      MATRIX: '(${{ matrix.testgroup }})'
 
     steps:
 
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    
 #    - name: Maximize build space
 #      uses: easimon/maximize-build-space@master
 #      with:
@@ -338,3 +349,14 @@ jobs:
         name: ${{ github.workflow }}-${{ env.SHA }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/test/tap/tests*
+    
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

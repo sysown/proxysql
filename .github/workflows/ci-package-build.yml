@@ -56,8 +56,24 @@ jobs:
 #            type: '-clang'
           - dist: 'ubuntu18'
             type: '-clang'
+    env:
+      DIST: ${{ matrix.dist }}
+      TYPE: ${{ matrix.type }}
+      MATRIX: '(${{ matrix.dist }},${{ matrix.type }})'
 
     steps:
+
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
@@ -107,6 +123,17 @@ jobs:
         # gh release upload ${SHA}-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
         gh release upload ${SHA}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
  
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
   finalize:
     runs-on: ubuntu-22.04
     needs: [ build ]
