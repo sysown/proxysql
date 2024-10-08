@@ -24,7 +24,7 @@ jobs:
       matrix:
 #        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
         infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
-        connector: [ 8.0 ]
+        connector: [ '8.0' ]
     env:
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
@@ -34,6 +34,7 @@ jobs:
     steps:
         
     - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
@@ -148,7 +149,7 @@ jobs:
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        check_id: ${{ steps.checks.outputs.check_id }}
         repo: ${{ github.repository }}
         sha: ${{ env.SHA }}
         conclusion: ${{ job.status }}

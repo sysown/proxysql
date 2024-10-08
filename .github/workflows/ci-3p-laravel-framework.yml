@@ -34,6 +34,7 @@ jobs:
     steps:
         
     - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
@@ -155,7 +156,7 @@ jobs:
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        check_id: ${{ steps.checks.outputs.check_id }}
         repo: ${{ github.repository }}
         sha: ${{ env.SHA }}
         conclusion: ${{ job.status }}
