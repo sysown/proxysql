@@ -18,4 +18,4 @@ jobs:
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
-      testgroup: ${{ vars.MATRIX_TAP_GROUPS_testgroup }}
+      testgroup: ${{ vars.MATRIX_TAPTESTS_GROUPS_testgroup }}
