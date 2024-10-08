@@ -18,21 +18,23 @@ jobs:
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
-      infradb: ${{ vars.MATRIX_3P_SQLALCHEMY_infradb_mysql }}
-      connector: ${{ vars.MATRIX_3P_SQLALCHEMY_connector_mysql }}
+      infradb: ${{ vars.MATRIX_3P_LARAVEL_FRAMEWORK_infradb_mysql }}
+      connector: ${{ vars.MATRIX_3P_LARAVEL_FRAMEWORK_connector_mysql }}
+
   run-mariadb:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     uses: sysown/proxysql/.github/workflows/ci-3p-laravel-framework.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
-      infradb: ${{ vars.MATRIX_3P_SQLALCHEMY_infradb_mariadb }}
-      connector: ${{ vars.MATRIX_3P_SQLALCHEMY_connector_mariadb }}
+      infradb: ${{ vars.MATRIX_3P_LARAVEL_FRAMEWORK_infradb_mariadb }}
+      connector: ${{ vars.MATRIX_3P_LARAVEL_FRAMEWORK_connector_mariadb }}
+      
   run-pgsql:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     uses: sysown/proxysql/.github/workflows/ci-3p-laravel-framework.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
-      infradb: ${{ vars.MATRIX_3P_SQLALCHEMY_infradb_pgsql }}
-      connector: ${{ vars.MATRIX_3P_SQLALCHEMY_connector_pgsql }}
+      infradb: ${{ vars.MATRIX_3P_LARAVEL_FRAMEWORK_infradb_pgsql }}
+      connector: ${{ vars.MATRIX_3P_LARAVEL_FRAMEWORK_connector_pgsql }}

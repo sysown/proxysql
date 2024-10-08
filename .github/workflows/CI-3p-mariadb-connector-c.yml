@@ -18,5 +18,5 @@ jobs:
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
-      infradb: ${{ vars.MATRIX_3P_SQLALCHEMY_infradb_mysql }}
-      connector: ${{ vars.MATRIX_3P_SQLALCHEMY_connector_mysql }}
+      infradb: ${{ vars.MATRIX_3P_MARIADB_CONNECTOR_C_infradb_mysql }}
+      connector: ${{ vars.MATRIX_3P_MARIADB_CONNECTOR_C_connector_mysql }}
