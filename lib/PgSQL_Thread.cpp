@@ -2720,6 +2720,9 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (my_idle_conns)
 		free(my_idle_conns);
 
+	if (pgsql_thread___monitor_username) { free(pgsql_thread___monitor_username); pgsql_thread___monitor_username = NULL; }
+	if (pgsql_thread___monitor_password) { free(pgsql_thread___monitor_password); pgsql_thread___monitor_password = NULL; }
+
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username = NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password = NULL; }
 	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
