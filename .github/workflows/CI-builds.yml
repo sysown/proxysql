@@ -1,26 +1,19 @@
 name: CI-builds
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
 on:
-  push:
-#    branches: [ 'v[0-9]+.x','v[0-9]+.[0-9]+','v[0-9]+.[0-9]+.[0-9]+' ]
-    paths-ignore:
-    - '.github/**'
-    - '**.md'
-  pull_request:
-#    branches: [ 'v[0-9]+.x','v[0-9]+.[0-9]+','v[0-9]+.[0-9]+.[0-9]+' ]
-    paths-ignore:
-    - '.github/**'
-    - '**.md'
-#  schedule:
-#    - cron: '15 13 * * 3'
   workflow_dispatch:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ in_progress ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   run:
     uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
     secrets: inherit
-    
+    with:
+      trigger: ${{ toJson(github) }}
