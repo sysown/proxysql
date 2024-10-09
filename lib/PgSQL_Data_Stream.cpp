@@ -292,13 +292,13 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	kill_type = 0;
 	connect_tries = 0;
 	poll_fds_idx = -1;
-	resultset_length = 0;
+	//resultset_length = 0;
 
 	revents = 0;
 
 	PSarrayIN = NULL;
 	PSarrayOUT = NULL;
-	resultset = NULL;
+	//resultset = NULL;
 	queue_init(queueIN, QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT, QUEUE_T_DEFAULT_SIZE);
 	mybe = NULL;
@@ -374,13 +374,13 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		}
 		delete PSarrayOUT;
 	}
-	if (resultset) {
+	/*if (resultset) {
 		while (resultset->len) {
 			resultset->remove_index_fast(0, &pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
 		delete resultset;
-	}
+	}*/
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
 
@@ -438,7 +438,7 @@ void PgSQL_Data_Stream::init() {
 		if (PSarrayIN == NULL) PSarrayIN = new PtrSizeArray();
 		if (PSarrayOUT == NULL) PSarrayOUT = new PtrSizeArray();
 		//		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
-		if (resultset == NULL) resultset = new PtrSizeArray();
+		//if (resultset == NULL) resultset = new PtrSizeArray();
 
 		if (unlikely(GloVars.global.data_packets_history_size)) {
 			data_packets_history_IN.set_max_size(GloVars.global.data_packets_history_size);
@@ -1174,7 +1174,8 @@ __exit_array2buffer:
 	return ret;
 }
 
-unsigned char* PgSQL_Data_Stream::resultset2buffer(bool del) {
+unsigned char* PgSQL_Data_Stream::copy_array_to_buffer(PtrSizeArray* resultset, size_t resultset_length,
+	bool del) {
 	unsigned int i;
 	unsigned int l = 0;
 	unsigned char* mybuff = (unsigned char*)l_alloc(resultset_length);
@@ -1188,52 +1189,75 @@ unsigned char* PgSQL_Data_Stream::resultset2buffer(bool del) {
 	return mybuff;
 };
 
-void PgSQL_Data_Stream::buffer2resultset(unsigned char* ptr, unsigned int size) {
-	unsigned char* __ptr = ptr;
-	mysql_hdr hdr;
-	unsigned int l;
-	void* buff = NULL;
-	unsigned int bl;
-	unsigned int bf;
-	while (__ptr < ptr + size) {
-		memcpy(&hdr, __ptr, sizeof(mysql_hdr));
-		l = hdr.pkt_length + sizeof(mysql_hdr); // amount of space we need
-		if (buff) {
-			if (bf < l) {
-				// we ran out of space
-				resultset->add(buff, bl - bf);
-				buff = NULL;
+static inline uint32_t get_uint32(const unsigned char* ptr) {
+	return (static_cast<uint32_t>(ptr[0]) << 24) |
+		(static_cast<uint32_t>(ptr[1]) << 16) |
+		(static_cast<uint32_t>(ptr[2]) << 8) |
+		static_cast<uint32_t>(ptr[3]);
+}
+
+void PgSQL_Data_Stream::copy_buffer_to_resultset(PtrSizeArray* resultset, unsigned char* ptr, uint64_t size, 
+	char current_transaction_state) {
+	unsigned char* current_ptr = ptr;
+	unsigned char* buffer = NULL;
+	uint32_t data_len;
+	uint32_t buffer_len;
+	uint32_t remaining_space;
+
+	while (current_ptr < ptr + size) {
+		uint8_t packet_type = *current_ptr; // read packet type (unused in the code)
+		// Read 4-byte length
+		/*unsigned int a = current_ptr[read_pos++];
+		unsigned int b = current_ptr[read_pos++];
+		unsigned int c = current_ptr[read_pos++];
+		unsigned int d = current_ptr[read_pos++];
+		const uint32_t packet_length = (a << 24) | (b << 16) | (c << 8) | d;
+		*/
+		data_len = get_uint32(current_ptr + 1 /*skip type*/) + 1; // total space needed, including type
+
+		// Handle buffer space
+		if (buffer) {
+			if (remaining_space < data_len) {
+				// Insufficient space, add buffer to resultset
+				resultset->add(buffer, buffer_len - remaining_space);
+				buffer = NULL;
 			}
 		}
-		if (buff == NULL) {
-			if (__ptr + RESULTSET_BUFLEN_DS_1M <= ptr + size) {
-				bl = RESULTSET_BUFLEN_DS_1M;
+
+		// Allocate new buffer if needed
+		if (buffer == NULL) {
+			// Set buffer size depending on available space
+			if (current_ptr + RESULTSET_BUFLEN_DS_1M <= ptr + size) {
+				buffer_len = RESULTSET_BUFLEN_DS_1M;
 			}
 			else {
-				bl = RESULTSET_BUFLEN_DS_16K;
+				buffer_len = RESULTSET_BUFLEN_DS_16K;
 			}
-			if (l > bl) {
-				bl = l; // make sure there is the space to copy a packet
+
+			// Ensure buffer is large enough for the current packet
+			if (data_len > buffer_len) {
+				buffer_len = data_len;
 			}
-			buff = malloc(bl);
-			bf = bl;
+
+			buffer = (unsigned char*)malloc(buffer_len);
+			remaining_space = buffer_len;
 		}
-		memcpy((char*)buff + (bl - bf), __ptr, l);
-		bf -= l;
-		__ptr += l;
-		/*
-				l=hdr.pkt_length+sizeof(mysql_hdr);
-				pkt=l_alloc(l);
-				memcpy(pkt,__ptr,l);
-				resultset->add(pkt,l);
-				__ptr+=l;
-		*/
+
+		// Copy data to buffer
+		memcpy((unsigned char*)buffer + (buffer_len - remaining_space), current_ptr, data_len);
+		remaining_space -= data_len;
+		current_ptr += data_len;
+
+		if (packet_type == 'Z') {
+			// if packet is a 'Z' packet (Ready Packet), we need to overwrite trasaction state
+			*(buffer + (buffer_len - remaining_space) - 1) = current_transaction_state;
+		}
 	}
-	if (buff) {
-		// last buffer to add
-		resultset->add(buff, bl - bf);
+	// Add the last buffer to the resultset, if any
+	if (buffer) {
+		resultset->add(buffer, buffer_len - remaining_space);
 	}
-};
+}
 
 int PgSQL_Data_Stream::array2buffer_full() {
 	int rc = 0;

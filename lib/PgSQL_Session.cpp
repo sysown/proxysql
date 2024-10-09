@@ -23,7 +23,7 @@ using json = nlohmann::json;
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
-
+#include "PgSQL_Query_Cache.h"
 
 #include "libinjection.h"
 #include "libinjection_sqli.h"
@@ -313,7 +313,7 @@ __exit_kill_query_thread:
 }
 
 extern PgSQL_Query_Processor* GloPgQPro;
-extern Query_Cache* GloQC;
+extern PgSQL_Query_Cache *GloPgQC;
 extern ProxySQL_Admin* GloAdmin;
 extern PgSQL_Threads_Handler* GloPTH;
 
@@ -5831,24 +5831,21 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return true;
 	}
 	//}
-	/* Query Cache is not supported for PgSQL 
 	if (qpo->cache_ttl > 0 && ((prepare_stmt_type & PgSQL_ps_type_prepare_stmt) == 0)) {
-		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-		uint32_t resbuf = 0;
-		unsigned char* aa = GloQC->get(
+		
+		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
 			client_myds->myconn->userinfo->hash,
 			(const unsigned char*)CurrentQuery.QueryPointer,
 			CurrentQuery.QueryLength,
-			&resbuf,
 			thread->curtime / 1000,
-			qpo->cache_ttl,
-			deprecate_eof_active
+			qpo->cache_ttl
 		);
-		if (aa) {
-			client_myds->buffer2resultset(aa, resbuf);
-			free(aa);
-			client_myds->PSarrayOUT->copy_add(client_myds->resultset, 0, client_myds->resultset->len);
-			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len - 1, NULL);
+		if (pgsql_qc_entry) {
+			// FIXME: Add Error Transaction state detection
+			unsigned int nTrx = NumActiveTransactions();
+			PgSQL_Data_Stream::copy_buffer_to_resultset(client_myds->PSarrayOUT, 
+				pgsql_qc_entry->value, pgsql_qc_entry->length, (nTrx ? 'T' : 'I'));
+			//client_myds->PSarrayOUT->copy_add(resultset, 0, resultset->len);
 			if (transaction_persistent_hostgroup == -1) {
 				// not active, we can change it
 				current_hostgroup = -1;
@@ -5857,7 +5854,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			l_free(pkt->size, pkt->ptr);
 			return true;
 		}
-	}*/
+	}
 
 __exit_set_destination_hostgroup:
 
@@ -6232,48 +6229,46 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		bool transfer_started = query_result->is_transfer_started();
 		// if there is an error, it will be false so results are not cached
 		bool is_tuple = query_result->get_result_packet_type() == (PGSQL_QUERY_RESULT_TUPLE | PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY); 
-		CurrentQuery.rows_sent = query_result->get_num_rows();
+		const uint64_t num_rows  = query_result->get_num_rows();
+		const uint64_t resultset_size = query_result->get_resultset_size();
 		const auto _affected_rows = query_result->get_affected_rows();
 		if (_affected_rows != -1) {
 			 CurrentQuery.affected_rows = _affected_rows;
 			 CurrentQuery.have_affected_rows = true;
 		}
+		CurrentQuery.rows_sent = num_rows;
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 		if (_conn->processing_multi_statement == false)
 			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
 		if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true) { // the resultset should be cached
-				/*if (mysql_errno(pgsql) == 0 &&
-					(mysql_warning_count(pgsql) == 0 ||
-						mysql_thread___query_cache_handle_warnings == 1)) { // no errors
+				
+				if (_conn->is_error_present() == false &&
+					(/* check warnings count here*/ true || 
+						pgsql_thread___query_cache_handle_warnings == 1)) { // no errors
+
 					if (
-						(qpo->cache_empty_result == 1)
-						|| (
-							(qpo->cache_empty_result == -1)
-							&&
-							(thread->variables.query_cache_stores_empty_result || query_result->num_rows)
+						(qpo->cache_empty_result == 1) || 
+							(
+								(qpo->cache_empty_result == -1) &&
+								(thread->variables.query_cache_stores_empty_result || num_rows)
 							)
 						) {
-						client_myds->resultset->copy_add(client_myds->PSarrayOUT, 0, client_myds->PSarrayOUT->len);
-						client_myds->resultset_length = query_result->resultset_size;
-						unsigned char* aa = client_myds->resultset2buffer(false);
-						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len - 1, NULL);
-						bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-						GloQC->set(
+						// Query Cache will have the ownership to buff. No need to free it here
+						unsigned char* buff = PgSQL_Data_Stream::copy_array_to_buffer(client_myds->PSarrayOUT, 
+							resultset_size, false);
+						GloPgQC->set(
 							client_myds->myconn->userinfo->hash,
-							(const unsigned char*)CurrentQuery.QueryPointer,
+							CurrentQuery.QueryPointer,
 							CurrentQuery.QueryLength,
-							aa,
-							client_myds->resultset_length,
+							buff, 
+							resultset_size,
 							thread->curtime / 1000,
 							thread->curtime / 1000,
-							thread->curtime / 1000 + qpo->cache_ttl,
-							deprecate_eof_active
+							thread->curtime / 1000 + qpo->cache_ttl
 						);
-						l_free(client_myds->resultset_length, aa);
-						client_myds->resultset_length = 0;
 					}
-				}*/
+				}
 			}
 		}
 	} else { // if query result is empty, means there was an error before query result was generated
@@ -6534,7 +6529,7 @@ void PgSQL_Session::Memory_Stats() {
 	unsigned long long internal = 0;
 	internal += sizeof(PgSQL_Session);
 	if (qpo)
-		internal += sizeof(Query_Processor_Output);
+		internal += sizeof(PgSQL_Query_Processor_Output);
 	if (client_myds) {
 		internal += sizeof(PgSQL_Data_Stream);
 		if (client_myds->queueIN.buffer)
@@ -6552,7 +6547,7 @@ void PgSQL_Session::Memory_Stats() {
 				internal += client_myds->PSarrayOUT->total_size();
 			} else {
 				internal += client_myds->PSarrayOUT->total_size(PGSQL_RESULTSET_BUFLEN);
-				internal += client_myds->resultset->total_size(PGSQL_RESULTSET_BUFLEN);
+				//internal += client_myds->resultset->total_size(PGSQL_RESULTSET_BUFLEN);
 			}
 		}
 	}

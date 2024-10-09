@@ -108,8 +108,8 @@ public:
 	FixedSizeQueue data_packets_history_IN;
 	FixedSizeQueue data_packets_history_OUT;
 	//PtrSizeArray *PSarrayOUTpending;
-	PtrSizeArray* resultset;
-	unsigned int resultset_length;
+	//PtrSizeArray* resultset;
+	//unsigned int resultset_length;
 
 	ProxySQL_Poll<PgSQL_Data_Stream>* mypolls;
 	//int listener;
@@ -201,8 +201,9 @@ public:
 	void check_data_flow();
 	int assign_fd_from_mysql_conn();
 
-	unsigned char* resultset2buffer(bool);
-	void buffer2resultset(unsigned char*, unsigned int);
+	static unsigned char* copy_array_to_buffer(PtrSizeArray* resultset, size_t resultset_length, bool del);
+	static void copy_buffer_to_resultset(PtrSizeArray* resultset, unsigned char* ptr, uint64_t size, 
+		char current_transaction_state);
 
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {

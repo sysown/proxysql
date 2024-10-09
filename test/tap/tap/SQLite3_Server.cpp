@@ -73,7 +73,7 @@ static bool testTimeoutSequence[] = {true, false, true, false, true, false, true
 static int testIndex = 7;
 static int testLag = 10;
 
-extern Query_Cache *GloQC;
+extern MySQL_Query_Cache *GloMyQC;
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Query_Processor* GloQPro;

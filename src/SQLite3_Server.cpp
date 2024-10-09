@@ -99,7 +99,7 @@ static char *s_strdup(char *s) {
 
 static int __SQLite3_Server_refresh_interval=1000;
 
-extern Query_Cache *GloQC;
+extern MySQL_Query_Cache *GloMyQC;
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Query_Processor* GloMyQPro;
