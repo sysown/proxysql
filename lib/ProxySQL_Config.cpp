@@ -1289,6 +1289,81 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
                     rows++;
             }
     }
+	if (root.exists("mysql_hostgroup_attributes") == true) {
+		const Setting &mysql_hostgroup_attributes = root["mysql_hostgroup_attributes"];
+		int count = mysql_hostgroup_attributes.getLength();
+
+		char *q = (char *)"INSERT OR REPLACE INTO mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
+							"init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment) "
+							"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, '%s', '%s', '%s', '%s')";
+
+		for (i = 0; i < count; i++) {
+			// setting default as par table schema
+			const Setting &hostgroup_attributes = mysql_hostgroup_attributes[i];
+			int hostgroup_id = 0;
+			int max_num_online_servers = 1000000;
+			int autocommit = -1;
+			int free_connections_pct = 10;
+			int multiplex = 1;
+			int connection_warming = 0;
+			int throttle_connections_per_sec = 1000000;
+			std::string init_connect = "";
+			std::string ignore_session_variables = "";
+			std::string hostgroup_settings = "";
+			std::string servers_defaults = "";
+			std::string comment = "";
+
+			if (hostgroup_attributes.lookupValue("hostgroup_id", hostgroup_id) == false) {
+				proxy_error("Admin: detected a mysql_hostgroup_attributes in config file without a mandatory hostgroup_id.\n");
+				continue;
+			}
+			hostgroup_attributes.lookupValue("max_num_online_servers", max_num_online_servers);
+			hostgroup_attributes.lookupValue("autocommit", autocommit);
+			hostgroup_attributes.lookupValue("free_connections_pct", free_connections_pct);
+			hostgroup_attributes.lookupValue("multiplex", multiplex);
+			hostgroup_attributes.lookupValue("connection_warming", connection_warming);
+			hostgroup_attributes.lookupValue("throttle_connections_per_sec", throttle_connections_per_sec);
+			hostgroup_attributes.lookupValue("init_connect", init_connect);
+			hostgroup_attributes.lookupValue("ignore_session_variables", ignore_session_variables);
+			hostgroup_attributes.lookupValue("hostgroup_settings", hostgroup_settings);
+			hostgroup_attributes.lookupValue("servers_defaults", servers_defaults);
+			hostgroup_attributes.lookupValue("comment", comment);
+
+			char *ic1 = strdup(init_connect.c_str());
+			char *ic = escape_string_single_quotes(ic1, false);
+			char *is1 = strdup(ignore_session_variables.c_str());
+			char *is = escape_string_single_quotes(is1, false);
+			char *hs1 = strdup(hostgroup_settings.c_str());
+			char *hs = escape_string_single_quotes(hs1, false);
+			char *sd1 = strdup(servers_defaults.c_str());
+			char *sd = escape_string_single_quotes(sd1, false);
+			char *cm1 = strdup(comment.c_str());
+			char *cm = escape_string_single_quotes(cm1, false);
+
+			char *query = (char *)malloc(strlen(q) + strlen(ic) + strlen(is) +
+							strlen(hs) + strlen(sd) + strlen(cm) + 128);
+			sprintf(query, q, hostgroup_id, max_num_online_servers, autocommit, free_connections_pct,
+					ic, multiplex, connection_warming, throttle_connections_per_sec,
+					is, hs, sd, cm);
+
+			fprintf(stderr, "%s\n", query);
+			admindb->execute(query);
+
+			free(query);
+			if (ic != ic1) free(ic);
+			free(ic1);
+			if (is != is1) free(is);
+			free(is1);
+			if (hs != hs1) free(hs);
+			free(hs1);
+			if (sd != sd1) free(sd);
+			free(sd1);
+			if (cm != cm1) free(cm);
+			free(cm1);
+
+			rows++;
+		}
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
