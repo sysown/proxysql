@@ -1148,6 +1148,7 @@ char *build_server_final_message(ScramState *scram_state)
 	if (!result) 
 		goto failed;
 	snprintf(result, len, "v=%s", server_signature);
+	free(server_signature);
 	return result;
 
 failed:
