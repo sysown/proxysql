@@ -122,7 +122,7 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/test_django-framework
-        BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_DJANGO_FRAMEWORK_${INFRADB/./}_${CONNECTOR/./} | awk '{ print $2 }')
+        BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_DJANGO_FRAMEWORK_${INFRADB//./}_${CONNECTOR//./} | awk '{ print $2 }')
 
         FAILS=$(cat logs/*run-tests.log | grep -oP 'FAILED \(failures=\d+' | tr '=' ' ' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
@@ -142,7 +142,7 @@ jobs:
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           MAIN=$(curl -s https://api.github.com/repos/${{ github.repository }} | jq --raw-output .default_branch)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
-            gh variable -R ${{ github.repository }} set BASELINE_3P_DJANGO_FRAMEWORK_${INFRADB/./}_${CONNECTOR/./} -b "${FAILS}"
+            gh variable -R ${{ github.repository }} set BASELINE_3P_DJANGO_FRAMEWORK_${INFRADB//./}_${CONNECTOR//./} -b "${FAILS}"
           fi
         fi
     

@@ -111,7 +111,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_sqlalchemy
-        BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_SQLALCHEMY_${INFRADB/./}_${CONNECTOR/./} | awk '{ print $2 }')
+        BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_SQLALCHEMY_${INFRADB//./}_${CONNECTOR//./} | awk '{ print $2 }')
 
         GHUSER="$(id -u):$(id -g)"
         sudo chown -R ${GHUSER} ./logs
@@ -131,7 +131,7 @@ jobs:
           #MAIN=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq .defaultBranchRef.name)
           if [[ ${MAIN} == ${{ github.ref_name }} ]]; then
             echo "INFRADB: '${INFRADB}' CONNECTOR: '${CONNECTOR}' Setting new BASELINE: ${FAILS} for '${MAIN}'"
-            gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${INFRADB/./}_${CONNECTOR/./} -b "${FAILS}"
+            gh variable -R ${{ github.repository }} set BASELINE_3P_SQLALCHEMY_${INFRADB//./}_${CONNECTOR//./} -b "${FAILS}"
           fi
         fi
         SUM="{'STATUS':'${STATUS}','INFRADB':'${INFRADB}','CONNECTOR':'${CONNECTOR}','BASELINE':${BASELINE:-10000},'FAILS':${FAILS:-1}}"
