@@ -679,10 +679,11 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length == strlen("PROXYSQL FLUSH PGSQL QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH PGSQL QUERY CACHE", query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH PGSQL QUERY CACHE command\n");
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		uint64_t count = 0;
 		if (GloPgQC) {
-			GloPgQC->flush();
+			count = GloPgQC->flush();
 		}
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		SPA->send_ok_msg_to_client(sess, NULL, (int)count, "DELETE ");
 		return false;
 	}
 
