@@ -23,8 +23,10 @@ jobs:
       fail-fast: false
       matrix:
 #        infradb: [ 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
-        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
-        connector: [ 'mysql', 'mariadb' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90' ]
+        infradb: ${{ fromJson( inputs.infradb ) }}
+#        connector: [ 'mysql', 'mariadb' ]
+        connector: ${{ fromJson( inputs.connector ) }}
     env:
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
