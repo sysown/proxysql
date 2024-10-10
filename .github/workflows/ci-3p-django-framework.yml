@@ -99,8 +99,8 @@ jobs:
         #sed -i 's/timeout -v -s1 800 //' run-tests.bash
 
         # fix permissions
-        mkdir django/cache
-        chmod -R 777 django/cache
+        mkdir django-framework/cache
+        chmod -R 777 django-framework/cache
 
         # set tested database infra
         #sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
