@@ -30,13 +30,6 @@ using TypeSess = typename std::conditional<
 #include "MySQL_HostGroups_Manager.h"
 
 
-#ifdef TEST_AURORA
-if constexpr (std::is_same_v<HGC, MyHGC>) {
-static unsigned long long array_mysrvc_total = 0;
-static unsigned long long array_mysrvc_cands = 0;
-}
-#endif // TEST_AURORA
-
 extern MySQL_Threads_Handler *GloMTH;
 
 
