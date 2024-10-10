@@ -57,6 +57,7 @@ jobs:
         path: 'proxysql_3p_testing'
         token: ${{ secrets.gh_token }}
         sparse-checkout: |
+          libs
           infra-docker-hoster
           test_sqlalchemy
 #          proxysql
