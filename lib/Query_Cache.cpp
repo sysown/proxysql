@@ -59,15 +59,76 @@ bool Query_Cache<QC_DERIVED>::shutting_down = false;
 template<typename QC_DERIVED>
 pthread_t Query_Cache<QC_DERIVED>::purge_thread_id;
 
+/*The KV_BtreeArray class is a container class that represents a key-value store 
+  implemented using a B-tree data structure. It provides methods for performing various 
+  operations on the key-value pairs stored in the container.*/
 class KV_BtreeArray {
 public:
+	/**
+	 * Constructs a new KV_BtreeArray object with the given entry size.
+	 *
+	 * @param entry_size The size of each entry in the key-value store.
+	 */
 	KV_BtreeArray(unsigned int entry_size);
+
+	/**
+	 * Destructs the KV_BtreeArray object.
+	 */
 	~KV_BtreeArray();
+
+	/**
+	 * Retrieves the entry with the given key from the key-value store in the KV_BtreeArray.
+	 * If an entry with the given key exists in the store, a weak pointer to the entry will be returned.
+	 * If an entry with the given key does not exist in the store, an empty weak pointer will be returned.
+	 *
+	 * @param key The key of the entry to be retrieved.
+	 * @return A weak pointer to the entry with the given key, or an empty weak pointer if the entry does not exist.
+	 */
 	std::weak_ptr<QC_entry_t> lookup(uint64_t key);
+
+	/**
+	 * Replaces the entry with the given key in the key-value store in the KV_BtreeArray.
+	 * If an entry with the given key already exists in the store, it will be replaced with the new entry.
+	 * If an entry with the given key does not exist in the store, the new entry will be added to the store.
+	 *
+	 * @param key The key of the entry to be replaced.
+	 * @param entry The new entry to be added to the store.
+	 * @return True if the entry was successfully replaced, false otherwise. (currently always true)
+	 */
 	bool replace(uint64_t key, QC_entry_t *entry);
+
+	/**
+	 * Clears the key-value store in the KV_BtreeArray.
+	 * If release_entries is set to true, the entries in the store will be released.
+	 *
+	 * @param release_entries A flag indicating whether to release the entries in the store or not.
+	 */
 	void clear(bool release_entries = false);
+
+	/**
+	 * Purges entries from the key-value store in the KV_BtreeArray based on the given criteria.
+	 * If aggressive is set to true, the function will remove entries based on the access time
+	 * of the entries, otherwise it will remove entries based on the expiration time of the entries.
+	 *
+	 * @param QCnow_ms The current time in milliseconds.
+	 * @param aggressive A flag indicating whether to perform aggressive purging or not.
+	 */
 	void purge_some(uint64_t QCnow_ms, bool aggressive);
+
+	/**
+	 * Retrieves the total data size of the key-value store in the KV_BtreeArray.
+	 * The data size is calculated by multiplying the number of entries in the store
+	 * with the size of each entry, including the size of the value, pointers, and metadata.
+	 *
+	 * @return The total data size of the key-value store.
+	 */
 	uint64_t get_data_size() const;
+
+	/**
+	 * Retrieves the number of entries in the key-value store in the KV_BtreeArray.
+	 *
+	 * @return The number of entries in the key-value store.
+	 */
 	int count() const;
 
 private:
@@ -77,10 +138,30 @@ private:
 	BtMap_cache bt_map;
 	const unsigned int qc_entry_size;
 
+	// read lock
 	void rdlock();
+
+	// write lock
 	void wrlock();
+
+	// unlock
 	void unlock();
+
+	/**
+	 * Adds the given entry to the entries vector of the KV_BtreeArray.
+	 * If the capacity of the entries vector is not enough to accommodate the new entry,
+	 * it will be resized to the nearest power of 2 greater than the current size.
+	 *
+	 * @param entry The entry to be added to the entries vector.
+	 */
 	void add_to_entries(const std::shared_ptr<QC_entry_t>& entry);
+
+	/**
+	 * Removes the entry at the given index from the entries vector of the KV_BtreeArray.
+	 * If the index is out of bounds, this function does nothing.
+	 *
+	 * @param index The index of the entry to be removed from the entries vector.
+	 */
 	void remove_from_entries_by_index(size_t index);
 };
 
@@ -130,8 +211,8 @@ void KV_BtreeArray::remove_from_entries_by_index(size_t index) {
 }
 
 uint64_t KV_BtreeArray::get_data_size() const {
-	uint64_t data_size = __sync_fetch_and_add(&Glo_num_entries,0) * (qc_entry_size+sizeof(QC_entry_t*)*2+sizeof(uint64_t)*2); // +  __sync_fetch_and_add(&Glo_size_values,0) ;
-	return data_size;
+    uint64_t data_size = __sync_fetch_and_add(&Glo_num_entries,0) * (qc_entry_size+sizeof(QC_entry_t*)*2+sizeof(uint64_t)*2); // +  __sync_fetch_and_add(&Glo_size_values,0) ;
+    return data_size;
 };
 
 void KV_BtreeArray::purge_some(uint64_t QCnow_ms, bool aggressive) {
@@ -403,13 +484,13 @@ qc_metrics_map = std::make_tuple(
 
 template <typename QC_DERIVED>
 uint64_t Query_Cache<QC_DERIVED>::get_data_size_total() {
-	uint64_t total_size = 0;
-	for (int i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-		total_size += KVs[i]->get_data_size();
-	}
-	total_size += __sync_fetch_and_add(&Glo_size_values,0);
-	return total_size;
-};
+    uint64_t total_size = 0;
+    for (int i = 0; i < SHARED_QUERY_CACHE_HASH_TABLES; i++) {
+        total_size += KVs[i]->get_data_size();
+    }
+    total_size += __sync_fetch_and_add(&Glo_size_values, 0);
+    return total_size;
+}
 
 template <typename QC_DERIVED>
 unsigned int Query_Cache<QC_DERIVED>::current_used_memory_pct(uint64_t max_memory_size) {
@@ -529,7 +610,7 @@ uint64_t Query_Cache<QC_DERIVED>::flush() {
 	uint64_t total_count=0;
 	for (int i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
 		total_count+=KVs[i]->count();
-		KVs[i]->clear();
+		KVs[i]->clear(true);
 	}
 	return total_count;
 };
