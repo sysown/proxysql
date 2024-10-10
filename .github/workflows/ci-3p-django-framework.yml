@@ -24,9 +24,9 @@ jobs:
       matrix:
 #        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
 #        infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
-        infradb: ${{ inputs.infradb }}
+        infradb: ${{ fromJson( inputs.infradb ) }}
 #        connector: [ 'pymysql' ]
-        connector: ${{ inputs.connector }}
+        connector: ${{ fromJson( inputs.connector ) }}
     env:
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
