@@ -1289,13 +1289,13 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 		strcmp(tag, "MOVE") == 0 ||
 		strcmp(tag, "FETCH") == 0 ||
 		strcmp(tag, "COPY") == 0 ||
-		strcmp(tag, "SELECT") == 0 ||
-		strcmp(tag, "COPY") == 0 ) {
+		strcmp(tag, "SELECT") == 0) {
 		sprintf(tmpbuf, "%s %d", tag, rows);
 		pgpkt.write_CommandComplete(tmpbuf);
 	} else {
 		pgpkt.write_CommandComplete(tag);
 	}
+	free(tag);
 	
 	if (ready == true) {
 		pgpkt.write_ReadyForQuery(trx_state);
@@ -1309,7 +1309,6 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 		_ptr->ptr = buff.first;
 		_ptr->size = buff.second;
 	}
-	free(tag);
 	return true;
 }
 
