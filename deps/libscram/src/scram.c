@@ -43,7 +43,7 @@ void scram_reset_error() {
 	errorBuffer[0] = '\0';
 }
 
-size_t strlcat(char* dst, const char* src, size_t siz)
+static size_t strlcat(char* dst, const char* src, size_t siz)
 {
 	char* d = dst;
 	const char* s = src;
