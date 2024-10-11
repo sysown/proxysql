@@ -75,7 +75,7 @@ static int testLag = 10;
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
-extern MySQL_Query_Processor* GloQPro;
+extern MySQL_Query_Processor* GloMyQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
@@ -253,7 +253,7 @@ static void *child_mysql(void *arg) {
 	SQLite3_Session *sqlite_sess = new SQLite3_Session();
 	mysql_thr->gen_args = (void *)sqlite_sess;
 
-	GloQPro->init_thread();
+	GloMyQPro->init_thread();
 	mysql_thr->refresh_variables();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(client);
 	sess->thread=mysql_thr;
