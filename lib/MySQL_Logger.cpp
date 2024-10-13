@@ -1145,107 +1145,35 @@ void MySQL_Logger::print_version() {
 	fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
 };
 
-MySQL_Logger_CircularBuffer::MySQL_Logger_CircularBuffer(size_t size) {
-	head = 0;
-	tail = 0;
-	buffer_size = size;
-	event_buffer = new MySQL_Event*[buffer_size];
-}
+MySQL_Logger_CircularBuffer::MySQL_Logger_CircularBuffer(size_t size) : buffer_size(size), event_buffer(size) {}
 
 MySQL_Logger_CircularBuffer::~MySQL_Logger_CircularBuffer() {
-	for (size_t i = 0; i < buffer_size; ++i) {
-		if (event_buffer[i] != nullptr) {
-			delete event_buffer[i];
-		}
-	}
-	delete[] event_buffer;
-}
-
-void MySQL_Logger_CircularBuffer::resize(size_t new_size) {
 	std::lock_guard<std::mutex> lock(mutex);
-
-	if (new_size == buffer_size) {
-		return; // No need to resize
+	for (MySQL_Event* event : event_buffer) {
+		delete event;
 	}
-
-	// Create the new buffer
-	MySQL_Event **new_buffer = new MySQL_Event*[new_size];
-
-	// Handle the case when initial buffer size is 0
-	if (buffer_size == 0) {
-		// No need to copy or delete; just update the members
-		delete[] event_buffer;
-		event_buffer = new_buffer;
-		buffer_size = new_size;
-		head = 0;
-		tail = 0;
-		return;
-	}
-
-	// Copy events from the old buffer and delete those not copied
-	size_t num_events = (head >= tail) ? (head - tail) : (buffer_size + head - tail);
-	size_t copy_count = std::min(num_events, new_size);
-
-	size_t i = 0;
-	for (size_t j = (tail + buffer_size - copy_count) % buffer_size; j != tail; j = (j + 1) % buffer_size) {
-		new_buffer[i++] = event_buffer[j];
-	}
-
-	// Delete events that were not copied
-	for (size_t j = 0; j < buffer_size; ++j) {
-		if (event_buffer[j] != nullptr && event_buffer[j] != new_buffer[j % new_size]) {
-			delete event_buffer[j];
-		}
-	}
-
-	// Delete the old buffer
-	delete[] event_buffer;
-
-	// Update the members
-	event_buffer = new_buffer;
-	buffer_size = new_size;
-	head = copy_count;
-	tail = 0;
 }
 
-
-void MySQL_Logger_CircularBuffer::insert(MySQL_Event *event) {
+void MySQL_Logger_CircularBuffer::insert(MySQL_Event* event) {
 	std::lock_guard<std::mutex> lock(mutex);
-
-	// Insert the new event
-	event_buffer[head] = event;
-
-	// Move head forward
-	head = (head + 1) % buffer_size;
-
-	// Update tail if necessary (if head is about to overwrite tail)
-	if (head == tail) {
-		// Delete the oldest element if it's not null
-		if (event_buffer[tail] != nullptr) {
-			delete event_buffer[tail];
-		}
-
-		// Move tail forward
-		tail = (tail + 1) % buffer_size;
+	if (event_buffer.size() == buffer_size) {
+		delete event_buffer.front();
+		event_buffer.pop_front();
 	}
+	event_buffer.push_back(event);
 }
 
-
-std::pair<MySQL_Event**, size_t> MySQL_Logger_CircularBuffer::get_all_events() {
+std::deque<MySQL_Event*> MySQL_Logger_CircularBuffer::get_all_events() {
 	std::lock_guard<std::mutex> lock(mutex);
-
-	size_t num_events = (head >= tail) ? (head - tail) : (buffer_size + head - tail);
-	MySQL_Event **events = new MySQL_Event*[num_events];
-
-	size_t i = 0;
-	// Iterate from tail to head, copying the events
-	for (size_t j = tail; j != head; j = (j + 1) % buffer_size) {
-		events[i++] = event_buffer[j];
-	}
-
-	// Reset head and tail
-	head = tail; // Set head to tail to mark the buffer as empty
-
-	return std::make_pair(events, num_events);
+	std::deque<MySQL_Event*> events = std::move(event_buffer);
+	return events;
 }
 
+size_t MySQL_Logger_CircularBuffer::getBufferSize() const {
+	return buffer_size;
+}
+
+void MySQL_Logger_CircularBuffer::setBufferSize(size_t newSize) {
+	std::lock_guard<std::mutex> lock(mutex);
+	buffer_size = newSize;
+}

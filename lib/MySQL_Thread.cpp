@@ -4374,8 +4374,8 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(eventslog_buffer_history_size);
 	{
 		int elmhs = mysql_thread___eventslog_buffer_history_size;
-		if (GloMyLogger->MyLogCB->buffer_size != elmhs) {
-			GloMyLogger->MyLogCB->resize(elmhs);
+		if (GloMyLogger->MyLogCB->getBufferSize() != elmhs) {
+			GloMyLogger->MyLogCB->setBufferSize(elmhs);
 		}
 	}
 	REFRESH_VARIABLE_INT(eventslog_default_log);

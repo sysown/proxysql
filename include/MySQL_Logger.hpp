@@ -53,26 +53,63 @@ class MySQL_Event {
 	void set_gtid(MySQL_Session *sess);
 };
 
+/**
+ * @class MySQL_Logger_CircularBuffer
+ * @brief A thread-safe circular buffer for storing MySQL events.
+ *
+ * This class implements a circular buffer that stores pointers to MySQL_Event objects.
+ * It provides thread-safe methods for inserting events and retrieving all stored events.
+ * The buffer automatically manages memory for the stored events.  Once an event is inserted, the buffer assumes ownership.
+ */
 class MySQL_Logger_CircularBuffer {
 private:
-	MySQL_Event **event_buffer;
-	size_t head;
-	size_t tail;
-	std::mutex mutex;
+	std::deque<MySQL_Event*> event_buffer;  ///< The internal deque storing event pointers.
+	std::mutex mutex;                        ///< Mutex for thread safety.
 
 public:
-	// we allow potential dirty read of buffer_size.
-	// this is not a problem because operation on the object are
-	// then performed holding the mutex
-	std::atomic<size_t> buffer_size;
+	std::atomic<size_t> buffer_size;        ///< Atomic variable to store the buffer size. (Public for direct access)
+	/**
+	 * @brief Constructor for the MySQL_Logger_CircularBuffer class.
+	 * @param size The initial size of the circular buffer.
+	 */
 	MySQL_Logger_CircularBuffer(size_t size);
 
+	/**
+	 * @brief Destructor for the MySQL_Logger_CircularBuffer class.
+	 *
+	 * This destructor deallocates the memory used by the buffer and the MySQL_Event objects it contains.
+	 */
 	~MySQL_Logger_CircularBuffer();
 
-	void insert(MySQL_Event *event);
-	std::pair<MySQL_Event**, size_t> get_all_events();
-	void resize(size_t new_size);
+	/**
+	 * @brief Inserts a new MySQL_Event into the circular buffer.
+	 * @param event A pointer to the MySQL_Event object to insert.  The buffer takes ownership.
+	 *
+	 * If the buffer is full, the oldest event is removed before inserting the new event.
+	 */
+	void insert(MySQL_Event* event);
+
+	/**
+	 * @brief Retrieves all events from the circular buffer.
+	 * @return A deque containing all the events in the buffer.  The caller takes ownership of the events and is responsible for deleting them.
+	 *
+	 * This method clears the buffer after retrieving the events.
+	 */
+	std::deque<MySQL_Event*> get_all_events();
+
+	/**
+	 * @brief Gets the current size of the buffer.
+	 * @return The current size of the circular buffer.
+	 */
+	size_t getBufferSize() const;
+
+	/**
+	 * @brief Sets the size of the buffer.
+	 * @param newSize The new size of the circular buffer.
+	 */
+	void setBufferSize(size_t newSize);
 };
+
 
 
 class MySQL_Logger {
