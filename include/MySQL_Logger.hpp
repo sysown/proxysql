@@ -90,12 +90,13 @@ public:
 	void insert(MySQL_Event* event);
 
 	/**
-	 * @brief Retrieves all events from the circular buffer.
-	 * @return A deque containing all the events in the buffer.  The caller takes ownership of the events and is responsible for deleting them.
+	 * @brief Retrieves all events from the circular buffer and populates a provided vector.
+	 * @param events A reference to a vector that will be populated with the events from the buffer.  The caller takes ownership of the events and is responsible for deleting them.
 	 *
-	 * This method clears the buffer after retrieving the events.
+	 * This method clears the buffer after retrieving the events.  The function reserves space in the vector to avoid unnecessary reallocations.
 	 */
-	std::deque<MySQL_Event*> get_all_events();
+	void get_all_events(std::vector<MySQL_Event*>& events);
+
 
 	/**
 	 * @brief Gets the current size of the buffer.

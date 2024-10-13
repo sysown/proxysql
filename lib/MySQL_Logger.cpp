@@ -1163,10 +1163,11 @@ void MySQL_Logger_CircularBuffer::insert(MySQL_Event* event) {
 	event_buffer.push_back(event);
 }
 
-std::deque<MySQL_Event*> MySQL_Logger_CircularBuffer::get_all_events() {
+void MySQL_Logger_CircularBuffer::get_all_events(std::vector<MySQL_Event*>& events) {
 	std::lock_guard<std::mutex> lock(mutex);
-	std::deque<MySQL_Event*> events = std::move(event_buffer);
-	return events;
+	events.reserve(event_buffer.size());
+	events.insert(events.end(), event_buffer.begin(), event_buffer.end());
+	event_buffer.clear();
 }
 
 size_t MySQL_Logger_CircularBuffer::getBufferSize() const {
