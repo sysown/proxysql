@@ -602,6 +602,10 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_columns INT NOT NULL, num_params INT NOT NULL, query VARCHAR NOT NULL)"
 
+
+#define ADMIN_SQLITE_TABLE_STATS_MYSQL_QUERY_EVENTS "CREATE TABLE stats_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT)"
+
+
 static char * admin_variables_names[]= {
 	(char *)"admin_credentials",
 	(char *)"stats_credentials",
@@ -6569,6 +6573,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_prepared_statements_info", ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache_reset", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_events", ADMIN_SQLITE_TABLE_STATS_MYSQL_QUERY_EVENTS);
+
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
