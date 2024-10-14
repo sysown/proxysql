@@ -3784,6 +3784,32 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		 }
 	 }
 
+
+	if (!strncasecmp("DUMP EVENTSLOG ", query_no_space, strlen("DUMP EVENTSLOG "))) {
+		int num_rows = 0;
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command DUMP EVENTSLOG: %s\n", query_no_space);
+		proxy_info("Received command DUMP EVENTSLOG: %s\n", query_no_space);
+
+		// Use a map for better efficiency and readability
+		std::map<std::string, std::pair<SQLite3DB*, SQLite3DB*>> commandMap = {
+			{"DUMP EVENTSLOG FROM BUFFER TO MEMORY", {SPA->statsdb, nullptr}},
+			{"DUMP EVENTSLOG FROM BUFFER TO DISK",   {nullptr,      SPA->statsdb_disk}},
+			{"DUMP EVENTSLOG FROM BUFFER TO BOTH",   {SPA->statsdb, SPA->statsdb_disk}}
+		};
+
+		auto it = commandMap.find(query_no_space);
+		if (it != commandMap.end()) {
+			num_rows = GloMyLogger->processEvents(it->second.first, it->second.second);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, num_rows);
+		} else {
+			proxy_warning("Received invalid command DUMP EVENTSLOG: %s\n", query_no_space);
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid DUMP EVENTSLOG command");
+		}
+		run_query = false;
+		goto __run_query;
+	}
+
+
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
 

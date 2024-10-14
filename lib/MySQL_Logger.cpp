@@ -1180,16 +1180,18 @@ void MySQL_Logger_CircularBuffer::setBufferSize(size_t newSize) {
 }
 
 
-void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::vector<MySQL_Event*>& events){
+void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& tableName, size_t numEvents, std::vector<MySQL_Event*>::const_iterator begin){
 	int rc = 0;
 	sqlite3_stmt *statement1=NULL;
 	sqlite3_stmt *statement32=NULL;
 	char *query1=NULL;
 	char *query32=NULL;
-	std::string query32s = "";
 	const int numcols = 17;
-	query1=(char *)"INSERT INTO stats_mysql_query_events VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
-	query32s = "INSERT INTO stats_mysql_query_events VALUES " + generate_multi_rows_query(32, numcols);
+	std::string query1s = "";
+	std::string query32s = "";
+	query1s  = "INSERT INTO " + tableName + " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+	query32s = "INSERT INTO " + tableName + " VALUES " + generate_multi_rows_query(32, numcols);
+	query1  = (char *)query1s.c_str();
 	query32 = (char *)query32s.c_str();
 	rc = db->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, db);
@@ -1201,9 +1203,9 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::vector<MyS
 	db->execute("BEGIN");
 
 	int row_idx=0;
-	int max_bulk_row_idx=events.size()/32;
+	int max_bulk_row_idx=numEvents/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
-	for (std::vector<MySQL_Event *>::const_iterator it = events.begin() ; it != events.end(); ++it) {
+	for (std::vector<MySQL_Event *>::const_iterator it = begin ; it != begin + numEvents; ++it) {
 		MySQL_Event *event = *it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
@@ -1261,3 +1263,47 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::vector<MyS
 	(*proxy_sqlite3_finalize)(statement32);
 	db->execute("COMMIT");
 }
+
+
+int MySQL_Logger::processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk) {
+	std::vector<MySQL_Event*> events = {};
+	MyLogCB->get_all_events(events);
+
+	if (events.empty()) return 0;
+
+	if (statsdb_disk != nullptr) {
+		// Write to on-disk database first
+		insertMysqlEventsIntoDb(statsdb_disk, "history_mysql_query_events", events.size(), events.begin());
+	}
+
+	if (statsdb != nullptr) {
+
+		size_t maxInMemorySize = eventslog_table_memory_size;
+		size_t numEventsToInsert = std::min(events.size(), maxInMemorySize);
+
+		if (events.size() >= maxInMemorySize) {
+			// delete everything from stats_mysql_query_events
+			statsdb->execute("DELETE FROM stats_mysql_query_events");
+		} else {
+			// make enough room in stats_mysql_query_events
+			int current_rows = statsdb->return_one_int((char *)"SELECT COUNT(*) FROM stats_mysql_query_events");
+			int rows_to_keep = maxInMemorySize - events.size();
+			if (current_rows > rows_to_keep) {
+				int rows_to_delete = (current_rows - rows_to_keep);
+				string delete_stmt = "DELETE FROM stats_mysql_query_events ORDER BY id LIMIT " + to_string(rows_to_delete);
+				statsdb->execute(delete_stmt.c_str());
+			}
+		}
+
+		// Pass iterators to avoid copying
+		insertMysqlEventsIntoDb(statsdb, "stats_mysql_query_events", numEventsToInsert, events.begin());
+	}
+
+	// cleanup of all events
+	for (MySQL_Event* event : events) {
+		delete event;
+	}
+	size_t ret = events.size();
+	return ret;
+}
+

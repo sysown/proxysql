@@ -146,6 +146,7 @@ class MySQL_Logger {
 	unsigned int events_find_next_id();
 	unsigned int audit_find_next_id();
 	public:
+	int eventslog_table_memory_size;
 	MySQL_Logger();
 	~MySQL_Logger();
 	void print_version();
@@ -162,7 +163,8 @@ class MySQL_Logger {
 	void wrlock();
 	void wrunlock();
 	MySQL_Logger_CircularBuffer * MyLogCB;
-	void insertMysqlEventsIntoDb(SQLite3DB * db, const std::vector<MySQL_Event*>& events);
+	void insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& tableName, size_t numEvents, std::vector<MySQL_Event*>::const_iterator begin);
+	int processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk);
 };
 
 
