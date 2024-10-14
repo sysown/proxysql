@@ -97,6 +97,8 @@ void ProxySQL_Statistics::init() {
 
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_digest", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST);
 
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_events", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS);
+
 	disk_upgrade_mysql_connections();
 
 	check_and_build_standard_tables(statsdb_mem, tables_defs_statsdb_disk);
@@ -110,6 +112,9 @@ void ProxySQL_Statistics::init() {
 //	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_last_seen ON history_mysql_query_digest (last_seen)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_dump_time ON history_mysql_query_digest (dump_time)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_status_variable_id_timestamp ON history_mysql_status_variables(variable_id,timestamp)");
+
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_start_time ON history_mysql_query_events(start_time)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_query_digest ON history_mysql_query_events(query_digest)");
 }
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
@@ -174,6 +179,17 @@ void ProxySQL_Statistics::drop_tables_defs(std::vector<table_def_t *> *tables_de
 	}
 }
 
+bool ProxySQL_Statistics::MySQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros) {
+	if (variables.stats_mysql_eventslog_sync_buffer_to_disk) { // only proceed if not zero
+		unsigned long long t = variables.stats_mysql_eventslog_sync_buffer_to_disk; // originally in seconds
+		t = t * 1000 * 1000;
+		if (currentTimeMicros > last_timer_mysql_dump_eventslog_to_disk + t) {
+			last_timer_mysql_dump_eventslog_to_disk = currentTimeMicros;
+			return true;
+		}
+	}
+	return false;
+}
 
 bool ProxySQL_Statistics::MySQL_Threads_Handler_timetoget(unsigned long long curtime) {
 	unsigned int i = (unsigned int)variables.stats_mysql_connections;
