@@ -91,6 +91,7 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_MySQL_Threads_Handler;
 	unsigned long long next_timer_mysql_query_digest_to_disk;
 	unsigned long long next_timer_system_cpu;
+	unsigned long long last_timer_mysql_dump_eventslog_to_disk = 0;
 #ifndef NOJEM
 	unsigned long long next_timer_system_memory;
 #endif
@@ -106,6 +107,7 @@ class ProxySQL_Statistics {
 		int stats_mysql_query_cache;
 		int stats_system_cpu;
 		int stats_mysql_query_digest_to_disk;
+		int stats_mysql_eventslog_sync_buffer_to_disk;
 #ifndef NOJEM
 		int stats_system_memory;
 #endif
@@ -118,6 +120,7 @@ class ProxySQL_Statistics {
 	bool MySQL_Threads_Handler_timetoget(unsigned long long);
 	bool mysql_query_digest_to_disk_timetoget(unsigned long long);
 	bool system_cpu_timetoget(unsigned long long);
+	bool MySQL_Logger_dump_eventslog_timetoget(unsigned long long);
 #ifndef NOJEM
 	bool system_memory_timetoget(unsigned long long);
 #endif

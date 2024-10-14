@@ -179,6 +179,17 @@ void ProxySQL_Statistics::drop_tables_defs(std::vector<table_def_t *> *tables_de
 	}
 }
 
+bool ProxySQL_Statistics::MySQL_Logger_dump_eventslog_timetoget(unsigned long long curtime) {
+	if (variables.stats_mysql_eventslog_sync_buffer_to_disk) { // only proceed if not zero
+		unsigned long long t = variables.stats_mysql_eventslog_sync_buffer_to_disk; // originally in seconds
+		t = t * 1000 * 1000;
+		if (curtime > last_timer_mysql_dump_eventslog_to_disk + t) {
+			last_timer_mysql_dump_eventslog_to_disk = curtime;
+			return true;
+		}
+	}
+	return false;
+}
 
 bool ProxySQL_Statistics::MySQL_Threads_Handler_timetoget(unsigned long long curtime) {
 	unsigned int i = (unsigned int)variables.stats_mysql_connections;
