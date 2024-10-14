@@ -535,6 +535,7 @@ class MySQL_Threads_Handler
 		char *eventslog_filename;
 		int eventslog_filesize;
 		int eventslog_buffer_history_size;
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
 		char *auditlog_filename;

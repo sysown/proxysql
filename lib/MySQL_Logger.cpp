@@ -80,9 +80,12 @@ MySQL_Event::MySQL_Event(const MySQL_Event &other) {
 	}
 	// query_ptr is NOT null terminated
 	if (other.query_ptr != nullptr) {
-		query_ptr = (char *)malloc(query_len+1);
-		memcpy(query_ptr, other.query_ptr, query_len);
-		query_ptr[query_len] = '\0';
+		size_t maxQueryLen = mysql_thread___eventslog_buffer_max_query_length;
+		size_t lenToCopy = std::min(other.query_len, maxQueryLen);
+		query_ptr = (char*)malloc(lenToCopy + 1); // +1 for null terminator
+		memcpy(query_ptr, other.query_ptr, lenToCopy);
+		query_ptr[lenToCopy] = '\0'; // Null-terminate the copied string
+		query_len = lenToCopy;
 	}
 	// server is NOT null terminated
 	if (other.server != nullptr) {
@@ -1217,7 +1220,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+5, event->end_time); ASSERT_SQLITE_OK(rc, db);
 			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+7, event->query_ptr, event->query_len, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+9, event->client, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int)(statement32, (idx*numcols)+10, (int)event->et); ASSERT_SQLITE_OK(rc, db); // Assuming event_type is an enum mapped to integers
@@ -1242,7 +1245,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 			rc = (*proxy_sqlite3_bind_int64)(statement1, 5, event->end_time); ASSERT_SQLITE_OK(rc, db);
 			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
 			rc = (*proxy_sqlite3_bind_text)(statement1, 6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_bind_text)(statement1, 7, event->query_ptr, event->query_len, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
 			rc = (*proxy_sqlite3_bind_text)(statement1, 8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(statement1, 9, event->client, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int)(statement1, 10, (int)event->et); ASSERT_SQLITE_OK(rc, db); // Assuming event_type is an enum mapped to integers
