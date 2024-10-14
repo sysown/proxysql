@@ -6,6 +6,8 @@
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
+class MySQL_Logger;
+
 class MySQL_Event {
 	private:
 	uint32_t thread_id;
@@ -51,6 +53,7 @@ class MySQL_Event {
 	void set_affected_rows(uint64_t ar, uint64_t lid);
 	void set_rows_sent(uint64_t rs);
 	void set_gtid(MySQL_Session *sess);
+	friend MySQL_Logger;
 };
 
 /**
@@ -159,6 +162,7 @@ class MySQL_Logger {
 	void wrlock();
 	void wrunlock();
 	MySQL_Logger_CircularBuffer * MyLogCB;
+	void insertMysqlEventsIntoDb(SQLite3DB * db, const std::vector<MySQL_Event*>& events);
 };
 
 
