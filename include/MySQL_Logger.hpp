@@ -163,7 +163,32 @@ class MySQL_Logger {
 	void wrlock();
 	void wrunlock();
 	MySQL_Logger_CircularBuffer * MyLogCB;
+	/**
+	 * @brief Inserts a batch of MySQL events into a specified SQLite table.
+	 * @param db A pointer to the SQLite3DB object representing the database connection.
+	 * @param tableName The name of the SQLite table to insert into.
+	 * @param numEvents The number of events to insert.
+	 * @param begin An iterator pointing to the beginning of the range of MySQL_Event* in the vector to insert.
+	 * @return 0 if the insertion was successful, a negative error code otherwise.
+	 *
+	 * This function inserts a batch of MySQL events into the specified SQLite table using bulk insert techniques for efficiency.
+	 * It handles the conversion of MySQL_Event data to a format suitable for SQLite insertion.  Error handling includes logging of errors.
+	 * The function uses a prepared statement for bulk insertion.
+	 * The function assumes that the provided events have been allocated with `new` and will not be deleted by this function.
+	 */
 	void insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& tableName, size_t numEvents, std::vector<MySQL_Event*>::const_iterator begin);
+	/**
+	 * @brief Processes and inserts MySQL events into in-memory and/or on-disk SQLite databases.
+	 * @param statsdb A pointer to the SQLite3DB object for the in-memory database (can be nullptr).
+	 * @param statsdb_disk A pointer to the SQLite3DB object for the on-disk database (can be nullptr).
+	 * @return The number of events processed. Returns a negative value if an error occurs.
+	 *
+	 * This function retrieves events from the circular buffer, handles in-memory table size limits, and inserts them into the specified SQLite databases.
+	 * If either statsdb or statsdb_disk is nullptr, events are only written to the other database.
+     * It handles in-memory table size limits by deleting existing entries if necessary.
+	 * The function ensures that the in-memory table size does not exceed a predefined limit (`eventslog_table_memory_size`).
+	 * The function assumes ownership of the MySQL_Event pointers and deletes them after processing.
+	 */
 	int processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk);
 };
 

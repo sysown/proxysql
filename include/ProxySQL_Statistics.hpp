@@ -120,7 +120,16 @@ class ProxySQL_Statistics {
 	bool MySQL_Threads_Handler_timetoget(unsigned long long);
 	bool mysql_query_digest_to_disk_timetoget(unsigned long long);
 	bool system_cpu_timetoget(unsigned long long);
-	bool MySQL_Logger_dump_eventslog_timetoget(unsigned long long);
+	/**
+	 * @brief Checks if it's time to dump the events log to disk based on the configured interval.
+	 * @param currentTimeMicros The current time in microseconds.
+	 * @return True if it's time to dump the events log, false otherwise.
+	 *
+	 * This function checks if the current time exceeds the last dump time plus the configured dump interval.
+	 * The dump interval is retrieved from the ProxySQL configuration.  If the dump interval is 0, no dumping is performed.
+	 */
+	bool MySQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros);
+
 #ifndef NOJEM
 	bool system_memory_timetoget(unsigned long long);
 #endif
