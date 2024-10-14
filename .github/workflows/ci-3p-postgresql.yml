@@ -55,7 +55,7 @@ jobs:
         sparse-checkout: |
           libs
           infra-docker-hoster
-          test_proxysql
+          test_postgresql
 #          proxysql
 
     - name: Wait for cache
@@ -85,16 +85,16 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/
-        git sparse-checkout list
-        ./setup.sh test_proxysql
+        #git sparse-checkout list
+        ./setup.sh test_postgresql
         
         # use cached build
         rm -rf ./proxysql && mv ../proxysql .
         
         # set tested database infra
-        sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
-        sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
-        sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
+        #sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
+        #sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
+        #sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
 
     - name: Run tests
       run: |
