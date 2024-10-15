@@ -1757,9 +1757,7 @@ handler_again:
 	{
 		if (myds->sess && myds->sess->client_myds && myds->sess->mirror == false /* &&
 			myds->sess->status != SHOW_WARNINGS*/) { // see issue#4072
-			unsigned int buffered_data = 0;
-			buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
-			//buffered_data += myds->sess->client_myds->resultset->len * PGSQL_RESULTSET_BUFLEN;
+			const unsigned int buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
 			if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 8) {
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
 				break;

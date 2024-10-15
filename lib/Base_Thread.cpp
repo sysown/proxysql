@@ -377,9 +377,7 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 		// but assuming that client isn't completely blocked, we will stop checking for data
 		// only at mysql_thread___threshold_resultset_size * 4
 		if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-			unsigned int buffered_data = 0;
-			buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
-			//buffered_data += myds->sess->client_myds->resultset->len * PGSQL_RESULTSET_BUFLEN;
+			const unsigned int buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
 			if (buffered_data > (unsigned int)pgsql_thread___threshold_resultset_size * 4) {
 				thr->mypolls.fds[n].events = 0;
 				return true;
