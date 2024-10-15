@@ -83,7 +83,8 @@ jobs:
     - name: Prepare
       run: |
         set +e
-
+        sudo ulimit -c unlimited
+        echo '/core' | sudo tee /proc/sys/kernel/core_pattern
         echo "==================================="
         ulimit -c
         echo "==================================="
