@@ -1838,10 +1838,12 @@ void PgSQL_Query_Result::buffer_init() {
 
 void PgSQL_Query_Result::init(PgSQL_Protocol* _proto, PgSQL_Data_Stream* _myds, PgSQL_Connection* _conn) {
 	PROXY_TRACE2();
-	transfer_started = false;
 	proto = _proto;
 	conn = _conn;
 	myds = _myds;
+
+	if (conn->processing_multi_statement == false)
+		transfer_started = false;
 	buffer_init();
 	reset();
 
