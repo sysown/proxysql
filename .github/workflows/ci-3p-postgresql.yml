@@ -116,7 +116,7 @@ jobs:
         BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_POSTGRESQL_${INFRADB//./}_${CONNECTOR//./} | awk '{ print $2 }')
         
         FAILS=$(cat logs/*run-tests.log | grep '^not ok ' | wc -l)
-        if [[ -z ${FAILS} ]]; then
+        if [[ -z ${FAILS#0} ]]; then
           echo "Baseline '${BASELINE:-10000}' ERROR: no results found"
           exit 1
         fi
