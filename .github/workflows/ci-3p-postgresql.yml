@@ -115,10 +115,10 @@ jobs:
         cd proxysql_3p_testing/test_postgresql
         BASELINE=$(gh variable -R ${{ github.repository }} list | grep -i BASELINE_3P_POSTGRESQL_${INFRADB//./}_${CONNECTOR//./} | awk '{ print $2 }')
         
-        FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
+        FAILS=$(cat logs/*run-tests.log | grep '^not ok ' | wc -l)
         if [[ -z ${FAILS} ]]; then
-          echo "Baseline '${BASELINE:-10000}' WARN: no results found"
-          exit 0
+          echo "Baseline '${BASELINE:-10000}' ERROR: no results found"
+          exit 1
         fi
         
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
