@@ -83,6 +83,12 @@ jobs:
     - name: Prepare
       run: |
         set +e
+
+        echo "==================================="
+        ulimit -c
+        echo "==================================="
+        cat /proc/sys/kernel/core_pattern
+        echo "==================================="
         
         cd proxysql_3p_testing/
         #git sparse-checkout list
