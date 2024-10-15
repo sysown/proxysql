@@ -494,6 +494,8 @@ uint64_t Query_Cache<QC_DERIVED>::get_data_size_total() {
 
 template <typename QC_DERIVED>
 unsigned int Query_Cache<QC_DERIVED>::current_used_memory_pct(uint64_t max_memory_size) {
+	if (max_memory_size == 0)
+		return 100;
 	uint64_t cur_size=get_data_size_total();
 	float pctf = (float) cur_size*100/max_memory_size;
 	if (pctf > 100) return 100;
