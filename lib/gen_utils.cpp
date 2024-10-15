@@ -277,3 +277,34 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
 
 	return tokens;
 }
+
+char* escape_string_single_quotes_and_backslashes(char* input, bool free_it) {
+	const char* c;
+	int input_len = 0;
+	int escape_count = 0;
+
+	for (c = input; *c != '\0'; c++) {
+		if ((*c == '\'') || (*c == '\\')) {
+			escape_count += 2;
+		}
+		input_len++;
+	}
+
+	if (escape_count == 0)
+		return input;
+
+	char* output = (char*)malloc(input_len + escape_count + 1);
+	char* p = output;
+
+	for (c = input; *c != '\0'; c++) {
+		if ((*c == '\'') || (*c == '\\')) {
+			*(p++) = '\\';
+		}
+		*(p++) = *c;
+	}
+	*(p++) = '\0';
+	if (free_it) {
+		free(input);
+	}
+	return output;
+}
