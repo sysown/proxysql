@@ -2191,6 +2191,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	int strAl, strBl;
 	char *query=NULL;
 	unsigned int query_length = 0;
+	char* query_no_space = NULL;
+	unsigned int query_no_space_length = 0;
 
 	if constexpr (std::is_same_v<S,MySQL_Session>) {
 		query_length = pkt->size - sizeof(mysql_hdr);
@@ -2204,7 +2206,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			//error
 			proxy_warning("Malformed packet\n");
 			SPA->send_error_msg_to_client(sess, "Malformed packet");
-			return;
+			run_query = false;
+			goto __run_query;
 		}
 		
 		switch (hdr.type) {
@@ -2214,7 +2217,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		case PG_PKT_SSLREQ:
 		case PG_PKT_GSSENCREQ:
 			//error
-			return;
+			proxy_warning("Unsupported query type %d\n", hdr.type);
+			SPA->send_error_msg_to_client(sess, "Unsupported query type");
+			run_query = false;
+			goto __run_query;
 		}
 
 		query_length = hdr.data.size;
@@ -2226,18 +2232,26 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	query[query_length-1]=0;
 
-	char *query_no_space=(char *)l_alloc(query_length);
+	query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
 
-	unsigned int query_no_space_length=remove_spaces(query_no_space);
+	query_no_space_length=remove_spaces(query_no_space);
 	//fprintf(stderr,"%s----\n",query_no_space);
 
 	if (query_no_space_length) {
 		// fix bug #925
-		while (query_no_space[query_no_space_length-1]==';' || query_no_space[query_no_space_length-1]==' ') {
+		while (query_no_space_length && 
+			(query_no_space[query_no_space_length-1]==';' || query_no_space[query_no_space_length-1]==' ')) {
 			query_no_space_length--;
 			query_no_space[query_no_space_length]=0;
 		}
+	}
+
+	if (query_no_space_length == 0) {
+		proxy_warning("Empty query\n");
+		SPA->send_error_msg_to_client(sess, "Empty query");
+		run_query = false;
+		goto __run_query;
 	}
 
 	// add global mutex, see bug #1188
