@@ -996,12 +996,10 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 				addField(data, "multiplex", r->fields[5], "");
 				addField(data, "connection_warming", r->fields[6], "");
 				addField(data, "throttle_connections_per_sec", r->fields[7], "");
-				addField(data, "ignore_session_variables", r->fields[8], "");
-				addField(data, "hostgroup_settings", r->fields[9], "");
-				addField(data, "servers_defaults", r->fields[10], "");
-				addField(data, "min_lag_ms", r->fields[11], "");
-				addField(data, "lag_num_checks", r->fields[12], "");
-				addField(data, "comment", r->fields[13]);
+				addField(data, "ignore_session_variables", r->fields[8]);
+				addField(data, "hostgroup_settings", r->fields[9]);
+				addField(data, "servers_defaults", r->fields[10]);
+				addField(data, "comment", r->fields[11]);
 
 				data += "\t}";
 				isNext = true;
