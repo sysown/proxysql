@@ -77,6 +77,8 @@ using json = nlohmann::json;
 #include <uuid/uuid.h>
 
 #include "PgSQL_Protocol.h"
+#include "MySQL_Query_Cache.h"
+#include "PgSQL_Query_Cache.h"
 //#include "usual/time.h"
 
 using std::string;
@@ -135,7 +137,8 @@ extern bool admin_proxysql_pgsql_paused;
 extern int admin_old_wait_timeout;
 
 
-extern Query_Cache *GloQC;
+extern MySQL_Query_Cache *GloMyQC;
+extern PgSQL_Query_Cache* GloPgQC;
 extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
@@ -653,10 +656,34 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL FLUSH QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH QUERY CACHE",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH QUERY CACHE command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (GloQC) {
-			GloQC->flush();
+		if (GloMyQC) {
+			GloMyQC->flush();
+		}
+		//if (GloPgQC) {
+		//	GloPgQC->flush();
+		//}
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == strlen("PROXYSQL FLUSH MYSQL QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH MYSQL QUERY CACHE", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH MYSQL QUERY CACHE command\n");
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		if (GloMyQC) {
+			GloMyQC->flush();
 		}
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == strlen("PROXYSQL FLUSH PGSQL QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH PGSQL QUERY CACHE", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH PGSQL QUERY CACHE command\n");
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		uint64_t count = 0;
+		if (GloPgQC) {
+			count = GloPgQC->flush();
+		}
+		SPA->send_ok_msg_to_client(sess, NULL, (int)count, "DELETE ");
 		return false;
 	}
 

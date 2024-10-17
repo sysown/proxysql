@@ -706,7 +706,8 @@ class SimpleKV;
 class AdvancedKV;
 template <class T>
 class ProxySQL_Poll;
-class Query_Cache;
+class MySQL_Query_Cache;
+class PgSQL_Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
 class PgSQL_Connection;
@@ -1095,6 +1096,10 @@ __thread int pgsql_thread___monitor_threads;
 __thread char* pgsql_thread___monitor_username;
 __thread char* pgsql_thread___monitor_password;
 
+// PgSQL Query Cache
+__thread int pgsql_thread___query_cache_size_MB;
+__thread int pgsql_thread___query_cache_soft_ttl_pct;
+__thread int pgsql_thread___query_cache_handle_warnings;
 //---------------------------
 
 __thread char *mysql_thread___default_schema;
@@ -1382,6 +1387,10 @@ extern __thread int pgsql_thread___monitor_threads;
 extern __thread char* pgsql_thread___monitor_username;
 extern __thread char* pgsql_thread___monitor_password;
 
+// PgSQL Query Cache
+extern __thread int pgsql_thread___query_cache_size_MB;
+extern __thread int pgsql_thread___query_cache_soft_ttl_pct;
+extern __thread int pgsql_thread___query_cache_handle_warnings;
 //---------------------------
 
 extern __thread char *mysql_thread___default_schema;

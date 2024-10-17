@@ -22,7 +22,7 @@ using json = nlohmann::json;
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
-
+#include "MySQL_Query_Cache.h"
 
 #include "libinjection.h"
 #include "libinjection_sqli.h"
@@ -333,7 +333,7 @@ __exit_kill_query_thread:
 }
 
 extern MySQL_Query_Processor* GloMyQPro;
-extern Query_Cache *GloQC;
+extern MySQL_Query_Cache *GloMyQC;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -6810,7 +6810,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (qpo->cache_ttl>0 && ((prepare_stmt_type & ps_type_prepare_stmt) == 0)) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		uint32_t resbuf=0;
-		unsigned char *aa=GloQC->get(
+		unsigned char *aa= GloMyQC->get(
 			client_myds->myconn->userinfo->hash,
 			(const unsigned char *)CurrentQuery.QueryPointer ,
 			CurrentQuery.QueryLength ,
@@ -7254,18 +7254,18 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 						unsigned char *aa=client_myds->resultset2buffer(false);
 						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
 						bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-						GloQC->set(
+						GloMyQC->set(
 							client_myds->myconn->userinfo->hash ,
-							(const unsigned char *)CurrentQuery.QueryPointer,
+							CurrentQuery.QueryPointer,
 							CurrentQuery.QueryLength,
-							aa ,
+							aa , // Query Cache now have the ownership, no need to free it
 							client_myds->resultset_length ,
 							thread->curtime/1000 ,
 							thread->curtime/1000 ,
 							thread->curtime/1000 + qpo->cache_ttl,
 							deprecate_eof_active
 						);
-						l_free(client_myds->resultset_length,aa);
+						//l_free(client_myds->resultset_length,aa);
 						client_myds->resultset_length=0;
 					}
 				}
@@ -7491,7 +7491,7 @@ void MySQL_Session::Memory_Stats() {
 	unsigned long long internal=0;
 	internal+=sizeof(MySQL_Session);
 	if (qpo)
-		internal+=sizeof(Query_Processor_Output);
+		internal+=sizeof(MySQL_Query_Processor_Output);
 	if (client_myds) {
 		internal+=sizeof(MySQL_Data_Stream);
 		if (client_myds->queueIN.buffer)

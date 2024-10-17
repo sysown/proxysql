@@ -10,7 +10,7 @@
 #include "PgSQL_Backend.h"
 #include "ProxySQL_Poll.h"
 //#include "MySQL_Data_Stream.h"
-#include "query_cache.hpp"
+//#include "MySQL_Query_Cache.h"
 #include "mysql_connection.h"
 #include "sqlite3db.h"
 //#include "StatCounters.h"

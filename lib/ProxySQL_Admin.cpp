@@ -77,6 +77,8 @@ using json = nlohmann::json;
 #include <uuid/uuid.h>
 
 #include "PgSQL_Protocol.h"
+#include "MySQL_Query_Cache.h"
+#include "PgSQL_Query_Cache.h"
 //#include "usual/time.h"
 
 using std::string;
@@ -307,7 +309,8 @@ bool admin_proxysql_mysql_paused = false;
 bool admin_proxysql_pgsql_paused = false;
 int admin_old_wait_timeout;
 
-extern Query_Cache *GloQC;
+extern MySQL_Query_Cache *GloMyQC;
+extern PgSQL_Query_Cache* GloPgQC;
 extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
@@ -2328,8 +2331,8 @@ __end_while_pool:
 				}
 			}
 			if (GloProxyStats->MySQL_Query_Cache_timetoget(curtime)) {
-				if (GloQC) {
-					SQLite3_result * resultset=GloQC->SQL3_getStats();
+				if (GloMyQC) {
+					SQLite3_result * resultset=GloMyQC->SQL3_getStats();
 					if (resultset) {
 						GloProxyStats->MySQL_Query_Cache_sets(resultset);
 						delete resultset;
@@ -2502,9 +2505,13 @@ void update_modules_metrics() {
 	if (GloMyMon) {
 		GloMyMon->p_update_metrics();
 	}
-	// Update query_cache metrics
-	if (GloQC) {
-		GloQC->p_update_metrics();
+	// Update mysql query_cache metrics
+	if (GloMyQC) {
+		GloMyQC->p_update_metrics();
+	}
+	// Update pgsql query_cache metrics
+	if (GloPgQC) {
+		GloPgQC->p_update_metrics();
 	}
 	// Update cluster metrics
 	if (GloProxyCluster) {

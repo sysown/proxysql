@@ -441,7 +441,7 @@ static char *s_strdup(char *s) {
 
 
 static int __ClickHouse_Server_refresh_interval=1000;
-extern Query_Cache *GloQC;
+extern MySQL_Query_Cache *GloMyQC;
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Query_Processor* GloMyQPro;
