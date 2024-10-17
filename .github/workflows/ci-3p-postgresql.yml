@@ -146,6 +146,7 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
         path: |
+          proxysql_3p_testing/proxysql
           proxysql_3p_testing/test_postgresql/logs
           
     - uses: LouisBrunner/checks-action@v2.0.0
