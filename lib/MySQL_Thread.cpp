@@ -350,6 +350,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
 	(char *)"eventslog_buffer_history_size",
+	(char *)"eventslog_table_memory_size",
 	(char *)"eventslog_buffer_max_query_length",
 	(char *)"eventslog_default_log",
 	(char *)"eventslog_format",
@@ -1072,6 +1073,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
 	variables.eventslog_buffer_history_size=0;
+	variables.eventslog_table_memory_size=10000;
 	variables.eventslog_buffer_max_query_length = 32*1024;
 	variables.eventslog_default_log=0;
 	variables.eventslog_format=1;
@@ -2245,6 +2247,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
 		VariablesPointers_int["eventslog_filesize"]    = make_tuple(&variables.eventslog_filesize,   1024*1024, 1*1024*1024*1024, false);
 		VariablesPointers_int["eventslog_buffer_history_size"]     = make_tuple(&variables.eventslog_buffer_history_size,       0,  8*1024*1024, false);
+		VariablesPointers_int["eventslog_table_memory_size"]       = make_tuple(&variables.eventslog_table_memory_size,         0,  8*1024*1024, false);
 		VariablesPointers_int["eventslog_buffer_max_query_length"] = make_tuple(&variables.eventslog_buffer_max_query_length, 128, 32*1024*1024, false);
 		VariablesPointers_int["eventslog_default_log"] = make_tuple(&variables.eventslog_default_log,        0,                1, false);
 		// various
@@ -4374,6 +4377,7 @@ void MySQL_Thread::refresh_variables() {
 
 	REFRESH_VARIABLE_CHAR(server_version);
 	REFRESH_VARIABLE_INT(eventslog_filesize);
+	REFRESH_VARIABLE_INT(eventslog_table_memory_size);
 	REFRESH_VARIABLE_INT(eventslog_buffer_history_size);
 	{
 		int elmhs = mysql_thread___eventslog_buffer_history_size;

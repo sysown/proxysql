@@ -196,6 +196,8 @@ class MySQL_Logger_CircularBuffer {
 private:
 	std::deque<MySQL_Event*> event_buffer;  ///< The internal deque storing event pointers.
 	std::mutex mutex;                        ///< Mutex for thread safety.
+    std::atomic<unsigned long long> eventsAddedCount;     ///< Total number of events added to the buffer.
+    std::atomic<unsigned long long> eventsDroppedCount;   ///< Total number of events dropped from the buffer.
 
 public:
 	std::atomic<size_t> buffer_size;        ///< Atomic variable to store the buffer size. (Public for direct access)
@@ -222,12 +224,18 @@ public:
 
 	/**
 	 * @brief Retrieves all events from the circular buffer and populates a provided vector.
-	 * @param events A reference to a vector that will be populated with the events from the buffer.  The caller takes ownership of the events and is responsible for deleting them.
+	 * @param events A reference to a vector that will be populated with the events from the buffer.
+	 * The caller takes ownership of the events and is responsible for deleting them.
 	 *
 	 * This method clears the buffer after retrieving the events.  The function reserves space in the vector to avoid unnecessary reallocations.
 	 */
 	void get_all_events(std::vector<MySQL_Event*>& events);
 
+	/**
+	 * @brief Returns the current size of the buffer.
+	 * @return The number of events currently in the buffer.
+	 */
+	size_t size();
 
 	/**
 	 * @brief Gets the current size of the buffer.
@@ -240,6 +248,18 @@ public:
 	 * @param newSize The new size of the circular buffer.
 	 */
 	void setBufferSize(size_t newSize);
+
+	/**
+	 * @brief Returns the total number of events added to the buffer.
+	 * @return The total number of events added to the buffer.
+	 */
+	unsigned long long getEventsAddedCount() const { return eventsAddedCount; }
+
+	/**
+	 * @brief Returns the total number of events dropped from the buffer.
+	 * @return The total number of events dropped from the buffer.
+	 */
+	unsigned long long getEventsDroppedCount() const { return eventsDroppedCount; }
 };
 
 
@@ -276,6 +296,38 @@ private:
 		unsigned int max_log_file_size; ///< Maximum size of an audit log file in bytes.
 		std::fstream* logfile;     ///< File stream for audit logging.
 	} audit;
+
+	/**
+	 * @brief Structure to hold performance metrics for the MySQL event logger.
+	 *
+	 * This structure keeps track of various metrics related to the performance of the event logging system,
+	 * including the number of times events are copied to memory and disk, the total time spent on
+	 * these operations, and the total number of events copied.
+	 * All members are atomic to ensure thread safety.
+	 */
+	struct EventLogMetrics {
+		/** @brief Number of times events were copied to the in-memory database. */
+		std::atomic<unsigned long long> memoryCopyCount;
+		/** @brief Number of times events were copied to the on-disk database. */
+		std::atomic<unsigned long long> diskCopyCount;
+		/** @brief Number of times the `get_all_events` method was called. */
+		std::atomic<unsigned long long> getAllEventsCallsCount;
+		/** @brief Total number of events retrieved by the `get_all_events` method. */
+		std::atomic<unsigned long long> getAllEventsEventsCount;
+		/** @brief Total time spent copying events to the in-memory database (microseconds). */
+		std::atomic<unsigned long long> totalMemoryCopyTimeMicros;
+		/** @brief Total time spent copying events to the on-disk database (microseconds). */
+		std::atomic<unsigned long long> totalDiskCopyTimeMicros;
+		/** @brief Total time spent in `get_all_events` (microseconds). */
+		std::atomic<unsigned long long> totalGetAllEventsDiskCopyTimeMicros;
+		/** @brief Total number of events copied to the in-memory database. */
+		std::atomic<unsigned long long> totalEventsCopiedToMemory;
+		/** @brief Total number of events copied to the on-disk database. */
+		std::atomic<unsigned long long> totalEventsCopiedToDisk;
+		std::atomic<unsigned long long> eventsAddedToBufferCount;     ///< Total number of events added to the buffer.
+		std::atomic<unsigned long long> eventsCurrentlyInBufferCount; ///< Number of events currently in the buffer.
+	} metrics;
+
 
 	// Mutex or rwlock for thread safety
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
@@ -317,8 +369,6 @@ private:
 	unsigned int audit_find_next_id();
 
 public:
-	int eventslog_table_memory_size; ///< Maximum size of the in-memory event log table.
-
 	/**
 	 * @brief Constructor for the MySQL_Logger class.
 	 *

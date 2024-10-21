@@ -531,7 +531,8 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 
 extern Query_Processor *GloQPro;
 
-MySQL_Logger::MySQL_Logger() {
+//MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
+MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
 	events.enabled=false;
 	events.base_filename=NULL;
 	events.datadir=NULL;
@@ -877,12 +878,12 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	if (MyLogCB->buffer_size != 0) {
 		MySQL_Event *me2 = new MySQL_Event(me);
 		MyLogCB->insert(me2);
-#if 1
+#if 0
 		for (int i=0; i<10000; i++) {
 			MySQL_Event *me2 = new MySQL_Event(me);
 			MyLogCB->insert(me2);
 		}
-#endif // 1
+#endif // 0
 	}
 
 	if (cl && sess->client_myds->addr.port) {
@@ -1148,7 +1149,9 @@ void MySQL_Logger::print_version() {
 	fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
 };
 
-MySQL_Logger_CircularBuffer::MySQL_Logger_CircularBuffer(size_t size) : event_buffer(size), buffer_size(size) {}
+MySQL_Logger_CircularBuffer::MySQL_Logger_CircularBuffer(size_t size) : event_buffer(size),
+	eventsAddedCount(0), eventsDroppedCount(0),
+	buffer_size(size) {}
 
 MySQL_Logger_CircularBuffer::~MySQL_Logger_CircularBuffer() {
 	std::lock_guard<std::mutex> lock(mutex);
@@ -1159,11 +1162,19 @@ MySQL_Logger_CircularBuffer::~MySQL_Logger_CircularBuffer() {
 
 void MySQL_Logger_CircularBuffer::insert(MySQL_Event* event) {
 	std::lock_guard<std::mutex> lock(mutex);
+	eventsAddedCount++;
 	if (event_buffer.size() == buffer_size) {
 		delete event_buffer.front();
 		event_buffer.pop_front();
+		eventsDroppedCount++;
 	}
 	event_buffer.push_back(event);
+}
+
+
+size_t MySQL_Logger_CircularBuffer::size() {
+	std::lock_guard<std::mutex> lock(mutex);
+	return event_buffer.size();
 }
 
 void MySQL_Logger_CircularBuffer::get_all_events(std::vector<MySQL_Event*>& events) {
@@ -1192,8 +1203,11 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 	const int numcols = 17;
 	std::string query1s = "";
 	std::string query32s = "";
-	query1s  = "INSERT INTO " + tableName + " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
-	query32s = "INSERT INTO " + tableName + " VALUES " + generate_multi_rows_query(32, numcols);
+
+	std::string coldefs = "(thread_id, username, schemaname, start_time, end_time, query_digest, query, server, client, event_type, hid, extra_info, affected_rows, last_insert_id, rows_sent, client_stmt_id, gtid)";
+
+	query1s  = "INSERT INTO " + tableName + coldefs + " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+	query32s = "INSERT INTO " + tableName + coldefs + " VALUES " + generate_multi_rows_query(32, numcols);
 	query1  = (char *)query1s.c_str();
 	query32 = (char *)query32s.c_str();
 	rc = db->prepare_v2(query1, &statement1);
@@ -1211,6 +1225,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 	for (std::vector<MySQL_Event *>::const_iterator it = begin ; it != begin + numEvents; ++it) {
 		MySQL_Event *event = *it;
 		int idx=row_idx%32;
+
 		if (row_idx<max_bulk_row_idx) { // bulk
 			//Bind parameters. Handle potential errors in binding.
 			rc = (*proxy_sqlite3_bind_int)(statement32, (idx*numcols)+1, event->thread_id); ASSERT_SQLITE_OK(rc, db);
@@ -1269,19 +1284,30 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 
 
 int MySQL_Logger::processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk) {
+	unsigned long long startTimeMicros = monotonic_time();
 	std::vector<MySQL_Event*> events = {};
 	MyLogCB->get_all_events(events);
 
+	metrics.getAllEventsCallsCount++;
 	if (events.empty()) return 0;
+
+	unsigned long long afterGetAllEventsTimeMicros = monotonic_time();
+	metrics.getAllEventsEventsCount += events.size();
+	metrics.totalGetAllEventsDiskCopyTimeMicros += (afterGetAllEventsTimeMicros-startTimeMicros);
 
 	if (statsdb_disk != nullptr) {
 		// Write to on-disk database first
+		unsigned long long diskStartTimeMicros = monotonic_time();
 		insertMysqlEventsIntoDb(statsdb_disk, "history_mysql_query_events", events.size(), events.begin());
+		unsigned long long diskEndTimeMicros = monotonic_time();
+		metrics.diskCopyCount++;
+		metrics.totalDiskCopyTimeMicros += (diskEndTimeMicros - diskStartTimeMicros);
+		metrics.totalEventsCopiedToDisk += events.size();
 	}
 
 	if (statsdb != nullptr) {
-
-		size_t maxInMemorySize = eventslog_table_memory_size;
+		unsigned long long memoryStartTimeMicros = monotonic_time();
+		size_t maxInMemorySize = mysql_thread___eventslog_table_memory_size;
 		size_t numEventsToInsert = std::min(events.size(), maxInMemorySize);
 
 		if (events.size() >= maxInMemorySize) {
@@ -1300,6 +1326,10 @@ int MySQL_Logger::processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk) 
 
 		// Pass iterators to avoid copying
 		insertMysqlEventsIntoDb(statsdb, "stats_mysql_query_events", numEventsToInsert, events.begin());
+		unsigned long long memoryEndTimeMicros = monotonic_time();
+		metrics.memoryCopyCount++;
+		metrics.totalMemoryCopyTimeMicros += (memoryEndTimeMicros - memoryStartTimeMicros);
+		metrics.totalEventsCopiedToMemory += numEventsToInsert;
 	}
 
 	// cleanup of all events
@@ -1307,6 +1337,14 @@ int MySQL_Logger::processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk) 
 		delete event;
 	}
 	size_t ret = events.size();
+#if 1 // FIXME: TEMPORARY , TO REMOVE
+	std::cerr << "Circular:" << endl;
+	std::cerr << "  EventsAddedCount:   " << MyLogCB->getEventsAddedCount() << endl;
+	std::cerr << "  EventsDroppedCount: " << MyLogCB->getEventsDroppedCount() << endl;
+	std::cerr << "  Size:               " << MyLogCB->size() << endl;
+	std::cerr << "memoryCopy: Count: " << metrics.memoryCopyCount << " , TimeUs: " << metrics.totalMemoryCopyTimeMicros << endl;
+	std::cerr << "diskCopy:   Count: " << metrics.diskCopyCount   << " , TimeUs: " << metrics.totalDiskCopyTimeMicros << endl;
+#endif // 1 , FIXME: TEMPORARY , TO REMOVE
 	return ret;
 }
 

@@ -3798,7 +3798,8 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			{"DUMP EVENTSLOG FROM BUFFER TO BOTH",   {SPA->statsdb, SPA->statsdb_disk}}
 		};
 
-		auto it = commandMap.find(query_no_space);
+		string s = string(query_no_space);
+		auto it = commandMap.find(s);
 		if (it != commandMap.end()) {
 			num_rows = GloMyLogger->processEvents(it->second.first, it->second.second);
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, num_rows);
