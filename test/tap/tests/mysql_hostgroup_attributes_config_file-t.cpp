@@ -1,10 +1,6 @@
 /**
  * @file mysql_hostgroup_attributes_config_file-t.cpp
- * @brief Reading and saving 'mysql_hostgroup_attributes' table from configuration file:
- *   1. Correct values should be inserted into 'mysql_hostgroup_attributes' table.
- *   2. Correct saving of mysql_hostgroup_attributes into config file.
- *   3. Delete all the values from 'mysql_hostgroup_attributes' table
- *   4. Correct load of 'mysql_hostgroup_attributes' table values from config file
+ * @brief Reading and saving of 'mysql_hostgroup_attributes' table from configuration file:
  */
 
 #include <cstring>
@@ -25,73 +21,200 @@ using nlohmann::json;
 using std::string;
 using std::fstream;
 
-int save_and_read_mysql_hostgroup_attributes_from_config(MYSQL* admin) {
-	json j_servers_defaults { { "weight", 100 }, { "max_connections", 10000 }, { "use_ssl", 1}, };
+int validate_mysql_hostgroup_attributes_from_config(MYSQL* admin) {
+	string hostgroup_attributes_values[5][12] = {
+			{"1", "900000", "-1", "11", "ic1", "0", "1", "9001", "{\"isv\":100}", "{\"hs\":200}", "{\"weight\":100,\"max_connections\":500}", "com1"},
+			{"2", "900001", "0", "12", "ic2", "1", "0", "9002", "{\"isv\":101}", "{\"hs\":201}", "{\"weight\":101,\"max_connections\":501}", "com2"},
+			{"3", "900002", "1", "13", "ic3", "0", "1", "9003", "{\"isv\":102}", "{\"hs\":202}", "{\"weight\":102,\"max_connections\":502}", "com3"},
+			{"4", "900003", "-1", "14", "ic4", "1", "0", "9004", "{\"isv\":103}", "{\"hs\":203}", "{\"weight\":103,\"max_connections\":503}", "com4"},
+			{"5", "900004", "0", "15", "ic5", "0", "1", "9005", "{\"isv\":104}", "{\"hs\":204}", "{\"weight\":104,\"max_connections\":504}", "com5"}};
 
-	// To run this test locally copy a ProxySQL config file into this path.
-	string save_config_query = {"SAVE CONFIG TO FILE /var/lib/jenkins//scripts/"
-								"docker-mysql-proxysql/conf/proxysql/proxysql.cnf"};
-
-	const string INSERT_QUERY {
-		"INSERT INTO mysql_hostgroup_attributes (hostgroup_id, servers_defaults, comment)"
-			" VALUES (0, '" + j_servers_defaults.dump() + "', 'read config test')"
-	};
-
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, INSERT_QUERY.c_str());
-	MYSQL_QUERY_T(admin, save_config_query.c_str());
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS FROM CONFIG;");
-
-	diag("Checking that config saved value matches INSERTED");
-	MYSQL_QUERY_T(admin, "SELECT servers_defaults FROM mysql_hostgroup_attributes WHERE hostgroup_id=0");
-
-	const auto extract_json_result = [] (MYSQL* admin) {
-		json j_result {};
+	auto check_result = [&] () {
 		MYSQL_RES* myres = mysql_store_result(admin);
-		MYSQL_ROW myrow = mysql_fetch_row(myres);
+		MYSQL_ROW myrow;
 
-		if (myrow && myrow[0]) {
-			try {
-				j_result = json::parse(myrow[0]);
-			} catch (const std::exception& e) {
-				diag("ERROR: Failed to parse retrieved 'servers_defaults' - '%s'", e.what());
+		int row_num {0};
+		while ((myrow = mysql_fetch_row(myres))) {
+
+			int field_num = {0};
+			for (field_num = 0; field_num < 12; field_num++) {
+				if(!myrow[field_num]) {
+					diag("ERROR: hostgroup_attributes_values field: %d is null", field_num);
+					return false;
+				}
+				if(strncmp(myrow[field_num], hostgroup_attributes_values[row_num][field_num].c_str(), 
+					sizeof(hostgroup_attributes_values[row_num][field_num]))) {
+					diag("INSERTED 'fields' should match with config value - Exp: `%s`, Act: `%s`",
+						hostgroup_attributes_values[row_num][field_num].c_str(), myrow[field_num]);
+					return false;
+				}
 			}
+			row_num++;
 		}
-
 		mysql_free_result(myres);
-
-		return j_result;
+		return true;
 	};
 
-	json j_config_servers_defaults = extract_json_result(admin);
+	diag("Checking loading of mysql_hostgroup_attributes from config file");
+	MYSQL_QUERY_T(admin, "SELECT * FROM mysql_hostgroup_attributes");
+
+	auto b_config_parsing = check_result();
 
 	ok(
-		j_servers_defaults == j_config_servers_defaults,
-		"INSERTED 'servers_defaults' should match config value - Exp: `%s`, Act: `%s`",
-		j_servers_defaults.dump().c_str(), j_config_servers_defaults.dump().c_str()
+		b_config_parsing == true,
+		"Parsed hostgroup_attributes_values values are correct"
 	);
 
 	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, save_config_query.c_str());
-	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS FROM CONFIG;");		
-	diag("Checking that config saved value matches INSERTED");
-	MYSQL_QUERY_T(admin, "SELECT servers_defaults FROM mysql_hostgroup_attributes WHERE hostgroup_id=0");
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS FROM CONFIG;");
+	diag("Checking loading of mysql_hostgroup_attributes from config file after deleting and reloading config");
+	MYSQL_QUERY_T(admin, "SELECT * FROM mysql_hostgroup_attributes");
 
-	j_config_servers_defaults = extract_json_result(admin);
-	json j_empty = {};
+	b_config_parsing = check_result();
 
 	ok(
-		j_empty == j_config_servers_defaults,
-		"mysql_hostgroup_attributes should be empty. j_config_servers_defaults: `%s`",
-		j_config_servers_defaults.dump().c_str()
+		b_config_parsing == true,
+		"Parsed hostgroup_attributes_values values after reload config are correct"
 	);
 
 	return EXIT_SUCCESS;
 }
 
+void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lines){
+	config_lines =  {
+		"mysql_hostgroup_attributes:",
+		"(",
+		"	{",
+		"		hostgroup_id=1",
+		"		max_num_online_servers=900000",
+		"		autocommit=-1",
+		"		free_connections_pct=11",
+		"		init_connect=\"ic1\"",
+		"		multiplex=0",
+		"		connection_warming=1",
+		"		throttle_connections_per_sec=9001",
+		"		ignore_session_variables=\"{\"isv\":100}\"",
+		"		hostgroup_settings=\"{\"hs\":200}\"",
+		"		servers_defaults=\"{\"weight\":100,\"max_connections\":500}\"",
+		"		comment=\"com1\"",
+		"	},",
+		"	{",
+		"		hostgroup_id=2",
+		"		max_num_online_servers=900001",
+		"		autocommit=0",
+		"		free_connections_pct=12",
+		"		init_connect=\"ic2\"",
+		"		multiplex=1",
+		"		connection_warming=0",
+		"		throttle_connections_per_sec=9002",
+		"		ignore_session_variables=\"{\"isv\":101}\"",
+		"		hostgroup_settings=\"{\"hs\":201}\"",
+		"		servers_defaults=\"{\"weight\":101,\"max_connections\":501}\"",
+		"		comment=\"com2\"",
+		"	},",
+		"	{",
+		"		hostgroup_id=3",
+		"		max_num_online_servers=900002",
+		"		autocommit=1",
+		"		free_connections_pct=13",
+		"		init_connect=\"ic3\"",
+		"		multiplex=0",
+		"		connection_warming=1",
+		"		throttle_connections_per_sec=9003",
+		"		ignore_session_variables=\"{\"isv\":102}\"",
+		"		hostgroup_settings=\"{\"hs\":202}\"",
+		"		servers_defaults=\"{\"weight\":102,\"max_connections\":502}\"",
+		"		comment=\"com3\"",
+		"	},",
+		"	{",
+		"		hostgroup_id=4",
+		"		max_num_online_servers=900003",
+		"		autocommit=-1",
+		"		free_connections_pct=14",
+		"		init_connect=\"ic4\"",
+		"		multiplex=1",
+		"		connection_warming=0",
+		"		throttle_connections_per_sec=9004",
+		"		ignore_session_variables=\"{\"isv\":103}\"",
+		"		hostgroup_settings=\"{\"hs\":203}\"",
+		"		servers_defaults=\"{\"weight\":103,\"max_connections\":503}\"",
+		"		comment=\"com4\"",
+		"	},",
+		"	{",
+		"		hostgroup_id=5",
+		"		max_num_online_servers=900004",
+		"		autocommit=0",
+		"		free_connections_pct=15",
+		"		init_connect=\"ic5\"",
+		"		multiplex=0",
+		"		connection_warming=1",
+		"		throttle_connections_per_sec=9005",
+		"		ignore_session_variables=\"{\"isv\":104}\"",
+		"		hostgroup_settings=\"{\"hs\":204}\"",
+		"		servers_defaults=\"{\"weight\":104,\"max_connections\":504}\"",
+		"		comment=\"com5\"",
+		"	}",
+		")"
+	};
+}
+
+int write_mysql_hostgroup_attributes_to_config(MYSQL* admin) {
+	std::vector<std::string> config_lines;
+	make_hostgroup_attributes_config_lines(config_lines);
+
+	string config_file_path {"myproxysql.cnf"};
+	string save_config_query = "SAVE CONFIG TO FILE " + config_file_path;
+	MYSQL_QUERY_T(admin, save_config_query.c_str());
+	fstream f_stream;
+	diag("Checking correctness of config file. ");
+
+	auto check_config_file = [&] () {
+		int cur_line {0};
+		string next_line {};
+		bool first_matched {false};
+		const char* c_f_path { config_file_path.c_str() };
+		f_stream.open(config_file_path.c_str(), std::fstream::out | std::fstream::in | std::fstream::trunc);
+
+		if (!f_stream.is_open() || !f_stream.good()) {
+			diag("Failed to open '%s' file: { path: %s, error: %d }", basename(c_f_path), c_f_path, errno);
+			return false;;
+		}
+		while (getline(f_stream, next_line)) {
+			if (next_line == config_lines[0]) {
+				first_matched = true;
+			}
+
+			if (first_matched) {
+				if (cur_line  >=  config_lines.size()) {
+					return true;
+				}
+				next_line.erase(remove(next_line.begin(), next_line.end(), '\\'), next_line.end());
+				if (next_line == config_lines[cur_line]) {
+					cur_line++;
+				}
+				else {
+					diag("Confige file line didn't match,  config line %s, expected line %s", next_line.c_str(), config_lines[cur_line].c_str());
+					return false;
+				}			
+			}
+
+			next_line = "";
+		}
+		return true;
+	};
+
+	auto b_config_parsing = check_config_file();
+	ok(
+		b_config_parsing == true,
+		"mysql_hostgroup_attributes values are correctly written in config file"
+	);
+	f_stream.close();
+	remove(config_file_path.c_str());
+	return EXIT_SUCCESS;
+}
+
 int main(int, char**) {
-	plan(2);
+	plan(3);
 
 	CommandLine cl;
 
@@ -107,17 +230,11 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	// Cleanup
-	MYSQL_QUERY_T(admin, "DROP TABLE IF EXISTS mysql_hostgroup_attributes_0508");
-	MYSQL_QUERY_T(admin, "CREATE TABLE mysql_hostgroup_attributes_0508 AS SELECT * FROM mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
-
-	save_and_read_mysql_hostgroup_attributes_from_config(admin);
+	validate_mysql_hostgroup_attributes_from_config(admin);
+	write_mysql_hostgroup_attributes_to_config(admin);
 
 cleanup:
 
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, "INSERT INTO mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_0508");
 	mysql_close(admin);
 	return exit_status();
 }
