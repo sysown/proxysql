@@ -1609,7 +1609,7 @@ PG_ASYNC_ST PgSQL_Connection::handler(short event) {
 #if ENABLE_TIMER
 	Timer timer(myds->sess->thread->Timers.Connections_Handlers);
 #endif // ENABLE_TIMER
-	unsigned long long processed_bytes = 0;	// issue #527 : this variable will store the amount of bytes processed during this event
+	uint64_t processed_bytes = 0;	// issue #527 : this variable will store the amount of bytes processed during this event
 	if (pgsql_conn == NULL) {
 		// it is the first time handler() is being called
 		async_state_machine = ASYNC_CONNECT_START;
@@ -1855,8 +1855,15 @@ handler_again:
 					const unsigned int bytes_recv = query_result->add_row(result.get());
 					update_bytes_recv(bytes_recv);
 					processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
+					
+					bool pause_loop = (processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8);
+
+					if (pause_loop == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
+						pause_loop = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
+					}
+					
 					if (
-						(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
+						pause_loop
 						||
 						(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 						) {
@@ -1877,8 +1884,14 @@ handler_again:
 				update_bytes_recv(bytes_recv);
 				processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 
+				bool pause_loop = (processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8);
+
+				if (pause_loop == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
+					pause_loop = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
+				}
+
 				if (
-					(processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
+					pause_loop
 					||
 					(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 					) {
@@ -2187,7 +2200,7 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	if (pgsql_result)
 		return;
 
-	switch (PShandleRowData(pgsql_conn, &ps_result)) {
+	switch (PShandleRowData(pgsql_conn, new_result, &ps_result)) {
 	case 0:
 		result_type = 2;
 		return;
@@ -2215,7 +2228,7 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 		return;
 	}
 
-	switch (PShandleRowData(pgsql_conn, &ps_result)) {
+	switch (PShandleRowData(pgsql_conn, new_result, &ps_result)) {
 	case 0:
 		result_type = 2;
 		return;

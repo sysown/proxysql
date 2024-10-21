@@ -6240,7 +6240,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 		if (_conn->processing_multi_statement == false)
 			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
-		if (transfer_started == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
+		if (transfer_started == false && _conn->processing_multi_statement == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
