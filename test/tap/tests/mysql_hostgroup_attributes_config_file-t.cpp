@@ -40,12 +40,14 @@ int validate_mysql_hostgroup_attributes_from_config(MYSQL* admin) {
 			for (field_num = 0; field_num < 12; field_num++) {
 				if(!myrow[field_num]) {
 					diag("ERROR: hostgroup_attributes_values field: %d is null", field_num);
+					mysql_free_result(myres);
 					return false;
 				}
 				if(strncmp(myrow[field_num], hostgroup_attributes_values[row_num][field_num].c_str(), 
 					sizeof(hostgroup_attributes_values[row_num][field_num]))) {
-					diag("INSERTED 'fields' should match with config value - Exp: `%s`, Act: `%s`",
+					diag("INSERTED 'field' should match with config value - Exp: `%s`, Act: `%s`",
 						hostgroup_attributes_values[row_num][field_num].c_str(), myrow[field_num]);
+					mysql_free_result(myres);
 					return false;
 				}
 			}
@@ -160,17 +162,17 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 
 int write_mysql_hostgroup_attributes_to_config(MYSQL* admin) {
 	std::vector<std::string> config_lines;
-	make_hostgroup_attributes_config_lines(config_lines);
-
 	string config_file_path {"myproxysql.cnf"};
 	string save_config_query = "SAVE CONFIG TO FILE " + config_file_path;
-	MYSQL_QUERY_T(admin, save_config_query.c_str());
 	fstream f_stream;
+
+	make_hostgroup_attributes_config_lines(config_lines);
+	MYSQL_QUERY_T(admin, save_config_query.c_str());
 	diag("Checking correctness of config file. ");
 
 	auto check_config_file = [&] () {
 		int cur_line {0};
-		string next_line {};
+		string next_line {""};
 		bool first_matched {false};
 		const char* c_f_path { config_file_path.c_str() };
 		f_stream.open(config_file_path.c_str(), std::fstream::out | std::fstream::in | std::fstream::trunc);
@@ -195,7 +197,7 @@ int write_mysql_hostgroup_attributes_to_config(MYSQL* admin) {
 				else {
 					diag("Confige file line didn't match,  config line %s, expected line %s", next_line.c_str(), config_lines[cur_line].c_str());
 					return false;
-				}			
+				}
 			}
 
 			next_line = "";
@@ -206,7 +208,7 @@ int write_mysql_hostgroup_attributes_to_config(MYSQL* admin) {
 	auto b_config_parsing = check_config_file();
 	ok(
 		b_config_parsing == true,
-		"mysql_hostgroup_attributes values are correctly written in config file"
+		"mysql_hostgroup_attributes values are correctly written in config file."
 	);
 	f_stream.close();
 	remove(config_file_path.c_str());
@@ -230,11 +232,18 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
+	// For cleanup
+	MYSQL_QUERY_T(admin, "DROP TABLE IF EXISTS mysql_hostgroup_attributes_0508");
+	MYSQL_QUERY_T(admin, "CREATE TABLE mysql_hostgroup_attributes_0508 AS SELECT * FROM mysql_hostgroup_attributes");
+
 	validate_mysql_hostgroup_attributes_from_config(admin);
 	write_mysql_hostgroup_attributes_to_config(admin);
 
 cleanup:
 
+	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
+	MYSQL_QUERY_T(admin, "INSERT INTO mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_0508");
 	mysql_close(admin);
+
 	return exit_status();
 }
