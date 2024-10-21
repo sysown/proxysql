@@ -893,6 +893,9 @@ __thread char * mysql_thread___ssl_p2s_crlpath;
 /* variables used by events log */
 __thread char * mysql_thread___eventslog_filename;
 __thread int mysql_thread___eventslog_filesize;
+__thread int mysql_thread___eventslog_buffer_history_size;
+__thread int mysql_thread___eventslog_table_memory_size;
+__thread int mysql_thread___eventslog_buffer_max_query_length;
 __thread int mysql_thread___eventslog_default_log;
 __thread int mysql_thread___eventslog_format;
 
@@ -1066,6 +1069,9 @@ extern __thread char * mysql_thread___ssl_p2s_crlpath;
 /* variables used by events log */
 extern __thread char * mysql_thread___eventslog_filename;
 extern __thread int mysql_thread___eventslog_filesize;
+extern __thread int mysql_thread___eventslog_buffer_history_size;
+extern __thread int mysql_thread___eventslog_table_memory_size;
+extern __thread int mysql_thread___eventslog_buffer_max_query_length;
 extern __thread int mysql_thread___eventslog_default_log;
 extern __thread int mysql_thread___eventslog_format;
 

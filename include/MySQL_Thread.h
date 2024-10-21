@@ -535,6 +535,9 @@ class MySQL_Threads_Handler
 		int connpoll_reset_queue_length;
 		char *eventslog_filename;
 		int eventslog_filesize;
+		int eventslog_buffer_history_size;
+		int eventslog_table_memory_size;
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
 		char *auditlog_filename;

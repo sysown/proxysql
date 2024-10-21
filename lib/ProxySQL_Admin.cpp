@@ -602,6 +602,10 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_columns INT NOT NULL, num_params INT NOT NULL, query VARCHAR NOT NULL)"
 
+
+#define ADMIN_SQLITE_TABLE_STATS_MYSQL_QUERY_EVENTS "CREATE TABLE stats_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT)"
+
+
 static char * admin_variables_names[]= {
 	(char *)"admin_credentials",
 	(char *)"stats_credentials",
@@ -609,6 +613,7 @@ static char * admin_variables_names[]= {
 	(char *)"stats_mysql_connection_pool",
 	(char *)"stats_mysql_query_cache",
 	(char *)"stats_mysql_query_digest_to_disk",
+	(char *)"stats_mysql_eventslog_sync_buffer_to_disk",
 	(char *)"stats_system_cpu",
 	(char *)"stats_system_memory",
 	(char *)"mysql_ifaces",
@@ -3780,6 +3785,33 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		 }
 	 }
 
+
+	if (!strncasecmp("DUMP EVENTSLOG ", query_no_space, strlen("DUMP EVENTSLOG "))) {
+		int num_rows = 0;
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command DUMP EVENTSLOG: %s\n", query_no_space);
+		proxy_info("Received command DUMP EVENTSLOG: %s\n", query_no_space);
+
+		// Use a map for better efficiency and readability
+		std::map<std::string, std::pair<SQLite3DB*, SQLite3DB*>> commandMap = {
+			{"DUMP EVENTSLOG FROM BUFFER TO MEMORY", {SPA->statsdb, nullptr}},
+			{"DUMP EVENTSLOG FROM BUFFER TO DISK",   {nullptr,      SPA->statsdb_disk}},
+			{"DUMP EVENTSLOG FROM BUFFER TO BOTH",   {SPA->statsdb, SPA->statsdb_disk}}
+		};
+
+		string s = string(query_no_space);
+		auto it = commandMap.find(s);
+		if (it != commandMap.end()) {
+			num_rows = GloMyLogger->processEvents(it->second.first, it->second.second);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, num_rows);
+		} else {
+			proxy_warning("Received invalid command DUMP EVENTSLOG: %s\n", query_no_space);
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid DUMP EVENTSLOG command");
+		}
+		run_query = false;
+		goto __run_query;
+	}
+
+
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
 
@@ -5809,6 +5841,14 @@ __end_while_pool:
 				curtime2 = curtime2/1000;
 				proxy_info("Automatically saved stats_mysql_query_digest to disk: %llums to write %d entries\n", curtime2-curtime1, r1);
 			}
+			if (GloProxyStats->MySQL_Logger_dump_eventslog_timetoget(curtime)) {
+				unsigned long long curtime1=monotonic_time();
+				int r1 = GloMyLogger->processEvents(nullptr, SPA->statsdb_disk);
+				unsigned long long curtime2=monotonic_time();
+				curtime1 = curtime1/1000;
+				curtime2 = curtime2/1000;
+				proxy_info("Automatically saved history_mysql_query_events to disk: %llums to write %d entries\n", curtime2-curtime1, r1);
+			}
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
 			}
@@ -6025,12 +6065,14 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.stats_mysql_connections = 60;
 	variables.stats_mysql_query_cache = 60;
 	variables.stats_mysql_query_digest_to_disk = 0;
+	variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
 	variables.stats_system_cpu = 60;
 	variables.stats_system_memory = 60;
 	GloProxyStats->variables.stats_mysql_connection_pool = 60;
 	GloProxyStats->variables.stats_mysql_connections = 60;
 	GloProxyStats->variables.stats_mysql_query_cache = 60;
 	GloProxyStats->variables.stats_mysql_query_digest_to_disk = 0;
+	GloProxyStats->variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
 	GloProxyStats->variables.stats_system_cpu = 60;
 #ifndef NOJEM
 	GloProxyStats->variables.stats_system_memory = 60;
@@ -6570,6 +6612,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_prepared_statements_info", ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache_reset", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_events", ADMIN_SQLITE_TABLE_STATS_MYSQL_QUERY_EVENTS);
+
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
@@ -8426,6 +8470,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 			sprintf(intbuf,"%d",variables.stats_mysql_query_digest_to_disk);
 			return strdup(intbuf);
 		}
+		if (!strcasecmp(name,"stats_mysql_eventslog_sync_buffer_to_disk")) {
+			sprintf(intbuf,"%d",variables.stats_mysql_eventslog_sync_buffer_to_disk);
+			return strdup(intbuf);
+		}
 		if (!strcasecmp(name,"stats_system_cpu")) {
 			sprintf(intbuf,"%d",variables.stats_system_cpu);
 			return strdup(intbuf);
@@ -8726,6 +8774,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			if (intv >= 0 && intv <= 24*3600) {
 				variables.stats_mysql_query_digest_to_disk=intv;
 				GloProxyStats->variables.stats_mysql_query_digest_to_disk=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_mysql_eventslog_sync_buffer_to_disk")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 24*3600) {
+				variables.stats_mysql_eventslog_sync_buffer_to_disk=intv;
+				GloProxyStats->variables.stats_mysql_eventslog_sync_buffer_to_disk=intv;
 				return true;
 			} else {
 				return false;

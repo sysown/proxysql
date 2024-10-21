@@ -1,6 +1,7 @@
 #include <fstream>
 #include "proxysql.h"
 #include "cpp.h"
+#include <string.h>
 
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
@@ -62,6 +63,69 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	rows_sent=0;
 	client_stmt_id=0;
 	gtid = NULL;
+	free_on_delete = false; // by default, this is false. This because pointers do not belong to this object
+}
+
+MySQL_Event::MySQL_Event(const MySQL_Event &other) {
+
+	// Initialize basic members using memcpy
+	memcpy(this, &other, sizeof(MySQL_Event));
+
+	// Copy char pointers using strdup (if not null)
+	if (other.username != nullptr) {
+		username = strdup(other.username);
+	}
+	if (other.schemaname != nullptr) {
+		schemaname = strdup(other.schemaname);
+	}
+	// query_ptr is NOT null terminated
+	if (other.query_ptr != nullptr) {
+		size_t maxQueryLen = mysql_thread___eventslog_buffer_max_query_length;
+		size_t lenToCopy = std::min(other.query_len, maxQueryLen);
+		query_ptr = (char*)malloc(lenToCopy + 1); // +1 for null terminator
+		memcpy(query_ptr, other.query_ptr, lenToCopy);
+		query_ptr[lenToCopy] = '\0'; // Null-terminate the copied string
+		query_len = lenToCopy;
+	}
+	// server is NOT null terminated
+	if (other.server != nullptr) {
+		server = (char *)malloc(server_len+1);
+		memcpy(server, other.server, server_len);
+		server[server_len] = '\0';
+	}
+	// client is NOT null terminated
+	if (other.client != nullptr) {
+		client = (char *)malloc(client_len+1);
+		memcpy(client, other.client, client_len);
+		client[client_len] = '\0';
+	}
+	if (other.extra_info != nullptr) {
+		extra_info = strdup(other.extra_info);
+	}
+	free_on_delete = true; // pointers belong to this object
+}
+
+MySQL_Event::~MySQL_Event() {
+	if (free_on_delete == true) {
+		if (username != nullptr) {
+			free(username); username = nullptr;
+		}
+		if (schemaname != nullptr) {
+			free(schemaname); schemaname = nullptr;
+		}
+		if (query_ptr != nullptr) {
+			free(query_ptr); query_ptr = nullptr;
+		}
+		if (server != nullptr) {
+			free(server); server = nullptr;
+		}
+		if (client != nullptr) {
+			free(client); client = nullptr;
+		}
+		if (extra_info != nullptr) {
+			free(extra_info); extra_info = nullptr;
+		}
+	}
 }
 
 void MySQL_Event::set_client_stmt_id(uint32_t client_stmt_id) {
@@ -289,7 +353,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
 	//GloMyLogger->wrlock();
-        //move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
+		//move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
 
 	// write total length , fixed size
 	f->write((const char *)&total_bytes,sizeof(uint64_t));
@@ -459,7 +523,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
 	//GloMyLogger->wrlock();
-        //move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
+		//move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
 
 	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 	return total_bytes; // always 0
@@ -467,7 +531,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 
 extern Query_Processor *GloQPro;
 
-MySQL_Logger::MySQL_Logger() {
+MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0} {
 	events.enabled=false;
 	events.base_filename=NULL;
 	events.datadir=NULL;
@@ -487,6 +551,7 @@ MySQL_Logger::MySQL_Logger() {
 	audit.logfile=NULL;
 	audit.log_file_id=0;
 	audit.max_log_file_size=100*1024*1024;
+	MyLogCB = new MySQL_Logger_CircularBuffer(0);
 };
 
 MySQL_Logger::~MySQL_Logger() {
@@ -498,13 +563,14 @@ MySQL_Logger::~MySQL_Logger() {
 		free(audit.datadir);
 	}
 	free(audit.base_filename);
+	delete MyLogCB;
 };
 
 void MySQL_Logger::wrlock() {
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_lock(&wmutex);
 #else
-  spin_wrlock(&rwlock);
+	spin_wrlock(&rwlock);
 #endif
 };
 
@@ -512,7 +578,7 @@ void MySQL_Logger::wrunlock() {
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_unlock(&wmutex);
 #else
-  spin_wrunlock(&rwlock);
+	spin_wrunlock(&rwlock);
 #endif
 };
 
@@ -674,8 +740,11 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 };
 
 void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
-	if (events.enabled==false) return;
-	if (events.logfile==NULL) return;
+	int elmhs = mysql_thread___eventslog_buffer_history_size;
+	if (elmhs == 0) {
+		if (events.enabled==false) return;
+		if (events.logfile==NULL) return;
+	}
 	// 'MySQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
 	// due to a failed 'CONNECTION_RESET'. Because this scenario isn't a client request, we just return.
 	if (sess->client_myds==NULL || sess->client_myds->myconn== NULL) return;
@@ -791,17 +860,30 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	// right before the write to disk
 	//wrlock();
 	
-	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
-        GloMyLogger->wrlock();
 
-	me.write(events.logfile, sess);
+	if ((events.enabled == true) && (events.logfile != nullptr)) {
+		//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
+		GloMyLogger->wrlock();
+
+		me.write(events.logfile, sess);
 
 
-	unsigned long curpos=events.logfile->tellp();
-	if (curpos > events.max_log_file_size) {
-		events_flush_log_unlocked();
+		unsigned long curpos=events.logfile->tellp();
+		if (curpos > events.max_log_file_size) {
+			events_flush_log_unlocked();
+		}
+		wrunlock();
 	}
-	wrunlock();
+	if (MyLogCB->buffer_size != 0) {
+		MySQL_Event *me2 = new MySQL_Event(me);
+		MyLogCB->insert(me2);
+#if 0
+		for (int i=0; i<10000; i++) {
+			MySQL_Event *me2 = new MySQL_Event(me);
+			MyLogCB->insert(me2);
+		}
+#endif // 0
+	}
 
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
@@ -816,7 +898,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	if (audit.logfile==NULL) return;
 
 	if (sess == NULL) return;
-	if (sess->client_myds == NULL)  return; 
+	if (sess->client_myds == NULL) return;
 
 	MySQL_Connection_userinfo *ui= NULL;
 	if (sess) {
@@ -941,7 +1023,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	//wrlock();
 
 	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
-        GloMyLogger->wrlock();
+	GloMyLogger->wrlock();
 	me.write(audit.logfile, sess);
 
 
@@ -1004,15 +1086,15 @@ unsigned int MySQL_Logger::events_find_next_id() {
 			free(eval_dirname);
 			free(eval_filename);
 		}
-                if (eval_pathname) {
-                        free(eval_pathname);
-                }
+		if (eval_pathname) {
+				free(eval_pathname);
+		}
 		return maxidx;
 	} else {
-        /* could not open directory */
+		/* could not open directory */
 		proxy_error("Unable to open datadir: %s\n", eval_dirname);
 		exit(EXIT_FAILURE);
-	}        
+	}
 	return 0;
 }
 
@@ -1050,19 +1132,239 @@ unsigned int MySQL_Logger::audit_find_next_id() {
 			free(eval_dirname);
 			free(eval_filename);
 		}
-                if (eval_pathname) {
-                        free(eval_pathname);
-                }
+		if (eval_pathname) {
+				free(eval_pathname);
+		}
 		return maxidx;
 	} else {
-        /* could not open directory */
+		/* could not open directory */
 		proxy_error("Unable to open datadir: %s\n", eval_dirname);
 		exit(EXIT_FAILURE);
-	}        
+	}
 	return 0;
 }
 
 void MySQL_Logger::print_version() {
-  fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
+	fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
 };
 
+MySQL_Logger_CircularBuffer::MySQL_Logger_CircularBuffer(size_t size) : event_buffer(size),
+	eventsAddedCount(0), eventsDroppedCount(0),
+	buffer_size(size) {}
+
+MySQL_Logger_CircularBuffer::~MySQL_Logger_CircularBuffer() {
+	std::lock_guard<std::mutex> lock(mutex);
+	for (MySQL_Event* event : event_buffer) {
+		delete event;
+	}
+}
+
+void MySQL_Logger_CircularBuffer::insert(MySQL_Event* event) {
+	std::lock_guard<std::mutex> lock(mutex);
+	eventsAddedCount++;
+	if (event_buffer.size() == buffer_size) {
+		delete event_buffer.front();
+		event_buffer.pop_front();
+		eventsDroppedCount++;
+	}
+	event_buffer.push_back(event);
+}
+
+
+size_t MySQL_Logger_CircularBuffer::size() {
+	std::lock_guard<std::mutex> lock(mutex);
+	return event_buffer.size();
+}
+
+void MySQL_Logger_CircularBuffer::get_all_events(std::vector<MySQL_Event*>& events) {
+	std::lock_guard<std::mutex> lock(mutex);
+	events.reserve(event_buffer.size());
+	events.insert(events.end(), event_buffer.begin(), event_buffer.end());
+	event_buffer.clear();
+}
+
+size_t MySQL_Logger_CircularBuffer::getBufferSize() const {
+	return buffer_size;
+}
+
+void MySQL_Logger_CircularBuffer::setBufferSize(size_t newSize) {
+	std::lock_guard<std::mutex> lock(mutex);
+	buffer_size = newSize;
+}
+
+
+void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& tableName, size_t numEvents, std::vector<MySQL_Event*>::const_iterator begin){
+	int rc = 0;
+	sqlite3_stmt *statement1=NULL;
+	sqlite3_stmt *statement32=NULL;
+	char *query1=NULL;
+	char *query32=NULL;
+	const int numcols = 17;
+	std::string query1s = "";
+	std::string query32s = "";
+
+	std::string coldefs = "(thread_id, username, schemaname, start_time, end_time, query_digest, query, server, client, event_type, hid, extra_info, affected_rows, last_insert_id, rows_sent, client_stmt_id, gtid)";
+
+	query1s  = "INSERT INTO " + tableName + coldefs + " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+	query32s = "INSERT INTO " + tableName + coldefs + " VALUES " + generate_multi_rows_query(32, numcols);
+	query1  = (char *)query1s.c_str();
+	query32 = (char *)query32s.c_str();
+	rc = db->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+	rc = db->prepare_v2(query32, &statement32);
+	ASSERT_SQLITE_OK(rc, db);
+
+	char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
+
+	db->execute("BEGIN");
+
+	int row_idx=0;
+	int max_bulk_row_idx=numEvents/32;
+	max_bulk_row_idx=max_bulk_row_idx*32;
+	for (std::vector<MySQL_Event *>::const_iterator it = begin ; it != begin + numEvents; ++it) {
+		MySQL_Event *event = *it;
+		int idx=row_idx%32;
+
+		if (row_idx<max_bulk_row_idx) { // bulk
+			//Bind parameters. Handle potential errors in binding.
+			rc = (*proxy_sqlite3_bind_int)(statement32, (idx*numcols)+1, event->thread_id); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+2, event->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+3, event->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+4, event->start_time); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+5, event->end_time); ASSERT_SQLITE_OK(rc, db);
+			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+9, event->client, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int)(statement32, (idx*numcols)+10, (int)event->et); ASSERT_SQLITE_OK(rc, db); // Assuming event_type is an enum mapped to integers
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+11, event->hid); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+12, event->extra_info, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+13, event->affected_rows); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+14, event->last_insert_id); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+15, event->rows_sent); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int)(statement32, (idx*numcols)+16, event->client_stmt_id); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+17, event->gtid, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			if (idx==31) {
+				SAFE_SQLITE3_STEP2(statement32);
+				rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, db);
+				rc=(*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, db);
+			}
+		} else { // single row
+			//Bind parameters. Handle potential errors in binding.
+			rc = (*proxy_sqlite3_bind_int)(statement1, 1, event->thread_id); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 2, event->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 3, event->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 4, event->start_time); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 5, event->end_time); ASSERT_SQLITE_OK(rc, db);
+			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
+			rc = (*proxy_sqlite3_bind_text)(statement1, 8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 9, event->client, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int)(statement1, 10, (int)event->et); ASSERT_SQLITE_OK(rc, db); // Assuming event_type is an enum mapped to integers
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 11, event->hid); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 12, event->extra_info, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 13, event->affected_rows); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 14, event->last_insert_id); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int64)(statement1, 15, event->rows_sent); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_int)(statement1, 16, event->client_stmt_id); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement1, 17, event->gtid, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			SAFE_SQLITE3_STEP2(statement1);
+			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+		}
+		row_idx++;
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement32);
+	db->execute("COMMIT");
+}
+
+
+int MySQL_Logger::processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk) {
+	unsigned long long startTimeMicros = monotonic_time();
+	std::vector<MySQL_Event*> events = {};
+	MyLogCB->get_all_events(events);
+
+	metrics.getAllEventsCallsCount++;
+	if (events.empty()) return 0;
+
+	unsigned long long afterGetAllEventsTimeMicros = monotonic_time();
+	metrics.getAllEventsEventsCount += events.size();
+	metrics.totalGetAllEventsDiskCopyTimeMicros += (afterGetAllEventsTimeMicros-startTimeMicros);
+
+	if (statsdb_disk != nullptr) {
+		// Write to on-disk database first
+		unsigned long long diskStartTimeMicros = monotonic_time();
+		insertMysqlEventsIntoDb(statsdb_disk, "history_mysql_query_events", events.size(), events.begin());
+		unsigned long long diskEndTimeMicros = monotonic_time();
+		metrics.diskCopyCount++;
+		metrics.totalDiskCopyTimeMicros += (diskEndTimeMicros - diskStartTimeMicros);
+		metrics.totalEventsCopiedToDisk += events.size();
+	}
+
+	if (statsdb != nullptr) {
+		unsigned long long memoryStartTimeMicros = monotonic_time();
+		size_t maxInMemorySize = mysql_thread___eventslog_table_memory_size;
+		size_t numEventsToInsert = std::min(events.size(), maxInMemorySize);
+
+		if (events.size() >= maxInMemorySize) {
+			// delete everything from stats_mysql_query_events
+			statsdb->execute("DELETE FROM stats_mysql_query_events");
+		} else {
+			// make enough room in stats_mysql_query_events
+			int current_rows = statsdb->return_one_int((char *)"SELECT COUNT(*) FROM stats_mysql_query_events");
+			int rows_to_keep = maxInMemorySize - events.size();
+			if (current_rows > rows_to_keep) {
+				int rows_to_delete = (current_rows - rows_to_keep);
+				string delete_stmt = "DELETE FROM stats_mysql_query_events ORDER BY id LIMIT " + to_string(rows_to_delete);
+				statsdb->execute(delete_stmt.c_str());
+			}
+		}
+
+		// Pass iterators to avoid copying
+		insertMysqlEventsIntoDb(statsdb, "stats_mysql_query_events", numEventsToInsert, events.begin());
+		unsigned long long memoryEndTimeMicros = monotonic_time();
+		metrics.memoryCopyCount++;
+		metrics.totalMemoryCopyTimeMicros += (memoryEndTimeMicros - memoryStartTimeMicros);
+		metrics.totalEventsCopiedToMemory += numEventsToInsert;
+	}
+
+	// cleanup of all events
+	for (MySQL_Event* event : events) {
+		delete event;
+	}
+	size_t ret = events.size();
+#if 1 // FIXME: TEMPORARY , TO REMOVE
+	std::cerr << "Circular:" << endl;
+	std::cerr << "  EventsAddedCount:   " << MyLogCB->getEventsAddedCount() << endl;
+	std::cerr << "  EventsDroppedCount: " << MyLogCB->getEventsDroppedCount() << endl;
+	std::cerr << "  Size:               " << MyLogCB->size() << endl;
+	std::cerr << "memoryCopy: Count: " << metrics.memoryCopyCount << " , TimeUs: " << metrics.totalMemoryCopyTimeMicros << endl;
+	std::cerr << "diskCopy:   Count: " << metrics.diskCopyCount   << " , TimeUs: " << metrics.totalDiskCopyTimeMicros << endl;
+#endif // 1 , FIXME: TEMPORARY , TO REMOVE
+	return ret;
+}
+
+
+std::unordered_map<std::string, unsigned long long> MySQL_Logger::getAllMetrics() const {
+    std::unordered_map<std::string, unsigned long long> allMetrics;
+
+    allMetrics["memoryCopyCount"] = metrics.memoryCopyCount;
+    allMetrics["diskCopyCount"] = metrics.diskCopyCount;
+    allMetrics["getAllEventsCallsCount"] = metrics.getAllEventsCallsCount;
+    allMetrics["getAllEventsEventsCount"] = metrics.getAllEventsEventsCount;
+    allMetrics["totalMemoryCopyTimeMicros"] = metrics.totalMemoryCopyTimeMicros;
+    allMetrics["totalDiskCopyTimeMicros"] = metrics.totalDiskCopyTimeMicros;
+    allMetrics["totalGetAllEventsDiskCopyTimeMicros"] = metrics.totalGetAllEventsDiskCopyTimeMicros;
+    allMetrics["totalEventsCopiedToMemory"] = metrics.totalEventsCopiedToMemory;
+    allMetrics["totalEventsCopiedToDisk"] = metrics.totalEventsCopiedToDisk;
+    //allMetrics["eventsAddedToBufferCount"] = metrics.eventsAddedToBufferCount;
+    //allMetrics["eventsDroppedFromBufferCount"] = metrics.eventsDroppedFromBufferCount;
+    allMetrics["circularBuffereventsAddedCount"] = MyLogCB->getEventsAddedCount();
+    allMetrics["circularBufferEventsDroppedCount"] = MyLogCB->getEventsDroppedCount();
+    allMetrics["circularBufferEventsSize"] = MyLogCB->size();
+
+    return allMetrics;
+}

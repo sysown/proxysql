@@ -79,6 +79,7 @@
 
 #define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST "CREATE TABLE history_mysql_query_digest (dump_time INT , hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL)"
 
+#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS "CREATE TABLE history_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT)"
 class ProxySQL_Statistics {
 	SQLite3DB *statsdb_mem; // internal statistics DB
 	std::vector<table_def_t *> *tables_defs_statsdb_mem;
@@ -90,6 +91,7 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_MySQL_Threads_Handler;
 	unsigned long long next_timer_mysql_query_digest_to_disk;
 	unsigned long long next_timer_system_cpu;
+	unsigned long long last_timer_mysql_dump_eventslog_to_disk = 0;
 #ifndef NOJEM
 	unsigned long long next_timer_system_memory;
 #endif
@@ -105,6 +107,7 @@ class ProxySQL_Statistics {
 		int stats_mysql_query_cache;
 		int stats_system_cpu;
 		int stats_mysql_query_digest_to_disk;
+		int stats_mysql_eventslog_sync_buffer_to_disk;
 #ifndef NOJEM
 		int stats_system_memory;
 #endif
@@ -117,6 +120,16 @@ class ProxySQL_Statistics {
 	bool MySQL_Threads_Handler_timetoget(unsigned long long);
 	bool mysql_query_digest_to_disk_timetoget(unsigned long long);
 	bool system_cpu_timetoget(unsigned long long);
+	/**
+	 * @brief Checks if it's time to dump the events log to disk based on the configured interval.
+	 * @param currentTimeMicros The current time in microseconds.
+	 * @return True if it's time to dump the events log, false otherwise.
+	 *
+	 * This function checks if the current time exceeds the last dump time plus the configured dump interval.
+	 * The dump interval is retrieved from the ProxySQL configuration.  If the dump interval is 0, no dumping is performed.
+	 */
+	bool MySQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros);
+
 #ifndef NOJEM
 	bool system_memory_timetoget(unsigned long long);
 #endif
