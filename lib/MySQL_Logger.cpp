@@ -531,8 +531,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 
 extern Query_Processor *GloQPro;
 
-//MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
-MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
+MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0} {
 	events.enabled=false;
 	events.base_filename=NULL;
 	events.datadir=NULL;
@@ -1348,3 +1347,24 @@ int MySQL_Logger::processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk) 
 	return ret;
 }
 
+
+std::unordered_map<std::string, unsigned long long> MySQL_Logger::getAllMetrics() const {
+    std::unordered_map<std::string, unsigned long long> allMetrics;
+
+    allMetrics["memoryCopyCount"] = metrics.memoryCopyCount;
+    allMetrics["diskCopyCount"] = metrics.diskCopyCount;
+    allMetrics["getAllEventsCallsCount"] = metrics.getAllEventsCallsCount;
+    allMetrics["getAllEventsEventsCount"] = metrics.getAllEventsEventsCount;
+    allMetrics["totalMemoryCopyTimeMicros"] = metrics.totalMemoryCopyTimeMicros;
+    allMetrics["totalDiskCopyTimeMicros"] = metrics.totalDiskCopyTimeMicros;
+    allMetrics["totalGetAllEventsDiskCopyTimeMicros"] = metrics.totalGetAllEventsDiskCopyTimeMicros;
+    allMetrics["totalEventsCopiedToMemory"] = metrics.totalEventsCopiedToMemory;
+    allMetrics["totalEventsCopiedToDisk"] = metrics.totalEventsCopiedToDisk;
+    //allMetrics["eventsAddedToBufferCount"] = metrics.eventsAddedToBufferCount;
+    //allMetrics["eventsDroppedFromBufferCount"] = metrics.eventsDroppedFromBufferCount;
+    allMetrics["circularBuffereventsAddedCount"] = MyLogCB->getEventsAddedCount();
+    allMetrics["circularBufferEventsDroppedCount"] = MyLogCB->getEventsDroppedCount();
+    allMetrics["circularBufferEventsSize"] = MyLogCB->size();
+
+    return allMetrics;
+}

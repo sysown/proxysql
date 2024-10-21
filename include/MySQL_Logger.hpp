@@ -324,8 +324,8 @@ private:
 		std::atomic<unsigned long long> totalEventsCopiedToMemory;
 		/** @brief Total number of events copied to the on-disk database. */
 		std::atomic<unsigned long long> totalEventsCopiedToDisk;
-		std::atomic<unsigned long long> eventsAddedToBufferCount;     ///< Total number of events added to the buffer.
-		std::atomic<unsigned long long> eventsCurrentlyInBufferCount; ///< Number of events currently in the buffer.
+		//std::atomic<unsigned long long> eventsAddedToBufferCount;     ///< Total number of events added to the buffer.
+		//std::atomic<unsigned long long> eventsCurrentlyInBufferCount; ///< Number of events currently in the buffer.
 	} metrics;
 
 
@@ -494,6 +494,19 @@ public:
 	 * The function assumes ownership of the MySQL_Event pointers and deletes them after processing.
 	 */
 	int processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk);
+
+	/**
+	 * @brief Retrieves all performance metrics from the logger and circular buffer.
+	 * @return An unordered map containing all performance metrics.
+	 * The keys are strings representing the metric names, and the values are unsigned long long integers representing the metric values.
+	 *
+	 * This function gathers all relevant performance metrics from the logger's internal EventLogMetrics structure and the circular buffer.
+	 * It returns these metrics as a key-value map for easy access.
+	 * The function ensures thread safety by acquiring a lock on the circular buffer's mutex before accessing its internal metrics.
+	 */
+	std::unordered_map<std::string, unsigned long long> getAllMetrics() const;
+
+
 };
 
 
