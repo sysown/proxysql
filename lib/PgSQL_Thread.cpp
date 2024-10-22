@@ -3932,13 +3932,14 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___query_digests_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_grouping_limit");
 	pgsql_thread___query_digests_groups_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_groups_grouping_limit");
 	pgsql_thread___query_digests_keep_comment = (bool)GloPTH->get_variable_int((char*)"query_digests_keep_comment");
+
+	variables.query_cache_stores_empty_result = (bool)GloPTH->get_variable_int((char*)"query_cache_stores_empty_result");
 	/*
 	variables.min_num_servers_lantency_awareness = GloPTH->get_variable_int((char*)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas = GloPTH->get_variable_int((char*)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query = (bool)GloPTH->get_variable_int((char*)"stats_time_backend_query");
 	variables.stats_time_query_processor = (bool)GloPTH->get_variable_int((char*)"stats_time_query_processor");
-	variables.query_cache_stores_empty_result = (bool)GloPTH->get_variable_int((char*)"query_cache_stores_empty_result");
-	
+
 	mysql_thread___client_session_track_gtid = (bool)GloPTH->get_variable_int((char*)"client_session_track_gtid");
 
 #ifdef IDLE_THREADS
