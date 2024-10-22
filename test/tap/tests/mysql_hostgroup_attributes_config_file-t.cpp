@@ -23,11 +23,11 @@ using std::fstream;
 
 int validate_mysql_hostgroup_attributes_from_config(MYSQL* admin) {
 	string hostgroup_attributes_values[5][12] = {
-			{"1", "900000", "-1", "11", "ic1", "0", "1", "9001", "{\"isv\":100}", "{\"hs\":200}", "{\"weight\":100,\"max_connections\":500}", "com1"},
-			{"2", "900001", "0", "12", "ic2", "1", "0", "9002", "{\"isv\":101}", "{\"hs\":201}", "{\"weight\":101,\"max_connections\":501}", "com2"},
-			{"3", "900002", "1", "13", "ic3", "0", "1", "9003", "{\"isv\":102}", "{\"hs\":202}", "{\"weight\":102,\"max_connections\":502}", "com3"},
-			{"4", "900003", "-1", "14", "ic4", "1", "0", "9004", "{\"isv\":103}", "{\"hs\":203}", "{\"weight\":103,\"max_connections\":503}", "com4"},
-			{"5", "900004", "0", "15", "ic5", "0", "1", "9005", "{\"isv\":104}", "{\"hs\":204}", "{\"weight\":104,\"max_connections\":504}", "com5"}};
+			{"900000", "900000", "-1", "11", "ic1", "0", "1", "9001", "{\"isv\":100}", "{\"hs\":200}", "{\"weight\":100,\"max_connections\":500}", "attributes test hostgroup 900000"},
+			{"900001", "900001", "0", "12", "ic2", "1", "0", "9002", "{\"isv\":101}", "{\"hs\":201}", "{\"weight\":101,\"max_connections\":501}", "attributes test hostgroup 900001"},
+			{"900002", "900002", "1", "13", "ic3", "0", "1", "9003", "{\"isv\":102}", "{\"hs\":202}", "{\"weight\":102,\"max_connections\":502}", "attributes test hostgroup 900002"},
+			{"900003", "900003", "-1", "14", "ic4", "1", "0", "9004", "{\"isv\":103}", "{\"hs\":203}", "{\"weight\":103,\"max_connections\":503}", "attributes test hostgroup 900003"},
+			{"900004", "900004", "0", "15", "ic5", "0", "1", "9005", "{\"isv\":104}", "{\"hs\":204}", "{\"weight\":104,\"max_connections\":504}", "attributes test hostgroup 900004"}};
 
 	auto check_result = [&] () {
 		MYSQL_RES* myres = mysql_store_result(admin);
@@ -87,7 +87,7 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 		"mysql_hostgroup_attributes:",
 		"(",
 		"	{",
-		"		hostgroup_id=1",
+		"		hostgroup_id=900000",
 		"		max_num_online_servers=900000",
 		"		autocommit=-1",
 		"		free_connections_pct=11",
@@ -98,10 +98,10 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 		"		ignore_session_variables=\"{\"isv\":100}\"",
 		"		hostgroup_settings=\"{\"hs\":200}\"",
 		"		servers_defaults=\"{\"weight\":100,\"max_connections\":500}\"",
-		"		comment=\"com1\"",
+		"		comment=\"attributes test hostgroup 900000\"",
 		"	},",
 		"	{",
-		"		hostgroup_id=2",
+		"		hostgroup_id=900001",
 		"		max_num_online_servers=900001",
 		"		autocommit=0",
 		"		free_connections_pct=12",
@@ -112,10 +112,10 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 		"		ignore_session_variables=\"{\"isv\":101}\"",
 		"		hostgroup_settings=\"{\"hs\":201}\"",
 		"		servers_defaults=\"{\"weight\":101,\"max_connections\":501}\"",
-		"		comment=\"com2\"",
+		"		comment=\"attributes test hostgroup 900001\"",
 		"	},",
 		"	{",
-		"		hostgroup_id=3",
+		"		hostgroup_id=900002",
 		"		max_num_online_servers=900002",
 		"		autocommit=1",
 		"		free_connections_pct=13",
@@ -126,10 +126,10 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 		"		ignore_session_variables=\"{\"isv\":102}\"",
 		"		hostgroup_settings=\"{\"hs\":202}\"",
 		"		servers_defaults=\"{\"weight\":102,\"max_connections\":502}\"",
-		"		comment=\"com3\"",
+		"		comment=\"attributes test hostgroup 900002\"",
 		"	},",
 		"	{",
-		"		hostgroup_id=4",
+		"		hostgroup_id=900003",
 		"		max_num_online_servers=900003",
 		"		autocommit=-1",
 		"		free_connections_pct=14",
@@ -140,10 +140,10 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 		"		ignore_session_variables=\"{\"isv\":103}\"",
 		"		hostgroup_settings=\"{\"hs\":203}\"",
 		"		servers_defaults=\"{\"weight\":103,\"max_connections\":503}\"",
-		"		comment=\"com4\"",
+		"		comment=\"attributes test hostgroup 900003\"",
 		"	},",
 		"	{",
-		"		hostgroup_id=5",
+		"		hostgroup_id=900004",
 		"		max_num_online_servers=900004",
 		"		autocommit=0",
 		"		free_connections_pct=15",
@@ -154,7 +154,7 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 		"		ignore_session_variables=\"{\"isv\":104}\"",
 		"		hostgroup_settings=\"{\"hs\":204}\"",
 		"		servers_defaults=\"{\"weight\":104,\"max_connections\":504}\"",
-		"		comment=\"com5\"",
+		"		comment=\"attributes test hostgroup 900004\"",
 		"	}",
 		")"
 	};
