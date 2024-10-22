@@ -1856,14 +1856,14 @@ handler_again:
 					update_bytes_recv(bytes_recv);
 					processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 					
-					bool pause_loop = (processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8);
-
-					if (pause_loop == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
-						pause_loop = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
+					bool suspend_resultset_fetch = (processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8);
+					 
+					if (suspend_resultset_fetch == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
+						suspend_resultset_fetch = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
 					}
 					
 					if (
-						pause_loop
+						suspend_resultset_fetch
 						||
 						(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 						) {
@@ -1884,14 +1884,14 @@ handler_again:
 				update_bytes_recv(bytes_recv);
 				processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 
-				bool pause_loop = (processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8);
+				bool suspend_resultset_fetch = (processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8);
 
-				if (pause_loop == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
-					pause_loop = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
+				if (suspend_resultset_fetch == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
+					suspend_resultset_fetch = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
 				}
 
 				if (
-					pause_loop
+					suspend_resultset_fetch
 					||
 					(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
 					) {
