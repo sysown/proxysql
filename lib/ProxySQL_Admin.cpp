@@ -3761,10 +3761,18 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	if (query_no_space_length) {
 		// fix bug #925
-		while (query_no_space[query_no_space_length-1]==';' || query_no_space[query_no_space_length-1]==' ') {
+		while (query_no_space_length &&
+			(query_no_space[query_no_space_length-1]==';' || query_no_space[query_no_space_length-1]==' ')) {
 			query_no_space_length--;
 			query_no_space[query_no_space_length]=0;
 		}
+	}
+
+	if (query_no_space_length == 0) {
+		proxy_warning("Empty query\n");
+		SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char*)"Empty query");
+		run_query = false;
+		goto __run_query;
 	}
 
 	// add global mutex, see bug #1188
