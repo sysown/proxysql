@@ -36,6 +36,18 @@ public:
 
 TestMetrics metrics;
 
+void printQueryCacheMetrics() {
+	diag("Before: Query Cache Metrics");
+	for (const auto& obj : metrics.before)
+		diag("%s : %d", obj.first.c_str(), obj.second);
+	diag("===========================");
+
+	diag("After: Query Cache Metrics");
+	for (const auto& obj : metrics.after)
+		diag("%s : %d", obj.first.c_str(), obj.second);
+	diag("===========================");
+}
+
 class Timer {
 public:
     Timer() : lastTime(std::chrono::high_resolution_clock::now()) {}
@@ -62,7 +74,6 @@ PGConnPtr createNewConnection(ConnType conn_type, bool with_ssl) {
     int port = (conn_type == BACKEND) ? cl.pgsql_port : cl.admin_port;
     const char* username = (conn_type == BACKEND) ? cl.pgsql_username : cl.admin_username;
     const char* password = (conn_type == BACKEND) ? cl.pgsql_password : cl.admin_password;
-    
 
     ss << "host=" << host << " port=" << port;
     ss << " user=" << username << " password=" << password;
@@ -229,11 +240,6 @@ void execute_multi_threaded_purge_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.before = getQueryCacheMertrics(admin_conn);
 
-    diag("Before: Query Cache Metrics");
-    for (const auto& obj : metrics.before)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
-
     for (unsigned int i = 0; i < NUM_THREADS; i++) {
         mythreads[i] = std::thread(run_pgsleep_thread, &timer_results[i]);
     }
@@ -252,10 +258,7 @@ void execute_multi_threaded_purge_test(PGconn* admin_conn, PGconn* conn) {
     usleep(5000000);
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     // difference query cache metrics
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
@@ -289,20 +292,12 @@ void execute_basic_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.before = getQueryCacheMertrics(admin_conn);
 
-    diag("Before: Query Cache Metrics");
-    for (const auto& obj : metrics.before)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
-
     if (!executeQueries(conn, { "SELECT 1" }))
         return;
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-	diag("After: Query Cache Metrics");
-	for (const auto& obj : metrics.after)
-		diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
 	// difference query cache metrics
     checkMetricDelta<>("Query_Cache_Memory_bytes", 1, std::greater<int>());
@@ -321,10 +316,7 @@ void execute_basic_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
@@ -344,10 +336,7 @@ void execute_basic_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 1, std::greater<int>());
     checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
@@ -370,10 +359,7 @@ void execute_basic_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
@@ -411,11 +397,6 @@ void execute_data_manipulation_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.before = getQueryCacheMertrics(admin_conn);
 
-    diag("Before DML Operations: Query Cache Metrics");
-    for (const auto& obj : metrics.before)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
-
     // INSERT
     if (!executeQueries(conn, { "INSERT INTO test_table(id, name) VALUES (1, 'test')" }))
         return;
@@ -430,10 +411,7 @@ void execute_data_manipulation_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After DML Operations: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     // Validate that no cache entries were created for DML operations
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
@@ -471,20 +449,12 @@ void execute_threshold_resultset_size_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.before = getQueryCacheMertrics(admin_conn);
 
-    diag("Before: Query Cache Metrics");
-    for (const auto& obj : metrics.before)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
-
     if (!executeQueries(conn, { "SELECT REPEAT('X', 8197)" }))
         return;
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     // difference query cache metrics
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
@@ -510,10 +480,7 @@ void execute_threshold_resultset_size_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     // difference query cache metrics
     checkMetricDelta<>("Query_Cache_Memory_bytes", 8197, std::greater<int>());
@@ -532,10 +499,7 @@ void execute_threshold_resultset_size_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     // difference query cache metrics
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
@@ -570,20 +534,12 @@ void execute_multi_statement_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.before = getQueryCacheMertrics(admin_conn);
 
-    diag("Before: Query Cache Metrics");
-    for (const auto& obj : metrics.before)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
-
     if (!executeQueries(conn, { "SELECT 1; SELECT 2; SELECT 3;" }))
         return;
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     // difference query cache metrics
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
@@ -602,10 +558,7 @@ void execute_multi_statement_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
@@ -638,20 +591,12 @@ void execute_transaction_status_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.before = getQueryCacheMertrics(admin_conn);
 
-    diag("Before: Query Cache Metrics");
-    for (const auto& obj : metrics.before)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
-
     if (!executeQueries(conn, { "SELECT 1" }))
         return;
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 1, std::greater<int>());
     checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
@@ -672,10 +617,7 @@ void execute_transaction_status_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
@@ -702,10 +644,7 @@ void execute_transaction_status_test(PGconn* admin_conn, PGconn* conn) {
 
     metrics.after = getQueryCacheMertrics(admin_conn);
 
-    diag("After: Query Cache Metrics");
-    for (const auto& obj : metrics.after)
-        diag("%s : %d", obj.first.c_str(), obj.second);
-    diag("===========================");
+    printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
@@ -728,6 +667,156 @@ void execute_transaction_status_test(PGconn* admin_conn, PGconn* conn) {
         return;
 }
 
+void execute_query_cache_store_empty_result_test(PGconn* admin_conn, PGconn* conn) {
+
+	if (!executeQueries(admin_conn, {
+		"DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl,cache_empty_result) VALUES (2,1,'^SELECT',4000,0)",
+		"LOAD PGSQL QUERY RULES TO RUNTIME",
+		"UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_stores_empty_result'",
+		"LOAD PGSQL VARIABLES TO RUNTIME"
+		}))
+		return;
+
+	metrics.before = getQueryCacheMertrics(admin_conn);
+
+	if (!executeQueries(conn, {"SELECT 1 WHERE 1!=1"}))
+		return;
+
+	metrics.after = getQueryCacheMertrics(admin_conn);
+
+    printQueryCacheMetrics();
+
+	checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+
+    metrics.swap();
+
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl,cache_empty_result) VALUES (3,1,'^SELECT',4000,1)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME"
+        }))
+        return;
+
+	if (!executeQueries(conn, { "SELECT 1 WHERE 1!=1" }))
+		return;
+
+	metrics.after = getQueryCacheMertrics(admin_conn);
+
+    printQueryCacheMetrics();
+
+	checkMetricDelta<>("Query_Cache_Memory_bytes", 1, std::greater<int>());
+	checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_SET", 1, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_bytes_IN", 1, std::greater<int>());
+	checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_Entries", 1, std::equal_to<int>());
+
+    metrics.swap();
+
+	if (!executeQueries(conn, { "SELECT 1 WHERE 1!=1" }))
+		return;
+
+	metrics.after = getQueryCacheMertrics(admin_conn);
+
+    printQueryCacheMetrics();
+
+    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", 1, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_OUT", 1, std::greater<int>());
+    checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+
+    usleep(5000000);  // Sleep for 5 seconds
+
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (4,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME"
+        }))
+        return;
+
+    metrics.before = getQueryCacheMertrics(admin_conn);
+
+    if (!executeQueries(conn, { "SELECT 1 WHERE 1!=1" }))
+        return;
+
+    metrics.after = getQueryCacheMertrics(admin_conn);
+
+    printQueryCacheMetrics();
+
+    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+
+    metrics.swap();
+
+    if (!executeQueries(admin_conn, {
+        "UPDATE global_variables SET variable_value=1 WHERE variable_name='pgsql-query_cache_stores_empty_result'",
+        "LOAD PGSQL VARIABLES TO RUNTIME"
+        }))
+        return;
+
+    if (!executeQueries(conn, { "SELECT 1 WHERE 1!=1" }))
+        return;
+
+    metrics.after = getQueryCacheMertrics(admin_conn);
+
+    printQueryCacheMetrics();
+
+    checkMetricDelta<>("Query_Cache_Memory_bytes", 1, std::greater<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 1, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_IN", 1, std::greater<int>());
+    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Entries", 1, std::equal_to<int>());
+
+	metrics.swap();
+
+	if (!executeQueries(conn, { "SELECT 1 WHERE 1!=1" }))
+		return;
+
+	metrics.after = getQueryCacheMertrics(admin_conn);
+
+    printQueryCacheMetrics();
+
+	checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_GET_OK", 1, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_bytes_OUT", 1, std::greater<int>());
+	checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+	checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+
+
+	if (!executeQueries(admin_conn, {
+		"DELETE FROM pgsql_query_rules",
+		"LOAD PGSQL QUERY RULES TO RUNTIME",
+		}))
+		return;
+}
+
 std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Basic Test", execute_basic_test },
 	{ "Data Manipulation Test", execute_data_manipulation_test },
@@ -735,7 +824,8 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Threshold Resultset Size Test", execute_threshold_resultset_size_test },
 	{ "Multi Threaded Test", execute_multi_threaded_test },
 	{ "Multi Threaded Purge Test", execute_multi_threaded_purge_test },
-	{ "Transaction Status Test", execute_transaction_status_test }
+	{ "Transaction Status Test", execute_transaction_status_test },
+    { "Query Cache Store Empty Result Test", execute_query_cache_store_empty_result_test }
 };
 
 void execute_tests(bool with_ssl, bool diff_conn) {
@@ -753,7 +843,7 @@ void execute_tests(bool with_ssl, bool diff_conn) {
             return;
 
 		for (const auto& test : tests) {
-			diag(">>>> Running %s - Shared Connection:%d <<<<", test.first.c_str(), !diff_conn);
+			diag(">>>> Running %s - Shared Connection: %s <<<<", test.first.c_str(), !diff_conn ? "True" : "False");
 			test.second(admin_conn.get(), backend_conn.get());
             diag(">>>> Done <<<<");
 		}
@@ -764,7 +854,7 @@ void execute_tests(bool with_ssl, bool diff_conn) {
             return;
 
         for (const auto& test : tests) {
-            diag(">>>> Running %s - Shared Connection:%d <<<<", test.first.c_str(), diff_conn);
+            diag(">>>> Running %s - Shared Connection: %s <<<<", test.first.c_str(), diff_conn ? "False" : "True");
 
             PGConnPtr admin_conn = createNewConnection(ConnType::ADMIN, with_ssl);
             PGConnPtr backend_conn = createNewConnection(ConnType::BACKEND, with_ssl);
@@ -782,13 +872,13 @@ void execute_tests(bool with_ssl, bool diff_conn) {
 
 int main(int argc, char** argv) {
 
-    plan(117*2); // Total number of tests planned
+    plan(165*2); // Total number of tests planned
 
     if (cl.getEnv())
         return exit_status();
 
-    execute_tests(false, false); // without SSL
-    execute_tests(false, true); // without SSL
+    execute_tests(false, false);
+	execute_tests(false, true);
 
     return exit_status();
 }
