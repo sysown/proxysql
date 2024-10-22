@@ -177,7 +177,7 @@ class Query_Processor_Output {
 		mirror_flagOUT=-1;
 		next_query_flagIN=-1;
 		cache_ttl=-1;
-		cache_empty_result=1;
+		cache_empty_result=-1;
 		cache_timeout=-1;
 		reconnect=-1;
 		timeout=-1;
