@@ -148,7 +148,7 @@ struct cpu_timer
 extern int admin_load_main_;
 extern bool admin_nostart_;
 
-extern Query_Cache *GloQC;
+//extern MySQL_Query_Cache *GloMyQC;
 extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;

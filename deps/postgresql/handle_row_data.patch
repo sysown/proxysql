@@ -6,10 +6,10 @@ index 2265ab5..56883ec 100644
         return conn->result;
  }
  
-+int PShandleRowData(PGconn *conn, PSresult* result) {
++int PShandleRowData(PGconn *conn, bool is_first_packet, PSresult* result) {
 +    if (!conn || !result)
 +		return 1;
-+    return psHandleRowData(conn, result);
++    return psHandleRowData(conn, is_first_packet, result);
 +}
 +
 diff --git src/interfaces/libpq/fe-misc.c src/interfaces/libpq/fe-misc.c
@@ -60,7 +60,7 @@ diff --git src/interfaces/libpq/fe-protocol3.c src/interfaces/libpq/fe-protocol3
 index 9c4aa7e..de0746c 100644
 --- src/interfaces/libpq/fe-protocol3.c
 +++ src/interfaces/libpq/fe-protocol3.c
-@@ -2299,3 +2299,105 @@ build_startup_packet(const PGconn *conn, char *packet,
+@@ -2299,3 +2299,109 @@ build_startup_packet(const PGconn *conn, char *packet,
  
  	return packet_len;
  }
@@ -78,7 +78,7 @@ index 9c4aa7e..de0746c 100644
 + * -1  -> Not enough data to process the message; the next call should be to PQconsumeInput.
 + */
 +int
-+psHandleRowData(PGconn *conn, PSresult* result)
++psHandleRowData(PGconn *conn, bool isFirstPacket, PSresult* result)
 +{
 +	char	id;
 +	int		msgLength;
@@ -121,6 +121,10 @@ index 9c4aa7e..de0746c 100644
 +           return EOF;
 +       return 1;
 +   }
++
++   /* First data row should be skipped since it is part of PGresult, which contains row description */
++   if (isFirstPacket)
++		return 1;
 +
 +	if (conn->result != NULL &&
 +		conn->result->resultStatus == PGRES_TUPLES_OK)
@@ -194,7 +198,7 @@ index c5170d1..3e3cc34 100644
  extern const PGresult *PQgetResultFromPGconn(PGconn *conn);
  
 +/* ProxySQL special handler function */
-+extern int PShandleRowData(PGconn *conn, PSresult* result);
++extern int PShandleRowData(PGconn *conn, bool is_first_packet, PSresult* result);
 +
  #ifdef __cplusplus
  }
@@ -210,7 +214,7 @@ index a951f49..e1df8b5 100644
 + /*
 +  * ProxySQL light weight routines
 +  */
-+extern int  psHandleRowData(PGconn *conn, PSresult* result);								 
++extern int  psHandleRowData(PGconn *conn, bool is_first_packet, PSresult* result);								 
 +
  /* === in fe-misc.c === */
  
