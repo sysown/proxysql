@@ -975,6 +975,42 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	if (sqlite_resultset)
 		delete sqlite_resultset;
 
+	query = (char *)"SELECT * FROM mysql_hostgroup_attributes";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_hostgroup_attributes: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			data += "mysql_hostgroup_attributes:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "hostgroup_id", r->fields[0], "");
+				addField(data, "max_num_online_servers", r->fields[1], "");
+				addField(data, "autocommit", r->fields[2], "");
+				addField(data, "free_connections_pct", r->fields[3], "");
+				addField(data, "init_connect", r->fields[4]);
+				addField(data, "multiplex", r->fields[5], "");
+				addField(data, "connection_warming", r->fields[6], "");
+				addField(data, "throttle_connections_per_sec", r->fields[7], "");
+				addField(data, "ignore_session_variables", r->fields[8]);
+				addField(data, "hostgroup_settings", r->fields[9]);
+				addField(data, "servers_defaults", r->fields[10]);
+				addField(data, "comment", r->fields[11]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
 	return 0;
 }
 
@@ -1289,6 +1325,97 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
                     rows++;
             }
     }
+	if (root.exists("mysql_hostgroup_attributes") == true) {
+		const Setting &mysql_hostgroup_attributes = root["mysql_hostgroup_attributes"];
+		int count = mysql_hostgroup_attributes.getLength();
+
+		for (i = 0; i < count; i++) {
+			const Setting &hostgroup_attributes = mysql_hostgroup_attributes[i];
+			bool is_first_field = true;
+			int integer_val = 0;
+			std::string string_val = "";
+			std::string fields = "";
+			std::string values = "";
+
+			auto process_field = [&](const std::string &field_name, const std::string &field_value, int is_int) {
+				if (!is_first_field) {
+					fields += ", ";
+					values += ", ";
+				}
+				else {
+					is_first_field = false;
+				}
+				fields += field_name;
+
+				if (is_int) {
+					values += field_value;
+				}
+				else {
+					char *cs = strdup(field_value.c_str());
+					char *ecs = escape_string_single_quotes(cs, false);
+					values +=  std::string("'") + ecs + "'";
+					if (cs != ecs) free(cs);
+					free(ecs);
+				}
+			};
+
+			// Only inserting/updating fields which are in configuration file.
+			// Fields default will be from table schema.
+
+			// Parsing integer field
+			if (hostgroup_attributes.lookupValue("hostgroup_id", integer_val) ) {
+				process_field("hostgroup_id", to_string(integer_val), true);
+			}
+			else {
+				proxy_error("Admin: detected a mysql_hostgroup_attributes in config file without a mandatory hostgroup_id.\n");
+				continue;
+			}
+			if (hostgroup_attributes.lookupValue("max_num_online_servers", integer_val)) {
+				process_field("max_num_online_servers", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("autocommit", integer_val)) {
+				process_field("autocommit", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("free_connections_pct", integer_val)) {
+				process_field("free_connections_pct", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("multiplex", integer_val)) {
+				process_field("multiplex", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("connection_warming", integer_val)) {
+				process_field("connection_warming", to_string(integer_val), true);
+			}
+			if (hostgroup_attributes.lookupValue("throttle_connections_per_sec", integer_val)) {
+				process_field("throttle_connections_per_sec", to_string(integer_val), true);
+			}
+			// Parsing string field
+			if (hostgroup_attributes.lookupValue("init_connect", string_val)) {
+				process_field("init_connect", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("ignore_session_variables", string_val)) {
+				process_field("ignore_session_variables", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("hostgroup_settings", string_val)) {
+				process_field("hostgroup_settings", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("servers_defaults", string_val)) {
+				process_field("servers_defaults", string_val, false);
+			}
+			if (hostgroup_attributes.lookupValue("comment", string_val)) {
+				process_field("comment", string_val, false);
+			}
+
+			std::string s_query = "INSERT OR REPLACE INTO mysql_hostgroup_attributes (";
+			s_query  += fields + ") VALUES (" + values + ")";
+
+			//fprintf(stderr, "%s\n", s_query.c_str());
+			if (admindb->execute(s_query.c_str()) == false) {
+				proxy_error("Admin: detected a mysql_hostgroup_attributes invalid value. Failed to insert in the table.\n");
+				continue;
+			}
+			rows++;
+		}
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
