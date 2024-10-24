@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
     metrics.before = getQueryCacheMetrics(proxysql_admin);
 
     // Execute the test query and check the result
-    if (exec_query(proxysql_backend, "SELECT 1 WHERE 1!=1")) {
+    if (exec_query(proxysql_backend, "SELECT 1 FROM DUAL WHERE 1!=1")) {
         MYSQL_RES* res = mysql_store_result(proxysql_backend);
         ok(res != nullptr, "Query executed successfully.");
         mysql_free_result(res);
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
     // Execute the same query again and check the result
-    if (exec_query(proxysql_backend, "SELECT 1 WHERE 1!=1")) {
+    if (exec_query(proxysql_backend, "SELECT 1 FROM DUAL WHERE 1!=1")) {
         MYSQL_RES* res = mysql_store_result(proxysql_backend);
         ok(res != nullptr, "Query executed successfully.");
         mysql_free_result(res);
