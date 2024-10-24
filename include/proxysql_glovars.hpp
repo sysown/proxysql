@@ -86,7 +86,8 @@ class ProxySQL_GlobalVariables {
 		unsigned long long start_time;
 		bool gdbg;
 		bool nostart;
-		bool monitor;
+		bool my_monitor;
+		bool pg_monitor;
 		bool version_check;
 #ifdef SO_REUSEPORT
 		bool reuseport;

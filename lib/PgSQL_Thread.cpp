@@ -311,15 +311,18 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_enabled",
 	(char*)"monitor_history",
 	(char*)"monitor_connect_interval",
+	(char*)"monitor_connect_interval_window",
 	(char*)"monitor_connect_timeout",
 	(char*)"monitor_ping_interval",
+	(char*)"monitor_ping_interval_window",
 	(char*)"monitor_ping_max_failures",
 	(char*)"monitor_ping_timeout",
-/*
-	(char*)"monitor_aws_rds_topology_discovery_interval",
 	(char*)"monitor_read_only_interval",
+	(char*)"monitor_read_only_interval_window",
 	(char*)"monitor_read_only_timeout",
 	(char*)"monitor_read_only_max_timeout_count",
+/*
+	(char*)"monitor_aws_rds_topology_discovery_interval",
 	(char*)"monitor_replication_lag_group_by_host",
 	(char*)"monitor_replication_lag_interval",
 	(char*)"monitor_replication_lag_timeout",
@@ -932,12 +935,15 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_enabled = true;
 	variables.monitor_history = 7200000; // changed in 2.6.0 : was 600000
 	variables.monitor_connect_interval = 120000;
+	variables.monitor_connect_interval_window = 50;
 	variables.monitor_connect_timeout = 600;
 	variables.monitor_ping_interval = 8000;
+	variables.monitor_ping_interval_window = 10;
 	variables.monitor_ping_max_failures = 3;
 	variables.monitor_ping_timeout = 1000;
     variables.monitor_aws_rds_topology_discovery_interval=1000;
 	variables.monitor_read_only_interval = 1000;
+	variables.monitor_read_only_interval_window = 10;
 	variables.monitor_read_only_timeout = 800;
 	variables.monitor_read_only_max_timeout_count = 3;
 	variables.monitor_replication_lag_group_by_host = false;
@@ -2079,9 +2085,11 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_history"] = make_tuple(&variables.monitor_history, 1000, 7 * 24 * 3600 * 1000, false);
 
 		VariablesPointers_int["monitor_connect_interval"] = make_tuple(&variables.monitor_connect_interval, 100, 7 * 24 * 3600 * 1000, false);
+		VariablesPointers_int["monitor_connect_interval_window"] = make_tuple(&variables.monitor_connect_interval_window, 0, 100, false);
 		VariablesPointers_int["monitor_connect_timeout"] = make_tuple(&variables.monitor_connect_timeout, 100, 600 * 1000, false);
 
 		VariablesPointers_int["monitor_ping_interval"] = make_tuple(&variables.monitor_ping_interval, 100, 7 * 24 * 3600 * 1000, false);
+		VariablesPointers_int["monitor_ping_interval_window"] = make_tuple(&variables.monitor_ping_interval_window, 0, 100, false);
 		VariablesPointers_int["monitor_ping_timeout"] = make_tuple(&variables.monitor_ping_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_ping_max_failures"] = make_tuple(&variables.monitor_ping_max_failures, 1, 1000 * 1000, false);
 
@@ -2089,6 +2097,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
         VariablesPointers_int["monitor_aws_rds_topology_discovery_interval"] = make_tuple(&variables.monitor_aws_rds_topology_discovery_interval, 1, 100000, false);
 */
 		VariablesPointers_int["monitor_read_only_interval"] = make_tuple(&variables.monitor_read_only_interval, 100, 7 * 24 * 3600 * 1000, false);
+		VariablesPointers_int["monitor_read_only_interval_window"] = make_tuple(&variables.monitor_read_only_interval_window, 0, 100, false);
 		VariablesPointers_int["monitor_read_only_timeout"] = make_tuple(&variables.monitor_read_only_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_read_only_max_timeout_count"] = make_tuple(&variables.monitor_read_only_max_timeout_count, 1, 1000 * 1000, false);
 /*
@@ -3814,11 +3823,14 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_enabled = (bool)GloPTH->get_variable_int((char*)"monitor_enabled");
 	pgsql_thread___monitor_history = GloPTH->get_variable_int((char*)"monitor_history");
 	pgsql_thread___monitor_connect_interval = GloPTH->get_variable_int((char*)"monitor_connect_interval");
+	pgsql_thread___monitor_connect_interval_window = GloPTH->get_variable_int((char*)"monitor_connect_interval_window");
 	pgsql_thread___monitor_connect_timeout = GloPTH->get_variable_int((char*)"monitor_connect_timeout");
 	pgsql_thread___monitor_ping_interval = GloPTH->get_variable_int((char*)"monitor_ping_interval");
+	pgsql_thread___monitor_ping_interval_window = GloPTH->get_variable_int((char*)"monitor_ping_interval_window");
 	pgsql_thread___monitor_ping_max_failures = GloPTH->get_variable_int((char*)"monitor_ping_max_failures");
 	pgsql_thread___monitor_ping_timeout = GloPTH->get_variable_int((char*)"monitor_ping_timeout");
 	pgsql_thread___monitor_read_only_interval = GloPTH->get_variable_int((char*)"monitor_read_only_interval");
+	pgsql_thread___monitor_read_only_interval_window = GloPTH->get_variable_int((char*)"monitor_read_only_interval_window");
 	pgsql_thread___monitor_read_only_timeout = GloPTH->get_variable_int((char*)"monitor_read_only_timeout");
 	pgsql_thread___monitor_threads = GloPTH->get_variable_int((char*)"monitor_threads");
 	if (pgsql_thread___monitor_username) free(pgsql_thread___monitor_username);
