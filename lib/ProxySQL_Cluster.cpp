@@ -869,7 +869,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		mysql_servers_sync_algorithm mysql_server_sync_algo = (mysql_servers_sync_algorithm)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_sync_algorithm, 0);
 
 		if (mysql_server_sync_algo == mysql_servers_sync_algorithm::auto_select) {
-			mysql_server_sync_algo = (GloVars.global.monitor == false) ? 
+			mysql_server_sync_algo = (GloVars.global.my_monitor == false) ?
 				mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2 : mysql_servers_sync_algorithm::mysql_servers_v2;
 		}
 

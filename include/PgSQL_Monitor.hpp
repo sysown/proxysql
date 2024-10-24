@@ -14,6 +14,8 @@
 
 #define MONITOR_SQLITE_TABLE_PGSQL_SERVER_PING_LOG "CREATE TABLE pgsql_server_ping_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , ping_success_time_us INT DEFAULT 0 , ping_error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
+#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_READ_ONLY_LOG "CREATE TABLE pgsql_server_read_only_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , read_only INT DEFAULT 1 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+
 #define MONITOR_SQLITE_TABLE_PGSQL_SERVERS "CREATE TABLE pgsql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port) )"
 
 #define MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS "CREATE TABLE proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
@@ -35,6 +37,8 @@ struct PgSQL_Monitor {
 	uint64_t connect_check_OK { 0 };
 	uint64_t ping_check_ERR { 0 };
 	uint64_t ping_check_OK { 0 };
+	uint64_t readonly_check_ERR { 0 };
+	uint64_t readonly_check_OK { 0 };
 	///////////////////////////////////////////////////////////////////////////
 
 	std::vector<table_def_t> tables_defs_monitor {
@@ -45,7 +49,11 @@ struct PgSQL_Monitor {
 		{
 			const_cast<char*>("pgsql_server_ping_log"),
 			const_cast<char*>(MONITOR_SQLITE_TABLE_PGSQL_SERVER_PING_LOG)
-		}
+		},
+		{
+			const_cast<char*>("pgsql_server_read_only_log"),
+			const_cast<char*>(MONITOR_SQLITE_TABLE_PGSQL_SERVER_READ_ONLY_LOG)
+		},
 	};
 
 	std::vector<table_def_t> tables_defs_monitor_internal {

@@ -1414,12 +1414,20 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
 #endif
 	}
-	if (GloVars.global.monitor==true)
+	if (GloVars.global.my_monitor==true)
 		{
 			cpu_timer t;
 			ProxySQL_Main_init_MySQL_Monitor_module();
 #ifdef DEBUG
 			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
+#endif
+		}
+	if (GloVars.global.pg_monitor==true)
+		{
+			cpu_timer t;
+			pgsql_monitor_thread = new std::thread(&PgSQL_monitor_scheduler_thread);
+#ifdef DEBUG
+			std::cerr << "Main phase3 : PgSQL Monitor initialized in ";
 #endif
 		}
 #ifdef PROXYSQLCLICKHOUSE
@@ -1447,8 +1455,6 @@ void ProxySQL_Main_init_phase3___start_all() {
 	// Load the config not previously loaded for these modules
 	GloAdmin->load_http_server();
 	GloAdmin->load_restapi_server();
-
-	pgsql_monitor_thread = new std::thread(&PgSQL_monitor_scheduler_thread);
 }
 
 

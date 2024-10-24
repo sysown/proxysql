@@ -801,9 +801,11 @@ public:
 
 		int monitor_history;
 		int monitor_connect_interval;
+		int monitor_connect_interval_window;
 		int monitor_connect_timeout;
 		//! Monitor ping interval. Unit: 'ms'.
 		int monitor_ping_interval;
+		int monitor_ping_interval_window;
 		int monitor_ping_max_failures;
 		//! Monitor ping timeout. Unit: 'ms'.
 		int monitor_ping_timeout;
@@ -811,6 +813,7 @@ public:
 		int monitor_aws_rds_topology_discovery_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
+		int monitor_read_only_interval_window;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_timeout;
 		int monitor_read_only_max_timeout_count;
