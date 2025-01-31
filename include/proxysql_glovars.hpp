@@ -74,6 +74,7 @@ class ProxySQL_GlobalVariables {
 	char *errorlog;
 	char *pid;
 	int restart_on_missing_heartbeats;
+    int console_logging_verbosity_level;
 	char * execute_on_exit_failure;
 	char * sqlite3_plugin;
 	char * web_interface_plugin;

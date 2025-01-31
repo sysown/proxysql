@@ -350,10 +350,11 @@ unordered_map<string, ProxySQL_messages_stats> umap_msg_stats {};
  *   Any other use of the function is UNSAFE. And will result in unespecified behavior.
  * @param msgid The message id of the message to be logged, when non-zero, stats about the message are updated in
  *   'umap_msg_stats'.
+  * @param loglevel The level of log entry (as per LOG_LEVEL_*)
  * @param fmt The formatted string to be pass to 'vfprintf'.
  * @param ... The variadic list of arguments to be passed to 'vfprintf'.
  */
-void proxy_error_func(int msgid, const char *fmt, ...) {
+void proxy_error_func(int msgid, int loglevel, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
 
@@ -394,8 +395,10 @@ void proxy_error_func(int msgid, const char *fmt, ...) {
 		}
 	}
 
-	vfprintf(stderr, fmt, ap);
-	va_end(ap);	
+    if (GloVars.console_logging_verbosity_level >= loglevel) {
+		vfprintf(stderr, fmt, ap);
+	}
+	va_end(ap);
 };
 
 SQLite3_result* proxysql_get_message_stats(bool reset) {
