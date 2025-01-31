@@ -2060,9 +2060,9 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 					( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
 				);
 				if (myerr != 0) {
-					proxy_error("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+					proxy_warning("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
 				} else {
-					proxy_error(
+					proxy_warning(
 						"Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n",
 						myconn->parent->myhgc->hid,
 						myconn->parent->address,
