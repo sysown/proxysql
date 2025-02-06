@@ -1460,7 +1460,9 @@ int MySQL_Logger::processEvents(SQLite3DB * statsdb , SQLite3DB * statsdb_disk) 
 			int rows_to_keep = maxInMemorySize - events.size();
 			if (current_rows > rows_to_keep) {
 				int rows_to_delete = (current_rows - rows_to_keep);
-				string delete_stmt = "DELETE FROM stats_mysql_query_events ORDER BY id LIMIT " + to_string(rows_to_delete);
+				string query = "SELECT MAX(id) FROM (SELECT id FROM stats_mysql_query_events ORDER BY id LIMIT " + to_string(rows_to_delete) + ")";
+				int maxIdToDelete = statsdb->return_one_int(query.c_str());
+				string delete_stmt = "DELETE FROM stats_mysql_query_events WHERE id <= " + to_string(maxIdToDelete);
 				statsdb->execute(delete_stmt.c_str());
 			}
 		}
