@@ -669,7 +669,12 @@ void MySQL_Monitor_State_Data::init_async() {
 	case MON_REPLICATION_LAG:
 		async_state_machine_ = ASYNC_QUERY_START;
 #ifdef TEST_REPLICATIONLAG
-		query_ = "SELECT SLAVE STATUS "; // replaced SHOW with SELECT to avoid breaking simulator logic
+        // replace SHOW with SELECT to avoid breaking simulator logic
+        if (strncmp(mysql->server_version, (char*)"8", 1) >= 0 && strncmp(mysql->server_version, (char*)"8.4", 3) >= 0) {
+            query_ = "SELECT REPLICA STATUS ";
+        } else {
+            query_ = "SELECT SLAVE STATUS ";
+        }
 		query_ += std::string(hostname) + ":" + std::to_string(port);
 #else
 		if (mysql_thread___monitor_replication_lag_use_percona_heartbeat && 
@@ -678,7 +683,11 @@ void MySQL_Monitor_State_Data::init_async() {
 			query_ = "SELECT MAX(ROUND(TIMESTAMPDIFF(MICROSECOND, ts, SYSDATE(6))/1000000)) AS Seconds_Behind_Master FROM ";
 			query_ += mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 		} else {
-			query_ = "SHOW SLAVE STATUS";
+		    if (strncmp(mysql->server_version, (char*)"8", 1) >= 0 && strncmp(mysql->server_version, (char*)"8.4", 3) >= 0) {
+		        query_ = "SHOW REPLICA STATUS";
+		    } else {
+		        query_ = "SHOW SLAVE STATUS";
+		    }
 		}
 #endif
 		task_timeout_ = mysql_thread___monitor_replication_lag_timeout;
@@ -2684,7 +2693,13 @@ void * monitor_replication_lag_thread(void *arg) {
 
 #ifdef TEST_REPLICATIONLAG
 	{
-		std::string s = "SELECT SLAVE STATUS "; // replaced SHOW with SELECT to avoid breaking simulator logic
+	    // replaced SHOW with SELECT to avoid breaking simulator logic
+	    if (strncmp(mmsd->mysql->server_version, (char*)"8", 1) >= 0 && strncmp(mmsd->mysql->server_version, (char*)"8.4", 3) >= 0) {
+	        // MySQL 8.4 terminology
+	        std::string s = "SELECT REPLICA STATUS ";
+	    } else {
+		    std::string s = "SELECT SLAVE STATUS ";
+		}
 		s += std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
 		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, s.c_str());
 	}
@@ -2701,7 +2716,12 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 	}
 	if (use_percona_heartbeat == false) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
+	    if (strncmp(mmsd->mysql->server_version, (char*)"8", 1) >= 0 && strncmp(mmsd->mysql->server_version, (char*)"8.4", 3) >= 0) {
+            // MySQL 8.4 terminology
+            mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW REPLICA STATUS");
+        } else {
+            mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
+        }
 	}
 #endif // TEST_REPLICATIONLAG
 	while (mmsd->async_exit_status) {
