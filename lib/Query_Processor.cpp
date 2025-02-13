@@ -221,58 +221,61 @@ Query_Processor::Query_Processor() {
 
 	commands_counters_desc[MYSQL_COM_QUERY_ALTER_TABLE]=(char *)"ALTER_TABLE";
 	commands_counters_desc[MYSQL_COM_QUERY_ALTER_VIEW]=(char *)"ALTER_VIEW";
-  commands_counters_desc[MYSQL_COM_QUERY_ANALYZE_TABLE]=(char *)"ANALYZE_TABLE";
-  commands_counters_desc[MYSQL_COM_QUERY_BEGIN]=(char *)"BEGIN";
-  commands_counters_desc[MYSQL_COM_QUERY_CALL]=(char *)"CALL";
-  commands_counters_desc[MYSQL_COM_QUERY_CHANGE_MASTER]=(char *)"CHANGE_MASTER";
-  commands_counters_desc[MYSQL_COM_QUERY_COMMIT]=(char *)"COMMIT";
-  commands_counters_desc[MYSQL_COM_QUERY_CREATE_DATABASE]=(char *)"CREATE_DATABASE";
-  commands_counters_desc[MYSQL_COM_QUERY_CREATE_INDEX]=(char *)"CREATE_INDEX";
-  commands_counters_desc[MYSQL_COM_QUERY_CREATE_TABLE]=(char *)"CREATE_TABLE";
-  commands_counters_desc[MYSQL_COM_QUERY_CREATE_TEMPORARY]=(char *)"CREATE_TEMPORARY";
-  commands_counters_desc[MYSQL_COM_QUERY_CREATE_TRIGGER]=(char *)"CREATE_TRIGGER";
-  commands_counters_desc[MYSQL_COM_QUERY_CREATE_USER]=(char *)"CREATE_USER";
-  commands_counters_desc[MYSQL_COM_QUERY_CREATE_VIEW]=(char *)"CREATE_VIEW";
-  commands_counters_desc[MYSQL_COM_QUERY_DEALLOCATE]=(char *)"DEALLOCATE";
-  commands_counters_desc[MYSQL_COM_QUERY_DELETE]=(char *)"DELETE";
-  commands_counters_desc[MYSQL_COM_QUERY_DESCRIBE]=(char *)"DESCRIBE";
-  commands_counters_desc[MYSQL_COM_QUERY_DROP_DATABASE]=(char *)"DROP_DATABASE";
-  commands_counters_desc[MYSQL_COM_QUERY_DROP_INDEX]=(char *)"DROP_INDEX";
-  commands_counters_desc[MYSQL_COM_QUERY_DROP_TABLE]=(char *)"DROP_TABLE";
-  commands_counters_desc[MYSQL_COM_QUERY_DROP_TRIGGER]=(char *)"DROP_TRIGGER";
-  commands_counters_desc[MYSQL_COM_QUERY_DROP_USER]=(char *)"DROP_USER";
-  commands_counters_desc[MYSQL_COM_QUERY_DROP_VIEW]=(char *)"DROP_VIEW";
-  commands_counters_desc[MYSQL_COM_QUERY_EXECUTE]=(char *)"EXECUTE";
-  commands_counters_desc[MYSQL_COM_QUERY_EXPLAIN]=(char *)"EXPLAIN";
-  commands_counters_desc[MYSQL_COM_QUERY_FLUSH]=(char *)"FLUSH";
-  commands_counters_desc[MYSQL_COM_QUERY_GRANT]=(char *)"GRANT";
-  commands_counters_desc[MYSQL_COM_QUERY_INSERT]=(char *)"INSERT";
-  commands_counters_desc[MYSQL_COM_QUERY_KILL]=(char *)"KILL";
-  commands_counters_desc[MYSQL_COM_QUERY_LOAD]=(char *)"LOAD";
-  commands_counters_desc[MYSQL_COM_QUERY_LOCK_TABLE]=(char *)"LOCK_TABLE";
-  commands_counters_desc[MYSQL_COM_QUERY_OPTIMIZE]=(char *)"OPTIMIZE";
-  commands_counters_desc[MYSQL_COM_QUERY_PREPARE]=(char *)"PREPARE";
-  commands_counters_desc[MYSQL_COM_QUERY_PURGE]=(char *)"PURGE";
-  commands_counters_desc[MYSQL_COM_QUERY_RELEASE_SAVEPOINT]=(char *)"RELEASE_SAVEPOINT";
-  commands_counters_desc[MYSQL_COM_QUERY_RENAME_TABLE]=(char *)"RENAME_TABLE";
-  commands_counters_desc[MYSQL_COM_QUERY_RESET_MASTER]=(char *)"RESET_MASTER";
-  commands_counters_desc[MYSQL_COM_QUERY_RESET_SLAVE]=(char *)"RESET_SLAVE";
-  commands_counters_desc[MYSQL_COM_QUERY_REPLACE]=(char *)"REPLACE";
-  commands_counters_desc[MYSQL_COM_QUERY_REVOKE]=(char *)"REVOKE";
-  commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK]=(char *)"ROLLBACK";
-  commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT]=(char *)"ROLLBACK_SAVEPOINT";
-  commands_counters_desc[MYSQL_COM_QUERY_SAVEPOINT]=(char *)"SAVEPOINT";
-  commands_counters_desc[MYSQL_COM_QUERY_SELECT]=(char *)"SELECT";
-  commands_counters_desc[MYSQL_COM_QUERY_SELECT_FOR_UPDATE]=(char *)"SELECT_FOR_UPDATE";
-  commands_counters_desc[MYSQL_COM_QUERY_SET]=(char *)"SET";
-  commands_counters_desc[MYSQL_COM_QUERY_SHOW_TABLE_STATUS]=(char *)"SHOW_TABLE_STATUS";
-  commands_counters_desc[MYSQL_COM_QUERY_SHOW]=(char *)"SHOW";
-  commands_counters_desc[MYSQL_COM_QUERY_START_TRANSACTION]=(char *)"START_TRANSACTION";
-  commands_counters_desc[MYSQL_COM_QUERY_TRUNCATE_TABLE]=(char *)"TRUNCATE_TABLE";
-  commands_counters_desc[MYSQL_COM_QUERY_UNLOCK_TABLES]=(char *)"UNLOCK_TABLES";
-  commands_counters_desc[MYSQL_COM_QUERY_UPDATE]=(char *)"UPDATE";
-  commands_counters_desc[MYSQL_COM_QUERY_USE]=(char *)"USE";
-  commands_counters_desc[MYSQL_COM_QUERY_UNKNOWN]=(char *)"UNKNOWN";
+    commands_counters_desc[MYSQL_COM_QUERY_ANALYZE_TABLE]=(char *)"ANALYZE_TABLE";
+    commands_counters_desc[MYSQL_COM_QUERY_BEGIN]=(char *)"BEGIN";
+    commands_counters_desc[MYSQL_COM_QUERY_CALL]=(char *)"CALL";
+    commands_counters_desc[MYSQL_COM_QUERY_CHANGE_MASTER]=(char *)"CHANGE_MASTER";
+    commands_counters_desc[MYSQL_COM_QUERY_CHANGE_REPLICATION_SOURCE]=(char *)"CHANGE_REPLICATION_SOURCE";
+    commands_counters_desc[MYSQL_COM_QUERY_COMMIT]=(char *)"COMMIT";
+    commands_counters_desc[MYSQL_COM_QUERY_CREATE_DATABASE]=(char *)"CREATE_DATABASE";
+    commands_counters_desc[MYSQL_COM_QUERY_CREATE_INDEX]=(char *)"CREATE_INDEX";
+    commands_counters_desc[MYSQL_COM_QUERY_CREATE_TABLE]=(char *)"CREATE_TABLE";
+    commands_counters_desc[MYSQL_COM_QUERY_CREATE_TEMPORARY]=(char *)"CREATE_TEMPORARY";
+    commands_counters_desc[MYSQL_COM_QUERY_CREATE_TRIGGER]=(char *)"CREATE_TRIGGER";
+    commands_counters_desc[MYSQL_COM_QUERY_CREATE_USER]=(char *)"CREATE_USER";
+    commands_counters_desc[MYSQL_COM_QUERY_CREATE_VIEW]=(char *)"CREATE_VIEW";
+    commands_counters_desc[MYSQL_COM_QUERY_DEALLOCATE]=(char *)"DEALLOCATE";
+    commands_counters_desc[MYSQL_COM_QUERY_DELETE]=(char *)"DELETE";
+    commands_counters_desc[MYSQL_COM_QUERY_DESCRIBE]=(char *)"DESCRIBE";
+    commands_counters_desc[MYSQL_COM_QUERY_DROP_DATABASE]=(char *)"DROP_DATABASE";
+    commands_counters_desc[MYSQL_COM_QUERY_DROP_INDEX]=(char *)"DROP_INDEX";
+    commands_counters_desc[MYSQL_COM_QUERY_DROP_TABLE]=(char *)"DROP_TABLE";
+    commands_counters_desc[MYSQL_COM_QUERY_DROP_TRIGGER]=(char *)"DROP_TRIGGER";
+    commands_counters_desc[MYSQL_COM_QUERY_DROP_USER]=(char *)"DROP_USER";
+    commands_counters_desc[MYSQL_COM_QUERY_DROP_VIEW]=(char *)"DROP_VIEW";
+    commands_counters_desc[MYSQL_COM_QUERY_EXECUTE]=(char *)"EXECUTE";
+    commands_counters_desc[MYSQL_COM_QUERY_EXPLAIN]=(char *)"EXPLAIN";
+    commands_counters_desc[MYSQL_COM_QUERY_FLUSH]=(char *)"FLUSH";
+    commands_counters_desc[MYSQL_COM_QUERY_GRANT]=(char *)"GRANT";
+    commands_counters_desc[MYSQL_COM_QUERY_INSERT]=(char *)"INSERT";
+    commands_counters_desc[MYSQL_COM_QUERY_KILL]=(char *)"KILL";
+    commands_counters_desc[MYSQL_COM_QUERY_LOAD]=(char *)"LOAD";
+    commands_counters_desc[MYSQL_COM_QUERY_LOCK_TABLE]=(char *)"LOCK_TABLE";
+    commands_counters_desc[MYSQL_COM_QUERY_OPTIMIZE]=(char *)"OPTIMIZE";
+    commands_counters_desc[MYSQL_COM_QUERY_PREPARE]=(char *)"PREPARE";
+    commands_counters_desc[MYSQL_COM_QUERY_PURGE]=(char *)"PURGE";
+    commands_counters_desc[MYSQL_COM_QUERY_RELEASE_SAVEPOINT]=(char *)"RELEASE_SAVEPOINT";
+    commands_counters_desc[MYSQL_COM_QUERY_RENAME_TABLE]=(char *)"RENAME_TABLE";
+    commands_counters_desc[MYSQL_COM_QUERY_RESET_BINARY_LOGS_AND_GTIDS]=(char *)"RESET_BINARY_LOGS_AND_GTIDS";
+    commands_counters_desc[MYSQL_COM_QUERY_RESET_MASTER]=(char *)"RESET_MASTER";
+    commands_counters_desc[MYSQL_COM_QUERY_RESET_REPLICA]=(char *)"RESET_REPLICA";
+    commands_counters_desc[MYSQL_COM_QUERY_RESET_SLAVE]=(char *)"RESET_SLAVE";
+    commands_counters_desc[MYSQL_COM_QUERY_REPLACE]=(char *)"REPLACE";
+    commands_counters_desc[MYSQL_COM_QUERY_REVOKE]=(char *)"REVOKE";
+    commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK]=(char *)"ROLLBACK";
+    commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT]=(char *)"ROLLBACK_SAVEPOINT";
+    commands_counters_desc[MYSQL_COM_QUERY_SAVEPOINT]=(char *)"SAVEPOINT";
+    commands_counters_desc[MYSQL_COM_QUERY_SELECT]=(char *)"SELECT";
+    commands_counters_desc[MYSQL_COM_QUERY_SELECT_FOR_UPDATE]=(char *)"SELECT_FOR_UPDATE";
+    commands_counters_desc[MYSQL_COM_QUERY_SET]=(char *)"SET";
+    commands_counters_desc[MYSQL_COM_QUERY_SHOW_TABLE_STATUS]=(char *)"SHOW_TABLE_STATUS";
+    commands_counters_desc[MYSQL_COM_QUERY_SHOW]=(char *)"SHOW";
+    commands_counters_desc[MYSQL_COM_QUERY_START_TRANSACTION]=(char *)"START_TRANSACTION";
+    commands_counters_desc[MYSQL_COM_QUERY_TRUNCATE_TABLE]=(char *)"TRUNCATE_TABLE";
+    commands_counters_desc[MYSQL_COM_QUERY_UNLOCK_TABLES]=(char *)"UNLOCK_TABLES";
+    commands_counters_desc[MYSQL_COM_QUERY_UPDATE]=(char *)"UPDATE";
+    commands_counters_desc[MYSQL_COM_QUERY_USE]=(char *)"USE";
+    commands_counters_desc[MYSQL_COM_QUERY_UNKNOWN]=(char *)"UNKNOWN";
 
 	{
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -2312,6 +2315,10 @@ __remove_paranthesis:
 					ret=MYSQL_COM_QUERY_CHANGE_MASTER;
 					break;
 				}
+				if (!strcasecmp("REPLICATION",token)) {
+					ret=MYSQL_COM_QUERY_CHANGE_REPLICATION_SOURCE;
+					break;
+				}
 				break;
 			}
 			if (!strcasecmp("COMMIT",token)) { // COMMIT
@@ -2487,8 +2494,16 @@ __remove_paranthesis:
 			if (!strcasecmp("RESET",token)) { // RESET
 				token=(char *)tokenize(&tok);
 				if (token==NULL) break;
+				if (!strcasecmp("BINARY",token)) {
+					ret=MYSQL_COM_QUERY_RESET_BINARY_LOGS_AND_GTIDS;
+					break;
+				}
 				if (!strcasecmp("MASTER",token)) {
 					ret=MYSQL_COM_QUERY_RESET_MASTER;
+					break;
+				}
+				if (!strcasecmp("REPLICA",token)) {
+					ret=MYSQL_COM_QUERY_RESET_REPLICA;
 					break;
 				}
 				if (!strcasecmp("SLAVE",token)) {
