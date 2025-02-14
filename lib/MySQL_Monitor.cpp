@@ -2693,12 +2693,13 @@ void * monitor_replication_lag_thread(void *arg) {
 
 #ifdef TEST_REPLICATIONLAG
 	{
+	    std::string s = "";
 	    // replaced SHOW with SELECT to avoid breaking simulator logic
 	    if (strncmp(mmsd->mysql->server_version, (char*)"8", 1) >= 0 && strncmp(mmsd->mysql->server_version, (char*)"8.4", 3) >= 0) {
 	        // MySQL 8.4 terminology
-	        std::string s = "SELECT REPLICA STATUS ";
+	        s += "SELECT REPLICA STATUS ";
 	    } else {
-		    std::string s = "SELECT SLAVE STATUS ";
+		    s += "SELECT SLAVE STATUS ";
 		}
 		s += std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
 		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, s.c_str());
