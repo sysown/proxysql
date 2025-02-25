@@ -119,7 +119,7 @@ int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, cons
 		} \
 	} while(0)
 
-int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value);
+int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value, bool new_connection=false);
 int show_admin_global_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value);
 int set_admin_global_variable(MYSQL *mysql, const std::string& var_name, const std::string& var_value);
 int get_server_version(MYSQL *mysql, std::string& version);

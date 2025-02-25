@@ -774,11 +774,11 @@ void MySQL_Connection::connect_start_SetCharset() {
 		csname = mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET);
 	}
 
-	const MARIADB_CHARSET_INFO * c = NULL;
+	MARIADB_CHARSET_INFO * c = NULL;
 	if (csname)
-		c = proxysql_find_charset_nr(atoi(csname));
+		c = (MARIADB_CHARSET_INFO *)proxysql_find_charset_nr(atoi(csname));
 	else
-		c = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+		c = (MARIADB_CHARSET_INFO *)proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 
 	if (!c) {
 		// LCOV_EXCL_START
@@ -786,6 +786,21 @@ void MySQL_Connection::connect_start_SetCharset() {
 		assert(0);
 		// LCOV_EXCL_STOP
 	}
+
+	if (c->nr > 255) {
+		const char *csname_default = c->csname;
+		c = NULL;
+		c = (MARIADB_CHARSET_INFO *)proxysql_find_charset_name(csname_default);
+		if (!c) {
+			// LCOV_EXCL_START
+			proxy_error("Not existing charset number %s\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
+			assert(0);
+			// LCOV_EXCL_STOP
+		}
+	}
+
+
+
 	{
 		/* We are connecting to backend setting charset in mysql_options.
 		 * Client already has sent us a character set and client connection variables have been already set.

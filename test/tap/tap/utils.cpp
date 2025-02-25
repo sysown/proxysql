@@ -243,13 +243,15 @@ int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, cons
 	return mysql_query(mysql, query);
 }
 
-int show_variable(MYSQL *mysql, const string& var_name, string& var_value) {
-	char query[128];
+int show_variable(MYSQL *mysql, const string& var_name, string& var_value, bool new_connection) {
 
-	snprintf(query, sizeof(query),"show variables like '%s'", var_name.c_str());
-	if (mysql_query(mysql, query)) {
+	std::string query = "show variables ";
+	query += (new_connection == true ? "/* create_new_connection=1 */ " : "");
+	query += " like '" + var_name + "'";
+
+	if (mysql_query(mysql, query.c_str())) {
 		fprintf(stderr, "Failed to execute query [%s] : no %d, %s\n",
-				query, mysql_errno(mysql), mysql_error(mysql));
+				query.c_str(), mysql_errno(mysql), mysql_error(mysql));
 		return exit_status();
 	}
 
