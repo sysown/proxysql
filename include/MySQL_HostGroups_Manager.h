@@ -532,6 +532,16 @@ struct p_hg_dyn_gauge {
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
+		// PMM-Compatibility metrics
+		///////////////////////////////////////////////////////////////////////
+		runtime_servers_status,
+		runtime_servers_weight,
+		runtime_servers_compression,
+		runtime_servers_max_connections,
+		runtime_servers_max_replication_lag,
+		runtime_servers_use_ssl,
+		runtime_servers_max_latency_ms,
+		///////////////////////////////////////////////////////////////////////
 		__size
 	};
 };
@@ -914,6 +924,16 @@ class MySQL_HostGroups_Manager {
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_latency_us_map {};
 		std::map<std::string, prometheus::Counter*> p_connection_pool_queries_map {};
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_status_map {};
+		// PMM-Compatibility metrics
+		///////////////////////////////////////////////////////////////////////
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_status_map {};
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_weigth_map {};
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_compress_map {};
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_max_conns_map {};
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_max_repl_lag_map {};
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_use_ssl_map {};
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_max_lat_map {};
+		///////////////////////////////////////////////////////////////////////
 
 		/// Prometheus gtid_executed metrics
 		std::map<std::string, prometheus::Counter*> p_gtid_executed_map {};
