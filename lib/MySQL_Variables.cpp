@@ -52,6 +52,8 @@ MySQL_Variables::MySQL_Variables() {
 	ignore_vars.push_back("read_rnd_buffer_size");
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	ignore_vars.push_back("session_track_schema");
+	// NOTE: This variable has been temporarily ignored. Check issues #4839
+	ignore_vars.push_back("session_track_system_variables");
 	variables_regexp = "";
 	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		// we initialized all the internal_variable_name if set to NULL

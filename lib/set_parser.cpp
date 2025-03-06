@@ -162,7 +162,7 @@ void SetParser::generateRE_parse1v2() {
 		// - variable name , with double @ (session variable) or single @ (user defiend variable)
 		// - strings that includes words, spaces and commas
 		// - single quote string
-		string  sw0  = "(?:\\w+|\"[\\w, ]+\"|\'[\\w, ]+\'|@(?:|@)\\w+|\'\')";
+		string  sw0  = "(?:\\w+|\"[\\w, ]+\"|\'[\\w, ]+\'|@(?:|@|@session\\.|@global\\.)\\w+|\'\')";
 		string  mw0  = "(?:" + sw0 + "(?: *, *" + sw0 + ")*)"; // multiple words, separated by comma and random spaces
 		string  fww  = "(?:(?:REPLACE|IFNULL|CONCAT)\\( *" + mw0 + "\\))"; // functions REPLACE|IFNULL|CONCAT having argument multiple words
 		string rfww2 = "(?:(?:REPLACE|IFNULL|CONCAT)\\( *" + fww   + " *, *" + mw0 + "\\))"; //functions REPLACE|IFNULL|CONCAT calling the same functions
