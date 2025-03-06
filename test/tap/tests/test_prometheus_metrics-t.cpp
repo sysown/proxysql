@@ -29,6 +29,7 @@ using std::vector;
 using std::pair;
 using std::string;
 using std::tuple;
+using std::map;
 
 CommandLine cl;
 
@@ -891,7 +892,157 @@ const vector<pair<string, tuple<setup, metric_trigger, metric_check>>> metric_te
 	},
 };
 
-using std::map;
+string status_to_string(int status) {
+	if (status == 1) {
+		return "ONLINE";
+	} else if (status == 2) {
+		return "SHUNNED";
+	} else if (status == 3) {
+		return "OFFLINE_SOFT";
+	} else if (status == 4) {
+		return "OFFLINE_HARD";
+	} else if (status == 5) {
+		return "SHUNNED_REPLICATION_LAG";
+	} else {
+		assert(0);
+	}
+}
+
+const char RUNTIME_SRVS[] {
+	"SELECT"
+		" hostgroup_id,"
+		" (hostname || \":\" || port) AS endpoint,"
+		" gtid_port,"
+		" status,"
+		" weight,"
+		" compression,"
+		" max_connections,"
+		" max_replication_lag,"
+		" use_ssl,"
+		" max_latency_ms"
+	" FROM"
+		" runtime_mysql_servers"
+};
+
+enum SRV_FLD {
+	hosgroup_id = 0,
+	endpoint,
+	gtid_port,
+	status,
+	weight,
+	compression,
+	max_connections,
+	max_replication_lag,
+	use_ssl,
+	max_latency_ms
+};
+
+const map<string,int> m_srvs_metrics {
+	{ "proxysql_runtime_mysql_servers_status", SRV_FLD::status },
+	{ "proxysql_runtime_mysql_servers_weight", SRV_FLD::weight },
+	{ "proxysql_runtime_mysql_servers_compression", SRV_FLD::compression },
+	{ "proxysql_runtime_mysql_servers_max_connections", SRV_FLD::max_connections },
+	{ "proxysql_runtime_mysql_servers_max_replication_lag", SRV_FLD::max_replication_lag },
+	{ "proxysql_runtime_mysql_servers_use_ssl", SRV_FLD::use_ssl },
+	{ "proxysql_runtime_mysql_servers_max_latency_ms", SRV_FLD::max_latency_ms },
+};
+
+using p_srv_metrics = pair<mysql_row_t,vector<pair<string,double>>>;
+using nlohmann::json;
+
+int check_srvs_metrics(
+	const vector<mysql_row_t>& srvs, const map<string,double>& cur_metrics
+) {
+	const auto match_start = [] (const string s1, const string s2) {
+		return s1.rfind(s2) == 0;
+	};
+
+	// 1. Find all defined metrics
+	bool match = true;
+	const uint32_t exp_checks = m_srvs_metrics.size() * srvs.size();
+	uint32_t act_checks = 0;
+
+	// 2. Check all defined metrics match
+	for (const mysql_row_t& row : srvs) {
+		diag(
+			"Checking matching ept metrics for server   srv_row=\"%s\"",
+			json(row).dump().c_str()
+		);
+
+		for (const auto& p_id_val : cur_metrics) {
+			auto metric_it {
+				std::find_if(m_srvs_metrics.begin(), m_srvs_metrics.end(),
+					[p_id_val] (const auto& p) { return p_id_val.first.rfind(p.first, 0) == 0; }
+				)
+			};
+
+			if (metric_it != std::end(m_srvs_metrics)) {
+				const string& srv_ept { row[SRV_FLD::endpoint] };
+				const string& srv_hg { row[SRV_FLD::hosgroup_id] };
+				const auto& tags { extract_metric_tags(p_id_val.first) };
+
+				if (tags.at("endpoint") == srv_ept && tags.at("hostgroup") == srv_hg) {
+					diag(
+						"Checking matching ept metric   ept=\"%s\" hg=%s metric=\"%s\" val=%lf",
+						srv_ept.c_str(), srv_hg.c_str(), p_id_val.first.c_str(), p_id_val.second
+					);
+
+					const string mval_str {
+						metric_it->first.rfind("status") != std::string::npos ?
+						status_to_string(int32_t(p_id_val.second))
+						: std::to_string(int32_t(p_id_val.second))
+					};
+
+					match = row[metric_it->second] == mval_str;
+					match = row[SRV_FLD::gtid_port] == tags.at("gtid_port");
+					act_checks += 1;
+
+					if (!match) {
+						diag(
+							"FAIL - Mismatch found checking metric   "
+								"exp_val=%s act_val=%s exp_gtid_port=%s act_gtid_port=%s",
+							row[metric_it->second].c_str(),
+							mval_str.c_str(),
+							row[SRV_FLD::gtid_port].c_str(),
+							tags.at("gtid_port").c_str()
+						);
+					}
+				}
+			}
+		}
+	}
+
+	ok(match, "Metrics values should match for Admin and Exporter");
+	ok(
+		exp_checks == act_checks,
+		"All supported metrics should be found for server entries   exp_checks=%d act_checks=%d",
+		exp_checks, act_checks
+	);
+
+	return EXIT_SUCCESS;
+}
+
+int coherence_check_runtime_servers(MYSQL* admin) {
+	map<string,double> cur_metrics {};
+	int rc = get_cur_metrics(admin, cur_metrics);
+	if (rc) { return EXIT_FAILURE; }
+
+	auto srvs_rows { mysql_query_ext_rows(admin, RUNTIME_SRVS) };
+	if (srvs_rows.first) {
+		diag(
+			"Failed to fetch 'runtime_mysql_servers' rows   errno=%d error=\"%s\" query=\"%s\"",
+			srvs_rows.first, mysql_error(admin), RUNTIME_SRVS
+		);
+		return EXIT_FAILURE;
+	}
+
+	return check_srvs_metrics(srvs_rows.second, cur_metrics);
+}
+
+const vector<pair<string, std::function<int(MYSQL*)>>> coherence_checks {
+	// Check current 'runtime_mysql_servers' values matches the ones exposed by its metrics
+	{ "proxysql_runtime_mysql_servers_{*} - Matching Admin Interface", coherence_check_runtime_servers },
+};
 
 
 int main(int argc, char** argv) {
@@ -901,7 +1052,10 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(metric_tests.size() * 4);
+	plan(
+		metric_tests.size() * 4
+		+ coherence_checks.size() * 2
+	);
 
 	for (const auto& metric_test : metric_tests) {
 		// Initialize Admin connection
@@ -957,6 +1111,25 @@ int main(int argc, char** argv) {
 		// Close the connections used for this test
 		mysql_close(proxysql);
 		mysql_close(proxysql_admin);
+	}
+
+	{
+		MYSQL* admin = mysql_init(NULL);
+
+		if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+			return EXIT_FAILURE;
+		}
+
+		for (const auto& p_id_check : coherence_checks) {
+			const string& id { p_id_check.first.c_str() };
+
+			diag("Started metrics coherence check   id=\"%s\"", id.c_str());
+			int rc = p_id_check.second(admin);
+			diag("Finished metric coherence check   id=\"%s\" rc=%d", id.c_str(), rc);
+		}
+
+		mysql_close(admin);
 	}
 
 	return exit_status();
