@@ -3470,7 +3470,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			p_update_connection_pool_update_gauge(
 				endpoint_id,
 				srvs_common_labels,
-				status.p_runtime_servers_weigth_map,
+				status.p_runtime_servers_weight_map,
 				mysrvc->weight,
 				p_hg_dyn_gauge::runtime_servers_weight
 			);
@@ -3544,6 +3544,37 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 		gauge = status.p_connection_pool_latency_us_map[key];
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_latency_us]->Remove(gauge);
 		status.p_connection_pool_latency_us_map.erase(key);
+
+		// PMM-Compatibility metrics
+		////////////////////////////////////////////////////////////////////
+		gauge = status.p_runtime_servers_status_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::runtime_servers_status]->Remove(gauge);
+		status.p_runtime_servers_status_map.erase(key);
+
+		gauge = status.p_runtime_servers_weight_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::runtime_servers_weight]->Remove(gauge);
+		status.p_runtime_servers_weight_map.erase(key);
+
+		gauge = status.p_runtime_servers_compress_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::runtime_servers_compression]->Remove(gauge);
+		status.p_runtime_servers_compress_map.erase(key);
+
+		gauge = status.p_runtime_servers_max_conns_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::runtime_servers_max_connections]->Remove(gauge);
+		status.p_runtime_servers_max_conns_map.erase(key);
+
+		gauge = status.p_runtime_servers_max_repl_lag_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::runtime_servers_max_replication_lag]->Remove(gauge);
+		status.p_runtime_servers_max_repl_lag_map.erase(key);
+
+		gauge = status.p_runtime_servers_use_ssl_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::runtime_servers_use_ssl]->Remove(gauge);
+		status.p_runtime_servers_use_ssl_map.erase(key);
+
+		gauge = status.p_runtime_servers_max_lat_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::runtime_servers_max_latency_ms]->Remove(gauge);
+		status.p_runtime_servers_max_lat_map.erase(key);
+		////////////////////////////////////////////////////////////////////
 	}
 
 	wrunlock();

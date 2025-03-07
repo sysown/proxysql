@@ -927,7 +927,7 @@ class MySQL_HostGroups_Manager {
 		// PMM-Compatibility metrics
 		///////////////////////////////////////////////////////////////////////
 		std::map<std::string, prometheus::Gauge*> p_runtime_servers_status_map {};
-		std::map<std::string, prometheus::Gauge*> p_runtime_servers_weigth_map {};
+		std::map<std::string, prometheus::Gauge*> p_runtime_servers_weight_map {};
 		std::map<std::string, prometheus::Gauge*> p_runtime_servers_compress_map {};
 		std::map<std::string, prometheus::Gauge*> p_runtime_servers_max_conns_map {};
 		std::map<std::string, prometheus::Gauge*> p_runtime_servers_max_repl_lag_map {};
