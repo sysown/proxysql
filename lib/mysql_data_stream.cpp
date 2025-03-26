@@ -1061,39 +1061,65 @@ int MySQL_Data_Stream::buffer2array() {
 	} else {
 
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
-			// check if this is a PROXY protocol packet
 			if (
 				pkts_recv==0 && // checks if no packets have been received yet
-				queueIN.tail == 0 && // checks if the input queue (`queueIN`) was never rotated . This check is redundant
-				queueIN.head > 7 && // ensures that there are at least 8 bytes in the input buffer (`queueIN.buffer`)
-									// This is because the PROXY protocol signature (`PROXY`) is 5 bytes long, and we need at least 3 more bytes to check for the `\r\n` delimiter.
-				strncmp((char *)queueIN.buffer,"PROXY ",6) == 0 // checks if the first 6 bytes of the buffer match the "PROXY " string, indicating a potential PROXY protocol packet
+				queueIN.tail == 0 // checks if the input queue (`queueIN`) was never rotated . This check is redundant
 			) {
-				bool found_delimiter = false;
-				size_t b = 0;
-				const char *ptr = (char *)queueIN.buffer;
-				// This loop iterates through the buffer, starting from the 8th byte (index 7) until the end of the buffer (index `queueIN.head - 1`).
-				// The loop continues as long as the delimiter hasn't been found (`found_delimiter == false`)
-				// the loop looks for \r\n , the delimiter of the PROXY packet
-				for (size_t i = 7; found_delimiter == false && i < queueIN.head - 1; i++) {
-					if (
-						ptr[i] == '\r'
-						&&
-						ptr[i+1] == '\n'
-					) {
-						found_delimiter = true;
-						b = i+2;
-					}
+				enum ProxyProtocolVersion ppv = NONE;
+
+				// check if this is a PROXY protocol V1 or V2 packet
+				if (queueIN.head > 7 && // ensures that there are at least 8 bytes in the input buffer (`queueIN.buffer`)
+							// This is because the PROXY protocol signature (`PROXY`) is 5 bytes long, and we need at least 3 more bytes to check for the `\r\n` delimiter.
+						strncmp((char *)queueIN.buffer,"PROXY ",6) == 0) { // checks if the first 6 bytes of the buffer match the "PROXY " string, indicating a potential PROXY protocol packet
+					ppv = PPv1;
+				} else if (queueIN.head >= PPV2_HEADER_LENGTH && // ensure that there are at least 16 bytes in the input buffer
+						memcmp((const char *) queueIN.buffer, PPV2_SIGNATURE, PPV2_SIGNATURE_LENGTH) == 0) { // Check that the header starts with the PPv2 signature
+					ppv = PPv2;
 				}
-				if (found_delimiter) {
-/*
-					// we could return a packet, but it is actually better to handle it here
-					queueIN.pkt.size = b;
-					queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
-					memcpy(queueIN.pkt.ptr, queueIN.buffer, b);
-					PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
-					add_to_data_packet_history(data_packets_history_IN,queueIN.pkt.ptr,queueIN.pkt.size);
-*/
+
+				if (ppv != NONE) {
+					size_t b = 0;
+					bool parse_success = false;
+					ProxyProtocolInfo ppi;
+
+					if (ppv == PPv1) {
+						bool found_delimiter = false;
+						const char *ptr = (char *)queueIN.buffer;
+						// This loop iterates through the buffer, starting from the 8th byte (index 7) until the end of the buffer (index `queueIN.head - 1`).
+						// The loop continues as long as the delimiter hasn't been found (`found_delimiter == false`)
+						// the loop looks for \r\n , the delimiter of the PROXY packet
+						for (size_t i = 7; found_delimiter == false && i < queueIN.head - 1; i++) {
+							if (ptr[i] == '\r' && ptr[i+1] == '\n') {
+								found_delimiter = true;
+								b = i+2;
+							}
+						}
+
+						if (!found_delimiter) {
+							// set the connection unhealthy , this will cause the session to be destroyed
+							if (sess) {
+								sess->set_unhealthy();
+							}
+							return 0; // we always return
+						}
+
+						parse_success = ppi.parseProxyProtocolHeader((const char *)queueIN.buffer, b);
+					} else if (ppv == PPv2) {
+						int length = ppi.parseProxyProtocolV2Header((const char *)queueIN.buffer, queueIN.head);
+						parse_success = length != -1;
+
+						// If the header is invalid, we don't know the length
+						if (!parse_success) {
+							// set the connection unhealthy , this will cause the session to be destroyed
+							if (sess) {
+								sess->set_unhealthy();
+							}
+							return 0;
+						}
+
+						b = length;
+					}
+
 					// we move forward the internal pointer.
 					// note that parseProxyProtocolHeader() will read from the beginning of the buffer
 					queue_r(queueIN, b);
@@ -1101,7 +1127,6 @@ int MySQL_Data_Stream::buffer2array() {
 					bool accept_proxy = false; // by default, we do not accept a PROXY header
 					const char * proxy_protocol_networks = mysql_thread___proxy_protocol_networks;
 
-					ProxyProtocolInfo ppi;
 					if (strcmp(proxy_protocol_networks,"*") == 0) { // all networks are accepted
 						accept_proxy = true;
 					} else {
@@ -1111,9 +1136,17 @@ int MySQL_Data_Stream::buffer2array() {
 							}
 						}
 					}
-					if (accept_proxy == true) {
-						if (ppi.parseProxyProtocolHeader((const char *)queueIN.buffer, b)) {
+
+					if (accept_proxy) {
+						if (parse_success) {
 							PROXY_info = new ProxyProtocolInfo(ppi);
+
+							if (ppv == PPv1) {
+								PROXY_info->version = PPv1;
+							} else if (ppv == PPv2) {
+								PROXY_info->version = PPv2;
+							}
+
 							// we take a copy of old address/port
 							if (addr.addr) {
 								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
@@ -1134,18 +1167,11 @@ int MySQL_Data_Stream::buffer2array() {
 						}
 					}
 
-
 					pkts_recv++;
 					queueIN.pkt.size=0;
 					queueIN.pkt.ptr=NULL;
 					return b;
-				} else {
-					// set the connection unhealthy , this will cause the session to be destroyed
-					if (sess) {
-						sess->set_unhealthy();
-					}
 				}
-				return 0; // we always return
 			}
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new packet\n", sess);
 			memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
@@ -1642,13 +1668,14 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 	jc1["client_addr"]["port"] = addr.port;
 	jc1["proxy_addr"]["address"] = ( proxy_addr.addr ? proxy_addr.addr : "" );
 	jc1["proxy_addr"]["port"] = proxy_addr.port;
-	if (PROXY_info != NULL) {
-		jc1["PROXY_V1"]["source_address"] = PROXY_info->source_address;
-		jc1["PROXY_V1"]["destination_address"] = PROXY_info->destination_address;
-		jc1["PROXY_V1"]["proxy_address"] = PROXY_info->proxy_address;
-		jc1["PROXY_V1"]["source_port"] = PROXY_info->source_port;
-		jc1["PROXY_V1"]["destination_port"] = PROXY_info->destination_port;
-		jc1["PROXY_V1"]["proxy_port"] = PROXY_info->proxy_port;
+	if (PROXY_info != NULL && PROXY_info->version != NONE) {
+		const char * version_string = PROXY_info->version == PPv2 ? "PROXY_V2" : "PROXY_V1";
+		jc1[version_string]["source_address"] = PROXY_info->source_address;
+		jc1[version_string]["destination_address"] = PROXY_info->destination_address;
+		jc1[version_string]["proxy_address"] = PROXY_info->proxy_address;
+		jc1[version_string]["source_port"] = PROXY_info->source_port;
+		jc1[version_string]["destination_port"] = PROXY_info->destination_port;
+		jc1[version_string]["proxy_port"] = PROXY_info->proxy_port;
 	}
 	jc1["encrypted"] = encrypted;
 	if (encrypted) {

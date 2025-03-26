@@ -53,6 +53,130 @@ bool ProxyProtocolInfo::parseProxyProtocolHeader(const char* packet, size_t pack
 	return false; // Invalid header format
 }
 
+#define PPV2_VERSION_COMMAND_PROXY 0x21
+#define PPV2_FAMILY_IPV4_TCP 0x11
+#define PPV2_FAMILY_IPV4_UDP 0x12
+#define PPV2_FAMILY_IPV6_TCP 0x21
+#define PPV2_FAMILY_IPV6_UDP 0x22
+
+////////////////////////////////////////////////////////////////
+//                  Proxy Protocol Version 2
+////////////////////////////////////////////////////////////////
+/*
+ 0               1               2               3
+ 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                   PPv2 Signature (12 bytes)                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           ...                                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           ...                                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|Version command|Protocol family|    Remaining Length           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          IPv4 (12 bytes) or IPv6 Address (36 bytes)           |
+|                           ...                                 |
+|                           ...                                 |
+|                           ...                                 |
+|                           ...                                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+*/
+
+// Taken from https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
+typedef struct {
+	uint8_t sig[12];  /* hex 0D 0A 0D 0A 00 0D 0A 51 55 49 54 0A */
+	uint8_t ver_cmd;  /* protocol version and command */
+	uint8_t fam;      /* protocol family and address */
+	uint16_t len;     /* number of following bytes part of the header */
+} ppv2_header_t;
+
+typedef union {
+	struct {        /* for TCP/UDP over IPv4, len = 12 */
+		uint32_t src_addr;
+		uint32_t dst_addr;
+		uint16_t src_port;
+		uint16_t dst_port;
+	} ipv4_addr;
+	struct {        /* for TCP/UDP over IPv6, len = 36 */
+		uint8_t  src_addr[16];
+		uint8_t  dst_addr[16];
+		uint16_t src_port;
+		uint16_t dst_port;
+	} ipv6_addr;
+} proxy_addr_t;
+
+int ProxyProtocolInfo::parseProxyProtocolV2Header(const char* packet, size_t packet_length) {
+	// Verify that the packet length is sufficient for a PPv2 header
+	if (packet_length < PPV2_HEADER_LENGTH) {
+		return -1;
+	}
+
+	ppv2_header_t *ppv2_header = (ppv2_header_t *) packet;
+
+	// Verify that the header's signature matches the PPv2 protocol signature
+	if (memcmp(ppv2_header->sig, PPV2_SIGNATURE, sizeof(ppv2_header->sig)) != 0) {
+		return -1;
+	}
+
+	// Verify that this is a version 2 PROXY command.
+	// This does not handle the LOCAL command case.
+	if (ppv2_header->ver_cmd != PPV2_VERSION_COMMAND_PROXY) {
+		return -1;
+	}
+
+	uint8_t family = ppv2_header->fam;
+	uint16_t remaining_length = ntohs(ppv2_header->len);
+
+	// Verify length of packet is longer than header and remaining length
+	uint16_t total_length = PPV2_HEADER_LENGTH + remaining_length;
+	if (packet_length < total_length) {
+		return -1;
+	}
+
+	// Point the address immediately after the fixed PPv2 header
+	packet += PPV2_HEADER_LENGTH;
+	proxy_addr_t *proxy_addr = (proxy_addr_t *) packet;
+	// Only IPv4 and IPv6 are handled here.
+	// AF_UNSPEC and AF_UNIX are not handled.
+	if (family == PPV2_FAMILY_IPV4_TCP || family == PPV2_FAMILY_IPV4_UDP) {
+		// Verify address length is sufficient for IPv4
+		if (remaining_length < sizeof(proxy_addr->ipv4_addr)) {
+			return -1;
+		}
+
+		// Parse IPv4 address
+		if (!inet_ntop(AF_INET, &proxy_addr->ipv4_addr.src_addr, source_address, sizeof(source_address))) {
+			return -1;
+		}
+		if (!inet_ntop(AF_INET, &proxy_addr->ipv4_addr.dst_addr, destination_address, sizeof(destination_address))) {
+			return -1;
+		}
+		source_port = ntohs(proxy_addr->ipv4_addr.src_port);
+		destination_port = ntohs(proxy_addr->ipv4_addr.dst_port);
+	} else if (family == PPV2_FAMILY_IPV6_TCP || family == PPV2_FAMILY_IPV6_UDP) {
+		// Verify address length is sufficient for IPv6
+		if (remaining_length < sizeof(proxy_addr->ipv6_addr)) {
+			return -1;
+		}
+
+		// Parse IPv6 address
+		if (!inet_ntop(AF_INET6, &proxy_addr->ipv6_addr.src_addr, source_address, sizeof(source_address))) {
+			return -1;
+		}
+		if (!inet_ntop(AF_INET6, &proxy_addr->ipv6_addr.dst_addr, destination_address, sizeof(destination_address))) {
+			return -1;
+		}
+		source_port = ntohs(proxy_addr->ipv6_addr.src_port);
+		destination_port = ntohs(proxy_addr->ipv6_addr.dst_port);
+	} else {
+		return -1;
+	}
+
+	// TLVs are not handled
+
+	return total_length;
+}
+
 /**
  * Checks if a client address is within a specified subnet.
  *
