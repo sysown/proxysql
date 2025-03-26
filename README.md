@@ -8,7 +8,7 @@
 Introduction	
 ============	
 
-ProxySQL is a high performance, high availability, protocol aware proxy for MySQL and forks (like Percona Server and MariaDB).	
+ProxySQL is a high performance, high availability, protocol aware proxy for MySQL (including MariaDB Server and Percona Server), and PostgreSQL.	
 All the while getting the unlimited freedom that comes with a GPL license.	
 
 Its development is driven by the lack of open source proxies that provide high performance.  	
@@ -20,7 +20,7 @@ Useful links
 - [Subscriptions and Support](https://proxysql.com/services/support/) 
 - [Documentation](https://www.proxysql.com/Documentation)
 - [DockerHub Repository](https://hub.docker.com/r/proxysql/proxysql)
-- [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)	
+- [Benchmarks and blog posts](https://proxysql.com/blog/)	
 - [Forum](https://groups.google.com/forum/#!forum/proxysql/)
 - [Facebook](https://www.facebook.com/proxysql)	
 - [Linkedin](https://www.linkedin.com/groups/13581070/)	
