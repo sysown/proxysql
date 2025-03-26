@@ -3267,9 +3267,26 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 	// 'mysql_thread___connect_retries_delay'. In case of 'async_connect' failing, 'pause_until' should also
 	// be set to 'mysql_thread___connect_retries_delay'. Complementary NOTE below.
 	if (mybe->server_myds->myconn==NULL) {
-		pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
-		*_rc=1;
-		return false;
+		if (mybe->server_myds->connect_retries_on_failure > 0 ) {
+			mybe->server_myds->connect_retries_on_failure--;
+			pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
+			*_rc=1;
+			return false;
+		} else {
+			char buf[256];
+			sprintf(buf,"Max connect failure reached and no server is available in hostgroup %d", current_hostgroup);
+			if (thread) {
+				thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
+			}
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000",buf,true);
+			RequestEnd(mybe->server_myds);
+
+			while (previous_status.size()) {
+				previous_status.pop();
+			}
+			mybe->server_myds->max_connect_time=0;
+			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+		}
 	} else {
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=myds->myconn;
