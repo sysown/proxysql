@@ -443,6 +443,7 @@ Query_Cache::Query_Cache() {
 };
 
 void Query_Cache::p_update_metrics() {
+	proxy_warning("pranavk-dbg line 446. Query_Cache::p_update_metrics()\n");
 	this->metrics.p_gauge_array[p_qc_gauge::query_cache_memory_bytes]->Set(get_data_size_total());
 	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get], Glo_cntGet - Glo_cntGetOK);
 	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok], Glo_cntGetOK);

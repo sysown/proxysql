@@ -823,6 +823,7 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 				} else {
 					if (!strcasecmp(r1->fields[4],"OFFLINE_HARD")) {
 						status1=MYSQL_SERVER_STATUS_OFFLINE_HARD;
+						proxy_warning("pranavk-dbg line 826. setting offline hard, %s, %s, %s, %s, %s\n", r1->fields[0], r1->fields[1], r1->fields[2], r1->fields[3], r1->fields[4]);
 					}
 				}
 			}
@@ -1291,7 +1292,7 @@ bool MySQL_HostGroups_Manager::commit(
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[0]);
-			proxy_warning("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
+			proxy_warning("pranavk-dbg line 1294. Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
 			MySrvC *mysrvc=(MySrvC *)ptr;
 			mysrvc->set_status(MYSQL_SERVER_STATUS_OFFLINE_HARD);
 			mysrvc->ConnectionsFree->drop_all_connections();
@@ -1691,7 +1692,9 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 				}
 				if (gtid_is) {
 					gtid_is->active = true;
-				} else if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				} else if (mysrvc->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+					proxy_warning("pranavk-dbg line 1696. offline hard s1 %s\n", s1.c_str());
+				} else {
 					// we didn't find it. Create it
 					/*
 					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
@@ -1747,6 +1750,10 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			if (mysrvc->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				std::string s = mysrvc->address;
+				s.append(":");
+				s.append(std::to_string(mysrvc->port));
+
 				if (mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) {
 					// no more connections for OFFLINE_HARD server, removing it
 					mysrvc=(MySrvC *)myhgc->mysrvs->servers->remove_index_fast(j);
@@ -1754,6 +1761,9 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 					//myhgc->refresh_online_server_count(); 
 					j--;
 					delete mysrvc;
+					proxy_warning("pranavk-dbg line 1764. deleted offline hard server %s\n", s.c_str());
+				} else {
+					proxy_warning("pranavk-dbg line 1764. not deleted offline hard server %s\n", s.c_str());
 				}
 			}
 		}
@@ -1816,6 +1826,10 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 					case 4:
 						st=(char *)"SHUNNED";
 						break;
+				}
+				if ((int)mysrvc->get_status() == 3) {
+					proxy_warning("pranavk-dbg line 1830. "
+					           "HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 				}
 				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
@@ -3347,13 +3361,15 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
 void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	std::vector<string> cur_servers_ids {};
 	wrlock();
+	proxy_warning("pranavk-dbg line 3350. entered MySQL_HostGroups_Manager::p_update_connection_pool()\n");
 	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
 		MyHGC *myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+		std::string hostgroup_id = std::to_string(myhgc->hid);
+		proxy_warning("pranavk-dbg line 3355. p_update_connection_pool() hostgroup_id:%s\n", hostgroup_id.c_str());
 		for (int j = 0; j < static_cast<int>(myhgc->mysrvs->cnt()); j++) {
 			MySrvC *mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
 			std::string endpoint_addr = mysrvc->address;
 			std::string endpoint_port = std::to_string(mysrvc->port);
-			std::string hostgroup_id = std::to_string(myhgc->hid);
 			std::string endpoint_id = hostgroup_id + ":" + endpoint_addr + ":" + endpoint_port;
 			const std::map<std::string, std::string> common_labels {
 				{"endpoint", endpoint_addr + ":" + endpoint_port},
@@ -3406,8 +3422,10 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				status.p_connection_pool_queries_map, mysrvc->queries_sent, p_hg_dyn_counter::connection_pool_queries);
 
 			// proxysql_connection_pool_status metric
+			int st = ((int)mysrvc->get_status()) + 1;
+			proxy_warning("pranavk-dbg line 3412. p_update_connection_pool() endpoint_id:%s status:%d\n", endpoint_id.c_str(), st);
 			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
-				status.p_connection_pool_status_map, ((int)mysrvc->get_status()) + 1, p_hg_dyn_gauge::connection_pool_status);
+				status.p_connection_pool_status_map, st, p_hg_dyn_gauge::connection_pool_status);
 		}
 	}
 
@@ -3502,6 +3520,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					break;
 				case 3:
 					pta[3]=strdup("OFFLINE_HARD");
+					proxy_warning("pranavk-dbg line 3523 %s:%d is OFFLINE_HARD\n", mysrvc->address, mysrvc->port);
 					break;
 				case 4:
 					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
@@ -4012,8 +4031,8 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		} else if (read_only == 1) {
 			if (is_writer) {
 				// the server has read_only=1 (reader), but we find it as writer, so we copy all writer nodes to reader (previous reader nodes will be reused)
-				proxy_info("Server '%s:%d' found with 'read_only=1', but not found as reader\n", hostname.c_str(), port);
-				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=1', but not found as reader\n", hostname.c_str(), port);
+				proxy_info("pranavk-dbg line 4015. Server '%s:%d' found with 'read_only=1', but not found as reader\n", hostname.c_str(), port);
+				proxy_debug(PROXY_DEBUG_MONITOR, 5, "pranavk-dbg line 4016. Server '%s:%d' found with 'read_only=1', but not found as reader\n", hostname.c_str(), port);
 				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
 
 				// clearing all writer nodes
@@ -4142,6 +4161,8 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 }
 
 void MySQL_HostGroups_Manager::p_update_metrics() {
+	proxy_warning("pranavk-dbg line 4149. MySQL_HostGroups_Manager::p_update_metrics()\n");
+
 	p_update_counter(status.p_counter_array[p_hg_counter::servers_table_version], status.servers_table_version);
 	// Update *server_connections* related metrics
 	status.p_gauge_array[p_hg_gauge::server_connections_connected]->Set(status.server_connections_connected);
@@ -4938,8 +4959,8 @@ void MySQL_HostGroups_Manager::update_group_replication_add_autodiscovered(
 			if (mysrvc->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 				reset_hg_attrs_server_defaults(mysrvc);
 				update_hg_attrs_server_defaults(mysrvc, mysrvc->myhgc);
-				proxy_info(
-					"Found healthy previously discovered GR node %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
+				proxy_warning(
+					"pranavk-dbg line 4963. Found healthy previously discovered GR node %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
 						" hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",
 					_host.c_str(), _port, reader_hg, mysrvc->weight, mysrvc->max_connections, mysrvc->use_ssl
 				);
@@ -6746,7 +6767,7 @@ int MySQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 	uint64_t mysrvc_addr = reinterpret_cast<uint64_t>(mysrvc);
 
 	proxy_warning(
-		"Removed server at address %ld, hostgroup %d, address %s port %d."
+		"pranavk-dbg line 6749. Removed server at address %ld, hostgroup %d, address %s port %d."
 		" Setting status OFFLINE HARD and immediately dropping all free connections."
 		" Used connections will be dropped when trying to use them\n",
 		mysrvc_addr, hid, mysrvc->address, mysrvc->port
@@ -7300,6 +7321,7 @@ MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned 
 
 				if (GloMTH->variables.hostgroup_manager_verbose) {
 					proxy_info(
+						"pranavk-dbg line 7324. "
 						"Found server node in Host Group Container %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
 						" hostgroup_id=%d, gtid_port=%d, weight=%ld, compression=%d, max_connections=%ld, use_ssl=%d,"
 						" max_replication_lag=%d, max_latency_ms=%d, comment=%s\n",
@@ -7331,7 +7353,7 @@ MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned 
 }
 
 void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(MySrvC* srv) {
-	proxy_warning("Removed server at address %p, hostgroup %d, address %s port %d. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", (void*)srv, srv->myhgc->hid, srv->address, srv->port);
+	proxy_warning("pranavk-dbg line 7334. Removed server at address %p, hostgroup %d, address %s port %d. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", (void*)srv, srv->myhgc->hid, srv->address, srv->port);
 	srv->set_status(MYSQL_SERVER_STATUS_OFFLINE_HARD);
 	srv->ConnectionsFree->drop_all_connections();
 }

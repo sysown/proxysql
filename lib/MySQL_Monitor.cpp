@@ -1125,7 +1125,10 @@ MySQL_Monitor::~MySQL_Monitor() {
 };
 
 void MySQL_Monitor::p_update_metrics() {
+	proxy_warning("pranavk-dbg line 1128. MySQL_Monitor::p_update_metrics()\n");
+
 	if (GloMyMon) {
+		proxy_warning("pranavk-dbg line 1131. GloMyMon MySQL_Monitor::p_update_metrics()\n");
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(GloMyMon->num_threads);
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers_aux]->Set(GloMyMon->aux_threads);
 

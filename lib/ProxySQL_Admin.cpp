@@ -9345,6 +9345,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 }
 
 void ProxySQL_Admin::p_update_metrics() {
+	proxy_warning("pranavk-dbg line 9348. ProxySQL_Admin::p_update_metrics()\n");
 	// Update proxysql_uptime
 	auto t1 = monotonic_time();
 	auto new_uptime = (t1 - GloVars.global.start_time)/1000/1000;

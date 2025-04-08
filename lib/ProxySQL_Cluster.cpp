@@ -4380,6 +4380,7 @@ ProxySQL_Cluster::~ProxySQL_Cluster() {
 }
 
 void ProxySQL_Cluster::p_update_metrics() {
+	proxy_warning("pranavk-dbg line 4283. ProxySQL_Cluster::p_update_metrics()\n");
 	this->nodes.update_prometheus_nodes_metrics();
 };
 

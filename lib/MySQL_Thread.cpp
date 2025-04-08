@@ -5647,6 +5647,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_session_internal_bytes() {
 }
 
 void MySQL_Threads_Handler::p_update_metrics() {
+	proxy_warning("pranavk-dbg line 5650. MySQL_Threads_Handler::p_update_metrics()\n");
 	get_total_mirror_queue();
 	get_active_transations();
 #ifdef IDLE_THREADS
