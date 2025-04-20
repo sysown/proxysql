@@ -1,3 +1,4 @@
+#include "gen_utils.h"
 #include "query_processor.h"
 
 // reverse:  reverse string s in place
@@ -151,16 +152,13 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	my_itoa(qdsp->count_star, count_star);
 	pta[5]=qdsp->count_star;
 
-	time_t __now;
-	time(&__now);
-	unsigned long long curtime=monotonic_time();
 	time_t seen_time;
-	seen_time= __now - curtime/1000000 + first_seen/1000000;
+	seen_time=monotonic_time_to_realtime(first_seen);
 	//sprintf(qdsp->first_seen,"%ld", seen_time);
 	my_itoa(qdsp->first_seen, seen_time);
 	pta[6]=qdsp->first_seen;
 
-	seen_time= __now - curtime/1000000 + last_seen/1000000;
+	seen_time=monotonic_time_to_realtime(last_seen);
 	//sprintf(qdsp->last_seen,"%ld", seen_time);
 	my_itoa(qdsp->last_seen, seen_time);
 	pta[7]=qdsp->last_seen;
@@ -187,4 +185,3 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	pta[13]=qdsp->rows_sent;
 	return pta;
 }
-

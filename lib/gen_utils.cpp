@@ -350,3 +350,42 @@ const char* escape_string_backslash_spaces(const char* input) {
 	*(p++) = '\0';
 	return output;
 }
+
+/**
+ * Converts monotonic clock time (in μs) to realtime clock time (in sec).
+ * This function assumes that during bootup initial value for the monotonic
+ * clock in the operation system will be set based on realtime clock value.
+ * This function should only be used in non-critical business logic, such as
+ * input and output conversion.
+ *
+ * @param mt monotonic clock value in microseconds.
+ * @return realtime clock time in seconds.
+ */
+time_t monotonic_time_to_realtime(time_t mt) {
+	time_t mt_now = monotonic_time() / 1000000;
+	mt = mt / 1000000;
+
+	time_t rt_now;
+	time(&rt_now);
+
+	return (rt_now - mt_now + mt);
+}
+
+/**
+ * Converts realtime clock time (in sec) to monotonic clock time (in μs).
+ * This function assumes that during bootup initial value for the monotonic
+ * clock in the operation system will be set based on realtime clock value.
+ * This function should only be used in non-critical business logic, such as
+ * input and output conversion.
+ *
+ * @param rt realtime clock time in seconds.
+ * @return monotonic clock value in microseconds.
+ */
+time_t realtime_to_monotonic_time(time_t rt) {
+	time_t mt_now = monotonic_time() / 1000000;
+
+	time_t rt_now;
+	time(&rt_now);
+
+	return ((mt_now - rt_now + rt) * 1000000);
+}
