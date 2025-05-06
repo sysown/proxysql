@@ -122,6 +122,7 @@ public:
 	PgSQL_Session* sess;  // pointer to the session using this data stream
 	PgSQL_Backend* mybe;  // if this is a connection to a mysql server, this points to a backend structure
 	char* x509_subject_alt_name;
+	char* x509_subject_name;
 	SSL* ssl;
 	BIO* rbio_ssl;
 	BIO* wbio_ssl;
@@ -132,6 +133,7 @@ public:
 	struct {
 		char* addr;
 		int port;
+        char *hostname;
 	} addr;
 	struct {
 		char* addr;

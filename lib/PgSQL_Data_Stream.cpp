@@ -162,6 +162,10 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				}
 			}
 
+            // This returns the subject line as '/C=US/ST=California/L=Mountain View/O=Google Inc/CN=*.google.com'
+            x509_subject_name = strdup(X509_NAME_oneline(X509_get_subject_name((X509*)cert), NULL, 0));
+            proxy_info("SSL cert subject = %s\n", x509_subject_name);
+
 			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
 			X509_free(cert);
 		}
@@ -220,6 +224,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 
 	addr.addr = NULL;
 	addr.port = 0;
+    addr.hostname = NULL;
 	proxy_addr.addr = NULL;
 	proxy_addr.port = 0;
 
@@ -255,6 +260,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	switching_auth_stage = 0;
 	switching_auth_type = 0;
 	x509_subject_alt_name = NULL;
+    x509_subject_name = NULL;
 	ssl = NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;
@@ -291,6 +297,10 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		free(addr.addr);
 		addr.addr = NULL;
 	}
+    if (addr.hostname) {
+        free(addr.hostname);
+        addr.hostname=NULL;
+    }    
 	if (proxy_addr.addr) {
 		free(proxy_addr.addr);
 		proxy_addr.addr = NULL;
@@ -371,6 +381,10 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 	if (x509_subject_alt_name) {
 		free(x509_subject_alt_name);
 		x509_subject_alt_name = NULL;
+	}
+	if (x509_subject_name) {
+		free(x509_subject_name);
+		x509_subject_name = NULL;
 	}
 
 	free_scram_state(scram_state);
