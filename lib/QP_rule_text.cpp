@@ -7,13 +7,15 @@
 
 QP_rule_text_hitsonly::QP_rule_text_hitsonly(QP_rule_t *QPr) {
 	pta=NULL;
-	pta=(char **)malloc(sizeof(char *)*2);
+	pta=(char **)malloc(sizeof(char *)*4);
 	itostr(pta[0], (long long)QPr->rule_id);
 	itostr(pta[1], (long long)QPr->hits);
+    itostr(pta[2], (long long)QPr->num_throttle);
+    itostr(pta[3], (long long)QPr->ms_throttled);
 }
 
 QP_rule_text_hitsonly::~QP_rule_text_hitsonly() {
-	for(int i=0; i<2; i++) {
+	for(int i=0; i<4; i++) {
 		free_null(pta[i]);
 	}
 	free(pta);

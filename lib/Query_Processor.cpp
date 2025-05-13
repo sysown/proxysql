@@ -406,11 +406,14 @@ void Query_Processor<QP_DERIVED>::commit() {
 template <typename QP_DERIVED>
 SQLite3_result * Query_Processor<QP_DERIVED>::get_stats_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping query rules statistics, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(2);
+	SQLite3_result *result=new SQLite3_result(4);
 	rdlock();
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
 	result->add_column_definition(SQLITE_TEXT,"hits");
+    result->add_column_definition(SQLITE_TEXT,"num_throttles");
+    result->add_column_definition(SQLITE_TEXT,"ms_throttled");
+
 	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
 		qr1=*it;
 		if (qr1->active) {
@@ -1481,6 +1484,40 @@ __internal_loop:
 		}
 
 		// if we arrived here, we have a match
+
+		// Do we need to consider throttling?
+		if (qr->max_rate > 0) {
+
+			//fprintf(stderr,"Query suject to rate limiting\n");
+			struct timeval current_time;
+			gettimeofday(&current_time, NULL);
+
+			if (current_time.tv_sec > qr->last_sec) {
+				qr->last_sec = current_time.tv_sec;
+				qr->number_hits_last_sec = 1;
+			} else {
+				qr->number_hits_last_sec++;
+			}
+
+			if ((qr->number_hits_last_sec + qr->parent->current_throttled) > qr->max_rate) {
+				__sync_fetch_and_add(&(qr->parent->current_throttled),1);  // global
+
+				// Sleep for the remaining of the second plus current_throttled/max_rate second
+				unsigned int us_sleep_time = 1000000 - current_time.tv_usec; 
+
+				if (qr->parent->current_throttled > qr->max_rate) {
+					// pushing further
+					us_sleep_time += (qr->parent->current_throttled - qr->max_rate)*1000000/qr->max_rate;
+				}
+				usleep(us_sleep_time);
+
+				qr->num_throttle++;  // this is done without atomic function because it updates only the local variables
+				qr->ms_throttled += us_sleep_time/1000;  // this is done without atomic function because it updates only the local variables
+				__sync_fetch_and_sub(&(qr->parent->current_throttled),1);  // global
+
+			}
+		}
+
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 		bool set_flagOUT=false;
 		if (qr->flagOUT_weights_total > 0) {
@@ -1789,6 +1826,15 @@ void Query_Processor<QP_DERIVED>::update_query_processor_stats() {
 				__sync_fetch_and_add(&qr->parent->hits,qr->hits);
 				qr->hits=0;
 			}
+			if (qr->active && qr->num_throttle) {
+				__sync_fetch_and_add(&qr->parent->num_throttle,qr->num_throttle);
+				qr->num_throttle=0;
+			}
+			if (qr->active && qr->ms_throttled) {
+				__sync_fetch_and_add(&qr->parent->ms_throttled,qr->ms_throttled);
+				qr->ms_throttled=0;
+			}
+
 		}
 	}
 	wrunlock();

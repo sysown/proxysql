@@ -56,7 +56,7 @@ public:
 		const char* re_modifiers, int flagOUT, const char* replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result,
 		int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT,
 		int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log,
-		bool apply, const char* attributes, const char* comment);
+		bool apply, const char* attributes, int max_rate, const char* comment);
 
 private:
 	Command_Counter* commands_counters[MYSQL_COM_QUERY___NONE];

@@ -319,7 +319,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id,
 	const char* re_modifiers, int flagOUT, const char* replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result,
 	int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT,
 	int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int log,
-	bool apply, const char* attributes, const char* comment) {
+	bool apply, const char* attributes, int max_rate, const char* comment) {
 
 	PgSQL_Query_Processor_Rule_t* newQR = (PgSQL_Query_Processor_Rule_t*)malloc(sizeof(PgSQL_Query_Processor_Rule_t));
 	newQR->rule_id = rule_id;
@@ -368,6 +368,12 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->regex_engine1 = NULL;
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
+    newQR->number_hits_last_sec=0;
+    newQR->current_throttled=0;
+    newQR->last_sec=0;
+    newQR->num_throttle=0;
+    newQR->ms_throttled=0;
+    newQR->max_rate=max_rate;
 
 	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (client_addr ? strdup(client_addr) : NULL);
@@ -503,6 +509,12 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 	newQR->regex_engine1 = NULL;
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
+    newQR->number_hits_last_sec=0;
+    newQR->current_throttled=0;
+    newQR->last_sec=0;
+    newQR->num_throttle=0;
+    newQR->ms_throttled=0;
+    newQR->max_rate=pqr->max_rate;
 
 	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (pqr->client_addr ? strdup(pqr->client_addr) : NULL);
@@ -576,7 +588,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 
 SQLite3_result* PgSQL_Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result* result = new SQLite3_result(35);
+	SQLite3_result* result = new SQLite3_result(36);
 	PgSQL_Query_Processor_Rule_t* qr1;
 	rdlock();
 	result->add_column_definition(SQLITE_TEXT, "rule_id");
@@ -612,6 +624,7 @@ SQLite3_result* PgSQL_Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT, "log");
 	result->add_column_definition(SQLITE_TEXT, "apply");
 	result->add_column_definition(SQLITE_TEXT, "attributes");
+	result->add_column_definition(SQLITE_TEXT, "max_rate");
 	result->add_column_definition(SQLITE_TEXT, "comment"); // issue #643
 	result->add_column_definition(SQLITE_TEXT, "hits");
 	for (std::vector<QP_rule_t*>::iterator it = rules.begin(); it != rules.end(); ++it) {
