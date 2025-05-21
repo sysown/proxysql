@@ -7355,7 +7355,7 @@ MySQLServers_SslParams * MySQL_HostGroups_Manager::get_Server_SSL_Params(char *h
 * @param new_servers A vector of tuples where each tuple contains the values needed to add each new server.
 */
 void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(
-	const vector<tuple<string, int, int>>& new_servers
+	const vector<tuple<string, int, long, int>>& new_servers
 ) {
 	int added_new_server = -1;
 
@@ -7363,15 +7363,19 @@ void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_repli
 	wrlock();
 
 	// Add the discovered server with default values
-	for (const tuple<string, int, int>& s : new_servers) {
+	for (const tuple<string, int, long, int>& s : new_servers) {
 		string host = std::get<0>(s);
-		uint16_t port = std::get<1>(s);
+		int port = std::get<1>(s);
 		long int hostgroup_id = std::get<2>(s);
-			
-		srv_info_t srv_info { host.c_str(), port, "AWS RDS" };
-		srv_opts_t srv_opts { -1, -1, -1 };
+		int weight = std::get<3>(s);
 
-		added_new_server = create_new_server_in_hg(hostgroup_id, srv_info, srv_opts);
+		srv_info_t srv_info { host.c_str(), (uint16_t)port, "AWS RDS" };
+		srv_opts_t srv_opts { weight, -1, -1 };
+
+		int res = create_new_server_in_hg(hostgroup_id, srv_info, srv_opts);
+		if (added_new_server < 0) {
+			added_new_server = res;
+		}
 	}
 
 	// If servers were added, perform necessary updates to internal structures

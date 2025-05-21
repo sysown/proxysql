@@ -1077,7 +1077,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	void set_Readyset_status(char *hostname, int port, enum MySerStatus status);
 	unsigned long long Get_Memory_Stats();
 
-	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);
+	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, long, int>>& new_servers);
 
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
