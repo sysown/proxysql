@@ -83,10 +83,10 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1() {
 
 	re2::RE2 re0("^\\s*SET\\s+", *opt2);
 	re2::RE2::Replace(&query, re0, "");
-	re2::RE2 re1("(\\s|;)+$", *opt2); // remove trailing spaces and semicolon
-	re2::RE2::Replace(&query, re1, "");
 	re2::RE2 re2("--.*$", *opt2); // remove comments
 	re2::RE2::Replace(&query, re2, "");
+	re2::RE2 re1("(\\s|;)+$", *opt2); // remove trailing spaces and semicolon
+	re2::RE2::Replace(&query, re1, "");
 
 	std::map<std::string,std::vector<std::string>> result;
 
