@@ -109,6 +109,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <cstdint>
 #include <type_traits>
 #include <new>
 #include <ostream>
