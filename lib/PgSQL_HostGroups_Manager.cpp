@@ -1974,6 +1974,17 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				}
 			}
 		}
+		if (sum==0 && num_candidates > 0) {
+			proxy_info("No available server in hostgroup %u with weight > 0, but %u candidates found. This is probably due to max_connections reached for all servers. Using candidates with weight 0\n", hid, num_candidates);
+			// Iterate on all candidates and increase their weight
+			for (j=0; j<num_candidates; j++) {
+				mysrvc = mysrvcCandidates[j];
+				// increase the weight of the server
+				mysrvc->weight++;
+				proxy_debug("Increasing weight of server %s:%d to %ld\n", mysrvc->address, mysrvc->port, mysrvc->weight);
+				sum += 1;
+			}
+		}
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
