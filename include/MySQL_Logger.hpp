@@ -6,7 +6,7 @@
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX

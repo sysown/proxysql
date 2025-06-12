@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -392,4 +392,3 @@ void ProxySQL_RESTAPI_Server::init() {
 void ProxySQL_RESTAPI_Server::print_version() {
     fprintf(stderr,"Standard ProxySQL REST API Server Handler rev. %s -- %s -- %s\n", PROXYSQL_RESTAPI_SERVER_VERSION, __FILE__, __TIMESTAMP__);
 }
-

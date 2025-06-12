@@ -329,6 +329,13 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 
 libscram: libscram/lib/libscram.a
 
+json/json/include/nlohmann/json.hpp:
+	cd json && rm -rf json-*/ || true
+	cd json && tar -zxf json-3.12.0.tar.gz
+	cd json/json && cmake .
+
+json: json/json/include/nlohmann/json.hpp
+
 ### clean targets
 
 cleanpart:

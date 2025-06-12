@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -1052,4 +1052,3 @@ unsigned int PgSQL_Logger::audit_find_next_id() {
 void PgSQL_Logger::print_version() {
   fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
 };
-

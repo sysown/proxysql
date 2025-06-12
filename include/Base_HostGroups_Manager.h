@@ -34,7 +34,7 @@ class PgSQL_SrvList;
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 #include <variant>

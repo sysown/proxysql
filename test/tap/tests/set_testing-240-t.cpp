@@ -20,7 +20,7 @@
 #include <mutex>
 
 #include "mysql.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include "tap.h"
 #include "utils.h"

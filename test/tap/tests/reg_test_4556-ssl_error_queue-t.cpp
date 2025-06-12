@@ -35,7 +35,7 @@
 
 #include "mysql.h"
 #include "openssl/ssl.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include "tap.h"
 #include "command_line.h"

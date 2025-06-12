@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -17,7 +17,7 @@ using json = nlohmann::json;
 #include "tap.h"
 #include "command_line.h"
 
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include "MySQL_Protocol.h"
 

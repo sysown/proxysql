@@ -107,9 +107,48 @@ LIBSCRAM_PATH=$(DEPS_PATH)/libscram/
 LIBSCRAM_IDIR=$(LIBSCRAM_PATH)/include/
 LIBSCRAM_LDIR=$(LIBSCRAM_PATH)/lib/
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBCONFIG_IDIR) -I$(LIBDAEMON_IDIR) -I$(RE2_IDIR) -L$(PCRE_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(PROMETHEUS_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(SQLITE3_IDIR) -I$(CLICKHOUSE_CPP_IDIR) -I$(CLICKHOUSE_CPP_CDIR) -I$(SSL_IDIR) -I$(0)
-LDIRS := -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) -L$(LIBCONFIG_LDIR) -L$(LIBDAEMON_LDIR) -L$(RE2_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR) -L$(POSTGRESQL_LDIR) -L$(LIBUSUAL_LDIR) -L$(LIBSCRAM_LDIR) -L$(SSL_LDIR)
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
 
+IDIRS := -I$(PROXYSQL_IDIR) \
+			-I$(JEMALLOC_IDIR) \
+			-I$(MARIADB_IDIR) \
+			-I$(LIBCONFIG_IDIR) \
+			-I$(LIBDAEMON_IDIR) \
+			-I$(RE2_IDIR) \
+			-L$(PCRE_IDIR) \
+			-I$(MICROHTTPD_IDIR) \
+			-I$(LIBHTTPSERVER_IDIR) \
+			-I$(LIBINJECTION_IDIR) \
+			-I$(CURL_IDIR) \
+			-I$(EV_IDIR) \
+			-I$(PROMETHEUS_IDIR) \
+			-I$(POSTGRESQL_IDIR) \
+			-I$(LIBSCRAM_IDIR) \
+			-I$(SQLITE3_IDIR) \
+			-I$(CLICKHOUSE_CPP_IDIR) \
+			-I$(CLICKHOUSE_CPP_CDIR) \
+			-I$(JSON_IDIR) \
+			-I$(SSL_IDIR) \
+			-I$(0)
+
+LDIRS := -L$(PROXYSQL_LDIR) \
+			-L$(JEMALLOC_LDIR) \
+			-L$(MARIADB_LDIR) \
+			-L$(LIBCONFIG_LDIR) \
+			-L$(LIBDAEMON_LDIR) \
+			-L$(RE2_LDIR) \
+			-L$(PCRE_LDIR) \
+			-L$(MICROHTTPD_LDIR) \
+			-L$(LIBHTTPSERVER_LDIR) \
+			-L$(LIBINJECTION_LDIR) \
+			-L$(CURL_LDIR) \
+			-L$(EV_LDIR) \
+			-L$(PROMETHEUS_LDIR) \
+			-L$(POSTGRESQL_LDIR) \
+			-L$(LIBUSUAL_LDIR) \
+			-L$(LIBSCRAM_LDIR) \
+			-L$(SSL_LDIR)
 
 ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
@@ -178,8 +217,26 @@ ifeq ($(CXX),clang++)
 endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
+STATICMYLIBS := -Wl,-Bstatic \
+				-lconfig \
+				-lproxysql \
+				-ldaemon \
+				-lconfig++ \
+				-lre2 \
+				-lpcrecpp \
+				-lpcre \
+				-lmariadbclient \
+				-lhttpserver \
+				-lmicrohttpd \
+				-linjection \
+				-lcurl \
+				-lev \
+				-lscram \
+				-lusual \
+				-lpq \
+				-lpgcommon \
+				-lpgport
 
-STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lev -lscram -lusual -lpq -lpgcommon -lpgport
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc
 endif

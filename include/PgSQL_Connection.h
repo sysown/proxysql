@@ -7,7 +7,7 @@
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 class PgSQL_SrvC;
@@ -58,7 +58,7 @@ enum PgSQL_Param_Name {
 	PG_SSLROOTCERT,  // Specifies the name of a file containing SSL certificate authority (CA) certificate(s)
 	PG_SSLCRL,  // Specifies the file name of the SSL server certificate revocation list (CRL)
 	PG_SSLCRLDIR,  // Specifies the directory name of the SSL server certificate revocation list (CRL)
-	PG_SSLSNI,  // Sets the TLS extension “Server Name Indication” (SNI) on SSL-enabled connections
+	PG_SSLSNI,  // Sets the TLS extension ï¿½Server Name Indicationï¿½ (SNI) on SSL-enabled connections
 	PG_REQUIREPEER,  // Specifies the operating-system user name of the server
 	PG_SSL_MIN_PROTOCOL_VERSION,  // Specifies the minimum SSL/TLS protocol version to allow for the connection
 	PG_SSL_MAX_PROTOCOL_VERSION,  // Specifies the maximum SSL/TLS protocol version to allow for the connection
