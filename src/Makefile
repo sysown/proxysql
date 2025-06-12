@@ -85,9 +85,9 @@ COREDUMPER_PATH := $(DEPS_PATH)/coredumper/coredumper
 COREDUMPER_IDIR := $(COREDUMPER_PATH)/include
 COREDUMPER_LDIR := $(COREDUMPER_PATH)/src
 
-CURL_PATH := $(DEPS_PATH)/curl/curl
+CURL_PATH := $(DEPS_PATH)/curl/curl/local
 CURL_IDIR := $(CURL_PATH)/include
-CURL_LDIR := $(CURL_PATH)/lib/.libs
+CURL_LDIR := $(CURL_PATH)/lib
 
 include ../common_mk/openssl_flags.mk
 
@@ -263,4 +263,3 @@ default: $(EXECUTABLE)
 
 clean:
 	rm -rf *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1 $(ODIR)
-

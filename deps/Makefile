@@ -116,18 +116,18 @@ coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 coredumper: coredumper/coredumper/src/libcoredumper.a
 
-curl/curl/lib/.libs/libcurl.a:
+curl/curl/local/lib/libcurl.a:
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
-	cd curl && ln -fsT curl-*/ curl
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl --enable-shared=yes
+	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --prefix=$(abspath ./curl/curl/local) --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl --enable-shared=yes
 	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ${MAKE} install
 
-curl: curl/curl/lib/.libs/libcurl.a
+curl: curl/curl/local/lib/libcurl.a
 
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
@@ -361,4 +361,3 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 .PHONY: cleanall
-
