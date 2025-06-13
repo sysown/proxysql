@@ -45,7 +45,28 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-targets := check_openssl_version libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libhttpserver libinjection prometheus-cpp postgresql libusual libscram
+targets := check_openssl_version    \
+			libconfig               \
+			libdaemon               \
+			jemalloc                \
+			mariadb_client          \
+			re2                     \
+			sqlite3                 \
+			pcre                    \
+			lz4                     \
+			cityhash                \
+			microhttpd              \
+			curl                    \
+			ev                      \
+			libhttpserver           \
+			libinjection            \
+			prometheus-cpp          \
+			postgresql              \
+			libusual                \
+			libscram                \
+			json                    \
+			abseil
+
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
 endif
@@ -336,6 +357,17 @@ json/json/include/nlohmann/json.hpp:
 
 json: json/json/include/nlohmann/json.hpp
 
+abseil/abseil-cpp/local/lib/libabsl.a:
+	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd abseil && tar -zxf abseil-cpp-20250512.0.tar.gz
+	cd abseil/abseil-cpp && mkdir -p build
+	cd abseil/abseil-cpp/build && cmake .. -DCMAKE_INSTALL_PREFIX=../local -DBUILD_TESTING=OFF
+	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd abseil/abseil-cpp/build && ${MAKE} install
+	cd abseil/abseil-cpp/local/lib && ${AR} -crs --thin libabsl.a *.a
+
+abseil: abseil/abseil-cpp/local/lib/libabsl.a
+
 ### clean targets
 
 cleanpart:
@@ -367,4 +399,6 @@ cleanall:
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
+	cd json && rm -rf json-*/ || true
+	cd abseil && rm -rf abseil-cpp-*/ || true
 .PHONY: cleanall
