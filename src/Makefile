@@ -114,6 +114,10 @@ ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp/local
 ABSL_IDIR := $(ABSL_PATH)/include
 ABSL_LDIR := $(ABSL_PATH)/lib
 
+PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf/local
+PROTOBUF_IDIR := $(PROTOBUF_PATH)/include
+PROTOBUF_LDIR := $(PROTOBUF_PATH)/lib
+
 IDIRS := -I$(PROXYSQL_IDIR)       \
 		-I$(JEMALLOC_IDIR)        \
 		-I$(MARIADB_IDIR)         \
@@ -134,6 +138,7 @@ IDIRS := -I$(PROXYSQL_IDIR)       \
 		-I$(CLICKHOUSE_CPP_CDIR)  \
 		-I$(JSON_IDIR)            \
 		-I$(ABSL_IDIR)            \
+		-I$(PROTOBUF_IDIR)        \
 		-I$(SSL_IDIR)             \
 		-I$(0)
 
@@ -154,6 +159,7 @@ LDIRS := -L$(PROXYSQL_LDIR)     \
 		-L$(LIBUSUAL_LDIR)      \
 		-L$(LIBSCRAM_LDIR)      \
 		-L$(ABSL_LDIR)          \
+		-L$(PROTOBUF_LDIR)      \
 		-L$(SSL_LDIR)
 
 ifeq ($(UNAME_S),Linux)
@@ -242,7 +248,9 @@ STATICMYLIBS := -Wl,-Bstatic    \
 				-lpq            \
 				-lpgcommon      \
 				-lpgport        \
-				-labsl
+				-labsl          \
+				-lprotobuf      \
+				-lutf8
 
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc

@@ -45,6 +45,9 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
+ABSL_INSTALL_DIR := $(abspath abseil/abseil-cpp/local)
+PROTOBUF_INSTALL_DIR := $(abspath protobuf/protobuf/local)
+
 targets := check_openssl_version    \
 			libconfig               \
 			libdaemon               \
@@ -65,7 +68,8 @@ targets := check_openssl_version    \
 			libusual                \
 			libscram                \
 			json                    \
-			abseil
+			abseil                  \
+			protobuf
 
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
@@ -357,16 +361,31 @@ json/json/include/nlohmann/json.hpp:
 
 json: json/json/include/nlohmann/json.hpp
 
-abseil/abseil-cpp/local/lib/libabsl.a:
+$(ABSL_INSTALL_DIR)/lib/libabsl.a:
 	cd abseil && rm -rf abseil-cpp-*/ || true
 	cd abseil && tar -zxf abseil-cpp-20250512.0.tar.gz
 	cd abseil/abseil-cpp && mkdir -p build
-	cd abseil/abseil-cpp/build && cmake .. -DCMAKE_INSTALL_PREFIX=../local -DBUILD_TESTING=OFF
+	cd abseil/abseil-cpp/build && cmake .. -DCMAKE_INSTALL_PREFIX=$(ABSL_INSTALL_DIR) -DBUILD_TESTING=OFF
 	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd abseil/abseil-cpp/build && ${MAKE} install
-	cd abseil/abseil-cpp/local/lib && ${AR} -crs --thin libabsl.a *.a
+	cd $(ABSL_INSTALL_DIR)/lib && ${AR} -crs --thin libabsl.a *.a
 
-abseil: abseil/abseil-cpp/local/lib/libabsl.a
+abseil: $(ABSL_INSTALL_DIR)/lib/libabsl.a
+
+$(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a: abseil
+	cd protobuf && rm -rf protobuf-*/ || true
+	cd protobuf && tar -zxf protobuf-31.0.tar.gz
+	cd protobuf/protobuf && mkdir -p build
+	cd protobuf/protobuf/build && cmake ..                                     \
+								-DCMAKE_PREFIX_PATH=$(ABSL_INSTALL_DIR)        \
+								-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_INSTALL_DIR) \
+								-Dprotobuf_BUILD_TESTS=OFF                     \
+								-Dprotobuf_LOCAL_DEPENDENCIES_ONLY=ON
+	cd protobuf/protobuf/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd protobuf/protobuf/build && ${MAKE} install
+	cd $(PROTOBUF_INSTALL_DIR)/lib && ${AR} -crs --thin libutf8.a libutf8_*.a
+
+protobuf: $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
 
 ### clean targets
 
@@ -401,4 +420,5 @@ cleanall:
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
 	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd protobuf && rm -rf protobuf-*/ || true
 .PHONY: cleanall
