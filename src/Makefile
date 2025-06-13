@@ -118,6 +118,10 @@ PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf/local
 PROTOBUF_IDIR := $(PROTOBUF_PATH)/include
 PROTOBUF_LDIR := $(PROTOBUF_PATH)/lib
 
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp/local
+OTEL_IDIR := $(OTEL_PATH)/include
+OTEL_LDIR := $(OTEL_PATH)/lib
+
 IDIRS := -I$(PROXYSQL_IDIR)       \
 		-I$(JEMALLOC_IDIR)        \
 		-I$(MARIADB_IDIR)         \
@@ -139,6 +143,7 @@ IDIRS := -I$(PROXYSQL_IDIR)       \
 		-I$(JSON_IDIR)            \
 		-I$(ABSL_IDIR)            \
 		-I$(PROTOBUF_IDIR)        \
+		-I$(OTEL_IDIR)            \
 		-I$(SSL_IDIR)             \
 		-I$(0)
 
@@ -160,6 +165,7 @@ LDIRS := -L$(PROXYSQL_LDIR)     \
 		-L$(LIBSCRAM_LDIR)      \
 		-L$(ABSL_LDIR)          \
 		-L$(PROTOBUF_LDIR)      \
+		-L$(OTEL_LDIR)          \
 		-L$(SSL_LDIR)
 
 ifeq ($(UNAME_S),Linux)
@@ -250,7 +256,8 @@ STATICMYLIBS := -Wl,-Bstatic    \
 				-lpgport        \
 				-labsl          \
 				-lprotobuf      \
-				-lutf8
+				-lutf8          \
+				-lopentelemetry
 
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc

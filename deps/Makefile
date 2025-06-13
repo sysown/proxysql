@@ -45,8 +45,12 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
+JSON_INSTALL_DIR := $(abspath json/json)
+CURL_INSTALL_DIR := $(abspath curl/curl/local)
 ABSL_INSTALL_DIR := $(abspath abseil/abseil-cpp/local)
 PROTOBUF_INSTALL_DIR := $(abspath protobuf/protobuf/local)
+OTEL_INSTALL_DIR := $(abspath opentelemetry/opentelemetry-cpp/local)
+OTEL_PROTO_DIR := $(abspath opentelemetry/opentelemetry-proto)
 
 targets := check_openssl_version    \
 			libconfig               \
@@ -69,7 +73,8 @@ targets := check_openssl_version    \
 			libscram                \
 			json                    \
 			abseil                  \
-			protobuf
+			protobuf                \
+			otel
 
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
@@ -141,18 +146,18 @@ coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 coredumper: coredumper/coredumper/src/libcoredumper.a
 
-curl/curl/local/lib/libcurl.a:
+$(CURL_INSTALL_DIR)/lib/libcurl.a:
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --prefix=$(abspath ./curl/curl/local) --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl --enable-shared=yes
+	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --prefix=$(CURL_INSTALL_DIR) --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl --enable-shared=yes
 	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE}
 	cd curl/curl && ${MAKE} install
 
-curl: curl/curl/local/lib/libcurl.a
+curl: $(CURL_INSTALL_DIR)/lib/libcurl.a
 
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
@@ -354,12 +359,12 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 
 libscram: libscram/lib/libscram.a
 
-json/json/include/nlohmann/json.hpp:
+$(JSON_INSTALL_DIR)/include/nlohmann/json.hpp:
 	cd json && rm -rf json-*/ || true
 	cd json && tar -zxf json-3.12.0.tar.gz
 	cd json/json && cmake .
 
-json: json/json/include/nlohmann/json.hpp
+json: $(JSON_INSTALL_DIR)/include/nlohmann/json.hpp
 
 $(ABSL_INSTALL_DIR)/lib/libabsl.a:
 	cd abseil && rm -rf abseil-cpp-*/ || true
@@ -386,6 +391,29 @@ $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a: abseil
 	cd $(PROTOBUF_INSTALL_DIR)/lib && ${AR} -crs --thin libutf8.a libutf8_*.a
 
 protobuf: $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
+
+$(OTEL_INSTALL_DIR)/lib/libopentelemetry.a: protobuf abseil curl json
+	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
+	cd opentelemetry && tar -zxf opentelemetry-cpp-1.21.0.tar.gz
+	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
+	cd opentelemetry && tar -zxf opentelemetry-proto-1.6.0.tar.gz
+	cd opentelemetry/opentelemetry-cpp && mkdir -p build
+	cd opentelemetry/opentelemetry-cpp/build && cmake ..                   \
+								-DBUILD_SHARED_LIBS=OFF                    \
+								-DBUILD_TESTING=OFF                        \
+								-DWITH_BENCHMARK=OFF                       \
+								-DWITH_EXAMPLES=OFF                        \
+								-DWITH_OTLP_HTTP=ON                        \
+								-DWITH_OTLP_GRPC=OFF                       \
+								-DOTELCPP_PROTO_PATH=$(OTEL_PROTO_DIR)     \
+								-DCMAKE_INSTALL_PREFIX=$(OTEL_INSTALL_DIR) \
+								-DCMAKE_PREFIX_PATH="$(PROTOBUF_INSTALL_DIR);$(ABSL_INSTALL_DIR);$(CURL_INSTALL_DIR);$(JSON_INSTALL_DIR)"
+
+	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd opentelemetry/opentelemetry-cpp/build && ${MAKE} install
+	cd $(OTEL_INSTALL_DIR)/lib && ${AR} -crs --thin libopentelemetry.a *.a
+
+otel: $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a
 
 ### clean targets
 
