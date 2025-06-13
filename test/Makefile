@@ -43,6 +43,9 @@ MICROHTTPD_IDIR := $(MICROHTTPD_PATH)/src/include
 CURL_PATH := $(DEPS_PATH)/curl/curl
 CURL_IDIR := -I$(CURL_PATH)/include
 
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
+
 include ../common_mk/openssl_flags.mk
 
 EV_PATH := $(DEPS_PATH)/libev/libev/
@@ -67,6 +70,7 @@ IDIRS += -I$(LIBINJECTION_IDIR)
 IDIRS += -I$(CURL_IDIR)
 IDIRS += -I$(EV_DIR)
 IDIRS += -I$(SSL_IDIR)
+IDIRS += -I$(JSON_IDIR)
 
 
 sqlite_history_convert: sqlite_history_convert.cpp

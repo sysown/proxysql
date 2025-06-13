@@ -86,30 +86,43 @@ POSTGRES_IDIR = $(POSTGRES_PATH)/include
 JSON_PATH := $(DEPS_PATH)/json/json
 JSON_IDIR := $(JSON_PATH)/include
 
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp/local
+ABSL_IDIR := $(ABSL_PATH)/include
+
+PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf/local
+PROTOBUF_IDIR := $(PROTOBUF_PATH)/include
+
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp/local
+OTEL_IDIR := $(OTEL_PATH)/include
+
 SYS_LOC_IDIR := /usr/local/include
 PROXYSQL_IDIR := ../include
 
-IDIRS := -I$(SYS_LOC_IDIR) \
-			-I$(PROXYSQL_IDIR) \
-			-I$(JEMALLOC_IDIR) \
-			-I$(MARIADB_IDIR) \
-			-I$(LIBCONFIG_IDIR) \
-			-I$(RE2_IDIR) \
-			-I$(SQLITE3_DIR) \
-			-I$(PCRE_PATH) \
-			-I$(CLICKHOUSE_CPP_DIR) \
+IDIRS := -I$(SYS_LOC_IDIR)                   \
+			-I$(PROXYSQL_IDIR)               \
+			-I$(JEMALLOC_IDIR)               \
+			-I$(MARIADB_IDIR)                \
+			-I$(LIBCONFIG_IDIR)              \
+			-I$(RE2_IDIR)                    \
+			-I$(SQLITE3_DIR)                 \
+			-I$(PCRE_PATH)                   \
+			-I$(CLICKHOUSE_CPP_DIR)          \
 			-I$(CLICKHOUSE_CPP_DIR)/contrib/ \
-			-I$(MICROHTTPD_DIR) \
-			-I$(MICROHTTPD_IDIR) \
-			-I$(LIBHTTPSERVER_IDIR) \
-			-I$(LIBINJECTION_IDIR) \
-			-I$(CURL_IDIR) \
-			-I$(EV_DIR) \
-			-I$(PROMETHEUS_IDIR) \
-			-I$(LIBUSUAL_IDIR) \
-			-I$(LIBSCRAM_IDIR) \
-			-I$(POSTGRES_IFACE) \
-			-I$(POSTGRES_IDIR) \
+			-I$(MICROHTTPD_DIR)              \
+			-I$(MICROHTTPD_IDIR)             \
+			-I$(LIBHTTPSERVER_IDIR)          \
+			-I$(LIBINJECTION_IDIR)           \
+			-I$(CURL_IDIR)                   \
+			-I$(EV_DIR)                      \
+			-I$(PROMETHEUS_IDIR)             \
+			-I$(LIBUSUAL_IDIR)               \
+			-I$(LIBSCRAM_IDIR)               \
+			-I$(POSTGRES_IFACE)              \
+			-I$(POSTGRES_IDIR)               \
+			-I$(JSON_IDIR)                   \
+			-I$(ABSL_IDIR)					 \
+			-I$(PROTOBUF_IDIR)               \
+			-I$(OTEL_IDIR)                   \
 			-I$(SSL_IDIR)
 
 ifeq ($(UNAME_S),Linux)
