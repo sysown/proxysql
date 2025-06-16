@@ -253,7 +253,7 @@ void MySQL_Set_Stmt_Parser::generateRE_parse1v2() {
 		string tzd =  "(?:(?:\\+|\\-)(?:|\\d)\\d:\\d\\d)";
 		// time_zone in string format:
 		// word / word
-		string tzw =  "(?:\\w+/\\w+)";
+		string tzw =  "(?:\\w+/\\w+(?:/\\w+)?)";
 		vp = "(?:" + tzd + "|" + tzw + ")"; // time_zone in numeric and string format
 	}
 	for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
