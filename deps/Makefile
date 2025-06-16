@@ -9,7 +9,8 @@ endif
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
-DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d' ' -f1 | cut -d- -f1)
+DISTVERS := $(shell grep '^VERSION=' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d' ' -f1 | cut -d. -f1)
 
 CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))
@@ -44,6 +45,8 @@ endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
+# force CMake to always use lib, instead of lib64
+CMAKE_COMMON_FLAGS := -DCMAKE_INSTALL_LIBDIR=lib
 
 JSON_INSTALL_DIR := $(abspath json/json)
 CURL_INSTALL_DIR := $(abspath curl/curl/local)
@@ -106,8 +109,10 @@ endif
 
 libinjection: libinjection/libinjection/src/libinjection.a
 
+
 include ../common_mk/openssl_flags.mk
 include ../common_mk/openssl_version_check.mk
+
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
@@ -144,7 +149,9 @@ coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper/coredumper && patch -p1 < ../includes.patch
 	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
+
 coredumper: coredumper/coredumper/src/libcoredumper.a
+
 
 $(CURL_INSTALL_DIR)/lib/libcurl.a:
 	cd curl && rm -rf curl-*/ || true
@@ -194,6 +201,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a: abseil
 										-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 										-DCMAKE_PREFIX_PATH=$(abspath abseil/abseil-cpp/local)
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
+
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a
 
 
@@ -369,11 +377,15 @@ json: $(JSON_INSTALL_DIR)/include/nlohmann/json.hpp
 $(ABSL_INSTALL_DIR)/lib/libabsl.a:
 	cd abseil && rm -rf abseil-cpp-*/ || true
 	cd abseil && tar -zxf abseil-cpp-20250512.0.tar.gz
+ifneq (,$(filter $(DISTRO)$(DISTVERS),almalinux8 opensuse15))
+	cd abseil/abseil-cpp && patch -p0 < ../constexpr.patch
+endif
 	cd abseil/abseil-cpp && mkdir -p build
-	cd abseil/abseil-cpp/build && cmake .. -DCMAKE_INSTALL_PREFIX=$(ABSL_INSTALL_DIR) -DBUILD_TESTING=OFF
+	cd abseil/abseil-cpp/build && cmake .. $(CMAKE_COMMON_FLAGS) -DCMAKE_CXX_STANDARD=17 -DCMAKE_INSTALL_PREFIX=$(ABSL_INSTALL_DIR) -DBUILD_TESTING=OFF
 	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd abseil/abseil-cpp/build && ${MAKE} install
-	cd $(ABSL_INSTALL_DIR)/lib && ${AR} -crs --thin libabsl.a *.a
+	cd $(ABSL_INSTALL_DIR)/lib && ls libabsl_*.a | xargs -n1 ${AR} -x
+	cd $(ABSL_INSTALL_DIR)/lib && ${AR} -crs libabsl.a *.o && rm *.o
 
 abseil: $(ABSL_INSTALL_DIR)/lib/libabsl.a
 
@@ -382,13 +394,15 @@ $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a: abseil
 	cd protobuf && tar -zxf protobuf-31.0.tar.gz
 	cd protobuf/protobuf && mkdir -p build
 	cd protobuf/protobuf/build && cmake ..                                     \
+								$(CMAKE_COMMON_FLAGS)                          \
 								-DCMAKE_PREFIX_PATH=$(ABSL_INSTALL_DIR)        \
 								-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_INSTALL_DIR) \
 								-Dprotobuf_BUILD_TESTS=OFF                     \
 								-Dprotobuf_LOCAL_DEPENDENCIES_ONLY=ON
 	cd protobuf/protobuf/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd protobuf/protobuf/build && ${MAKE} install
-	cd $(PROTOBUF_INSTALL_DIR)/lib && ${AR} -crs --thin libutf8.a libutf8_*.a
+	cd $(PROTOBUF_INSTALL_DIR)/lib && ls libutf8_*.a | xargs -n1 ${AR} -x
+	cd $(PROTOBUF_INSTALL_DIR)/lib && ${AR} -crs libutf8.a *.o && rm *.o
 
 protobuf: $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
 
@@ -399,6 +413,7 @@ $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a: protobuf abseil curl json
 	cd opentelemetry && tar -zxf opentelemetry-proto-1.6.0.tar.gz
 	cd opentelemetry/opentelemetry-cpp && mkdir -p build
 	cd opentelemetry/opentelemetry-cpp/build && cmake ..                   \
+								$(CMAKE_COMMON_FLAGS)                      \
 								-DBUILD_SHARED_LIBS=OFF                    \
 								-DBUILD_TESTING=OFF                        \
 								-DWITH_BENCHMARK=OFF                       \
@@ -408,10 +423,10 @@ $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a: protobuf abseil curl json
 								-DOTELCPP_PROTO_PATH=$(OTEL_PROTO_DIR)     \
 								-DCMAKE_INSTALL_PREFIX=$(OTEL_INSTALL_DIR) \
 								-DCMAKE_PREFIX_PATH="$(PROTOBUF_INSTALL_DIR);$(ABSL_INSTALL_DIR);$(CURL_INSTALL_DIR);$(JSON_INSTALL_DIR)"
-
 	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd opentelemetry/opentelemetry-cpp/build && ${MAKE} install
-	cd $(OTEL_INSTALL_DIR)/lib && ${AR} -crs --thin libopentelemetry.a *.a
+	cd $(OTEL_INSTALL_DIR)/lib && ls libopentelemetry_*.a | xargs -n1 ${AR} -x
+	cd $(OTEL_INSTALL_DIR)/lib && ${AR} -crs libopentelemetry.a *.o && rm *.o
 
 otel: $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a
 
