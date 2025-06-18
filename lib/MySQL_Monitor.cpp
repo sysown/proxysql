@@ -3502,7 +3502,6 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 	char *query=(char *)"SELECT DISTINCT hostname FROM monitor_internal.mysql_servers ORDER BY hostname";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	monitordb->execute_statement(query, &error, &cols, &affected_rows, &runtime_mysql_servers);
-	assert(runtime_mysql_servers);
 
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -7698,7 +7697,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				}
 
 				rc = (*proxy_sqlite3_bind_int64)(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				if (fields && is_aws_rds_topology_query_task(mmsd->get_task_type()) && mysql_row_matches_query_task(field_names, mmsd->get_task_type())) {
+				if (is_aws_rds_topology_query_task(mmsd->get_task_type()) && mysql_row_matches_query_task(field_names, mmsd->get_task_type())) {
 					// Process the read_only field as above and store the first server
 					vector<MYSQL_ROW> discovered_servers;
 					discovered_servers.push_back(row);
@@ -7714,10 +7713,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 					if (!discovered_servers.empty()) {
 						process_discovered_topology(originating_server_hostname, discovered_servers, mmsd, num_fields);
 					}
-				} else {
-					proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
-					rc = (*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				}
+			} else {
+				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
+				rc = (*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			}
 			mysql_free_result(mmsd->result);
 			mmsd->result = NULL;
