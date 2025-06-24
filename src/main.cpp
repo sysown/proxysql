@@ -37,6 +37,7 @@ using json = nlohmann::json;
 #include "Web_Interface.hpp"
 #include "proxysql_utils.h"
 #include "PgSQL_Monitor.hpp"
+#include "otel_tracer.h"
 
 #include "libdaemon/dfork.h"
 #include "libdaemon/dsignal.h"
@@ -492,6 +493,7 @@ SQLite3_Server *GloSQLite3Server;
 ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
 
+OTelTracer *GloOTelTracer;
 
 ProxySQL_Cluster *GloProxyCluster = NULL;
 
@@ -1068,6 +1070,12 @@ void ProxySQL_Main_init_ClickHouseServer() {
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
+void ProxySQL_Main_init_OTelTracer() {
+	GloOTelTracer = new OTelTracer();
+	GloOTelTracer->init();
+	GloAdmin->init_otel_variables();
+}
+
 void ProxySQL_Main_join_all_threads() {
 	cpu_timer t;
 	if (GloMTH) {
@@ -1433,7 +1441,6 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 }
 
 void ProxySQL_Main_init_phase3___start_all() {
-
 	{
 		cpu_timer t;
 		GloMyLogger->events_set_datadir(GloVars.datadir);
@@ -1450,6 +1457,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : GloPgSQL_Logger initialized in ";
 #endif
 	}
+
 	// Initialized monitor, no matter if it will be started or not
 	GloMyMon = new MySQL_Monitor();
 	GloPgMon = new PgSQL_Monitor();
@@ -1462,6 +1470,13 @@ void ProxySQL_Main_init_phase3___start_all() {
 		GloAdmin->load_scheduler_to_runtime();
 #ifdef DEBUG
 		std::cerr << "Main phase3 : GloAdmin initialized in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_OTelTracer();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : OTel Tracer initialized in ";
 #endif
 	}
 	{

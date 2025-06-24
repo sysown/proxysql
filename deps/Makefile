@@ -197,8 +197,9 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a: abseil
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
-	cd clickhouse-cpp/clickhouse-cpp && cmake .                           \
-										-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+	cd clickhouse-cpp/clickhouse-cpp && cmake .                            \
+										-DCMAKE_BUILD_TYPE=RelWithDebInfo  \
+										-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 										-DCMAKE_PREFIX_PATH=$(abspath abseil/abseil-cpp/local)
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 

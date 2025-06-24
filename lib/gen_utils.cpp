@@ -350,3 +350,7 @@ const char* escape_string_backslash_spaces(const char* input) {
 	*(p++) = '\0';
 	return output;
 }
+
+char* s_strdup(const char* str) {
+    return (str) ? strdup(str) : nullptr;
+}
