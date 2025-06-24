@@ -340,6 +340,9 @@ std::string trim(const std::string& s);
 char* escape_string_single_quotes_and_backslashes(char* input, bool free_it);
 const char* escape_string_backslash_spaces(const char* input);
 
+// null-safe strdup wrapper
+char* s_strdup(const char* str);
+
 /**
  * @brief Helper function that converts a MYSQL_RES into a 'SQLite3_result'.
  * @param resultset The resultset to be converted into a 'SQLite3_result'.

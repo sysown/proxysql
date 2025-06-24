@@ -292,14 +292,6 @@ struct cpu_timer
 	unsigned long long begin;
 };
 
-char *s_strdup(char *s) {
-	char *ret=NULL;
-	if (s) {
-		ret=strdup(s);
-	}
-	return ret;
-}
-
 int admin_load_main_=0;
 bool admin_nostart_=false;
 
@@ -2806,6 +2798,12 @@ void ProxySQL_Admin::init_pgsql_variables() {
 	flush_pgsql_variables___runtime_to_database(configdb, false, false, false);
 	flush_pgsql_variables___runtime_to_database(admindb, false, true, false);
 	flush_pgsql_variables___database_to_runtime(admindb, true);
+}
+
+void ProxySQL_Admin::init_otel_variables() {
+	flush_otel_variables___database_to_runtime(admindb, true);
+	flush_otel_variables___runtime_to_database(configdb, false, false, false);
+	flush_otel_variables___runtime_to_database(admindb, false, true, false);
 }
 
 void ProxySQL_Admin::admin_shutdown() {

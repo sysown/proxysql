@@ -89,14 +89,6 @@ struct cpu_timer
 };
 */
 
-static char *s_strdup(char *s) {
-	char *ret=NULL;
-	if (s) {
-		ret=strdup(s);
-	}
-	return ret;
-}
-
 static int __SQLite3_Server_refresh_interval=1000;
 
 extern MySQL_Query_Cache *GloMyQC;

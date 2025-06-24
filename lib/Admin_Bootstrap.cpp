@@ -819,6 +819,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 
+			// OpenTelemetry
+			proxysql_config().Read_Global_Variables_from_configfile("otel");
+
 			proxysql_config().Read_Scheduler_from_configfile();
 			proxysql_config().Read_Restapi_from_configfile();
 			proxysql_config().Read_ProxySQL_Servers_from_configfile();
