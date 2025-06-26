@@ -13,7 +13,7 @@
 #include "curl/curl.h"
 #include "mysql.h"
 #include "sqlite3db.h"
-#include "json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 
 #include "command_line.h"
 #include "mysql.h"

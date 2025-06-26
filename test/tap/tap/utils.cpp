@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include <utility>
 
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 #include "re2/re2.h"
 
 #include "proxysql_utils.h"

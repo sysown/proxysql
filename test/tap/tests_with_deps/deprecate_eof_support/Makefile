@@ -21,7 +21,8 @@ JEMALLOC_PATH := $(DEPS_PATH)/jemalloc/jemalloc
 JEMALLOC_IDIR := $(JEMALLOC_PATH)/include/jemalloc
 JEMALLOC_LDIR := $(JEMALLOC_PATH)/lib
 
-JSON_IDIR := $(DEPS_PATH)/json
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
 
 RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH)

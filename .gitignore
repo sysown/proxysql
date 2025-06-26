@@ -97,6 +97,11 @@ deps/sqlite3/sqlite-amalgamation-*/
 deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/libusual/libusual-*/
+deps/json/json-*/
+deps/abseil/abseil-cpp-*/
+deps/protobuf/protobuf-*/
+deps/opentelemetry/opentelemetry-cpp-*/
+deps/opentelemetry/opentelemetry-proto-*/
 
 test/.vagrant
 .DS_Store
