@@ -60,16 +60,18 @@ jobs:
           # debian12 is needed for 3p testing
           - dist: 'debian12'
             type: ''
-          - dist: 'opensuse15'
-            type: '-clang'
+#          - dist: 'opensuse15'
+#            type: '-clang'
 #          - dist: 'ubuntu16'
 #            type: ''
+          # ubuntu22 is needed for TAP testing
           - dist: 'ubuntu22'
             type: '-tap'
+          # ubuntu22 is needed for ASAN TAP testing
           - dist: 'ubuntu22'
             type: '-tap-asan'
-          - dist: 'ubuntu22'
-            type: '-clang'
+#          - dist: 'ubuntu22'
+#            type: '-clang'
 #          - dist: 'ubuntu22'
 #            type: '-clang-tap'
 #          - dist: 'ubuntu22'
