@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -3837,4 +3837,3 @@ __run_query:
 // Explicitly instantiate the required template class and member functions
 template void admin_session_handler<MySQL_Session>(MySQL_Session* sess, void *_pa, PtrSize_t *pkt);
 template void admin_session_handler<PgSQL_Session>(PgSQL_Session* sess, void *_pa, PtrSize_t *pkt);
-

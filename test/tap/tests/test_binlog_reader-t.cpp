@@ -30,7 +30,7 @@
 
 #include "mysql.h"
 #include "mysqld_error.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include "tap.h"
 #include "command_line.h"

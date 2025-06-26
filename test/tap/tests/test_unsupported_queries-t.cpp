@@ -16,7 +16,7 @@
 #include "mysqld_error.h"
 
 #include "command_line.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 #include "proxysql_utils.h"
 #include "tap.h"
 #include "utils.h"

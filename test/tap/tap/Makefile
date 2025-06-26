@@ -13,8 +13,8 @@ PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
 
 DEPS_PATH := $(PROXYSQL_PATH)/deps
 
-JSON_PATH := $(DEPS_PATH)/json
-JSON_IDIR := $(JSON_PATH)
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
 
 MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR := $(MARIADB_PATH)/include
@@ -175,4 +175,3 @@ clean:
 	find . -name '*.so.*' -delete || true
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
-
