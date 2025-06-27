@@ -2717,16 +2717,12 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 		
 		bool is_match=false;
 		for (std::vector<char*>::iterator it1=keep_multiplexing_variables_v.begin();it1!=keep_multiplexing_variables_v.end();it1++){
-			//printf("%s,%s\n",*it,*it1);
 			if (strncasecmp(var,*it1,strlen(*it1))==0){
 				is_match=true;
 				break;
 			}
 		}
-		if(is_match){
-			is_match=false;
-			continue;
-		}else{
+		if(!is_match){
 			free(query_digest_text_filter_select);
 			free(keep_multiplexing_variables_tmp);
 			return false;
