@@ -1,0 +1,114 @@
+version: 2.1
+
+orbs:
+  aws-cli: circleci/aws-cli@5.1.1
+
+executors:
+  docker:
+    docker:
+      - image: cimg/python:3.11
+  amd64:
+    machine: &machine
+      image: ubuntu-2004:current
+      docker_layer_caching: true
+    resource_class: medium
+  arm64:
+    machine: *machine
+    resource_class: arm.medium
+
+default-options: &default-options
+  context:
+    - circleci-infra-bot
+
+default-envs: &default-envs
+  ECR_REPO: 314716043882.dkr.ecr.us-east-1.amazonaws.com/mesg/proxysql-custom
+
+commands:
+  create-aws-profiles:
+    description: Create AWS profiles
+    steps:
+      - aws-cli/setup:
+          role_arn: ${AWS_ID_ROLE_ARN}
+          region: us-east-1
+          profile_name: aws-id
+          session_duration: "1800"
+      - aws-cli/role_arn_setup:
+          profile_name: ci-ops
+          source_profile: aws-id
+          role_arn: ${AWS_OPS_ROLE_ARN}
+      - run:
+          name: Test created profiles
+          command: |
+            aws sts get-caller-identity --profile ci-ops
+  build-and-push:
+    description: Build and push
+    parameters:
+      dockerfile:
+        description: dockerfile to build
+        type: string
+        default: Dockerfile
+    steps:
+      - checkout
+      - create-aws-profiles
+      - run:
+          name: Build and push docker image
+          command: |
+            image_tag="$ECR_REPO:$CIRCLE_BRANCH-$ARCH"
+            sudo apt-get update
+            sudo apt-get install -y automake bzip2 cmake make g++ gcc git openssl libssl-dev libgnutls28-dev libtool patch uuid-dev curl git zlib1g-dev
+            make
+            docker build -f << parameters.dockerfile >> --build-arg ARCH=$ARCH . -t $image_tag
+            aws ecr get-login-password --profile ci-ops --region us-east-1 | docker login --username AWS --password-stdin $image_tag
+            docker push $image_tag
+
+jobs:
+  build:
+    environment:
+      <<: *default-envs
+      ARCH: << parameters.architecture >>
+    parameters:
+      architecture:
+        description: architecture to build
+        type: enum
+        enum: ["amd64", "arm64"]
+      dockerfile:
+        description: dockerfile to build
+        type: string
+        default: Dockerfile
+    executor: << parameters.architecture >>
+    steps:
+      - build-and-push:
+          dockerfile: << parameters.dockerfile >>
+
+  push-manifest:
+    environment:
+      <<: *default-envs
+      DOCKER_CLI_EXPERIMENTAL: enabled
+    executor: docker
+    steps:
+      - create-aws-profiles
+      - run:
+          name: Push image manifest
+          command: |
+            sudo apt-get update 
+            sudo apt-get install -y curl
+            aws ecr get-login-password --profile ci-ops --region us-east-1 | docker login --username AWS --password-stdin $ECR_REPO
+            docker manifest create "$ECR_REPO:$CIRCLE_BRANCH" "$ECR_REPO:$CIRCLE_BRANCH-amd64" "$ECR_REPO:$CIRCLE_BRANCH-arm64"
+            docker manifest push "$ECR_REPO:$CIRCLE_BRANCH"
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - build:
+          <<: *default-options
+          matrix:
+            alias: build
+            parameters:
+              architecture:
+                - amd64
+                - arm64
+      - push-manifest:
+          <<: *default-options
+          requires:
+            - build
