@@ -2706,10 +2706,19 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	}
 
 	for (std::vector<char*>::iterator it=query_digest_text_filter_select_v.begin();it!=query_digest_text_filter_select_v.end();it++){
+		// Skip leading whitespace
+		char* var = *it;
+		while (*var && isspace(*var)) var++;
+		
+		// Only check if this looks like a variable (starts with @@)
+		if (strncmp(var, "@@", 2) != 0) {
+			continue; // Skip non-variable parts like functions, literals, etc.
+		}
+		
 		bool is_match=false;
 		for (std::vector<char*>::iterator it1=keep_multiplexing_variables_v.begin();it1!=keep_multiplexing_variables_v.end();it1++){
 			//printf("%s,%s\n",*it,*it1);
-			if (strncasecmp(*it,*it1,strlen(*it1))==0){
+			if (strncasecmp(var,*it1,strlen(*it1))==0){
 				is_match=true;
 				break;
 			}
