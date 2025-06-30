@@ -318,7 +318,7 @@ amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensu
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
 amd64-centos: centos9 centos9-clang centos9-dbg
 amd64-debian: debian12 debian12-clang debian12-dbg
-amd64-fedora: fedora40 fedora40-clang fedora40-dbg fedora41 fedora41-clang fedora41-dbg
+amd64-fedora: fedora40 fedora40-clang fedora40-dbg fedora41 fedora41-clang fedora41-dbg fedora42 fedora42-clang fedora42-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
@@ -329,7 +329,7 @@ arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensu
 arm64-almalinux: almalinux8 almalinux9
 arm64-centos: centos9
 arm64-debian: debian12
-arm64-fedora: fedora40 fedora41
+arm64-fedora: fedora40 fedora41 fedora42
 arm64-opensuse: opensuse15
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:

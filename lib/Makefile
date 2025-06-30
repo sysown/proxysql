@@ -28,68 +28,94 @@ DEPS_PATH := $(PROXYSQL_PATH)/deps
 
 MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR := $(MARIADB_PATH)/include
+MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
+
+LIBDAEMON_PATH := $(DEPS_PATH)/libdaemon/libdaemon
+LIBDAEMON_IDIR := $(LIBDAEMON_PATH)
+LIBDAEMON_LDIR := $(LIBDAEMON_PATH)/libdaemon/.libs
 
 JEMALLOC_PATH := $(DEPS_PATH)/jemalloc/jemalloc
 JEMALLOC_IDIR := $(JEMALLOC_PATH)/include/jemalloc
+JEMALLOC_LDIR := $(JEMALLOC_PATH)/lib
 
 LIBCONFIG_PATH := $(DEPS_PATH)/libconfig/libconfig
-LIBCONFIG_IDIR := -I$(LIBCONFIG_PATH)/lib
-
-#INJECTION_PATH := $(DEPS_PATH)/libinjection
-#INJECTION_IDIR := $(INJECTION_PATH)
-
-RE2_PATH := $(DEPS_PATH)/re2/re2
-RE2_IDIR := $(RE2_PATH)
-
-PCRE_PATH := $(DEPS_PATH)/pcre/pcre
-
-SQLITE3_DIR := $(DEPS_PATH)/sqlite3/sqlite3
-
-CLICKHOUSE_CPP_DIR := $(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
-
-LIBINJECTION_DIR := $(DEPS_PATH)/libinjection/libinjection
-LIBINJECTION_IDIR := -I$(LIBINJECTION_DIR)/src
-
-LIBHTTPSERVER_DIR := $(DEPS_PATH)/libhttpserver/libhttpserver
-LIBHTTPSERVER_IDIR := -I$(LIBHTTPSERVER_DIR)/src
-
-MICROHTTPD_DIR := $(DEPS_PATH)/libmicrohttpd/libmicrohttpd
-MICROHTTPD_IDIR := -I$(MICROHTTPD_DIR) -I$(MICROHTTPD_DIR)/src/include
-
-COREDUMPER_DIR := $(DEPS_PATH)/coredumper/coredumper
-COREDUMPER_IDIR := $(COREDUMPER_DIR)/include
-
-CURL_DIR := $(DEPS_PATH)/curl/curl
-CURL_IDIR := $(CURL_DIR)/include
-
-include ../common_mk/openssl_flags.mk
-
-EV_DIR := $(DEPS_PATH)/libev/libev/
-EV_IDIR := $(EV_DIR)
+LIBCONFIG_IDIR := $(LIBCONFIG_PATH)/lib
+LIBCONFIG_LDIR := $(LIBCONFIG_PATH)/out
 
 PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
 
-LIBUSUAL_PATH=$(DEPS_PATH)/libusual/libusual
-LIBUSUAL_IDIR=$(LIBUSUAL_PATH)
-LIBUSUAL_LDIR=$(LIBUSUAL_PATH)/.libs/
+JSON_PATH := $(DEPS_PATH)/json
+JSON_IDIR := $(JSON_PATH)
 
-LIBSCRAM_PATH=$(DEPS_PATH)/libscram/
-LIBSCRAM_IDIR=$(LIBSCRAM_PATH)/include/
-LIBSCRAM_LDIR=$(LIBSCRAM_PATH)/lib/
+RE2_PATH := $(DEPS_PATH)/re2/re2
+RE2_IDIR := $(RE2_PATH)
+RE2_LDIR := $(RE2_PATH)/obj
 
-POSTGRES_PATH=$(DEPS_PATH)/postgresql/postgresql/src/
-POSTGRES_IFACE=$(POSTGRES_PATH)/interfaces/libpq/ -I$(POSTGRES_PATH)/include
-POSTGRES_LDIR=$(POSTGRES_IFACES)/libpq/
+PCRE_PATH := $(DEPS_PATH)/pcre/pcre
+PCRE_IDIR := $(PCRE_PATH)
+PCRE_LDIR := $(PCRE_PATH)/.libs
+
+SQLITE3_PATH := $(DEPS_PATH)/sqlite3/sqlite3
+SQLITE3_IDIR := $(SQLITE3_PATH)
+SQLITE3_LDIR := $(SQLITE3_PATH)
+
+CITYHASH_PATH := $(DEPS_PATH)/cityhash/cityhash
+CITYHASH_LDIR := $(CITYHASH_PATH)/src/.libs
+
+LZ4_PATH := $(DEPS_PATH)/lz4/lz4
+LZ4_LDIR := $(LZ4_PATH)/lib
+
+CLICKHOUSE_CPP_PATH := $(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
+CLICKHOUSE_CPP_IDIR := $(CLICKHOUSE_CPP_PATH) -I$(CLICKHOUSE_CPP_PATH)/contrib -I$(CLICKHOUSE_CPP_PATH)/contrib/absl
+CLICKHOUSE_CPP_LDIR := $(CLICKHOUSE_CPP_PATH)/clickhouse
+
+LIBINJECTION_PATH := $(DEPS_PATH)/libinjection/libinjection
+LIBINJECTION_IDIR := $(LIBINJECTION_PATH)/src
+LIBINJECTION_LDIR := $(LIBINJECTION_PATH)/src
+
+LIBHTTPSERVER_PATH := $(DEPS_PATH)/libhttpserver/libhttpserver
+LIBHTTPSERVER_IDIR := $(LIBHTTPSERVER_PATH)/src
+LIBHTTPSERVER_LDIR := $(LIBHTTPSERVER_PATH)/build/src/.libs
+
+MICROHTTPD_PATH := $(DEPS_PATH)/libmicrohttpd/libmicrohttpd
+MICROHTTPD_IDIR := $(MICROHTTPD_PATH) -I$(MICROHTTPD_PATH)/src/include
+MICROHTTPD_LDIR := $(MICROHTTPD_PATH)/src/microhttpd/.libs
+
+COREDUMPER_PATH := $(DEPS_PATH)/coredumper/coredumper
+COREDUMPER_IDIR := $(COREDUMPER_PATH)/include
+COREDUMPER_LDIR := $(COREDUMPER_PATH)/src
+
+CURL_PATH := $(DEPS_PATH)/curl/curl
+CURL_IDIR := $(CURL_PATH)/include
+CURL_LDIR := $(CURL_PATH)/lib/.libs
+
+include ../common_mk/openssl_flags.mk
+
+EV_PATH := $(DEPS_PATH)/libev/libev
+EV_IDIR := $(EV_PATH)
+EV_LDIR := $(EV_PATH)/.libs
+
+POSTGRES_PATH := $(DEPS_PATH)/postgresql/postgresql/src
+POSTGRES_IDIR := $(POSTGRES_PATH)/include -I$(POSTGRES_PATH)/interfaces/libpq
+POSTGRES_LDIR := $(POSTGRES_PATH)/interfaces/libpq -L$(POSTGRES_PATH)/common -L$(POSTGRES_PATH)/port
+
+LIBUSUAL_PATH := $(DEPS_PATH)/libusual/libusual
+LIBUSUAL_IDIR := $(LIBUSUAL_PATH)
+LIBUSUAL_LDIR := $(LIBUSUAL_PATH)/.libs
+
+LIBSCRAM_PATH := $(DEPS_PATH)/libscram
+LIBSCRAM_IDIR := $(LIBSCRAM_PATH)/include
+LIBSCRAM_LDIR := $(LIBSCRAM_PATH)/lib
 
 IDIR := ../include
 
-IDIRS := -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) -I$(CLICKHOUSE_CPP_DIR)/contrib/ $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_DIR) -I$(PROMETHEUS_IDIR) -I$(LIBUSUAL_IDIR) -I$(LIBSCRAM_IDIR) -I$(POSTGRES_IFACE) -I$(SSL_IDIR)
+IDIRS := -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_IDIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_PATH) -I$(PROMETHEUS_IDIR) -I$(LIBUSUAL_IDIR) -I$(LIBSCRAM_IDIR) -I$(POSTGRES_IDIR) -I$(SSL_IDIR)
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
 endif
-LDIRS := -L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH) -L$(PROMETHEUS_LDIR)
+LDIRS := -L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(LIBINJECTION_LDIR) -L$(PROMETHEUS_LDIR)
 
 #LIBS := -rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
 #LIBS := -Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
@@ -175,8 +201,8 @@ HEADERS := ../include/*.h ../include/*.hpp
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_DIR)/sqlite3.o
-	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
+	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
 
 $(ODIR):
 	mkdir $(ODIR)

@@ -105,6 +105,34 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  fedora42_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-fedora42-v3.0.2
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=fedora42
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora42_clang_build:
+    extends:
+      service: fedora42_build
+    image: proxysql/packaging:build-clang-fedora42-v3.0.2
+    environment:
+      - PKG_RELEASE=fedora42-clang
+
+  fedora42_dbg_build:
+    extends:
+      service: fedora42_build
+    environment:
+      - PKG_RELEASE=dbg-fedora42
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   debian12_build:
     extends:
