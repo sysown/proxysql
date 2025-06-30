@@ -48,6 +48,34 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  centos10_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-centos10-v3.0.2
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=centos10
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  centos10_clang_build:
+    extends:
+      service: centos10_build
+    image: proxysql/packaging:build-clang-centos10-v3.0.2
+    environment:
+      - PKG_RELEASE=centos10-clang
+
+  centos10_dbg_build:
+    extends:
+      service: centos10_build
+    environment:
+      - PKG_RELEASE=dbg-centos10
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   fedora40_build:
     extends:
@@ -299,6 +327,34 @@ services:
       service: almalinux9_build
     environment:
       - PKG_RELEASE=dbg-almalinux9
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  almalinux10_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-almalinux10-v3.0.2
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=almalinux10
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  almalinux10_clang_build:
+    extends:
+      service: almalinux10_build
+    image: proxysql/packaging:build-clang-almalinux10-v3.0.2
+    environment:
+      - PKG_RELEASE=almalinux10-clang
+
+  almalinux10_dbg_build:
+    extends:
+      service: almalinux10_build
+    environment:
+      - PKG_RELEASE=dbg-almalinux10
       - PROXYSQL_BUILD_TYPE=debug
 
 
