@@ -88,11 +88,11 @@ class ProxySQL_GlobalVariables {
 		bool gdbg;
 		bool nostart;
 		bool my_monitor;
+		bool pg_monitor;
 		bool mysql_workers;
 		bool pgsql_workers;
 		bool mysql_admin;
 		bool pgsql_admin;
-		bool pg_monitor;
 		bool version_check;
 #ifdef SO_REUSEPORT
 		bool reuseport;
