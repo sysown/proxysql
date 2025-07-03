@@ -81,6 +81,15 @@ COREDUMPER_DIR := $(DEPS_PATH)/coredumper/coredumper
 COREDUMPER_IDIR := $(COREDUMPER_DIR)/include
 COREDUMPER_LDIR := $(COREDUMPER_DIR)/src
 
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp/local
+ABSL_IDIR := $(ABSL_PATH)/include
+
+PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf/local
+PROTOBUF_IDIR := $(PROTOBUF_PATH)/include
+
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp/local
+OTEL_IDIR := $(OTEL_PATH)/include
+
 TAP_PATH := ../tap
 TAP_IDIR := ../tap
 TAP_LDIR := ../tap
@@ -128,7 +137,7 @@ OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.
 IDIRS := -I$(TAP_IDIR) -I$(RE2_IDIR) -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(LIBCONFIG_IDIR) -I$(MARIADB_IDIR)\
 		 -I$(DAEMONPATH_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR)\
 		 -I$(PROMETHEUS_IDIR) -I$(DOTENV_DYN_IDIR) -I$(SQLITE3_IDIR) -I$(JSON_IDIR) -I$(POSTGRESQL_IDIR)\
-		 -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR)
+		 -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR) -I$(ABSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(OTEL_IDIR)
 
 LDIRS := -L$(TAP_LDIR) -L$(RE2_LDIR) -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(LIBCONFIG_LDIR) -L$(MARIADB_LDIR)\
 		 -L$(DAEMONPATH_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR)\
@@ -314,13 +323,13 @@ setparser_test2-t: setparser_test2
 	ln -fs setparser_test2 setparser_test2-t
 
 setparser_test2: setparser_test2.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-	$(CXX) $<  -DEXCLUDE_TRACKING_VARAIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $<  -DEXCLUDE_TRACKING_VARAIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(PROXYSQL_LDIR)/debug.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test3-t: setparser_test3
 	ln -fs setparser_test3 setparser_test3-t
 
 setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-	$(CXX) $< -DEXCLUDE_TRACKING_VARAIABLES -DPARSERDEBUG $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARAIABLES -DPARSERDEBUG $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(PROXYSQL_LDIR)/debug.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@

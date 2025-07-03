@@ -682,6 +682,9 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+
+	span_stack = unsafe_shared_ptr<OTelSpanStack>();
+	root_span = CreateSessionSpan("new_session");
 }
 
 /**

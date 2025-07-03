@@ -1,9 +1,18 @@
-#include "otel_tracer.h"
-#include "cpp.h"
-#include <cstdint>
+#include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <inttypes.h>
 
+#include "otel_tracer.h"
+#include "opentelemetry/trace/provider.h"
+#include "opentelemetry/trace/tracer.h"
+#include "opentelemetry/trace/span.h"
+#include "opentelemetry/sdk/trace/tracer_provider_factory.h"
+#include "opentelemetry/sdk/trace/batch_span_processor_factory.h"
+#include "opentelemetry/exporters/otlp/otlp_http_exporter_factory.h"
+#include "opentelemetry/exporters/otlp/otlp_http_exporter_options.h"
+
+#define OTEL_TRACER_NAME_DEFAULT		"proxysql"
 #define OTEL_SERVICE_NAME_DEFAULT		"proxysql"
 #define OTEL_OTLP_PROTO_DEFAULT			"http/protobuf"
 #define OTEL_OTLP_ENDPOINT_DEFAULT		"http://127.0.0.1:4318"
@@ -14,6 +23,10 @@
 #define OTEL_BSP_SCHED_DELAY_DEFAULT	5000
 #define OTEL_BSP_QUEUE_SIZE_DEFAULT		2048
 #define OTEL_BSP_EXPORT_SIZE_DEFAULT	512
+
+namespace otel_trace_sdk = opentelemetry::sdk::trace;
+namespace otel_exporter = opentelemetry::exporter::otlp;
+namespace otel_resource = opentelemetry::sdk::resource;
 
 using std::string;
 
@@ -60,18 +73,61 @@ OTelTracer::~OTelTracer() {
 	pthread_rwlock_destroy(&rwlock);
 }
 
-void OTelTracer::init() {}
+void OTelTracer::setup() {
+	wrlock();
 
-void OTelTracer::rdlock() {
-	pthread_rwlock_rdlock(&rwlock);
+	// reset global trace provider
+	std::shared_ptr<opentelemetry::trace::TracerProvider> none;
+	otel_trace_api::Provider::SetTracerProvider(none);
+
+	if (!variables.trace_enable) {
+		unlock();
+		return;
+	}
+
+	// configure exporter
+	otel_exporter::OtlpHttpExporterOptions exporter_opt;
+	exporter_opt.url = variables.exporter_otlp_endpoint;
+	exporter_opt.compression = variables.exporter_otlp_compression;
+	exporter_opt.timeout = std::chrono::milliseconds(variables.exporter_otlp_timeout);
+	exporter_opt.ssl_ca_cert_path = variables.exporter_otlp_certificates;
+	// TODO: add headers from variable.exporter_otlp_headers to exporter_opt
+	auto exporter  = otel_exporter::OtlpHttpExporterFactory::Create(exporter_opt);
+
+	// configure batch span processor
+	otel_trace_sdk::BatchSpanProcessorOptions proc_opt;
+	proc_opt.schedule_delay_millis = std::chrono::milliseconds(variables.bsp_schedule_delay);
+	proc_opt.max_queue_size = variables.bsp_max_queue_size;
+	proc_opt.max_export_batch_size = variables.bsp_max_export_batch_size;
+	auto processor = otel_trace_sdk::BatchSpanProcessorFactory::Create(std::move(exporter), proc_opt);
+
+	// configure service attributes
+	auto resource = otel_resource::Resource::Create(
+		// TODO: include attributes from variables.resource_attributes
+		otel_resource::ResourceAttributes{{"service.name", variables.service_name}}
+	);
+
+	// setup tracer provider
+	std::shared_ptr<otel_trace_api::TracerProvider> provider =
+		otel_trace_sdk::TracerProviderFactory::Create(std::move(processor), std::move(resource));
+	otel_trace_api::Provider::SetTracerProvider(provider);
+
+	// create tracer object
+	tracer = provider->GetTracer(OTEL_TRACER_NAME_DEFAULT);
+
+	unlock();
 }
 
-void OTelTracer::wrlock() {
-	pthread_rwlock_wrlock(&rwlock);
-}
+otel_trace_api::Tracer* OTelTracer::get() {
+	otel_trace_api::Tracer* ret = nullptr;
 
-void OTelTracer::unlock() {
-	pthread_rwlock_unlock(&rwlock);
+	rdlock();
+	if (variables.trace_enable) {
+		ret = tracer.get();
+	}
+	unlock();
+
+	return ret;
 }
 
 const std::vector<std::string>& OTelTracer::get_variables_list() {

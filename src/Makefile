@@ -19,7 +19,6 @@ endif
 IS_ARM := $(if $(findstring aarch64, $(UNAME_M)),true,false)
 IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
 
-
 PROXYSQL_PATH := ..
 PROXYSQL_IDIR := $(PROXYSQL_PATH)/include
 PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
@@ -238,6 +237,10 @@ MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\
 STATICMYLIBS := -Wl,-Bstatic    \
 				-lconfig        \
 				-lproxysql      \
+				-lopentelemetry \
+				-lprotobuf      \
+				-lutf8          \
+				-labsl          \
 				-ldaemon        \
 				-lconfig++      \
 				-lre2           \
@@ -253,11 +256,7 @@ STATICMYLIBS := -Wl,-Bstatic    \
 				-lusual         \
 				-lpq            \
 				-lpgcommon      \
-				-lpgport        \
-				-labsl          \
-				-lprotobuf      \
-				-lutf8          \
-				-lopentelemetry
+				-lpgport
 
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc

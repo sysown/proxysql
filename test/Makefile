@@ -46,6 +46,15 @@ CURL_IDIR := -I$(CURL_PATH)/include
 JSON_PATH := $(DEPS_PATH)/json/json
 JSON_IDIR := $(JSON_PATH)/include
 
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp/local
+ABSL_IDIR := $(ABSL_PATH)/include
+
+PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf/local
+PROTOBUF_IDIR := $(PROTOBUF_PATH)/include
+
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp/local
+OTEL_IDIR := $(OTEL_PATH)/include
+
 include ../common_mk/openssl_flags.mk
 
 EV_PATH := $(DEPS_PATH)/libev/libev/
@@ -71,6 +80,9 @@ IDIRS += -I$(CURL_IDIR)
 IDIRS += -I$(EV_DIR)
 IDIRS += -I$(SSL_IDIR)
 IDIRS += -I$(JSON_IDIR)
+IDIRS += -I$(ABSL_IDIR)
+IDIRS += -I$(PROTOBUF_IDIR)
+IDIRS += -I$(OTEL_IDIR)
 
 
 sqlite_history_convert: sqlite_history_convert.cpp

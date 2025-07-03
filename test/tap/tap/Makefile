@@ -48,9 +48,18 @@ RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH)
 RE2_LDIR := $(RE2_PATH)/obj
 
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp/local
+ABSL_IDIR := $(ABSL_PATH)/include
+
+PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf/local
+PROTOBUF_IDIR := $(PROTOBUF_PATH)/include
+
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp/local
+OTEL_IDIR := $(OTEL_PATH)/include
+
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR) -I$(RE2_IDIR)
+IDIRS := -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR) -I$(RE2_IDIR) -I$(ABSL_IDIR) -I$(PROTOBUF_IDIR) -I$(OTEL_IDIR)
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')

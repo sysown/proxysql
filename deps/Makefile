@@ -23,12 +23,17 @@ IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
 
+# force CMake to always use lib, instead of lib64
+CMAKE_FLAGS := -DCMAKE_INSTALL_LIBDIR=lib
+
 ifeq ($(PROXYDEBUG),1)
-	MYCFLAGS := -O0
+	MYCFLAGS := -O0 -ggdb
 	MYJEOPT := --enable-xmalloc --enable-prof --enable-fill --enable-debug
+	CMAKE_FLAGS += -DCMAKE_BUILD_TYPE=Debug
 else
-	MYCFLAGS := -O2
+	MYCFLAGS := -O2 -g
 	MYJEOPT := --enable-xmalloc --enable-prof
+	CMAKE_FLAGS += -DCMAKE_BUILD_TYPE=RelWithDebInfo
 endif
 ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
 	MYJEOPT += --with-lg-page=16
@@ -37,16 +42,18 @@ endif
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201703L)
+ifeq ($(CPLUSPLUS),201703L)
+	CMAKE_FLAGS += -DCMAKE_CXX_STANDARD=17
+else
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201103L)
-    $(error Compiler must support at least c++11)
+	ifeq ($(CPLUSPLUS),201103L)
+		CMAKE_FLAGS += -DCMAKE_CXX_STANDARD=11
+	else
+    	$(error Compiler must support at least c++11)
+	endif
 endif
-endif
-STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
-# force CMake to always use lib, instead of lib64
-CMAKE_COMMON_FLAGS := -DCMAKE_INSTALL_LIBDIR=lib
+STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 JSON_INSTALL_DIR := $(abspath json/json)
 CURL_INSTALL_DIR := $(abspath curl/curl/local)
@@ -147,7 +154,7 @@ coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd coredumper && tar -zxf coredumper-*.tar.gz
 	cd coredumper/coredumper && patch -p1 < ../includes.patch
-	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd coredumper/coredumper && cmake . $(CMAKE_FLAGS) -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 
 coredumper: coredumper/coredumper/src/libcoredumper.a
@@ -198,8 +205,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a: abseil
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
 	cd clickhouse-cpp/clickhouse-cpp && cmake .                            \
-										-DCMAKE_BUILD_TYPE=RelWithDebInfo  \
-										-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+										$(CMAKE_FLAGS)                     \
 										-DCMAKE_PREFIX_PATH=$(abspath abseil/abseil-cpp/local)
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -233,7 +239,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
-	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(SSL_IDIR) -DOPENSSL_LIBRARIES=$(SSL_LDIR) -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
+	cd mariadb-client-library/mariadb_client && cmake . $(CMAKE_FLAGS) -Wno-dev -DOPENSSL_ROOT_DIR=$(SSL_IDIR) -DOPENSSL_LIBRARIES=$(SSL_LDIR) -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
 ifeq ($(PROXYDEBUG),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)
@@ -307,7 +313,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../registry_counters_reset.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../fix_old_distros.patch
-	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
+	cd prometheus-cpp/prometheus-cpp && cmake . $(CMAKE_FLAGS) -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
@@ -371,7 +377,7 @@ libscram: libscram/lib/libscram.a
 $(JSON_INSTALL_DIR)/include/nlohmann/json.hpp:
 	cd json && rm -rf json-*/ || true
 	cd json && tar -zxf json-3.12.0.tar.gz
-	cd json/json && cmake .
+	cd json/json && cmake . $(CMAKE_FLAGS)
 
 json: $(JSON_INSTALL_DIR)/include/nlohmann/json.hpp
 
@@ -382,11 +388,12 @@ ifneq (,$(filter $(DISTRO)$(DISTVERS),almalinux8 opensuse15))
 	cd abseil/abseil-cpp && patch -p0 < ../constexpr.patch
 endif
 	cd abseil/abseil-cpp && mkdir -p build
-	cd abseil/abseil-cpp/build && cmake .. $(CMAKE_COMMON_FLAGS) -DCMAKE_CXX_STANDARD=17 -DCMAKE_INSTALL_PREFIX=$(ABSL_INSTALL_DIR) -DBUILD_TESTING=OFF
+	cd abseil/abseil-cpp/build && cmake .. $(CMAKE_FLAGS) -DCMAKE_INSTALL_PREFIX=$(ABSL_INSTALL_DIR) -DBUILD_TESTING=OFF
 	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd abseil/abseil-cpp/build && ${MAKE} install
-	cd $(ABSL_INSTALL_DIR)/lib && ls libabsl_*.a | xargs -n1 ${AR} -x
-	cd $(ABSL_INSTALL_DIR)/lib && ${AR} -crs libabsl.a *.o && rm *.o
+	cd $(ABSL_INSTALL_DIR)/lib && ${AR} -crs --thin libabsl.a *.a
+	# cd $(ABSL_INSTALL_DIR)/lib && ls libabsl_*.a | xargs -n1 ${AR} -x
+	# cd $(ABSL_INSTALL_DIR)/lib && ${AR} -crs libabsl.a *.o && rm *.o
 
 abseil: $(ABSL_INSTALL_DIR)/lib/libabsl.a
 
@@ -395,15 +402,19 @@ $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a: abseil
 	cd protobuf && tar -zxf protobuf-31.0.tar.gz
 	cd protobuf/protobuf && mkdir -p build
 	cd protobuf/protobuf/build && cmake ..                                     \
-								$(CMAKE_COMMON_FLAGS)                          \
+								$(CMAKE_FLAGS)                                 \
 								-DCMAKE_PREFIX_PATH=$(ABSL_INSTALL_DIR)        \
 								-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_INSTALL_DIR) \
 								-Dprotobuf_BUILD_TESTS=OFF                     \
 								-Dprotobuf_LOCAL_DEPENDENCIES_ONLY=ON
 	cd protobuf/protobuf/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd protobuf/protobuf/build && ${MAKE} install
-	cd $(PROTOBUF_INSTALL_DIR)/lib && ls libutf8_*.a | xargs -n1 ${AR} -x
-	cd $(PROTOBUF_INSTALL_DIR)/lib && ${AR} -crs libutf8.a *.o && rm *.o
+	cd $(PROTOBUF_INSTALL_DIR)/lib && ${AR} -crs --thin libutf8.a *.a
+	# cd $(PROTOBUF_INSTALL_DIR)/lib && ls libutf8_*.a | xargs -n1 ${AR} -x
+	# cd $(PROTOBUF_INSTALL_DIR)/lib && ${AR} -crs libutf8.a *.o && rm *.o
+ifeq ($(PROXYDEBUG),1)
+	cd $(PROTOBUF_INSTALL_DIR)/lib && cp libprotobufd.a libprotobuf.a
+endif
 
 protobuf: $(PROTOBUF_INSTALL_DIR)/lib/libprotobuf.a
 
@@ -414,7 +425,7 @@ $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a: protobuf abseil curl json
 	cd opentelemetry && tar -zxf opentelemetry-proto-1.6.0.tar.gz
 	cd opentelemetry/opentelemetry-cpp && mkdir -p build
 	cd opentelemetry/opentelemetry-cpp/build && cmake ..                   \
-								$(CMAKE_COMMON_FLAGS)                      \
+								$(CMAKE_FLAGS)                             \
 								-DBUILD_SHARED_LIBS=OFF                    \
 								-DBUILD_TESTING=OFF                        \
 								-DWITH_BENCHMARK=OFF                       \
@@ -426,8 +437,9 @@ $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a: protobuf abseil curl json
 								-DCMAKE_PREFIX_PATH="$(PROTOBUF_INSTALL_DIR);$(ABSL_INSTALL_DIR);$(CURL_INSTALL_DIR);$(JSON_INSTALL_DIR)"
 	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd opentelemetry/opentelemetry-cpp/build && ${MAKE} install
-	cd $(OTEL_INSTALL_DIR)/lib && ls libopentelemetry_*.a | xargs -n1 ${AR} -x
-	cd $(OTEL_INSTALL_DIR)/lib && ${AR} -crs libopentelemetry.a *.o && rm *.o
+	cd $(OTEL_INSTALL_DIR)/lib && ${AR} -crs --thin libopentelemetry.a *.a
+	# cd $(OTEL_INSTALL_DIR)/lib && ls libopentelemetry_*.a | xargs -n1 ${AR} -x
+	# cd $(OTEL_INSTALL_DIR)/lib && ${AR} -crs libopentelemetry.a *.o && rm *.o
 
 otel: $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a
 
