@@ -1,0 +1,16 @@
+diff -rau clickhouse-cpp-2.5.1.O/contrib/absl/absl/base/options.h clickhouse-cpp-2.5.1/contrib/absl/absl/base/options.h
+--- contrib/absl/absl/base/options.h	2023-09-30 00:53:54.000000000 +0000
++++ contrib/absl/absl/base/options.h	2025-05-27 09:27:52.020638618 +0000
+@@ -70,7 +70,11 @@
+ // Include a standard library header to allow configuration based on the
+ // standard library in use.
+ #ifdef __cplusplus
+-#include <ciso646>
++#if __has_include(<version>)
++#include <version>
++#else
++#include <ciso646>
++#endif
+ #endif
+ 
+ // -----------------------------------------------------------------------------
