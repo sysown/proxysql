@@ -581,6 +581,9 @@ PgSQL_Session::PgSQL_Session() {
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
 	transaction_state_manager = new PgSQL_ExplicitTxnStateMgr(this);
+
+	span_stack = unsafe_shared_ptr<OTelSpanStack>();
+	root_span = CreateSessionSpan("new_session");
 }
 
 void PgSQL_Session::reset() {

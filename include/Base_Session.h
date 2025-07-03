@@ -15,10 +15,25 @@ template<typename S, typename DSi, typename B, typename T> class Base_Session;
 #include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
+#include "otel_span.h"
+
 class MySQL_STMTs_meta;
 class StmtLongDataHandler;
 class MySQL_Session;
 class PgSQL_Session;
+
+#define STR(x)			#x
+#define TO_STRING(x)	STR(x)
+#define FILE_LINE_FUNC	(std::string(__FILE__ ":" TO_STRING(__LINE__) ":") + __func__)
+
+#define SESSION_TRACE(session) \
+	session->CreateSessionSpan(FILE_LINE_FUNC)
+
+#define SESSION_TRACE_NAMED(session, name) \
+	session->CreateSessionSpan(name)
+
+#define SESSION_TRACE_AUTO(session) \
+	auto otel_span = session->CreateSessionSpan(FILE_LINE_FUNC)
 
 enum SESSION_FORWARD_TYPE : uint8_t {
 	SESSION_FORWARD_TYPE_NONE					= 0x00,
@@ -30,6 +45,9 @@ enum SESSION_FORWARD_TYPE : uint8_t {
 
 template<typename S, typename DS, typename B, typename T>
 class Base_Session {
+	protected:
+	unsafe_shared_ptr<OTelSpanStack> span_stack;
+
 	public:
 	Base_Session();
 	virtual ~Base_Session();
@@ -102,8 +120,7 @@ class Base_Session {
 	bool use_ssl;
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
-
-
+	std::unique_ptr<OTelSpan> root_span;
 
 	void init();
 	//template<typename B> B * find_backend(int hostgroup_id);
@@ -149,6 +166,8 @@ class Base_Session {
 	 * @returns The hostgroup in which the connection was found, -1 in case no connection is found.
 	 */
 	int FindOneActiveTransaction(bool check_savepoint=false);
+
+	std::unique_ptr<OTelSpan> CreateSessionSpan(const std::string& span_name) { return std::make_unique<OTelSpan>(span_name, span_stack); }
 };
 
 #endif // CLASS_BASE_SESSION_H

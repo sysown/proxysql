@@ -1137,6 +1137,9 @@ void ProxySQL_Admin::flush_otel_variables___database_to_runtime(SQLite3DB *db, b
 		GloOTelTracer->unlock();
 	}
 
+	// setup tracer after configuration change
+	GloOTelTracer->setup();
+
 	if (resultset) delete resultset;
 }
 
