@@ -777,6 +777,12 @@ class ProxySQL_Admin {
 	void enable_aurora_testing_populate_mysql_aurora_hostgroups();
 #endif // TEST_AURORA
 
+#ifdef TEST_AWS_RDS
+	void enable_aws_rds_testing();
+	void enable_aws_rds_testing___populate_mysql_servers();
+	void enable_aws_rds_testing___populate_replication_hostgroups();
+#endif // TEST_AWS_RDS
+
 #ifdef TEST_GALERA
 	void enable_galera_testing();
 #endif // TEST_GALERA

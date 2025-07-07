@@ -336,7 +336,7 @@ vector<aurora_hg_info_t> get_hgs_info(SQLite3DB* db) {
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
-    SQLite3_result* resultset = NULL;
+	SQLite3_result* resultset = NULL;
 
 	GloAdmin->admindb->execute_statement(
 		"SELECT writer_hostgroup,reader_hostgroup,domain_name FROM mysql_aws_aurora_hostgroups",
@@ -354,6 +354,49 @@ vector<aurora_hg_info_t> get_hgs_info(SQLite3DB* db) {
 	return whgs;
 }
 
+
+#endif
+
+#ifdef TEST_AWS_RDS
+
+using std::vector;
+using std::string;
+
+/**
+ * @brief Extracts the <cluster-name> from a string of form '<cluster-name>-instance-1...amazonaws.com'.
+ */
+string get_cluster_name(const string& str) {
+	size_t pos = str.find("-instance-");
+	return pos != string::npos ? str.substr(0, pos) : str;
+}
+
+struct repl_hg_info_t {
+	uint32_t writer_hg;
+	uint32_t reader_hg;
+	string check_type;
+	string comment;
+};
+
+vector<repl_hg_info_t> get_repl_hgs_info(SQLite3DB* db) {
+	vector<repl_hg_info_t> repl_hgs {};
+
+	std::unique_ptr<SQLite3_result> res_repl_hgs {
+		GloAdmin->admindb->execute_statement(
+			"SELECT writer_hostgroup,reader_hostgroup,check_type,comment FROM mysql_replication_hostgroups"
+		)
+	};
+
+	for (const SQLite3_row* r : res_repl_hgs->rows) {
+		uint32_t writer_hg = atoi(r->fields[0]);
+		uint32_t reader_hg = atoi(r->fields[1]);
+		string check_type { r->fields[2] };
+		string comment { r->fields[3] };
+
+		repl_hgs.push_back({writer_hg, reader_hg, check_type, comment});
+	}
+
+	return repl_hgs;
+}
 
 #endif
 
@@ -770,7 +813,7 @@ __end_show_commands:
 
 __run_query:
 	if (run_query) {
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
+#if defined(TEST_AURORA) || defined(TEST_AWS_RDS) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
 #ifdef TEST_AURORA
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
@@ -870,6 +913,59 @@ __run_query:
 				}
 			}
 #endif // TEST_READONLY
+#ifdef TEST_AWS_RDS
+			{
+				const vector<const char*> mon_test_qs {
+					TEST_QUERY___READ_ONLY,
+					TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY,
+					TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY,
+
+					TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY,
+					TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY,
+				};
+
+				auto q_match = std::find_if(mon_test_qs.begin(), mon_test_qs.end(),
+					[&query_no_space] (const char* q) -> bool {
+						return strncasecmp(q, query_no_space, strlen(q)) == 0;
+					}
+				);
+
+				if (q_match != mon_test_qs.end()) {
+					free(query);
+
+					pthread_mutex_lock(&GloSQLite3Server->aws_rds_mutex);
+					GloSQLite3Server->populate_aws_rds_table(sess);
+
+					if (strcasecmp(*q_match, TEST_QUERY___READ_ONLY) == 0) {
+						const string ept_port { query_no_space + strlen(*q_match) };
+						const size_t pos = ept_port.find(":");
+						const string ept { pos != string::npos ? ept_port.substr(0, pos) : "" };
+
+						const string ro_q {
+							"SELECT read_only FROM MYSQL_RDS_TOPOLOGY WHERE endpoint='"  + ept + "'"
+						};
+
+						query = static_cast<char*>(malloc(ro_q.size() + 1));
+						sprintf(query, "%s", ro_q.c_str());
+					} else if (
+						strcasecmp(*q_match, TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY)
+						|| strcasecmp(*q_match, TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY)
+					) {
+						const string cluster_name { get_cluster_name(query_no_space + strlen(*q_match)) };
+						const string multi_az_q {
+							"SELECT read_only,id,endpoint,port FROM MYSQL_RDS_TOPOLOGY"
+								" WHERE endpoint LIKE '%" + cluster_name + "%'"
+						};
+
+						query = static_cast<char*>(malloc(multi_az_q.size() + 1));
+						sprintf(query, "%s", multi_az_q.c_str());
+					} else {
+					}
+
+					pthread_mutex_unlock(&GloSQLite3Server->aws_rds_mutex);
+				}
+			}
+#endif
 #ifdef TEST_REPLICATIONLAG
 			if (
 				strncasecmp("SELECT SLAVE STATUS ", query_no_space, strlen("SELECT SLAVE STATUS ")) == 0
@@ -1308,6 +1404,26 @@ void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
 }
 #endif
 
+#ifdef TEST_AWS_RDS
+void SQLite3_Server::init_aws_rds_ifaces_string(std::string& s) {
+	pthread_mutex_init(&aws_rds_mutex, NULL);
+
+	if(!s.empty()) {
+		s += ";";
+	}
+
+	max_num_aws_rds_servers = 50;
+
+	for (unsigned int i=0; i < max_num_aws_rds_servers; i++) {
+		s += "127.3.1." + std::to_string(i) + ":3306";
+
+		if (i != max_num_aws_rds_servers) {
+			s += ";";
+		}
+	}
+}
+#endif
+
 #ifdef TEST_GALERA
 void SQLite3_Server::init_galera_ifaces_string(std::string& s) {
 	if(!s.empty())
@@ -1371,7 +1487,7 @@ SQLite3_Server::SQLite3_Server() {
 
 	variables.read_only=false;
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) 
+#if defined(TEST_AURORA) || defined(TEST_AWS_RDS) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) 
 	string s = "";
 
 #ifdef TEST_AURORA
@@ -1385,6 +1501,7 @@ SQLite3_Server::SQLite3_Server() {
 #ifdef TEST_GROUPREP
 	init_grouprep_ifaces_string(s);
 #endif // TEST_GROUPREP
+
 #ifdef TEST_READONLY
 	// for readonly test we listen on all IPs because we simulate a lot of clusters
 	if (!s.empty())
@@ -1399,6 +1516,10 @@ SQLite3_Server::SQLite3_Server() {
 	s += "0.0.0.0:3306";
 	pthread_mutex_init(&test_replicationlag_mutex, NULL);
 #endif //TEST_REPLICATIONLAG
+
+#ifdef TEST_AWS_RDS
+	init_aws_rds_ifaces_string(s);
+#endif // TEST_AWS_RDS
 
 	variables.mysql_ifaces=strdup(s.c_str());
 
@@ -1522,15 +1643,8 @@ string get_server_id(const string& hostname, const string& domain_name) {
 }
 
 void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg) {
-	int rc = 0;
-	sqlite3_stmt* stmt = NULL;
-    const char query[] { "INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5, ?6)" };
-
-	rc = sessdb->prepare_v2(query, &stmt);
-	ASSERT_SQLITE_OK(rc, sessdb);
-
 #ifndef TEST_AURORA_RANDOM
-    SQLite3_result* host_status = NULL;
+	SQLite3_result* host_status = NULL;
 
 	{
 		char* error = NULL;
@@ -1563,6 +1677,11 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 
 		sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
 		vector<string> proc_srvs {};
+
+		const auto [rc, stmt] {
+			sessdb->prepare_v2("INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
+		};
+		ASSERT_SQLITE_OK(rc, sessdb);
 
 		for (const aurora_hg_info_t& hg_info : hgs_info) {
 			const auto match_writer = [&hg_info](const SQLite3_row* row) {
@@ -1689,6 +1808,109 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 }
 #endif // TEST_AURORA
 
+#ifdef TEST_AWS_RDS
+
+struct mysql_rds_srv_t {
+	bool ro;
+	size_t id;
+	string ept;
+	int port;
+};
+
+void SQLite3_Server::populate_aws_rds_table(MySQL_Session *sess) {
+	int srv_count { sessdb->return_one_int("SELECT COUNT(*) FROM MYSQL_RDS_TOPOLOGY") };
+
+	// If empty, we fill the map with some defaults for manual testing
+	if (srv_count == 0) {
+		// Fetch the configured servers in the target hostgroups
+		std::unique_ptr<SQLite3_result> srvs_res {
+			GloAdmin->admindb->execute_statement(
+				"SELECT hostname, hostgroup_id, port FROM mysql_servers WHERE"
+					" hostgroup_id BETWEEN 1200 AND 1220 GROUP BY HOSTNAME"
+			)
+		};
+
+		const std::vector<repl_hg_info_t> repl_hgs_info { get_repl_hgs_info(GloAdmin->admindb) };
+		std::map<string, vector<mysql_rds_srv_t>> rds_clusters {};
+
+		for (const repl_hg_info_t& hg_info : repl_hgs_info) {
+			for (const SQLite3_row* r : srvs_res->rows) {
+				const string host { r->fields[0] };
+				const int hg = std::atoi(r->fields[1]);
+				const int port = std::atoi(r->fields[2]);
+
+				if (hg == hg_info.writer_hg || hg == hg_info.reader_hg) {
+					const string cluster_id { get_cluster_name(host) };
+					auto& cluster_srvs = rds_clusters[cluster_id];
+					mysql_rds_srv_t srv {
+						hg != hg_info.writer_hg,
+						cluster_srvs.size() + 1,
+						host,
+						port
+					};
+					cluster_srvs.push_back(srv);
+				}
+			}
+		}
+
+		for (auto& [cluster_id, srvs] : rds_clusters) {
+			bool has_writer {
+				std::any_of(srvs.begin(), srvs.end(),
+					[](const mysql_rds_srv_t& server) -> bool { return !server.ro; }
+				)
+			};
+			if (!has_writer) {
+				srvs.front().ro = 0;
+			}
+
+			auto [rc, stmt] {
+				sessdb->prepare_v2(
+					"INSERT INTO MYSQL_RDS_TOPOLOGY VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+				)
+			};
+			ASSERT_SQLITE_OK(rc, sessdb);
+
+			auto insert_srv = [](SQLite3DB* sessdb, sqlite3_stmt* stmt, const mysql_rds_srv_t& srv) -> void {
+				int rc = 0;
+
+				rc=sqlite3_bind_int64(stmt, 1, srv.ro);
+				ASSERT_SQLITE_OK(rc, sessdb);
+				rc=sqlite3_bind_int64(stmt, 2, srv.id);
+				ASSERT_SQLITE_OK(rc, sessdb);
+				rc=sqlite3_bind_text(stmt, 3, srv.ept.c_str(), -1, SQLITE_TRANSIENT);
+				ASSERT_SQLITE_OK(rc, sessdb);
+				rc=sqlite3_bind_int64(stmt, 4, srv.port);
+				ASSERT_SQLITE_OK(rc, sessdb);
+
+				SAFE_SQLITE3_STEP2(stmt);
+				rc=sqlite3_clear_bindings(stmt); ASSERT_SQLITE_OK(rc, sessdb);
+				rc=sqlite3_reset(stmt); ASSERT_SQLITE_OK(rc, sessdb);
+			};
+
+			for (const auto& srv : srvs) {
+				insert_srv(sessdb, stmt.get(), srv);
+			}
+
+			size_t auto_discover = size_t(3) - srvs.size();
+
+			mysql_rds_srv_t ro_srv { srvs.back() };
+			ro_srv.ro = 1;
+
+			for (size_t i = srvs.size() + 1; i <= auto_discover + 1; i++) {
+				const size_t ins_pos { ro_srv.ept.find("instance-") };
+
+				ro_srv.ept.replace(ins_pos, sizeof("instance-n") - 1, "instance-" + std::to_string(i));
+				ro_srv.id = i;
+
+				insert_srv(sessdb, stmt.get(), ro_srv);
+			}
+		}
+	} else {
+		// Do nothing; unlike other tables, like Aurora, there is nothing to update
+	}
+}
+#endif // TEST_AWS_RDS
+
 #ifdef TEST_GROUPREP
 /**
  * @brief Populates the 'grouprep' table if it's found empty with the default
@@ -1766,7 +1988,7 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind
 #endif // TEST_GALERA
 
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
+#if defined(TEST_AURORA) || defined(TEST_AWS_RDS) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
 void SQLite3_Server::insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def) {
 	table_def_t *td = new table_def_t;
 	td->table_name=strdup(table_name);
@@ -1827,6 +2049,20 @@ bool SQLite3_Server::init() {
 	check_and_build_standard_tables(sessdb, tables_defs_aurora);
 	GloAdmin->enable_aurora_testing();
 #endif // TEST_AURORA
+#ifdef TEST_AWS_RDS
+	tables_defs_aws_rds = new std::vector<table_def_t *>;
+	insert_into_tables_defs(tables_defs_aws_rds,
+		(const char *)"MYSQL_RDS_TOPOLOGY",
+		"CREATE TABLE MYSQL_RDS_TOPOLOGY ("
+			" read_only VARCHAR NOT NULL , id VARCHAR NOT NULL , endpoint VARCHAR NOT NULL ,"
+			" port INT NOT NULL , role VARCHAR , status VARCHAR , version VARCHAR ,"
+			" PRIMARY KEY (endpoint, id)"
+		")"
+	);
+	check_and_build_standard_tables(sessdb, tables_defs_aws_rds);
+	GloAdmin->enable_aws_rds_testing();
+#endif // TEST_AWS_RDS
+
 #ifdef TEST_GALERA
 	tables_defs_galera = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_galera,

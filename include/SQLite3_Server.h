@@ -44,6 +44,9 @@ class SQLite3_Server {
 #ifdef TEST_AURORA
 	std::vector<table_def_t *> *tables_defs_aurora;
 #endif // TEST_AURORA
+#ifdef TEST_AWS_RDS
+	std::vector<table_def_t *> *tables_defs_aws_rds;
+#endif // TEST_AURORA
 #ifdef TEST_GALERA
 	std::vector<table_def_t *> *tables_defs_galera;
 #endif // TEST_GALERA
@@ -59,7 +62,7 @@ class SQLite3_Server {
 	std::unordered_map<std::string, std::unique_ptr<int>> replicationlag_map;
 	std::vector<table_def_t*>* tables_defs_replicationlag;
 #endif // TEST_REPLICATIONLAG
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
+#if defined(TEST_AURORA) || defined(TEST_AWS_RDS) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
@@ -79,6 +82,17 @@ class SQLite3_Server {
 	void populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg);
 	void init_aurora_ifaces_string(std::string& s);
 #endif // TEST_AURORA
+#ifdef TEST_AWS_RDS
+	pthread_mutex_t aws_rds_mutex;
+	/*
+	 * @brief Handles queries to table 'MYSQL_RDS_TOPOLOGY'.
+	 * @details This function needs to be called with lock on mutex 'aws_rds_mutex' already acquired.
+	 * @param sess The session which request is to be handled.
+	 */
+	unsigned int max_num_aws_rds_servers;
+	void populate_aws_rds_table(MySQL_Session *sess);
+	void init_aws_rds_ifaces_string(std::string& s);
+#endif // TEST_AWS_RDS
 #ifdef TEST_GALERA
 	//unsigned int cur_aurora_writer[3];
 	unsigned int num_galera_servers[3];

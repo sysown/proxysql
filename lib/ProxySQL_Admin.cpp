@@ -8393,7 +8393,120 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_AURORA
+#ifdef TEST_AWS_RDS
 
+const uint32_t RDS_HGS_OFFSET = 1200;
+
+/**
+ * @brief Configure 3 clusters of each kind, Multi AZ and Blue Green deployment.
+ * @details Instances for both clusters will follow the following pattern:
+ *   - 1 Cluster with all servers (3) including a writer.
+ *   - 1 Cluster with all servers (3) as readers.
+ *   - 1 Cluster with just one reader (autodiscovery).
+ */
+void ProxySQL_Admin::enable_aws_rds_testing___populate_mysql_servers() {
+	proxy_info("Admin is enabling AWS RDS Testing using SQLite3 Server\n");
+
+	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 1200 AND 1220");
+	auto [rc, stmt] { admindb->prepare_v2(
+		"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)"
+	)};
+	ASSERT_SQLITE_OK(rc, admindb);
+
+	for (uint32_t j = 0; j < 3*2; j += 2) {
+		proxy_info("Creating Multi AZ cluster on HGs %d and %d\n", j, j + 1);
+
+		for (uint32_t i = 1; i <= 3; i++) {
+			const string instance_id {
+				"cluster_id_" + std::to_string(j) + "-instance-" + std::to_string(i)
+			};
+			const string server_id { instance_id + ".rds.amazonaws.com" };
+
+			if (j == 0 && i == 0) {
+				// For Cluster 1, there is 1 writer present by config
+				rc = (*proxy_sqlite3_bind_int64)(stmt.get(), 1, j + RDS_HGS_OFFSET);
+				ASSERT_SQLITE_OK(rc, admindb);
+			} else if (j == 2) {
+				// For Cluster 2, no writers present by config
+				rc = (*proxy_sqlite3_bind_int64)(stmt.get(), 1, j + RDS_HGS_OFFSET + 1);
+				ASSERT_SQLITE_OK(rc, admindb);
+			} else {
+				// For Cluster 3, one writer by config, autodiscovery should complete the cluster
+				rc = (*proxy_sqlite3_bind_int64)(stmt.get(), 1, j + RDS_HGS_OFFSET);
+				ASSERT_SQLITE_OK(rc, admindb);
+			}
+
+			rc = (*proxy_sqlite3_bind_text)(stmt.get(), 2, server_id.c_str(), -1, SQLITE_TRANSIENT);
+			ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(stmt.get(), 3, 0);
+			ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(stmt.get(), 4, instance_id.c_str(), -1, SQLITE_TRANSIENT);
+			ASSERT_SQLITE_OK(rc, admindb);
+
+			SAFE_SQLITE3_STEP2(stmt.get());
+			rc = (*proxy_sqlite3_clear_bindings)(stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_reset)(stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
+
+			// Last iteration, autodiscovery cluster
+			if (j + 2 >= 3*2) {
+				break;
+			}
+		}
+	}
+}
+
+void ProxySQL_Admin::enable_aws_rds_testing___populate_replication_hostgroups() {
+	auto [rc, stmt] { admindb->prepare_v2(
+		"INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,check_type,comment)"
+			" VALUES (?1, ?2, ?3, ?4)"
+	)};
+	ASSERT_SQLITE_OK(rc, admindb);
+
+	for (uint32_t j = 0; j + RDS_HGS_OFFSET < 3*2 + RDS_HGS_OFFSET; j += 2) {
+		rc = (*proxy_sqlite3_bind_int64)(stmt.get(), 1, j + RDS_HGS_OFFSET);
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = (*proxy_sqlite3_bind_int64)(stmt.get(), 2, j + RDS_HGS_OFFSET + 1);
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = (*proxy_sqlite3_bind_text)(stmt.get(), 3, "read_only", -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		const string cluster_name { "AWS RDS Testing Cluster " + std::to_string(j) };
+		rc = (*proxy_sqlite3_bind_text)(stmt.get(), 4, cluster_name.c_str(), -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		SAFE_SQLITE3_STEP2(stmt.get());
+		rc = (*proxy_sqlite3_clear_bindings)(stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
+		rc = (*proxy_sqlite3_reset)(stmt.get()); ASSERT_SQLITE_OK(rc, admindb);
+	}
+}
+
+void ProxySQL_Admin::enable_aws_rds_testing() {
+	// TODO: CHANGE
+	proxy_info("Admin is enabling AWS RDS Testing using SQLite3 Server and HGs from 1200 to 1220\n");
+
+	mysql_servers_wrlock();
+	enable_aws_rds_testing___populate_mysql_servers();
+	enable_aws_rds_testing___populate_replication_hostgroups();
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+
+	admindb->execute("UPDATE global_variables SET variable_value=1000 WHERE variable_name='mysql-monitor_ping_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_timeout'");
+	admindb->execute("UPDATE global_variables SET variable_value=1000 WHERE variable_name='mysql-monitor_replication_lag_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
+
+	load_mysql_variables_to_runtime();
+
+	admindb->execute("DELETE FROM mysql_users WHERE username LIKE '%awsrds%'");
+	admindb->execute(
+		"INSERT INTO mysql_users (username,password,default_hostgroup) VALUES"
+			" ('awsrds1','awsrds1',1200), ('awsrds2','awsrds2',1200), ('awsrds3','awsrds3',1200)"
+	);
+
+	init_users();
+}
+
+#endif // TEST_AWS_RDS
 #ifdef TEST_GROUPREP
 void ProxySQL_Admin::enable_grouprep_testing() {
 	proxy_info("Admin is enabling Group Replication Testing using SQLite3 Server and HGs from 3271 to 3274\n");

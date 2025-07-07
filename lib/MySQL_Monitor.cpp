@@ -635,7 +635,7 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_ping_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::ping_handler;
 		break;
-#ifndef TEST_READONLY
+#if !defined(TEST_READONLY) && !defined(TEST_AWS_RDS)
 	case MON_READ_ONLY:
 		query_ = "SELECT @@global.read_only read_only";
 		async_state_machine_ = ASYNC_QUERY_START;
@@ -698,6 +698,30 @@ void MySQL_Monitor_State_Data::init_async() {
 	case MON_READ_ONLY__OR__INNODB_READ_ONLY:
 		query_ = "SELECT @@global.read_only read_only ";
 		query_ += std::string(hostname) + ":" + std::to_string(port);
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
+	case MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
+		query_ = string { TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY } + " " + hostname;
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
+	case MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
+		query_ = string { TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY } + " " + hostname;
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
+	case MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY:
+		query_ = string { TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY } + " " + hostname;
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
+	case MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY:
+		query_ = string { TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY } + " " + hostname;
 		async_state_machine_ = ASYNC_QUERY_START;
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
@@ -784,6 +808,10 @@ void MySQL_Monitor_State_Data::init_async() {
 	case MON_AWS_AURORA:
 		break;
 	}
+
+	proxy_debug(PROXY_DEBUG_MONITOR, 3,
+		"Starting monitoring task   task_id=%d query=\"%s\"\n", task_id_, query_.c_str()
+	);
 }
 
 void MySQL_Monitor_State_Data::mark_task_as_timeout(unsigned long long time) {
@@ -1711,7 +1739,7 @@ void * monitor_read_only_thread(void *arg) {
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
-#ifndef TEST_READONLY
+#if !defined(TEST_READONLY) && !defined(TEST_AWS_RDS)
 	if (mmsd->get_task_type() == MON_INNODB_READ_ONLY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.innodb_read_only read_only");
 	} else if (mmsd->get_task_type() == MON_SUPER_READ_ONLY) {
@@ -1733,9 +1761,38 @@ void * monitor_read_only_thread(void *arg) {
 	}
 #else // TEST_READONLY
 	{
-		std::string s = "SELECT @@global.read_only read_only";
-		s += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,s.c_str());
+		auto get_task_query = [] (MySQL_Monitor_State_Data_Task_Type task_type) -> std::string {
+			if (task_type == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
+				return TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY;
+			} else if (task_type == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
+				return TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY;
+			} else if (task_type == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY) {
+				return TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
+			} else if (task_type == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY) {
+				return TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
+			} else {
+				assert(0);
+			}
+		};
+
+		string task_query {};
+
+		if (
+			mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
+			|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
+			|| mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
+			|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
+		) {
+			task_query = get_task_query(mmsd->get_task_type()) + " " + mmsd->hostname;
+		} else { // default
+			task_query = "SELECT @@global.read_only read_only "
+				+ std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
+		}
+
+		proxy_debug(PROXY_DEBUG_MONITOR, 3,
+			"Issuing read_only monitoring query   query=\"%s\"\n", task_query.c_str()
+		);
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr, mmsd->mysql, task_query.c_str());
 	}
 #endif // TEST_READONLY
 	while (mmsd->async_exit_status) {
@@ -3482,12 +3539,15 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 			|| (rds_topology_check_type == AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK && discovered_servers.size() % 2 != 0)) {
 		// Query result matches neither a Multi_AZ DB Cluster nor a Blue/Green deployment
 		rds_topology_check_type = AWS_RDS_TOPOLOGY_CHECK; // Set back to default rds_topology check
+		// TODO: This needs to be notified to the user; potential cluster misconfiguration.
 		proxy_debug(PROXY_DEBUG_MONITOR, 7, "Got a query result for the rds_topology metadata table but it matches neither Multi-AZ DB Clusters, nor a blue/green deployment. Number of records: %d\n", discovered_servers.size());
 		return;
 	}
 
 
 	if (num_fields < 4) {
+		// TODO: This error message should be more specific about the source of the error. An invalid
+		// resultset may implied a misconfigured cluster, or invalid config. This should be more explicit.
 		proxy_error("Received row with too few fields. num_field = %d\n", num_fields);
 		return;
 	}

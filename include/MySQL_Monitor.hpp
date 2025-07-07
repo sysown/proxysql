@@ -87,6 +87,19 @@ A single AWS_Aurora_monitor_node will have a AWS_Aurora_status_entry per check.
 
 #endif
 
+#ifdef TEST_AWS_RDS
+
+#define TEST_QUERY___READ_ONLY "SELECT @@global.read_only read_only "
+#define TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port "
+#define TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only read_only, id, endpoint, port "
+
+#define TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.read_only AS read_only, id, endpoint, port, role, status, version "
+#define TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only AS read_only, id, endpoint, port, role, status, version "
+
+#define TEST_QUERY___SQLITE3_AWS_RDS_TOPOLOGY "SELECT read_only read_only, id, endpoint, port "
+
+#endif
+
 class AWS_Aurora_replica_host_status_entry {
 	public:
 	char * server_id = NULL;
