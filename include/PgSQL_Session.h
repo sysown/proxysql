@@ -16,12 +16,12 @@
 
 class PgSQL_Query_Result;
 class PgSQL_ExplicitTxnStateMgr;
-//#include "../deps/json/json.hpp"
+//#include "nlohmann/json.hpp"
 //using json = nlohmann::json;
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 extern class PgSQL_Variables pgsql_variables;

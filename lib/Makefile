@@ -46,8 +46,8 @@ PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
 
-JSON_PATH := $(DEPS_PATH)/json
-JSON_IDIR := $(JSON_PATH)
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
 
 RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH)
@@ -62,6 +62,7 @@ SQLITE3_IDIR := $(SQLITE3_PATH)
 SQLITE3_LDIR := $(SQLITE3_PATH)
 
 CITYHASH_PATH := $(DEPS_PATH)/cityhash/cityhash
+CITYHASH_IDIR := $(CITYHASH_PATH)
 CITYHASH_LDIR := $(CITYHASH_PATH)/src/.libs
 
 LZ4_PATH := $(DEPS_PATH)/lz4/lz4
@@ -109,9 +110,41 @@ LIBSCRAM_PATH := $(DEPS_PATH)/libscram
 LIBSCRAM_IDIR := $(LIBSCRAM_PATH)/include
 LIBSCRAM_LDIR := $(LIBSCRAM_PATH)/lib
 
-IDIR := ../include
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp/local
+ABSL_IDIR := $(ABSL_PATH)/include
 
-IDIRS := -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_IDIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_PATH) -I$(PROMETHEUS_IDIR) -I$(LIBUSUAL_IDIR) -I$(LIBSCRAM_IDIR) -I$(POSTGRES_IDIR) -I$(SSL_IDIR)
+PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf/local
+PROTOBUF_IDIR := $(PROTOBUF_PATH)/include
+
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp/local
+OTEL_IDIR := $(OTEL_PATH)/include
+
+SYS_LOC_IDIR := /usr/local/include
+
+IDIRS := -I$(SYS_LOC_IDIR)                   \
+			-I$(PROXYSQL_IDIR)               \
+			-I$(JEMALLOC_IDIR)               \
+			-I$(MARIADB_IDIR)                \
+			-I$(LIBCONFIG_IDIR)              \
+			-I$(RE2_IDIR)                    \
+			-I$(SQLITE3_IDIR)                \
+			-I$(PCRE_IDIR)                   \
+			-I$(CLICKHOUSE_CPP_IDIR)         \
+			-I$(MICROHTTPD_IDIR)             \
+			-I$(LIBHTTPSERVER_IDIR)          \
+			-I$(LIBINJECTION_IDIR)           \
+			-I$(CURL_IDIR)                   \
+			-I$(EV_IDIR)                     \
+			-I$(PROMETHEUS_IDIR)             \
+			-I$(LIBUSUAL_IDIR)               \
+			-I$(LIBSCRAM_IDIR)               \
+			-I$(POSTGRES_IDIR)               \
+			-I$(JSON_IDIR)                   \
+			-I$(ABSL_IDIR)                   \
+			-I$(PROTOBUF_IDIR)               \
+			-I$(OTEL_IDIR)                   \
+			-I$(SSL_IDIR)
+
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
 endif

@@ -12,7 +12,7 @@ template<typename S, typename DSi, typename B, typename T> class Base_Session;
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 class MySQL_STMTs_meta;

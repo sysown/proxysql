@@ -77,6 +77,7 @@ ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	LEGACY_BUILD := 1
     export CC=gcc
     export CXX=g++
+    export AR=ar
 endif
 export MAKEOPT := -j${NPROCS}
 

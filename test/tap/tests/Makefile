@@ -33,8 +33,8 @@ PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
 
-JSON_PATH := $(DEPS_PATH)/json
-JSON_IDIR := $(JSON_PATH)
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
 
 RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH)
@@ -49,6 +49,7 @@ SQLITE3_IDIR := $(SQLITE3_PATH)
 SQLITE3_LDIR := $(SQLITE3_PATH)
 
 CITYHASH_PATH := $(DEPS_PATH)/cityhash/cityhash
+CITYHASH_IDIR := $(CITYHASH_PATH)
 CITYHASH_LDIR := $(CITYHASH_PATH)/src/.libs
 
 LZ4_PATH := $(DEPS_PATH)/lz4/lz4
@@ -77,6 +78,10 @@ COREDUMPER_LDIR := $(COREDUMPER_PATH)/src
 CURL_PATH := $(DEPS_PATH)/curl/curl
 CURL_IDIR := $(CURL_PATH)/include
 CURL_LDIR := $(CURL_PATH)/lib/.libs
+
+LIBDAEMON_PATH := $(DEPS_PATH)/libdaemon/libdaemon
+LIBDAEMON_IDIR := $(LIBDAEMON_PATH)
+LIBDAEMON_LDIR := $(LIBDAEMON_PATH)/libdaemon/.libs
 
 include ../../../common_mk/openssl_flags.mk
 

@@ -1,0 +1,74 @@
+--- absl/time/time.h	2025-05-12 17:41:36.000000000 +0000
++++ ../time.h	2025-06-15 22:04:19.463661983 +0000
+@@ -620,9 +620,9 @@
+ //
+ //   absl::Duration d = absl::Milliseconds(1500);
+ //   int64_t isec = absl::ToInt64Seconds(d);  // isec == 1
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Nanoseconds(Duration d);
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Microseconds(Duration d);
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Milliseconds(Duration d);
++ABSL_ATTRIBUTE_CONST_FUNCTION int64_t ToInt64Nanoseconds(Duration d);
++ABSL_ATTRIBUTE_CONST_FUNCTION int64_t ToInt64Microseconds(Duration d);
++ABSL_ATTRIBUTE_CONST_FUNCTION int64_t ToInt64Milliseconds(Duration d);
+ ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Seconds(Duration d);
+ ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Minutes(Duration d);
+ ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Hours(Duration d);
+@@ -964,9 +964,9 @@
+ //
+ // Creates an `absl::Time` from a variety of other representations.  See
+ // https://unicode-org.github.io/icu/userguide/datetime/universaltimescale.html
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromUnixNanos(int64_t ns);
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromUnixMicros(int64_t us);
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromUnixMillis(int64_t ms);
++ABSL_ATTRIBUTE_CONST_FUNCTION Time FromUnixNanos(int64_t ns);
++ABSL_ATTRIBUTE_CONST_FUNCTION Time FromUnixMicros(int64_t us);
++ABSL_ATTRIBUTE_CONST_FUNCTION Time FromUnixMillis(int64_t ms);
+ ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromUnixSeconds(int64_t s);
+ ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromTimeT(time_t t);
+ ABSL_ATTRIBUTE_CONST_FUNCTION Time FromUDate(double udate);
+@@ -1844,15 +1844,15 @@
+   return time_internal::FromChrono(d);
+ }
+ 
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromUnixNanos(int64_t ns) {
++ABSL_ATTRIBUTE_CONST_FUNCTION Time FromUnixNanos(int64_t ns) {
+   return time_internal::FromUnixDuration(Nanoseconds(ns));
+ }
+ 
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromUnixMicros(int64_t us) {
++ABSL_ATTRIBUTE_CONST_FUNCTION Time FromUnixMicros(int64_t us) {
+   return time_internal::FromUnixDuration(Microseconds(us));
+ }
+ 
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr Time FromUnixMillis(int64_t ms) {
++ABSL_ATTRIBUTE_CONST_FUNCTION Time FromUnixMillis(int64_t ms) {
+   return time_internal::FromUnixDuration(Milliseconds(ms));
+ }
+ 
+@@ -1864,7 +1864,7 @@
+   return time_internal::FromUnixDuration(Seconds(t));
+ }
+ 
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Nanoseconds(Duration d) {
++ABSL_ATTRIBUTE_CONST_FUNCTION int64_t ToInt64Nanoseconds(Duration d) {
+   if (time_internal::GetRepHi(d) >= 0 &&
+       time_internal::GetRepHi(d) >> 33 == 0) {
+     return (time_internal::GetRepHi(d) * 1000 * 1000 * 1000) +
+@@ -1873,7 +1873,7 @@
+   return d / Nanoseconds(1);
+ }
+ 
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Microseconds(
++ABSL_ATTRIBUTE_CONST_FUNCTION int64_t ToInt64Microseconds(
+     Duration d) {
+   if (time_internal::GetRepHi(d) >= 0 &&
+       time_internal::GetRepHi(d) >> 43 == 0) {
+@@ -1884,7 +1884,7 @@
+   return d / Microseconds(1);
+ }
+ 
+-ABSL_ATTRIBUTE_CONST_FUNCTION constexpr int64_t ToInt64Milliseconds(
++ABSL_ATTRIBUTE_CONST_FUNCTION int64_t ToInt64Milliseconds(
+     Duration d) {
+   if (time_internal::GetRepHi(d) >= 0 &&
+       time_internal::GetRepHi(d) >> 53 == 0) {

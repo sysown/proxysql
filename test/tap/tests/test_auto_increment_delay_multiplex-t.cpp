@@ -29,7 +29,7 @@
 #include <unistd.h>
 #include "mysql.h"
 
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include "command_line.h"
 #include "proxysql_utils.h"

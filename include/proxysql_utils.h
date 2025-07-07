@@ -12,7 +12,7 @@
 #include <sys/resource.h>
 #include <assert.h>
 
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 
 #ifndef ProxySQL_Checksum_Value_LENGTH
 #define ProxySQL_Checksum_Value_LENGTH 20

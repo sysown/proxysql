@@ -21,7 +21,8 @@ JEMALLOC_PATH := $(DEPS_PATH)/jemalloc/jemalloc
 JEMALLOC_IDIR := $(JEMALLOC_PATH)/include/jemalloc
 JEMALLOC_LDIR := $(JEMALLOC_PATH)/lib
 
-JSON_IDIR := $(DEPS_PATH)/json
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
 
 RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH)
@@ -31,42 +32,42 @@ SQLITE3_PATH := $(DEPS_PATH)/sqlite3/sqlite3
 SQLITE3_IDIR := $(SQLITE3_PATH)
 SQLITE3_LDIR := $(SQLITE3_PATH)
 
-LIBHTTPSERVER_DIR := $(DEPS_PATH)/libhttpserver/libhttpserver
-LIBHTTPSERVER_IDIR := $(LIBHTTPSERVER_DIR)/src
-LIBHTTPSERVER_LDIR := $(LIBHTTPSERVER_DIR)/build/src/.libs/
+LIBHTTPSERVER_PATH := $(DEPS_PATH)/libhttpserver/libhttpserver
+LIBHTTPSERVER_IDIR := $(LIBHTTPSERVER_PATH)/src
+LIBHTTPSERVER_LDIR := $(LIBHTTPSERVER_PATH)/build/src/.libs/
 
 LIBCONFIG_PATH := $(DEPS_PATH)/libconfig/libconfig
 LIBCONFIG_IDIR := $(LIBCONFIG_PATH)/lib
 LIBCONFIG_LDIR := $(LIBCONFIG_PATH)/lib/.libs
 
-CURL_DIR := $(DEPS_PATH)/curl/curl
-CURL_IDIR := $(CURL_DIR)/include
-CURL_LDIR := $(CURL_DIR)/lib/.libs
+CURL_PATH := $(DEPS_PATH)/curl/curl
+CURL_IDIR := $(CURL_PATH)/include
+CURL_LDIR := $(CURL_PATH)/lib/.libs
 
 PCRE_PATH := $(DEPS_PATH)/pcre/pcre
 PCRE_LDIR := $(PCRE_PATH)/.libs
 
-MICROHTTPD_DIR := $(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
-MICROHTTPD_IDIR := $(MICROHTTPD_DIR)/include
-MICROHTTPD_LDIR := $(MICROHTTPD_DIR)/microhttpd/.libs
+MICROHTTPD_PATH := $(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
+MICROHTTPD_IDIR := $(MICROHTTPD_PATH)/include
+MICROHTTPD_LDIR := $(MICROHTTPD_PATH)/microhttpd/.libs
 
 include ../../../../common_mk/openssl_flags.mk
 
-EV_DIR := $(DEPS_PATH)/libev/libev/
-EV_IDIR := $(EV_DIR)
-EV_LDIR := $(EV_DIR)/.libs
+EV_PATH := $(DEPS_PATH)/libev/libev/
+EV_IDIR := $(EV_PATH)
+EV_LDIR := $(EV_PATH)/.libs
 
 PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
 
-CITYHASH_DIR := $(DEPS_PATH)/cityhash/cityhash/
-CITYHASH_IDIR := $(CITYHASH_DIR)
-CITYHASH_LDIR := $(CITYHASH_DIR)/src/.libs
+CITYHASH_PATH := $(DEPS_PATH)/cityhash/cityhash/
+CITYHASH_IDIR := $(CITYHASH_PATH)
+CITYHASH_LDIR := $(CITYHASH_PATH)/src/.libs
 
-COREDUMPER_DIR := $(DEPS_PATH)/coredumper/coredumper
-COREDUMPER_IDIR := $(COREDUMPER_DIR)/include
-COREDUMPER_LDIR := $(COREDUMPER_DIR)/src
+COREDUMPER_PATH := $(DEPS_PATH)/coredumper/coredumper
+COREDUMPER_IDIR := $(COREDUMPER_PATH)/include
+COREDUMPER_LDIR := $(COREDUMPER_PATH)/src
 
 TAP_PATH := $(PROXYSQL_PATH)/test/tap/tap
 TAP_IDIR := $(TAP_PATH)
@@ -83,9 +84,9 @@ TEST_MYSQL_IDIR := $(TEST_MYSQL_PATH)/include
 TEST_MYSQL_EDIR := $(TEST_MYSQL_PATH)/libbinlogevents/export
 TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
 
-POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/src
-POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/include -I$(POSTGRESQL_PATH)/interfaces/libpq
-POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port
+POSTGRES_PATH := $(DEPS_PATH)/postgresql/postgresql/src
+POSTGRES_IDIR := $(POSTGRES_PATH)/include -I$(POSTGRES_PATH)/interfaces/libpq
+POSTGRES_LDIR := $(POSTGRES_PATH)/interfaces/libpq -L$(POSTGRES_PATH)/common -L$(POSTGRES_PATH)/port
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
@@ -117,10 +118,10 @@ OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,"../../tap" $(WGCOV) $(
 
 IDIRS := -I$(TAP_IDIR) -I$(RE2_IDIR) -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(LIBCONFIG_IDIR)\
 		 -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(PROMETHEUS_IDIR)\
-		 -I$(SQLITE3_IDIR) -I$(JSON_IDIR) -I$(POSTGRESQL_IDIR) -I$(SSL_IDIR) 
+		 -I$(SQLITE3_IDIR) -I$(JSON_IDIR) -I$(POSTGRES_IDIR) -I$(SSL_IDIR) 
 LDIRS := -L$(TAP_LDIR) -L$(RE2_LDIR) -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(LIBCONFIG_LDIR)\
 		 -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR)\
-		 -L$(SQLITE3_LDIR) -L$(PCRE_LDIR) -L$(POSTGRESQL_LDIR) -L$(SSL_LDIR) 
+		 -L$(SQLITE3_LDIR) -L$(PCRE_LDIR) -L$(POSTGRES_LDIR) -L$(SSL_LDIR) 
 
 ### main targets
 

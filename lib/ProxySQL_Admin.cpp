@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -8465,4 +8465,3 @@ void ProxySQL_Admin::enable_replicationlag_testing() {
 	mysql_servers_wrunlock();
 }
 #endif // TEST_REPLICATIONLAG
-

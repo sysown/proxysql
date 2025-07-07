@@ -9,7 +9,8 @@ endif
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
-DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d' ' -f1 | cut -d- -f1)
+DISTVERS := $(shell grep '^VERSION=' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d' ' -f1 | cut -d. -f1)
 
 CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))
@@ -45,7 +46,28 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-targets := check_openssl_version libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libhttpserver libinjection prometheus-cpp postgresql libusual libscram
+targets := check_openssl_version    \
+			libconfig               \
+			libdaemon               \
+			jemalloc                \
+			mariadb_client          \
+			re2                     \
+			sqlite3                 \
+			pcre                    \
+			lz4                     \
+			cityhash                \
+			microhttpd              \
+			curl                    \
+			ev                      \
+			libhttpserver           \
+			libinjection            \
+			prometheus-cpp          \
+			postgresql              \
+			libusual                \
+			libscram                \
+			json                    \
+			abseil
+
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
 endif
@@ -120,24 +142,24 @@ coredumper/coredumper/src/libcoredumper.a:
 coredumper: coredumper/coredumper/src/libcoredumper.a
 
 
-curl/curl/lib/.libs/libcurl.a:
+
+curl/curl/local/lib/libcurl.a:
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
-#	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl --enable-shared=yes
+	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --prefix=$(abspath ./curl/curl/local) --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl --enable-shared=yes
 	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ${MAKE} install
 
-curl: curl/curl/lib/.libs/libcurl.a
+curl: curl/curl/local/lib/libcurl.a
 
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && tar -zxf libmicrohttpd-*.tar.gz
-#	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
@@ -160,12 +182,13 @@ lz4/lz4/lib/liblz4.a:
 lz4: lz4/lz4/lib/liblz4.a
 
 
-clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
+clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a: abseil
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp-*.tar.gz
-	cd clickhouse-cpp && ln -fsT clickhouse-cpp-*/ clickhouse-cpp
 	cd clickhouse-cpp/clickhouse-cpp && patch -p0 < ../fix_ciso646.patch
-	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
+	cd clickhouse-cpp/clickhouse-cpp && cmake .                           \
+										-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+										-DCMAKE_PREFIX_PATH=$(abspath abseil/abseil-cpp/local)
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
@@ -249,8 +272,7 @@ mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclien
 sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
-	cd sqlite3/sqlite3 && patch -p1 < ../from_unixtime.patch
-	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
+	cd sqlite3/sqlite3 && patch -p0 < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../throw.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
@@ -262,9 +284,9 @@ sqlite3: sqlite3/sqlite3/sqlite3.o
 libconfig/libconfig/out/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-*.tar.gz
-	cd libconfig && ln -fsT libconfig-*/ libconfig
 	cd libconfig/libconfig && cmake -DBUILD_SHARED_LIBS=0 -DBUILD_EXAMPLES=0 -DBUILD_TESTS=0 -DBUILD_FUZZERS=0 .
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
+
 
 libconfig: libconfig/libconfig/out/libconfig++.a
 
@@ -275,7 +297,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-*.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../registry_counters_reset.patch
-	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../fix_old_distros.patch
+#	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../fix_old_distros.patch
 	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -313,7 +335,6 @@ pcre: pcre/pcre/.libs/libpcre.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a:
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
-	cd postgresql && ln -fsT postgresql-*/ postgresql
 	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
 	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch
 	cd postgresql/postgresql && patch -p0 < ../fmt_err_msg.patch
@@ -340,6 +361,32 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(SSL_IDIR)" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 
 libscram: libscram/lib/libscram.a
+
+
+json/json/include/nlohmann/json.hpp:
+	cd json && rm -rf json-*/ || true
+	cd json && tar -zxf json-*.tar.gz
+	cd json/json && cmake .
+
+json: json/json/include/nlohmann/json.hpp
+
+
+abseil/abseil-cpp/local/lib/libabsl.a:
+	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd abseil && tar -zxf abseil-cpp-*.tar.gz
+	cd abseil/abseil-cpp && mkdir -p build
+ifneq (,$(filter $(DISTRO)$(DISTVERS),almalinux8 opensuse15))
+	cd abseil/abseil-cpp && patch -p0 < ../constexpr.patch
+endif
+	cd abseil/abseil-cpp/build && cmake .. -DCMAKE_CXX_FLAGS='-D_GLIBCXX_USE_CXX11_ABI=0' -DCMAKE_INSTALL_PREFIX=../local -DBUILD_TESTING=OFF
+	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd abseil/abseil-cpp/build && ${MAKE} install
+	cd abseil/abseil-cpp/local && ln -fsT lib64 lib || true
+	#cd abseil/abseil-cpp/local/lib && ${AR} -crs --thin libabsl.a *.a		# older ar doesn't support --thin
+	cd abseil/abseil-cpp/local/lib && ls libabsl_*.a | xargs -n1 ${AR} -x
+	cd abseil/abseil-cpp/local/lib && ${AR} -crs libabsl.a *.o && rm *.o
+
+abseil: abseil/abseil-cpp/local/lib/libabsl.a
 
 
 ### clean targets
@@ -373,5 +420,6 @@ cleanall:
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
+	cd json && rm -rf json-*/ || true
+	cd abseil && rm -rf abseil-cpp-*/ || true
 .PHONY: cleanall
-

@@ -97,6 +97,8 @@ deps/sqlite3/sqlite-amalgamation-*/
 deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/libusual/libusual-*/
+deps/json/json-*/
+deps/abseil/abseil-cpp-*/
 
 test/.vagrant
 .DS_Store
