@@ -283,7 +283,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     
-    plan(10); // Expecting 10 test assertions
+    plan(9); // Expecting 9 test assertions
     
     MYSQL* mysql = mysql_init(NULL);
     if (!mysql) {
