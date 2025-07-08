@@ -1296,7 +1296,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 						rows=SPA->proxysql_config().Read_PgSQL_Users_from_configfile();
 						if (rows < 0) {
 							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load pgsql users from CONFIG due to validation errors\n");
-							SPA->send_error_msg_to_client(sess, (char *)"Configuration validation failed - check error log for details");
+SPA->send_error_msg_to_client(sess, "Configuration validation failed - check error log for details");
 						} else {
 							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql users from CONFIG\n");
 							SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
