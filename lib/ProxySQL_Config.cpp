@@ -4,6 +4,8 @@
 #include "cpp.h"
 
 #include <sstream>
+#include <set>
+#include <tuple>
 
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
@@ -1022,6 +1024,45 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
 	if (root.exists("mysql_servers")==true) {
 		const Setting &mysql_servers = root["mysql_servers"];
 		int count = mysql_servers.getLength();
+		
+		// PRE-VALIDATION: Check for duplicates within config file
+		std::set<std::tuple<int, std::string, int>> pk_set; // {hostgroup_id, hostname, port}
+		
+		for (i=0; i< count; i++) {
+			const Setting &server = mysql_servers[i];
+			std::string address;
+			int port=3306;
+			int hostgroup;
+			
+			// Validate mandatory fields
+			if (server.lookupValue("address", address)==false) {
+				if (server.lookupValue("hostname", address)==false) {
+					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostname\n");
+					admindb->execute("PRAGMA foreign_keys = ON");
+					return -1;
+				}
+			}
+			server.lookupValue("port", port);
+			if (server.lookupValue("hostgroup", hostgroup)==false) {
+				if (server.lookupValue("hostgroup_id", hostgroup)==false) {
+					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostgroup_id\n");
+					admindb->execute("PRAGMA foreign_keys = ON");
+					return -1;
+				}
+			}
+			
+			// Check for duplicates within config file
+			auto pk_tuple = std::make_tuple(hostgroup, address, port);
+			if (pk_set.find(pk_tuple) != pk_set.end()) {
+				proxy_error("Admin: duplicate server entry in config file: hostgroup=%d, hostname=%s, port=%d\n", 
+				           hostgroup, address.c_str(), port);
+				admindb->execute("PRAGMA foreign_keys = ON");
+				return -1;
+			}
+			pk_set.insert(pk_tuple);
+		}
+		
+		// If validation passed, proceed with existing INSERT OR REPLACE logic
 		//fprintf(stderr, "Found %d servers\n",count);
 		char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, gtid_port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
 		for (i=0; i< count; i++) {

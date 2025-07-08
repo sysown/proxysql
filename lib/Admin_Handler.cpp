@@ -1695,12 +1695,23 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					int rows=0;
 					if (is_pgsql) {
 						rows=SPA->proxysql_config().Read_PgSQL_Servers_from_configfile();
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers from CONFIG\n");
+						if (rows < 0) {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load pgsql servers from CONFIG due to validation errors\n");
+							SPA->send_error_msg_to_client(sess, (char *)"Configuration validation failed - check error log for details");
+						} else {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers from CONFIG\n");
+							SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+						}
 					} else {
 						rows=SPA->proxysql_config().Read_MySQL_Servers_from_configfile();
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers from CONFIG\n");
+						if (rows < 0) {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load mysql servers from CONFIG due to validation errors\n");
+							SPA->send_error_msg_to_client(sess, (char *)"Configuration validation failed - check error log for details");
+						} else {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers from CONFIG\n");
+							SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+						}
 					}
-					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
 					GloVars.confFile->CloseFile();
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
