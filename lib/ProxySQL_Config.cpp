@@ -146,40 +146,90 @@ int ProxySQL_Config::Write_MySQL_Users_to_configfile(std::string& data) {
 	return 0;
 }
 
+/**
+ * Generic template function for validating config entries to prevent duplicates and validate mandatory fields
+ * 
+ * @tparam PKTuple - Type of the primary key tuple (e.g., std::tuple<std::string, int>)
+ * @tparam ExtractorFunc - Function type that extracts primary key from a config Setting
+ * @param config_array - The libconfig Setting array to validate
+ * @param section_name - Name of the config section for error messages
+ * @param extractor - Function that extracts primary key tuple and validates mandatory fields
+ * @param admindb - Database connection for cleanup operations
+ * @param use_mysql_pragma - Whether to use MySQL-style PRAGMA commands
+ * @return 0 on success, -1 on validation failure
+ */
+template<typename PKTuple, typename ExtractorFunc>
+int validate_config_entries(const Setting& config_array, const char* section_name, 
+                          ExtractorFunc extractor, SQLite3DB* admindb, bool use_mysql_pragma = true) {
+    int count = config_array.getLength();
+    std::set<PKTuple> pk_set;
+    
+    // PRE-VALIDATION: Check for duplicates and mandatory fields
+    for (int i = 0; i < count; i++) {
+        const Setting& entry = config_array[i];
+        PKTuple pk_tuple;
+        std::string error_msg;
+        
+        // Use the extractor function to get primary key and validate mandatory fields
+        if (!extractor(entry, pk_tuple, error_msg)) {
+            proxy_error("Admin: %s\n", error_msg.c_str());
+            if (use_mysql_pragma) {
+                admindb->execute("PRAGMA foreign_keys = OFF");
+                admindb->execute("PRAGMA foreign_keys = ON");
+            } else {
+                admindb->execute("PRAGMA foreign_keys = ON");
+            }
+            return -1;
+        }
+        
+        // Check for duplicates within config file
+        if (pk_set.find(pk_tuple) != pk_set.end()) {
+            // Call extractor again to get detailed error message for duplicate
+            std::string duplicate_error;
+            extractor(entry, pk_tuple, duplicate_error); // This populates pk_tuple again
+            proxy_error("Admin: duplicate entry found in %s config section\n", section_name);
+            if (use_mysql_pragma) {
+                admindb->execute("PRAGMA foreign_keys = OFF");
+                admindb->execute("PRAGMA foreign_keys = ON");
+            } else {
+                admindb->execute("PRAGMA foreign_keys = ON");
+            }
+            return -1;
+        }
+        pk_set.insert(pk_tuple);
+    }
+    
+    return 0; // Validation passed
+}
+
 int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	if (root.exists("mysql_users")==false) return 0;
 	const Setting &mysql_users = root["mysql_users"];
 	int count = mysql_users.getLength();
 	
-	// PRE-VALIDATION: Check for duplicates within config file
-	std::set<std::tuple<std::string, int>> pk_set; // {username, backend}
-	int i;
-	
-	for (i=0; i< count; i++) {
-		const Setting &user = mysql_users[i];
+	// Define extractor function for MySQL users validation
+	auto mysql_users_extractor = [](const Setting& user, std::tuple<std::string, int>& pk_tuple, std::string& error_msg) -> bool {
 		std::string username;
 		int backend = 1; // default backend value
 		
 		// Validate mandatory fields
-		if (user.lookupValue("username", username)==false) {
-			proxy_error("Admin: detected a mysql_users in config file without a mandatory username\n");
-			admindb->execute("PRAGMA foreign_keys = OFF");
-			admindb->execute("PRAGMA foreign_keys = ON");
-			return -1;
+		if (user.lookupValue("username", username) == false) {
+			error_msg = "detected a mysql_users in config file without a mandatory username";
+			return false;
 		}
 		user.lookupValue("backend", backend); // Check if backend is specified
 		
-		// Check for duplicates within config file
-		auto pk_tuple = std::make_tuple(username, backend);
-		if (pk_set.find(pk_tuple) != pk_set.end()) {
-			proxy_error("Admin: duplicate user entry in config file: username=%s, backend=%d\n", 
-			           username.c_str(), backend);
-			admindb->execute("PRAGMA foreign_keys = OFF");
-			admindb->execute("PRAGMA foreign_keys = ON");
-			return -1;
-		}
-		pk_set.insert(pk_tuple);
+		pk_tuple = std::make_tuple(username, backend);
+		return true;
+	};
+	
+	// Use template validation function
+	int validation_result = validate_config_entries<std::tuple<std::string, int>>(
+		mysql_users, "mysql_users", mysql_users_extractor, admindb, true);
+	
+	if (validation_result != 0) {
+		return validation_result;
 	}
 	
 	// If validation passed, proceed with existing INSERT OR REPLACE logic
@@ -1056,41 +1106,37 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
 		const Setting &mysql_servers = root["mysql_servers"];
 		int count = mysql_servers.getLength();
 		
-		// PRE-VALIDATION: Check for duplicates within config file
-		std::set<std::tuple<int, std::string, int>> pk_set; // {hostgroup_id, hostname, port}
-		
-		for (i=0; i< count; i++) {
-			const Setting &server = mysql_servers[i];
+		// Define extractor function for MySQL servers validation
+		auto mysql_servers_extractor = [](const Setting& server, std::tuple<int, std::string, int>& pk_tuple, std::string& error_msg) -> bool {
 			std::string address;
-			int port=3306;
+			int port = 3306;
 			int hostgroup;
 			
 			// Validate mandatory fields
-			if (server.lookupValue("address", address)==false) {
-				if (server.lookupValue("hostname", address)==false) {
-					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostname\n");
-					admindb->execute("PRAGMA foreign_keys = ON");
-					return -1;
+			if (server.lookupValue("address", address) == false) {
+				if (server.lookupValue("hostname", address) == false) {
+					error_msg = "detected a mysql_servers in config file without a mandatory hostname";
+					return false;
 				}
 			}
 			server.lookupValue("port", port);
-			if (server.lookupValue("hostgroup", hostgroup)==false) {
-				if (server.lookupValue("hostgroup_id", hostgroup)==false) {
-					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostgroup_id\n");
-					admindb->execute("PRAGMA foreign_keys = ON");
-					return -1;
+			if (server.lookupValue("hostgroup", hostgroup) == false) {
+				if (server.lookupValue("hostgroup_id", hostgroup) == false) {
+					error_msg = "detected a mysql_servers in config file without a mandatory hostgroup_id";
+					return false;
 				}
 			}
 			
-			// Check for duplicates within config file
-			auto pk_tuple = std::make_tuple(hostgroup, address, port);
-			if (pk_set.find(pk_tuple) != pk_set.end()) {
-				proxy_error("Admin: duplicate server entry in config file: hostgroup=%d, hostname=%s, port=%d\n", 
-				           hostgroup, address.c_str(), port);
-				admindb->execute("PRAGMA foreign_keys = ON");
-				return -1;
-			}
-			pk_set.insert(pk_tuple);
+			pk_tuple = std::make_tuple(hostgroup, address, port);
+			return true;
+		};
+		
+		// Use template validation function
+		int validation_result = validate_config_entries<std::tuple<int, std::string, int>>(
+			mysql_servers, "mysql_servers", mysql_servers_extractor, admindb, false);
+		
+		if (validation_result != 0) {
+			return validation_result;
 		}
 		
 		// If validation passed, proceed with existing INSERT OR REPLACE logic
@@ -1538,37 +1584,33 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile() {
 		const Setting & proxysql_servers = root["proxysql_servers"];
 		int count = proxysql_servers.getLength();
 		
-		// PRE-VALIDATION: Check for duplicates within config file
-		std::set<std::tuple<std::string, int>> pk_set; // {hostname, port}
-		
-		for (i=0; i< count; i++) {
-			const Setting &server = proxysql_servers[i];
+		// Define extractor function for ProxySQL servers validation
+		auto proxysql_servers_extractor = [](const Setting& server, std::tuple<std::string, int>& pk_tuple, std::string& error_msg) -> bool {
 			std::string address;
 			int port;
 			
 			// Validate mandatory fields
-			if (server.lookupValue("address", address)==false) {
-				if (server.lookupValue("hostname", address)==false) {
-					proxy_error("Admin: detected a proxysql_servers in config file without a mandatory hostname\n");
-					admindb->execute("PRAGMA foreign_keys = ON");
-					return -1;
+			if (server.lookupValue("address", address) == false) {
+				if (server.lookupValue("hostname", address) == false) {
+					error_msg = "detected a proxysql_servers in config file without a mandatory hostname";
+					return false;
 				}
 			}
-			if (server.lookupValue("port", port)==false) {
-				proxy_error("Admin: detected a proxysql_servers in config file without a mandatory port\n");
-				admindb->execute("PRAGMA foreign_keys = ON");
-				return -1;
+			if (server.lookupValue("port", port) == false) {
+				error_msg = "detected a proxysql_servers in config file without a mandatory port";
+				return false;
 			}
 			
-			// Check for duplicates within config file
-			auto pk_tuple = std::make_tuple(address, port);
-			if (pk_set.find(pk_tuple) != pk_set.end()) {
-				proxy_error("Admin: duplicate server entry in config file: hostname=%s, port=%d\n", 
-				           address.c_str(), port);
-				admindb->execute("PRAGMA foreign_keys = ON");
-				return -1;
-			}
-			pk_set.insert(pk_tuple);
+			pk_tuple = std::make_tuple(address, port);
+			return true;
+		};
+		
+		// Use template validation function
+		int validation_result = validate_config_entries<std::tuple<std::string, int>>(
+			proxysql_servers, "proxysql_servers", proxysql_servers_extractor, admindb, false);
+		
+		if (validation_result != 0) {
+			return validation_result;
 		}
 		
 		// If validation passed, proceed with existing INSERT OR REPLACE logic
@@ -1737,11 +1779,8 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 		const Setting& pgsql_servers = root["pgsql_servers"];
 		int count = pgsql_servers.getLength();
 		
-		// PRE-VALIDATION: Check for duplicates within config file
-		std::set<std::tuple<int, std::string, int>> pk_set; // {hostgroup_id, hostname, port}
-		
-		for (i = 0; i < count; i++) {
-			const Setting& server = pgsql_servers[i];
+		// Define extractor function for PostgreSQL servers validation
+		auto pgsql_servers_extractor = [](const Setting& server, std::tuple<int, std::string, int>& pk_tuple, std::string& error_msg) -> bool {
 			std::string address;
 			int port = 5432;
 			int hostgroup;
@@ -1749,29 +1788,28 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 			// Validate mandatory fields
 			if (server.lookupValue("address", address) == false) {
 				if (server.lookupValue("hostname", address) == false) {
-					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostname\n");
-					admindb->execute("PRAGMA foreign_keys = ON");
-					return -1;
+					error_msg = "detected a pgsql_servers in config file without a mandatory hostname";
+					return false;
 				}
 			}
 			server.lookupValue("port", port);
 			if (server.lookupValue("hostgroup", hostgroup) == false) {
 				if (server.lookupValue("hostgroup_id", hostgroup) == false) {
-					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostgroup_id\n");
-					admindb->execute("PRAGMA foreign_keys = ON");
-					return -1;
+					error_msg = "detected a pgsql_servers in config file without a mandatory hostgroup_id";
+					return false;
 				}
 			}
 			
-			// Check for duplicates within config file
-			auto pk_tuple = std::make_tuple(hostgroup, address, port);
-			if (pk_set.find(pk_tuple) != pk_set.end()) {
-				proxy_error("Admin: duplicate server entry in config file: hostgroup=%d, hostname=%s, port=%d\n", 
-				           hostgroup, address.c_str(), port);
-				admindb->execute("PRAGMA foreign_keys = ON");
-				return -1;
-			}
-			pk_set.insert(pk_tuple);
+			pk_tuple = std::make_tuple(hostgroup, address, port);
+			return true;
+		};
+		
+		// Use template validation function
+		int validation_result = validate_config_entries<std::tuple<int, std::string, int>>(
+			pgsql_servers, "pgsql_servers", pgsql_servers_extractor, admindb, false);
+		
+		if (validation_result != 0) {
+			return validation_result;
 		}
 		
 		// If validation passed, proceed with existing INSERT OR REPLACE logic
@@ -1929,34 +1967,28 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 	const Setting& pgsql_users = root["pgsql_users"];
 	int count = pgsql_users.getLength();
 	
-	// PRE-VALIDATION: Check for duplicates within config file
-	std::set<std::tuple<std::string, int>> pk_set; // {username, backend}
-	int i;
-	
-	for (i = 0; i < count; i++) {
-		const Setting& user = pgsql_users[i];
+	// Define extractor function for PostgreSQL users validation
+	auto pgsql_users_extractor = [](const Setting& user, std::tuple<std::string, int>& pk_tuple, std::string& error_msg) -> bool {
 		std::string username;
 		int backend = 1; // default backend value
 		
 		// Validate mandatory fields
 		if (user.lookupValue("username", username) == false) {
-			proxy_error("Admin: detected a pgsql_users in config file without a mandatory username\n");
-			admindb->execute("PRAGMA foreign_keys = OFF");
-			admindb->execute("PRAGMA foreign_keys = ON");
-			return -1;
+			error_msg = "detected a pgsql_users in config file without a mandatory username";
+			return false;
 		}
 		user.lookupValue("backend", backend); // Check if backend is specified
 		
-		// Check for duplicates within config file
-		auto pk_tuple = std::make_tuple(username, backend);
-		if (pk_set.find(pk_tuple) != pk_set.end()) {
-			proxy_error("Admin: duplicate user entry in config file: username=%s, backend=%d\n", 
-			           username.c_str(), backend);
-			admindb->execute("PRAGMA foreign_keys = OFF");
-			admindb->execute("PRAGMA foreign_keys = ON");
-			return -1;
-		}
-		pk_set.insert(pk_tuple);
+		pk_tuple = std::make_tuple(username, backend);
+		return true;
+	};
+	
+	// Use template validation function
+	int validation_result = validate_config_entries<std::tuple<std::string, int>>(
+		pgsql_users, "pgsql_users", pgsql_users_extractor, admindb, true);
+	
+	if (validation_result != 0) {
+		return validation_result;
 	}
 	
 	// If validation passed, proceed with existing INSERT OR REPLACE logic
