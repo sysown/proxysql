@@ -151,8 +151,39 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
 	if (root.exists("mysql_users")==false) return 0;
 	const Setting &mysql_users = root["mysql_users"];
 	int count = mysql_users.getLength();
-	//fprintf(stderr, "Found %d users\n",count);
+	
+	// PRE-VALIDATION: Check for duplicates within config file
+	std::set<std::tuple<std::string, int>> pk_set; // {username, backend}
 	int i;
+	
+	for (i=0; i< count; i++) {
+		const Setting &user = mysql_users[i];
+		std::string username;
+		int backend = 1; // default backend value
+		
+		// Validate mandatory fields
+		if (user.lookupValue("username", username)==false) {
+			proxy_error("Admin: detected a mysql_users in config file without a mandatory username\n");
+			admindb->execute("PRAGMA foreign_keys = OFF");
+			admindb->execute("PRAGMA foreign_keys = ON");
+			return -1;
+		}
+		user.lookupValue("backend", backend); // Check if backend is specified
+		
+		// Check for duplicates within config file
+		auto pk_tuple = std::make_tuple(username, backend);
+		if (pk_set.find(pk_tuple) != pk_set.end()) {
+			proxy_error("Admin: duplicate user entry in config file: username=%s, backend=%d\n", 
+			           username.c_str(), backend);
+			admindb->execute("PRAGMA foreign_keys = OFF");
+			admindb->execute("PRAGMA foreign_keys = ON");
+			return -1;
+		}
+		pk_set.insert(pk_tuple);
+	}
+	
+	// If validation passed, proceed with existing INSERT OR REPLACE logic
+	//fprintf(stderr, "Found %d users\n",count);
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s','%s')";
@@ -1506,6 +1537,41 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile() {
 	if (root.exists("proxysql_servers")==true) {
 		const Setting & proxysql_servers = root["proxysql_servers"];
 		int count = proxysql_servers.getLength();
+		
+		// PRE-VALIDATION: Check for duplicates within config file
+		std::set<std::tuple<std::string, int>> pk_set; // {hostname, port}
+		
+		for (i=0; i< count; i++) {
+			const Setting &server = proxysql_servers[i];
+			std::string address;
+			int port;
+			
+			// Validate mandatory fields
+			if (server.lookupValue("address", address)==false) {
+				if (server.lookupValue("hostname", address)==false) {
+					proxy_error("Admin: detected a proxysql_servers in config file without a mandatory hostname\n");
+					admindb->execute("PRAGMA foreign_keys = ON");
+					return -1;
+				}
+			}
+			if (server.lookupValue("port", port)==false) {
+				proxy_error("Admin: detected a proxysql_servers in config file without a mandatory port\n");
+				admindb->execute("PRAGMA foreign_keys = ON");
+				return -1;
+			}
+			
+			// Check for duplicates within config file
+			auto pk_tuple = std::make_tuple(address, port);
+			if (pk_set.find(pk_tuple) != pk_set.end()) {
+				proxy_error("Admin: duplicate server entry in config file: hostname=%s, port=%d\n", 
+				           address.c_str(), port);
+				admindb->execute("PRAGMA foreign_keys = ON");
+				return -1;
+			}
+			pk_set.insert(pk_tuple);
+		}
+		
+		// If validation passed, proceed with existing INSERT OR REPLACE logic
 		//fprintf(stderr, "Found %d servers\n",count);
 		char *q=(char *)"INSERT OR REPLACE INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %d, %d, '%s')";
 		for (i=0; i< count; i++) {
@@ -1670,6 +1736,45 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 	if (root.exists("pgsql_servers") == true) {
 		const Setting& pgsql_servers = root["pgsql_servers"];
 		int count = pgsql_servers.getLength();
+		
+		// PRE-VALIDATION: Check for duplicates within config file
+		std::set<std::tuple<int, std::string, int>> pk_set; // {hostgroup_id, hostname, port}
+		
+		for (i = 0; i < count; i++) {
+			const Setting& server = pgsql_servers[i];
+			std::string address;
+			int port = 5432;
+			int hostgroup;
+			
+			// Validate mandatory fields
+			if (server.lookupValue("address", address) == false) {
+				if (server.lookupValue("hostname", address) == false) {
+					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostname\n");
+					admindb->execute("PRAGMA foreign_keys = ON");
+					return -1;
+				}
+			}
+			server.lookupValue("port", port);
+			if (server.lookupValue("hostgroup", hostgroup) == false) {
+				if (server.lookupValue("hostgroup_id", hostgroup) == false) {
+					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostgroup_id\n");
+					admindb->execute("PRAGMA foreign_keys = ON");
+					return -1;
+				}
+			}
+			
+			// Check for duplicates within config file
+			auto pk_tuple = std::make_tuple(hostgroup, address, port);
+			if (pk_set.find(pk_tuple) != pk_set.end()) {
+				proxy_error("Admin: duplicate server entry in config file: hostgroup=%d, hostname=%s, port=%d\n", 
+				           hostgroup, address.c_str(), port);
+				admindb->execute("PRAGMA foreign_keys = ON");
+				return -1;
+			}
+			pk_set.insert(pk_tuple);
+		}
+		
+		// If validation passed, proceed with existing INSERT OR REPLACE logic
 		//fprintf(stderr, "Found %d servers\n",count);
 		char* q = (char*)"INSERT OR REPLACE INTO pgsql_servers (hostname, port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
 		for (i = 0; i < count; i++) {
@@ -1823,8 +1928,39 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 	if (root.exists("pgsql_users") == false) return 0;
 	const Setting& pgsql_users = root["pgsql_users"];
 	int count = pgsql_users.getLength();
-	//fprintf(stderr, "Found %d users\n",count);
+	
+	// PRE-VALIDATION: Check for duplicates within config file
+	std::set<std::tuple<std::string, int>> pk_set; // {username, backend}
 	int i;
+	
+	for (i = 0; i < count; i++) {
+		const Setting& user = pgsql_users[i];
+		std::string username;
+		int backend = 1; // default backend value
+		
+		// Validate mandatory fields
+		if (user.lookupValue("username", username) == false) {
+			proxy_error("Admin: detected a pgsql_users in config file without a mandatory username\n");
+			admindb->execute("PRAGMA foreign_keys = OFF");
+			admindb->execute("PRAGMA foreign_keys = ON");
+			return -1;
+		}
+		user.lookupValue("backend", backend); // Check if backend is specified
+		
+		// Check for duplicates within config file
+		auto pk_tuple = std::make_tuple(username, backend);
+		if (pk_set.find(pk_tuple) != pk_set.end()) {
+			proxy_error("Admin: duplicate user entry in config file: username=%s, backend=%d\n", 
+			           username.c_str(), backend);
+			admindb->execute("PRAGMA foreign_keys = OFF");
+			admindb->execute("PRAGMA foreign_keys = ON");
+			return -1;
+		}
+		pk_set.insert(pk_tuple);
+	}
+	
+	// If validation passed, proceed with existing INSERT OR REPLACE logic
+	//fprintf(stderr, "Found %d users\n",count);
 	int rows = 0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char* q = (char*)"INSERT OR REPLACE INTO pgsql_users (username, password, active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, %d, %d, %d, '%s','%s')";
