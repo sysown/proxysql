@@ -141,6 +141,122 @@ void create_invalid_proxysql_servers_missing_port(const string& config_file_path
 }
 
 /**
+ * Create config file with duplicate PostgreSQL servers
+ */
+void create_invalid_pgsql_servers_config(const string& config_file_path) {
+    fstream config_file;
+    config_file.open(config_file_path, std::ios::out);
+    
+    config_file << "datadir=\"/tmp\"\n";
+    config_file << "errorlog=\"/tmp/proxysql.log\"\n";
+    config_file << "\n";
+    config_file << "pgsql_servers:\n";
+    config_file << "(\n";
+    config_file << "    {\n";
+    config_file << "        address=\"127.0.0.1\"\n";
+    config_file << "        port=5432\n";
+    config_file << "        hostgroup=0\n";
+    config_file << "        weight=1000\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    config_file << "        address=\"127.0.0.1\"\n";  // Same address
+    config_file << "        port=5432\n";             // Same port  
+    config_file << "        hostgroup=0\n";          // Same hostgroup - DUPLICATE!
+    config_file << "        weight=900\n";
+    config_file << "    }\n";
+    config_file << ")\n";
+    
+    config_file.close();
+}
+
+/**
+ * Create config file with missing hostgroup in PostgreSQL servers
+ */
+void create_invalid_pgsql_servers_missing_hostgroup(const string& config_file_path) {
+    fstream config_file;
+    config_file.open(config_file_path, std::ios::out);
+    
+    config_file << "datadir=\"/tmp\"\n";
+    config_file << "errorlog=\"/tmp/proxysql.log\"\n";
+    config_file << "\n";
+    config_file << "pgsql_servers:\n";
+    config_file << "(\n";
+    config_file << "    {\n";
+    config_file << "        address=\"127.0.0.1\"\n";
+    config_file << "        port=5432\n";
+    config_file << "        hostgroup=0\n";
+    config_file << "        weight=1000\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    config_file << "        address=\"192.168.1.1\"\n";
+    config_file << "        port=5433\n";
+    // Missing hostgroup field - should cause validation error
+    config_file << "        weight=900\n";
+    config_file << "    }\n";
+    config_file << ")\n";
+    
+    config_file.close();
+}
+
+/**
+ * Create config file with duplicate PostgreSQL users
+ */
+void create_invalid_pgsql_users_config(const string& config_file_path) {
+    fstream config_file;
+    config_file.open(config_file_path, std::ios::out);
+    
+    config_file << "datadir=\"/tmp\"\n";
+    config_file << "errorlog=\"/tmp/proxysql.log\"\n";
+    config_file << "\n";
+    config_file << "pgsql_users:\n";
+    config_file << "(\n";
+    config_file << "    {\n";
+    config_file << "        username=\"pguser\"\n";
+    config_file << "        password=\"pgpass\"\n";
+    config_file << "        backend=1\n";
+    config_file << "        default_hostgroup=0\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    config_file << "        username=\"pguser\"\n";   // Same username
+    config_file << "        password=\"different\"\n";
+    config_file << "        backend=1\n";           // Same backend - DUPLICATE!
+    config_file << "        default_hostgroup=1\n";
+    config_file << "    }\n";
+    config_file << ")\n";
+    
+    config_file.close();
+}
+
+/**
+ * Create config file with missing username in PostgreSQL users
+ */
+void create_invalid_pgsql_users_missing_username(const string& config_file_path) {
+    fstream config_file;
+    config_file.open(config_file_path, std::ios::out);
+    
+    config_file << "datadir=\"/tmp\"\n";
+    config_file << "errorlog=\"/tmp/proxysql.log\"\n";
+    config_file << "\n";
+    config_file << "pgsql_users:\n";
+    config_file << "(\n";
+    config_file << "    {\n";
+    config_file << "        username=\"validpguser\"\n";
+    config_file << "        password=\"pgpass\"\n";
+    config_file << "        backend=1\n";
+    config_file << "        default_hostgroup=0\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    // Missing username field - should cause validation error
+    config_file << "        password=\"pgpass2\"\n";
+    config_file << "        backend=2\n";
+    config_file << "        default_hostgroup=1\n";
+    config_file << "    }\n";
+    config_file << ")\n";
+    
+    config_file.close();
+}
+
+/**
  * Create valid config file with all sections
  */
 void create_valid_comprehensive_config(const string& config_file_path) {
@@ -199,6 +315,50 @@ void create_valid_comprehensive_config(const string& config_file_path) {
     config_file << "        address=\"192.168.1.1\"\n";  // Different address - VALID
     config_file << "        port=6032\n";
     config_file << "        weight=900\n";
+    config_file << "    }\n";
+    config_file << ")\n";
+    config_file << "\n";
+    config_file << "pgsql_servers:\n";
+    config_file << "(\n";
+    config_file << "    {\n";
+    config_file << "        address=\"127.0.0.1\"\n";
+    config_file << "        port=5432\n";
+    config_file << "        hostgroup=0\n";
+    config_file << "        weight=1000\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    config_file << "        address=\"127.0.0.1\"\n";
+    config_file << "        port=5433\n";  // Different port - VALID
+    config_file << "        hostgroup=0\n";
+    config_file << "        weight=900\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    config_file << "        address=\"192.168.1.1\"\n";  // Different address - VALID
+    config_file << "        port=5432\n";
+    config_file << "        hostgroup=1\n";  // Different hostgroup - VALID
+    config_file << "        weight=800\n";
+    config_file << "    }\n";
+    config_file << ")\n";
+    config_file << "\n";
+    config_file << "pgsql_users:\n";
+    config_file << "(\n";
+    config_file << "    {\n";
+    config_file << "        username=\"pguser1\"\n";
+    config_file << "        password=\"pgpass1\"\n";
+    config_file << "        backend=1\n";
+    config_file << "        default_hostgroup=0\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    config_file << "        username=\"pguser2\"\n";  // Different username - VALID
+    config_file << "        password=\"pgpass2\"\n";
+    config_file << "        backend=1\n";
+    config_file << "        default_hostgroup=0\n";
+    config_file << "    },\n";
+    config_file << "    {\n";
+    config_file << "        username=\"pguser1\"\n";  // Same username
+    config_file << "        password=\"pgpass3\"\n";
+    config_file << "        backend=2\n";          // Different backend - VALID
+    config_file << "        default_hostgroup=1\n";
     config_file << "    }\n";
     config_file << ")\n";
     
@@ -284,6 +444,84 @@ int test_proxysql_servers_validation(MYSQL* admin, const string& config_file_pat
 }
 
 /**
+ * Test PostgreSQL servers validation
+ */
+int test_pgsql_servers_validation(MYSQL* admin, const string& config_file_path) {
+    diag("Testing PostgreSQL servers validation");
+    
+    // Test duplicate servers
+    create_invalid_pgsql_servers_config(config_file_path);
+    
+    string set_config_cmd = "SET mysql-config_file='" + config_file_path + "'";
+    MYSQL_QUERY_T(admin, set_config_cmd.c_str());
+    MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+    
+    int query_result = mysql_query(admin, "LOAD PGSQL SERVERS FROM CONFIG");
+    ok(query_result != 0, "LOAD PGSQL SERVERS FROM CONFIG should fail with duplicate servers");
+    
+    if (query_result != 0) {
+        const char* error_msg = mysql_error(admin);
+        diag("Error message: %s", error_msg);
+        ok(strstr(error_msg, "validation failed") != nullptr || 
+           strstr(error_msg, "Configuration validation failed") != nullptr ||
+           strstr(error_msg, "duplicate entry") != nullptr,
+           "Error message should indicate server validation failure");
+    } else {
+        ok(false, "Error message should indicate server validation failure");
+    }
+    
+    // Test missing hostgroup
+    create_invalid_pgsql_servers_missing_hostgroup(config_file_path);
+    
+    MYSQL_QUERY_T(admin, set_config_cmd.c_str());
+    MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+    
+    query_result = mysql_query(admin, "LOAD PGSQL SERVERS FROM CONFIG");
+    ok(query_result != 0, "LOAD PGSQL SERVERS FROM CONFIG should fail with missing hostgroup");
+    
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Test PostgreSQL users validation
+ */
+int test_pgsql_users_validation(MYSQL* admin, const string& config_file_path) {
+    diag("Testing PostgreSQL users validation");
+    
+    // Test duplicate users
+    create_invalid_pgsql_users_config(config_file_path);
+    
+    string set_config_cmd = "SET mysql-config_file='" + config_file_path + "'";
+    MYSQL_QUERY_T(admin, set_config_cmd.c_str());
+    MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+    
+    int query_result = mysql_query(admin, "LOAD PGSQL USERS FROM CONFIG");
+    ok(query_result != 0, "LOAD PGSQL USERS FROM CONFIG should fail with duplicate users");
+    
+    if (query_result != 0) {
+        const char* error_msg = mysql_error(admin);
+        diag("Error message: %s", error_msg);
+        ok(strstr(error_msg, "validation failed") != nullptr || 
+           strstr(error_msg, "Configuration validation failed") != nullptr ||
+           strstr(error_msg, "duplicate user entry") != nullptr,
+           "Error message should indicate user validation failure");
+    } else {
+        ok(false, "Error message should indicate user validation failure");
+    }
+    
+    // Test missing username
+    create_invalid_pgsql_users_missing_username(config_file_path);
+    
+    MYSQL_QUERY_T(admin, set_config_cmd.c_str());
+    MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+    
+    query_result = mysql_query(admin, "LOAD PGSQL USERS FROM CONFIG");
+    ok(query_result != 0, "LOAD PGSQL USERS FROM CONFIG should fail with missing username");
+    
+    return EXIT_SUCCESS;
+}
+
+/**
  * Test that comprehensive valid config loads successfully
  */
 int test_comprehensive_valid_config(MYSQL* admin, const string& config_file_path) {
@@ -299,21 +537,33 @@ int test_comprehensive_valid_config(MYSQL* admin, const string& config_file_path
     MYSQL_QUERY_T(admin, "DELETE FROM mysql_servers");
     MYSQL_QUERY_T(admin, "DELETE FROM mysql_users");
     MYSQL_QUERY_T(admin, "DELETE FROM proxysql_servers");
+    MYSQL_QUERY_T(admin, "DELETE FROM pgsql_servers");
+    MYSQL_QUERY_T(admin, "DELETE FROM pgsql_users");
     MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
     MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
     MYSQL_QUERY_T(admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+    MYSQL_QUERY_T(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+    MYSQL_QUERY_T(admin, "LOAD PGSQL USERS TO RUNTIME");
     
-    // Load servers
+    // Load MySQL servers
     int query_result = mysql_query(admin, "LOAD MYSQL SERVERS FROM CONFIG");
     ok(query_result == 0, "LOAD MYSQL SERVERS FROM CONFIG should succeed with valid config");
     
-    // Load users
+    // Load MySQL users
     query_result = mysql_query(admin, "LOAD MYSQL USERS FROM CONFIG");
     ok(query_result == 0, "LOAD MYSQL USERS FROM CONFIG should succeed with valid config");
     
     // Load ProxySQL servers
     query_result = mysql_query(admin, "LOAD PROXYSQL SERVERS FROM CONFIG");
     ok(query_result == 0, "LOAD PROXYSQL SERVERS FROM CONFIG should succeed with valid config");
+    
+    // Load PostgreSQL servers
+    query_result = mysql_query(admin, "LOAD PGSQL SERVERS FROM CONFIG");
+    ok(query_result == 0, "LOAD PGSQL SERVERS FROM CONFIG should succeed with valid config");
+    
+    // Load PostgreSQL users
+    query_result = mysql_query(admin, "LOAD PGSQL USERS FROM CONFIG");
+    ok(query_result == 0, "LOAD PGSQL USERS FROM CONFIG should succeed with valid config");
     
     // Verify data was loaded
     MYSQL_QUERY_T(admin, "SELECT * FROM mysql_servers");
@@ -334,6 +584,18 @@ int test_comprehensive_valid_config(MYSQL* admin, const string& config_file_path
     mysql_free_result(result);
     ok(proxysql_count == 2, "Should have loaded 2 ProxySQL servers");
     
+    MYSQL_QUERY_T(admin, "SELECT * FROM pgsql_servers");
+    result = mysql_store_result(admin);
+    int pgsql_server_count = mysql_num_rows(result);
+    mysql_free_result(result);
+    ok(pgsql_server_count == 3, "Should have loaded 3 PostgreSQL servers");
+    
+    MYSQL_QUERY_T(admin, "SELECT * FROM pgsql_users");
+    result = mysql_store_result(admin);
+    int pgsql_user_count = mysql_num_rows(result);
+    mysql_free_result(result);
+    ok(pgsql_user_count == 3, "Should have loaded 3 PostgreSQL users");
+    
     return EXIT_SUCCESS;
 }
 
@@ -345,7 +607,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     
-    plan(13); // Expecting 13 test assertions
+    plan(23); // Expecting 23 test assertions
     
     MYSQL* mysql = mysql_init(NULL);
     if (!mysql) {
@@ -365,6 +627,12 @@ int main(int argc, char** argv) {
     
     // Test ProxySQL servers validation
     test_proxysql_servers_validation(mysql, config_file_path);
+    
+    // Test PostgreSQL servers validation
+    test_pgsql_servers_validation(mysql, config_file_path);
+    
+    // Test PostgreSQL users validation
+    test_pgsql_users_validation(mysql, config_file_path);
     
     // Test comprehensive valid configuration
     test_comprehensive_valid_config(mysql, config_file_path);
