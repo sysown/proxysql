@@ -296,7 +296,7 @@ int main(int argc, char** argv) {
         return exit_status();
     }
     
-    string config_file_path = "/tmp/test_proxysql_config.cnf";
+    string config_file_path = "test_proxysql_config.cnf";
     
     // Test 1: Duplicate primary key validation
     test_duplicate_pk_validation(mysql, config_file_path);

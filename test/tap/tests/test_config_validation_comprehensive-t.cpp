@@ -620,7 +620,7 @@ int main(int argc, char** argv) {
         return exit_status();
     }
     
-    string config_file_path = "/tmp/test_comprehensive_config.cnf";
+    string config_file_path = "test_comprehensive_config.cnf";
     
     // Test MySQL users validation
     test_mysql_users_validation(mysql, config_file_path);
