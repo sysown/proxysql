@@ -1776,11 +1776,12 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 
 					if (computed_checksum == peer_checksum) {
 						GloAdmin->mysql_servers_wrlock();
+						MyHGM->wrlock();
 						std::unique_ptr<SQLite3_result> runtime_mysql_servers_resultset = get_SQLite3_resulset(result);
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
-						MyHGM->servers_add(runtime_mysql_servers_resultset.get());
+						MyHGM->servers_add_locked(runtime_mysql_servers_resultset.get());
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
-						MyHGM->commit(
+						MyHGM->commit_locked(
 							{ runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server },
 							{ nullptr, {} }, true, true
 						);
@@ -1792,6 +1793,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 							proxy_info("Cluster: Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
 						}
+						MyHGM->wrunlock();
 						GloAdmin->mysql_servers_wrunlock();
 
 						// free result

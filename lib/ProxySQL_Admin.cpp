@@ -7207,6 +7207,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result* incoming_mysql_servers_ssl_params = incoming_servers.incoming_mysql_servers_ssl_params;
 	SQLite3_result* incoming_mysql_servers_v2 = incoming_servers.incoming_mysql_servers_v2;
 
+	MyHGM->wrlock();
+
 	const char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
 	if (runtime_mysql_servers == nullptr) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
@@ -7214,11 +7216,10 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	} else {
 		resultset_servers = runtime_mysql_servers;
 	}
-	//MyHGH->wrlock();
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		MyHGM->servers_add(resultset_servers);
+		MyHGM->servers_add_locked(resultset_servers);
 	}
 	// memory leak was detected here. The following few lines fix that
 	if (runtime_mysql_servers == nullptr) {   
@@ -7255,7 +7256,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_replication,"mysql_replication_hostgroups");
+		MyHGM->save_incoming_mysql_table_locked(resultset_replication,"mysql_replication_hostgroups");
 	}
 	//if (resultset) delete resultset;
 	//resultset=NULL;
@@ -7289,7 +7290,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_group_replication,"mysql_group_replication_hostgroups");
+		MyHGM->save_incoming_mysql_table_locked(resultset_group_replication,"mysql_group_replication_hostgroups");
 	}
 
 	// support for Galera, table mysql_galera_hostgroups
@@ -7320,7 +7321,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_galera, "mysql_galera_hostgroups");
+		MyHGM->save_incoming_mysql_table_locked(resultset_galera, "mysql_galera_hostgroups");
 	}
 
 	// support for AWS Aurora, table mysql_aws_aurora_hostgroups
@@ -7355,7 +7356,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
+		MyHGM->save_incoming_mysql_table_locked(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
 	}
 
 	// support for hostgroup attributes, table mysql_hostgroup_attributes
@@ -7370,7 +7371,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_hostgroup_attributes, "mysql_hostgroup_attributes");
+		MyHGM->save_incoming_mysql_table_locked(resultset_hostgroup_attributes, "mysql_hostgroup_attributes");
 	}
 
 	// support for SSL parameters, table mysql_servers_ssl_params
@@ -7385,16 +7386,18 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_mysql_servers_ssl_params, "mysql_servers_ssl_params");
+		MyHGM->save_incoming_mysql_table_locked(resultset_mysql_servers_ssl_params, "mysql_servers_ssl_params");
 	}
 
 	// commit all the changes
-	MyHGM->commit(
+	MyHGM->commit_locked(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
 		false, true
 	);
-	
+
+	MyHGM->wrunlock();
+
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
 

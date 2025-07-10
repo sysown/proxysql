@@ -832,7 +832,7 @@ unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 }
 
 // we always assume that the calling thread has acquired a rdlock()
-int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
+int MySQL_HostGroups_Manager::servers_add_locked(SQLite3_result *resultset) {
 	if (resultset==NULL) {
 		return 0;
 	}
@@ -1258,11 +1258,15 @@ std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint6
 	return mysrvs_checksum;
 }
 
-bool MySQL_HostGroups_Manager::commit() {
+inline bool MySQL_HostGroups_Manager::commit() {
 	return commit({},{});
 }
 
-bool MySQL_HostGroups_Manager::commit(
+inline bool MySQL_HostGroups_Manager::commit_locked() {
+	return commit_locked({},{});
+}
+
+inline bool MySQL_HostGroups_Manager::commit(
 	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 	bool only_commit_runtime_mysql_servers,
@@ -1276,7 +1280,25 @@ bool MySQL_HostGroups_Manager::commit(
 	}
 
 	unsigned long long curtime1=monotonic_time();
+	GloAdmin->mysql_servers_wrlock();
 	wrlock();
+	bool result = commit_locked(peer_runtime_mysql_servers, peer_mysql_servers_v2, only_commit_runtime_mysql_servers, update_version);
+	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
+	unsigned long long curtime2=monotonic_time();
+	curtime1 = curtime1/1000;
+	curtime2 = curtime2/1000;
+	proxy_info("MySQL_HostGroups_Manager::commit() locked for %llums\n", curtime2-curtime1);
+
+	return result;
+}
+
+bool MySQL_HostGroups_Manager::commit_locked(
+	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
+	bool only_commit_runtime_mysql_servers,
+	bool update_version
+) {
 	// purge table
 	purge_mysql_servers_table();
 	// if any server has gtid_port enabled, use_gtid is set to true
@@ -1590,12 +1612,6 @@ bool MySQL_HostGroups_Manager::commit(
 	// NOTE: In order to guarantee the latest generated version, this should be kept after all the
 	// calls to 'generate_mysql_servers'.
 	update_table_mysql_servers_for_monitor(false);
-
-	wrunlock();
-	unsigned long long curtime2=monotonic_time();
-	curtime1 = curtime1/1000;
-	curtime2 = curtime2/1000;
-	proxy_info("MySQL_HostGroups_Manager::commit() locked for %llums\n", curtime2-curtime1);
 
 	if (GloMTH) {
 		GloMTH->signal_all_threads(1);
@@ -2809,7 +2825,6 @@ void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(My
 void MySQL_HostGroups_Manager::group_replication_lag_action(
 	int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable
 ) {
-	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 
 	int reader_hostgroup = 0;
@@ -2872,7 +2887,6 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 __exit_replication_lag_action:
 
 	wrunlock();
-	GloAdmin->mysql_servers_wrunlock();
 }
 
 void MySQL_HostGroups_Manager::drop_all_idle_connections() {
@@ -3044,7 +3058,7 @@ __exit_get_multiple_idle_connections:
 	return num_conn_current;
 }
 
-void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, const string& name) {
+void MySQL_HostGroups_Manager::save_incoming_mysql_table_locked(SQLite3_result *s, const string& name) {
 	SQLite3_result ** inc = NULL;
 	if (name == "mysql_aws_aurora_hostgroups") {
 		inc = &incoming_aws_aurora_hostgroups;
@@ -4374,16 +4388,17 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
-  mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+
+	wrlock();
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
 		error=NULL;
 	}
 	free(query);
-	if (resultset) { // we lock only if needed
+	if (resultset) {
 		if (resultset->rows_count) {
 			proxy_warning("Group Replication: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
-			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			// NOTE: Only updated the servers that have belong to the same cluster.
@@ -4414,8 +4429,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
-			commit();
-			wrlock();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -4441,8 +4455,6 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 				delete resultset2;
 				resultset2=NULL;
 			}
-			wrunlock();
-			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 		}
 	}
@@ -4450,6 +4462,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 		delete resultset;
 		resultset=NULL;
 	}
+	wrunlock();
 }
 
 /**
@@ -4477,16 +4490,17 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
-  mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+
+	wrlock();
+	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
 		error=NULL;
 	}
 	free(query);
-	if (resultset) { // we lock only if needed
+	if (resultset) {
 		if (resultset->rows_count) {
 			proxy_warning("Group Replication: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
-			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			// NOTE: Only updated the servers that have belong to the same cluster.
@@ -4516,8 +4530,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
-			commit();
-			wrlock();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -4543,8 +4556,6 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 				delete resultset2;
 				resultset2=NULL;
 			}
-			wrunlock();
-			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 		}
 	}
@@ -4552,6 +4563,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 		delete resultset;
 		resultset=NULL;
 	}
+	wrunlock();
 }
 
 /**
@@ -4594,7 +4606,9 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	q=(char *)"SELECT hostgroup_id, status FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
-  mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+
+	wrlock();
+	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
 		error=NULL;
@@ -4686,7 +4700,6 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			need_converge=false;
 			proxy_warning("Group Replication: setting host %s:%d as writer\n", _hostname, _port);
 
-			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			// NOTE: Only updated the servers that have belong to the same cluster.
@@ -4712,8 +4725,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				mydb->execute(query);
 			}
 			converge_group_replication_config(_writer_hostgroup);
-			commit();
-			wrlock();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -4741,8 +4753,6 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				delete resultset2;
 				resultset2=NULL;
 			}
-			wrunlock();
-			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 		}
 	}
@@ -4750,6 +4760,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 		delete resultset;
 		resultset=NULL;
 	}
+	wrunlock();
 }
 
 /**
@@ -5132,14 +5143,15 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status=0";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 	sprintf(query,q,_hostname,_port);
+
+	wrlock();
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 //		free(error);
 		error=NULL;
 	}
 	//free(query);
-	GloAdmin->mysql_servers_wrlock();
-	if (resultset) { // we lock only if needed
+	if (resultset) {
 		if (resultset->rows_count) {
 			// the server was found. It needs to be set offline
 			set_offline = true;
@@ -5170,11 +5182,6 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				mydb->execute(query);
 				//free(query);
 				q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
-				//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-				sprintf(query,q,_hostname,_port,_writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
-				mydb->execute(query);
-				//free(query);
-				q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 				//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
 				sprintf(query,q,_hostname,_port,_writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
 				mydb->execute(query);
@@ -5235,8 +5242,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
 				print_galera_nodes_last_status();
-				commit();
-				wrlock();
+				commit_locked();
 				SQLite3_result *resultset2=NULL;
 				q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
 				//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -5262,7 +5268,6 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 					delete resultset2;
 					resultset2=NULL;
 				}
-				wrunlock();
 			} else {
 				proxy_warning("Galera: skipping setting offline node %s:%d from hostgroup %d because won't change the list of ONLINE nodes\n", _hostname, _port, _writer_hostgroup);
 				print_galera_nodes_last_status();
@@ -5270,11 +5275,11 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 		}
 	}
 	free(query);
-	GloAdmin->mysql_servers_wrunlock();
 	if (resultset) {
 		delete resultset;
 		resultset=NULL;
 	}
+	wrunlock();
 }
 
 void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
@@ -5287,7 +5292,9 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
-  mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+
+	wrlock();
+	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
 		error=NULL;
@@ -5295,11 +5302,10 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 	free(query);
 
 	auto info = get_galera_node_info(_writer_hostgroup);
-	if (resultset && info) { // we lock only if needed
+	if (resultset && info) {
 		if (resultset->rows_count) {
 			proxy_warning("Galera: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
 			print_galera_nodes_last_status();
-			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
@@ -5318,8 +5324,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 			mydb->execute(query);
 			//free(query);
 			converge_galera_config(_writer_hostgroup);
-			commit();
-			wrlock();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -5345,8 +5350,6 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 				delete resultset2;
 				resultset2=NULL;
 			}
-			wrunlock();
-			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 		}
 	}
@@ -5354,6 +5357,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 		delete resultset;
 		resultset=NULL;
 	}
+	wrunlock();
 }
 
 Galera_Info *MySQL_HostGroups_Manager::get_galera_node_info(int hostgroup) {
@@ -5369,7 +5373,6 @@ Galera_Info *MySQL_HostGroups_Manager::get_galera_node_info(int hostgroup) {
 }
 
 void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
-	std::lock_guard<std::mutex> lock(galera_set_writer_mutex);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -5379,6 +5382,8 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	q=(char *)"SELECT hostgroup_id,status FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
+
+	wrlock();
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
@@ -5469,7 +5474,6 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 		if (resultset->rows_count) {
 			need_converge=false;
 
-			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d, %d)";
@@ -5536,8 +5540,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("Galera: setting host %s:%d as writer\n", _hostname, _port);
 				print_galera_nodes_last_status();
-				commit();
-				wrlock();
+				commit_locked();
 				SQLite3_result *resultset2=NULL;
 				q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
 				sprintf(query,q,_writer_hostgroup);
@@ -5562,13 +5565,11 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 					delete resultset2;
 					resultset2=NULL;
 				}
-				wrunlock();
 			} else {
 				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
 					proxy_warning("Galera: skipping setting node %s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _hostname, _port, _writer_hostgroup);
 				}
 			}
-			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 		}
 	}
@@ -5576,11 +5577,11 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 		delete resultset;
 		resultset=NULL;
 	}
+	wrunlock();
 }
 
 // this function completes the tuning of mysql_servers_incoming
 // it assumes that before calling converge_galera_config()
-// * GloAdmin->mysql_servers_wrlock() was already called
 // * mysql_servers_incoming has already entries copied from mysql_servers and ready to be loaded
 // at this moment, it is only used to check if there are more than one writer
 void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
@@ -6609,7 +6610,6 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 	}
 	char *address = (char *)malloc(strlen(_server_id)+strlen(domain_name)+1);
 	sprintf(address,"%s%s",_server_id,domain_name);
-	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 	int i,j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -6675,7 +6675,6 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 	}
 //__exit_aws_aurora_replication_lag_action:
 	wrunlock();
-	GloAdmin->mysql_servers_wrunlock();
 	if (ret == true) {
 		if (reader_found_in_whg == true) {
 			ret = false;
@@ -6806,6 +6805,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 
 	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+1024*1024);
 	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
+	wrlock();
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
@@ -6845,7 +6845,6 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		// This should be the case most of the time,
 		// because the calling function knows if an action is required.
 		if (resultset->rows_count) {
-			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d";
 			sprintf(query,q,_rhid);
@@ -6921,27 +6920,21 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				q = (char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id NOT IN (%d, %d)";
 				sprintf(query, q, _rhid, _whid);
 				mydb->execute(query);
-				commit();
-				wrlock();
+				commit_locked();
 				q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
 				sprintf(query,q,_whid,_rhid);
 				mydb->execute(query);
 				generate_mysql_servers_table(&_whid);
 				generate_mysql_servers_table(&_rhid);
-				wrunlock();
 			} else {
 				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
 					proxy_warning("AWS Aurora: skipping setting node %s%s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _server_id, domain_name, aurora_port, _writer_hostgroup);
 				}
 			}
-			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 			query = NULL;
 		} else {
 			string full_hostname { string { _server_id } + string { domain_name } };
-
-			GloAdmin->mysql_servers_wrlock();
-			wrlock();
 
 			srv_info_t srv_info { full_hostname, static_cast<uint16_t>(aurora_port), "Aurora AWS" };
 			srv_opts_t wr_srv_opts { -1, -1, -1 };
@@ -6986,9 +6979,6 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				// Update AWS Aurora resultset used for monitoring
 				update_aws_aurora_hosts_monitor_resultset(true);
 			}
-
-			wrunlock();
-			GloAdmin->mysql_servers_wrunlock();
 		}
 	}
 	if (resultset) {
@@ -6999,6 +6989,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		free(query);
 	}
 	free(domain_name);
+	wrunlock();
 }
 
 void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id) {
@@ -7031,16 +7022,16 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	q = (char*)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d,%d)";
 	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+32+32+32);
 	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
+	wrlock();
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
 		error=NULL;
 	}
 	free(query);
-	if (resultset) { // we lock only if needed
+	if (resultset) {
 		if (resultset->rows_count) {
 			proxy_warning("AWS Aurora: setting host %s%s:%d (part of cluster with writer_hostgroup=%d) in a reader, moving from writer_hostgroup %d to reader_hostgroup %d\n", _server_id, domain_name, aurora_port, _whid, _whid, _rhid);
-			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			// If server present as WRITER try moving it to 'reader_hostgroup'.
@@ -7056,8 +7047,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
 			sprintf(query, q, _server_id, domain_name, aurora_port, _rhid);
 			mydb->execute(query);
-			commit();
-			wrlock();
+			commit_locked();
 
 			q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
 			sprintf(query,q,_whid,_rhid);
@@ -7065,15 +7055,11 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			generate_mysql_servers_table(&_whid);
 			generate_mysql_servers_table(&_rhid);
 
-			wrunlock();
-			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 		} else {
 			// we couldn't find the server
 			// autodiscovery algorithm here
 			string full_hostname { string { _server_id } + string { domain_name } };
-			GloAdmin->mysql_servers_wrlock();
-			wrlock();
 
 			srv_info_t srv_info { full_hostname, static_cast<uint16_t>(aurora_port), "Aurora AWS" };
 			srv_opts_t srv_opts { new_reader_weight, -1, -1 };
@@ -7107,9 +7093,6 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				// Update AWS Aurora resultset used for monitoring
 				update_aws_aurora_hosts_monitor_resultset(true);
 			}
-
-			wrunlock();
-			GloAdmin->mysql_servers_wrunlock();
 		}
 	}
 	if (resultset) {
@@ -7117,6 +7100,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		resultset=NULL;
 	}
 	free(domain_name);
+	wrunlock();
 }
 
 const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
@@ -7359,7 +7343,6 @@ void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_repli
 ) {
 	int added_new_server = -1;
 
-	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 
 	// Add the discovered server with default values
@@ -7422,5 +7405,4 @@ void MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_repli
 	}
 
 	wrunlock();
-	GloAdmin->mysql_servers_wrunlock();
 }
