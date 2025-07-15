@@ -1,0 +1,23 @@
+--- sdk/src/trace/tracer.cc.orig	2025-07-15 15:37:39.140015261 +0530
++++ sdk/src/trace/tracer.cc	2025-07-15 15:52:52.629125745 +0530
+@@ -62,7 +62,7 @@
+   {
+     return kNoopTracer->StartSpan(name, attributes, links, options);
+   }
+-  opentelemetry::trace::SpanContext parent_context = GetCurrentSpan()->GetContext();
++  auto parent_context = opentelemetry::trace::SpanContext::GetInvalid();
+   if (nostd::holds_alternative<opentelemetry::trace::SpanContext>(options.parent))
+   {
+     auto span_context = nostd::get<opentelemetry::trace::SpanContext>(options.parent);
+@@ -89,6 +89,11 @@
+     }
+   }
+ 
++  if (!parent_context.IsValid())
++  {
++    parent_context = GetCurrentSpan()->GetContext();
++  }
++
+   IdGenerator &generator = GetIdGenerator();
+   opentelemetry::trace::TraceId trace_id;
+   opentelemetry::trace::SpanId span_id = generator.GenerateSpanId();
