@@ -423,6 +423,7 @@ $(OTEL_INSTALL_DIR)/lib/libopentelemetry.a: protobuf abseil curl json
 	cd opentelemetry && tar -zxf opentelemetry-cpp-1.21.0.tar.gz
 	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
 	cd opentelemetry && tar -zxf opentelemetry-proto-1.6.0.tar.gz
+	cd opentelemetry/opentelemetry-cpp && patch -p0 < ../active_span.patch
 	cd opentelemetry/opentelemetry-cpp && mkdir -p build
 	cd opentelemetry/opentelemetry-cpp/build && cmake ..                   \
 								$(CMAKE_FLAGS)                             \
