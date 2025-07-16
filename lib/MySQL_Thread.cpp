@@ -3576,6 +3576,8 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 
 
 bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
+	SESSION_TRACE_AUTO(myds->sess);
+
 				if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
 					if (myds->myds_type==MYDS_FRONTEND) {
@@ -3735,6 +3737,8 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 
 // this function was inline in MySQL_Thread::process_all_sessions()
 void MySQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess) {
+	SESSION_TRACE_AUTO(sess);
+
 	unregister_session(n);
 	n--;
 	unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
@@ -3772,6 +3776,8 @@ void MySQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, My
  * @param total_active_transactions_ Reference to the total number of active transactions across all sessions.
  */
 void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_) {
+	SESSION_TRACE_AUTO(sess);
+
 	unsigned int numTrx=0;
 	total_active_transactions_ += sess->active_transactions;
 	sess->to_process=1;
@@ -3892,6 +3898,8 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 
 
 void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int& n) {
+	SESSION_TRACE_AUTO(sess);
+
 	char _buf[1024];
 	if (sess->client_myds) {
 		if (mysql_thread___log_unhealthy_connections) {
@@ -3960,6 +3968,9 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+
+		auto trace_span = SESSION_TRACE_NAMED(sess, FILE_LINE_FUNC + "__loop_iteration");
+
 #ifdef DEBUG
 		if(sess==sess_stopat) {
 			sess_stopat=sess;
@@ -4385,6 +4396,8 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	}
 	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
+		std::string client_addr = get_client_addr(addr);
+
 		if (mysql_thread___client_host_cache_size) {
 			MySQL_Client_Host_Cache_Entry client_host_entry =
 				GloMTH->find_client_host_cache(addr);
@@ -4392,7 +4405,6 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 				client_host_entry.updated_at != 0 &&
 				client_host_entry.error_count >= static_cast<uint32_t>(mysql_thread___client_host_error_counts)
 			) {
-				std::string client_addr = get_client_addr(addr);
 				proxy_error(
 					"Closing connection because client '%s' reached 'mysql-client_host_error_counts': %d\n",
 					client_addr.c_str(), mysql_thread___client_host_error_counts
@@ -4407,6 +4419,12 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		// create a new client connection
 		mypolls.fds[n].revents=0;
 		MySQL_Session *sess=create_new_session_and_client_data_stream<MySQL_Thread, MySQL_Session*>(c);
+
+		auto trace_span = SESSION_TRACE_NAMED(sess, FILE_LINE_FUNC + "__after_create_new_session");
+		trace_span->SetAttribute("session.client_addr", client_addr);
+
+		sess->root_span->UpdateName("session - " + client_addr);
+
 		__sync_add_and_fetch(&MyHGM->status.client_connections_created,1);
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;

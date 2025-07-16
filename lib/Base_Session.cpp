@@ -186,6 +186,8 @@ B * Base_Session<S,DS,B,T>::find_or_create_backend(int hostgroup_id, DS *_myds) 
 
 template<typename S, typename DS, typename B, typename T>
 void Base_Session<S,DS,B,T>::writeout() {
+	SESSION_TRACE_AUTO(this);
+
 	int tps = 10; // throttling per second , by default every 100ms
 	int total_written = 0;
 	unsigned long long last_sent_=0;

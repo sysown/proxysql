@@ -30,6 +30,8 @@ Base_Thread::~Base_Thread() {
 
 template<typename T, typename S>
 void Base_Thread::register_session(T thr, S _sess, bool up_start) {
+	SESSION_TRACE_AUTO(_sess);
+
 	if (mysql_sessions==NULL) {
 		mysql_sessions = new PtrArray();
 	}
@@ -69,7 +71,12 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	} else {
 		assert(0);
 	}
+
+	auto trace_span = SESSION_TRACE(sess);
+	trace_span->SetAttribute("session.client_data_stream.fd", _fd);
+
 	register_session(static_cast<T*>(this), sess);
+
 	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 		sess->client_myds = new PgSQL_Data_Stream();
 	} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
