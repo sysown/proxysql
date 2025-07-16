@@ -683,7 +683,7 @@ MySQL_Session::MySQL_Session() {
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
 
-	span_stack = unsafe_shared_ptr<OTelSpanStack>();
+	span_stack = unsafe_shared_ptr(new OTelSpanStack());
 	root_span = CreateSessionSpan("new_session");
 }
 
