@@ -193,7 +193,7 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
 		} else if (modname == "otel") {
-			rc = GloOTelTracer->set_variable(r->fields[0], r->fields[1]);
+			rc = GloOTelTracer->SetVariable(r->fields[0], r->fields[1]);
 		}
 
 		const string v = string(r->fields[0]);
@@ -214,7 +214,7 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
 				} else if (modname == "otel") {
-					val = GloOTelTracer->get_variable(r->fields[0]);
+					val = GloOTelTracer->GetVariable(r->fields[0]);
 				}
 
 				char q[1000];
@@ -1138,7 +1138,7 @@ void ProxySQL_Admin::flush_otel_variables___database_to_runtime(SQLite3DB *db, b
 	}
 
 	// setup tracer after configuration change
-	GloOTelTracer->setup();
+	GloOTelTracer->Setup();
 
 	if (resultset) delete resultset;
 }
@@ -1204,9 +1204,9 @@ void ProxySQL_Admin::flush_otel_variables___runtime_to_database(SQLite3DB *db, b
 	GloOTelTracer->wrlock();
 	db->execute("BEGIN");
 
-	for (auto& var : GloOTelTracer->get_variables_list()) {
+	for (auto& var : GloOTelTracer->GetVariablesList()) {
 		const char *varname = var.c_str();
-		char *val = GloOTelTracer->get_variable(varname);
+		char *val = GloOTelTracer->GetVariable(varname);
 
 		char *qualified_name = (char *)malloc(strlen(varname) + 6);
 		sprintf(qualified_name, "otel-%s", varname);

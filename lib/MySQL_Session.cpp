@@ -684,7 +684,7 @@ MySQL_Session::MySQL_Session() {
 	use_ldap_auth = false;
 
 	span_stack = unsafe_shared_ptr(new OTelSpanStack());
-	root_span = CreateSessionSpan("new_session");
+	root_span = SESSION_TRACE(this);
 }
 
 /**

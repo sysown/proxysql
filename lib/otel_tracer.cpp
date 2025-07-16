@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <inttypes.h>
+#include <memory>
+#include <string>
 
 #include "otel_tracer.h"
 #include "opentelemetry/trace/provider.h"
@@ -11,6 +13,7 @@
 #include "opentelemetry/sdk/trace/batch_span_processor_factory.h"
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_factory.h"
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_options.h"
+#include "otel_span.h"
 
 #define OTEL_TRACER_NAME_DEFAULT		"proxysql"
 #define OTEL_SERVICE_NAME_DEFAULT		"proxysql"
@@ -73,7 +76,7 @@ OTelTracer::~OTelTracer() {
 	pthread_rwlock_destroy(&rwlock);
 }
 
-void OTelTracer::setup() {
+void OTelTracer::Setup() {
 	wrlock();
 
 	// reset global trace provider
@@ -118,33 +121,11 @@ void OTelTracer::setup() {
 	unlock();
 }
 
-otel_trace_api::Tracer* OTelTracer::get() {
-	otel_trace_api::Tracer* ret = nullptr;
-
-	rdlock();
-	if (variables.trace_enable) {
-		ret = tracer.get();
-	}
-	unlock();
-
-	return ret;
-}
-
-const std::vector<std::string>& OTelTracer::get_variables_list() {
+const std::vector<std::string>& OTelTracer::GetVariablesList() {
 	return otel_variables;
 }
 
-bool OTelTracer::has_variable(const char * key) {
-	for (auto& var : otel_variables) {
-		if (strcasecmp(var.c_str(), key) == 0) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
-char * OTelTracer::get_variable(const char* key) {
+char * OTelTracer::GetVariable(const char* key) {
 	char buf[21];
 
 	if (strcasecmp(key,"trace_enable") == 0)
@@ -194,7 +175,7 @@ char * OTelTracer::get_variable(const char* key) {
 	return nullptr;
 }
 
-bool OTelTracer::set_variable(const char *key, const char *val) {
+bool OTelTracer::SetVariable(const char *key, const char *val) {
 	if (strcasecmp(key,"trace_enable") == 0) {
 		if (strcasecmp(val, "true") == 0 || strcasecmp(val, "1") == 0) {
 			variables.trace_enable = true;
@@ -295,4 +276,108 @@ bool OTelTracer::set_variable(const char *key, const char *val) {
 	}
 
 	return false;
+}
+
+void OTelTracer::SetFilter(const std::set<std::string>& filter) {
+	wrlock();
+
+	span_filter = filter;
+	span_filter_enable = false;
+	if(span_filter.size())
+		span_filter_enable = true;
+
+	unlock();
+}
+
+std::set<std::string> OTelTracer::GetFilter() {
+	rdlock();
+	auto ret = span_filter;
+	unlock();
+
+	return ret;
+}
+
+std::unique_ptr<OTelSpan> OTelTracer::StartSpan(
+	unsafe_shared_ptr<OTelSpanStack>& stack,
+	const char *__file,
+	int __line,
+	const char *name
+) {
+	auto inactive_span = std::make_unique<OTelSpan>();
+
+	auto tracer = get_tracer();
+	if (!tracer)
+		return inactive_span;
+
+	if(!allow_span(__file, __line, name))
+		return inactive_span;
+
+	auto span = std::make_unique<OTelSpan>(tracer, name, stack);
+	span->SetAttribute("file", __file);
+	span->SetAttribute("line", __line);
+
+	return span;
+}
+
+otel_trace_api::Tracer* OTelTracer::get_tracer() {
+	otel_trace_api::Tracer* ret = nullptr;
+
+	rdlock();
+	if (variables.trace_enable) {
+		ret = tracer.get();
+	}
+	unlock();
+
+	return ret;
+}
+
+bool OTelTracer::allow_span(const char *__file, int __line, const char *name) {
+	rdlock();
+
+	if (!span_filter_enable) {
+		unlock();
+		return true;
+	}
+
+	bool ret = false;
+	do {
+		// full search - file:line:span_name
+		std::string key(__file);
+		key += ":" + std::to_string(__line);
+		key += ":";
+		key += name;
+		if (span_filter.find(key) != span_filter.end()) {
+			ret = true;
+			break;
+		}
+
+		// partial - file:line:<empty>
+		key = __file;
+		key += ":" + std::to_string(__line);
+		key += ":";
+		if (span_filter.find(key) != span_filter.end()) {
+			ret = true;
+			break;
+		}
+
+		// partial - file:0:span_name
+		key = __file;
+		key += ":0:";
+		key += name;
+		if (span_filter.find(key) != span_filter.end()) {
+			ret = true;
+			break;
+		}
+
+		// partial - file:0:<empty>
+		key = __file;
+		key += ":0:";
+		if (span_filter.find(key) != span_filter.end()) {
+			ret = true;
+			break;
+		}
+	} while(0);
+
+	unlock();
+	return ret;
 }

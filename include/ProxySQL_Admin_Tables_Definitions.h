@@ -304,6 +304,8 @@
 #define STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST "CREATE TABLE stats_pgsql_query_digest (hostgroup INT , database VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, database, username, client_address, digest))"
 #define STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_pgsql_query_digest_reset (hostgroup INT , database VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, database, username, client_address, digest))"
 
+// OpenTelemetry
+#define OTEL_SQLITE_TABLE_SPAN_FILTERS "CREATE TABLE otel_span_filters (file VARCHAR NOT NULL, line INT NOT NULL, span VARCHAR NOT NULL, PRIMARY KEY (file, line, span))"
 
 //#define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 

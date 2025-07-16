@@ -15,25 +15,23 @@ template<typename S, typename DSi, typename B, typename T> class Base_Session;
 #include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
-#include "otel_span.h"
+#include "otel_tracer.h"
 
 class MySQL_STMTs_meta;
 class StmtLongDataHandler;
 class MySQL_Session;
 class PgSQL_Session;
 
-#define STR(x)			#x
-#define TO_STRING(x)	STR(x)
-#define FILE_LINE_FUNC	(std::string(__FILE__ ":" TO_STRING(__LINE__) ":") + __func__)
+extern OTelTracer *GloOTelTracer;
 
 #define SESSION_TRACE(session) \
-	session->CreateSessionSpan(FILE_LINE_FUNC)
+	session->CreateSessionSpan(__FILE__, __LINE__, __func__)
 
 #define SESSION_TRACE_NAMED(session, name) \
-	session->CreateSessionSpan(name)
+	session->CreateSessionSpan(__FILE__, __LINE__, name)
 
 #define SESSION_TRACE_AUTO(session) \
-	auto otel_span = session->CreateSessionSpan(FILE_LINE_FUNC)
+	auto __otel_span = session->CreateSessionSpan(__FILE__, __LINE__, __func__)
 
 enum SESSION_FORWARD_TYPE : uint8_t {
 	SESSION_FORWARD_TYPE_NONE					= 0x00,
@@ -167,7 +165,13 @@ class Base_Session {
 	 */
 	int FindOneActiveTransaction(bool check_savepoint=false);
 
-	std::unique_ptr<OTelSpan> CreateSessionSpan(const std::string& span_name) { return std::make_unique<OTelSpan>(span_name, span_stack); }
+	std::unique_ptr<OTelSpan> CreateSessionSpan(
+		const char *__file,
+		int __line,
+		const char *name
+	) {
+		return GloOTelTracer->StartSpan(span_stack, __file, __line, name);
+	}
 };
 
 #endif // CLASS_BASE_SESSION_H

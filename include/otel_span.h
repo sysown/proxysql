@@ -3,12 +3,14 @@
 
 #include <memory>
 #include <signal.h>
-#include "unsafe_shared_ptr.h"
-#include "otel_tracer.h"
-#include "opentelemetry/nostd/shared_ptr.h"
-#include "opentelemetry/trace/span.h"
+#include <utility>
 
-extern OTelTracer *GloOTelTracer;
+#include "opentelemetry/nostd/shared_ptr.h"
+#include "opentelemetry/trace/tracer.h"
+#include "opentelemetry/trace/span.h"
+#include "opentelemetry/trace/span_startoptions.h"
+
+#include "unsafe_shared_ptr.h"
 
 #define OTEL_SPAN_STACK_SIZE_DEFAULT	8
 
@@ -94,30 +96,48 @@ class OTelSpan {
 private:
 	otel_nostd::shared_ptr<Span> span;
 	unsafe_shared_ptr<OTelSpanStack> ctx_stack;
-	bool create_span(const string& name, const OTelSpanCtx& pctx);
+
+	bool create_span(
+		otel_trace_api::Tracer* tracer,
+		const string& name,
+		const OTelSpanCtx& pctx
+	);
+
 public:
-	OTelSpan(const string& name, const OTelSpanCtx& pctx = OTelSpanCtx::GetInvalid());
-	OTelSpan(const string& name, unsafe_shared_ptr<OTelSpanStack>& stack);
+	OTelSpan() = default;
+
+	explicit OTelSpan(
+		otel_trace_api::Tracer* tracer,
+		const string& name,
+		const OTelSpanCtx& pctx = OTelSpanCtx::GetInvalid()
+	);
+
+	explicit OTelSpan(
+		otel_trace_api::Tracer* tracer,
+		const string& name,
+		unsafe_shared_ptr<OTelSpanStack>& stack
+	);
+
 	~OTelSpan();
 
 	void SetAttribute(const string& key, OTelSpanAttrVal value);
 	void UpdateName(const string& name);
 };
 
-inline OTelSpan::OTelSpan(const string& name, const OTelSpanCtx& pctx) {
-	create_span(name, pctx);
+inline OTelSpan::OTelSpan(otel_trace_api::Tracer* tracer, const string& name, const OTelSpanCtx& pctx) {
+	create_span(tracer, name, pctx);
 }
 
-inline OTelSpan::OTelSpan(const string& name, unsafe_shared_ptr<OTelSpanStack>& stack) {
+inline OTelSpan::OTelSpan(otel_trace_api::Tracer* tracer, const string& name, unsafe_shared_ptr<OTelSpanStack>& stack) {
 	if (stack) {
-		if (create_span(name, stack->GetCurrent())) {
+		if (create_span(tracer, name, stack->GetCurrent())) {
 			stack->Attach(span->GetContext());
 			ctx_stack = stack;
 		}
 		return;
 	}
 
-	create_span(name, OTelSpanCtx::GetInvalid());
+	create_span(tracer, name, OTelSpanCtx::GetInvalid());
 }
 
 inline OTelSpan::~OTelSpan() {
@@ -138,11 +158,7 @@ inline void OTelSpan::UpdateName(const string& name) {
 	}
 }
 
-inline bool OTelSpan::create_span(const string& name, const OTelSpanCtx& pctx) {
-	auto tracer = GloOTelTracer->get();
-	if (!tracer)
-		return false;
-
+inline bool OTelSpan::create_span(otel_trace_api::Tracer* tracer, const string& name, const OTelSpanCtx& pctx) {
 	auto option = otel_trace_api::StartSpanOptions();
 	option.parent = pctx;
 	span = tracer->StartSpan(name, option);

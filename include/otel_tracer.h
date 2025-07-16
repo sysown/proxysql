@@ -2,9 +2,14 @@
 #define __CLASS_PROXYSQL_OTEL_TRACER_H
 
 #include "proxysql.h"
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include "opentelemetry/nostd/shared_ptr.h"
 #include "opentelemetry/trace/tracer.h"
+
+#include "unsafe_shared_ptr.h"
+#include "otel_span.h"
 
 namespace otel_nostd = opentelemetry::nostd;
 namespace otel_trace_api = opentelemetry::trace;
@@ -20,19 +25,30 @@ class OTelTracer {
 public:
 	OTelTracer();
 	~OTelTracer();
-	void setup();
-	otel_trace_api::Tracer* get();
-	const std::vector<string>& get_variables_list();
-	bool has_variable(const char *var);
-	char *get_variable(const char *var);
-	bool set_variable(const char *var, const char *val);
+
+	void Setup();
+
+	std::unique_ptr<OTelSpan> StartSpan(
+		unsafe_shared_ptr<OTelSpanStack>& stack,
+		const char *__file,
+		int __line,
+		const char *name
+	);
+
+	const std::vector<string>& GetVariablesList();
+	char *GetVariable(const char *var);
+	bool SetVariable(const char *var, const char *val);
+	std::set<std::string> GetFilter();
+	void SetFilter(const std::set<std::string>& filter);
 
 	void rdlock() { pthread_rwlock_rdlock(&rwlock); }
 	void wrlock() { pthread_rwlock_wrlock(&rwlock); }
 	void unlock() { pthread_rwlock_unlock(&rwlock); }
 private:
 	pthread_rwlock_t rwlock;
+
 	otel_nostd::shared_ptr<otel_trace_api::Tracer> tracer;
+
 	struct {
 		bool trace_enable;
 		string service_name;
@@ -47,6 +63,12 @@ private:
 		size_t bsp_max_queue_size;
 		size_t bsp_max_export_batch_size;
 	} variables;
+
+	bool span_filter_enable = false;
+	std::set<std::string> span_filter;
+
+	otel_trace_api::Tracer* get_tracer();
+	bool allow_span(const char *__file, int __line, const char *name);
 };
 
 #endif  // __CLASS_PROXYSQL_OTEL_TRACER_H
