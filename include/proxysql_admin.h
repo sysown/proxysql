@@ -641,6 +641,8 @@ class ProxySQL_Admin {
 	void init_otel_variables();
 	void load_otel_variables_to_runtime() { flush_otel_variables___database_to_runtime(admindb, true); }
 	void save_otel_variables_from_runtime() { flush_otel_variables___runtime_to_database(admindb, true, true, false); }
+	void load_otel_filter_to_runtime();
+	void save_otel_filter_from_runtime();
 
 	void p_update_metrics();
 	void stats___mysql_query_rules();

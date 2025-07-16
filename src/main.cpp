@@ -1072,8 +1072,9 @@ void ProxySQL_Main_init_ClickHouseServer() {
 
 void ProxySQL_Main_init_OTelTracer() {
 	GloOTelTracer = new OTelTracer();
-	GloOTelTracer->setup();
+	GloOTelTracer->Setup();
 	GloAdmin->init_otel_variables();
+	GloAdmin->load_otel_filter_to_runtime();
 }
 
 void ProxySQL_Main_join_all_threads() {

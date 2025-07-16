@@ -583,7 +583,7 @@ PgSQL_Session::PgSQL_Session() {
 	transaction_state_manager = new PgSQL_ExplicitTxnStateMgr(this);
 
 	span_stack = unsafe_shared_ptr<OTelSpanStack>();
-	root_span = CreateSessionSpan("new_session");
+	root_span = SESSION_TRACE(this);
 }
 
 void PgSQL_Session::reset() {
