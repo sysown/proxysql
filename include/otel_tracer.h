@@ -29,7 +29,7 @@ public:
 	void Setup();
 
 	std::unique_ptr<OTelSpan> StartSpan(
-		unsafe_shared_ptr<OTelSpanStack>& stack,
+		unsafe_shared_ptr<OTelSpanStack> stack,
 		const char *__file,
 		int __line,
 		const char *name
