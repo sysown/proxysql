@@ -298,7 +298,7 @@ std::set<std::string> OTelTracer::GetFilter() {
 }
 
 std::unique_ptr<OTelSpan> OTelTracer::StartSpan(
-	unsafe_shared_ptr<OTelSpanStack>& stack,
+	unsafe_shared_ptr<OTelSpanStack> stack,
 	const char *__file,
 	int __line,
 	const char *name

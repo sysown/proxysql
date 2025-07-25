@@ -1,6 +1,7 @@
 #ifndef __CLASS_UNSAFE_SHARED_PTR_H
 #define __CLASS_UNSAFE_SHARED_PTR_H
 
+#include <memory>
 #include <cstddef>
 
 /**
@@ -23,6 +24,8 @@ private:
 
 public:
 	unsafe_shared_ptr() noexcept : ptr_(nullptr), ref_count_(nullptr) {}
+
+	unsafe_shared_ptr(std::nullptr_t) noexcept : ptr_(nullptr), ref_count_(nullptr) {}
 
 	explicit unsafe_shared_ptr(T* p) : ptr_(p), ref_count_(p ? new size_t(1) : nullptr) {}
 
