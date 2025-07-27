@@ -305,12 +305,20 @@ std::unique_ptr<OTelSpan> OTelTracer::StartSpan(
 ) {
 	auto inactive_span = std::make_unique<OTelSpan>();
 
-	auto tracer = get_tracer();
-	if (!tracer)
-		return inactive_span;
+	rdlock();
 
-	if(!allow_span(__file, __line, name))
+	auto tracer = get_tracer();
+	if (!tracer) {
+		unlock();
 		return inactive_span;
+	}
+
+	if(!allow_span(__file, __line, name)) {
+		unlock();
+		return inactive_span;
+	}
+
+	unlock();
 
 	auto span = std::make_unique<OTelSpan>(tracer, name, stack);
 	span->SetAttribute("file", __file);
@@ -320,64 +328,49 @@ std::unique_ptr<OTelSpan> OTelTracer::StartSpan(
 }
 
 otel_trace_api::Tracer* OTelTracer::get_tracer() {
-	otel_trace_api::Tracer* ret = nullptr;
-
-	rdlock();
 	if (variables.trace_enable) {
-		ret = tracer.get();
+		return tracer.get();
 	}
-	unlock();
 
-	return ret;
+	return nullptr;
 }
 
 bool OTelTracer::allow_span(const char *__file, int __line, const char *name) {
-	rdlock();
-
 	if (!span_filter_enable) {
-		unlock();
 		return true;
 	}
 
-	bool ret = false;
-	do {
-		// full search - file:line:span_name
-		std::string key(__file);
-		key += ":" + std::to_string(__line);
-		key += ":";
-		key += name;
-		if (span_filter.find(key) != span_filter.end()) {
-			ret = true;
-			break;
-		}
+	// full search - file:line:span_name
+	std::string key(__file);
+	key += ":" + std::to_string(__line);
+	key += ":";
+	key += name;
+	if (span_filter.find(key) != span_filter.end()) {
+		return true;
+	}
 
-		// partial - file:line:<empty>
-		key = __file;
-		key += ":" + std::to_string(__line);
-		key += ":";
-		if (span_filter.find(key) != span_filter.end()) {
-			ret = true;
-			break;
-		}
+	// partial - file:line:<empty>
+	key = __file;
+	key += ":" + std::to_string(__line);
+	key += ":";
+	if (span_filter.find(key) != span_filter.end()) {
+		return true;
+	}
 
-		// partial - file:0:span_name
-		key = __file;
-		key += ":0:";
-		key += name;
-		if (span_filter.find(key) != span_filter.end()) {
-			ret = true;
-			break;
-		}
+	// partial - file:0:span_name
+	key = __file;
+	key += ":0:";
+	key += name;
+	if (span_filter.find(key) != span_filter.end()) {
+		return true;
+	}
 
-		// partial - file:0:<empty>
-		key = __file;
-		key += ":0:";
-		if (span_filter.find(key) != span_filter.end()) {
-			ret = true;
-			break;
-		}
-	} while(0);
+	// partial - file:0:<empty>
+	key = __file;
+	key += ":0:";
+	if (span_filter.find(key) != span_filter.end()) {
+		return true;
+	}
 
-	unlock();
-	return ret;
+	return false;
 }
