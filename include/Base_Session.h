@@ -31,7 +31,7 @@ extern OTelTracer *GloOTelTracer;
 	session->CreateSessionSpan(__FILE__, __LINE__, name)
 
 #define SESSION_TRACE_AUTO(session) \
-	auto __otel_span = session->CreateSessionSpan(__FILE__, __LINE__, __func__)
+	auto otel_span_ = session->CreateSessionSpan(__FILE__, __LINE__, __func__)
 
 enum SESSION_FORWARD_TYPE : uint8_t {
 	SESSION_FORWARD_TYPE_NONE					= 0x00,

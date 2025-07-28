@@ -5,7 +5,6 @@
 #include <memory>
 #include <string>
 
-#include "otel_tracer.h"
 #include "opentelemetry/trace/provider.h"
 #include "opentelemetry/trace/tracer.h"
 #include "opentelemetry/trace/span.h"
@@ -13,6 +12,9 @@
 #include "opentelemetry/sdk/trace/batch_span_processor_factory.h"
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_factory.h"
 #include "opentelemetry/exporters/otlp/otlp_http_exporter_options.h"
+
+#include "gen_utils.h"
+#include "otel_tracer.h"
 #include "otel_span.h"
 
 #define OTEL_TRACER_NAME_DEFAULT		"proxysql"
@@ -28,8 +30,6 @@
 #define OTEL_BSP_EXPORT_SIZE_DEFAULT	512
 
 namespace otel_trace_sdk = opentelemetry::sdk::trace;
-namespace otel_exporter = opentelemetry::exporter::otlp;
-namespace otel_resource = opentelemetry::sdk::resource;
 
 using std::string;
 
@@ -94,7 +94,7 @@ void OTelTracer::Setup() {
 	exporter_opt.compression = variables.exporter_otlp_compression;
 	exporter_opt.timeout = std::chrono::milliseconds(variables.exporter_otlp_timeout);
 	exporter_opt.ssl_ca_cert_path = variables.exporter_otlp_certificates;
-	// TODO: add headers from variable.exporter_otlp_headers to exporter_opt
+	exporter_opt.http_headers = get_otlp_headers();
 	auto exporter  = otel_exporter::OtlpHttpExporterFactory::Create(exporter_opt);
 
 	// configure batch span processor
@@ -105,10 +105,7 @@ void OTelTracer::Setup() {
 	auto processor = otel_trace_sdk::BatchSpanProcessorFactory::Create(std::move(exporter), proc_opt);
 
 	// configure service attributes
-	auto resource = otel_resource::Resource::Create(
-		// TODO: include attributes from variables.resource_attributes
-		otel_resource::ResourceAttributes{{"service.name", variables.service_name}}
-	);
+	auto resource = otel_resource::Resource::Create(get_resource_attributes());
 
 	// setup tracer provider
 	std::shared_ptr<otel_trace_api::TracerProvider> provider =
@@ -220,7 +217,7 @@ bool OTelTracer::SetVariable(const char *key, const char *val) {
 	}
 
 	if (strcasecmp(key,"trace_exporter_otlp_headers") == 0) {
-		variables.resource_attributes = val;
+		variables.exporter_otlp_headers = val;
 		return true;
 	}
 
@@ -373,4 +370,45 @@ bool OTelTracer::allow_span(const char *__file, int __line, const char *name) {
 	}
 
 	return false;
+}
+
+otel_resource::ResourceAttributes OTelTracer::get_resource_attributes() {
+	otel_resource::ResourceAttributes attributes{{"service.name", variables.service_name}};
+
+	for (const auto& [key, value] : parse_key_value_pairs(variables.resource_attributes)) {
+		attributes[key] = value;
+	}
+
+	return attributes;
+}
+
+otel_exporter::OtlpHeaders OTelTracer::get_otlp_headers() {
+	otel_exporter::OtlpHeaders headers;
+
+	for (const auto& [key, value] : parse_key_value_pairs(variables.exporter_otlp_headers)) {
+		headers.insert({key, value});
+	}
+
+	return headers;
+}
+
+std::vector<std::pair<string, string>> OTelTracer::parse_key_value_pairs(const string& input) {
+	std::vector<std::pair<string, string>> result;
+
+	if (!input.empty()) {
+		auto pairs = split_string(input, ',');
+		for (const auto& pair : pairs) {
+			auto kv = split_string(pair, '=');
+			if (kv.size() == 2) {
+				string key = trim(kv[0]);
+				string value = trim(kv[1]);
+
+				if (!key.empty()) {
+					result.emplace_back(key, value);
+				}
+			}
+		}
+	}
+
+	return result;
 }
