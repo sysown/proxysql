@@ -321,8 +321,8 @@ std::unique_ptr<OTelSpan> OTelTracer::StartSpan(
 	unlock();
 
 	auto span = std::make_unique<OTelSpan>(tracer, name, stack);
-	span->SetAttribute("file", __file);
-	span->SetAttribute("line", __line);
+	span->SetAttribute("code.file.path", __file);
+	span->SetAttribute("code.line.number", __line);
 
 	return span;
 }
