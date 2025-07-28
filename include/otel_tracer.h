@@ -1,18 +1,23 @@
 #ifndef __CLASS_PROXYSQL_OTEL_TRACER_H
 #define __CLASS_PROXYSQL_OTEL_TRACER_H
 
-#include "proxysql.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+
 #include "opentelemetry/nostd/shared_ptr.h"
 #include "opentelemetry/trace/tracer.h"
+#include "opentelemetry/sdk/resource/resource.h"
+#include "opentelemetry/exporters/otlp/otlp_environment.h"
 
+#include "proxysql.h"
 #include "unsafe_shared_ptr.h"
 #include "otel_span.h"
 
 namespace otel_nostd = opentelemetry::nostd;
 namespace otel_trace_api = opentelemetry::trace;
+namespace otel_resource = opentelemetry::sdk::resource;
+namespace otel_exporter = opentelemetry::exporter::otlp;
 
 using std::string;
 using opentelemetry::trace::Span;
@@ -69,6 +74,9 @@ private:
 
 	otel_trace_api::Tracer* get_tracer();
 	bool allow_span(const char *__file, int __line, const char *name);
+	otel_resource::ResourceAttributes get_resource_attributes();
+	otel_exporter::OtlpHeaders get_otlp_headers();
+	std::vector<std::pair<string, string>> parse_key_value_pairs(const string& input);
 };
 
 #endif  // __CLASS_PROXYSQL_OTEL_TRACER_H
