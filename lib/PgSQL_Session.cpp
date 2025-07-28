@@ -582,7 +582,7 @@ PgSQL_Session::PgSQL_Session() {
 	use_ldap_auth = false;
 	transaction_state_manager = new PgSQL_ExplicitTxnStateMgr(this);
 
-	span_stack = unsafe_shared_ptr<OTelSpanStack>();
+	span_stack = unsafe_shared_ptr(new OTelSpanStack());
 	root_span = SESSION_TRACE(this);
 }
 

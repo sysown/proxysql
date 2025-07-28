@@ -111,7 +111,7 @@ inline bool OTelSpanStack::contains(const OTelSpanCtx* ctx) {
 class OTelSpan {
 private:
 	otel_nostd::shared_ptr<Span> span;
-	OTelSpanCtx *span_ctx;
+	OTelSpanCtx *span_ctx = nullptr;
 	unsafe_shared_ptr<OTelSpanStack> ctx_stack;
 
 	void create_span(
