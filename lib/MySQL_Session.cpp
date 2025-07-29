@@ -5206,6 +5206,7 @@ handler_again:
 									NEXT_IMMEDIATE(CONNECTING_SERVER);
 								return handler_ret;
 							}
+							myconn = myds->myconn;
 							handler_minus1_GenerateErrorMessage(myds, myconn, wrong_pass);
 							RequestEnd(myds, myerr);
 							handler_minus1_HandleBackendConnection(myds, myconn);
