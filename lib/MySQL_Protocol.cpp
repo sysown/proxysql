@@ -1026,6 +1026,8 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 }
 
 bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id, bool deprecate_eof_active) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	int use_plugin_id = mysql_thread___default_authentication_plugin_int;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
 	assert(use_plugin_id == 0 || use_plugin_id == 2 ); // mysql_native_password or caching_sha2_password
@@ -1558,6 +1560,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
 int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 1
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	if ((*myds)->switching_auth_stage == 1) {
 		// this was set in PPHR_4auth0() or PPHR_4auth1()
 		(*myds)->switching_auth_stage=2;
@@ -1709,6 +1713,8 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 }
 
 void MySQL_Protocol::PPHR_3(MyProt_tmp_auth_vars& vars1) { // detect plugin id
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	if (vars1.auth_plugin == NULL) {
 		vars1.auth_plugin = (unsigned char *)"mysql_native_password"; // default
 		auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
@@ -1737,6 +1743,8 @@ void MySQL_Protocol::PPHR_3(MyProt_tmp_auth_vars& vars1) { // detect plugin id
 }
 
 bool MySQL_Protocol::PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	if ((*myds)->switching_auth_stage == 0) {
 		(*myds)->switching_auth_stage = 1;
 		(*myds)->auth_in_progress = 1;
@@ -1773,6 +1781,8 @@ bool MySQL_Protocol::PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret
 
 
 bool MySQL_Protocol::PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	if (GloMyLdapAuth) {
 		if ((*myds)->switching_auth_stage == 0) {
 			bool user_exists = true;
@@ -1809,6 +1819,8 @@ void MySQL_Protocol::PPHR_5passwordTrue(
 	char * reply,
 	account_details_t& attr1
 ) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 #ifdef DEBUG
 	proxy_debug(
 		PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n",
@@ -1852,6 +1864,8 @@ void MySQL_Protocol::PPHR_5passwordFalse_0(
 	MyProt_tmp_auth_vars& vars1,
 	char * reply,
 	account_details_t& attr1) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	if (strcmp((const char *)vars1.user,mysql_thread___monitor_username)==0) {
 		proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
 		if (memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH)==0) {
@@ -1875,6 +1889,8 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 	char * reply,
 	account_details_t& attr1
 ) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	if (GloMyLdapAuth) {
 #ifdef DEBUG
 		{
@@ -1969,6 +1985,8 @@ void MySQL_Protocol::PPHR_6auth2(
 	bool& ret,
 	MyProt_tmp_auth_vars& vars1
 	) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		unsigned char a[SHA256_DIGEST_LENGTH];
@@ -1996,6 +2014,8 @@ void MySQL_Protocol::PPHR_7auth1(
 	char * reply,
 	account_details_t& attr1
 ) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		ret=proxy_scramble_sha1((char *)vars1.pass,(*myds)->myconn->scramble_buff,vars1.password+1, reply);
@@ -2018,6 +2038,8 @@ void MySQL_Protocol::PPHR_7auth2(
 	char * reply,
 	account_details_t& attr1
 ) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, vars1.user, session_type);
@@ -2060,6 +2082,8 @@ bool MySQL_Protocol::PPHR_verify_sha2(
 	enum proxysql_auth_plugins passformat,
 	PASSWORD_TYPE::E passtype
 ) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	bool ret = false;
 
 	if ((*myds)->switching_auth_stage == 5) {
@@ -2104,6 +2128,8 @@ void MySQL_Protocol::PPHR_sha2full(
 	enum proxysql_auth_plugins passformat,
 	PASSWORD_TYPE::E passtype
 ) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
 		generate_one_byte_pkt(perform_full_authentication);
@@ -2162,6 +2188,8 @@ void MySQL_Protocol::PPHR_sha2full(
 }
 
 void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_details_t& attr1) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	MySQL_Connection *myconn = NULL;
 	myconn=sess->client_myds->myconn;
 	assert(myconn);
@@ -2241,6 +2269,8 @@ void MySQL_Protocol::PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_
 // - If not (caching_sha2_password):
 //     + Continue auth; trigger contitue of full auth
 bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	bool ret = false;
 	char reply[SHA_DIGEST_LENGTH + 1] = { 0 };
 
@@ -2354,6 +2384,8 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
  *      false: the authentication failed, or more data is needed
  */
 bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned int len) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
 #endif
@@ -2600,6 +2632,8 @@ __exit_process_pkt_handshake_response:
 }
 
 bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	bool ret = true;
 	if ((*myds)->sess->user_attributes) {
 		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
@@ -2639,6 +2673,8 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 }
 
 bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user) {
+	SESSION_TRACE_AUTO((*myds)->sess);
+
 	bool ret = false;
 	if ((*myds)->sess->user_attributes) {
 		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
