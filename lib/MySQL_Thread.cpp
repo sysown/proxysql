@@ -3808,7 +3808,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 			}
 		} else {
 			// the session is idle, kill it
-			if (sess_time/1000 > (unsigned long long)sess->wait_timeout) {
+			if (sess_time/1000 > effective_wait_timeout) {
 				sess->killed=true;
 				if (sess->client_myds) {
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
