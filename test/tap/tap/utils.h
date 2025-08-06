@@ -1002,4 +1002,7 @@ const char* get_env_str(const char* envname, const char* envdefault);
 int get_env_int(const char* envname, int envdefault);
 bool get_env_bool(const char* envname, bool envdefault);
 
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
+int run_q(MYSQL *mysql, const char *q);
+
 #endif // #define UTILS_H

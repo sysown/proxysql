@@ -26,11 +26,6 @@
  * 127.0.0.1:26009 : satellite node6
 */
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
-
 void get_time(std::string& s) {
 	time_t __timer;
 	char __buffer[30];

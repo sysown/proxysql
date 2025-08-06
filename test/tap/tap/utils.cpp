@@ -2316,3 +2316,38 @@ bool get_env_bool(const char* envname, bool envdefault) {
 
 	return (bool) res;
 };
+
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, bool cmp) {
+	diag("Creating MySQL conn  host=\"%s\" port=\"%d\" user=\"%s\" ssl=\"%d\" cmp=\"%d\"", host, port, user, ssl, cmp);
+
+	MYSQL* mysql = mysql_init(NULL);
+
+	if (!mysql) {
+		return nullptr;
+	}
+	if (cmp) {
+		if (mysql_options(mysql, MYSQL_OPT_COMPRESS, nullptr)) {
+			return nullptr;
+		}
+	}
+
+	int cflags = 0;
+
+	if (ssl) {
+		if (mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL)) {
+			return nullptr;
+		}
+		cflags |= CLIENT_SSL;
+	}
+
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) {
+		return nullptr;
+	}
+
+	return mysql;
+}
+
+int run_q(MYSQL *mysql, const char *q) {
+	MYSQL_QUERY_T(mysql,q);
+	return 0;
+}
