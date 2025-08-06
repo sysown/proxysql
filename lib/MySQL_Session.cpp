@@ -6825,7 +6825,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		myds->DSS=STATE_QUERY_SENT_DS;
 		int sid=1;
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
-		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",63,1,MYSQL_TYPE_LONGLONG,0x80,0,false,0,NULL); sid++;
 		myds->DSS=STATE_COLUMN_DEFINITION;
 
 		bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
