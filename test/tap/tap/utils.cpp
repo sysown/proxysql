@@ -2259,3 +2259,28 @@ bool get_env_bool(const char* envname, bool envdefault) {
 
 	return (bool) res;
 };
+
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool cmp) {
+	diag("Creating MySQL conn  host=\"%s\" port=\"%d\" user=\"%s\" cmp=\"%d\"", host, port, user, cmp);
+
+	MYSQL* mysql = mysql_init(NULL);
+
+	if (!mysql) {
+		return nullptr;
+	}
+	if (cmp) {
+		if (mysql_options(mysql, MYSQL_OPT_COMPRESS, nullptr)) {
+			return nullptr;
+		}
+	}
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, 0)) {
+		return nullptr;
+	}
+
+	return mysql;
+}
+
+int run_q(MYSQL *mysql, const char *q) {
+	MYSQL_QUERY_T(mysql,q);
+	return 0;
+}
