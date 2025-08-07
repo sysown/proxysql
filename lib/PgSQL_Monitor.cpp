@@ -874,14 +874,22 @@ string build_conn_str(const task_st_t& task_st) {
 	const mon_srv_t& srv_info { task_st.op_st.srv_info };
 	const mon_user_t& user_info { task_st.op_st.user_info };
 
-	return string {
+	string conn_str = 
 		"host='" + srv_info.addr + "' "
-			+ "port='" + std::to_string(srv_info.port) + "' "
-			+ "user='" + user_info.user + "' "
-			+ "password='" + user_info.pass + "' "
-			+ "dbname='" + user_info.dbname + "' "
-			+ "application_name=ProxySQL-Monitor"
-	};
+		+ "port='" + std::to_string(srv_info.port) + "' "
+		+ "user='" + user_info.user + "' "
+		+ "password='" + user_info.pass + "' "
+		+ "dbname='" + user_info.dbname + "' "
+		+ "application_name=ProxySQL-Monitor ";
+
+	// Add SSL configuration based on server's use_ssl setting
+	if (srv_info.ssl) {
+		conn_str += "sslmode=require ";
+	} else {
+		conn_str += "sslmode=disable ";
+	}
+
+	return conn_str;
 }
 
 pgsql_conn_t create_new_conn(task_st_t& task_st) {
