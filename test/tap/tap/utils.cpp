@@ -2168,11 +2168,14 @@ void check_conn_count(MYSQL* admin, const string& conn_type, uint32_t conn_num, 
 
 void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg) {
 	const string queries_s { to_string(queries) };
-	const string hg_s { to_string(hg) };
 
-	const string select_hg_queries {
-		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
-	};
+	string select_hg_queries;
+	if (hg == -1) {
+		select_hg_queries = "SELECT SUM(Queries) FROM stats_mysql_connection_pool";
+	} else {
+		select_hg_queries = "SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg);
+	}
+
 	const string check_queries {
 		"SELECT IIF((" + select_hg_queries + ")=" + queries_s + ",'TRUE','FALSE')"
 	};
@@ -2193,11 +2196,14 @@ void check_query_count(MYSQL* admin, vector<uint32_t> queries, uint32_t hg) {
 			}
 		)
 	};
-	const string hg_s { to_string(hg) };
 
-	const string select_hg_queries {
-		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
-	};
+	string select_hg_queries;
+	if (hg == -1) {
+		select_hg_queries = "SELECT SUM(Queries) FROM stats_mysql_connection_pool";
+	} else {
+		select_hg_queries = "SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg);
+	}
+
 	const string check_queries {
 		"SELECT IIF((" + select_hg_queries + ") IN (" + queries_s + "),'TRUE','FALSE')"
 	};
