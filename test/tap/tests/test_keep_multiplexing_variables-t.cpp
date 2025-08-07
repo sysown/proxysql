@@ -44,19 +44,10 @@ int check_multiplexing_disabled(const CommandLine& cl, const std::string query, 
 	MYSQL_RES* dummy_res = mysql_store_result(proxysql_mysql);
 	mysql_free_result(dummy_res);
 
-	json j_status = fetch_internal_session(proxysql_mysql);
-
-	if (j_status.contains("backends")) {
-		for (auto& backend : j_status["backends"]) {
-			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
-				multiplex_disabled = backend["conn"]["MultiplexDisabled"];
-			}
-		}
-	}
+	int rc = fetch_multiplex_disabled(proxysql_mysql, multiplex_disabled);
 
 	mysql_close(proxysql_mysql);
-
-	return EXIT_SUCCESS;
+	return rc;
 }
 
 int main(int argc, char** argv) {

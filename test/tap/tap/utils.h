@@ -968,5 +968,6 @@ bool get_env_bool(const char* envname, bool envdefault);
 
 MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool cmp=false);
 int run_q(MYSQL *mysql, const char *q);
+int fetch_multiplex_disabled(MYSQL *mysql, bool& multiplex_disabled);
 
 #endif // #define UTILS_H

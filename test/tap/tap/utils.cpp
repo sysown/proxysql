@@ -2284,3 +2284,22 @@ int run_q(MYSQL *mysql, const char *q) {
 	MYSQL_QUERY_T(mysql,q);
 	return 0;
 }
+
+int fetch_multiplex_disabled(MYSQL *mysql, bool& multiplex_disabled) {
+	json session = fetch_internal_session(mysql);
+
+	if (!session.contains("backends")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Backend not available");
+		return EXIT_FAILURE;
+	}
+
+	for (auto& backend : session["backends"]) {
+		if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
+			multiplex_disabled =  backend["conn"]["MultiplexDisabled"];
+			if (multiplex_disabled)
+				break;
+		}
+	}
+
+	return EXIT_SUCCESS;
+}
