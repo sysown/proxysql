@@ -933,8 +933,8 @@ struct srv_addr_t {
 
 // Helpers using 'wait_for_cond' on 'stats_mysql_connection'
 void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
-void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
-void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
+void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg=-1);
+void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg=-1);
 
 /**
  * @brief Fetches the ProxySQL nodes configured in the supplied instance.
