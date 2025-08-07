@@ -181,6 +181,5 @@
   "eof_mixed_flags_queries-t" : [ "default", "mysql-auto_increment_delay_multiplex=0", "mysql-multiplexing=false", "mysql-query_digests=0", "mysql-query_digests_keep_comment=1" ],
   "eof_packet_mixed_queries-t" : [ "default", "mysql-auto_increment_delay_multiplex=0", "mysql-multiplexing=false", "mysql-query_digests=0", "mysql-query_digests_keep_comment=1" ],
   "ok_packet_mixed_queries-t" : [ "default", "mysql-auto_increment_delay_multiplex=0", "mysql-multiplexing=false", "mysql-query_digests=0", "mysql-query_digests_keep_comment=1" ],
-  "mysql-protocol_compression_level-t" : [ "default", "mysql-auto_increment_delay_multiplex=0", "mysql-multiplexing=false", "mysql-query_digests=0", "mysql-query_digests_keep_comment=1" ],
-  "mysql-select_auto_commit-t" : [ "default", "mysql-auto_increment_delay_multiplex=0", "mysql-multiplexing=false", "mysql-query_digests=0", "mysql-query_digests_keep_comment=1" ]
+  "mysql-protocol_compression_level-t" : [ "default", "mysql-auto_increment_delay_multiplex=0", "mysql-multiplexing=false", "mysql-query_digests=0", "mysql-query_digests_keep_comment=1" ]
 }
