@@ -320,7 +320,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_server_connections_total",
 			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
-				{ "status", "created" }
+				{ "status", "created" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -328,7 +329,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_server_connections_total",
 			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
-				{ "status", "delayed" }
+				{ "status", "delayed" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -336,7 +338,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_server_connections_total",
 			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
-				{ "status", "aborted" }
+				{ "status", "aborted" },
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -347,7 +350,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_client_connections_total",
 			"Total number of client connections created.",
 			metric_tags {
-				{ "status", "created" }
+				{ "status", "created" },
+				{ "protocol", "mysql" }
 			}
 		),
 		std::make_tuple (
@@ -361,7 +365,8 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_client_connections_total",
 			"Total number of client failed connections (or closed improperly).",
 			metric_tags {
-				{ "status", "aborted" }
+				{ "status", "aborted" },
+				{ "protocol", "mysql" }
 			}
 		),
 		// ====================================================================
@@ -448,19 +453,25 @@ hg_metrics_map = std::make_tuple(
 			p_hg_counter::access_denied_wrong_password,
 			"proxysql_access_denied_wrong_password_total",
 			"Total access denied \"wrong password\".",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::access_denied_max_connections,
 			"proxysql_access_denied_max_connections_total",
 			"Total access denied \"max connections\".",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::access_denied_max_user_connections,
 			"proxysql_access_denied_max_user_connections_total",
 			"Total access denied \"max user connections\".",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 
 		// ====================================================================
@@ -518,13 +529,17 @@ hg_metrics_map = std::make_tuple(
 			p_hg_gauge::server_connections_connected,
 			"proxysql_server_connections_connected",
 			"Backend connections that are currently connected.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 		std::make_tuple (
 			p_hg_gauge::client_connections_connected,
 			"proxysql_client_connections_connected",
 			"Client connections that are currently connected.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "mysql" }
+			}
 		),
 		std::make_tuple (
 			p_hg_gauge::client_connections_connected_prim,
