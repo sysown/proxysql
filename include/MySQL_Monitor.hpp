@@ -463,7 +463,7 @@ class MySQL_Monitor {
 	static void trigger_dns_cache_update();
 
 	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, const MySQL_Monitor_State_Data* mmsd, int num_fields);
-	bool is_aws_rds_multi_az_db_cluster_topology(const string& originating_server_hostname, const vector<tuple<string, int, long, int>>& discovered_servers);
+	bool is_aws_rds_multi_az_db_cluster_topology(const string& originating_server_hostname, const vector<tuple<string, uint16_t, uint32_t, int64_t, int32_t>>& discovered_servers);
 	bool is_aws_rds_topology_query_task(const MySQL_Monitor_State_Data_Task_Type& task_type);
 	bool mysql_row_matches_query_task(const unordered_set<string> &field_names, const MySQL_Monitor_State_Data_Task_Type &task_type);
 	void add_topology_query_to_task(MySQL_Monitor_State_Data_Task_Type &task_type);

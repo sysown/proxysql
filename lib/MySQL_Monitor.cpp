@@ -3492,7 +3492,7 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 		return;
 	}
 
-	int reader_hostgroup = mmsd->reader_hostgroup;
+	uint32_t reader_hostgroup = (uint32_t)(mmsd->reader_hostgroup);
 
 	char *error = NULL;
 	int cols = 0;
@@ -3508,7 +3508,7 @@ void MySQL_Monitor::process_discovered_topology(const std::string& originating_s
 	} else {
 		unordered_set<string> saved_hostnames;
 		saved_hostnames.insert(originating_server_hostname);
-		vector<tuple<string, int, long, int>> new_servers;
+		vector<tuple<string, uint16_t, uint32_t, int64_t, int32_t>> new_servers;
 
 		// Do a loop through the query results to save existing runtime server hostnames
 		for (std::vector<SQLite3_row *>::iterator it = runtime_mysql_servers->rows.begin(); it != runtime_mysql_servers->rows.end(); it++) {
@@ -3532,9 +3532,9 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 VALGRIND_ENABLE_ERROR_REPORTING;
 			string current_discovered_hostname = row[2];
 			string current_discovered_port_string = row[3];
-			int current_discovered_port;
+			uint16_t current_discovered_port;
 			try {
-				current_discovered_port = stoi(current_discovered_port_string);
+				current_discovered_port = (uint16_t)stoi(current_discovered_port_string);
 			} catch (...) {
 				proxy_error(
 					"Unable to parse port value coming from '%s' during topology discovery ('%s':%s). Terminating discovery early.\n",
@@ -3554,8 +3554,12 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				return;
 			}
 
-			int current_determined_weight = -1; // TODO: Add logic for selecting a different weight based on discovered role and status
-			tuple<string, int, long, int> discovered_server(current_discovered_hostname, current_discovered_port, reader_hostgroup, current_determined_weight);
+			int64_t current_determined_weight = (int64_t)(-1L); // TODO: Add logic for selecting a different weight based on discovered role and status
+			int32_t use_ssl = 0;
+			if (mmsd->use_ssl) {
+				use_ssl = 1;
+			}
+			tuple<string, uint16_t, uint32_t, int64_t, int32_t> discovered_server(current_discovered_hostname, current_discovered_port, reader_hostgroup, current_determined_weight, use_ssl);
 			if (!saved_hostnames.count(current_discovered_hostname)) {
 				// Server isn't in either hostgroup yet, adding as reader
 				proxy_info("%d: Adding new host '%s' to new server list in hostgroup [%ld].\n", __LINE__, std::get<0>(discovered_server).c_str(), std::get<2>(discovered_server));
@@ -3576,13 +3580,13 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 * @param discovered_servers A vector of servers discovered when querying the cluster's topology.
 * @return Returns 'true' if all conditions are met and 'false' otherwise.
 */
-bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const string& originating_servername, const std::vector<tuple<string, int, long, int>>& discovered_servers) {
+bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const string& originating_servername, const std::vector<tuple<string, uint16_t, uint32_t, int64_t, int32_t>>& discovered_servers) {
 	if (discovered_servers.size() != 2) {
 		return false;
 	}
 
 	vector<string> hostnames(1, originating_servername);
-	for (tuple<string, int, long, int> server : discovered_servers) {
+	for (tuple<string, uint16_t, uint32_t, int64_t, int32_t> server : discovered_servers) {
 		string hostname = std::get<0>(server);
 		if (hostname.empty()) {
 			continue;
