@@ -1,0 +1,162 @@
+name: CI-3p-pgjdbc
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+#      testtree:
+#        type: string
+      infradb:
+        type: string
+      connector:
+        type: string
+
+env:
+#  TESTTREE: ${{ inputs.testtree || inputs.trigger.event.inputs.testtree || 'main' }}
+  TESTTREE: add_pgjdbc
+  TESTNAME: pgjdbc
+  TESTDIST: debian12
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  BRANCH: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_branch || github.ref_name }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        infradb: ${{ fromJson( inputs.infradb ) }}
+        connector: ${{ fromJson( inputs.connector ) }}
+    env:
+      INFRADB: ${{ matrix.infradb }}
+      CONNECTOR: ${{ matrix.connector }}
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12_bin
+      MATRIX: '(${{ matrix.infradb }},${{ matrix.connector }})'
+      
+    steps:
+        
+    - uses: LouisBrunner/checks-action@v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    
+    - name: Checkout proxysql_3p_testing
+      uses: actions/checkout@v4
+      with:
+        repository: 'proxysql/proxysql_3p_testing'
+        ref: ${{ env.TESTTREE }}
+        fetch-depth: 1
+        path: 'proxysql_3p_testing'
+        token: ${{ secrets.GH_TOKEN_PROXYSQL }}
+        sparse-checkout: |
+          common
+          libs
+          infra-docker-hoster
+          test_${{ env.TESTNAME }}
+#          proxysql
+
+#    - name: Wait for cache
+#      if: ${{ env.BRANCH != 'none' }}
+#      env:
+#        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#      run: |
+#        echo "Wating for cache '${BLDCACHE}' ..."
+#        sleep $(( $RANDOM / 1024 ))
+#        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
+#        while [[ -z ${PROBE} ]]; do
+#          echo "Wating for cache '${BLDCACHE}' ..."
+#          sleep 30
+#          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
+#        done
+#        echo "Cache available '${BLDCACHE}'"
+
+    - name: Cache restore bin
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ env.BLDCACHE }}
+        fail-on-cache-miss: true
+        path: |
+          proxysql/.git/
+          proxysql/binaries/
+        
+    - name: Prepare
+      run: |
+        set +e
+        
+        #ulimit -c unlimited
+        #echo '/core' | sudo tee /proc/sys/kernel/core_pattern
+        #echo "==================================="
+        #ulimit -c
+        #echo "==================================="
+        #cat /proc/sys/kernel/core_pattern
+        #echo "==================================="
+        
+        cd proxysql_3p_testing/
+        ./setup.sh test_${{ env.TESTNAME }}/${{ env.TESTNAME }}
+        #git switch ${{ env.TESTTREE }}
+        #git config user.email "GH-Actions@proxysql.com"
+        #git config user.name "GH-Actions"
+        #git rebase main -f -s recursive -X theirs
+        
+        # use cached build
+        rm -rf ./proxysql && mv ../proxysql . || true
+        
+        # set tested database infra
+        #sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
+        #sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
+        #sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
+
+    - name: Run tests
+      run: |
+        set +e
+        
+        cd proxysql_3p_testing/test_${{ env.TESTNAME }}
+        sed -i 's/docker-compose/docker compose/g' run-tests.bash
+        ./run-tests.bash
+        RC=$?
+        
+        #sudo chmod -R 777 ${{ github.workspace }}/*
+        exit $RC
+        
+    - name: Check baseline
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set +e
+        cd proxysql_3p_testing/test_${{ env.TESTNAME }}
+
+        GHUSER="$(id -u):$(id -g)"
+        sudo chown -R ${GHUSER} ./logs
+        cat ./logs/*_summary.log || true
+        FAILS=$(cat ./logs/*_summary.log | grep -oPm1 '(?<=^FAIL: )\d+')
+        
+        exit ${FAILS:-x}
+    
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
+        path: |
+          proxysql_3p_testing/proxysql
+          proxysql_3p_testing/test_${{ env.TESTNAME }}/logs
+          
+    - uses: LouisBrunner/checks-action@v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
