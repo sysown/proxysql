@@ -131,6 +131,16 @@ class AWS_Aurora_monitor_node {
 	}
 };
 
+class AWS_RDS_topology_server {
+	public:
+	string addr;
+	int port;
+	unsigned int writer_hostgroup;
+	unordered_set<string> hosts_in_topology;
+
+	AWS_RDS_topology_server(const string &_str_a, int _p, int _whg);
+};
+
 typedef struct _Galera_status_entry_t {
 	unsigned long long start_time;
 	unsigned long long check_time;
@@ -469,7 +479,6 @@ class MySQL_Monitor {
 	void add_topology_query_to_task(MySQL_Monitor_State_Data_Task_Type &task_type);
 	bool is_aws_rds_topology_version_supported(const string& version);
 
-
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
 	std::vector<table_def_t *> *tables_defs_monitor_internal;
@@ -491,6 +500,7 @@ class MySQL_Monitor {
 	SQLite3_result *Galera_Hosts_resultset;
 	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
+	std::map<std::string, shared_ptr<AWS_RDS_topology_server>> AWS_RDS_Topology_Server_Map; 
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
 	unsigned int num_threads;
 	unsigned int aux_threads;
