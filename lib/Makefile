@@ -117,13 +117,5 @@ libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
 $(ODIR):
 	mkdir $(ODIR)
 
-#all: $(EXECUTABLE)
-
-
 clean:
 	rm -rf *.pid $(ODIR)/*.oo $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *.ko *.so *~ core libproxysql.a $(ODIR)
-
-
-## self note
-# ../deps/protobuf/protobuf/src/protoc -I=. --cpp_out=. ./mysql_logger.proto
-# mv mysql_logger.pb.cc mysql_logger.pb.cpp
