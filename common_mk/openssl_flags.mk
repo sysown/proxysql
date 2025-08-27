@@ -21,8 +21,8 @@ ifeq ($(CUSTOM_OPENSSL_PATH),)
     else
         SSL_IDIR := $(shell export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1; export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1; pkg-config --cflags $(OPENSSL_PACKAGE) | grep -oP "(?<=-I)[^ ]+")
         SSL_LDIR := $(shell pkg-config --variable=libdir $(OPENSSL_PACKAGE))
-        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.so" 2>/dev/null | head -n 1)
-        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.so" 2>/dev/null | head -n 1)
+        LIB_SSL_PATH := $(shell find $(SSL_LDIR) --maxdepth 1 -name "libssl.so" 2>/dev/null | head -n 1)
+        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) --maxdepth 1 -name "libcrypto.so" 2>/dev/null | head -n 1)
     endif
 else
     SSL_IDIR := $(CUSTOM_OPENSSL_PATH)/include
