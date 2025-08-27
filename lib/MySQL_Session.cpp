@@ -56,6 +56,8 @@ using json = nlohmann::json;
 #define SELECT_VARIABLE_IDENTITY_LEN 17
 #define SELECT_VARIABLE_IDENTITY_LIMIT1 "SELECT @@IDENTITY LIMIT 1"
 #define SELECT_VARIABLE_IDENTITY_LIMIT1_LEN 25
+#define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
+#define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
 #define EXPMARIA
 
@@ -1394,6 +1396,34 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
+
+	// Handle SHOW STATUS LIKE 'Ssl_version%'
+	if ((pkt->size >= SHOW_STATUS_LIKE_SSL_VERSION_LEN + 5) && (strncasecmp(SHOW_STATUS_LIKE_SSL_VERSION, (char*)pkt->ptr + 5, SHOW_STATUS_LIKE_SSL_VERSION_LEN) == 0)) {
+		SQLite3_result* resultset = new SQLite3_result(2);
+		resultset->add_column_definition(SQLITE_TEXT, "Variable_name");
+		resultset->add_column_definition(SQLITE_TEXT, "Value");
+
+		const char* ssl_version = "";
+		if (client_myds->encrypted && client_myds->ssl) {
+			ssl_version = SSL_get_version(client_myds->ssl);
+		}
+
+		char* pta[2];
+		pta[0] = (char*)"Ssl_version";
+		pta[1] = (char*)ssl_version;
+		resultset->add_row(pta);
+
+		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+		delete resultset;
+
+		if (mirror == false) {
+			RequestEnd(NULL);
+		}
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
+
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
 	if ( (pkt->size >= 22 + 5) && (strncasecmp((char *)"LOAD DATA LOCAL INFILE",(char *)pkt->ptr+5, 22)==0) ) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
