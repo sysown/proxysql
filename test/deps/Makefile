@@ -33,7 +33,11 @@ mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c
 	cd mysql-connector-c && rm -rf mysql-*/ || true
 	cd mysql-connector-c && tar -zxf mysql-boost-5.7.*.tar.gz
 	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
-	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC"
+	cd mysql-connector-c/mysql-connector-c && mkdir -p storage/ndb
+	cd mysql-connector-c/mysql-connector-c && touch storage/ndb/CMakeLists.txt
+	cd mysql-connector-c/mysql-connector-c && cmake . -DWITHOUT_SERVER=ON -DWITH_BOOST=./boost \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC -Wno-incompatible-pointer-types"
 	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mysqlclient mysql
 	cd mysql-connector-c/mysql-connector-c && cp archive_output_directory/libmysqlclient.a libmysql/
 
