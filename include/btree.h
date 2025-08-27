@@ -106,6 +106,7 @@
 #include <sys/types.h>
 #include <cstdint>
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <iterator>
