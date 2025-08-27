@@ -20,7 +20,8 @@ mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a:
 	cd mariadb-connector-c && tar -zxf mariadb-connector-c-*.tar.gz
 	cd mariadb-connector-c/mariadb-connector-c && patch -p0 < ../CMakeLists.txt.patch
 	cd mariadb-connector-c/mariadb-connector-c && patch -p0 < ../ConnectorName.cmake.patch
-	cd mariadb-connector-c/mariadb-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo
+	cd mariadb-connector-c/mariadb-connector-c && patch -p0 < ../ma_global.h.patch
+	cd mariadb-connector-c/mariadb-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd mariadb-connector-c/mariadb-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 
 mariadb_client: mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a
