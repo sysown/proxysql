@@ -50,9 +50,10 @@ mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a: mysql-conne
 	cd mysql-connector-c-8.4.0 && rm -rf mysql-*/ || true
 	cd mysql-connector-c-8.4.0 && tar -zxf mysql-*.tar.gz
 	cd mysql-connector-c-8.4.0 && ln -fsT $$(ls -1d mysql-8.4.*/) mysql-connector-c
-	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 -DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
-		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC"
+	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DWITHOUT_SERVER=ON -DFORCE_INSOURCE_BUILD=1 \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 \
+		-DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd mysql-connector-c-8.4.0/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE}
 	cd mysql-connector-c-8.4.0/mysql-connector-c && cp archive_output_directory/libmysqlclient.a libmysql/
 
