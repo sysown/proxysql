@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "re2/re2.h"
-#include "re2/regexp.h"
 
 //#define PARSERDEBUG
 
