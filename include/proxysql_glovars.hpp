@@ -50,6 +50,16 @@ class ProxySQL_Checksum_Value {
 	}
 };
 
+//                            Forward declarations
+////////////////////////////////////////////////////////////////////////////////
+
+typedef struct ssl_ctx_st SSL_CTX;
+typedef struct ssl_st SSL;
+
+typedef struct _debug_level debug_level;
+
+////////////////////////////////////////////////////////////////////////////////
+
 class ProxySQL_GlobalVariables {
 	public:
 	ez::ezOptionParser *opt;
