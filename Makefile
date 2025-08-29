@@ -495,3 +495,49 @@ ifneq ($(findstring proxysql,$(GROUPCHECK)),)
 	@echo "Deleting proxysql group"
 	groupdel proxysql
 endif
+
+.PHONY: sonar
+sonar:
+	@echo "Starting SonarQube analysis with Docker... ${SONAR_HOST_URL}"
+	@docker run \
+		--rm \
+		-e SONAR_HOST_URL="$${SONAR_HOST_URL:-http://localhost:9000}" \
+		-e SONAR_TOKEN="$${SONAR_TOKEN}" \
+		-e SONAR_SCANNER_OPTS="-Dsonar.projectKey=proxysql" \
+		-v "$${PWD}:/usr/src" \
+		-w /usr/src \
+		--network host \
+		sonarsource/sonar-scanner-cli \
+		-Dsonar.projectBaseDir=/usr/src
+
+.PHONY: sonar-server
+sonar-server:
+	@echo "Starting SonarQube server..."
+	@docker run -d \
+		--name sonarqube \
+		-p 9000:9000 \
+		-p 9092:9092 \
+		sonarqube:community
+	@echo "SonarQube server is starting at http://localhost:9000"
+	@echo "Default credentials: admin/admin"
+	@echo "Wait for server to fully start (may take a few minutes)"
+
+.PHONY: sonar-stop
+sonar-stop:
+	@echo "Stopping SonarQube server..."
+	@docker stop sonarqube 2>/dev/null || true
+	@docker rm sonarqube 2>/dev/null || true
+
+.PHONY: sonar-full
+sonar-full: sonar-server
+	@echo "Waiting for SonarQube to be ready..."
+	@for i in $$(seq 1 60); do \
+		if curl -s http://localhost:9000/api/system/status | grep -q "UP"; then \
+			echo "SonarQube is ready!"; \
+			break; \
+		fi; \
+		echo "Waiting for SonarQube to start ($$i/60)..."; \
+		sleep 5; \
+	done
+	@$(MAKE) sonar
+	@echo "Analysis complete. View results at http://localhost:9000"

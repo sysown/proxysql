@@ -114,6 +114,9 @@ heaptrack.*
 #vscode
 .vscode/
 
+# direnv local files
+.envrc.*
+
 # test deps
 test/deps/mariadb-connector-c/mariadb-connector-c-*/
 test/deps/mysql-connector-c/mysql-5.7.*/
