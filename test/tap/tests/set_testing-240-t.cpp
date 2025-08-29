@@ -517,7 +517,7 @@ int main(int argc, char *argv[]) {
 	//queries = testCases.size();
 	queries = queries / rows_res.size();		// keep test duration constant
 	unsigned int p = queries * num_threads;
-	p *= 2;										// number of algorithms
+	p *= 3;										// number of algorithms
 	p *= rows_res.size();						// number of host groups
 	plan(p);
 
@@ -553,7 +553,7 @@ int main(int argc, char *argv[]) {
 			uniquequeries=(int)sqrt(uniquequeries);
 		}
 
-		for (int algo = 1; algo <= 2; algo++ ) {
+		for (int algo = 1; algo <= 3; algo++ ) {
 			connect_phase_completed = 0;
 			query_phase_completed = 0;
 			std::string qu = "SET mysql-set_parser_algorithm=" + std::to_string(algo);
