@@ -3,8 +3,11 @@
 
 #include <memory>
 #include <queue>
-#include "proxysql.h"
-#include "sqlite3db.h"
+
+#include "proxysql_structs.h"
+#include "proxysql_mem.h"
+
+#include "mysql.h"
 
 #define MIN_ARRAY_LEN 8
 #define MIN_ARRAY_DELETE_RATIO  8

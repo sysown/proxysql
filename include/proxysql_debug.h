@@ -1,10 +1,6 @@
 #ifndef __PROXYSQL_DEBUG_H
 #define __PROXYSQL_DEBUG_H
 
-#include <chrono>
-#include <iostream>
-#include <atomic>
-
 #include "proxysql_macros.h"
 
 #if ENABLE_TIMER // this is defined in proxysql_macros.h

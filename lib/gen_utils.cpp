@@ -1,8 +1,11 @@
 #include <vector>
 #include <memory>
 #include <sstream>
-#include "gen_utils.h"
 
+#include "sys/stat.h"
+
+#include "gen_utils.h"
+#include "sqlite3db.h"
 
 using std::vector;
 using std::unique_ptr;

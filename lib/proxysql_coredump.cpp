@@ -1,8 +1,10 @@
 #include <string>
 #include <unordered_set>
+#include <unistd.h>
 
-#include "proxysql_coredump.h"
+#include "proxysql.h"
 #include "gen_utils.h"
+
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
 // currently only support x86-32, x86-64, ARM, and MIPS on Linux
 #include "coredumper/coredumper.h"

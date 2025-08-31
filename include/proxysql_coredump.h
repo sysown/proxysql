@@ -1,6 +1,8 @@
 #ifndef __PROXYSQL_COREDUMP_H
 #define __PROXYSQL_COREDUMP_H
+
 #include <unordered_set>
+#include <string>
 
 #define S1(x) #x
 #define S2(x) S1(x)
