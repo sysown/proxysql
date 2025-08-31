@@ -2,10 +2,8 @@
 #include "mysqld_error.h"
 
 #include <algorithm>
-#include <functional>
 #include <sstream>
 #include <algorithm>
-#include <climits>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -21,7 +19,6 @@
 #include <sys/syscall.h>
 #include <linux/close_range.h>
 
-using std::function;
 using std::string;
 using std::string_view;
 using std::unique_ptr;
@@ -433,6 +430,13 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 	}
 
 	return result;
+}
+
+string trim(string&& s) {
+	s.erase(0, s.find_first_not_of(" \n\r\t"));
+	s.erase(s.find_last_not_of(" \n\r\t") + 1);
+
+	return s;
 }
 
 std::string generate_multi_rows_query(int rows, int params) {

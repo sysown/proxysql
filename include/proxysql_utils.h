@@ -312,6 +312,13 @@ std::string replace_str(const std::string& str, const std::string& match, const 
  */
 std::vector<std::string> split_str(const std::string& s, char delimiter);
 
+ /**
+  * @brief Trims leading and trailing whitespace from a string.
+  * @param s A string to trim (rvalue reference). The string will be modified in place.
+  * @return The trimmed string (the modified input string).
+  */
+std::string trim(std::string&& s);
+
 std::string generate_multi_rows_query(int rows, int params);
 
 /**
