@@ -121,6 +121,7 @@ tests: tests-cpp \
 	test_ssl_fast_forward-3_libmysql-t \
 	setparser_test2 setparser_test2-t \
 	setparser_test3 setparser_test3-t \
+	test_set_parser_parity-t \
 	set_testing-240.csv \
 	test_clickhouse_server_libmysql-t \
 	reg_test_stmt_resultset_err_no_rows_libmysql-t \
@@ -232,6 +233,11 @@ ifeq ($(PROXYSQLGENAI),1)
 else
 	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 endif
+
+test_set_parser_parity-t: test_set_parser_parity.cpp $(TAP_LDIR)/libtap.so $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+	$(CXX) $<  -DEXCLUDE_TRACKING_VARAIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp \
+		$(PROXYSQL_LDIR)/MySQL_Variables_Utils.cpp $(PROXYSQL_LDIR)/MySQL_Session_Utils.cpp \
+		$(PROXYSQL_PATH)/src/proxysql_global.cpp  $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test3-t: setparser_test3
 	ln -fs setparser_test3 setparser_test3-t
