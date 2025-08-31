@@ -627,6 +627,7 @@ public:
 	void detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, bool verbose = false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void set_previous_status_mode3(bool allow_execute = true);
+	char* get_current_query(int max_length = -1);
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>

@@ -6453,6 +6453,45 @@ void PgSQL_Session::handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_St
 	}
 }*/
 
+char* PgSQL_Session::get_current_query(int max_length) {
+	const char *query_ptr = NULL;
+	int query_len = 0;
+
+	if (!(mybe && mybe->server_myds && mybe->server_myds->myconn)) {
+		return NULL;
+	}
+
+	if (CurrentQuery.extended_query_info.stmt_info == NULL) { // text protocol
+		query_ptr = mybe->server_myds->myconn->query.ptr;
+		query_len = mybe->server_myds->myconn->query.length;
+	} else { // prepared statement
+		query_ptr = CurrentQuery.extended_query_info.stmt_info->query;
+		query_len = CurrentQuery.extended_query_info.stmt_info->query_length;
+	}
+
+	bool trunc_query = false;
+	if (max_length > 0 && query_len > max_length) {
+		query_len = max_length;
+		trunc_query = true;
+	}
+
+	char *res = NULL;
+
+	if (query_len > 0) {
+		res = (char *) malloc(query_len + 1);
+		if (trunc_query) {
+			// for truncated queries, add three dots at the end
+			strncpy(res, query_ptr, query_len - 3);
+			strncpy(res + (query_len - 3), "...", 3);
+		} else {
+			strncpy(res, query_ptr, query_len);
+		}
+		res[query_len] = '\0';
+	}
+
+	return res;
+}
+
 // Optimized single‐pass parser for PostgreSQL DateStyle strings.
 // It supports input in one of these forms:
 //   - "ISO, MDY"  (two tokens separated by a comma)

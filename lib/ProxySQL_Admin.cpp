@@ -2605,8 +2605,6 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;
-	variables.mysql_show_processlist_extended = false;
-	variables.pgsql_show_processlist_extended = false;
 	//variables.hash_passwords=true;	// issue #676
 	variables.vacuum_stats=true;	// issue #1011
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
@@ -2692,6 +2690,14 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
 	init_prometheus_dyn_gauge_array<admin_metrics_map_idx, p_admin_dyn_gauge>(admin_metrics_map, this->metrics.p_dyn_gauge_array);
+
+	// processlist configuration
+	variables.mysql_processlist.show_extended = 0;
+	variables.pgsql_processlist.show_extended = 0;
+	variables.mysql_processlist.show_idle_session = true;
+	variables.pgsql_processlist.show_idle_session = true;
+	variables.mysql_processlist.max_query_length = PROCESSLIST_MAX_QUERY_LEN_DEFAULT;
+	variables.pgsql_processlist.max_query_length = PROCESSLIST_MAX_QUERY_LEN_DEFAULT;
 
 	// NOTE: Imposing fixed value to 'version_info' matching 'mysqld_exporter'
 	this->metrics.p_gauge_array[p_admin_gauge::version_info]->Set(1);

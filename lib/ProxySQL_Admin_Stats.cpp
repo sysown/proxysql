@@ -782,8 +782,8 @@ void ProxySQL_Admin::stats___pgsql_global() {
 void ProxySQL_Admin::stats___mysql_processlist() {
 	int rc;
 	if (!GloMTH) return;
-	mysql_thread___show_processlist_extended = variables.mysql_show_processlist_extended;
-	SQLite3_result * resultset=GloMTH->SQL3_Processlist();
+
+	SQLite3_result * resultset=GloMTH->SQL3_Processlist(variables.mysql_processlist);
 	if (resultset==NULL) return;
 
 	sqlite3_stmt *statement1=NULL;
@@ -935,8 +935,8 @@ CREATE TABLE stats_mysql_processlist (
 void ProxySQL_Admin::stats___pgsql_processlist() {
 	int rc;
 	if (!GloPTH) return;
-	pgsql_thread___show_processlist_extended = variables.pgsql_show_processlist_extended;
-	SQLite3_result* resultset = GloPTH->SQL3_Processlist();
+
+	SQLite3_result* resultset = GloPTH->SQL3_Processlist(variables.pgsql_processlist);
 	if (resultset == NULL) return;
 
 	sqlite3_stmt* statement1 = NULL;

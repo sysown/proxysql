@@ -17,6 +17,10 @@
 
 #include "proxysql_typedefs.h"
 
+#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    2 * 1024 * 1024  //  2 MiB
+#define PROCESSLIST_MAX_QUERY_LEN_MIN        1 * 1024         //  1 KiB
+#define PROCESSLIST_MAX_QUERY_LEN_MAX       32 * 1024 * 1024  // 32 MiB
+
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
 class ProxySQL_Restapi;
@@ -237,6 +241,13 @@ struct peer_pgsql_servers_v2_t {
 	peer_pgsql_servers_v2_t(SQLite3_result*, const pgsql_servers_v2_checksum_t&);
 };
 
+struct processlist_config_t {
+#ifdef IDLE_THREADS
+	bool show_idle_session;
+#endif
+	int show_extended;
+	int max_query_length;
+};
 
 class ProxySQL_Admin {
 	private:
@@ -317,8 +328,6 @@ class ProxySQL_Admin {
 		int stats_mysql_eventslog_sync_buffer_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
-		int mysql_show_processlist_extended;
-		int pgsql_show_processlist_extended;
 		bool restapi_enabled;
 		bool restapi_enabled_old;
 		int restapi_port;
@@ -335,6 +344,13 @@ class ProxySQL_Admin {
 		int coredump_generation_interval_ms;
 		int coredump_generation_threshold;
 		char* ssl_keylog_file;
+		/**
+		 *   Processlist configurations are owned by MySQL/PgSQL Threads_Handlers.
+		 *   At runtime, ProxySQL_Admin keeps a copy of those variables and uses them
+		 *   for collecting stats.
+		 */
+		processlist_config_t mysql_processlist;
+		processlist_config_t pgsql_processlist;
 	} variables;
 
 	unsigned long long last_p_memory_metrics_ts;
