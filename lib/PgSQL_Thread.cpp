@@ -416,6 +416,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"session_idle_show_processlist",
 #endif // IDLE_THREADS
 	(char*)"show_processlist_extended",
+	(char *)"processlist_max_query_length",
 	(char*)"commands_stats",
 	(char*)"query_digests",
 	(char*)"query_digests_lowercase",
@@ -1066,6 +1067,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.session_idle_show_processlist = true;
 #endif // IDLE_THREADS
 	variables.show_processlist_extended = 0;
+	variables.processlist_max_query_length = PROCESSLIST_MAX_QUERY_LEN_DEFAULT;
 	variables.servers_stats = true;
 	variables.default_reconnect = true;
 	variables.ssl_p2s_ca = NULL;
@@ -2191,6 +2193,14 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["session_idle_ms"] = make_tuple(&variables.session_idle_ms, 1, 3600 * 1000, false);
 #endif // IDLE_THREADS
 		VariablesPointers_int["show_processlist_extended"] = make_tuple(&variables.show_processlist_extended, 0, 2, false);
+
+		VariablesPointers_int["processlist_max_query_length"] = make_tuple(
+			&variables.processlist_max_query_length,
+			PROCESSLIST_MAX_QUERY_LEN_MIN,
+			PROCESSLIST_MAX_QUERY_LEN_MAX,
+			false
+		);
+
 		VariablesPointers_int["threshold_query_length"] = make_tuple(&variables.threshold_query_length, 1024, 1 * 1024 * 1024 * 1024, false);
 		VariablesPointers_int["threshold_resultset_size"] = make_tuple(&variables.threshold_resultset_size, 1024, 1 * 1024 * 1024 * 1024, false);
 
@@ -3747,7 +3757,6 @@ void PgSQL_Thread::refresh_variables() {
 	GloPTH->wrlock();
 	__thread_PgSQL_Thread_Variables_version = __global_PgSQL_Thread_Variables_version;
 	pgsql_thread___authentication_method = GloPTH->get_variable_int((char*)"authentication_method");
-	pgsql_thread___show_processlist_extended = GloPTH->get_variable_int((char*)"show_processlist_extended");
 	pgsql_thread___max_connections = GloPTH->get_variable_int((char*)"max_connections");
 	pgsql_thread___use_tcp_keepalive = (bool)GloPTH->get_variable_int((char*)"use_tcp_keepalive");
 	pgsql_thread___tcp_keepalive_time = GloPTH->get_variable_int((char*)"tcp_keepalive_time");
@@ -3799,7 +3808,6 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___mirror_max_concurrency = GloPTH->get_variable_int((char*)"mirror_max_concurrency");
 	pgsql_thread___mirror_max_queue_length = GloPTH->get_variable_int((char*)"mirror_max_queue_length");
 	pgsql_thread___sessions_sort = (bool)GloPTH->get_variable_int((char*)"sessions_sort");
-	pgsql_thread___show_processlist_extended = GloPTH->get_variable_int((char*)"show_processlist_extended");
 	pgsql_thread___servers_stats = (bool)GloPTH->get_variable_int((char*)"servers_stats");
 	pgsql_thread___default_reconnect = (bool)GloPTH->get_variable_int((char*)"default_reconnect");
 	
@@ -3961,9 +3969,6 @@ void PgSQL_Thread::refresh_variables() {
 
 	variables.query_cache_stores_empty_result = (bool)GloPTH->get_variable_int((char*)"query_cache_stores_empty_result");
 
-#ifdef IDLE_THREADS
-	pgsql_thread___session_idle_show_processlist = (bool)GloPTH->get_variable_int((char*)"session_idle_show_processlist");
-#endif // IDLE_THREADS
 	/*
 	variables.min_num_servers_lantency_awareness = GloPTH->get_variable_int((char*)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas = GloPTH->get_variable_int((char*)"aurora_max_lag_ms_only_read_from_replicas");
@@ -4539,7 +4544,7 @@ void PgSQL_Threads_Handler::Get_Memory_Stats() {
 	}
 }
 
-SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
+SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t args) {
 	const int colnum = 18;
 	char port[NI_MAXSERV];
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping PgSQL Processlist\n");
@@ -4577,8 +4582,9 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 		if (i < num_threads && pgsql_threads) {
 			thr = (PgSQL_Thread*)pgsql_threads[i].worker;
 #ifdef IDLE_THREADS
-		} else {
-			if (GloVars.global.idle_threads && pgsql_thread___session_idle_show_processlist && pgsql_threads_idles) {
+		}
+		else {
+			if (GloVars.global.idle_threads && args.show_idle_session && pgsql_threads_idles) {
 				thr = (PgSQL_Thread*)pgsql_threads_idles[i - num_threads].worker;
 			}
 #endif // IDLE_THREADS
@@ -4677,24 +4683,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 					pta[9] = strdup(buf);
 					sprintf(buf, "%d", mc->parent->port);
 					pta[10] = strdup(buf);
-					if (sess->CurrentQuery.extended_query_info.stmt_info == NULL) { // text protocol
-						if (mc->query.length) {
-							pta[15] = (char*)malloc(mc->query.length + 1);
-							strncpy(pta[15], mc->query.ptr, mc->query.length);
-							pta[15][mc->query.length] = '\0';
-						} else {
-							pta[15] = NULL;
-						}
-					} else { // prepared statement
-						const PgSQL_STMT_Global_info* si = sess->CurrentQuery.extended_query_info.stmt_info;
-						if (si->query_length) {
-							pta[15] = (char*)malloc(si->query_length + 1);
-							strncpy(pta[15], si->query, si->query_length);
-							pta[15][si->query_length] = '\0';
-						} else {
-							pta[15] = NULL;
-						}
-					}
+					pta[15] = sess->get_current_query(args.max_query_length);
 					sprintf(buf, "%d", mc->status_flags);
 					pta[16] = strdup(buf);
 					sprintf(buf, "%u", mc->get_pg_backend_pid());
@@ -4798,10 +4787,10 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist() {
 				pta[14] = strdup(buf);
 
 				pta[17] = NULL;
-				if (pgsql_thread___show_processlist_extended) {
+				if (args.show_extended) {
 					json j;
 					sess->generate_proxysql_internal_session_json(j);
-					if (pgsql_thread___show_processlist_extended == 2) {
+					if (args.show_extended == 2) {
 						std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
 						pta[17] = strdup(s.c_str());
 					} else {

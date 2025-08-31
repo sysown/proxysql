@@ -1083,7 +1083,6 @@ PgSQL_HostGroups_Manager* PgHGM;
 
 // PostgreSQL thread variables
 __thread int pgsql_thread___authentication_method;
-__thread int pgsql_thread___show_processlist_extended;
 __thread char *pgsql_thread___server_version;
 __thread char *pgsql_thread___server_encoding;
 __thread bool pgsql_thread___have_ssl;
@@ -1203,7 +1202,6 @@ __thread int pgsql_thread___query_cache_size_MB;
 __thread int pgsql_thread___query_cache_soft_ttl_pct;
 __thread int pgsql_thread___query_cache_handle_warnings;
 
-__thread bool pgsql_thread___session_idle_show_processlist;
 __thread char* pgsql_thread___default_variables[PGSQL_NAME_LAST_LOW_WM];
 __thread int pgsql_thread___handle_unknown_charset;
 __thread int pgsql_thread___max_stmts_cache;
@@ -1288,11 +1286,9 @@ __thread bool mysql_thread___query_digests_keep_comment;
 __thread int mysql_thread___query_digests_max_digest_length;
 __thread int mysql_thread___query_digests_max_query_length;
 __thread bool mysql_thread___parse_failure_logs_digest;
-__thread int mysql_thread___show_processlist_extended;
 __thread int mysql_thread___session_idle_ms;
 __thread int mysql_thread___hostgroup_manager_verbose;
 __thread bool mysql_thread___default_reconnect;
-__thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
@@ -1391,7 +1387,6 @@ extern PgSQL_HostGroups_Manager *PgHGM;
 
 //PostgreSQL Thread Variables
 extern __thread int pgsql_thread___authentication_method;
-extern __thread int pgsql_thread___show_processlist_extended;
 extern __thread char *pgsql_thread___server_version;
 extern __thread char* pgsql_thread___server_encoding;
 extern __thread bool pgsql_thread___have_ssl;
@@ -1509,7 +1504,6 @@ extern __thread int pgsql_thread___query_cache_size_MB;
 extern __thread int pgsql_thread___query_cache_soft_ttl_pct;
 extern __thread int pgsql_thread___query_cache_handle_warnings;
 
-extern __thread bool pgsql_thread___session_idle_show_processlist;
 extern __thread char* pgsql_thread___default_variables[PGSQL_NAME_LAST_LOW_WM];
 extern __thread int pgsql_thread___handle_unknown_charset;
 extern __thread int pgsql_thread___max_stmts_cache;
@@ -1594,11 +1588,9 @@ extern __thread bool mysql_thread___query_digests_keep_comment;
 extern __thread int mysql_thread___query_digests_max_digest_length;
 extern __thread int mysql_thread___query_digests_max_query_length;
 extern __thread bool mysql_thread___parse_failure_logs_digest;
-extern __thread int mysql_thread___show_processlist_extended;
 extern __thread int mysql_thread___session_idle_ms;
 extern __thread int mysql_thread___hostgroup_manager_verbose;
 extern __thread bool mysql_thread___default_reconnect;
-extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
