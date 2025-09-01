@@ -26,6 +26,12 @@ sonar/
 *.oo2
 *.pyc
 
+# Intermediate Files (Parser/Lexer)
+MySQL_Lexer.yy.c
+MySQL_Parser.output
+MySQL_Parser.tab.c
+MySQL_Parser.tab.h
+
 # Libraries
 *.lib
 *.a
