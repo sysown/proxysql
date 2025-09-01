@@ -13,7 +13,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 typedef unsigned int Oid;
 using nlohmann::json;
