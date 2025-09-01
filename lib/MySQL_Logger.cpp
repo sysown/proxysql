@@ -962,6 +962,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 			// Deterministic binary logging: always report 0 parameters.
 			uint16_t num_params = 0;
 			uint8_t paramCountLen = mysql_encode_length(num_params, buf);
+			write_encoded_length(buf, num_params, paramCountLen, buf[0]);
 			f->write((char *)buf, paramCountLen);
 		}
 	}

@@ -12,19 +12,22 @@
 
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
-//#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001 // DEPRECATED
-#define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
-#define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
-#define STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT   0x00000008
-#define STATUS_MYSQL_CONNECTION_LOCK_TABLES          0x00000010
-#define STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE      0x00000020
-#define STATUS_MYSQL_CONNECTION_GET_LOCK             0x00000040
-#define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX         0x00000080
-#define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
-#define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
-#define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG      0x00000400
-#define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
-#define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
+class PgSQL_STMTs_local_v14;
+class PgSQL_Describe_Prepared_Info;
+class PgSQL_Bind_Info;
+//#define STATUS_PGSQL_CONNECTION_SEQUENCE			 0x00000001
+#define STATUS_PGSQL_CONNECTION_COMPRESSION          0x00000002
+#define STATUS_PGSQL_CONNECTION_USER_VARIABLE        0x00000004
+#define STATUS_PGSQL_CONNECTION_PREPARED_STATEMENT   0x00000008
+#define STATUS_PGSQL_CONNECTION_LOCK_TABLES          0x00000010
+#define STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE      0x00000020
+#define STATUS_PGSQL_CONNECTION_ADVISORY_LOCK        0x00000040
+#define STATUS_PGSQL_CONNECTION_NO_MULTIPLEX         0x00000080
+#define STATUS_PGSQL_CONNECTION_HAS_SEQUENCES		 0x00000100
+#define STATUS_PGSQL_CONNECTION_ADVISORY_XACT_LOCK   0x00000200
+#define STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG      0x00000400
+#define STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
+//#define STATUS_PGSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
 
 enum PgSQL_Param_Name {
@@ -216,7 +219,7 @@ private:
 
 class PgSQL_Variable {
 public:
-	char *value = (char*)"";
+	char *value = nullptr;
 	void fill_server_internal_session(nlohmann::json &j, int conn_num, int idx);
 	void fill_client_internal_session(nlohmann::json &j, int idx);
 };
@@ -244,7 +247,7 @@ class PgSQL_Connection_userinfo {
 
 class PgSQL_Connection {
 public:
-	PgSQL_Connection();
+	explicit PgSQL_Connection(bool is_client_conn);
 	~PgSQL_Connection();
 
 	PG_ASYNC_ST handler(short event);
@@ -254,18 +257,77 @@ public:
 	void query_cont(short event);
 	void fetch_result_start();
 	void fetch_result_cont(short event);
+
+    /**
+     * @brief Initiates the asynchronous preparation of a SQL statement.
+     *
+     * This method starts the process of preparing a SQL statement on the PostgreSQL backend.
+     *
+     * The actual continuation and completion of the statement preparation is handled
+     * by stmt_prepare_cont(short event).
+     */
+    void stmt_prepare_start();
+
+    /**
+     * @brief Continues the asynchronous preparation of a SQL statement.
+     *
+     * This method is called after stmt_prepare_start() to handle the next step in the
+     * asynchronous state machine for preparing a SQL statement on the PostgreSQL backend.
+     *
+     * @param event The event flag indicating the current I/O event.
+     */
+    void stmt_prepare_cont(short event);
+
+    /**
+     * @brief Initiates the asynchronous description of a prepared SQL statement.
+     *
+     * This method starts the process of describing a previously prepared SQL statement
+     * on the PostgreSQL backend.
+	 * 
+     */
+    void stmt_describe_start();
+
+    /**
+     * @brief Continues the asynchronous description of a prepared SQL statement.
+     *
+     * This method is called after stmt_describe_start() to handle the next step in the
+     * asynchronous state machine for describing a prepared SQL statement on the PostgreSQL backend.
+     *
+     * @param event The event flag indicating the current I/O event.
+     */
+    void stmt_describe_cont(short event);
+
+    /**
+     * @brief Initiates the asynchronous execution of a prepared SQL statement.
+     *
+     * This method starts the process of executing a previously prepared SQL statement
+     * on the PostgreSQL backend. It sends Bind and Execute messages to the server
+     * and transitions the connection's state machine to handle the subsequent response.
+	 * 
+     */
+    void stmt_execute_start();
+
+    /**
+     * @brief Continues the asynchronous execution of a prepared SQL statement.
+     *
+     * This method is called after stmt_execute_start() to handle the next step in the
+     * asynchronous state machine for executing a prepared SQL statement on the PostgreSQL backend.
+     *
+     * @param returned The event flag indicating the current I/O event.
+     */
+    void stmt_execute_cont(short event);
+
 	void reset_session_start();
 	void reset_session_cont(short event);
 	
-	int  async_connect(short event);
-
-	int  async_query(short event, char* stmt, unsigned long length);
-	int  async_ping(short event);
-	int  async_reset_session(short event);
-	int	 async_send_simple_command(short event, char* stmt, unsigned long length); // no result set expected
+	int async_connect(short event);
+	int async_query(short event, const char* stmt, unsigned long length, const char* backend_stmt_name = nullptr, 
+		PgSQL_Extended_Query_Type type = PGSQL_EXTENDED_QUERY_TYPE_NOT_SET, const PgSQL_Extended_Query_Info* extended_query_info = nullptr);
+	int async_ping(short event);
+	int async_reset_session(short event);
+	int async_send_simple_command(short event, char* stmt, unsigned long length); // no result set expected
 
 	void next_event(PG_ASYNC_ST new_st);
-	bool IsAutoCommit();
 	bool is_connected() const;
 	void compute_unknown_transaction_status();
 	void async_free_result();
@@ -273,7 +335,7 @@ public:
 	bool IsActiveTransaction();
 	bool IsKnownActiveTransaction();
 	bool IsServerOffline();
-	
+	void set_is_client(); // used for local_stmts
 	bool is_connection_in_reusable_state() const;
 
 	bool requires_RESETTING_CONNECTION(const PgSQL_Connection* client_conn);
@@ -312,7 +374,7 @@ public:
 		if (error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL ||
 			error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR ||
 			error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_PANIC) {
-				return true;
+			return true;
 		}
 		return false;
 	}
@@ -410,6 +472,7 @@ public:
 	const char* get_pg_connection_status_str();
 	const char* get_pg_transaction_status_str();
 	unsigned int get_memory_usage() const;
+	char get_transaction_status_char();
 
 	inline
 	int get_backend_pid() { return (pgsql_conn) ? get_pg_backend_pid() : -1; }
@@ -433,18 +496,54 @@ public:
 	bool get_status(uint32_t status_flag);
 	bool MultiplexDisabled(bool check_delay_token = true);
 
-	bool AutocommitFalse_AndSavepoint();
-
 	unsigned int reorder_dynamic_variables_idx();
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection* client_conn, unsigned int& not_matching);
-	void set_query(char* stmt, unsigned long length);
+	void set_query(const char* stmt, unsigned long length, const char* _backend_stmt_name = nullptr, const PgSQL_Extended_Query_Info* extended_query_info = nullptr);
 	void reset();
 
 	bool IsKeepMultiplexEnabledVariables(char* query_digest_text);
 
+	/**
+	 * @brief Retrieves startup parameter and it's hash
+	 *
+	 * This function tries to retrieve value and hash of startup paramters if present (provided in connection parameters).
+	 * If value is not found, it falls back to the thread-specific default variables.
+	 *
+	 * @param idx The index of startup parameter to retrieve.
+	 * @return The value and hash of startup parameter.
+	 *
+	 */
+	std::pair<const char*, uint32_t> get_startup_parameter_and_hash(enum pgsql_variable_name idx);
+	
+	/**
+	 * @brief Copies tracked PgSQL session variables to startup parameters
+	 *
+	 * This function synchronizes the current tracked session variables (in `variables` and `var_hash`)
+	 * to the startup parameters arrays (`startup_parameters` and `startup_parameters_hash`). If `copy_only_critical_param` 
+	 * is true, only the critical parameters (indices 0 to PGSQL_NAME_LAST_LOW_WM-1) are copied. 
+	 * Otherwise, all tracked variables up to PGSQL_NAME_LAST_HIGH_WM are copied.
+	 *
+	 * @param copy_only_critical_param If true, only critical parameters are copied; otherwise, all tracked variables.
+	 */
+	void copy_pgsql_variables_to_startup_parameters(bool copy_only_critical_param);
+
+	/**
+	 * @brief Copies startup parameters to tracked PgSQL session variables.
+	 *
+	 * This function synchronizes the startup parameters arrays (`startup_parameters` and `startup_parameters_hash`)
+	 * to the tracked session variables (`variables` and `var_hash`). If `copy_only_critical_param` is true,
+	 * only the critical parameters (indices 0 to PGSQL_NAME_LAST_LOW_WM-1) are copied. Otherwise, all tracked
+	 * variables up to PGSQL_NAME_LAST_HIGH_WM are copied.
+	 *
+	 * @param copy_only_critical_param If true, only critical parameters are copied; otherwise, all tracked variables.
+	 */
+	void copy_startup_parameters_to_pgsql_variables(bool copy_only_critical_param);
+
 	struct {
 		unsigned long length;
-		char* ptr;
+		const char* ptr;
+		const char* backend_stmt_name;
+		const PgSQL_Extended_Query_Info* extended_query_info;
 	} query;
 
 	struct {
@@ -464,12 +563,15 @@ public:
 		unsigned long long pgconnpoll_put;
 	} statuses;
 
-	PgSQL_Variable variables[PGSQL_NAME_LAST_HIGH_WM];
-	uint32_t var_hash[PGSQL_NAME_LAST_HIGH_WM];
+	std::array<PgSQL_Variable, PGSQL_NAME_LAST_HIGH_WM> variables = {};
+	std::array<uint32_t, PGSQL_NAME_LAST_HIGH_WM> var_hash = {};
 	// for now we store possibly missing variables in the lower range
 	// we may need to fix that, but this will cost performance
-	bool var_absent[PGSQL_NAME_LAST_HIGH_WM] = { false };
+	std::array<bool, PGSQL_NAME_LAST_HIGH_WM> var_absent = {};
 	std::vector<uint32_t> dynamic_variables_idx;
+
+	std::array<uint32_t, PGSQL_NAME_LAST_HIGH_WM> startup_parameters_hash = {};
+	std::array<char*, PGSQL_NAME_LAST_HIGH_WM> startup_parameters = {};
 
 	/**
 	 * @brief Keeps tracks of the 'server_status'. Do not confuse with the 'server_status' from the
@@ -486,6 +588,7 @@ public:
 	PSresult  ps_result;
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
+	PgSQL_Describe_Prepared_Info* stmt_metadata_result;
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
@@ -499,8 +602,9 @@ public:
 	bool reusable;
 	bool processing_multi_statement;
 	bool multiplex_delayed;
+	bool is_client_connection; // true if this is a client connection, false if it is a server connection
 
-
+	PgSQL_STMTs_local_v14* local_stmts;
 	PgSQL_SrvC *parent;
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Data_Stream* myds;
@@ -516,6 +620,12 @@ public:
 	bool unknown_transaction_status;
 
 private:
+	// Set end state for the fetch result to indicate that it originates from a simple query or statement execution.
+	ASYNC_ST fetch_result_end_st = ASYNC_QUERY_END;
+	inline void set_fetch_result_end_state(ASYNC_ST st) {
+		assert(st == ASYNC_QUERY_END || st == ASYNC_STMT_EXECUTE_END);
+		fetch_result_end_st = st;
+	}
 	// Handles the COPY OUT response from the server.
 	// Returns true if it consumes all buffer data, or false if the threshold for result size is reached
 	bool handle_copy_out(const PGresult* result, uint64_t* processed_bytes);
@@ -553,5 +663,22 @@ private:
 	 */
 	static std::map<std::string, std::vector<std::string>> parse_pq_error_message(const std::string& error_str);
 };
+
+class PgSQL_CancelQueryArgs {
+public:
+	PGconn* conn;
+	PgSQL_Thread* mt;
+	char* username;
+	char* hostname;
+	unsigned int port;
+	int backend_pid;
+	unsigned int hid;
+
+	PgSQL_CancelQueryArgs(PGconn* _conn, const char* user, const char* host,
+		unsigned int _port, unsigned int _hid, int _backend_pid, PgSQL_Thread* _mt);
+	~PgSQL_CancelQueryArgs();
+};
+
+void* PgSQL_cancel_query_thread(void* arg);
 
 #endif /* __CLASS_PGSQL_CONNECTION_H */

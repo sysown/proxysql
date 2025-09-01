@@ -326,6 +326,47 @@ inline T overflow_safe_multiply(T val) {
 	return (val * FACTOR);
 }
 
+/*
+ * @brief Reads and converts a big endian 32-bit unsigned integer from the provided packet buffer into the destination pointer.
+ *
+ * This function is used to extract the big endian 32-bit unsigned integer value at the specified position in a given
+ * packet buffer, and stores it in the destination pointer passed as an argument.
+ *
+ * @param[in] pkt A pointer to the start of the input packet buffer from which to read the 32-bit integer.
+ *
+ * @param[out] dst_p A pointer where the extracted big endian 32-bit unsigned integer value will be stored.
+ */
+inline bool get_uint32be(const unsigned char* pkt, uint32_t* dst_p) {
+	*dst_p = ((uint32_t)pkt[0] << 24) |
+			 ((uint32_t)pkt[1] << 16) |
+			 ((uint32_t)pkt[2] << 8) |
+			 ((uint32_t)pkt[3]);
+	return true;
+}
+
+/**
+ * @brief Extracts a 16-bit unsigned integer from a packet and stores it in the provided destination pointer.
+ *
+ * This function reads two bytes from the packet `pkt` starting from the beginning, interprets them as a big-endian unsigned 16-bit integer,
+ * and stores the result into the memory location pointed to by `dst_p`. It consistently returns true to indicate successful execution.
+ *
+ * @param pkt Pointer to the packet data (array of unsigned chars) from which the 16-bit integer will be extracted.
+ *             The caller must ensure this pointer is valid and points to at least two bytes of data.
+ * @param dst_p Pointer to a uint16_t variable where the extracted integer will be stored. The caller must ensure that
+ *             this pointer is valid and points to a uint16_t variable.
+ *
+ * @return Always returns true to indicate success.
+ *
+ * @note This function uses big-endian byte order (network byte order) for interpreting the packet data.
+ *       It is assumed that the packet buffer `pkt` contains at least two bytes (the size of a uint16_t).
+ *       The function uses post-increment to move the reading position after extracting each byte.
+ */
+inline bool get_uint16be(const unsigned char* pkt, uint16_t* dst_p) {
+	*dst_p = ((uint16_t)pkt[0] << 8) |
+			 ((uint16_t)pkt[1]);
+	return true;
+}
+
 #endif /* __GEN_FUNCTIONS */
 
 bool Proxy_file_exists(const char *);

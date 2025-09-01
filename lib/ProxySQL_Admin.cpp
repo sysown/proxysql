@@ -1198,6 +1198,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_coredump_filters=false;
 
 	bool stats_mysql_prepared_statements_info = false;
+	bool stats_pgsql_prepared_statements_info = false;
 
 #ifdef PROXYSQLCLICKHOUSE
 	bool runtime_clickhouse_users = false;
@@ -1352,6 +1353,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 */
 	if (strstr(query_no_space,"stats_mysql_prepared_statements_info")) {
 		stats_mysql_prepared_statements_info=true; refresh=true;
+	}
+	if (strstr(query_no_space, "stats_pgsql_prepared_statements_info")) {
+		stats_pgsql_prepared_statements_info = true; refresh = true;
 	}
 	if (admin) {
 		if (strstr(query_no_space,"global_variables"))
@@ -1553,6 +1557,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 //		}
 		if (stats_mysql_prepared_statements_info) {
 			stats___mysql_prepared_statements_info();
+		}
+
+		if (stats_pgsql_prepared_statements_info) {
+			stats___pgsql_prepared_statements_info();
 		}
 
 		if (stats_mysql_client_host_cache) {
@@ -1895,6 +1903,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_pgsql_connection_pool",
 		"stats_pgsql_connection_pool_reset",
 		"stats_mysql_prepared_statements_info",
+		"stats_pgsql_prepared_statements_info",
 		"stats_mysql_processlist",
 		"stats_pgsql_processlist",
 		"stats_mysql_query_digest",
@@ -2062,17 +2071,6 @@ void* child_postgres(void* arg) {
 
 	arg_proxysql_adm* myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
-
-	//struct sockaddr *addr = arg->addr;
-	//socklen_t addr_size;
-
-	GloPTH->wrlock();
-	{
-		char* s = GloPTH->get_variable((char*)"server_capabilities");
-		mysql_thread___server_capabilities = atoi(s);
-		free(s);
-	}
-	GloPTH->wrunlock();
 
 	struct pollfd fds[1];
 	nfds_t nfds = 1;

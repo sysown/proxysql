@@ -92,12 +92,10 @@ class Base_Session {
 	int mirror_hostgroup;
 	int mirror_flagOUT;
 	unsigned int active_transactions;
-	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
 	int to_process;
 	int pending_connect;
 	enum proxysql_session_type session_type;
-	int warning_in_hg;
 
 	// bool
 	bool autocommit;
@@ -116,9 +114,11 @@ class Base_Session {
 	SESSION_FORWARD_TYPE session_fast_forward;
 	//bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
-	MySQL_STMTs_meta *sess_STMTs_meta;
-	StmtLongDataHandler *SLDH;
+	//MySQL_STMTs_meta *sess_STMTs_meta;
+	//StmtLongDataHandler *SLDH;
 	std::unique_ptr<OTelSpan> root_span;
+
+
 
 	void init();
 	//template<typename B> B * find_backend(int hostgroup_id);

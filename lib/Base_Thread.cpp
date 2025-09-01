@@ -132,8 +132,9 @@ S Base_Thread::create_new_session_and_client_data_stream(int _fd) {
 	sess->client_myds->myprot.dump_pkt = true;
 #endif
 	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-		PgSQL_Connection* myconn = new PgSQL_Connection();
+		PgSQL_Connection* myconn = new PgSQL_Connection(true);
 		sess->client_myds->attach_connection(myconn);
+		sess->client_myds->myconn->set_is_client(); // this is used for prepared statements
 	} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 		MySQL_Connection* myconn = new MySQL_Connection();
 		sess->client_myds->attach_connection(myconn);

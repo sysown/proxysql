@@ -65,18 +65,6 @@ struct pgsql_hdr {
 	PtrSize_t data;
 };
 
-struct PG_Field {
-	char*	 name;
-	uint32_t tbl_oid;
-	uint16_t col_idx;
-	uint32_t type_oid;
-	uint16_t col_len;
-	uint32_t type_mod;
-	uint16_t fmt;
-};
-
-using PG_Fields = std::vector<PG_Field>;
-
 class PG_pkt 
 {
 public:
@@ -245,7 +233,21 @@ public:
 	void write_PasswordMessage(const char* psw) {
 		write_generic('p', "s", psw);
 	}
-
+	void write_ParseCompletion() {
+		//put_char('1');
+		//put_uint32(4);
+		write_generic('1', "");
+	}
+	void write_BindCompletion() {
+		//put_char('2');
+		//put_uint32(4);
+		write_generic('2', "");
+	}
+	void write_CloseCompletion() {
+		//put_char('3');
+		//put_uint32(4);
+		write_generic('3', "");
+	}
 	void write_RowDescription(const char* tupdesc, ...);
 	void write_DataRow(const char* tupdesc, ...);
 
@@ -283,6 +285,35 @@ private:
 };
 
 class PgSQL_Protocol;
+
+struct ColumnMetadata {
+	char* name;				// Column name
+	uint32_t table_oid;     // Table OID
+	uint16_t column_index;  // Column index in table
+	uint32_t type_oid;      // Data type OID
+	int16_t length;         // Column length (-1 for variable length)
+	int32_t type_modifier;  // Type modifier (-1 if none)
+	uint16_t format;        // 0 = text, 1 = binary
+};
+
+class PgSQL_Describe_Prepared_Info {
+public:
+	uint32_t* parameter_types;	   // Array of parameter type OIDs
+	size_t parameter_types_count;  // Number of parameters
+	ColumnMetadata* columns;       // Array of column metadata
+	size_t columns_count;          // Number of columns
+
+	PgSQL_Describe_Prepared_Info();
+	~PgSQL_Describe_Prepared_Info();
+
+	// Populate metadata from PGresult
+	void populate(const PGresult* result);
+	void clear();
+
+private:
+	void extract_parameters(const PGresult* result);
+	void extract_columns(const PGresult* result);
+};
 
 #define PGSQL_QUERY_RESULT_NO_DATA	0x00
 #define PGSQL_QUERY_RESULT_TUPLE	0x01
@@ -736,6 +767,12 @@ public:
 	 */
 	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state = 'I', PtrSize_t* _ptr = NULL, 
 		const std::vector<std::pair<std::string,std::string>>& param_status = std::vector<std::pair<std::string, std::string>>());
+
+	bool generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_ready_for_query_packet(bool send, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_describe_completion_packet(bool send, bool ready, const PgSQL_Describe_Prepared_Info* desc, uint8_t stmt_type, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_close_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 
 	// temporary overriding generate_pkt_OK to avoid crash. FIXME remove this
 	bool generate_pkt_OK(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, unsigned int affected_rows, 

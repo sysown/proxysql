@@ -745,9 +745,7 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 		return;
 	}
 	else {
-		GloPTH->wrlock();
-		const char* previous_default_client_encoding = GloPTH->get_variable_string((char*)"default_client_encoding");
-		assert(previous_default_client_encoding);		
+		GloPTH->wrlock();	
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 			const char* value = r->fields[1];

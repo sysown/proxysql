@@ -12,6 +12,7 @@ class PgSQL_Event {
 	char *schemaname;
 	size_t username_len;
 	size_t schemaname_len;
+	size_t client_stmt_name_len;
 	uint64_t start_time;
 	uint64_t end_time;
 	uint64_t query_digest;
@@ -26,25 +27,24 @@ class PgSQL_Event {
 	enum log_event_type et;
 	uint64_t hid;
 	char *extra_info;
+	char *client_stmt_name;
 	bool have_affected_rows;
 	bool have_rows_sent;
 
 	uint64_t affected_rows;
-	uint64_t last_insert_id;
 	uint64_t rows_sent;
-	uint32_t client_stmt_id;
-
+	
 	public:
 	PgSQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f, PgSQL_Session *sess);
 	uint64_t write_query_format_1(std::fstream *f);
 	uint64_t write_query_format_2_json(std::fstream *f);
 	void write_auth(std::fstream *f, PgSQL_Session *sess);
-	void set_client_stmt_id(uint32_t client_stmt_id);
+	void set_client_stmt_name(char* client_stmt_name);
 	void set_query(const char *ptr, int len);
 	void set_server(int _hid, const char *ptr, int len);
 	void set_extra_info(char *);
-	void set_affected_rows(uint64_t ar, uint64_t lid);
+	void set_affected_rows(uint64_t ar);
 	void set_rows_sent(uint64_t rs);
 };
 

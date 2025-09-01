@@ -8,6 +8,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include "Command_Counter.h"
+#include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Query_Processor.h"
 
 extern PgSQL_Threads_Handler* GloPTH;
@@ -271,34 +272,33 @@ PgSQL_Query_Processor_Output* PgSQL_Query_Processor::process_query(PgSQL_Session
 	SQP_par_t stmt_exec_qp;
 	SQP_par_t* qp = NULL;
 	if (qi) {
-		// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
+		// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE or STMT_DESCRIBE
 		if (ptr) {
-			qp = (SQP_par_t*)&qi->QueryParserArgs;
+			qp = &qi->QueryParserArgs;
 		} else {
 			qp = &stmt_exec_qp;
-			//qp->digest = qi->stmt_info->digest;
-			//qp->digest_text = qi->stmt_info->digest_text;
-			//qp->first_comment = qi->stmt_info->first_comment;
+			qp->digest = qi->extended_query_info.stmt_info->digest;
+			qp->digest_text = qi->extended_query_info.stmt_info->digest_text;
+			qp->first_comment = qi->extended_query_info.stmt_info->first_comment;
 		}
 	}
 #define stackbuffer_size 128
 	char stackbuffer[stackbuffer_size];
-	unsigned int len = 0;
+	unsigned int len = size;
 	char* query = NULL;
 	// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
 	if (ptr) {
-		len = size - sizeof(mysql_hdr) - 1;
+		//len = size - sizeof(mysql_hdr) - 1;
 		if (len < stackbuffer_size) {
 			query = stackbuffer;
 		} else {
-			query = (char*)l_alloc(len + 1);
+			query = (char*)l_alloc(len);
 		}
-		memcpy(query, (char*)ptr + sizeof(mysql_hdr) + 1, len);
-		query[len] = 0;
-	}
-	else {
-		//query = qi->stmt_info->query;
-		//len = qi->stmt_info->query_length;
+		memcpy(query, ptr, len);
+		query[len-1] = 0;
+	} else {
+		query = qi->extended_query_info.stmt_info->query;
+		len = qi->extended_query_info.stmt_info->query_length;
 	}
 
 	Query_Processor::process_query(sess, ptr == NULL, query, len, ret, qp);
@@ -308,7 +308,7 @@ PgSQL_Query_Processor_Output* PgSQL_Query_Processor::process_query(PgSQL_Session
 		// query is in the stack
 	} else {
 		if (ptr) {
-			l_free(len + 1, query);
+			l_free(len, query);
 		}
 	}
 

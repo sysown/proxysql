@@ -209,6 +209,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	pthread_mutex_init(&global.start_mutex,NULL);
 	pthread_mutex_init(&checksum_mutex,NULL);
 	pthread_mutex_init(&global.ext_glomth_mutex,NULL);
+	pthread_mutex_init(&global.ext_glopth_mutex, NULL);
 	epoch_version = 0;
 	checksums_values.updates_cnt = 0;
 	checksums_values.dumped_at = 0;

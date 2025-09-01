@@ -76,6 +76,7 @@ enum PgSQL_Thread_status_variable {
 	st_var_backend_stmt_execute,
 	st_var_backend_stmt_close,
 	st_var_frontend_stmt_prepare,
+	st_var_frontend_stmt_describe,
 	st_var_frontend_stmt_execute,
 	st_var_frontend_stmt_close,
 	st_var_queries,
@@ -957,12 +958,11 @@ public:
 		char* ldap_user_variable;
 		char* add_ldap_user_comment;
 		char* default_session_track_gtids;
-		char* default_variables[PGSQL_NAME_LAST_HIGH_WM];
+		char* default_variables[PGSQL_NAME_LAST_LOW_WM];
 		char* firewall_whitelist_errormsg;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
-		uint32_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
 		char* eventslog_filename;
@@ -1257,23 +1257,6 @@ public:
 	 * the value of a variable as a string.
 	 */
 	char* get_variable_string(char* name);
-
-	/**
-	 * @brief Retrieves the value of a thread variable as a uint16_t.
-	 *
-	 * @param name The name of the variable to retrieve.
-	 *
-	 * @return The value of the variable as a uint16_t, or 0 if the variable is not found
-	 * or its value is not a valid uint16_t.
-	 *
-	 * @details This function retrieves the value of a thread variable as a uint16_t. It checks
-	 * if the variable exists and then converts its value to a uint16_t. If the variable is
-	 * not found or its value is not a valid uint16_t, it returns 0.
-	 *
-	 * @note This function is used internally by the `get_variable()` function to retrieve
-	 * the value of a variable as a uint16_t.
-	 */
-	uint16_t get_variable_uint16(char* name);
 
 	/**
 	 * @brief Retrieves the value of a thread variable as an integer.

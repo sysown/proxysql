@@ -696,6 +696,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_commands_counters", STATS_SQLITE_TABLE_PGSQL_COMMANDS_COUNTERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest_reset", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_prepared_statements_info", STATS_SQLITE_TABLE_PGSQL_PREPARED_STATEMENTS_INFO);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
@@ -729,6 +730,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	// upgrade restapi_routes if needed (upgrade from previous version)
 	disk_upgrade_rest_api_routes();
+
+	// upgrade pgsql_replication_hostgroups if needed (upgrade from previous version)
+	disk_upgrade_pgsql_replication_hostgroups();
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);

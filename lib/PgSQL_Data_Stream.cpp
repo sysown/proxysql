@@ -6,7 +6,7 @@
 #define UNIX_PATH_MAX    108
 #endif 
 
-#include "MySQL_PreparedStatement.h"
+#include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Data_Stream.h"
 
 #include "openssl/x509v3.h"
@@ -224,10 +224,10 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	proxy_addr.port = 0;
 
 	sess = NULL;
-	mysql_real_query.pkt.ptr = NULL;
-	mysql_real_query.pkt.size = 0;
-	mysql_real_query.QueryPtr = NULL;
-	mysql_real_query.QuerySize = 0;
+	pgsql_real_query.pkt.ptr = NULL;
+	pgsql_real_query.pkt.size = 0;
+	pgsql_real_query.QueryPtr = NULL;
+	pgsql_real_query.QuerySize = 0;
 
 	query_retries_on_failure = 0;
 	connect_retries_on_failure = 0;
@@ -296,7 +296,7 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		proxy_addr.addr = NULL;
 	}
 
-	free_mysql_real_query();
+	free_pgsql_real_query();
 
 	if (com_field_wild) {
 		free(com_field_wild);
@@ -404,7 +404,7 @@ void PgSQL_Data_Stream::reinit_queues() {
 }
 
 // this function initializes a PgSQL_Data_Stream with arguments
-void PgSQL_Data_Stream::init(enum MySQL_DS_type _type, PgSQL_Session* _sess, int _fd) {
+void PgSQL_Data_Stream::init(PgSQL_DS_type _type, PgSQL_Session* _sess, int _fd) {
 	myds_type = _type;
 	sess = _sess;
 	init();
@@ -446,7 +446,7 @@ void PgSQL_Data_Stream::shut_hard() {
 void PgSQL_Data_Stream::check_data_flow() {
 	if ((PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
 		// there is data at both sides of the data stream: this is considered a fatal error
-		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
+		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a PgSQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
 		shut_soft();
 		generate_coredump();
 	}
@@ -550,7 +550,7 @@ int PgSQL_Data_Stream::read_from_net() {
 		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, n, BIO_number_written(rbio_ssl), BIO_number_read(rbio_ssl));
 		if (n > 0 || BIO_number_written(rbio_ssl) > BIO_number_read(rbio_ssl)) {
 			//on_read_cb(buf, (size_t)n);
-
+			enum pgsql_sslstatus status;
 			char buf2[MY_SSL_BUFFER];
 			int n2;
 			//enum pgsql_sslstatus pgsql_status;
@@ -974,7 +974,7 @@ int PgSQL_Data_Stream::array2buffer() {
 
 					//explicitly disable compression
 					//myconn->options.compression_min_length = 0;
-					myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
+					myconn->set_status(false, STATUS_PGSQL_CONNECTION_COMPRESSION);
 				}
 				
 #ifdef DEBUG
@@ -1104,7 +1104,7 @@ int PgSQL_Data_Stream::array2buffer_full() {
 	return rc;
 }
 
-int PgSQL_Data_Stream::assign_fd_from_mysql_conn() {
+int PgSQL_Data_Stream::assign_fd_from_pgsql_conn() {
 	assert(myconn);
 	//proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->myconn.net.fd);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->fd);
@@ -1148,7 +1148,8 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	unsigned long long intv = pgsql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
-		((intv) && (mc->last_time_used > mc->creation_time + intv))
+		(((intv) && (mc->last_time_used > mc->creation_time + intv)) ||
+		(mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloPTH->variables.max_stmts_per_connection))
 		&&
 		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
 		// no need to reset the session. The destruction and creation of a new
@@ -1169,9 +1170,9 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	}
 }
 
-void PgSQL_Data_Stream::free_mysql_real_query() {
-	if (mysql_real_query.QueryPtr) {
-		mysql_real_query.end();
+void PgSQL_Data_Stream::free_pgsql_real_query() {
+	if (pgsql_real_query.QueryPtr) {
+		pgsql_real_query.end();
 	}
 }
 

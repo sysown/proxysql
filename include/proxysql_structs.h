@@ -125,6 +125,11 @@ enum ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_RESET_SESSION_SUCCESSFUL,
 	ASYNC_RESET_SESSION_FAILED,
 	ASYNC_RESET_SESSION_TIMEOUT,
+	ASYNC_DESCRIBE_START,
+	ASYNC_DESCRIBE_CONT,
+	ASYNC_DESCRIBE_END,
+	ASYNC_DESCRIBE_SUCCESSFUL,
+	ASYNC_DESCRIBE_FAILED,
 
 	ASYNC_IDLE
 };
@@ -176,6 +181,8 @@ enum MySQL_DS_type {
 //	MYDS_BACKEND_FAILED_CONNECT,
 	MYDS_FRONTEND,
 };
+
+using PgSQL_DS_type = MySQL_DS_type;
 
 /* NOTE:
 	make special ATTENTION that the order in mysql_variable_name
@@ -295,6 +302,7 @@ enum session_status {
 	SETTING_MULTI_STMT,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
+	PROCESSING_STMT_DESCRIBE,
 	PROCESSING_STMT_EXECUTE,
 	SETTING_VARIABLE,
 	SETTING_MULTIPLE_VARIABLES,
@@ -302,6 +310,7 @@ enum session_status {
 	SHOW_WARNINGS,
 	SETTING_NEXT_ISOLATION_LEVEL,
 	SETTING_NEXT_TRANSACTION_READ,
+	PROCESSING_EXTENDED_QUERY_SYNC,
 	session_status___NONE // special marker
 };
 
@@ -1192,8 +1201,9 @@ __thread int pgsql_thread___query_cache_soft_ttl_pct;
 __thread int pgsql_thread___query_cache_handle_warnings;
 
 __thread bool pgsql_thread___session_idle_show_processlist;
-__thread char* pgsql_thread___default_variables[PGSQL_NAME_LAST_HIGH_WM];
+__thread char* pgsql_thread___default_variables[PGSQL_NAME_LAST_LOW_WM];
 __thread int pgsql_thread___handle_unknown_charset;
+__thread int pgsql_thread___max_stmts_cache;
 //---------------------------
 
 __thread char *mysql_thread___default_schema;
@@ -1497,8 +1507,9 @@ extern __thread int pgsql_thread___query_cache_soft_ttl_pct;
 extern __thread int pgsql_thread___query_cache_handle_warnings;
 
 extern __thread bool pgsql_thread___session_idle_show_processlist;
-extern __thread char* pgsql_thread___default_variables[PGSQL_NAME_LAST_HIGH_WM];
+extern __thread char* pgsql_thread___default_variables[PGSQL_NAME_LAST_LOW_WM];
 extern __thread int pgsql_thread___handle_unknown_charset;
+extern __thread int pgsql_thread___max_stmts_cache;
 //---------------------------
 
 extern __thread char *mysql_thread___default_schema;

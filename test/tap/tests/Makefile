@@ -388,6 +388,8 @@ prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/l
 test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
 
+pgsql-extended_query_protocol_test-t: pgsql-extended_query_protocol_test-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 ### clean targets
 

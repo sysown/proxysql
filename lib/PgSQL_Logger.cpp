@@ -8,7 +8,7 @@ using json = nlohmann::json;
 
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Query_Processor.h"
-#include "MySQL_PreparedStatement.h"
+#include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Logger.hpp"
 
 #include <dirent.h>
@@ -20,7 +20,7 @@ using json = nlohmann::json;
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_MYSQL_LOGGER_VERSION "2.5.0421" DEB
+#define PROXYSQL_PGSQL_LOGGER_VERSION "2.5.0421" DEB
 
 extern PgSQL_Logger *GloPgSQL_Logger;
 
@@ -58,22 +58,20 @@ PgSQL_Event::PgSQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	extra_info = NULL;
 	have_affected_rows=false;
 	affected_rows=0;
-	last_insert_id = 0;
 	have_rows_sent=false;
 	rows_sent=0;
-	client_stmt_id=0;
+	client_stmt_name=NULL;
 }
 
-void PgSQL_Event::set_client_stmt_id(uint32_t client_stmt_id) {
-	this->client_stmt_id = client_stmt_id;
+void PgSQL_Event::set_client_stmt_name(char* client_stmt_name) {
+	this->client_stmt_name = client_stmt_name;
 }
 
 // if affected rows is set, last_insert_id is set too.
 // They are part of the same OK packet
-void PgSQL_Event::set_affected_rows(uint64_t ar, uint64_t lid) {
+void PgSQL_Event::set_affected_rows(uint64_t ar) {
 	have_affected_rows=true;
 	affected_rows=ar;
-	last_insert_id=lid;
 }
 
 void PgSQL_Event::set_rows_sent(uint64_t rs) {
@@ -268,9 +266,9 @@ uint64_t PgSQL_Event::write_query_format_1(std::fstream *f) {
 
 	total_bytes+=mysql_encode_length(start_time,NULL);
 	total_bytes+=mysql_encode_length(end_time,NULL);
-	total_bytes+=mysql_encode_length(client_stmt_id,NULL);
+	client_stmt_name_len=strlen(client_stmt_name);
+	total_bytes+=mysql_encode_length(client_stmt_name_len,NULL)+client_stmt_name_len;
 	total_bytes+=mysql_encode_length(affected_rows,NULL);
-	total_bytes+=mysql_encode_length(last_insert_id,NULL); // as in MySQL Protocol, last_insert_id is immediately after affected_rows
 	total_bytes+=mysql_encode_length(rows_sent,NULL);
 
 	total_bytes+=mysql_encode_length(query_digest,NULL);
@@ -328,17 +326,14 @@ uint64_t PgSQL_Event::write_query_format_1(std::fstream *f) {
 	f->write((char *)buf,len);
 
 	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
-		len=mysql_encode_length(client_stmt_id,buf);
-		write_encoded_length(buf,client_stmt_id,len,buf[0]);
-		f->write((char *)buf,len);
+		len = mysql_encode_length(client_stmt_name_len, buf);
+		write_encoded_length(buf, client_stmt_name_len, len, buf[0]);
+		f->write((char*)buf, len);
+		f->write(client_stmt_name, client_stmt_name_len);
 	}
 
 	len=mysql_encode_length(affected_rows,buf);
 	write_encoded_length(buf,affected_rows,len,buf[0]);
-	f->write((char *)buf,len);
-
-	len=mysql_encode_length(last_insert_id,buf);
-	write_encoded_length(buf,last_insert_id,len,buf[0]);
 	f->write((char *)buf,len);
 
 	len=mysql_encode_length(rows_sent,buf);
@@ -405,9 +400,6 @@ uint64_t PgSQL_Event::write_query_format_2_json(std::fstream *f) {
 		// rows_affected is logged also if 0, while
 		// last_insert_id is log logged if 0
 		j["rows_affected"] = affected_rows;
-		if (last_insert_id != 0) {
-			j["last_insert_id"] = last_insert_id;
-		}
 	}
 	if (have_rows_sent == true) {
 		j["rows_sent"] = rows_sent;
@@ -441,7 +433,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(std::fstream *f) {
 	j["digest"] = digest_hex;
 
 	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
-		j["client_stmt_id"] = client_stmt_id;
+		j["client_stmt_name"] = client_stmt_name;
 	}
 
 	// for performance reason, we are moving the write lock
@@ -714,7 +706,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	if (sess->status != PROCESSING_STMT_EXECUTE) {
 		query_digest = GloPgQPro->get_digest(&sess->CurrentQuery.QueryParserArgs);
 	} else {
-		query_digest = sess->CurrentQuery.stmt_info->digest;
+		query_digest = sess->CurrentQuery.extended_query_info.stmt_info->digest;
 	}
 
 	PgSQL_Event me(let,
@@ -728,9 +720,9 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	int ql = 0;
 	switch (sess->status) {
 		case PROCESSING_STMT_EXECUTE:
-			c = (char *)sess->CurrentQuery.stmt_info->query;
-			ql = sess->CurrentQuery.stmt_info->query_length;
-			me.set_client_stmt_id(sess->CurrentQuery.stmt_client_id);
+			c = (char *)sess->CurrentQuery.extended_query_info.stmt_info->query;
+			ql = sess->CurrentQuery.extended_query_info.stmt_info->query_length;
+			me.set_client_stmt_name((char*)sess->CurrentQuery.extended_query_info.stmt_client_name);
 			break;
 		case PROCESSING_STMT_PREPARE:
 		default:
@@ -741,7 +733,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 			// global cache and due to that we immediately reply to the client and session doesn't reach
 			// 'PROCESSING_STMT_PREPARE' state. 'stmt_client_id' is expected to be '0' for anything that isn't
 			// a prepared statement, still, logging should rely 'log_event_type' instead of this value.
-			me.set_client_stmt_id(sess->CurrentQuery.stmt_client_id);
+			me.set_client_stmt_name((char*)sess->CurrentQuery.extended_query_info.stmt_client_name);
 			break;
 	}
 	if (c) {
@@ -751,7 +743,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 
 	if (sess->CurrentQuery.have_affected_rows) {
-		me.set_affected_rows(sess->CurrentQuery.affected_rows, sess->CurrentQuery.last_insert_id);
+		me.set_affected_rows(sess->CurrentQuery.affected_rows);
 	}
 	me.set_rows_sent(sess->CurrentQuery.rows_sent);
 
@@ -1050,5 +1042,6 @@ unsigned int PgSQL_Logger::audit_find_next_id() {
 }
 
 void PgSQL_Logger::print_version() {
-  fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
-};
+  fprintf(stderr,"Standard ProxySQL PgSQL Logger rev. %s -- %s -- %s\n", PROXYSQL_PGSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
+}
+

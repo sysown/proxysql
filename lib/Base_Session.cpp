@@ -82,13 +82,9 @@ void Base_Session<S,DS,B,T>::init() {
 	mybes = new PtrArray(4);
 	// Conditional initialization based on derived class
 	if constexpr (std::is_same_v<S, MySQL_Session>) {
-		sess_STMTs_meta = new MySQL_STMTs_meta();
-		SLDH = new StmtLongDataHandler();
-	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
-		sess_STMTs_meta = NULL;
-		SLDH = NULL;
-	} else {
-		assert(0);
+		MySQL_Session* mysession = static_cast<S*>(this);
+		mysession->sess_STMTs_meta = new MySQL_STMTs_meta();
+		mysession->SLDH = new StmtLongDataHandler();
 	}
 };
 
@@ -506,24 +502,22 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 	if (thread___multiplexing) {
 		for (const int hg_id : hgs_expired_conns) {
 			B * mybe = find_backend(hg_id);
-
 			if (mybe != nullptr) {
 				DS * myds = mybe->server_myds;
-				// FIXME: NOTE: the logic for autocommit is relevant only for MYSQL
-				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-					if constexpr (std::is_same_v<S, MySQL_Session>) {
+				if constexpr (std::is_same_v<S, MySQL_Session>) {
+					if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit() == false) {
 						if (mysql_thread___reset_connection_algorithm == 2) {
 							create_new_session_and_reset_connection(myds);
 						} else {
 							myds->destroy_MySQL_Connection_From_Pool(true);
 						}
-					} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
-						create_new_session_and_reset_connection(myds);
 					} else {
-						assert(0);
+						myds->return_MySQL_Connection_To_Pool();
 					}
-				} else {
+				} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 					myds->return_MySQL_Connection_To_Pool();
+				} else {
+					assert(0);
 				}
 			}
 		}
@@ -689,7 +683,7 @@ int Base_Session<S,DS,B,T>::FindOneActiveTransaction(bool check_savepoint) {
 	return ret;
 }
 
-Session_Regex::Session_Regex(char* p) {
+Session_Regex::Session_Regex(const char* p) {
 	s = strdup(p);
 	re2::RE2::Options* opt2 = new re2::RE2::Options(RE2::Quiet);
 	opt2->set_case_sensitive(false);
@@ -703,7 +697,7 @@ Session_Regex::~Session_Regex() {
 	delete (re2::RE2::Options*)opt;
 }
 
-bool Session_Regex::match(char* m) {
+bool Session_Regex::match(const char* m) {
 	bool rc = false;
 	rc = RE2::PartialMatch(m, *(RE2*)re);
 	return rc;
