@@ -1,3 +1,18 @@
+# Direnv
+.envrc.local
+
+# Sonar artifacts
+sonar/
+bw-output/
+.scannerwork/
+
+# IDEs
+.idea/
+.vs/
+
+# Build Artiface
+out/
+
 # Object files
 *.o
 *.ko

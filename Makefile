@@ -100,6 +100,114 @@ default: build_src
 .PHONY: debug
 debug: build_src_debug
 
+# Sonar Scanner CLI configuration
+# All variables can be overridden via environment
+SONAR_SCANNER_VERSION ?= 7.2.0.5079
+SONAR_ARCH ?= $(call determine-arch)
+SONAR_SCANNER_DIR ?= sonar/sonar-scanner-$(SONAR_SCANNER_VERSION)-linux-$(SONAR_ARCH)
+SONAR_SCANNER_ZIP ?= sonar/sonar-scanner-cli-$(SONAR_SCANNER_VERSION)-linux-$(SONAR_ARCH).zip
+SONAR_SCANNER_URL ?= https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$(SONAR_SCANNER_VERSION)-linux-$(SONAR_ARCH).zip
+
+# Function to determine architecture for Sonar Scanner
+# Maps system architecture to Sonar Scanner naming convention
+# x86_64 -> x64, aarch64 -> aarch64
+define determine-arch
+$(shell uname -m | sed 's/x86_64/x64/;s/aarch64/aarch64/')
+endef
+
+.PHONY: sonar-setup
+sonar-setup:
+	@echo "====================================="
+	@echo "Sonar Scanner CLI Setup"
+	@echo "====================================="
+	@echo "Version: $(SONAR_SCANNER_VERSION)"
+	@echo "Architecture: $(SONAR_ARCH)"
+	@echo "Target directory: $(SONAR_SCANNER_DIR)"
+	@echo "Download URL: $(SONAR_SCANNER_URL)"
+	@echo "====================================="
+	@if [ -d "$(SONAR_SCANNER_DIR)" ]; then \
+		echo "✓ Sonar Scanner $(SONAR_SCANNER_VERSION) for linux-$(SONAR_ARCH) already installed"; \
+	else \
+		echo "Downloading Sonar Scanner $(SONAR_SCANNER_VERSION) for linux-$(SONAR_ARCH)..."; \
+		mkdir -p sonar; \
+		wget -q --show-progress -O "$(SONAR_SCANNER_ZIP)" "$(SONAR_SCANNER_URL)" || \
+			(echo "✗ Failed to download Sonar Scanner CLI" && exit 1); \
+		echo "Extracting Sonar Scanner..."; \
+		unzip -q "$(SONAR_SCANNER_ZIP)" -d sonar/ || \
+			(echo "✗ Failed to extract Sonar Scanner CLI" && rm -f "$(SONAR_SCANNER_ZIP)" && exit 1); \
+		rm -f "$(SONAR_SCANNER_ZIP)"; \
+		echo "✓ Sonar Scanner $(SONAR_SCANNER_VERSION) for linux-$(SONAR_ARCH) installed successfully"; \
+	fi
+
+# SonarCloud Build Wrapper configuration
+# Determine build wrapper architecture - map x64 to x86 for build wrapper naming
+BUILD_WRAPPER_ARCH ?= $(if $(filter aarch64,$(SONAR_ARCH)),aarch64,x86)
+BUILD_WRAPPER_DIR ?= sonar/build-wrapper-linux-$(BUILD_WRAPPER_ARCH)
+BUILD_WRAPPER_ZIP ?= sonar/build-wrapper-linux-$(BUILD_WRAPPER_ARCH).zip
+BUILD_WRAPPER_URL ?= https://sonarcloud.io/static/cpp/build-wrapper-linux-$(BUILD_WRAPPER_ARCH).zip
+
+.PHONY: setup-build-wrapper
+setup-build-wrapper:
+	@echo "====================================="
+	@echo "SonarCloud Build Wrapper Setup"
+	@echo "====================================="
+	@echo "System Architecture: $(SONAR_ARCH)"
+	@echo "Build Wrapper Architecture: $(BUILD_WRAPPER_ARCH)"
+	@echo "Target directory: $(BUILD_WRAPPER_DIR)"
+	@echo "Download URL: $(BUILD_WRAPPER_URL)"
+	@echo "====================================="
+	@if [ -d "$(BUILD_WRAPPER_DIR)" ]; then \
+		echo "✓ Build Wrapper for linux-$(BUILD_WRAPPER_ARCH) already installed at $(BUILD_WRAPPER_DIR)"; \
+	else \
+		echo "Downloading SonarCloud Build Wrapper for linux-$(BUILD_WRAPPER_ARCH)..."; \
+		mkdir -p sonar; \
+		wget -q --show-progress -O "$(BUILD_WRAPPER_ZIP)" "$(BUILD_WRAPPER_URL)" || \
+			(echo "✗ Failed to download Build Wrapper for linux-$(BUILD_WRAPPER_ARCH)" && exit 1); \
+		echo "Extracting Build Wrapper..."; \
+		unzip -q "$(BUILD_WRAPPER_ZIP)" -d sonar/ || \
+			(echo "✗ Failed to extract Build Wrapper" && rm -f "$(BUILD_WRAPPER_ZIP)" && exit 1); \
+		rm -f "$(BUILD_WRAPPER_ZIP)"; \
+		echo "✓ Build Wrapper for linux-$(BUILD_WRAPPER_ARCH) installed successfully at $(BUILD_WRAPPER_DIR)"; \
+	fi
+
+# SonarCloud analysis configuration
+BW_OUTPUT_DIR ?= bw-output
+SONAR_BUILD_CMD ?= make clean && make -j$(NPROCS)
+BUILD_WRAPPER_BIN := $(BUILD_WRAPPER_DIR)/build-wrapper-linux-$(if $(filter aarch64,$(BUILD_WRAPPER_ARCH)),aarch64,x86-64)
+SONAR_SCANNER_BIN := $(SONAR_SCANNER_DIR)/bin/sonar-scanner
+
+.PHONY: run-sonar-cli
+run-sonar-cli: sonar-setup setup-build-wrapper
+	@echo "====================================="
+	@echo "Running SonarCloud Analysis"
+	@echo "====================================="
+	@echo "Build command: $(SONAR_BUILD_CMD)"
+	@echo "Build wrapper: $(BUILD_WRAPPER_BIN)"
+	@echo "Scanner: $(SONAR_SCANNER_BIN)"
+	@echo "====================================="
+	@# Clean previous build wrapper output
+	@rm -rf $(BW_OUTPUT_DIR)
+	@# Run build with wrapper
+	@echo "Running build with wrapper..."
+	@$(BUILD_WRAPPER_BIN) --out-dir $(BW_OUTPUT_DIR) sh -c "$(SONAR_BUILD_CMD)" || \
+		(echo "✗ Build wrapper failed" && exit 1)
+	@echo "✓ Build wrapper completed"
+	@# Verify output
+	@if [ ! -f "$(BW_OUTPUT_DIR)/build-wrapper-dump.json" ]; then \
+		echo "✗ Build wrapper output not found"; \
+		exit 1; \
+	fi
+	@# Run scanner
+	@echo "Running SonarCloud scanner..."
+	@$(SONAR_SCANNER_BIN) \
+		-Dsonar.cfamily.build-wrapper-output=$(BW_OUTPUT_DIR) \
+		-Dsonar.host.url=$${SONAR_HOST_URL:-https://sonarcloud.io} \
+		-Dproject.settings=sonar-project.ci.properties \
+		$(if $(SONAR_TOKEN),-Dsonar.token=$(SONAR_TOKEN),) \
+		$(SONAR_EXTRA_ARGS) || \
+		(echo "✗ Scanner failed" && exit 1)
+	@echo "✓ SonarCloud analysis completed"
+
 .PHONY: testaurora_random
 testaurora_random: build_src_testaurora_random
 
