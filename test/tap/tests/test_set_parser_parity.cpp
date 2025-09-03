@@ -21,6 +21,8 @@
 
 #include "utils.h"
 
+#include "json.hpp"
+
 #include <unistd.h>
 #include <sys/ioctl.h>
 
@@ -29,9 +31,6 @@
 #include <string>
 #include <string.h>
 #include <vector>
-
-#include <nlohmann/json.hpp>
-#include <re2/re2.h>
 
 using std::fstream;
 using std::pair;
