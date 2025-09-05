@@ -237,7 +237,7 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s','%s')";
-	for (i=0; i< count; i++) {
+	for (int i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
 		std::string password="";
@@ -1996,7 +1996,7 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 	int rows = 0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char* q = (char*)"INSERT OR REPLACE INTO pgsql_users (username, password, active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, %d, %d, %d, '%s','%s')";
-	for (i = 0; i < count; i++) {
+	for (int i = 0; i < count; i++) {
 		const Setting& user = pgsql_users[i];
 		std::string username;
 		std::string password = "";
