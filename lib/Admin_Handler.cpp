@@ -721,6 +721,28 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+	if (strncasecmp("PROXYSQL SET CONFIG FILE ", query_no_space, 25) == 0) {
+		proxy_info("Received %s command\n", query_no_space);
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+
+		char *file_path = trim_spaces_and_quotes_in_place(query_no_space + 25);
+
+		if (GloVars.configfile_open) {
+			GloVars.confFile->CloseFile();
+		}
+		free(GloVars.config_file);
+
+		GloVars.config_file = strdup(file_path);
+		if (GloVars.confFile->OpenFile(GloVars.config_file)) {
+			GloVars.configfile_open = true;
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		} else {
+			SPA->send_error_msg_to_client(sess, "Invalid config file");
+		}
+
+		return false;
+	}
+
 #ifndef NOJEM
 	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE START") && !strncasecmp("PROXYSQL MEMPROFILE START",query_no_space, query_no_space_length)) {
 		bool en=true;
