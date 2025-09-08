@@ -812,20 +812,23 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial || admindb_file_exists==false) { // see #617
 		if (GloVars.configfile_open) {
-			proxysql_config().Read_MySQL_Servers_from_configfile();
-			proxysql_config().Read_MySQL_Users_from_configfile();
+			// ignore validation errors during init
+			std::string e;
+
+			proxysql_config().Read_MySQL_Servers_from_configfile(e);
+			proxysql_config().Read_MySQL_Users_from_configfile(e);
 			proxysql_config().Read_MySQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("admin");
 			proxysql_config().Read_Global_Variables_from_configfile("mysql");
 
-			proxysql_config().Read_PgSQL_Servers_from_configfile();
-			proxysql_config().Read_PgSQL_Users_from_configfile();
+			proxysql_config().Read_PgSQL_Servers_from_configfile(e);
+			proxysql_config().Read_PgSQL_Users_from_configfile(e);
 			proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 
 			proxysql_config().Read_Scheduler_from_configfile();
 			proxysql_config().Read_Restapi_from_configfile();
-			proxysql_config().Read_ProxySQL_Servers_from_configfile();
+			proxysql_config().Read_ProxySQL_Servers_from_configfile(e);
 			__insert_or_replace_disktable_select_maintable();
 		}
 	}

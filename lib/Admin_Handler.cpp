@@ -1292,14 +1292,28 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
+					std::string msg, validation_err;
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
-						rows=SPA->proxysql_config().Read_PgSQL_Users_from_configfile();
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql users from CONFIG\n");
+						rows = SPA->proxysql_config().Read_PgSQL_Users_from_configfile(validation_err);
+						if (rows < 0) {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load pgsql users from CONFIG due to validation error\n");
+							msg = "Configuration validation failed - " + validation_err;
+							SPA->send_error_msg_to_client(sess, msg.c_str());
+						} else {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql users from CONFIG\n");
+							SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+						}
 					} else {
-						rows=SPA->proxysql_config().Read_MySQL_Users_from_configfile();
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users from CONFIG\n");
+						rows = SPA->proxysql_config().Read_MySQL_Users_from_configfile(validation_err);
+						if (rows < 0) {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load mysql users from CONFIG due to validation error\n");
+							msg = "Configuration validation failed - " + validation_err;
+							SPA->send_error_msg_to_client(sess, msg.c_str());
+						} else {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users from CONFIG\n");
+							SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+						}
 					}
-					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
 					GloVars.confFile->CloseFile();
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
@@ -1693,14 +1707,28 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
+					std::string msg, validation_err;
 					if (is_pgsql) {
-						rows=SPA->proxysql_config().Read_PgSQL_Servers_from_configfile();
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers from CONFIG\n");
+						rows = SPA->proxysql_config().Read_PgSQL_Servers_from_configfile(validation_err);
+						if (rows < 0) {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load pgsql servers from CONFIG due to validation error\n");
+							msg = "Configuration validation failed - " + validation_err;
+							SPA->send_error_msg_to_client(sess, msg.c_str());
+						} else {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers from CONFIG\n");
+							SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+						}
 					} else {
-						rows=SPA->proxysql_config().Read_MySQL_Servers_from_configfile();
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers from CONFIG\n");
+						rows = SPA->proxysql_config().Read_MySQL_Servers_from_configfile(validation_err);
+						if (rows < 0) {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load mysql servers from CONFIG due to validation error\n");
+							msg = "Configuration validation failed - " + validation_err;
+							SPA->send_error_msg_to_client(sess, msg.c_str());
+						} else {
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers from CONFIG\n");
+							SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+						}
 					}
-					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
 					GloVars.confFile->CloseFile();
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
@@ -1815,9 +1843,16 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					rows=SPA->proxysql_config().Read_ProxySQL_Servers_from_configfile();
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers from CONFIG\n");
-					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+					std::string msg, validation_err;
+					rows = SPA->proxysql_config().Read_ProxySQL_Servers_from_configfile(validation_err);
+					if (rows < 0) {
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Failed to load ProxySQL servers from CONFIG due to validation error\n");
+						msg = "Configuration validation failed - " + validation_err;
+						SPA->send_error_msg_to_client(sess, msg.c_str());
+					} else {
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers from CONFIG\n");
+						SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+					}
 					GloVars.confFile->CloseFile();
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
