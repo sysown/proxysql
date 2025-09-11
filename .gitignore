@@ -1,3 +1,22 @@
+
+# direnv
+.envrc.local
+
+
+# Intelij
+.idea/
+
+# VS Code
+.vs/
+
+# Sonar
+.scannerwork/
+.vs/
+bw-output/
+out/
+sonar/
+
+
 # Object files
 *.o
 *.ko
