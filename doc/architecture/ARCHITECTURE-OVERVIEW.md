@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-ProxySQL is a high-performance MySQL and PostgreSQL protocol-aware proxy server written in C++11/17. It implements a sophisticated multi-threaded architecture with connection pooling, query routing, caching, and comprehensive monitoring capabilities. The system is designed for high throughput, low latency, and horizontal scalability in database environments.
+ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/17. It implements a multi-threaded architecture with connection pooling, query routing, caching, and monitoring capabilities.
 
 ## System Architecture
 
@@ -279,32 +279,28 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 5. **Connection Retry Logic**: Transparent failover
 6. **Cluster Mode**: Multi-proxy coordination
 
-## Architectural Strengths
+## Architecture Characteristics
 
 1. **Scalability**: Horizontal scaling via clustering
-2. **Performance**: Optimized for high throughput
-3. **Flexibility**: Extensive configuration options
-4. **Protocol Compliance**: Full protocol implementation
-5. **Extensibility**: Plugin architecture for auth/web interface
-6. **Observability**: Comprehensive monitoring capabilities
+2. **Performance**: High throughput optimization
+3. **Configuration**: Extensive runtime configuration options
+4. **Protocol Support**: Full MySQL and PostgreSQL protocol implementation
+5. **Extensibility**: Plugin architecture for authentication and web interface
+6. **Monitoring**: Built-in metrics and statistics collection
 
-## Key Design Decisions
+## Design Decisions
 
-1. **Multi-threaded over Multi-process**: Better resource sharing
+1. **Multi-threaded over Multi-process**: Resource sharing
 2. **SQLite for Configuration**: ACID compliance, SQL interface
-3. **Connection Pooling per Hostgroup**: Isolation and flexibility
-4. **Protocol-aware Proxy**: Deep packet inspection capabilities
-5. **Checksum-based Clustering**: Efficient configuration sync
+3. **Connection Pooling per Hostgroup**: Isolation between hostgroups
+4. **Protocol-aware Proxy**: Packet inspection and manipulation
+5. **Checksum-based Clustering**: Configuration synchronization
 
-## Future Considerations
+## Architecture Extensions
 
 The architecture supports:
 - Additional database protocols
-- Enhanced caching strategies
-- Advanced routing algorithms
+- Alternative caching strategies
+- Custom routing algorithms
 - Extended monitoring capabilities
 - Cloud-native deployments
-
----
-
-This architectural overview provides a comprehensive understanding of ProxySQL's design, components, and operational characteristics. The system demonstrates sophisticated engineering for database proxy requirements at scale.

@@ -677,7 +677,7 @@ sequenceDiagram
 ```mermaid
 graph TB
     subgraph "Main Thread"
-        MAIN[main()]
+        MAIN["main()"]
         INIT[Initialize]
         CONFIG[Load Config]
         START[Start Threads]
@@ -1208,19 +1208,3 @@ graph LR
     style MM1 fill:#ffebee
 ```
 
-## Summary
-
-This visual guide provides comprehensive diagrams and visualizations of ProxySQL's architecture, from high-level system overview down to detailed class hierarchies, database schemas, and deployment patterns. The diagrams illustrate:
-
-1. **System Architecture** - Multi-tier proxy architecture with dual protocol support
-2. **Code Organization** - Clear modular structure with template-based design
-3. **Class Hierarchies** - CRTP-based inheritance for type-safe polymorphism
-4. **Database Schema** - Multi-tier configuration with runtime and statistics layers
-5. **Data Flow** - Complete query processing pipeline from client to backend
-6. **Protocol Handling** - Detailed sequence diagrams for MySQL and PostgreSQL
-7. **Threading Model** - Multi-threaded architecture with specialized thread pools
-8. **Connection Pooling** - Sophisticated multiplexing and pool management
-9. **Query Processing** - Rule-based routing with caching and rewriting
-10. **Deployment Options** - From single instance to multi-region clusters
-
-These visualizations serve as a comprehensive reference for understanding ProxySQL's internal architecture and deployment patterns.

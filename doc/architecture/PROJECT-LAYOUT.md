@@ -2,15 +2,15 @@
 
 ## Executive Summary
 
-ProxySQL is a high-performance database proxy server written in C++ that provides **protocol-aware proxying** for MySQL and PostgreSQL databases. The system implements a sophisticated multi-threaded, event-driven architecture with comprehensive connection pooling, query routing, and monitoring capabilities. Built with C++11/17, it features a modular design with clear separation between protocol handlers, session management, and administrative interfaces, all backed by an embedded SQLite3 configuration database.
+ProxySQL is a database proxy server written in C++ that provides protocol-aware proxying for MySQL and PostgreSQL databases. The system implements a multi-threaded, event-driven architecture with connection pooling, query routing, and monitoring. Built with C++11/17, it uses a modular design with separation between protocol handlers, session management, and administrative interfaces, backed by an embedded SQLite3 configuration database.
 
-## Key Findings
+## Key Components
 
-- **Dual-protocol architecture**: Full MySQL and PostgreSQL wire protocol implementations
+- **Dual-protocol architecture**: MySQL and PostgreSQL wire protocol implementations
 - **Multi-threaded design**: Separate worker threads for connections, admin, monitoring, and clustering
 - **Embedded configuration**: SQLite3-based three-tier configuration system (Disk → Memory → Runtime)
-- **Performance-optimized**: Lock-free structures, connection pooling, query caching
-- **Enterprise-ready**: Clustering, monitoring, REST API, and Prometheus metrics integration
+- **Performance features**: Lock-free structures, connection pooling, query caching
+- **Enterprise features**: Clustering, monitoring, REST API, and Prometheus metrics
 
 ## System Architecture
 
@@ -409,15 +409,13 @@ mysql -h127.0.0.1 -P6032 -uadmin -padmin
 - Core dump generation
 - Verbose logging
 
-## Architectural Highlights
+## Architecture Features
 
-1. **Protocol-Aware Proxy**: Not just forwarding packets, but understanding and manipulating protocol
-2. **Zero-Downtime Reconfiguration**: Runtime changes without connection drops
-3. **Intelligent Load Balancing**: Weight-based, least-connections, round-robin
-4. **Advanced Query Routing**: Regex-based rules, query rewriting, caching
-5. **Enterprise Integration**: Prometheus, REST API, clustering support
-6. **Security Features**: SSL/TLS, SQL injection detection, authentication plugins
-7. **Performance Optimization**: Lock-free statistics, connection pooling, query cache
-8. **High Availability**: Automatic failover, read/write splitting, lag detection
-
-The architecture demonstrates sophisticated engineering optimized for high-throughput database proxying with comprehensive monitoring, configuration management, and protocol support for both MySQL and PostgreSQL ecosystems.
+1. **Protocol-Aware Proxy**: Understands and manipulates database protocols
+2. **Runtime Reconfiguration**: Configuration changes without connection drops
+3. **Load Balancing**: Weight-based, least-connections, round-robin algorithms
+4. **Query Routing**: Regex-based rules, query rewriting, caching
+5. **Integration**: Prometheus metrics, REST API, cluster support
+6. **Security**: SSL/TLS, SQL injection detection, authentication plugins
+7. **Performance**: Lock-free statistics, connection pooling, query cache
+8. **High Availability**: Automatic failover, read/write splitting, replication lag detection
