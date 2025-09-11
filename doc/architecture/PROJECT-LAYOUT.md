@@ -112,7 +112,7 @@ graph LR
 
 ### Code Organization
 ```
-/github/proxy/proxysql/
+https://github.com/sysown/proxysql/tree/v3.0.agentics/
 ├── src/                        # Main entry points (4 core files)
 │   ├── main.cpp               # Primary application entry, thread initialization
 │   ├── SQLite3_Server.cpp     # Embedded configuration database

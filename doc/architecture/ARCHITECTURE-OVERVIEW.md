@@ -33,7 +33,7 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
 ## Main Components and Relationships
 
 ### 1. Entry Point & Initialization
-- **File**: `/github/proxy/proxysql/src/main.cpp`
+- **File**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/src/main.cpp`
 - **Responsibilities**:
   - Process initialization and daemonization
   - Loading configuration from `proxysql.cfg`
@@ -42,16 +42,29 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
 
 ### 2. Thread Architecture
 
+#### Thread Pool Design
+- **Consumer Thread Pattern**: Generic work queue for monitoring tasks
+  ```cpp
+  template<typename T>
+  class ConsumerThread : public Thread {
+    wqueue<WorkItem<T>*>& m_queue;
+  }
+  ```
+- **Thread-Local Storage**: `__thread` variables for per-thread configuration
+- **Maintenance Threads**: Minimum 8 threads for housekeeping operations
+- **Event Loop Integration**: Epoll-based event handling for scalability
+
 #### MySQL Threads (`MySQL_Thread`)
-- **Files**: `/github/proxy/proxysql/lib/MySQL_Thread.cpp`, `/github/proxy/proxysql/include/MySQL_Thread.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_Thread.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/MySQL_Thread.h`
 - **Key Features**:
   - Worker threads handling MySQL client connections
   - Session management and query processing
   - Connection pool interaction
+  - Thread-local statistics for lock-free updates
   - Query cache integration
 
 #### PgSQL Threads (`PgSQL_Thread`)
-- **Files**: `/github/proxy/proxysql/lib/PgSQL_Thread.cpp`, `/github/proxy/proxysql/include/PgSQL_Thread.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/PgSQL_Thread.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/PgSQL_Thread.h`
 - **Key Features**:
   - PostgreSQL protocol handling
   - SASL/SCRAM authentication support
@@ -61,7 +74,7 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
 ### 3. Session Management
 
 #### MySQL Session (`MySQL_Session`)
-- **Files**: `/github/proxy/proxysql/lib/MySQL_Session.cpp`, `/github/proxy/proxysql/include/MySQL_Session.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_Session.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/MySQL_Session.h`
 - **Responsibilities**:
   - Client authentication
   - Query lifecycle management
@@ -70,7 +83,7 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
   - Prepared statement management
 
 #### PgSQL Session (`PgSQL_Session`)
-- **Files**: `/github/proxy/proxysql/lib/PgSQL_Session.cpp`, `/github/proxy/proxysql/include/PgSQL_Session.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/PgSQL_Session.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/PgSQL_Session.h`
 - **Features**:
   - PostgreSQL authentication methods
   - Extended query protocol
@@ -79,7 +92,7 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
 ### 4. Connection Pool Management
 
 #### MySQL HostGroups Manager
-- **Files**: `/github/proxy/proxysql/lib/MySQL_HostGroups_Manager.cpp`, `/github/proxy/proxysql/include/MySQL_HostGroups_Manager.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_HostGroups_Manager.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/MySQL_HostGroups_Manager.h`
 - **Key Concepts**:
   - Hostgroup: logical grouping of database servers
   - Connection pool per hostgroup
@@ -95,7 +108,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 ### 5. Query Processing
 
 #### MySQL Query Processor
-- **Files**: `/github/proxy/proxysql/lib/MySQL_Query_Processor.cpp`, `/github/proxy/proxysql/include/MySQL_Query_Processor.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_Query_Processor.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/MySQL_Query_Processor.h`
 - **Features**:
   - Rule-based query routing
   - Query rewriting capabilities
@@ -116,7 +129,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 - **Admin Database**: Runtime configuration storage
 - **Stats Database**: Metrics and statistics
 - **Monitor Database**: Health check results
-- **Files**: `/github/proxy/proxysql/lib/sqlite3db.cpp`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/sqlite3db.cpp`
 
 #### Configuration Layers
 1. **Disk**: Persistent configuration in SQLite
@@ -126,7 +139,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 ### 7. Admin & Monitoring Interfaces
 
 #### Admin Interface (`ProxySQL_Admin`)
-- **Files**: `/github/proxy/proxysql/lib/ProxySQL_Admin.cpp`, `/github/proxy/proxysql/include/proxysql_admin.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/ProxySQL_Admin.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/proxysql_admin.h`
 - **Features**:
   - MySQL-compatible admin interface (port 6032)
   - Configuration management via SQL
@@ -134,7 +147,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
   - Cluster synchronization
 
 #### SQLite3 Server
-- **Files**: `/github/proxy/proxysql/src/SQLite3_Server.cpp`, `/github/proxy/proxysql/include/SQLite3_Server.h`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/src/SQLite3_Server.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/SQLite3_Server.h`
 - **Purpose**: Provides SQL interface for admin operations
 
 #### Monitoring (`MySQL_Monitor`, `PgSQL_Monitor`)
@@ -160,19 +173,19 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 ### 9. Advanced Features
 
 #### Query Cache
-- **Files**: `/github/proxy/proxysql/lib/MySQL_Query_Cache.cpp`, `/github/proxy/proxysql/lib/PgSQL_Query_Cache.cpp`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_Query_Cache.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/PgSQL_Query_Cache.cpp`
 - In-memory result caching
 - TTL-based expiration
 - Cache key generation from query digest
 
 #### Cluster Support (`ProxySQL_Cluster`)
-- **Files**: `/github/proxy/proxysql/lib/ProxySQL_Cluster.cpp`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/ProxySQL_Cluster.cpp`
 - Configuration synchronization
 - Checksum-based change detection
 - Peer-to-peer communication
 
 #### Statistics & Metrics
-- **Files**: `/github/proxy/proxysql/lib/ProxySQL_Statistics.cpp`
+- **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/ProxySQL_Statistics.cpp`
 - Prometheus metrics integration
 - Query statistics
 - Connection pool metrics
@@ -198,7 +211,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 ## Configuration Management
 
 ### Configuration Sources
-1. **Configuration File**: `/github/proxy/proxysql/src/proxysql.cfg`
+1. **Configuration File**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/src/proxysql.cfg`
 2. **Command Line**: Override options
 3. **Admin Interface**: Runtime modifications
 4. **Cluster Sync**: Peer configuration updates
@@ -233,19 +246,50 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 ## Testing Framework
 
 ### Test Types
-- **TAP Tests**: `/github/proxy/proxysql/test/tap/`
+- **TAP Tests**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/test/tap/`
 - **Unit Tests**: Component-level testing
 - **Integration Tests**: Full stack testing
 - **Cluster Tests**: Multi-proxy scenarios
 
 ## Performance Optimizations
 
-1. **Connection Pooling**: Reduces connection overhead
-2. **Query Caching**: Eliminates redundant queries
-3. **Multiplexing**: Shares backend connections
-4. **Fast Pattern Matching**: Optimized query routing
-5. **Memory Management**: Custom allocators (jemalloc)
-6. **Lock-Free Structures**: Where possible for hot paths
+### Connection Pool Optimizations
+1. **Multi-Tier Pool Management**:
+   - Free connections pool per backend
+   - Used connections tracking with statistics
+   - Connection warming for pre-emptive establishment
+   - Latency-aware connection selection
+   - GTID-aware routing for consistency
+
+2. **Advanced Pool Algorithms**:
+   ```cpp
+   // Connection retrieval with multiple criteria
+   MySQL_Connection* get_MyConn_from_pool(
+     uint32_t wait_until_ms,  // Timeout control
+     bool ff_flag,             // Fast forward flag
+     char* gtid_uuid,          // GTID consistency
+     uint64_t gtid_trxid,      // Transaction ID
+     int max_lag_ms            // Max replication lag
+   )
+   ```
+
+3. **Query Processing Optimizations**:
+   - **Fast Digest Path**: Optimized computation for queries > 100KB
+   - **Multi-threaded Digesting**: 4 dedicated threads for parallel processing
+   - **Regex Caching**: Compiled patterns cached in `regex_engine1/2`
+   - **Digest Statistics**: Efficient tracking with minimal overhead
+
+4. **Memory Management**:
+   - **Buffer Pools**: Reusable buffers for packet handling
+   - **Statement Cache**: Prepared statement metadata caching
+   - **Result Buffering**: Configurable strategies
+   - **jemalloc Integration**: Optimized memory allocation
+
+5. **Lock-Free Optimizations**:
+   - Thread-local statistics counters
+   - Lock-free query digest maps
+   - Atomic operations for global counters
+   - Per-thread configuration caching
 
 ## Monitoring & Observability
 
@@ -264,20 +308,112 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 
 ## Security Features
 
-- MySQL/PostgreSQL authentication passthrough
+### Authentication Architecture
+
+#### Multi-Stage Authentication Flow
+1. **Initial Handshake**: Server greeting and capability negotiation
+2. **SSL Negotiation**: Optional TLS upgrade
+3. **Auth Plugin Negotiation**: Select authentication method
+4. **Credential Verification**: Validate user credentials
+5. **Session Establishment**: Create authenticated session
+
+#### Supported Authentication Methods
+- **mysql_native_password**: SHA1-based with fast path caching
+- **caching_sha2_password**: SHA256 with full/fast authentication modes
+- **mysql_clear_password**: For LDAP integration
+- **Auth Plugin Switching**: Dynamic protocol adaptation
+- **PostgreSQL SCRAM**: SASL/SCRAM-SHA-256 support
+
+#### Authentication Caching
+- SHA1 passwords cached in `GloMyAuth` for performance
+- Clear text passwords cached for `caching_sha2_password` fast auth
+- User attributes cached with JSON validation
+- Per-user connection limits and routing rules
+
+### Security Controls
 - SSL/TLS support for client and backend connections
-- LDAP authentication plugin support
-- Query firewall capabilities
-- User-level query rules
+- Query firewall with SQL injection detection
+- User-level query rules and access controls
+- Connection rate limiting per user/hostgroup
+- Audit logging capabilities
+
+## Query Processing Pipeline
+
+### Query Digest System
+- **Digest Computation**: Fast path for queries > 100KB
+- **Digest Structure**:
+  ```cpp
+  struct QP_query_digest_stats {
+    uint64_t digest;
+    time_t first_seen, last_seen;
+    unsigned long long sum_time, min_time, max_time;
+    unsigned long long rows_affected, rows_sent;
+  }
+  ```
+
+### Rule Processing Engine
+- **Weighted Routing**: Rules can specify multiple destinations with weights
+- **Rule Chaining**: `next_query_flagIN` enables sequential processing
+- **Query Mirroring**: Mirror queries to secondary hostgroups
+- **Query Rewriting**: Pattern-based query transformation
+- **Cache Control**: Per-rule cache TTL settings
+
+### Advanced Rule Features
+- **flagOUT Routing**: Multi-destination with load balancing
+- **Regex Optimization**: Compiled patterns cached for performance
+- **Conditional Logic**: Username, schema, client address matching
+- **Error Injection**: Custom error messages for blocked queries
+- **Sticky Sessions**: Maintain connection affinity
 
 ## High Availability Features
 
-1. **Multiple Backend Support**: Hostgroup failover
-2. **Health Checking**: Automatic backend monitoring
-3. **Replication Awareness**: Topology detection
-4. **Read/Write Splitting**: Automatic query routing
-5. **Connection Retry Logic**: Transparent failover
-6. **Cluster Mode**: Multi-proxy coordination
+### Backend Management
+1. **Server State Management**:
+   ```cpp
+   enum MySerStatus {
+     MYSQL_SERVER_STATUS_ONLINE = 0,
+     MYSQL_SERVER_STATUS_SHUNNED = 1,
+     MYSQL_SERVER_STATUS_OFFLINE_SOFT = 2,
+     MYSQL_SERVER_STATUS_OFFLINE_HARD = 3,
+     MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG = 4
+   }
+   ```
+
+2. **Automatic Server Management**:
+   - Auto-shunning on connection errors
+   - Weighted distribution across servers
+   - Per-server connection limits
+   - Compression support (0-102400 bytes)
+   - Per-server SSL configuration
+
+3. **Health Monitoring**:
+   - Connect checks for basic connectivity
+   - Ping checks for lightweight monitoring
+   - Read-only status detection
+   - Replication lag measurement
+   - Group replication state tracking
+
+### Cluster Synchronization
+
+#### Checksum-Based Sync
+- **Global Checksum**: Overall configuration state hash
+- **Module Checksums**: Individual module configuration tracking
+- **Epoch Tracking**: Version control for changes
+- **Diff-Based Sync**: Sync triggered after N differences
+
+#### Sync Decision Algorithm
+```
+IF (node_version > 1 AND 
+    (own_version == 1 OR node_epoch > own_epoch))
+    AND diff_check >= cluster_module_diffs_before_sync
+THEN sync_from_peer
+```
+
+#### Cluster Features
+- Automatic configuration propagation
+- Conflict resolution based on epochs
+- Selective module synchronization
+- Peer discovery and health checking
 
 ## Architecture Characteristics
 

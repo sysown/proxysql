@@ -561,6 +561,91 @@ graph TB
     style RETURN fill:#e8f5e8
 ```
 
+## Advanced Authentication Flow
+
+### Multi-Stage Authentication State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Handshake: Client Connect
+    
+    Handshake --> SSLNegotiation: SSL Required
+    Handshake --> PluginSelect: No SSL
+    
+    SSLNegotiation --> PluginSelect: SSL Established
+    
+    PluginSelect --> NativeAuth: mysql_native_password
+    PluginSelect --> CachingSHA2: caching_sha2_password
+    PluginSelect --> ClearPass: mysql_clear_password
+    PluginSelect --> SCRAM: PostgreSQL SCRAM
+    
+    NativeAuth --> CheckCache: SHA1 Hash
+    CheckCache --> CacheHit: Found
+    CheckCache --> Backend: Not Found
+    
+    CachingSHA2 --> FastAuth: Cached
+    CachingSHA2 --> FullAuth: Not Cached
+    
+    ClearPass --> LDAP: LDAP Integration
+    SCRAM --> SASLExchange: SASL Protocol
+    
+    CacheHit --> Authenticated
+    Backend --> UpdateCache: Success
+    UpdateCache --> Authenticated
+    FastAuth --> Authenticated
+    FullAuth --> Authenticated
+    LDAP --> Authenticated
+    SASLExchange --> Authenticated
+    
+    Authenticated --> SessionEstablished
+    SessionEstablished --> [*]
+```
+
+### Query Digest and Rule Processing
+
+```mermaid
+graph TB
+    subgraph "Query Digest Pipeline"
+        QUERY[SQL Query] --> SIZE{Size > 100KB?}
+        SIZE -->|Yes| FAST_PATH[Fast Digest<br/>Optimized Path]
+        SIZE -->|No| NORMAL[Normal Digest]
+        
+        FAST_PATH --> THREAD_POOL[4 Digest Threads]
+        NORMAL --> COMPUTE[Compute Hash]
+        THREAD_POOL --> DIGEST_RESULT[Digest Value]
+        COMPUTE --> DIGEST_RESULT
+    end
+    
+    subgraph "Rule Processing Engine"
+        DIGEST_RESULT --> LOAD_RULES[Load Query Rules]
+        LOAD_RULES --> RULE_LOOP{For Each Rule}
+        
+        RULE_LOOP --> MATCH_USER[Check Username]
+        MATCH_USER --> MATCH_SCHEMA[Check Schema]
+        MATCH_SCHEMA --> MATCH_ADDR[Check Client Addr]
+        MATCH_ADDR --> MATCH_PATTERN[Check Pattern]
+        
+        MATCH_PATTERN -->|Match| APPLY_ACTIONS[Apply Actions]
+        MATCH_PATTERN -->|No Match| NEXT_RULE[Next Rule]
+        
+        APPLY_ACTIONS --> WEIGHT{Has Weight?}
+        WEIGHT -->|Yes| WEIGHTED_ROUTE[Weighted Distribution]
+        WEIGHT -->|No| DIRECT_ROUTE[Direct Route]
+        
+        APPLY_ACTIONS --> MIRROR{Mirror?}
+        MIRROR -->|Yes| MIRROR_SETUP[Setup Mirror HG]
+        
+        APPLY_ACTIONS --> CHAIN{Chain Rules?}
+        CHAIN -->|Yes| SET_FLAG[Set next_query_flagIN]
+        
+        NEXT_RULE --> RULE_LOOP
+    end
+    
+    style FAST_PATH fill:#e8f5e8
+    style THREAD_POOL fill:#fff3e0
+    style WEIGHTED_ROUTE fill:#e1f5fe
+```
+
 ## Protocol Sequence Diagrams
 
 ### MySQL Connection and Query Sequence
@@ -776,6 +861,93 @@ graph LR
     style GV fill:#ffebee
     style HGM fill:#e8f5e8
     style QC fill:#fff3e0
+```
+
+## Connection Pooling Architecture
+
+### Advanced Pool Management
+
+```mermaid
+graph TB
+    subgraph "Connection Pool Internals"
+        subgraph "Pool Selection Criteria"
+            REQ[Connection Request] --> CRITERIA{Selection Criteria}
+            CRITERIA --> LAG[Max Lag Check]
+            CRITERIA --> GTID[GTID Position]
+            CRITERIA --> LATENCY[Latency Score]
+            CRITERIA --> WARM[Connection Warming]
+        end
+        
+        subgraph "Connection States"
+            FREE[Free Pool<br/>ConnectionsFree]
+            USED[Used Pool<br/>ConnectionsUsed]
+            WARMING[Warming Pool<br/>Pre-established]
+            EXPIRED[Expired<br/>To be closed]
+        end
+        
+        subgraph "Pool Algorithms"
+            ALG1[get_MyConn_from_pool()]
+            ALG1 --> CHECK_LAG{Lag < max_lag_ms?}
+            CHECK_LAG -->|Yes| CHECK_GTID{GTID Match?}
+            CHECK_LAG -->|No| REJECT1[Reject Connection]
+            CHECK_GTID -->|Yes| CHECK_LATENCY{Latency OK?}
+            CHECK_GTID -->|No| FIND_NEXT[Find Next]
+            CHECK_LATENCY -->|Yes| ASSIGN[Assign Connection]
+            CHECK_LATENCY -->|No| CREATE_NEW[Create New]
+        end
+        
+        LAG --> FREE
+        GTID --> FREE
+        LATENCY --> FREE
+        WARM --> WARMING
+        
+        FREE --> USED
+        USED --> FREE
+        WARMING --> FREE
+        FREE --> EXPIRED
+        USED --> EXPIRED
+    end
+    
+    style REQ fill:#e1f5fe
+    style FREE fill:#e8f5e8
+    style USED fill:#ffebee
+    style ASSIGN fill:#c8e6c9
+```
+
+### Pool Statistics and Metrics
+
+```mermaid
+graph LR
+    subgraph "Connection Pool Metrics"
+        subgraph "Prometheus Counters"
+            PC1[connection_pool_conn_err]
+            PC2[connection_pool_conn_ok]
+            PC3[connection_pool_queries]
+        end
+        
+        subgraph "Prometheus Gauges"
+            PG1[connection_pool_conn_free]
+            PG2[connection_pool_conn_used]
+            PG3[connection_pool_latency_us]
+        end
+        
+        subgraph "Statistics Tables"
+            ST1[stats_mysql_connection_pool]
+            ST2[Connection Efficiency]
+            ST3[Per-Backend Metrics]
+        end
+    end
+    
+    PC1 --> ST1
+    PC2 --> ST1
+    PC3 --> ST2
+    PG1 --> ST3
+    PG2 --> ST3
+    PG3 --> ST3
+    
+    style PC1 fill:#ffebee
+    style PG1 fill:#e8f5e8
+    style ST1 fill:#fff3e0
 ```
 
 ## Connection Pooling Architecture
@@ -1167,6 +1339,178 @@ graph TB
     style SVC fill:#e1f5fe
     style CM fill:#fff3e0
     style SECRET fill:#ffebee
+```
+
+## Monitor Module Architecture
+
+### Work Queue Pattern
+
+```mermaid
+graph TB
+    subgraph "Monitor Thread Pool"
+        subgraph "Work Queue System"
+            QUEUE[wqueue<WorkItem>]
+            WT1[Worker Thread 1]
+            WT2[Worker Thread 2]
+            WTN[Worker Thread N]
+        end
+        
+        subgraph "Monitor Tasks"
+            CONNECT[Connect Check]
+            PING[Ping Check]
+            READONLY[Read-Only Check]
+            REPLAG[Replication Lag]
+            GALERA[Galera Status]
+            GROUP_REP[Group Replication]
+        end
+        
+        subgraph "Task Processing"
+            CONNECT --> QUEUE
+            PING --> QUEUE
+            READONLY --> QUEUE
+            REPLAG --> QUEUE
+            GALERA --> QUEUE
+            GROUP_REP --> QUEUE
+            
+            QUEUE --> WT1
+            QUEUE --> WT2
+            QUEUE --> WTN
+        end
+    end
+    
+    subgraph "Results Processing"
+        WT1 --> UPDATE[Update Server Status]
+        WT2 --> UPDATE
+        WTN --> UPDATE
+        
+        UPDATE --> SHUN{Shun Server?}
+        SHUN -->|Yes| SET_SHUNNED[Mark SHUNNED]
+        SHUN -->|No| SET_ONLINE[Keep ONLINE]
+    end
+    
+    style QUEUE fill:#e1f5fe
+    style UPDATE fill:#e8f5e8
+```
+
+### Health Check State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> ONLINE: Initial State
+    
+    ONLINE --> CHECKING: Monitor Interval
+    
+    CHECKING --> CONNECT_TEST: Perform Check
+    CONNECT_TEST --> PING_TEST: Connect OK
+    CONNECT_TEST --> SHUNNED: Connect Fail
+    
+    PING_TEST --> LAG_CHECK: Ping OK
+    PING_TEST --> SHUNNED: Ping Fail
+    
+    LAG_CHECK --> ONLINE: Lag < Threshold
+    LAG_CHECK --> SHUNNED_LAG: Lag > Threshold
+    
+    SHUNNED --> RECOVERY: Retry Interval
+    SHUNNED_LAG --> RECOVERY: Retry Interval
+    
+    RECOVERY --> CONNECT_TEST: Retry Check
+    
+    SHUNNED_LAG --> ONLINE: Lag Resolved
+    SHUNNED --> ONLINE: Connection Restored
+    
+    ONLINE --> OFFLINE_SOFT: Admin Command
+    OFFLINE_SOFT --> ONLINE: Admin Command
+    
+    ONLINE --> OFFLINE_HARD: Admin Command
+    OFFLINE_HARD --> [*]: Removed
+```
+
+## Cluster Synchronization Architecture
+
+### Checksum-Based Sync Mechanism
+
+```mermaid
+graph TB
+    subgraph "Node A"
+        A_CONFIG[Configuration]
+        A_CHECKSUM[Calculate Checksum]
+        A_EPOCH[Epoch: 100]
+        A_VERSION[Version: 2]
+        
+        A_CONFIG --> A_CHECKSUM
+        A_CHECKSUM --> A_CS[Checksum: 0xABCD]
+    end
+    
+    subgraph "Node B"
+        B_CONFIG[Configuration]
+        B_CHECKSUM[Calculate Checksum]
+        B_EPOCH[Epoch: 101]
+        B_VERSION[Version: 2]
+        
+        B_CONFIG --> B_CHECKSUM
+        B_CHECKSUM --> B_CS[Checksum: 0xEF01]
+    end
+    
+    subgraph "Sync Decision"
+        COMPARE{Compare Checksums}
+        A_CS --> COMPARE
+        B_CS --> COMPARE
+        
+        COMPARE -->|Different| CHECK_EPOCH{Check Epoch}
+        COMPARE -->|Same| NO_SYNC[No Sync Needed]
+        
+        CHECK_EPOCH -->|B > A| SYNC_FROM_B[A syncs from B]
+        CHECK_EPOCH -->|A > B| SYNC_FROM_A[B syncs from A]
+        
+        SYNC_FROM_B --> APPLY_B[Apply B's Config to A]
+        SYNC_FROM_A --> APPLY_A[Apply A's Config to B]
+    end
+    
+    style A_EPOCH fill:#e1f5fe
+    style B_EPOCH fill:#e8f5e8
+    style SYNC_FROM_B fill:#fff3e0
+```
+
+### Cluster Module Synchronization
+
+```mermaid
+graph LR
+    subgraph "Configuration Modules"
+        M1[mysql_servers]
+        M2[mysql_users]
+        M3[mysql_query_rules]
+        M4[mysql_variables]
+        M5[proxysql_servers]
+    end
+    
+    subgraph "Checksum Calculation"
+        M1 --> CS1[Checksum 1]
+        M2 --> CS2[Checksum 2]
+        M3 --> CS3[Checksum 3]
+        M4 --> CS4[Checksum 4]
+        M5 --> CS5[Checksum 5]
+    end
+    
+    subgraph "Sync Decision per Module"
+        CS1 --> DIFF1{Diff Count}
+        CS2 --> DIFF2{Diff Count}
+        CS3 --> DIFF3{Diff Count}
+        
+        DIFF1 -->|>= threshold| SYNC1[Sync Module 1]
+        DIFF2 -->|>= threshold| SYNC2[Sync Module 2]
+        DIFF3 -->|>= threshold| SYNC3[Sync Module 3]
+    end
+    
+    subgraph "Global Checksum"
+        CS1 --> GLOBAL[Global Checksum]
+        CS2 --> GLOBAL
+        CS3 --> GLOBAL
+        CS4 --> GLOBAL
+        CS5 --> GLOBAL
+    end
+    
+    style M1 fill:#e1f5fe
+    style GLOBAL fill:#fff3e0
 ```
 
 ## Performance Optimization Points
