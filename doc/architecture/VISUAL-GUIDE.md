@@ -104,42 +104,42 @@ graph TB
 ```
 proxysql/
 ├── src/                                [Main Entry Points - 4 files]
-│   ├── main.cpp                       # Application entry, thread initialization
-│   ├── SQLite3_Server.cpp            # Embedded config database server
+│   ├── main.cpp                       # Application entry, thread init
+│   ├── SQLite3_Server.cpp            # Config database server
 │   ├── proxy_tls.cpp                 # TLS/SSL implementation
-│   └── proxysql_global.cpp           # Global variables and config
+│   └── proxysql_global.cpp           # Global variables, config
 │
 ├── lib/                                [Core Libraries - 86+ files]
 │   ├── [MySQL Components - 25+ files]
-│   │   ├── MySQL_Session.cpp         # Client session management
-│   │   ├── MySQL_Protocol.cpp        # Wire protocol implementation
-│   │   ├── MySQL_HostGroups_Manager.cpp  # Backend server management
+│   │   ├── MySQL_Session.cpp         # Session management
+│   │   ├── MySQL_Protocol.cpp        # Wire protocol
+│   │   ├── MySQL_HostGroups_Manager.cpp  # Backend management
 │   │   ├── MySQL_Monitor.cpp         # Health monitoring
-│   │   ├── MySQL_Authentication.cpp  # Auth methods (native, sha256, etc)
-│   │   ├── MySQL_Query_Processor.cpp # Query routing logic
+│   │   ├── MySQL_Authentication.cpp  # Auth methods
+│   │   ├── MySQL_Query_Processor.cpp # Query routing
 │   │   ├── MySQL_Query_Cache.cpp     # Result caching
-│   │   ├── MySQL_Thread.cpp          # Thread pool management
-│   │   ├── MySQL_Logger.cpp          # Query/error logging
-│   │   ├── MySQL_PreparedStatement.cpp # PS protocol handling
+│   │   ├── MySQL_Thread.cpp          # Thread pool
+│   │   ├── MySQL_Logger.cpp          # Logging
+│   │   ├── MySQL_PreparedStatement.cpp # Prepared statements
 │   │   └── MySQL_Variables.cpp       # Session variables
 │   │
 │   ├── [PostgreSQL Components - 20+ files]
-│   │   ├── PgSQL_Session.cpp         # Client session management
+│   │   ├── PgSQL_Session.cpp         # Session management
 │   │   ├── PgSQL_Protocol.cpp        # Wire protocol v3
 │   │   ├── PgSQL_HostGroups_Manager.cpp  # Backend management
 │   │   ├── PgSQL_Monitor.cpp         # Health checks
-│   │   ├── PgSQL_Authentication.cpp  # SASL/SCRAM support
+│   │   ├── PgSQL_Authentication.cpp  # SASL/SCRAM
 │   │   ├── PgSQL_Query_Processor.cpp # Query routing
 │   │   ├── PgSQL_Query_Cache.cpp     # Result caching
 │   │   ├── PgSQL_Thread.cpp          # Thread management
 │   │   └── PgSQL_Logger.cpp          # Logging
 │   │
 │   ├── [Base Infrastructure - 10+ files]
-│   │   ├── Base_Session.cpp          # Template base for sessions
-│   │   ├── Base_Thread.cpp           # Common threading
-│   │   ├── Base_HostGroups_Manager.cpp # Template base for HG
-│   │   ├── Query_Processor.cpp       # Common query processing
-│   │   └── Query_Cache.cpp           # Common caching logic
+│   │   ├── Base_Session.cpp          # Session template base
+│   │   ├── Base_Thread.cpp           # Threading base
+│   │   ├── Base_HostGroups_Manager.cpp # HostGroups base
+│   │   ├── Query_Processor.cpp       # Query processing base
+│   │   └── Query_Cache.cpp           # Caching base
 │   │
 │   ├── [Admin & Monitoring - 15+ files]
 │   │   ├── ProxySQL_Admin.cpp        # Admin interface (6032)
@@ -150,25 +150,25 @@ proxysql/
 │   │   └── ProxySQL_Config.cpp       # Configuration management
 │   │
 │   └── [Supporting Libraries]
-│       ├── Standard_Query_Cache.cpp  # Query cache implementation
-│       ├── MySQL_ResultSet.cpp       # Result set handling
+│       ├── Standard_Query_Cache.cpp  # Query cache
+│       ├── MySQL_ResultSet.cpp       # Result sets
 │       ├── network.cpp               # Network utilities
-│       ├── debug.cpp                 # Debug/logging utilities
-│       └── libproxysql.a            # Compiled static library (340MB+)
+│       ├── debug.cpp                 # Debug utilities
+│       └── libproxysql.a            # Static library (340MB+)
 │
 ├── include/                            [Header Files - 89+ files]
 │   ├── [Protocol Headers]
-│   │   ├── MySQL_Protocol.h          # MySQL protocol definitions
-│   │   ├── PgSQL_Protocol.h          # PostgreSQL protocol defs
-│   │   ├── mysql_connection.h        # MySQL connection handling
+│   │   ├── MySQL_Protocol.h          # MySQL protocol
+│   │   ├── PgSQL_Protocol.h          # PostgreSQL protocol
+│   │   ├── mysql_connection.h        # MySQL connections
 │   │   └── pgsql_connection.h        # PostgreSQL connections
 │   │
 │   ├── [Core Headers]
 │   │   ├── proxysql.h                # Main header
-│   │   ├── proxysql_structs.h        # Core data structures
-│   │   ├── Base_Session.h            # Session template base
-│   │   ├── Base_Thread.h             # Thread base class
-│   │   └── Base_HostGroups_Manager.h # HG template base
+│   │   ├── proxysql_structs.h        # Data structures
+│   │   ├── Base_Session.h            # Session base
+│   │   ├── Base_Thread.h             # Thread base
+│   │   └── Base_HostGroups_Manager.h # HostGroups base
 │   │
 │   └── [Utility Headers]
 │       ├── btree_map.h               # B-tree implementation
@@ -191,13 +191,13 @@ proxysql/
 │   └── [12 more libraries...]
 │
 └── test/                               [Test Infrastructure]
-    ├── tap/                           # TAP test framework
-    │   └── tests/                     # 220+ test files
-    │       ├── test_mysql_*.cpp      # MySQL-specific tests
+    ├── tap/                           # TAP framework
+    │   └── tests/                     # 220+ tests
+    │       ├── test_mysql_*.cpp      # MySQL tests
     │       ├── test_pgsql_*.cpp      # PostgreSQL tests
-    │       └── test_admin_*.cpp      # Admin interface tests
+    │       └── test_admin_*.cpp      # Admin tests
     ├── cluster/                       # Cluster tests
-    └── PrepStmt/                      # Prepared statement tests
+    └── PrepStmt/                      # Prepared statements
 ```
 
 ## Class Hierarchy Diagrams
@@ -757,12 +757,12 @@ sequenceDiagram
 
 ## Thread Architecture
 
-### Multi-Threaded Processing Model
+### Thread Processing Model
 
 ```mermaid
 graph TB
     subgraph "Main Thread"
-        MAIN["main()"]
+        MAIN[main()]
         INIT[Initialize]
         CONFIG[Load Config]
         START[Start Threads]
@@ -865,7 +865,7 @@ graph LR
 
 ## Connection Pooling Architecture
 
-### Advanced Pool Management
+### Pool Management
 
 ```mermaid
 graph TB
@@ -1515,7 +1515,7 @@ graph LR
 
 ## Performance Optimization Points
 
-### Critical Path Optimizations
+### Performance Optimizations
 
 ```mermaid
 graph LR

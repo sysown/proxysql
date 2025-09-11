@@ -2,13 +2,13 @@
 
 ## Executive Summary
 
-ProxySQL is a database proxy server written in C++ that provides protocol-aware proxying for MySQL and PostgreSQL databases. The system implements a multi-threaded, event-driven architecture with connection pooling, query routing, and monitoring. Built with C++11/17, it uses a modular design with separation between protocol handlers, session management, and administrative interfaces, backed by an embedded SQLite3 configuration database.
+ProxySQL is a database proxy server written in C++ providing protocol-aware proxying for MySQL and PostgreSQL databases. It implements a multi-threaded, event-driven architecture with connection pooling, query routing, and monitoring. Built with C++11/17, it uses modular design separating protocol handlers, session management, and administrative interfaces, backed by embedded SQLite3 configuration.
 
 ## Key Components
 
-- **Dual-protocol architecture**: MySQL and PostgreSQL wire protocol implementations
-- **Multi-threaded design**: Separate worker threads for connections, admin, monitoring, and clustering
-- **Embedded configuration**: SQLite3-based three-tier configuration system (Disk → Memory → Runtime)
+- **Dual protocols**: MySQL and PostgreSQL wire protocol implementations
+- **Multi-threaded**: Separate worker threads for connections, admin, monitoring, and clustering
+- **Configuration**: SQLite3 three-tier system (Disk → Memory → Runtime)
 - **Performance features**: Lock-free structures, connection pooling, query caching
 - **Enterprise features**: Clustering, monitoring, REST API, and Prometheus metrics
 
@@ -113,28 +113,28 @@ graph LR
 ### Code Organization
 ```
 https://github.com/sysown/proxysql/tree/v3.0.agentics/
-├── src/                        # Main entry points (4 core files)
-│   ├── main.cpp               # Primary application entry, thread initialization
-│   ├── SQLite3_Server.cpp     # Embedded configuration database
+├── src/                        # Main entry points (4 files)
+│   ├── main.cpp               # Application entry, thread initialization
+│   ├── SQLite3_Server.cpp     # Configuration database
 │   ├── proxy_tls.cpp          # TLS/SSL implementation
-│   └── proxysql_global.cpp    # Global variables and configuration
+│   └── proxysql_global.cpp    # Global variables, configuration
 │
 ├── lib/                        # Core library implementations (86 .cpp files)
 │   ├── MySQL_*.cpp            # MySQL protocol & management (20+ files)
-│   │   ├── MySQL_Protocol.cpp        # Wire protocol implementation
-│   │   ├── MySQL_Session.cpp         # Client session handling
+│   │   ├── MySQL_Protocol.cpp        # Wire protocol
+│   │   ├── MySQL_Session.cpp         # Session handling
 │   │   ├── MySQL_HostGroups_Manager.cpp # Backend management
 │   │   └── MySQL_Monitor.cpp         # Health monitoring
 │   │
 │   ├── PgSQL_*.cpp            # PostgreSQL protocol & management (15+ files)
-│   │   ├── PgSQL_Protocol.cpp        # Wire protocol implementation
-│   │   ├── PgSQL_Session.cpp         # Client session handling
-│   │   └── PgSQL_Authentication.cpp  # SASL/SCRAM support
+│   │   ├── PgSQL_Protocol.cpp        # Wire protocol v3
+│   │   ├── PgSQL_Session.cpp         # Session handling
+│   │   └── PgSQL_Authentication.cpp  # SASL/SCRAM
 │   │
 │   ├── ProxySQL_Admin*.cpp    # Administrative interface (10+ files)
-│   │   ├── ProxySQL_Admin.cpp        # Main admin implementation
-│   │   ├── ProxySQL_Admin_Stats.cpp  # Statistics collection
-│   │   └── ProxySQL_RESTAPI_Server.cpp # REST API endpoint
+│   │   ├── ProxySQL_Admin.cpp        # Admin implementation
+│   │   ├── ProxySQL_Admin_Stats.cpp  # Statistics
+│   │   └── ProxySQL_RESTAPI_Server.cpp # REST API
 │   │
 │   ├── Base_*.cpp             # Base infrastructure (5+ files)
 │   ├── Query_*.cpp            # Query processing & caching
@@ -156,8 +156,8 @@ https://github.com/sysown/proxysql/tree/v3.0.agentics/
 │   └── ...                     # 17 more dependencies
 │
 └── test/                       # Test infrastructure
-    ├── tap/tests/              # 220+ TAP test files
-    ├── cluster/                # Cluster functionality tests
+    ├── tap/tests/              # 220+ TAP tests
+    ├── cluster/                # Cluster tests
     └── PrepStmt/               # Prepared statement tests
 ```
 
@@ -277,11 +277,11 @@ graph LR
 └─────────────────┘
 ```
 
-### Port Mapping and Interfaces
-- **6033**: MySQL/PostgreSQL client connections (main proxy port)
-- **6032**: Admin interface (MySQL-compatible protocol)
-- **6080**: REST API endpoint (HTTP/JSON)
-- **6070**: Web UI interface (optional)
+### Port Mapping
+- **6033**: MySQL/PostgreSQL client connections
+- **6032**: Admin interface (MySQL protocol)
+- **6080**: REST API (HTTP/JSON)
+- **6070**: Web UI (optional)
 
 ### Docker Deployment Scenarios
 ```
@@ -317,10 +317,10 @@ INSERT INTO mysql_query_rules (
 ```
 
 ### Health Monitoring
-- **Automatic health checks**: Configurable intervals
+- **Health checks**: Configurable intervals
 - **Connection verification**: `monitor_ping_interval`
-- **Replication lag detection**: For read/write splitting
-- **Automatic shunning**: Remove unhealthy backends
+- **Replication lag detection**: Read/write splitting
+- **Automatic shunning**: Removes unhealthy backends
 
 ## Performance and Scaling Architecture
 
@@ -359,10 +359,10 @@ graph TD
     style BE fill:#e1f5fe
 ```
 
-### Caching Architecture
-- **Query Cache**: Configurable TTL, pattern-based
+### Caching
+- **Query Cache**: TTL and pattern-based
 - **Prepared Statement Cache**: Metadata caching
-- **Connection Attributes Cache**: Reduces authentication overhead
+- **Connection Attributes Cache**: Reduced authentication overhead
 
 ## Testing and Quality Assurance
 
@@ -411,11 +411,11 @@ mysql -h127.0.0.1 -P6032 -uadmin -padmin
 
 ## Architecture Features
 
-1. **Protocol-Aware Proxy**: Understands and manipulates database protocols
-2. **Runtime Reconfiguration**: Configuration changes without connection drops
-3. **Load Balancing**: Weight-based, least-connections, round-robin algorithms
-4. **Query Routing**: Regex-based rules, query rewriting, caching
-5. **Integration**: Prometheus metrics, REST API, cluster support
-6. **Security**: SSL/TLS, SQL injection detection, authentication plugins
-7. **Performance**: Lock-free statistics, connection pooling, query cache
-8. **High Availability**: Automatic failover, read/write splitting, replication lag detection
+1. **Protocol-Aware**: Understands and manipulates database protocols
+2. **Runtime Reconfiguration**: Changes without connection drops
+3. **Load Balancing**: Weight-based, least-connections, round-robin
+4. **Query Routing**: Regex rules, rewriting, caching
+5. **Integration**: Prometheus, REST API, clustering
+6. **Security**: SSL/TLS, SQL injection detection, authentication
+7. **Performance**: Lock-free statistics, connection pooling, caching
+8. **High Availability**: Failover, read/write splitting, lag detection

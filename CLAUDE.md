@@ -102,6 +102,47 @@ Claude Code provides specialized agents to help with different aspects of ProxyS
 "Use gpt-qa to create comprehensive tests for PgSQL prepared statements"
 ```
 
+### Running Agents in Parallel for Faster Analysis
+
+For optimal performance when analyzing ProxySQL's codebase, run multiple agents simultaneously:
+
+```bash
+# RECOMMENDED: Parallel agent execution for comprehensive analysis
+"Run gopher-scout and system-digest in parallel to analyze the MySQL session handling architecture"
+
+# Parallel exploration of different code areas
+"Deploy gopher-scout in parallel to:
+1. Find all MySQL authentication methods in lib/MySQL_Authentication.cpp
+2. Analyze connection pooling in lib/MySQL_HostGroups_Manager.cpp  
+3. Trace query routing logic in lib/MySQL_Query_Processor.cpp"
+
+# Parallel architecture + implementation analysis
+"Run these agents in parallel:
+- system-digest to analyze the overall threading architecture
+- gopher-scout to find specific thread pool implementations in MySQL_Thread.cpp
+- gopher-scout to examine PostgreSQL thread handling in PgSQL_Thread.cpp"
+
+# Parallel test creation and feature implementation
+"Execute in parallel:
+- tdd-driven-builder to implement the new feature
+- gpt-qa to create comprehensive test coverage
+- gopher-scout to find similar existing implementations for reference"
+```
+
+#### Performance Benefits of Parallel Execution
+
+1. **Faster Results**: Agents work concurrently, reducing total analysis time by 3-5x
+2. **Comprehensive Coverage**: Different agents can explore different aspects simultaneously
+3. **Cross-Reference**: Results from multiple agents provide richer context
+4. **Efficient Resource Use**: Claude Code optimizes parallel execution automatically
+
+#### Best Practices for Parallel Agent Use
+
+- **Combine complementary agents**: Pair high-level (system-digest) with detailed (gopher-scout) analysis
+- **Partition search spaces**: Have different gopher-scout instances scan different directories
+- **Mix analysis types**: Run architecture analysis alongside implementation searches
+- **Batch related queries**: Group related exploration tasks for parallel execution
+
 ## Common Development Workflows
 
 ### Understanding Code Flow

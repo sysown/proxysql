@@ -2,28 +2,28 @@
 
 ## Executive Summary
 
-ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/17. It implements a multi-threaded architecture with connection pooling, query routing, caching, and monitoring capabilities.
+ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/17. It implements a multi-threaded architecture with connection pooling, query routing, caching, and monitoring.
 
 ## System Architecture
 
 ### Core Design Patterns
 
 1. **Multi-Threaded Worker Model**
-   - MySQL worker threads (`MySQL_Thread`) handling client connections
+   - MySQL worker threads (`MySQL_Thread`) handle client connections
    - PgSQL worker threads (`PgSQL_Thread`) for PostgreSQL support
    - Admin threads for configuration management
    - Monitor threads for backend health checking
    - Idle connection management threads (when `IDLE_THREADS` enabled)
 
 2. **Event-Driven I/O**
-   - Uses `libev` for efficient event loop management
-   - Poll-based multiplexing for handling multiple connections per thread
+   - Uses `libev` for event loop management
+   - Poll-based multiplexing handles multiple connections per thread
    - Epoll support for idle thread management on Linux
 
 3. **Connection Pooling & Multiplexing**
    - Per-hostgroup connection pools
    - Connection multiplexing to reduce backend connections
-   - Smart connection reuse based on session state
+   - Connection reuse based on session state
 
 4. **Protocol Implementation**
    - Full MySQL protocol implementation (`MySQL_Protocol`)
@@ -36,9 +36,9 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
 - **File**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/src/main.cpp`
 - **Responsibilities**:
   - Process initialization and daemonization
-  - Loading configuration from `proxysql.cfg`
-  - Creating global variables structure
-  - Starting all subsystems
+  - Loads configuration from `proxysql.cfg`
+  - Creates global variables structure
+  - Starts all subsystems
 
 ### 2. Thread Architecture
 
@@ -57,7 +57,7 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
 #### MySQL Threads (`MySQL_Thread`)
 - **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_Thread.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/MySQL_Thread.h`
 - **Key Features**:
-  - Worker threads handling MySQL client connections
+  - Worker threads handle MySQL client connections
   - Session management and query processing
   - Connection pool interaction
   - Thread-local statistics for lock-free updates
@@ -94,7 +94,7 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
 #### MySQL HostGroups Manager
 - **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_HostGroups_Manager.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/MySQL_HostGroups_Manager.h`
 - **Key Concepts**:
-  - Hostgroup: logical grouping of database servers
+  - Hostgroups logically group database servers
   - Connection pool per hostgroup
   - Server status tracking (ONLINE, SHUNNED, OFFLINE_SOFT, OFFLINE_HARD)
   - Connection health monitoring
@@ -109,7 +109,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 
 #### MySQL Query Processor
 - **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/MySQL_Query_Processor.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/MySQL_Query_Processor.h`
-- **Features**:
+- **Functions**:
   - Rule-based query routing
   - Query rewriting capabilities
   - Query caching decisions
@@ -148,7 +148,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 
 #### SQLite3 Server
 - **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/src/SQLite3_Server.cpp`, `https://github.com/sysown/proxysql/tree/v3.0.agentics/include/SQLite3_Server.h`
-- **Purpose**: Provides SQL interface for admin operations
+- **Purpose**: SQL interface for admin operations
 
 #### Monitoring (`MySQL_Monitor`, `PgSQL_Monitor`)
 - Backend health checking
@@ -261,7 +261,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
    - Latency-aware connection selection
    - GTID-aware routing for consistency
 
-2. **Advanced Pool Algorithms**:
+2. **Pool Algorithms**:
    ```cpp
    // Connection retrieval with multiple criteria
    MySQL_Connection* get_MyConn_from_pool(
@@ -273,11 +273,11 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
    )
    ```
 
-3. **Query Processing Optimizations**:
-   - **Fast Digest Path**: Optimized computation for queries > 100KB
-   - **Multi-threaded Digesting**: 4 dedicated threads for parallel processing
+3. **Query Processing**:
+   - **Fast Digest Path**: Optimized for queries > 100KB
+   - **Multi-threaded Digesting**: 4 threads for parallel processing
    - **Regex Caching**: Compiled patterns cached in `regex_engine1/2`
-   - **Digest Statistics**: Efficient tracking with minimal overhead
+   - **Digest Statistics**: Low-overhead tracking
 
 4. **Memory Management**:
    - **Buffer Pools**: Reusable buffers for packet handling
@@ -285,7 +285,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
    - **Result Buffering**: Configurable strategies
    - **jemalloc Integration**: Optimized memory allocation
 
-5. **Lock-Free Optimizations**:
+5. **Lock-Free Structures**:
    - Thread-local statistics counters
    - Lock-free query digest maps
    - Atomic operations for global counters
@@ -325,8 +325,8 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 - **PostgreSQL SCRAM**: SASL/SCRAM-SHA-256 support
 
 #### Authentication Caching
-- SHA1 passwords cached in `GloMyAuth` for performance
-- Clear text passwords cached for `caching_sha2_password` fast auth
+- SHA1 passwords cached in `GloMyAuth`
+- Passwords cached for `caching_sha2_password` fast authentication
 - User attributes cached with JSON validation
 - Per-user connection limits and routing rules
 
@@ -340,7 +340,7 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 ## Query Processing Pipeline
 
 ### Query Digest System
-- **Digest Computation**: Fast path for queries > 100KB
+- **Digest Computation**: Optimized for queries > 100KB
 - **Digest Structure**:
   ```cpp
   struct QP_query_digest_stats {
@@ -434,7 +434,7 @@ THEN sync_from_peer
 
 ## Architecture Extensions
 
-The architecture supports:
+Architecture supports:
 - Additional database protocols
 - Alternative caching strategies
 - Custom routing algorithms
