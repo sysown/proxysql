@@ -1513,6 +1513,501 @@ graph LR
     style GLOBAL fill:#fff3e0
 ```
 
+## Galera Cluster Monitoring
+
+### WSREP Variable Monitoring Flow
+
+```mermaid
+graph TB
+    subgraph "Galera Health Check Pipeline"
+        START[Monitor Timer Trigger] --> CHECK_INTERVAL{Interval Elapsed?}
+        CHECK_INTERVAL -->|Yes| FETCH_WSREP[Fetch WSREP Variables]
+        CHECK_INTERVAL -->|No| WAIT[Wait]
+        
+        FETCH_WSREP --> PARSE[Parse WSREP Status]
+        
+        subgraph "WSREP Variables Check"
+            PARSE --> V1[wsrep_ready]
+            PARSE --> V2[wsrep_cluster_status]
+            PARSE --> V3[wsrep_local_state]
+            PARSE --> V4[wsrep_desync]
+            PARSE --> V5[wsrep_reject_queries]
+            PARSE --> V6[wsrep_sst_donor_rejects_queries]
+        end
+        
+        V1 --> EVAL{Evaluate Health}
+        V2 --> EVAL
+        V3 --> EVAL
+        V4 --> EVAL
+        V5 --> EVAL
+        V6 --> EVAL
+        
+        EVAL --> DECISION{Healthy?}
+        DECISION -->|Yes| MARK_ONLINE[Mark Server ONLINE]
+        DECISION -->|No| CHECK_TIMEOUT{Timeout Count}
+        
+        CHECK_TIMEOUT -->|< Max| INCREMENT[Increment Counter]
+        CHECK_TIMEOUT -->|>= Max| MARK_OFFLINE[Mark Server OFFLINE]
+        
+        INCREMENT --> LOG_WARNING[Log Warning]
+        MARK_ONLINE --> UPDATE_HG[Update Hostgroup]
+        MARK_OFFLINE --> UPDATE_HG
+        LOG_WARNING --> UPDATE_HG
+    end
+    
+    style START fill:#e1f5fe
+    style FETCH_WSREP fill:#fff3e0
+    style MARK_ONLINE fill:#c8e6c9
+    style MARK_OFFLINE fill:#ffebee
+```
+
+### Galera Node State Transitions
+
+```mermaid
+stateDiagram-v2
+    [*] --> Disconnected: Initial
+    
+    Disconnected --> Connecting: Join Cluster
+    Connecting --> Joining: SST/IST
+    
+    Joining --> Synced: State Transfer Complete
+    Synced --> Donor: Become Donor
+    Donor --> Synced: Donation Complete
+    
+    Synced --> Desync: Manual Desync
+    Desync --> Synced: Resync
+    
+    state "wsrep_local_state" {
+        1_Joining: 1 - Joining
+        2_Donor: 2 - Donor/Desynced
+        3_Joined: 3 - Joined
+        4_Synced: 4 - Synced
+    }
+    
+    state "wsrep_cluster_status" {
+        Primary: Primary Component
+        NonPrimary: Non-Primary
+        Disconnected_State: Disconnected
+    }
+    
+    Synced --> Primary: Normal Operation
+    Primary --> NonPrimary: Network Partition
+    NonPrimary --> Primary: Partition Healed
+    
+    Synced --> Error: wsrep_reject_queries=ON
+    Error --> Synced: Recovery
+    
+    note right of Donor
+        During SST donation:
+        - wsrep_sst_donor_rejects_queries
+        - Affects availability
+    end note
+```
+
+## Bootstrap Mode Implementation
+
+### Group Replication Bootstrap Flow
+
+```mermaid
+graph TB
+    subgraph "Bootstrap Initialization"
+        DETECT[Detect Bootstrap Mode] --> CHECK_VAR{bootstrap_variables?}
+        CHECK_VAR -->|Present| PARSE_JSON[Parse JSON Config]
+        CHECK_VAR -->|Absent| NORMAL_START[Normal Startup]
+        
+        PARSE_JSON --> EXTRACT[Extract Parameters]
+        EXTRACT --> VAL_HG[writer_hostgroup]
+        EXTRACT --> VAL_RD[reader_hostgroup]
+        EXTRACT --> VAL_WR[writer_is_also_reader]
+        EXTRACT --> VAL_MX[max_writers]
+    end
+    
+    subgraph "Auto-Discovery Phase"
+        VAL_MX --> QUERY_NODES[Query All Nodes]
+        QUERY_NODES --> CHECK_PRIMARY{Find Primary?}
+        
+        CHECK_PRIMARY -->|Found| GET_MEMBERS[Get Member List]
+        CHECK_PRIMARY -->|Not Found| RETRY{Retry Count?}
+        RETRY -->|< Max| WAIT_RETRY[Wait & Retry]
+        RETRY -->|>= Max| FAIL[Bootstrap Failed]
+        
+        WAIT_RETRY --> QUERY_NODES
+        
+        GET_MEMBERS --> BUILD_CONFIG[Build Configuration]
+    end
+    
+    subgraph "Configuration Generation"
+        BUILD_CONFIG --> GEN_SERVERS[Generate mysql_servers]
+        BUILD_CONFIG --> GEN_GROUPS[Generate mysql_group_replication_hostgroups]
+        
+        GEN_SERVERS --> POPULATE_WR[Populate Writer HG]
+        GEN_SERVERS --> POPULATE_RD[Populate Reader HG]
+        
+        subgraph "Server Assignment"
+            POPULATE_WR --> PRIMARY_NODE[Primary → Writer HG]
+            POPULATE_RD --> SECONDARY_NODES[Secondaries → Reader HG]
+            
+            VAL_WR -->|writer_is_also_reader=1| PRIMARY_BOTH[Primary → Both HGs]
+        end
+    end
+    
+    subgraph "Activation"
+        PRIMARY_NODE --> LOAD_RUNTIME[Load to Runtime]
+        SECONDARY_NODES --> LOAD_RUNTIME
+        PRIMARY_BOTH --> LOAD_RUNTIME
+        
+        LOAD_RUNTIME --> SAVE_DISK[Save to Disk]
+        SAVE_DISK --> MONITOR_START[Start Monitoring]
+        MONITOR_START --> COMPLETE[Bootstrap Complete]
+    end
+    
+    style DETECT fill:#e1f5fe
+    style CHECK_PRIMARY fill:#fff3e0
+    style COMPLETE fill:#c8e6c9
+    style FAIL fill:#ffebee
+```
+
+### Bootstrap Variables Processing
+
+```mermaid
+graph LR
+    subgraph "JSON Bootstrap Config"
+        JSON[bootstrap_variables JSON] --> PARSE{Parse JSON}
+        
+        PARSE --> P1[writer_hostgroup: 10]
+        PARSE --> P2[reader_hostgroup: 11]
+        PARSE --> P3[backup_writer_hostgroup: 12]
+        PARSE --> P4[offline_hostgroup: 9999]
+        PARSE --> P5[max_writers: 1]
+        PARSE --> P6[writer_is_also_reader: 2]
+        PARSE --> P7[max_transactions_behind: 0]
+        
+        subgraph "writer_is_also_reader modes"
+            P6 --> M0[0: Writer not in reader HG]
+            P6 --> M1[1: Writer also in reader HG]
+            P6 --> M2[2: Writer in backup_writer + reader HG]
+        end
+    end
+    
+    style JSON fill:#e1f5fe
+    style M2 fill:#c8e6c9
+```
+
+## Query Digest Generation Pipeline
+
+### SpookyV2 Hash Calculation
+
+```mermaid
+graph TB
+    subgraph "Query Normalization Pipeline"
+        QUERY[Original Query] --> SIZE_CHECK{Size > 100KB?}
+        
+        SIZE_CHECK -->|Yes| LARGE_QUERY[Large Query Path]
+        SIZE_CHECK -->|No| NORMAL_PATH[Normal Path]
+        
+        subgraph "Tokenization Process"
+            NORMAL_PATH --> TOKENIZE[Tokenize SQL]
+            TOKENIZE --> REPLACE_LITERALS[Replace Literals with ?]
+            REPLACE_LITERALS --> NORMALIZE_WS[Normalize Whitespace]
+            NORMALIZE_WS --> CASE_NORM[Lowercase Keywords]
+        end
+        
+        subgraph "Large Query Optimization"
+            LARGE_QUERY --> THREAD_POOL[4 Digest Threads]
+            THREAD_POOL --> CHUNK[Process in Chunks]
+            CHUNK --> PARALLEL_HASH[Parallel SpookyV2]
+        end
+        
+        CASE_NORM --> HASH_INPUT[Normalized Query Text]
+        PARALLEL_HASH --> HASH_INPUT
+    end
+    
+    subgraph "SpookyV2 Hashing"
+        HASH_INPUT --> SPOOKY_INIT[SpookyHash::Init()]
+        SPOOKY_INIT --> SPOOKY_UPDATE[SpookyHash::Update(data, len)]
+        SPOOKY_UPDATE --> SPOOKY_FINAL[SpookyHash::Final(&hash1, &hash2)]
+        SPOOKY_FINAL --> DIGEST[64-bit Digest Value]
+    end
+    
+    subgraph "Digest Storage"
+        DIGEST --> STATS_TABLE[stats_mysql_query_digest]
+        DIGEST --> QUERY_CACHE_KEY[Cache Key]
+        DIGEST --> RULE_MATCHING[Rule Digest Match]
+    end
+    
+    style QUERY fill:#e1f5fe
+    style THREAD_POOL fill:#fff3e0
+    style DIGEST fill:#c8e6c9
+```
+
+### Query Normalization Known Issues
+
+```mermaid
+graph TB
+    subgraph "Known Query Digest Bugs"
+        BUG1[Bug: INSERT normalization<br/>INSERT INTO t VALUES (1),(2)]
+        BUG2[Bug: IN clause ordering<br/>WHERE id IN (3,1,2)]
+        BUG3[Bug: Float normalization<br/>1.5 vs 1.50]
+        BUG4[Bug: String escape<br/>'O\'Brien' vs 'O''Brien']
+        BUG5[Bug: Comment stripping<br/>/* comment */ variations]
+        BUG6[Bug: Whitespace handling<br/>Tab vs Space]
+        BUG7[Bug: Case sensitivity<br/>SELECT vs select in strings]
+        BUG8[Bug: Numeric formats<br/>0x1A vs 26]
+        BUG9[Bug: NULL handling<br/>IS NULL variations]
+        BUG10[Bug: Operator spacing<br/>a=1 vs a = 1]
+        BUG11[Bug: Subquery formatting]
+        BUG12[Bug: JOIN reordering]
+    end
+    
+    subgraph "Impact on Caching"
+        BUG1 --> CACHE_MISS[Cache Misses]
+        BUG2 --> CACHE_MISS
+        BUG3 --> CACHE_MISS
+        BUG4 --> CACHE_MISS
+        
+        CACHE_MISS --> PERF_IMPACT[Performance Impact]
+        CACHE_MISS --> STATS_SKEW[Statistics Skew]
+    end
+    
+    style BUG1 fill:#ffebee
+    style CACHE_MISS fill:#fff3e0
+```
+
+## SSL/TLS Implementation
+
+### Non-Standard mTLS Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant P as ProxySQL
+    participant B as Backend MySQL
+    
+    Note over C,P: Frontend SSL (Standard)
+    C->>P: TCP Connect
+    P->>C: MySQL Greeting (SSL Capable)
+    C->>P: SSL Request
+    P->>C: SSL Handshake
+    C->>P: Client Certificate
+    P->>P: Verify Client Cert
+    P->>C: SSL Established
+    
+    Note over C,P: Authentication Phase
+    C->>P: MySQL Handshake
+    P->>P: Extract Username
+    
+    Note over P,B: Backend SSL (Non-Standard)
+    P->>B: TCP Connect
+    B->>P: MySQL Greeting
+    P->>B: SSL Request
+    B->>P: SSL Handshake Start
+    
+    rect rgb(255, 230, 230)
+        Note over P,B: Non-Standard Behavior
+        P->>B: Client Certificate
+        B->>P: SSL Established
+        B->>P: Request MySQL Auth
+        P->>B: MySQL Handshake
+        P->>P: Post-Handshake Validation
+        P->>P: Match Frontend Username
+        P->>P: Verify Cert CN/SAN
+    end
+    
+    alt Validation Success
+        P->>B: Complete Auth
+        B->>P: OK Packet
+    else Validation Failure
+        P->>P: Close Backend
+        P->>C: Error Response
+    end
+```
+
+### SPIFFE Certificate Flow
+
+```mermaid
+graph TB
+    subgraph "SPIFFE Authentication"
+        CLIENT[Client with SPIFFE Cert] --> EXTRACT_URI[Extract SPIFFE URI]
+        EXTRACT_URI --> PARSE_URI[Parse spiffe://domain/path]
+        
+        PARSE_URI --> VALIDATE{Validate Format}
+        VALIDATE -->|Valid| CHECK_MAPPING[Check URI Mapping]
+        VALIDATE -->|Invalid| REJECT[Reject Connection]
+        
+        CHECK_MAPPING --> MAP_TABLE[SPIFFE → Username Map]
+        MAP_TABLE --> FOUND{Mapping Found?}
+        
+        FOUND -->|Yes| SET_USER[Set MySQL Username]
+        FOUND -->|No| DEFAULT_USER[Use Default/Reject]
+        
+        SET_USER --> AUTH_BACKEND[Authenticate to Backend]
+        DEFAULT_USER --> AUTH_BACKEND
+    end
+    
+    subgraph "Certificate Validation"
+        AUTH_BACKEND --> VERIFY_CHAIN[Verify Cert Chain]
+        VERIFY_CHAIN --> CHECK_EXPIRY[Check Expiration]
+        CHECK_EXPIRY --> CHECK_REVOKE[Check Revocation]
+        CHECK_REVOKE --> VALIDATED[Certificate Valid]
+    end
+    
+    style CLIENT fill:#e1f5fe
+    style VALIDATED fill:#c8e6c9
+    style REJECT fill:#ffebee
+```
+
+## Cluster Synchronization Details
+
+### Differential Sync Algorithm
+
+```mermaid
+graph TB
+    subgraph "Checksum Calculation Per Module"
+        subgraph "Module: mysql_servers"
+            S_QUERY[SELECT * FROM mysql_servers] --> S_HASH[SpookyV2 Hash]
+            S_HASH --> S_CHECK[Checksum: 0xABCD1234]
+        end
+        
+        subgraph "Module: mysql_users"
+            U_QUERY[SELECT * FROM mysql_users] --> U_HASH[SpookyV2 Hash]
+            U_HASH --> U_CHECK[Checksum: 0xDEAD5678]
+        end
+        
+        subgraph "Module: mysql_query_rules"
+            Q_QUERY[SELECT * FROM mysql_query_rules] --> Q_HASH[SpookyV2 Hash]
+            Q_HASH --> Q_CHECK[Checksum: 0xBEEF9012]
+        end
+    end
+    
+    subgraph "Sync Decision Logic"
+        S_CHECK --> COMPARE_S{Compare with Peers}
+        U_CHECK --> COMPARE_U{Compare with Peers}
+        Q_CHECK --> COMPARE_Q{Compare with Peers}
+        
+        COMPARE_S -->|Different| S_DIFF[Calculate Diff Count]
+        COMPARE_U -->|Different| U_DIFF[Calculate Diff Count]
+        COMPARE_Q -->|Different| Q_DIFF[Calculate Diff Count]
+        
+        S_DIFF --> S_THRESH{Diff > mysql_servers_diffs_before_sync?}
+        U_DIFF --> U_THRESH{Diff > mysql_users_diffs_before_sync?}
+        Q_DIFF --> Q_THRESH{Diff > mysql_query_rules_diffs_before_sync?}
+        
+        S_THRESH -->|Yes| S_SYNC[Sync mysql_servers]
+        U_THRESH -->|Yes| U_SYNC[Sync mysql_users]
+        Q_THRESH -->|Yes| Q_SYNC[Sync mysql_query_rules]
+    end
+    
+    subgraph "Sync Execution"
+        S_SYNC --> FETCH_S[Fetch from Peer with Higher Epoch]
+        U_SYNC --> FETCH_U[Fetch from Peer with Higher Epoch]
+        Q_SYNC --> FETCH_Q[Fetch from Peer with Higher Epoch]
+        
+        FETCH_S --> APPLY_S[Apply to Runtime]
+        FETCH_U --> APPLY_U[Apply to Runtime]
+        FETCH_Q --> APPLY_Q[Apply to Runtime]
+        
+        APPLY_S --> PERSIST[Save to Disk]
+        APPLY_U --> PERSIST
+        APPLY_Q --> PERSIST
+    end
+    
+    style S_CHECK fill:#e1f5fe
+    style U_CHECK fill:#e8f5e8
+    style Q_CHECK fill:#fff3e0
+    style PERSIST fill:#c8e6c9
+```
+
+### Cluster Node Communication
+
+```mermaid
+sequenceDiagram
+    participant N1 as Node 1 (Leader)
+    participant N2 as Node 2
+    participant N3 as Node 3
+    
+    Note over N1,N3: Periodic Sync Check (5s default)
+    
+    N1->>N2: Request Checksums
+    N1->>N3: Request Checksums
+    
+    N2->>N1: Response {epoch:100, checksums:[...]}
+    N3->>N1: Response {epoch:99, checksums:[...]}
+    
+    N1->>N1: Compare Checksums
+    
+    alt Checksums Differ
+        N1->>N1: Check Diff Counts
+        
+        alt Diff > Threshold
+            N1->>N2: Request Full Data
+            N2->>N1: Send mysql_servers rows
+            N1->>N1: Apply Changes
+            
+            N1->>N3: Push Updates
+            N3->>N3: Apply Changes
+        else Diff < Threshold
+            N1->>N1: Increment Counter
+            N1->>N1: Wait Next Cycle
+        end
+    else Checksums Match
+        N1->>N1: No Action Needed
+    end
+    
+    Note over N1,N3: Update Global Checksum
+    N1->>N2: Broadcast Global Checksum
+    N1->>N3: Broadcast Global Checksum
+```
+
+## Read-Only Server Management
+
+### Evolution of Read-Only Handling
+
+```mermaid
+graph TB
+    subgraph "Legacy Mode (Pre-2.5.1)"
+        L_CHECK[Check read_only] --> L_BINARY{Binary Decision}
+        L_BINARY -->|read_only=0| L_WRITER[Assign to Writer HG]
+        L_BINARY -->|read_only=1| L_READER[Assign to Reader HG]
+    end
+    
+    subgraph "Modern Mode (2.5.1+)"
+        M_CHECK[Check Multiple Variables] --> M_EVAL[Weighted Evaluation]
+        
+        subgraph "Variables Checked"
+            V1[read_only: weight 100]
+            V2[innodb_read_only: weight 1000]
+            V3[super_read_only: weight 10000]
+            V4[innodb_super_read_only: custom]
+            V5[aws_aurora_info: custom]
+        end
+        
+        V1 --> M_EVAL
+        V2 --> M_EVAL
+        V3 --> M_EVAL
+        V4 --> M_EVAL
+        V5 --> M_EVAL
+        
+        M_EVAL --> SCORE[Calculate Total Score]
+        SCORE --> DECISION{Score Evaluation}
+        
+        DECISION -->|Score = 0| ASSIGN_WRITER[To Writer HG]
+        DECISION -->|Score > 0| ASSIGN_READER[To Reader HG]
+        DECISION -->|Aurora Writer| FORCE_WRITER[Override: Writer]
+    end
+    
+    subgraph "Aurora Special Handling"
+        V5 --> AURORA_CHECK{Is Aurora?}
+        AURORA_CHECK -->|Yes| PARSE_JSON[Parse JSON Info]
+        PARSE_JSON --> CHECK_ROLE{Check Role}
+        CHECK_ROLE -->|WRITER| FORCE_WRITER
+        CHECK_ROLE -->|READER| ASSIGN_READER
+    end
+    
+    style L_BINARY fill:#ffebee
+    style M_EVAL fill:#e8f5e8
+    style AURORA_CHECK fill:#e1f5fe
+```
+
 ## Performance Optimization Points
 
 ### Performance Optimizations

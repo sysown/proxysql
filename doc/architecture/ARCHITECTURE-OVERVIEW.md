@@ -98,6 +98,15 @@ ProxySQL is a MySQL and PostgreSQL protocol-aware proxy server written in C++11/
   - Connection pool per hostgroup
   - Server status tracking (ONLINE, SHUNNED, OFFLINE_SOFT, OFFLINE_HARD)
   - Connection health monitoring
+  
+#### Read-Only Server Management (v2.5.1+)
+- **Evolution**: Improved from `read_only_action()` to `read_only_action_v2()`
+- **Batch Processing**: Processes multiple servers simultaneously
+- **State Transitions**:
+  - `read_only=0`: Server promoted to writer hostgroup
+  - `read_only=1`: Server moved to reader hostgroup
+  - `writer_is_also_reader`: Controls writer presence in reader hostgroups
+- **Performance**: Optimized lock management and reduced database operations
   - Replication topology awareness (master/slave, Galera, Group Replication, Aurora)
 
 #### Connection States
@@ -116,12 +125,23 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
   - Query digest generation
   - GTID handling
 
+#### Query Digest Generation Pipeline
+- **Normalization Stages**:
+  1. **Comment Removal**: Hash (#), ANSI (--), C-style (/* */)
+  2. **Value Replacement**: Numbers and strings → `?`
+  3. **Spacing Normalization**: Collapse multiple spaces
+  4. **Grouping Algorithm**: `?,?,?,?` → `?,?,?,...` when exceeding limit
+  5. **NULL Handling**: Optional replacement based on `mysql-query_digests_replace_null`
+- **Implementation**: `c_tokenizer.cpp` using SpookyV2 hashing
+- **Known Limitations**: 12+ documented edge cases including buffer overruns, sign handling issues
+
 #### Query Rules Engine
 - Pattern matching (regex support)
 - Destination hostgroup routing
 - Query modification/rewriting
 - Cache TTL configuration
 - Query mirroring support
+- Fast routing optimization for simple patterns
 
 ### 6. Database Layer & Persistence
 
@@ -156,6 +176,28 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 - Read-only status detection
 - GTID tracking
 
+#### Galera Cluster Monitoring
+- **Health Check Query**: Monitors 8 critical Galera variables
+  - `wsrep_local_state` (must be 4=SYNCED or 2=DONOR with conditions)
+  - `wsrep_cluster_status` (Primary/Non-Primary detection)
+  - `wsrep_desync`, `wsrep_reject_queries`, `pxc_maint_mode`
+- **Writer Selection**: Deterministic by `weight DESC, hostname DESC, port DESC`
+- **SHUNNED Status**: Preserves connections during writer transitions
+- **SST Handling**: Honors `wsrep_sst_donor_rejects_queries`
+- **Monitoring Intervals**: 
+  - `mysql-monitor_galera_healthcheck_interval`: 1000ms default
+  - `mysql-monitor_galera_healthcheck_max_timeout_count`: 3 consecutive failures
+
+#### Bootstrap Mode
+- **Purpose**: Auto-configuration for MySQL Group Replication clusters
+- **Discovery Process**:
+  1. Connects to bootstrap server with optional SSL
+  2. Queries `performance_schema.replication_group_members`
+  3. Auto-discovers topology and creates configuration
+- **Account Creation**: Generates monitoring accounts with required permissions
+- **MySQL Router Compatibility**: Uses ports 6446 (RW) and 6447 (RO)
+- **Configuration Precedence**: Bootstrap → Config File → Command Line
+
 ### 8. Network & Protocol Handling
 
 #### Data Streams
@@ -180,9 +222,17 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 
 #### Cluster Support (`ProxySQL_Cluster`)
 - **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/ProxySQL_Cluster.cpp`
-- Configuration synchronization
-- Checksum-based change detection
-- Peer-to-peer communication
+- **Architecture**: Decentralized peer-to-peer with Core and Satellite nodes
+- **Synchronization Mechanism**:
+  - SpookyV2 hash-based checksums for change detection
+  - Version-based source of truth selection (version > 1 required)
+  - Epoch timestamps for conflict resolution
+  - Configurable diff thresholds before sync (default: 3)
+- **Protection Mechanisms**:
+  - Circular fetching prevention through version checks
+  - Split-brain detection with manual resolution
+  - Pre-computed resultsets for performance (v2.4.3+)
+- **Network Optimization**: ~50KBps per node in 200-node cluster
 
 #### Statistics & Metrics
 - **Files**: `https://github.com/sysown/proxysql/tree/v3.0.agentics/lib/ProxySQL_Statistics.cpp`
@@ -319,10 +369,19 @@ ONLINE → SHUNNED (temporary failures) → OFFLINE_SOFT → OFFLINE_HARD
 
 #### Supported Authentication Methods
 - **mysql_native_password**: SHA1-based with fast path caching
-- **caching_sha2_password**: SHA256 with full/fast authentication modes
+- **caching_sha2_password**: SHA256 with full/fast authentication modes (v2.6.0+)
 - **mysql_clear_password**: For LDAP integration
+- **SPIFFE Authentication**: Certificate-based passwordless auth
+- **Dual-Password Support**: Zero-downtime password rotation (v3.0+)
 - **Auth Plugin Switching**: Dynamic protocol adaptation
 - **PostgreSQL SCRAM**: SASL/SCRAM-SHA-256 support
+
+#### SSL/TLS Implementation
+- **Non-Standard mTLS**: Certificate verification occurs AFTER handshake completion
+- **SPIFFE Integration**: Only validates certificates with `spiffe://` SAN URIs
+- **Dynamic Certificate Reloading**: `PROXYSQL RELOAD TLS` without downtime (v2.3.0+)
+- **Known Limitation**: No SSL alert messages for certificate failures
+- **Future Enhancement**: Standard mTLS verification planned
 
 #### Authentication Caching
 - SHA1 passwords cached in `GloMyAuth`
