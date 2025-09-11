@@ -30,8 +30,8 @@
 ## Architecture Documentation
 *Location: `https://github.com/sysown/proxysql/tree/v3.0.agentics/doc/architecture/`*
 
-### Comprehensive Architecture Guides
-- **`ARCHITECTURE-OVERVIEW.md`** - Complete architectural analysis
+### Architecture Guides
+- **`ARCHITECTURE-OVERVIEW.md`** - Architectural analysis
   - Threading model and concurrency patterns
   - Protocol implementation details (MySQL/PostgreSQL)
   - Memory management strategies
@@ -59,7 +59,7 @@
 ### MySQL Protocol Implementation
 - **`MySQL_Connection.md`** (8.9 KB) - MySQL connection handling internals
 - **`MySQL_Data_Stream.md`** (8.5 KB) - MySQL data stream processing
-- **`MySQL_HostGroups_Manager.md`** (30.1 KB) - Comprehensive hostgroup management
+- **`MySQL_HostGroups_Manager.md`** (30.1 KB) - Hostgroup management
 - **`MySQL_Prepared_Statements.md`** (11.6 KB) - Prepared statement implementation
 - **`MySQL_Query_Cache.md`** (5.9 KB) - Query caching mechanisms
 - **`MySQL_Query_Rules_Evaluation.md`** (10.6 KB) - Rule processing logic
@@ -204,14 +204,14 @@ Notable dependency docs:
 
 ## Key Documentation Insights
 
-### Most Comprehensive Documents
-1. **MySQL_HostGroups_Manager.md** (30.1 KB) - Most detailed component doc
-2. **ProxySQL_Admin.md** (22.7 KB) - Complete admin interface guide
-3. **ProxySQL_Cluster_Architecture.md** (18.7 KB) - Full cluster design
-4. **Query_Processor.md** (16.5 KB) - Query processing deep dive
+### Largest Documents
+1. **MySQL_HostGroups_Manager.md** (30.1 KB) - Hostgroup management
+2. **ProxySQL_Admin.md** (22.7 KB) - Admin interface guide
+3. **ProxySQL_Cluster_Architecture.md** (18.7 KB) - Cluster design
+4. **Query_Processor.md** (16.5 KB) - Query processing
 5. **ProxySQL_Admin_Interface.md** (15.3 KB) - Admin API reference
 
-### Critical Implementation Details
+### Implementation Topics
 - Connection pooling strategies and optimizations
 - Query routing algorithms and rule evaluation
 - Memory management with jemalloc
@@ -257,6 +257,6 @@ https://github.com/sysown/proxysql/tree/v3.0.agentics/docker/README.md
 
 ---
 
-*Last Updated: Based on ProxySQL v3.0 branch*
-*Total Documentation Files: 300+*
-*Total Documentation Size: ~2.5 MB*
+*Based on ProxySQL v3.0 branch*
+*Documentation Files: 300+*
+*Documentation Size: ~2.5 MB*
