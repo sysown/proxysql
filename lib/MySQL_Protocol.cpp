@@ -35,7 +35,7 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 #endif
 
 #ifndef CLIENT_ZSTD_COMPRESSION
-#define CLIENT_ZSTD_COMPRESSION 0x04000000
+constexpr unsigned long CLIENT_ZSTD_COMPRESSION = 0x04000000;
 #endif
 
 #include "proxysql_find_charset.h"
