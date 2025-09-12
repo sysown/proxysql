@@ -10,8 +10,10 @@ using json = nlohmann::json;
 #define UNIX_PATH_MAX    108
 #endif
 
-#define COMPRESSION_ALGORITHM_ZLIB 0
-#define COMPRESSION_ALGORITHM_ZSTD 1
+enum CompressionAlgorithm {
+	COMPRESSION_ALGORITHM_ZLIB = 0,
+	COMPRESSION_ALGORITHM_ZSTD = 1
+};
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -213,6 +215,62 @@ void * MySQL_Data_Stream::operator new(size_t size) {
 
 void MySQL_Data_Stream::operator delete(void *ptr) {
   l_free(sizeof(MySQL_Data_Stream),ptr);
+}
+
+// Helper functions for compression
+static uLongf get_compression_bound(uLong sourceLen) {
+	switch (mysql_thread___compression_algorithm) {
+		case COMPRESSION_ALGORITHM_ZSTD:
+			return ZSTD_compressBound(sourceLen);
+		case COMPRESSION_ALGORITHM_ZLIB:
+		default:
+			return sourceLen * 120 / 100 + 12;
+	}
+}
+
+static int compress_data(Bytef* dest, uLongf* destLen, const Bytef* source, uLong sourceLen, int level) {
+	int rc;
+	switch (mysql_thread___compression_algorithm) {
+		case COMPRESSION_ALGORITHM_ZSTD:
+			{
+				size_t zstd_result = ZSTD_compress(dest, *destLen, source, sourceLen, level);
+				if (ZSTD_isError(zstd_result)) {
+					rc = Z_DATA_ERROR;
+				} else {
+					*destLen = zstd_result;
+					rc = Z_OK;
+				}
+			}
+			break;
+		case COMPRESSION_ALGORITHM_ZLIB:
+		default:
+			rc = compress2(dest, destLen, source, sourceLen, level);
+			break;
+	}
+	return rc;
+}
+
+static int decompress_data(Bytef* dest, uLong destLen, const Bytef* source, uLong sourceLen) {
+	int rc;
+	switch (mysql_thread___compression_algorithm) {
+		case COMPRESSION_ALGORITHM_ZSTD:
+			{
+				size_t zstd_result = ZSTD_decompress(dest, destLen, source, sourceLen);
+				if (ZSTD_isError(zstd_result)) {
+					rc = Z_DATA_ERROR;
+				} else if (zstd_result != destLen) {
+					rc = Z_DATA_ERROR;  // Size mismatch
+				} else {
+					rc = Z_OK;
+				}
+			}
+			break;
+		case COMPRESSION_ALGORITHM_ZLIB:
+		default:
+			rc = uncompress(dest, &destLen, source, sourceLen);
+			break;
+	}
+	return rc;
 }
 
 // Constructor
@@ -1110,16 +1168,7 @@ int MySQL_Data_Stream::buffer2array() {
 				destLen=payload_length;
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
-				int rc;
-				switch (mysql_thread___compression_algorithm) {
-					case COMPRESSION_ALGORITHM_ZSTD:
-						rc = (ZSTD_decompress(dest, destLen, _ptr, queueIN.pkt.size-7) == destLen) ? Z_OK : Z_DATA_ERROR;
-						break;
-					case COMPRESSION_ALGORITHM_ZLIB:
-					default:
-						rc = uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-						break;
-				}
+				int rc = decompress_data(dest, destLen, _ptr, queueIN.pkt.size-7);
 				if (rc!=Z_OK) {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
@@ -1236,17 +1285,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		// this worked in the past . it applies for small packets
 		uLong sourceLen=total_size;
 		Bytef *source=(Bytef *)l_alloc(total_size);
-		uLongf destLen;
-		// Calculate proper buffer size based on compression algorithm
-		switch (mysql_thread___compression_algorithm) {
-			case COMPRESSION_ALGORITHM_ZSTD:
-				destLen = ZSTD_compressBound(sourceLen);
-				break;
-			case COMPRESSION_ALGORITHM_ZLIB:
-			default:
-				destLen = total_size*120/100+12;
-				break;
-		}
+		uLongf destLen = get_compression_bound(sourceLen);
 		Bytef *dest=(Bytef *)malloc(destLen);
 		i=0;
 		total_size=0;
@@ -1257,24 +1296,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			total_size+=p2.size;
 			l_free(p2.size,p2.ptr);
 		}
-		int rc;
-		switch (mysql_thread___compression_algorithm) {
-			case COMPRESSION_ALGORITHM_ZSTD:
-				{
-					size_t zstd_result = ZSTD_compress(dest, destLen, source, sourceLen, mysql_thread___protocol_compression_level);
-					if (ZSTD_isError(zstd_result)) {
-						rc = Z_DATA_ERROR;
-					} else {
-						destLen = zstd_result;
-						rc = Z_OK;
-					}
-				}
-				break;
-			case COMPRESSION_ALGORITHM_ZLIB:
-			default:
-				rc = compress2(dest, &destLen, source, sourceLen, mysql_thread___protocol_compression_level);
-				break;
-		}
+		int rc = compress_data(dest, &destLen, source, sourceLen, mysql_thread___protocol_compression_level);
 		assert(rc==Z_OK);
 		l_free(total_size, source);
 		queueOUT.pkt.size=destLen+7;
@@ -1303,56 +1325,15 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		mysql_hdr hdr;
 
 		// Calculate proper buffer sizes based on compression algorithm
-		switch (mysql_thread___compression_algorithm) {
-			case COMPRESSION_ALGORITHM_ZSTD:
-				destLen1 = ZSTD_compressBound(len1);
-				destLen2 = ZSTD_compressBound(len2);
-				break;
-			case COMPRESSION_ALGORITHM_ZLIB:
-			default:
-				destLen1 = len1*120/100+12;
-				destLen2 = len2*120/100+12;
-				break;
-		}
+		destLen1 = get_compression_bound(len1);
+		destLen2 = get_compression_bound(len2);
 		dest1=(Bytef *)malloc(destLen1+7);
 		dest2=(Bytef *)malloc(destLen2+7);
 		// Compress first part
-		switch (mysql_thread___compression_algorithm) {
-			case COMPRESSION_ALGORITHM_ZSTD:
-				{
-					size_t zstd_result = ZSTD_compress(dest1+7, destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
-					if (ZSTD_isError(zstd_result)) {
-						rc = Z_DATA_ERROR;
-					} else {
-						destLen1 = zstd_result;
-						rc = Z_OK;
-					}
-				}
-				break;
-			case COMPRESSION_ALGORITHM_ZLIB:
-			default:
-				rc = compress2(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
-				break;
-		}
+		rc = compress_data(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
 		assert(rc==Z_OK);
 		// Compress second part
-		switch (mysql_thread___compression_algorithm) {
-			case COMPRESSION_ALGORITHM_ZSTD:
-				{
-					size_t zstd_result = ZSTD_compress(dest2+7, destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
-					if (ZSTD_isError(zstd_result)) {
-						rc = Z_DATA_ERROR;
-					} else {
-						destLen2 = zstd_result;
-						rc = Z_OK;
-					}
-				}
-				break;
-			case COMPRESSION_ALGORITHM_ZLIB:
-			default:
-				rc = compress2(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
-				break;
-		}
+		rc = compress_data(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
 		assert(rc==Z_OK);
 
 		hdr.pkt_length=destLen1;
