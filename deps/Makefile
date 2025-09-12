@@ -45,7 +45,7 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-targets := check_openssl_version libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libhttpserver libinjection prometheus-cpp postgresql libusual libscram
+targets := check_openssl_version libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libhttpserver libinjection prometheus-cpp postgresql libusual libscram zstd
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
 endif
@@ -329,6 +329,13 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 
 libscram: libscram/lib/libscram.a
 
+zstd/zstd/lib/libzstd.a:
+	cd zstd && rm -rf zstd-*/ || true
+	cd zstd && tar -zxf zstd-*.tar.gz
+	cd zstd/zstd && CC=${CC} CXX=${CXX} ${MAKE} lib
+
+zstd: zstd/zstd/lib/libzstd.a
+
 ### clean targets
 
 cleanpart:
@@ -360,5 +367,6 @@ cleanall:
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
+	cd zstd && rm -rf zstd-*/ || true
 .PHONY: cleanall
 

@@ -34,6 +34,10 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 #define CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA 0x00200000
 #endif
 
+#ifndef CLIENT_ZSTD_COMPRESSION
+#define CLIENT_ZSTD_COMPRESSION 0x04000000
+#endif
+
 #include "proxysql_find_charset.h"
 
 mf_unique_ptr<const char> get_masked_pass(const char* pass) {
@@ -1090,8 +1094,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	_ptr[l]=0x00; l+=1; //0x00
 	if (mysql_thread___have_compress) {
 		mysql_thread___server_capabilities |= CLIENT_COMPRESS;
+		// Also advertise zstd compression capability
+		mysql_thread___server_capabilities |= CLIENT_ZSTD_COMPRESSION;
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_COMPRESS;
+		mysql_thread___server_capabilities &= ~CLIENT_ZSTD_COMPRESSION;
 	}
 	if (mysql_thread___have_ssl==true || mysql_thread___default_authentication_plugin_int==2) {
 		// we enable SSL for client connections for either of these 2 conditions:

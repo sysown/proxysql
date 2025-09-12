@@ -5,9 +5,13 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include <zlib.h>
+#include <zstd.h>
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX    108
-#endif 
+#endif
+
+#define COMPRESSION_ALGORITHM_ZLIB 0
+#define COMPRESSION_ALGORITHM_ZSTD 1
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -1106,7 +1110,16 @@ int MySQL_Data_Stream::buffer2array() {
 				destLen=payload_length;
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
-				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
+				int rc;
+				switch (mysql_thread___compression_algorithm) {
+					case COMPRESSION_ALGORITHM_ZSTD:
+						rc = (ZSTD_decompress(dest, destLen, _ptr, queueIN.pkt.size-7) == destLen) ? Z_OK : Z_DATA_ERROR;
+						break;
+					case COMPRESSION_ALGORITHM_ZLIB:
+					default:
+						rc = uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
+						break;
+				}
 				if (rc!=Z_OK) {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
@@ -1234,7 +1247,24 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			total_size+=p2.size;
 			l_free(p2.size,p2.ptr);
 		}
-		int rc=compress2(dest, &destLen, source, sourceLen, mysql_thread___protocol_compression_level);
+		int rc;
+		switch (mysql_thread___compression_algorithm) {
+			case COMPRESSION_ALGORITHM_ZSTD:
+				{
+					size_t zstd_result = ZSTD_compress(dest, destLen, source, sourceLen, mysql_thread___protocol_compression_level);
+					if (ZSTD_isError(zstd_result)) {
+						rc = Z_DATA_ERROR;
+					} else {
+						destLen = zstd_result;
+						rc = Z_OK;
+					}
+				}
+				break;
+			case COMPRESSION_ALGORITHM_ZLIB:
+			default:
+				rc = compress2(dest, &destLen, source, sourceLen, mysql_thread___protocol_compression_level);
+				break;
+		}
 		assert(rc==Z_OK);
 		l_free(total_size, source);
 		queueOUT.pkt.size=destLen+7;
@@ -1266,9 +1296,43 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		dest1=(Bytef *)malloc(destLen1+7);
 		destLen2=len2*120/100+12;
 		dest2=(Bytef *)malloc(destLen2+7);
-		rc=compress2(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
+		// Compress first part
+		switch (mysql_thread___compression_algorithm) {
+			case COMPRESSION_ALGORITHM_ZSTD:
+				{
+					size_t zstd_result = ZSTD_compress(dest1+7, destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
+					if (ZSTD_isError(zstd_result)) {
+						rc = Z_DATA_ERROR;
+					} else {
+						destLen1 = zstd_result;
+						rc = Z_OK;
+					}
+				}
+				break;
+			case COMPRESSION_ALGORITHM_ZLIB:
+			default:
+				rc = compress2(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
+				break;
+		}
 		assert(rc==Z_OK);
-		rc=compress2(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
+		// Compress second part
+		switch (mysql_thread___compression_algorithm) {
+			case COMPRESSION_ALGORITHM_ZSTD:
+				{
+					size_t zstd_result = ZSTD_compress(dest2+7, destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
+					if (ZSTD_isError(zstd_result)) {
+						rc = Z_DATA_ERROR;
+					} else {
+						destLen2 = zstd_result;
+						rc = Z_OK;
+					}
+				}
+				break;
+			case COMPRESSION_ALGORITHM_ZLIB:
+			default:
+				rc = compress2(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
+				break;
+		}
 		assert(rc==Z_OK);
 
 		hdr.pkt_length=destLen1;
