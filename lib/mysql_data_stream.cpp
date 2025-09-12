@@ -1236,7 +1236,17 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		// this worked in the past . it applies for small packets
 		uLong sourceLen=total_size;
 		Bytef *source=(Bytef *)l_alloc(total_size);
-		uLongf destLen=total_size*120/100+12;
+		uLongf destLen;
+		// Calculate proper buffer size based on compression algorithm
+		switch (mysql_thread___compression_algorithm) {
+			case COMPRESSION_ALGORITHM_ZSTD:
+				destLen = ZSTD_compressBound(sourceLen);
+				break;
+			case COMPRESSION_ALGORITHM_ZLIB:
+			default:
+				destLen = total_size*120/100+12;
+				break;
+		}
 		Bytef *dest=(Bytef *)malloc(destLen);
 		i=0;
 		total_size=0;
@@ -1292,9 +1302,19 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 
 		mysql_hdr hdr;
 
-		destLen1=len1*120/100+12;
+		// Calculate proper buffer sizes based on compression algorithm
+		switch (mysql_thread___compression_algorithm) {
+			case COMPRESSION_ALGORITHM_ZSTD:
+				destLen1 = ZSTD_compressBound(len1);
+				destLen2 = ZSTD_compressBound(len2);
+				break;
+			case COMPRESSION_ALGORITHM_ZLIB:
+			default:
+				destLen1 = len1*120/100+12;
+				destLen2 = len2*120/100+12;
+				break;
+		}
 		dest1=(Bytef *)malloc(destLen1+7);
-		destLen2=len2*120/100+12;
 		dest2=(Bytef *)malloc(destLen2+7);
 		// Compress first part
 		switch (mysql_thread___compression_algorithm) {
