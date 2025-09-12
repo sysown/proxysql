@@ -510,6 +510,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"proxy_protocol_networks",
 	(char *)"protocol_compression_level",
 	(char *)"compression_algorithm",
+	(char *)"zstd_compression_level",
 	NULL
 };
 
@@ -1149,6 +1150,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.data_packets_history_size=0;
 	variables.protocol_compression_level=3;
 	variables.compression_algorithm=0;
+	variables.zstd_compression_level=3;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -2283,6 +2285,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["evaluate_replication_lag_on_servers_load"] = make_tuple(&variables.evaluate_replication_lag_on_servers_load, 0, 1, false);
 		VariablesPointers_int["protocol_compression_level"]    = make_tuple(&variables.protocol_compression_level,   -1,              9, false);
 		VariablesPointers_int["compression_algorithm"]         = make_tuple(&variables.compression_algorithm,        0,              1, false);
+		VariablesPointers_int["zstd_compression_level"]        = make_tuple(&variables.zstd_compression_level,       1,             22, false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
@@ -4225,6 +4228,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_BOOL(have_compress);
 	REFRESH_VARIABLE_INT(protocol_compression_level);
 	REFRESH_VARIABLE_INT(compression_algorithm);
+	REFRESH_VARIABLE_INT(zstd_compression_level);
 	REFRESH_VARIABLE_BOOL(have_ssl);
 	REFRESH_VARIABLE_BOOL(multiplexing);
 	REFRESH_VARIABLE_BOOL(log_unhealthy_connections);
@@ -4311,6 +4315,7 @@ MySQL_Thread::MySQL_Thread() {
 
 	mysql_thread___protocol_compression_level=3;
 	mysql_thread___compression_algorithm=0;
+	mysql_thread___zstd_compression_level=3;
 
 	last_maintenance_time=0;
 	last_move_to_idle_thread_time=0;

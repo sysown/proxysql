@@ -228,12 +228,12 @@ static uLongf get_compression_bound(uLong sourceLen) {
 	}
 }
 
-static int compress_data(Bytef* dest, uLongf* destLen, const Bytef* source, uLong sourceLen, int level) {
+static int compress_data(Bytef* dest, uLongf* destLen, const Bytef* source, uLong sourceLen, int zlib_level) {
 	int rc;
 	switch (mysql_thread___compression_algorithm) {
 		case COMPRESSION_ALGORITHM_ZSTD:
 			{
-				size_t zstd_result = ZSTD_compress(dest, *destLen, source, sourceLen, level);
+				size_t zstd_result = ZSTD_compress(dest, *destLen, source, sourceLen, mysql_thread___zstd_compression_level);
 				if (ZSTD_isError(zstd_result)) {
 					rc = Z_DATA_ERROR;
 				} else {
@@ -244,7 +244,7 @@ static int compress_data(Bytef* dest, uLongf* destLen, const Bytef* source, uLon
 			break;
 		case COMPRESSION_ALGORITHM_ZLIB:
 		default:
-			rc = compress2(dest, destLen, source, sourceLen, level);
+			rc = compress2(dest, destLen, source, sourceLen, zlib_level);
 			break;
 	}
 	return rc;

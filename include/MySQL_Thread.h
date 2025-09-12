@@ -472,6 +472,7 @@ class MySQL_Threads_Handler
 		bool have_compress;
 		int protocol_compression_level;
 		int compression_algorithm;
+		int zstd_compression_level;
 		bool have_ssl;
 		bool multiplexing;
 //		bool stmt_multiplexing;
