@@ -332,6 +332,7 @@ libscram: libscram/lib/libscram.a
 zstd/zstd/lib/libzstd.a:
 	cd zstd && rm -rf zstd-*/ || true
 	cd zstd && tar -zxf zstd-*.tar.gz
+    cd zstd && ln -sf zstd-*/ zstd
 	cd zstd/zstd && CC=${CC} CXX=${CXX} ${MAKE} lib
 
 zstd: zstd/zstd/lib/libzstd.a
