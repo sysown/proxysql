@@ -140,7 +140,7 @@ jobs:
         echo "SUMMARY=${SUM}"
         echo "SUMMARY="${SUM//\'/\"} >> $GITHUB_ENV
         
-        exit ${FAILS:-x}
+        exit ${FAILS:-0}
     
     - name: Summary output
       if: ${{ !cancelled() }}

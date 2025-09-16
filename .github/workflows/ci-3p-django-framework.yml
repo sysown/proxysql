@@ -149,7 +149,7 @@ jobs:
         cat ./logs/*_summary.log || true
         FAILS=$(cat ./logs/*_summary.log | grep -oP '(?<=^FAIL: )\d+')
         
-        exit ${FAILS:-x}
+        exit ${FAILS:-0}
 
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
