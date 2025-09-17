@@ -31,7 +31,7 @@ jobs:
     env:
       INFRADB: ${{ matrix.infradb }}
       CONNECTOR: ${{ matrix.connector }}
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12_bin
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12-dbg_bin
       MATRIX: '(${{ matrix.infradb }},${{ matrix.connector }})'
       
     steps:
