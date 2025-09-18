@@ -1,3 +1,5 @@
+# Internal Repos
+priv-infra/
 
 # direnv
 .envrc.local
