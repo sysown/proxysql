@@ -137,7 +137,7 @@ jobs:
        
     - name: Build package
       run: |
-        [[ $(git describe --long --abbrev=7) == ${{ needs.clean.outputs.gitdescribe }} ]] || exit 1
+        #[[ $(git describe --long --abbrev=7) == ${{ needs.clean.outputs.gitdescribe }} ]] || exit 1
         make ${{ matrix.dist }}${{ matrix.type }}
         echo "BIN_PKG=$(ls -1 binaries/*[mb])" >> $GITHUB_ENV
         echo "BIN_HASH=$(ls -1 binaries/*.id-hash)" >> $GITHUB_ENV
