@@ -107,7 +107,8 @@ jobs:
 
         # use cached build
         rm -rf ./proxysql && mv ../proxysql . || true
-                
+        ls -l proxysql/binaries/
+
     - name: Run tests
       run: |
         set +e
