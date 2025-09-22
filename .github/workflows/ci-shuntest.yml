@@ -93,6 +93,7 @@ jobs:
         sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
         sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
         cat env.sh
+        ls -l ${{ github.workspace }}/proxysql/src
         
         cd proxysql_repl_tests
         ./exec_shun_test.sh
