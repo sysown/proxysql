@@ -2284,6 +2284,89 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// add global mutex, see bug #1188
 	pthread_mutex_lock(&pa->sql_query_global_mutex);
 
+	if (strcasestr(query_no_space, "INFORMATION_SCHEMA.TABLES") != nullptr) {
+		const char* info_table_name = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+		const char* info_engine_table_type = "SELECT engine, table_type FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+
+		if (query_no_space_length > strlen(info_table_name) &&
+			strncasecmp(query_no_space, info_table_name, strlen(info_table_name)) == 0) {
+			std::string query_str(query_no_space, query_no_space_length);
+
+			size_t start_pos = strlen(info_table_name);
+			size_t end_pos = query_str.find('\'', start_pos);
+
+			if (end_pos != std::string::npos) {
+				std::string table_name_value = query_str.substr(start_pos, end_pos - start_pos);
+
+				char buf[256];
+				snprintf(buf, sizeof(buf),
+						"SELECT name as TABLE_NAME FROM sqlite_master WHERE type = 'table' AND name = '%s'",
+						table_name_value.c_str());
+
+				l_free(query_length, query);
+				query = l_strdup(buf);
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+		}
+
+		if (query_no_space_length > strlen(info_engine_table_type) &&
+			strncasecmp(query_no_space, info_engine_table_type, strlen(info_engine_table_type)) == 0) {
+			std::string query_str(query_no_space, query_no_space_length);
+
+			size_t start_pos = strlen(info_engine_table_type);
+			size_t end_pos = query_str.find('\'', start_pos);
+
+			if (end_pos != std::string::npos) {
+				std::string table_name_value = query_str.substr(start_pos, end_pos - start_pos);
+
+				char buf[256];
+				snprintf(buf, sizeof(buf),
+						"SELECT 'SQLite' as ENGINE, 'BASE TABLE' as TABLE_TYPE FROM sqlite_master WHERE type = 'table' AND name = '%s'",
+						table_name_value.c_str());
+
+				l_free(query_length, query);
+				query = l_strdup(buf);
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+		}
+	}
+
+	if (strcasestr(query_no_space, "INFORMATION_SCHEMA.COLUMNS") != nullptr) {
+		const char* info_column_data_type = "SELECT column_name, extra, generation_expression, data_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema=database() AND table_name='";
+
+		if (query_no_space_length > strlen(info_column_data_type) &&
+			strncasecmp(query_no_space, info_column_data_type, strlen(info_column_data_type)) == 0) {
+			std::string query_str(query_no_space, query_no_space_length);
+
+			size_t start_pos = strlen(info_column_data_type);
+			size_t end_pos = query_str.find('\'', start_pos);
+
+			if (end_pos != std::string::npos) {
+				std::string table_name_value = query_str.substr(start_pos, end_pos - start_pos);
+
+				char buf[256];
+				snprintf(buf, sizeof(buf),
+						"SELECT name as COLUMN_NAME, '' as EXTRA, '' as GENERATION_EXPRESSION, type as DATA_TYPE FROM pragma_table_info('%s') ORDER BY cid",
+						table_name_value.c_str());
+
+				l_free(query_length, query);
+				query = l_strdup(buf);
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+		}
+	}
+
+	if (!strncasecmp("SELECT LOGFILE", query_no_space, strlen("SELECT LOGFILE")) && strcasestr(query_no_space, "FROM INFORMATION_SCHEMA.FILES") != nullptr) {
+		string err_msg = "Invalid command - SELECT .. FROM INFORMATION_SCHEMA.FILES. ";
+		err_msg += "If you are using mysqldump, use --no-tablespaces flag to avoid this error message";
+		SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+		run_query = false;
+		goto __run_query;
+	}
+
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		if (!strncasecmp("LOGENTRY ", query_no_space, strlen("LOGENTRY "))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
@@ -2789,12 +2872,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (
 			!strncmp("/*!40014 SET ", query_no_space, 13) ||
+			!strncmp("/*!40100 SET ", query_no_space, 13) ||
 			!strncmp("/*!40101 SET ", query_no_space, 13) ||
 			!strncmp("/*!40103 SET ", query_no_space, 13) ||
 			!strncmp("/*!40111 SET ", query_no_space, 13) ||
 			!strncmp("/*!80000 SET ", query_no_space, 13) ||
 			!strncmp("/*!50503 SET ", query_no_space, 13) ||
 			!strncmp("/*!50717 SET ", query_no_space, 13) ||
+			!strncmp("/*M!100100 SET ", query_no_space, 15) ||
 			!strncmp("/*!50717 SELECT ", query_no_space, strlen("/*!50717 SELECT ")) ||
 			!strncmp("/*!50717 PREPARE ", query_no_space, strlen("/*!50717 PREPARE ")) ||
 			!strncmp("/*!50717 EXECUTE ", query_no_space, strlen("/*!50717 EXECUTE ")) ||
@@ -2817,10 +2902,65 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				||
 			!strncmp("SET SESSION character_set_results", query_no_space, strlen("SET SESSION character_set_results"))
 				||
+			!strncasecmp("FLUSH /*!40101 LOCAL */ TABLES", query_no_space, strlen("FLUSH /*!40101 LOCAL */ TABLES"))
+				||
+			!strncasecmp("FLUSH /*!40101 LOCAL */ LOGS", query_no_space, strlen("FLUSH /*!40101 LOCAL */ LOGS"))
+				||
+			!strncasecmp("FLUSH TABLES WITH READ LOCK", query_no_space, strlen("FLUSH TABLES WITH READ LOCK"))
+				||
 			!strncasecmp("USE ", query_no_space, strlen("USE ")) // this applies to all clients, not only mysqldump
 		) {
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			run_query=false;
+			goto __run_query;
+		}
+
+		if (query_no_space_length == strlen("SHOW MASTER STATUS") && !strncasecmp("SHOW MASTER STATUS", query_no_space, query_no_space_length)) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT '' AS 'File', 0 AS 'Position', '' AS 'Binlog_Do_DB', '' AS 'Binlog_Ignore_DB', '' AS 'Executed_Gtid_Set' WHERE 1=0");
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+
+		if (query_no_space_length == strlen("SHOW BINARY LOG STATUS") && !strncasecmp("SHOW BINARY LOG STATUS", query_no_space, query_no_space_length)) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT '' AS 'File', 0 AS 'Position', '' AS 'Binlog_Do_DB', '' AS 'Binlog_Ignore_DB', '' AS 'Executed_Gtid_Set' WHERE 1=0");
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+
+		if (query_no_space_length >= strlen("SHOW FUNCTION STATUS") && !strncasecmp("SHOW FUNCTION STATUS", query_no_space, strlen("SHOW FUNCTION STATUS"))) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT '' AS 'Db', '' AS 'Name', '' AS 'Type', '' AS 'Definer', '' AS 'Modified', '' AS 'Created', '' AS 'Security_type', '' AS 'Comment', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+
+		if (query_no_space_length >= strlen("SHOW PROCEDURE STATUS") && !strncasecmp("SHOW PROCEDURE STATUS", query_no_space, strlen("SHOW PROCEDURE STATUS"))) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT '' AS 'Db', '' AS 'Name', '' AS 'Type', '' AS 'Definer', '' AS 'Modified', '' AS 'Created', '' AS 'Security_type', '' AS 'Comment', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+
+		if (query_no_space_length >= strlen("SHOW TRIGGERS") && !strncasecmp("SHOW TRIGGERS", query_no_space, strlen("SHOW TRIGGERS"))) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT '' AS 'Trigger', '' AS 'Event', '' AS 'Table', '' AS 'Statement', '' AS 'Timing', '' AS 'Created', '' AS 'sql_mode', '' AS 'Definer', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+
+		if (query_no_space_length >= strlen("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS") && !strncasecmp("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS", query_no_space, strlen("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS"))) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT '' AS 'TRIGGER_NAME' WHERE 1=0");
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+
+		if (query_no_space_length >= strlen("SHOW EVENTS") && !strncasecmp("SHOW EVENTS", query_no_space, strlen("SHOW EVENTS"))) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT '' AS 'Db', '' AS 'Name', '' AS 'Definer', '' AS 'Time zone', '' AS 'Type', '' AS 'Execute at', '' AS 'Interval value', '' AS 'Interval field', '' AS 'Starts', '' AS 'Ends', '' AS 'Status', '' AS 'Originator', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
+			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
