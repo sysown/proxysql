@@ -1129,6 +1129,9 @@ int prepare_tables_and_config(MYSQL* admin, MYSQL* proxy) {
 	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	MYSQL_QUERY_T(admin, "SET mysql-auto_increment_delay_multiplex=0");
+	MYSQL_QUERY_T(admin, "SET mysql-default_session_track_gtids='OFF'");
+	MYSQL_QUERY_T(admin, "SET mysql-session_track_variables=0");
+
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES FROM DISK");

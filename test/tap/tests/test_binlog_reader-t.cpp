@@ -259,6 +259,9 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	MYSQL_QUERY_T(proxysql_admin, "SET mysql-session_track_variables=0");
+	MYSQL_QUERY_T(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
 	vector<pair<uint32_t, mysql_res_row>> failed_rows {};
 	vector<mysql_res_row> reader_1_read {};
 	vector<mysql_res_row> reader_2_read {};
@@ -278,10 +281,6 @@ int main(int argc, char** argv) {
 	for (uint32_t i = 0; i < NUM_CHECKS; i++) {
 		rc = perform_update(proxysql_mysql, NUM_ROWS);
 		if (rc != EXIT_SUCCESS) { goto cleanup; }
-
-		MYSQL_RES* my_res = mysql_store_result(proxysql_admin);
-		vector<mysql_res_row> pre_select_rows = extract_mysql_rows(my_res);
-		mysql_free_result(my_res);
 
 		int r_row = rand() % NUM_ROWS;
 		if (r_row == 0) { r_row = 1; }

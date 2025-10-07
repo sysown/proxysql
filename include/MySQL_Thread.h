@@ -336,6 +336,13 @@ struct th_metrics_map_idx {
 	};
 };
 
+struct session_track_variables {
+	enum mode {
+		DISABLED = 0,
+		ENABLED
+	};
+};
+
 /**
  * @brief Structure holding the data for a Client_Host_Cache entry.
  */
@@ -590,6 +597,7 @@ class MySQL_Threads_Handler
 		int processlist_max_query_length;
 
 		bool ignore_min_gtid_annotations;
+		int session_track_variables;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

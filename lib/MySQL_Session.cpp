@@ -1964,6 +1964,25 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___verify_backend_session_track_variables() {
+	if (mysql_thread___session_track_variables == session_track_variables::DISABLED) {
+		return false;
+	}
+
+	if (mybe->server_myds->myconn->options.session_track_variables_sent == false) {
+		mybe->server_myds->myconn->options.session_track_variables_sent = true;
+		set_previous_status_mode3();
+		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_VARIABLES);
+	}
+
+	if (mybe->server_myds->myconn->options.session_track_state_sent == false) {
+		mybe->server_myds->myconn->options.session_track_state_sent = true;
+		set_previous_status_mode3();
+		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_STATE);
+	}
+
+	return false;
+}
 
 bool MySQL_Session::handler_again___verify_multiple_variables(MySQL_Connection* myconn) {
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
@@ -2761,6 +2780,20 @@ bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc)
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_VARIABLES(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_system_variables", "*", false);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_STATE(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_state_change", "ON", false);
 	return ret;
 }
 
@@ -4905,6 +4938,41 @@ void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	}
 }
 
+void MySQL_Session::handler_rc0_Process_Variables(MySQL_Connection *myconn) {
+	std::unordered_map<string, string> var_map;
+
+	if(myconn->get_variables(var_map)) {
+		std::string variable;
+		std::string value;
+
+		for (int idx = 0 ; idx < SQL_NAME_LAST_HIGH_WM ; idx++) {
+			variable = mysql_tracked_variables[idx].set_variable_name;
+
+			auto itr = var_map.find(variable);
+			if(itr != var_map.end()) {
+				value = itr->second;
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p, backend=%p. Notification for session_track_system_variables: variable=%s, value=%s\n", this, this->mybe, variable.c_str(), value.c_str());
+
+				const MARIADB_CHARSET_INFO *ci = NULL;
+				if (variable == "character_set_results" || variable == "character_set_connection" ||
+						variable == "character_set_client" || variable == "character_set_database") {
+					ci = proxysql_find_charset_name(value.c_str());
+				}
+				else if (variable == "collation_connection") {
+					ci = proxysql_find_charset_collate(value.c_str());
+				}
+
+				if (ci) {
+					value = std::to_string(ci->nr);
+				}
+
+				mysql_variables.client_set_value(this, idx, value);
+				mysql_variables.server_set_value(this, idx, value.c_str());
+			}
+		}
+	}
+}
+
 void MySQL_Session::handler_KillConnectionIfNeeded() {
 	if ( // two conditions
 		// If the server connection is in a non-idle state (ASYNC_IDLE), and the current time is greater than or equal to mybe->server_myds->wait_until
@@ -5102,6 +5170,10 @@ handler_again:
 									goto handler_again;
 								}
 
+								if (handler_again___verify_backend_session_track_variables()) {
+									goto handler_again;
+								}
+
 								// Optimize network traffic when we can use 'SET NAMES'
 								if (verify_set_names(this)) {
 									goto handler_again;
@@ -5181,6 +5253,8 @@ handler_again:
 					}
 
 					handler_rc0_Process_GTID(myconn);
+
+					handler_rc0_Process_Variables(myconn);
 
 					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
 					// see bug #3549
@@ -5477,6 +5551,12 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 			break;
 		case SETTING_SESSION_TRACK_GTIDS:
 			ret = handler_again___status_SETTING_SESSION_TRACK_GTIDS(rc);
+			break;
+		case SETTING_SESSION_TRACK_VARIABLES:
+			ret = handler_again___status_SETTING_SESSION_TRACK_VARIABLES(rc);
+			break;
+		case SETTING_SESSION_TRACK_STATE:
+			ret = handler_again___status_SETTING_SESSION_TRACK_STATE(rc);
 			break;
 		case SETTING_SET_NAMES:
 			ret = handler_again___status_CHANGING_CHARSET(rc);

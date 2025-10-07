@@ -516,6 +516,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"protocol_compression_level",
 	(char *)"ignore_min_gtid_annotations",
 	(char *)"fast_forward_grace_close_ms",
+	(char *)"session_track_variables",
 	NULL
 };
 
@@ -1178,6 +1179,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.data_packets_history_size=0;
 	variables.protocol_compression_level=3;
 	variables.ignore_min_gtid_annotations=false;
+	variables.session_track_variables=session_track_variables::DISABLED;
+
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -2358,7 +2361,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
-
+		VariablesPointers_int["session_track_variables"]   = make_tuple(&variables.session_track_variables,   0, 1, false);
 	}
 
 
@@ -4322,6 +4325,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(handle_warnings);
 	REFRESH_VARIABLE_INT(evaluate_replication_lag_on_servers_load);
 	REFRESH_VARIABLE_BOOL(ignore_min_gtid_annotations);
+	REFRESH_VARIABLE_INT(session_track_variables);
 #ifdef DEBUG
 	REFRESH_VARIABLE_BOOL(session_debug);
 #endif /* DEBUG */
