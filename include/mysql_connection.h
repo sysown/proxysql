@@ -89,6 +89,7 @@ class MySQL_Connection {
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
 		bool session_track_gtids_sent;
+		bool session_track_variables_sent;
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
 		int8_t last_set_autocommit;
@@ -262,6 +263,7 @@ class MySQL_Connection {
 	void reset();
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	bool get_variables(std::unordered_map<std::string, std::string>&);
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_ff_req_options(const MySQL_Connection *c);

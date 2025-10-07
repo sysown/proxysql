@@ -452,6 +452,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.init_connect_sent=false;
 	options.session_track_gtids = NULL;
 	options.session_track_gtids_sent = false;
+	options.session_track_variables_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
@@ -3082,6 +3083,7 @@ void MySQL_Connection::reset() {
 		options.session_track_gtids = NULL;
 		options.session_track_gtids_sent = false;
 	}
+	options.session_track_variables_sent = false;
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
@@ -3113,6 +3115,48 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 			}
 		}
 	}
+	return ret;
+}
+
+bool MySQL_Connection::get_variables(std::unordered_map<string, string>& variables) {
+	bool ret = false;
+
+	if ((mysql != nullptr)
+		&& (mysql->net.last_errno == 0)
+		&& (mysql->server_status & SERVER_SESSION_STATE_CHANGED)) {
+		// when there is no error and status changed
+		const char *data;
+		size_t length;
+
+		if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+			string var_name(data, length);
+			string val;
+
+			// get_first() returns a variable_name
+			// get_next() will return the value
+			bool expect_value = true;
+
+			while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+				if (expect_value) {
+					val = string(data, length);
+					variables[var_name] = val;
+					// got a value in this iteration
+					// in the next iteration, we have to expect a variable_name
+					expect_value = false;
+				} else {
+					var_name = string(data, length);
+					// got a variable_name in this iteration
+					// in the next iteration, we have to expect the value of this variable
+					expect_value = true;
+				}
+			}
+
+			// update counters
+			// __sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
+			ret = true;
+		}
+	}
+
 	return ret;
 }
 
