@@ -1303,6 +1303,7 @@ __thread int mysql_thread___client_host_cache_size;
 __thread int mysql_thread___client_host_error_counts;
 __thread int mysql_thread___handle_warnings;
 __thread int mysql_thread___evaluate_replication_lag_on_servers_load;
+__thread bool mysql_thread___ignore_min_gtid_annotations;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -1605,6 +1606,7 @@ extern __thread int mysql_thread___client_host_cache_size;
 extern __thread int mysql_thread___client_host_error_counts;
 extern __thread int mysql_thread___handle_warnings;
 extern __thread int mysql_thread___evaluate_replication_lag_on_servers_load;
+extern __thread bool mysql_thread___ignore_min_gtid_annotations;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

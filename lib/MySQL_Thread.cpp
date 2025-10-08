@@ -510,6 +510,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"evaluate_replication_lag_on_servers_load",
 	(char *)"proxy_protocol_networks",
 	(char *)"protocol_compression_level",
+	(char *)"ignore_min_gtid_annotations",
 	NULL
 };
 
@@ -1149,6 +1150,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.log_mysql_warnings_enabled=false;
 	variables.data_packets_history_size=0;
 	variables.protocol_compression_level=3;
+	variables.ignore_min_gtid_annotations=false;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -1373,6 +1375,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
+
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
@@ -2171,6 +2174,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["stats_time_query_processor"]      = make_tuple(&variables.stats_time_query_processor,      false);
 		VariablesPointers_bool["use_tcp_keepalive"]               = make_tuple(&variables.use_tcp_keepalive,               false);
 		VariablesPointers_bool["verbose_query_error"]             = make_tuple(&variables.verbose_query_error,             false);
+		VariablesPointers_bool["ignore_min_gtid_annotations"]     = make_tuple(&variables.ignore_min_gtid_annotations,     false);
 #ifdef IDLE_THREADS
 		VariablesPointers_bool["session_idle_show_processlist"] = make_tuple(&variables.session_idle_show_processlist, false);
 #endif // IDLE_THREADS
@@ -2291,16 +2295,16 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["eventslog_default_log"] = make_tuple(&variables.eventslog_default_log,        0,                1, false);
 		VariablesPointers_int["eventslog_stmt_parameters"] = make_tuple(&variables.eventslog_stmt_parameters,    0,                1, false);
 		// various
-		VariablesPointers_int["long_query_time"]           = make_tuple(&variables.long_query_time,              0,  20*24*3600*1000, false);
-		VariablesPointers_int["max_allowed_packet"]        = make_tuple(&variables.max_allowed_packet,        8192,   1024*1024*1024, false);
-		VariablesPointers_int["max_connections"]           = make_tuple(&variables.max_connections,              1,        1000*1000, false);
-		VariablesPointers_int["max_stmts_per_connection"]  = make_tuple(&variables.max_stmts_per_connection,     1,             1024, false);
-		VariablesPointers_int["max_stmts_cache"]           = make_tuple(&variables.max_stmts_cache,            128,        1024*1024, false);
-		VariablesPointers_int["max_transaction_idle_time"] = make_tuple(&variables.max_transaction_idle_time, 1000,  20*24*3600*1000, false);
-		VariablesPointers_int["max_transaction_time"]      = make_tuple(&variables.max_transaction_time,      1000,  20*24*3600*1000, false);
-		VariablesPointers_int["query_cache_size_mb"]       = make_tuple(&variables.query_cache_size_MB,          0,       1024*10240, false);
-		VariablesPointers_int["query_cache_soft_ttl_pct"]  = make_tuple(&variables.query_cache_soft_ttl_pct,     0,              100, false);
-		VariablesPointers_int["query_cache_handle_warnings"] = make_tuple(&variables.query_cache_handle_warnings,	 0,				   1, false);
+		VariablesPointers_int["long_query_time"]           = make_tuple(&variables.long_query_time,               0,  20*24*3600*1000, false);
+		VariablesPointers_int["max_allowed_packet"]        = make_tuple(&variables.max_allowed_packet,         8192,   1024*1024*1024, false);
+		VariablesPointers_int["max_connections"]           = make_tuple(&variables.max_connections,               1,        1000*1000, false);
+		VariablesPointers_int["max_stmts_per_connection"]  = make_tuple(&variables.max_stmts_per_connection,      1,             1024, false);
+		VariablesPointers_int["max_stmts_cache"]           = make_tuple(&variables.max_stmts_cache,             128,        1024*1024, false);
+		VariablesPointers_int["max_transaction_idle_time"] = make_tuple(&variables.max_transaction_idle_time,  1000,  20*24*3600*1000, false);
+		VariablesPointers_int["max_transaction_time"]      = make_tuple(&variables.max_transaction_time,       1000,  20*24*3600*1000, false);
+		VariablesPointers_int["query_cache_size_mb"]       = make_tuple(&variables.query_cache_size_MB,           0,       1024*10240, false);
+		VariablesPointers_int["query_cache_soft_ttl_pct"]  = make_tuple(&variables.query_cache_soft_ttl_pct,      0,              100, false);
+		VariablesPointers_int["query_cache_handle_warnings"] = make_tuple(&variables.query_cache_handle_warnings, 0,                1, false);
 
 #ifdef IDLE_THREADS
 		VariablesPointers_int["session_idle_ms"]           = make_tuple(&variables.session_idle_ms,              1,        3600*1000, false);
@@ -4268,6 +4272,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(client_host_error_counts);
 	REFRESH_VARIABLE_INT(handle_warnings);
 	REFRESH_VARIABLE_INT(evaluate_replication_lag_on_servers_load);
+	REFRESH_VARIABLE_BOOL(ignore_min_gtid_annotations);
 #ifdef DEBUG
 	REFRESH_VARIABLE_BOOL(session_debug);
 #endif /* DEBUG */
