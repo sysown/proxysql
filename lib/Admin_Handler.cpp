@@ -4030,9 +4030,14 @@ __run_query:
 			if (needs_vacuum) {
 				SPA->vacuum_stats(true);
 			}
-		} else {
+		} else { // PROXYSQL_SESSION_STATS
 			SPA->statsdb->execute("PRAGMA query_only = ON");
-			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			std::string q = strip_schema_from_query(query, "stats");
+			l_free(query_length, query);
+			query = l_strdup(q.c_str());
+			query_length = strlen(query) + 1;
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "\nExecuting %s command in stats user session\n\n", query);
+			SPA->statsdb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
 			if (needs_vacuum) {
 				SPA->vacuum_stats(false);
