@@ -37,10 +37,6 @@ std::vector<unsigned int> vals = { 100, 345, 800 };
 
 std::vector<std::string> queries = {};
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
 int main() {
 	CommandLine cl;
 
