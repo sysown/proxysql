@@ -162,7 +162,7 @@ PgSQL_STMT_Manager_v14::~PgSQL_STMT_Manager_v14() {
 
 void PgSQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lock) noexcept {
 	if (lock)
-		pthread_rwlock_wrlock(&rwlock_);
+		wrlock();
 	
 	if (auto s = map_stmt_id_to_info.find(_stmt_id); s != map_stmt_id_to_info.end()) {
 		statuses.c_total += _v;
@@ -222,12 +222,12 @@ void PgSQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 		}
 	}
 	if (lock)
-		pthread_rwlock_unlock(&rwlock_);
+		unlock();
 }
 
 void PgSQL_STMT_Manager_v14::ref_count_server(uint64_t _stmt_id ,int _v, bool lock) noexcept {
 	if (lock)
-		pthread_rwlock_wrlock(&rwlock_);
+		wrlock();
 	std::map<uint64_t, PgSQL_STMT_Global_info *>::iterator s;
 	s = map_stmt_id_to_info.find(_stmt_id);
 	if (s != map_stmt_id_to_info.end()) {
@@ -243,7 +243,7 @@ void PgSQL_STMT_Manager_v14::ref_count_server(uint64_t _stmt_id ,int _v, bool lo
 		stmt_info->ref_count_server += _v;
 	}
 	if (lock)
-		pthread_rwlock_unlock(&rwlock_);
+		unlock();
 }
 
 PgSQL_STMTs_local_v14::~PgSQL_STMTs_local_v14() {
@@ -388,7 +388,7 @@ PgSQL_STMT_Global_info* PgSQL_STMT_Manager_v14::add_prepared_statement(
 	ret->ref_count_server++;
 	statuses.s_total++;
 	if (lock) {
-		pthread_rwlock_unlock(&rwlock_);
+		unlock();
 	}
 	return ret;
 }
@@ -458,7 +458,7 @@ void PgSQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
 	*cached = statuses.cached;
 	*s_total = statuses.s_total;
 	*s_unique = statuses.s_unique;
-	pthread_rwlock_unlock(&rwlock_);
+	unlock();
 }
 
 

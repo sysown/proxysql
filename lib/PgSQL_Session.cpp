@@ -6234,25 +6234,39 @@ int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 
 	int rc = -1;
 
-	if (const std::unique_ptr<PgSQL_Parse_Message>* parse_msg = std::get_if<std::unique_ptr<PgSQL_Parse_Message>>(&packet)) {
-		extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK) | EXTQ_PHASE_PROCESSING_PARSE;
-		rc = handle_post_sync_parse_message(parse_msg->get());
-	} else if (const std::unique_ptr<PgSQL_Describe_Message>* describe_msg = std::get_if<std::unique_ptr<PgSQL_Describe_Message>>(&packet)) {
-		extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK) | EXTQ_PHASE_PROCESSING_DESCRIBE;
-		rc = handle_post_sync_describe_message(describe_msg->get());
-	} else if (const std::unique_ptr<PgSQL_Close_Message>* close_msg = std::get_if<std::unique_ptr<PgSQL_Close_Message>>(&packet)) {
-		extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK) | EXTQ_PHASE_PROCESSING_CLOSE;
-		rc = handle_post_sync_close_message(close_msg->get());
-	} else if (const std::unique_ptr<PgSQL_Bind_Message>* bind_msg = std::get_if<std::unique_ptr<PgSQL_Bind_Message>>(&packet)) {
-		extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK) | EXTQ_PHASE_PROCESSING_BIND;
-		rc = handle_post_sync_bind_message(bind_msg->get());
-	} else if (const std::unique_ptr<PgSQL_Execute_Message>* execute_msg = std::get_if<std::unique_ptr<PgSQL_Execute_Message>>(&packet)) {
-		extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK) | EXTQ_PHASE_PROCESSING_EXECUTE;
-		rc = handle_post_sync_execute_message(execute_msg->get());
-	} else {
-		proxy_error("Unknown extended query message\n");
-		assert(0); // this should never happen
-	}
+	rc = std::visit([&](auto&& msg_ptr) -> int {
+		using T = std::decay_t<decltype(msg_ptr)>;
+		if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Parse_Message>>) {
+			extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK)
+				| EXTQ_PHASE_PROCESSING_PARSE;
+			return handle_post_sync_parse_message(msg_ptr.get());
+		}
+		else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Describe_Message>>) {
+			extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK)
+				| EXTQ_PHASE_PROCESSING_DESCRIBE;
+			return handle_post_sync_describe_message(msg_ptr.get());
+		}
+		else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Close_Message>>) {
+			extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK)
+				| EXTQ_PHASE_PROCESSING_CLOSE;
+			return handle_post_sync_close_message(msg_ptr.get());
+		}
+		else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Bind_Message>>) {
+			extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK)
+				| EXTQ_PHASE_PROCESSING_BIND;
+			return handle_post_sync_bind_message(msg_ptr.get());
+		}
+		else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Execute_Message>>) {
+			extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK)
+				| EXTQ_PHASE_PROCESSING_EXECUTE;
+			return handle_post_sync_execute_message(msg_ptr.get());
+		}
+		else {
+			proxy_error("Unknown extended query message\n");
+			assert(false);
+			return -1;
+		}
+		}, packet);
 
 	if (rc == 2) {
 		// incase of error, we discard all pending messages

@@ -239,7 +239,7 @@ private:
 	bool extended_query_exec_qp { false };
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
-	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute{};
+	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
 
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);

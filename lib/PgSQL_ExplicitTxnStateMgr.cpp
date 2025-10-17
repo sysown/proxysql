@@ -34,7 +34,16 @@ void verify_server_variables(PgSQL_Session* session) {
         const char* conn_param_status = session->mybe->server_myds->myconn->get_pg_parameter_status(pgsql_tracked_variables[idx].set_variable_name);
         const char* param_value = session->mybe->server_myds->myconn->variables[idx].value;
         if (conn_param_status && param_value) {
-            assert(strcmp(conn_param_status, param_value) == 0);
+            //assert(strcmp(conn_param_status, param_value) == 0);
+            if (strcmp(conn_param_status, param_value) != 0) {
+				// This isn’t actually a bug, but it can occur in an edge case — for example, when a COPY FROM STDIN fails.
+				// In that situation, the ParameterStatus message sent from the server is received and forwarded to the client
+				// via fast-forwarding, so the internal ParameterStatus in libpq isn’t updated.
+				proxy_warning("Server variable '%s' mismatch. Parameter status value: '%s', Expected value: '%s'\n",
+                    pgsql_tracked_variables[idx].set_variable_name,
+                    conn_param_status,
+                    param_value);
+            }
         }
     }
 #endif
