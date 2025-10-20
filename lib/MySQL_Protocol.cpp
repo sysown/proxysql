@@ -57,24 +57,6 @@ static const char *plugins[3] = {
 
 #include "MySQL_encode.h"
 
-std::string unhex(const std::string& hex) {
-	if (hex.size() % 2 || hex.size() == 0) { return {}; };
-
-	string result {};
-
-	for (size_t i = 0; i < hex.size() - 1; i += 2) {
-		string hex_char { string { hex[i] } + hex[i+1] };
-		uint64_t char_val { 0 };
-
-		std::istringstream stream { hex_char };
-		stream >> std::hex >> char_val;
-
-		result += string { static_cast<char>(char_val) };
-	}
-
-	return result;
-}
-
 char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
 	char* ret = nullptr;
 
@@ -2526,22 +2508,6 @@ __do_auth:
 
 __exit_do_auth:
 
-
-#ifdef DEBUG
-	{
-		char *tmp_pass= NULL;
-		if (vars1.password) {
-			tmp_pass = strdup(vars1.password);
-			int lpass = strlen(tmp_pass);
-			for (int i=2; i<lpass-1; i++) {
-				tmp_pass[i]='*';
-			}
-		}
-		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
-			(vars1.capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), vars1.user, tmp_pass, vars1.db, (*myds)->myconn->options.max_allowed_pkt, vars1.capabilities, vars1.charset, ((*myds)->encrypted ? "yes" : "no"));
-		free(tmp_pass);
-	}
-#endif
 	assert(sess);
 	assert(sess->client_myds);
 
@@ -2583,6 +2549,36 @@ __exit_do_auth:
 	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 
 __exit_process_pkt_handshake_response:
+
+#ifdef DEBUG
+	{
+		const auto get_debug_pass = [] (const char* pass, size_t len = 0) -> string {
+			if (!pass) { return "(null)"; }
+
+			const string_view pass_view { len > 0 ? string_view { pass, len } : string_view { pass } };
+			const string hex_pass { hex(pass_view) };
+
+			if (GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_PROTOCOL].verbosity >= 5) {
+				return hex_pass;
+			} else {
+				return string { get_masked_pass(hex_pass.c_str()).get() };
+			}
+		};
+
+		const string tmp_pass { get_debug_pass(vars1.password) };
+		const string tmp_cpass { get_debug_pass(reinterpret_cast<const char*>(vars1.pass), vars1.pass_len) };
+
+		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 1,
+			"Handshake in progress   session_id=%u user=\"%s\" password=\"%s\" client_pass=\"%s\" scramble=\"%s\""
+				" db=\"%s\" auth_method=\"%s\" max_pkt=%u capabilities=%u charset=%u use_ssl=%d auth_in_progress=%d\n",
+			(*myds)->sess->thread_session_id, vars1.user, tmp_pass.c_str(), tmp_cpass.c_str(),
+			hex((*myds)->myconn->scramble_buff).c_str(), vars1.db, vars1.auth_plugin,
+			(*myds)->myconn->options.max_allowed_pkt, vars1.capabilities, vars1.charset, (*myds)->encrypted,
+			(*myds)->auth_in_progress
+		);
+	}
+#endif
+
 	free(vars1.pass);
 	if (vars1.password) {
 		free(vars1.password);

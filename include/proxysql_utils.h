@@ -5,6 +5,7 @@
 #include <type_traits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -200,6 +201,19 @@ int wexecvp(
  * @return The current timestamp in microseconds.
  */
 uint64_t get_timestamp_us();
+
+ /**
+  * @brief Converts a string to its hexadecimal representation.
+  * @param str The input string to convert.
+  * @return The hexadecimal representation of the input string. Empty for empty input.
+  */
+std::string hex(const std::string_view& str);
+/**
+ * @brief Converts a hexadecimal string to its original string representation.
+ * @param hex The hexadecimal string to convert.
+ * @return The original string representation of the input hexadecimal string. Empty for empty input.
+ */
+std::string unhex(const std::string_view& hex);
 
 /**
  * @brief Helper function to replace all the occurrences in a string of a matching substring in favor
