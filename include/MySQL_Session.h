@@ -468,6 +468,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute=true);
+	char* get_current_query(int max_length = -1);
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
 

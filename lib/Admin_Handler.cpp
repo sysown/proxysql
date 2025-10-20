@@ -3916,7 +3916,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (query_no_space_length==strlen("SHOW PROCESSLIST") && !strncasecmp("SHOW PROCESSLIST",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		query=l_strdup("SELECT SessionID, user, db, hostgroup, command, time_ms, SUBSTR(info,0,100) info FROM stats_mysql_processlist");
+		query=l_strdup("SELECT SessionID, user, db, hostgroup, command, time_ms, info FROM stats_mysql_processlist");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -3937,14 +3937,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (query_no_space_length == strlen("SHOW PGSQL PROCESSLIST") && !strncasecmp("SHOW PGSQL PROCESSLIST", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
-		query = l_strdup("SELECT SessionID, user, database, hostgroup, backend_pid, backend_state, command, time_ms, SUBSTR(info,0,100) info FROM stats_pgsql_processlist");
+		query = l_strdup("SELECT SessionID, user, database, hostgroup, backend_pid, backend_state, command, time_ms, info FROM stats_pgsql_processlist");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 
 	if (query_no_space_length == strlen("SHOW PGSQL ACTIVITY") && !strncasecmp("SHOW PGSQL ACTIVITY", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
-		query = l_strdup("SELECT datname, pid, usename, hostgroup, backend_pid, state, command, duration_ms, SUBSTR(query,0,100) query FROM stats_pgsql_stat_activity");
+		query = l_strdup("SELECT datname, pid, usename, hostgroup, backend_pid, state, command, duration_ms, query FROM stats_pgsql_stat_activity");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}

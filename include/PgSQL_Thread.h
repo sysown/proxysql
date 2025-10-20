@@ -5,6 +5,8 @@
 #include <prometheus/gauge.h>
 
 #include "proxysql.h"
+#include "proxysql_admin.h"
+
 #include "Base_Thread.h"
 #include "ProxySQL_Poll.h"
 #include "PgSQL_Variables.h"
@@ -949,10 +951,8 @@ public:
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
-		int show_processlist_extended;
 #ifdef IDLE_THREADS
 		int session_idle_ms;
-		bool session_idle_show_processlist;
 #endif // IDLE_THREADS
 		bool sessions_sort;
 		char* default_schema;
@@ -1058,6 +1058,22 @@ public:
 		int handle_warnings;
 		char* server_version;
 		char* server_encoding;
+		/**
+		 *   The processlist variables are logically group under "pgsql-" variables
+		 *   and they are kept under PgSQL_Threads_Handler.
+		 *
+		 *   Other than configuration load/save or sync activities, these variables
+		 *   are not utilized by PTH or PgSQL_Thread for any other purpose and hence
+		 *   they are not associated with thread-local variables.
+		 *
+		 *   At runtime, ProxySQL_Admin keeps a copy of these variables and uses them
+		 *   when collecting stats for stats_pgsql_processlist.
+		 */
+#ifdef IDLE_THREADS
+		bool session_idle_show_processlist;
+#endif
+		int show_processlist_extended;
+		int processlist_max_query_length;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -1507,6 +1523,8 @@ public:
 	/**
 	 * @brief Retrieves a process list for all threads in the thread pool.
 	 *
+	 * @param args Processlist configuration of PgSQL.
+	 *
 	 * @return A `SQLite3_result` object containing the process list, or `NULL` if an error
 	 * occurred.
 	 *
@@ -1519,7 +1537,7 @@ public:
 	 * object, allowing administrators to monitor active sessions and their status.
 	 *
 	 */
-	SQLite3_result* SQL3_Processlist();
+	SQLite3_result* SQL3_Processlist(processlist_config_t args);
 
 	/**
 	 * @brief Retrieves global status information for the thread pool.
