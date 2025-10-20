@@ -448,6 +448,126 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	return true;
 }
 
+bool pgsql_variable_validate_search_path(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
+	(void)params;
+	(void)session;
+
+	if (transformed_value) *transformed_value = nullptr;
+	if (value == nullptr) return false;
+
+	// NOSONAR: strlen is safe here 
+	size_t value_len = strlen(value); // NOSONAR
+	if (value_len > SIZE_MAX - 1) return false;
+
+	char* normalized = (char*)malloc(value_len + 1);
+	if (normalized == nullptr) return false;
+	normalized[0] = '\0';
+
+	size_t norm_pos = 0;
+	bool first = true;
+	bool result = true;
+
+	const char* token = value;
+
+	while (*token && result) {
+		/* skip leading whitespace */
+		while (*token && isspace((unsigned char)*token)) token++;
+		if (*token == '\0') break;
+
+		const char* part_start = token;
+		size_t part_len = 0;
+		int effective_len = 0;  // for length check after de-escaping
+
+		if (*token == '"' || *token == '\'') {
+			// quoted identifier (preserve quotes in normalized output)
+			char quote = *token++;
+			const char* search = token;
+			while (*search) {
+				if (*search == quote) {
+					if (*(search + 1) == quote) {
+						search += 2;
+						effective_len++;  // doubled quote counts as one char
+						continue;
+					} else {
+						break;
+					}
+				}
+				search++;
+				effective_len++;
+			}
+
+			if (*search != quote) {
+				result = false;
+				break;  // unclosed quote
+			}
+			part_len = (size_t)(search - part_start + 1);
+			token = search + 1;  // skip closing quote
+			if (effective_len > 63) {
+				result = false;
+				break;
+			}
+		} else {
+			// unquoted identifier or $user
+			while (*token && *token != ',' && !isspace(*token)) token++;
+			part_len = (size_t)(token - part_start);
+			if (part_len == 0 || part_len > 63) {
+				result = false;
+				break;
+			}
+
+			// validate as identifier
+			if (!isalpha(part_start[0]) && part_start[0] != '_') {
+				result = false;
+				break;
+			}
+			for (size_t i = 1; i < part_len; ++i) {
+				if (!isalnum(part_start[i]) && part_start[i] != '_' && part_start[i] != '$') {
+					result = false;
+					break;
+				}
+			}
+			if (!result) break;
+		}
+
+		// add to normalized
+		if (!first) {
+			normalized[norm_pos++] = ',';
+		}
+		first = false;
+
+		// append the part bytes
+		if (part_len > 0) {
+			memcpy(normalized + norm_pos, part_start, part_len);
+			norm_pos += part_len;
+		}
+		normalized[norm_pos] = '\0';
+
+		// skip whitespace after part
+		while (*token && isspace(*token)) token++;
+
+		// expect comma or end
+		if (*token == ',') {
+			token++;
+		} else if (*token != '\0') {
+			// if there's more content without comma, invalid
+			result = false;
+			break;
+		}
+	}
+
+	if (result) {
+		if (transformed_value) {
+			*transformed_value = normalized;
+		} else {
+			free(normalized);
+		}
+	} else {
+		free(normalized);
+	}
+
+	return result;
+}
+
 const pgsql_variable_validator pgsql_variable_validator_bool = {
 	.type = VARIABLE_TYPE_BOOL,
 	.validate = &pgsql_variable_validate_bool,
@@ -511,5 +631,11 @@ const pgsql_variable_validator pgsql_variable_validator_maintenance_work_mem = {
 const pgsql_variable_validator pgsql_variable_validator_client_encoding = {
 	.type = VARIABLE_TYPE_CLIENT_ENCODING,
 	.validate = &pgsql_variable_validate_client_encoding,
+	.params = {}
+};
+
+const pgsql_variable_validator pgsql_variable_validator_search_path = {
+	.type = VARIABLE_TYPE_STRING,
+	.validate = &pgsql_variable_validate_search_path,
 	.params = {}
 };

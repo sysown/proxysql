@@ -6,6 +6,8 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "proxysql_admin.h"
+
 #include "MySQL_Variables.h"
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
@@ -441,10 +443,8 @@ class MySQL_Threads_Handler
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
-		int show_processlist_extended;
 #ifdef IDLE_THREADS
 		int session_idle_ms;
-		bool session_idle_show_processlist;
 #endif // IDLE_THREADS
 		bool sessions_sort;
 		char *default_schema;
@@ -561,6 +561,22 @@ class MySQL_Threads_Handler
 		int data_packets_history_size;
 		int handle_warnings;
 		int evaluate_replication_lag_on_servers_load;
+		/**
+		 *   The processlist variables are logically group under "mysql-" variables
+		 *   and they are kept under MySQL_Threads_Handler.
+		 *
+		 *   Other than configuration load/save or sync activities, these variables
+		 *   are not utilized by MTH or MySQL_Thread for any other purpose and hence
+		 *   they are not associated with thread-local variables.
+		 *
+		 *   At runtime, ProxySQL_Admin keeps a copy of these variables and uses them
+		 *   when collecting stats for stats_mysql_processlist.
+		 */
+#ifdef IDLE_THREADS
+		bool session_idle_show_processlist;
+#endif
+		int show_processlist_extended;
+		int processlist_max_query_length;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -678,7 +694,7 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
-	SQLite3_result * SQL3_Processlist();
+	SQLite3_result * SQL3_Processlist(processlist_config_t args);
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();

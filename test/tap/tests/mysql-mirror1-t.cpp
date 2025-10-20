@@ -24,11 +24,6 @@ This test also triggers:
 const int NUM_CONNS = 15;
 const int RPI = 20; // rows per insert
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
-
 MYSQL * conns[NUM_CONNS];
 unsigned long mythreadid[NUM_CONNS];
 

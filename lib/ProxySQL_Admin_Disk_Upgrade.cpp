@@ -608,3 +608,35 @@ void ProxySQL_Admin::disk_upgrade_rest_api_routes() {
 
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
+
+void ProxySQL_Admin::disk_upgrade_pgsql_replication_hostgroups() {
+	configdb->execute("PRAGMA foreign_keys = OFF");
+
+	int rci = configdb->check_table_structure(
+		const_cast<char*>("pgsql_replication_hostgroups"),
+		const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_1)
+	);
+
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version pre-3.0.2 of table 'pgsql_replication_hostgroups'\n");
+		proxy_warning("ONLINE UPGRADE of table 'pgsql_replication_hostgroups' in progress\n");
+		// drop any existing table with suffix _v301
+		configdb->execute("DROP TABLE IF EXISTS pgsql_replication_hostgroups_v301");
+		// rename current table to add suffix _v301
+		configdb->execute("ALTER TABLE pgsql_replication_hostgroups RENAME TO pgsql_replication_hostgroups_v301");
+		// create new table
+		configdb->build_table(
+			const_cast<char*>("pgsql_replication_hostgroups"),
+			const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS),
+			false
+		);
+		// copy fields from old table
+		configdb->execute(
+			"INSERT INTO pgsql_replication_hostgroups(writer_hostgroup, reader_hostgroup, check_type, comment)"
+				" SELECT writer_hostgroup, reader_hostgroup, 'read_only', comment FROM pgsql_replication_hostgroups_v301"
+		);
+	}
+
+	configdb->execute("PRAGMA foreign_keys = ON");
+}

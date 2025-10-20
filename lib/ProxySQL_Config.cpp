@@ -4,6 +4,8 @@
 #include "cpp.h"
 
 #include <sstream>
+#include <set>
+#include <tuple>
 
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
@@ -144,17 +146,21 @@ int ProxySQL_Config::Write_MySQL_Users_to_configfile(std::string& data) {
 	return 0;
 }
 
-int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
+int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	if (root.exists("mysql_users")==false) return 0;
 	const Setting &mysql_users = root["mysql_users"];
 	int count = mysql_users.getLength();
-	//fprintf(stderr, "Found %d users\n",count);
-	int i;
+
+	if (!validate_backend_users(PROXYSQL_CONFIG_MYSQL_USERS, mysql_users, error)) {
+		proxy_error("Admin: %s\n", error.c_str());
+		return -1;
+	}
+
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s','%s')";
-	for (i=0; i< count; i++) {
+	for (int i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
 		std::string password="";
@@ -168,10 +174,8 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
 		int max_connections=10000;
 		std::string comment="";
 		std::string attributes="";
-		if (user.lookupValue("username", username)==false) {
-			proxy_error("Admin: detected a mysql_users in config file without a mandatory username\n");
-			continue;
-		}
+
+		user.lookupValue("username", username);
 		user.lookupValue("password", password);
 		user.lookupValue("default_hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
@@ -1014,7 +1018,7 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 	return 0;
 }
 
-int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
+int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	int i;
 	int rows=0;
@@ -1022,7 +1026,12 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
 	if (root.exists("mysql_servers")==true) {
 		const Setting &mysql_servers = root["mysql_servers"];
 		int count = mysql_servers.getLength();
-		//fprintf(stderr, "Found %d servers\n",count);
+
+		if (!validate_backend_servers(PROXYSQL_CONFIG_MYSQL_SERVERS, mysql_servers, error)) {
+			proxy_error("Admin: %s\n", error.c_str());
+			return -1;
+		}
+
 		char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, gtid_port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
 		for (i=0; i< count; i++) {
 			const Setting &server = mysql_servers[i];
@@ -1038,20 +1047,15 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
 			int use_ssl=0;
 			int max_latency_ms=0;
 			std::string comment="";
-			if (server.lookupValue("address", address)==false) {
-				if (server.lookupValue("hostname", address)==false) {
-					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostname\n");
-					continue;
-				}
+
+			if (!server.lookupValue("address", address)) {
+				server.lookupValue("hostname", address);
+			}
+			if (!server.lookupValue("hostgroup", hostgroup)) {
+				server.lookupValue("hostgroup_id", hostgroup);
 			}
 			server.lookupValue("port", port);
 			server.lookupValue("gtid_port", gtid_port);
-			if (server.lookupValue("hostgroup", hostgroup)==false) {
-				if (server.lookupValue("hostgroup_id", hostgroup)==false) {
-					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostgroup_id\n");
-					continue;
-				}
-			}
 			server.lookupValue("status", status);
 			if (
 				(strcasecmp(status.c_str(),(char *)"ONLINE"))
@@ -1080,6 +1084,8 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile() {
 			rows++;
 		}
 	}
+
+	// TODO: Add validation to mysql_replication_hostgroups similar to mysql_servers
 	if (root.exists("mysql_replication_hostgroups")==true) {
 		const Setting &mysql_replication_hostgroups = root["mysql_replication_hostgroups"];
 		int count = mysql_replication_hostgroups.getLength();
@@ -1457,7 +1463,7 @@ int ProxySQL_Config::Write_ProxySQL_Servers_to_configfile(std::string& data) {
 	return 0;
 }
 
-int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile() {
+int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile(std::string& error) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	int i;
 	int rows=0;
@@ -1465,7 +1471,12 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile() {
 	if (root.exists("proxysql_servers")==true) {
 		const Setting & proxysql_servers = root["proxysql_servers"];
 		int count = proxysql_servers.getLength();
-		//fprintf(stderr, "Found %d servers\n",count);
+
+		if (!validate_proxysql_servers(proxysql_servers, error)) {
+			proxy_error("Admin: %s\n", error.c_str());
+			return -1;
+		}
+
 		char *q=(char *)"INSERT OR REPLACE INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %d, %d, '%s')";
 		for (i=0; i< count; i++) {
 			const Setting &server = proxysql_servers[i];
@@ -1473,16 +1484,11 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile() {
 			int port;
 			int weight=0;
 			std::string comment="";
-			if (server.lookupValue("address", address)==false) {
-				if (server.lookupValue("hostname", address)==false) {
-					proxy_error("Admin: detected a proxysql_servers in config file without a mandatory hostname\n");
-					continue;
-				}
+
+			if (!server.lookupValue("address", address)) {
+				server.lookupValue("hostname", address);
 			}
-			if (server.lookupValue("port", port)==false) {
-				proxy_error("Admin: detected a proxysql_servers in config file without a mandatory port\n");
-				continue;
-			}
+			server.lookupValue("port", port);
 			server.lookupValue("weight", weight);
 			server.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
@@ -1621,7 +1627,7 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 	return 0;
 }
 
-int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
+int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	int i;
 	int rows = 0;
@@ -1629,7 +1635,12 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 	if (root.exists("pgsql_servers") == true) {
 		const Setting& pgsql_servers = root["pgsql_servers"];
 		int count = pgsql_servers.getLength();
-		//fprintf(stderr, "Found %d servers\n",count);
+
+		if (!validate_backend_servers(PROXYSQL_CONFIG_PGSQL_SERVERS, pgsql_servers, error)) {
+			proxy_error("Admin: %s\n", error.c_str());
+			return -1;
+		}
+
 		char* q = (char*)"INSERT OR REPLACE INTO pgsql_servers (hostname, port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
 		for (i = 0; i < count; i++) {
 			const Setting& server = pgsql_servers[i];
@@ -1644,19 +1655,14 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 			int use_ssl = 0;
 			int max_latency_ms = 0;
 			std::string comment = "";
-			if (server.lookupValue("address", address) == false) {
-				if (server.lookupValue("hostname", address) == false) {
-					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostname\n");
-					continue;
-				}
+
+			if (!server.lookupValue("address", address)) {
+				server.lookupValue("hostname", address);
+			}
+			if (!server.lookupValue("hostgroup", hostgroup)) {
+				server.lookupValue("hostgroup_id", hostgroup);
 			}
 			server.lookupValue("port", port);
-			if (server.lookupValue("hostgroup", hostgroup) == false) {
-				if (server.lookupValue("hostgroup_id", hostgroup) == false) {
-					proxy_error("Admin: detected a pgsql_servers in config file without a mandatory hostgroup_id\n");
-					continue;
-				}
-			}
 			server.lookupValue("status", status);
 			if (
 				(strcasecmp(status.c_str(), (char*)"ONLINE"))
@@ -1685,6 +1691,8 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile() {
 			rows++;
 		}
 	}
+
+	// TODO: Add validation to pgsql_replication_hostgroups similar to pgsql_servers
 	if (root.exists("pgsql_replication_hostgroups") == true) {
 		const Setting& pgsql_replication_hostgroups = root["pgsql_replication_hostgroups"];
 		int count = pgsql_replication_hostgroups.getLength();
@@ -1777,17 +1785,21 @@ int ProxySQL_Config::Write_PgSQL_Users_to_configfile(std::string& data) {
 	return 0;
 }
 
-int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
+int ProxySQL_Config::Read_PgSQL_Users_from_configfile(std::string& error) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	if (root.exists("pgsql_users") == false) return 0;
 	const Setting& pgsql_users = root["pgsql_users"];
 	int count = pgsql_users.getLength();
-	//fprintf(stderr, "Found %d users\n",count);
-	int i;
+
+	if (!validate_backend_users(PROXYSQL_CONFIG_PGSQL_USERS, pgsql_users, error)) {
+		proxy_error("Admin: %s\n", error.c_str());
+		return -1;
+	}
+
 	int rows = 0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char* q = (char*)"INSERT OR REPLACE INTO pgsql_users (username, password, active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, %d, %d, %d, '%s','%s')";
-	for (i = 0; i < count; i++) {
+	for (int i = 0; i < count; i++) {
 		const Setting& user = pgsql_users[i];
 		std::string username;
 		std::string password = "";
@@ -1799,10 +1811,7 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile() {
 		int max_connections = 10000;
 		std::string comment = "";
 		std::string attributes = "";
-		if (user.lookupValue("username", username) == false) {
-			proxy_error("Admin: detected a pgsql_users in config file without a mandatory username\n");
-			continue;
-		}
+		user.lookupValue("username", username);
 		user.lookupValue("password", password);
 		user.lookupValue("default_hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
@@ -2165,4 +2174,116 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
+}
+
+bool ProxySQL_Config::validate_backend_users(proxysql_config_type type, const Setting& config, std::string& error) {
+	std::set<std::tuple<std::string, int>> pk_set;
+    int count = config.getLength();
+
+	for (int i = 0; i < count; i++) {
+        const Setting& user = config[i];
+
+		std::string config;
+        std::string username;
+		int backend = 1; // default backend value
+
+		config = (type == PROXYSQL_CONFIG_MYSQL_USERS) ? "mysql_users" : "pgsql_users";
+
+		if (user.lookupValue("username", username) == false) {
+			error = "mandatory field username missing from a " + config + " entry in config file";
+			return false;
+		}
+
+		user.lookupValue("backend", backend);
+
+		auto key = std::make_tuple(username, backend);
+
+		if (pk_set.find(key) != pk_set.end()) {
+			error = "duplicate entries found in " + config + " in config file";
+			return false;
+		}
+
+        pk_set.insert(key);
+    }
+
+    return true;
+}
+
+bool ProxySQL_Config::validate_backend_servers(proxysql_config_type type, const Setting& config, std::string& error) {
+	std::set<std::tuple<int, std::string, int>> pk_set;
+    int count = config.getLength();
+
+	for (int i = 0; i < count; i++) {
+        const Setting& server = config[i];
+
+		std::string config;
+		std::string address;
+		int port;
+		int hostgroup;
+
+		config = (type == PROXYSQL_CONFIG_MYSQL_SERVERS) ? "mysql_servers" : "pgsql_servers";
+		port = (type == PROXYSQL_CONFIG_MYSQL_SERVERS) ? 3306 : 5432;
+
+		if (server.lookupValue("hostgroup", hostgroup) == false) {
+			if (server.lookupValue("hostgroup_id", hostgroup) == false) {
+				error = "mandatory field hostgroup_id missing from a " + config + " entry in config file";
+				return false;
+			}
+		}
+
+		if (server.lookupValue("address", address) == false) {
+			if (server.lookupValue("hostname", address) == false) {
+				error = "mandatory field hostname missing from a " + config + " entry in config file";
+				return false;
+			}
+		}
+
+		server.lookupValue("port", port);
+
+		auto key = std::make_tuple(hostgroup, address, port);
+
+		if (pk_set.find(key) != pk_set.end()) {
+			error = "duplicate entries found in " + config + " in config file";
+			return false;
+		}
+
+        pk_set.insert(key);
+    }
+
+    return true;
+}
+
+bool ProxySQL_Config::validate_proxysql_servers(const Setting& config, std::string& error) {
+	std::set<std::tuple<std::string, int>> pk_set;
+	int count = config.getLength();
+
+	for (int i = 0; i < count; i++) {
+        const Setting& server = config[i];
+
+		std::string address;
+		int port;
+
+		if (server.lookupValue("address", address) == false) {
+			if (server.lookupValue("hostname", address) == false) {
+				error = "mandatory field hostname missing from a proxysql_servers entry in config file";
+				return false;
+			}
+		}
+
+		if (server.lookupValue("port", port) == false) {
+			error = "mandatory field port missing from a proxysql_servers entry in config file";
+			return false;
+		}
+
+		auto key = std::make_tuple(address, port);
+
+		if (pk_set.find(key) != pk_set.end()) {
+			error = "duplicate entries found in proxysql_servers in config file";
+			return false;
+		}
+
+        pk_set.insert(key);
+    }
+
+    return true;
 }

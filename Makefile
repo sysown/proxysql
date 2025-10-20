@@ -43,7 +43,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 3.0.2
+CURVER ?= 3.0.3
 #export DEBUG
 #export EXTRALINK
 export MAKE
@@ -315,22 +315,22 @@ pkglist: $(REL_ARCH)-pkglist
 
 amd64-%: SYS_ARCH := x86_64
 amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
-amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
-amd64-centos: centos9 centos9-clang centos9-dbg
-amd64-debian: debian12 debian12-clang debian12-dbg
-amd64-fedora: fedora40 fedora40-clang fedora40-dbg fedora41 fedora41-clang fedora41-dbg
-amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
+amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg almalinux10 almalinux10-clang almalinux10-dbg
+amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
+amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
+amd64-fedora: fedora40 fedora40-clang fedora40-dbg fedora41 fedora41-clang fedora41-dbg fedora42 fedora42-clang fedora42-dbg
+amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
 	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
 
 arm64-%: SYS_ARCH := aarch64
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
-arm64-almalinux: almalinux8 almalinux9
-arm64-centos: centos9
-arm64-debian: debian12
-arm64-fedora: fedora40 fedora41
-arm64-opensuse: opensuse15
+arm64-almalinux: almalinux8 almalinux9 almalinux10
+arm64-centos: centos9 centos10
+arm64-debian: debian12 debian13
+arm64-fedora: fedora40 fedora41 fedora42
+arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:
 	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'

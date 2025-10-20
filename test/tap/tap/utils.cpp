@@ -475,7 +475,7 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 
 unsigned long long monotonic_time() {
   struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  clock_gettime(PROXYSQL_CLOCK_MONOTONIC, &ts);
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
@@ -2168,11 +2168,14 @@ void check_conn_count(MYSQL* admin, const string& conn_type, uint32_t conn_num, 
 
 void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg) {
 	const string queries_s { to_string(queries) };
-	const string hg_s { to_string(hg) };
 
-	const string select_hg_queries {
-		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
-	};
+	string select_hg_queries;
+	if (hg == -1) {
+		select_hg_queries = "SELECT SUM(Queries) FROM stats_mysql_connection_pool";
+	} else {
+		select_hg_queries = "SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg);
+	}
+
 	const string check_queries {
 		"SELECT IIF((" + select_hg_queries + ")=" + queries_s + ",'TRUE','FALSE')"
 	};
@@ -2193,11 +2196,14 @@ void check_query_count(MYSQL* admin, vector<uint32_t> queries, uint32_t hg) {
 			}
 		)
 	};
-	const string hg_s { to_string(hg) };
 
-	const string select_hg_queries {
-		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
-	};
+	string select_hg_queries;
+	if (hg == -1) {
+		select_hg_queries = "SELECT SUM(Queries) FROM stats_mysql_connection_pool";
+	} else {
+		select_hg_queries = "SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg);
+	}
+
 	const string check_queries {
 		"SELECT IIF((" + select_hg_queries + ") IN (" + queries_s + "),'TRUE','FALSE')"
 	};
@@ -2316,3 +2322,38 @@ bool get_env_bool(const char* envname, bool envdefault) {
 
 	return (bool) res;
 };
+
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, bool cmp) {
+	diag("Creating MySQL conn  host=\"%s\" port=\"%d\" user=\"%s\" ssl=\"%d\" cmp=\"%d\"", host, port, user, ssl, cmp);
+
+	MYSQL* mysql = mysql_init(NULL);
+
+	if (!mysql) {
+		return nullptr;
+	}
+	if (cmp) {
+		if (mysql_options(mysql, MYSQL_OPT_COMPRESS, nullptr)) {
+			return nullptr;
+		}
+	}
+
+	int cflags = 0;
+
+	if (ssl) {
+		if (mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL)) {
+			return nullptr;
+		}
+		cflags |= CLIENT_SSL;
+	}
+
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) {
+		return nullptr;
+	}
+
+	return mysql;
+}
+
+int run_q(MYSQL *mysql, const char *q) {
+	MYSQL_QUERY_T(mysql,q);
+	return 0;
+}
