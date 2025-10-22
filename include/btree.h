@@ -104,7 +104,6 @@
 #include <stddef.h>
 #include <string.h>
 #include <sys/types.h>
-#include <cstdint>
 #include <algorithm>
 #include <functional>
 #include <iostream>
