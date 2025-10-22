@@ -98,6 +98,7 @@ deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
+deps/json/json-*/
 
 test/.vagrant
 .DS_Store

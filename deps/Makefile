@@ -38,7 +38,8 @@ targets :=	check_openssl_version \
 			prometheus-cpp \
 			postgresql \
 			libusual \
-			libscram
+			libscram \
+			json
 
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
@@ -328,6 +329,14 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(SSL_IDIR)" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 
 libscram: libscram/lib/libscram.a
+
+
+json/json/include/nlohmann/json.hpp:
+	cd json && rm -rf json-*/ || true
+	cd json && tar -zxf json-*.tar.gz
+	cd json/json && cmake .
+
+json: json/json/include/nlohmann/json.hpp
 
 
 ### clean targets
