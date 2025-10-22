@@ -744,12 +744,17 @@ CURLcode perform_simple_post(
 ) {
 	CURL *curl;
 	CURLcode res;
+	struct curl_slist *headers = NULL;
 
 	curl_global_init(CURL_GLOBAL_ALL);
 
 	curl = curl_easy_init();
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+
+		headers = curl_slist_append(headers, "Content-Type: application/json");
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, params.c_str());
 		struct memory response = { 0 };
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -765,6 +770,7 @@ CURLcode perform_simple_post(
 		}
 
 		free(response.data);
+		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 	}
 
