@@ -18,7 +18,7 @@
 
 using std::string;
 
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #define NUMQUERIES	15
 

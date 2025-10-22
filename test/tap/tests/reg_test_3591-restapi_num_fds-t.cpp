@@ -21,7 +21,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include <sys/time.h>
 #include <sys/resource.h>

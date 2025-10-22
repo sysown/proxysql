@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
-#include "json.hpp" // Requires nlohmann/json.hpp
+#include "nlohmann/json.hpp" // Requires nlohmann/json.hpp
 
 using json = nlohmann::json;
 
