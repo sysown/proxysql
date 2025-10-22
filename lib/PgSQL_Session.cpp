@@ -2299,7 +2299,6 @@ __implicit_sync:
 							// if the previous message succeeded (it was not queried on backend server)
 							// and there are more messages in the queue, sync needs to be executed again
 							if (rc == 0 && extended_query_frame.empty() == false) {
-								writeout();
 								goto __run_sync_again;
 							}
 						}
@@ -2708,7 +2707,6 @@ handler_again:
 		// Extended query synchronization complete; clean up and prepare for next command
 		if (rc == 0) {
 			if (extended_query_frame.empty() == false) {
-				writeout();
 				NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC);
 			}
 
@@ -3082,8 +3080,7 @@ handler_again:
 					}
 					if (has_pending_messages) {
 						// check if there are messages remaining in extended_query_frame, 
-						// if yes, send response to client and process pending messages
-						writeout();
+						// if yes, process pending messages
 						NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC);
 					}
 					extended_query_phase = EXTQ_PHASE_IDLE;
