@@ -529,26 +529,33 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received PROXYSQL STOP command\n");
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 
+		if (admin_nostart_) {
+			if (__sync_fetch_and_add((uint8_t*)(&GloVars.global.nostart), 0)) {
+				SPA->send_error_msg_to_client(sess, (char*)"ProxySQL MySQL and PgSQL modules are not running; cannot stop");
+				return false;
+			}
+		}
+
+		char buf[32];
+
 		// ----- MySQL module stop -----
-		admin_old_wait_timeout = GloMTH->get_variable_int((char*)"wait_timeout");
+		int admin_old_wait_timeout = GloMTH->get_variable_int((char*)"wait_timeout");
 		GloMTH->set_variable((char*)"wait_timeout", (char*)"0");
 		GloMTH->commit();
 		GloMTH->signal_all_threads(0);
 		GloMTH->stop_listeners();
-		char buf_mysql[32];
-		sprintf(buf_mysql, "%d", admin_old_wait_timeout);
-		GloMTH->set_variable((char*)"wait_timeout", buf_mysql);
+		sprintf(buf, "%d", admin_old_wait_timeout);
+		GloMTH->set_variable((char*)"wait_timeout", buf);
 		GloMTH->commit();
 
 		// ----- PgSQL module stop -----
-		int admin_old_wait_timeout_pgsql = GloPTH->get_variable_int((char*)"wait_timeout");
+		admin_old_wait_timeout = GloPTH->get_variable_int((char*)"wait_timeout");
 		GloPTH->set_variable((char*)"wait_timeout", (char*)"0");
 		GloPTH->commit();
 		GloPTH->signal_all_threads(0);
 		GloPTH->stop_listeners();
-		char buf_pgsql[32];
-		sprintf(buf_pgsql, "%d", admin_old_wait_timeout_pgsql);
-		GloPTH->set_variable((char*)"wait_timeout", buf_pgsql);
+		sprintf(buf, "%d", admin_old_wait_timeout);
+		GloPTH->set_variable((char*)"wait_timeout", buf);
 		GloPTH->commit();
 
 		// ----- Common shutdown actions -----
@@ -567,7 +574,6 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			usleep(1000);
 		}
 
-		// Send OK to client (important for proper disconnect behavior)
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 
 		return false;
@@ -655,7 +661,6 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			//GloMTH->set_variable((char *)"poll_timeout",buf);
 			//GloMTH->commit();
 			admin_proxysql_mysql_paused=false;
-			//SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			// we now rollback poll_timeout
 			char buf[32];
 			sprintf(buf,"%d",admin_old_wait_timeout);
@@ -676,7 +681,6 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			//GloPTH->set_variable((char *)"poll_timeout",buf);
 			//GloPTH->commit();
 			admin_proxysql_pgsql_paused = false;
-			//SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			// we now rollback poll_timeout
 			char buf[32];
 			sprintf(buf, "%d", admin_old_wait_timeout);
@@ -4124,8 +4128,14 @@ __run_query:
 		pthread_mutex_unlock(&pa->sql_query_global_mutex);
 	} else {
 		// The admin module may have already been freed in case of "PROXYSQL STOP"
-		if (strcasecmp("PROXYSQL STOP",query_no_space))
+		if (strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
+			// Command is "PROXYSQL STOP"
+			if (admin_nostart_ && __sync_fetch_and_add((uint8_t*)&GloVars.global.nostart, 0)) {
+				pthread_mutex_unlock(&pa->sql_query_global_mutex);
+			}
+		} else {
 			pthread_mutex_unlock(&pa->sql_query_global_mutex);
+		}
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
