@@ -4,12 +4,12 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-//#include "../deps/json/json.hpp"
+//#include "nlohmann/json.hpp"
 //using json = nlohmann::json;
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 //#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001 // DEPRECATED

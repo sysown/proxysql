@@ -3,7 +3,7 @@
 #include <sstream>
 #include <atomic>
 
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 #include "PgSQL_HostGroups_Manager.h"
