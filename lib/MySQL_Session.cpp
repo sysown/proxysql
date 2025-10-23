@@ -8126,8 +8126,8 @@ char* MySQL_Session::get_current_query(int max_length) {
 	}
 
 	if (CurrentQuery.stmt_info == NULL) { // text protocol
-		query_ptr = mybe->server_myds->myconn->query.ptr;
-		query_len = mybe->server_myds->myconn->query.length;
+		query_ptr = reinterpret_cast<const char*>(CurrentQuery.QueryPointer);
+		query_len = CurrentQuery.QueryLength;
 	} else { // prepared statement
 		query_ptr = CurrentQuery.stmt_info->query;
 		query_len = CurrentQuery.stmt_info->query_length;
