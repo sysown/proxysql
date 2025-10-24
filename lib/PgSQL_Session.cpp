@@ -6495,8 +6495,8 @@ char* PgSQL_Session::get_current_query(int max_length) {
 		res = (char *) malloc(query_len + 1);
 		if (trunc_query) {
 			// for truncated queries, add three dots at the end
-			strncpy(res, query_ptr, query_len - 3);
-			strncpy(res + (query_len - 3), "...", 3);
+			memcpy(res, query_ptr, query_len - 3);
+			memcpy(res + (query_len - 3), "...", 3);
 		} else {
 			strncpy(res, query_ptr, query_len);
 		}
