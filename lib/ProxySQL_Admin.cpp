@@ -1087,6 +1087,9 @@ void ProxySQL_Admin::flush_logs() {
 	if (GloMyLogger) {
 		GloMyLogger->flush_log();
 	}
+	if (GloPgSQL_Logger) {
+		GloPgSQL_Logger->flush_log();
+	}
 	this->flush_error_log();
 	proxysql_keylog_close();
 	char* ssl_keylog_file = this->get_variable((char*)"ssl_keylog_file");
