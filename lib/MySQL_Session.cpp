@@ -3445,7 +3445,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (stmt_meta==NULL) { // we couldn't find any metadata
 			stmt_meta_found=false;
 		}
-		stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info, &stmt_meta);
+		stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt,stmt_info, &stmt_meta);
 		if (stmt_meta==NULL) {
 			l_free(pkt.size,pkt.ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();

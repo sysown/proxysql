@@ -2672,9 +2672,11 @@ void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsig
 //
 // returns stmt_meta, or a new one
 // See https://dev.mysql.com/doc/internals/en/com-stmt-execute.html for reference
-stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta) {
+stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
+	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta
+) {
 	stmt_execute_metadata_t *ret=NULL; //return NULL in case of failure
-	if (size<14) {
+	if (pkt.size < 14) {
 		// some error!
 		return ret;
 	}
@@ -2682,7 +2684,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	if (num_params==2) {
 		PROXY_TRACE();
 	}
-	char *p=(char *)ptr+5;
+	char *p=(char *)pkt.ptr+5;
 	if (*stmt_meta) { // this PS was executed at least once, and we already have metadata
 		ret=*stmt_meta;
 	} else { // this is the first time that this PS is executed
@@ -2700,12 +2702,12 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	// * binds[X].buffer does NOT point to a new allocated buffer
 	// * binds[X].buffer points to offset inside the original packet
 	// FIXME: there is still no free for pkt, so that will be a memory leak that needs to be fixed
-	ret->pkt=ptr;
+	ret->pkt=pkt.ptr;
 	uint8_t new_params_bound_flag;
 	if (num_params) {
 		uint16_t i;
 		size_t null_bitmap_length=(num_params+7)/8;
-		if (size < (14+1+null_bitmap_length)) {
+		if (pkt.size < (14+1+null_bitmap_length)) {
 			// some data missing?
 			delete ret;
 			return NULL;
@@ -2790,6 +2792,14 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		}
 
 		for (i=0;i<num_params;i++) {
+			if (p > static_cast<char*>(pkt.ptr) + pkt.size) {
+				// Required to prevent double-free in dtor
+				if (ret->pkt) { ret->pkt = NULL; }
+				// Only free when metadata not obtained from cache (i.e. first execute)
+				if (!*stmt_meta) { delete ret; }
+
+				return NULL;
+			}
 			unsigned long *_l = 0;
 			my_bool * _is_null;
 			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
@@ -2896,6 +2906,16 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						if (l>1) {
 							PROXY_TRACE();
 						}
+
+						if (p + l > static_cast<char*>(pkt.ptr) + pkt.size || len > pkt.size) {
+							// Required to prevent double-free in dtor
+							if (ret->pkt) { ret->pkt = NULL; }
+							// Only free when metadata not obtained from cache (i.e. first execute)
+							if (!*stmt_meta) { delete ret; }
+
+							return NULL;
+						}
+
 						p+=l;
 						binds[i].buffer=p;
 						p+=len;
@@ -2926,7 +2946,8 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 #endif
 */
 	if (ret)
-		ret->size=size;
+		ret->size=pkt.size;
+
 	return ret;
 }
 
