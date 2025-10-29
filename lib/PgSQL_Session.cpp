@@ -2582,6 +2582,13 @@ void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* my
 	}
 }
 
+inline void build_backend_stmt_name(char* buf, unsigned int stmt_backend_id) {
+	char* p = buf;
+	const char* prefix = PROXYSQL_PS_PREFIX;
+	while (*prefix) *p++ = *prefix++;
+	p = fast_uint32toa(stmt_backend_id, p);
+}
+
 // this function was inline
 int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 	PROXY_TRACE2();
@@ -2599,9 +2606,10 @@ int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 					this, myconn, myconn->pgsql_conn, backend_stmt_id);
 			}
 			 // this is used to generate the name of the prepared statement in the backend
-			const std::string& backend_stmt_name = std::string(PROXYSQL_PS_PREFIX) + std::to_string(CurrentQuery.extended_query_info.stmt_backend_id);
+			char backend_stmt_name[32];
+			build_backend_stmt_name(backend_stmt_name, CurrentQuery.extended_query_info.stmt_backend_id);
 			rc = myconn->async_query(myds->revents, (char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 
-				backend_stmt_name.c_str(), PGSQL_EXTENDED_QUERY_TYPE_PARSE, &CurrentQuery.extended_query_info);
+				backend_stmt_name, PGSQL_EXTENDED_QUERY_TYPE_PARSE, &CurrentQuery.extended_query_info);
 		}	
 		break;
 	case PROCESSING_STMT_DESCRIBE:
@@ -2610,9 +2618,10 @@ int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 		{
 			PgSQL_Extended_Query_Type type = 
 				(status == PROCESSING_STMT_DESCRIBE) ? PGSQL_EXTENDED_QUERY_TYPE_DESCRIBE : PGSQL_EXTENDED_QUERY_TYPE_EXECUTE;
-			const std::string& backend_stmt_name = 
-				std::string(PROXYSQL_PS_PREFIX) + std::to_string(CurrentQuery.extended_query_info.stmt_backend_id);
-			rc = myconn->async_query(myds->revents, nullptr, 0, backend_stmt_name.c_str(), type, &CurrentQuery.extended_query_info);
+
+			char backend_stmt_name[32];
+			build_backend_stmt_name(backend_stmt_name, CurrentQuery.extended_query_info.stmt_backend_id);
+			rc = myconn->async_query(myds->revents, nullptr, 0, backend_stmt_name, type, &CurrentQuery.extended_query_info);
 		}
 		break;
 /*	case PROCESSING_STMT_EXECUTE:

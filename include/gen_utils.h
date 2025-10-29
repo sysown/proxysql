@@ -406,7 +406,7 @@ inline constexpr bool fast_isspace(unsigned char c) noexcept
 	return (c == ' ') | (static_cast<unsigned char>(c - '\t') < 5);
 }
 
-inline constexpr char* fast_uint32toa(uint32_t value, char* out) {
+inline constexpr char* fast_uint32toa(uint32_t value, char* out) noexcept {
 	char* p = out;
 	do {
 		*p++ = '0' + (value % 10);
