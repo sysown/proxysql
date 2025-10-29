@@ -2651,6 +2651,7 @@ int PgSQL_Session::handler() {
 #endif // ENABLE_TIMER
 	int handler_ret = 0;
 	bool wrong_pass = false;
+	bool in_pending_state = false;
 	if (to_process == 0) return 0; // this should be redundant if the called does the same check
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Processing session %p\n", this->thread, this, this);
 	//unsigned int j;
@@ -3125,6 +3126,8 @@ handler_again:
 					case 1:
 						if (myconn->query_result && myconn->query_result->get_resultset_size() > (unsigned int)pgsql_thread___threshold_resultset_size) {
 							myconn->query_result->get_resultset(client_myds->PSarrayOUT);
+						} else {
+							in_pending_state = true;
 						}
 						break;
 						// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
@@ -3217,7 +3220,8 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		}
 	}
 
-	writeout();
+	if (!in_pending_state)
+		writeout();
 
 	if (wrong_pass == true) {
 		client_myds->array2buffer_full();
