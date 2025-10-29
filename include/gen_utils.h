@@ -394,4 +394,33 @@ std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);
 
 std::vector<std::string> split_string(const std::string& str, char delimiter);
 
+inline constexpr bool fast_isspace(unsigned char c) noexcept
+{
+	// Matches: '\t' (0x09) through '\r' (0x0D), and ' ' (0x20)
+	// That is: '\t', '\n', '\v', '\f', '\r', ' '
+	//
+	// (c - '\t') < 5   -> true for 0x09-0x0D inclusive
+	// (c == ' ')       -> true for space
+	//
+	// Use bitwise OR `|` (not logical `||`) to keep it branchless.
+	return (c == ' ') | (static_cast<unsigned char>(c - '\t') < 5);
+}
+
+inline constexpr char* fast_uint32toa(uint32_t value, char* out) {
+	char* p = out;
+	do {
+		*p++ = '0' + (value % 10);
+		value /= 10;
+	} while (value);
+	*p = '\0';
+	char* start = out;
+	char* end = p - 1;
+	while (start < end) {
+		char t = *start;
+		*start++ = *end;
+		*end-- = t;
+	}
+	return p;
+}
+
 #endif /* __GEN_FUNCTIONS */
