@@ -1640,7 +1640,7 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 
 	if (vars1.capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
 		uint64_t passlen64;
-		int pass_len_enc=mysql_decode_length(pkt,&passlen64);
+		int pass_len_enc=mysql_decode_length_ll(pkt,&passlen64);
 		vars1.pass_len = passlen64;
 		pkt	+= pass_len_enc;
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
@@ -2901,7 +2901,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				case MYSQL_TYPE_GEOMETRY:
 					{
 						uint8_t l=0;
-						uint64_t len;
+						uint32_t len { 0 };
 						l=mysql_decode_length((unsigned char *)p, &len);
 						if (l>1) {
 							PROXY_TRACE();

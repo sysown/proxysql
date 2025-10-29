@@ -75,7 +75,8 @@ class MySQL_ResultSet {
 };
 
 
-uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
+uint8_t mysql_decode_length(unsigned char *ptr, uint32_t *len);
+uint8_t mysql_decode_length_ll(unsigned char *ptr, uint64_t *len);
 
 /**
  * @brief ProxySQL replacement function for 'mysql_stmt_close'. Closes a
