@@ -550,13 +550,13 @@ bool RunWatchdogTest(const char* label, ThreadType* worker, unsigned int poll_ti
 		return false;
 	}
 
-	proxy_info("Starting Watchdog test for %s threads...\n", label);
+	proxy_info("Starting Watchdog test for %s threads (poll timeout:%u ms)...\n", label, poll_timeout);
 
 	const unsigned int target_missed = GloVars.restart_on_missing_heartbeats;
-	const uint64_t time_per_miss_ms = poll_timeout + 1000 + 200;
-	const uint64_t total_expected_time_ms = target_missed * time_per_miss_ms;
+	const unsigned int time_per_miss_ms = poll_timeout + 1000 + 200;
+	const unsigned int total_expected_time_ms = target_missed * time_per_miss_ms;
 
-	worker->watchdog_test__simulated_delay_ms = static_cast<unsigned int>(total_expected_time_ms);
+	worker->watchdog_test__simulated_delay_ms = total_expected_time_ms;
 	const unsigned int timeout_ms = static_cast<unsigned int>(total_expected_time_ms * 1.25);
 
 	constexpr unsigned int poll_interval_ms = 200;
