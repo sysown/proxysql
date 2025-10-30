@@ -1099,7 +1099,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 
 	// Init client_host_cache mutex
 	pthread_mutex_init(&mutex_client_host_cache, NULL);
-	}
+}
 
 unsigned int PgSQL_Threads_Handler::get_global_version() {
 	return __sync_fetch_and_add(&__global_PgSQL_Thread_Variables_version, 0);
@@ -1427,7 +1427,9 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 	if (!strcasecmp(name, "eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name, "default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name, "keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
-	if (!strcasecmp(name, "interfaces")) return strdup(variables.interfaces);
+	if (!strcasecmp(name, "interfaces")) {
+		return strdup((strlen(variables.interfaces) == 0) ? "0.0.0.0:6133" : variables.interfaces);
+	}
 	// SSL variables
 	if (!strncasecmp(name, "ssl_", 4)) {
 		if (!strcasecmp(name, "ssl_p2s_ca")) {
