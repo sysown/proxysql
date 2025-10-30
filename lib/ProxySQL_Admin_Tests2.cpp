@@ -571,7 +571,7 @@ bool RunWatchdogTest(const char* label, ThreadType* worker, unsigned int poll_ti
 		unsigned int missed = worker->watchdog_test__missed_heartbeats;
 		if (missed != last_missed) {
 			last_missed = missed;
-			proxy_info("Watchdog test: Missed heartbeats: %u\n", missed);
+			proxy_info("Watchdog test - Missed heartbeats: %u\n", missed);
 		}
 
 		if (success == false && missed == target_missed) {
@@ -583,6 +583,13 @@ bool RunWatchdogTest(const char* label, ThreadType* worker, unsigned int poll_ti
 	// Clean-up
 	worker->watchdog_test__simulated_delay_ms = 0;
 	worker->watchdog_test__missed_heartbeats = 0;
+
+	usleep(1000000);
+
+	if (worker->watchdog_test__missed_heartbeats != 0) {
+		worker->watchdog_test__simulated_delay_ms = 0;
+		worker->watchdog_test__missed_heartbeats = 0;
+	}
 
 	if (success) {
 		proxy_info("Watchdog test passed. Missed heartbeats: %u\n", target_missed);
