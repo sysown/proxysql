@@ -577,6 +577,8 @@ class MySQL_Threads_Handler
 #endif
 		int show_processlist_extended;
 		int processlist_max_query_length;
+
+		bool ignore_min_gtid_annotations;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
