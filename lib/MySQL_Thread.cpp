@@ -3394,8 +3394,9 @@ __run_skip_1:
 #ifdef DEBUG
 		// This block is only used for Watchdog unit tests:
 		// Specifically for PROXYSQLTEST cases 55 0 and 55 1.
-		if (watchdog_test__simulated_delay_ms)
-			std::this_thread::sleep_for(std::chrono::milliseconds(watchdog_test__simulated_delay_ms));
+		while (watchdog_test__simulated_delay_ms > 0) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
 #endif
 	}
 }
