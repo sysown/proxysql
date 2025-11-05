@@ -274,23 +274,23 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL_QUERY(proxy_1, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY_T(proxy_1, "CREATE DATABASE IF NOT EXISTS test");
 
-	diag("Starting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_1);
-	MYSQL_QUERY(proxy_1, "/* create_new_connection=1 */ BEGIN");
+	diag("Start_Ting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_1);
+	MYSQL_QUERY_T(proxy_1, "/* create_new_connection=1 */ BEGIN");
 
-	MYSQL_QUERY(proxy_2, "USE test");
-	diag("Starting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_2);
-	MYSQL_QUERY(proxy_2, "/* create_new_connection=1 */ BEGIN");
+	MYSQL_QUERY_T(proxy_2, "USE test");
+	diag("Start_Ting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_2);
+	MYSQL_QUERY_T(proxy_2, "/* create_new_connection=1 */ BEGIN");
 
-	MYSQL_QUERY(proxy_1,
+	MYSQL_QUERY_T(proxy_1,
 		"CREATE TABLE IF NOT EXISTS test.test_stmt_inv__large_col_1 ("
 			"id INT AUTO_INCREMENT PRIMARY KEY,"
 			"data_column LONGTEXT"
 		")"
 	);
 
-	MYSQL_QUERY(proxy_1,
+	MYSQL_QUERY_T(proxy_1,
 		"CREATE TABLE IF NOT EXISTS test.test_stmt_inv__large_col_2 ("
 			"id INT AUTO_INCREMENT PRIMARY KEY,"
 			"data_column LONGTEXT,"
@@ -405,11 +405,11 @@ int main(int argc, char** argv) {
 	}
 
 cleanup:
-	MYSQL_QUERY(proxy_1, "ROLLBACK");
-	MYSQL_QUERY(proxy_2, "ROLLBACK");
+	MYSQL_QUERY_T(proxy_1, "ROLLBACK");
+	MYSQL_QUERY_T(proxy_2, "ROLLBACK");
 
-	MYSQL_QUERY(proxy_1, "DELETE FROM test.test_stmt_inv__large_col_1");
-	MYSQL_QUERY(proxy_1, "DELETE FROM test.test_stmt_inv__large_col_2");
+	MYSQL_QUERY_T(proxy_1, "DELETE FROM test.test_stmt_inv__large_col_1");
+	MYSQL_QUERY_T(proxy_1, "DELETE FROM test.test_stmt_inv__large_col_2");
 
 	for (const auto& sp : scs_stmt_params) {
 		mysql_stmt_close(sp.second.stmt);
