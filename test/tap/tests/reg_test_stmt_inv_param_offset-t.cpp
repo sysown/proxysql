@@ -173,7 +173,7 @@ int perform_fake_execute(MYSQL* mysql, const hdr_t& hdr, const vector<char>& dat
 int prepare_server_defaults(const CommandLine& cl) {
 	MYSQL* proxy = mysql_init(NULL);
 
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy, cl.host, cl.root_username, cl.root_password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
