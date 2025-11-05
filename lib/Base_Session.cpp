@@ -304,6 +304,8 @@ void Base_Session<S, DS, B, T>::return_proxysql_internal(PtrSize_t* pkt) {
 			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 			delete resultset;
+			// NOTE: End request before freeing the packet; otherwise logging could use invalid memory
+			static_cast<MySQL_Session*>(this)->RequestEnd(NULL);
 			l_free(pkt->size, pkt->ptr);
 			return;
 		}
@@ -331,6 +333,8 @@ void Base_Session<S, DS, B, T>::return_proxysql_internal(PtrSize_t* pkt) {
 			char txn_state = (nTxn ? 'T' : 'I');
 			SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset, nullptr, 0, (const char*)pkt->ptr + 5, txn_state);
 			delete resultset;
+			// NOTE: End request before freeing the packet; otherwise logging could use invalid memory
+			static_cast<PgSQL_Session*>(this)->RequestEnd(NULL, false);
 			l_free(pkt->size, pkt->ptr);
 			return;
 		}
