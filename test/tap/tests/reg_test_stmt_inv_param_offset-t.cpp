@@ -275,7 +275,13 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL_QUERY(proxy_1, "CREATE DATABASE IF NOT EXISTS test");
+
+	diag("Starting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_1);
+	MYSQL_QUERY(proxy_1, "/* create_new_connection=1 */ BEGIN");
+
 	MYSQL_QUERY(proxy_2, "USE test");
+	diag("Starting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_2);
+	MYSQL_QUERY(proxy_2, "/* create_new_connection=1 */ BEGIN");
 
 	MYSQL_QUERY(proxy_1,
 		"CREATE TABLE IF NOT EXISTS test.test_stmt_inv__large_col_1 ("
@@ -399,6 +405,9 @@ int main(int argc, char** argv) {
 	}
 
 cleanup:
+	MYSQL_QUERY(proxy_1, "ROLLBACK");
+	MYSQL_QUERY(proxy_2, "ROLLBACK");
+
 	MYSQL_QUERY(proxy_1, "DELETE FROM test.test_stmt_inv__large_col_1");
 	MYSQL_QUERY(proxy_1, "DELETE FROM test.test_stmt_inv__large_col_2");
 
