@@ -117,7 +117,7 @@ unsigned char* ok_to_eof_packet(const MySQL_QC_entry_t* entry) {
 	// Find the spot in which the first EOF needs to be placed
 	it += sizeof(mysql_hdr);
 	uint64_t c_count = 0;
-	int c_count_len = mysql_decode_length(reinterpret_cast<unsigned char*>(it), &c_count);
+	int c_count_len = mysql_decode_length_ll(reinterpret_cast<unsigned char*>(it), &c_count);
 	it += c_count_len;
 
 	mysql_hdr column_hdr;
@@ -196,7 +196,7 @@ bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_
 	unsigned char* it = vp;
 	it += sizeof(mysql_hdr);
 	uint64_t c_count = 0;
-	int c_count_len = mysql_decode_length(const_cast<unsigned char*>(it), &c_count);
+	int c_count_len = mysql_decode_length_ll(const_cast<unsigned char*>(it), &c_count);
 	it += c_count_len;
 
 	for (uint64_t i = 0; i < c_count; i++) {
@@ -230,10 +230,10 @@ bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_
 				unsigned char* payload_temp = payload + 1;
 
 				// skip affected_rows
-				payload_temp += mysql_decode_length(payload_temp, nullptr);
+				payload_temp += mysql_decode_length_ll(payload_temp, nullptr);
 
 				// skip last_insert_id
-				payload_temp += mysql_decode_length(payload_temp, nullptr);
+				payload_temp += mysql_decode_length_ll(payload_temp, nullptr);
 
 				// skip stats_flags
 				payload_temp += sizeof(uint16_t);

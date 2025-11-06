@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	MYSQL_QUERY_T(proxy, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY_T(proxy,
 		"CREATE TABLE IF NOT EXISTS test.auto_inc_multiplex "
 			"(c1 INT NOT NULL AUTO_INCREMENT PRIMARY KEY, c2 VARCHAR(100), c3 VARCHAR(100))"
