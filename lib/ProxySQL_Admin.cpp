@@ -8352,7 +8352,7 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 	SQLite3_result *resultset=NULL;
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("ldap", error, cols, affected_rows, resultset) == true) {
 		GloMyLdapAuth->wrlock();
-		flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, false, replace, {}, {}, {}, {});
+		flush_GENERIC_variables__process__database_to_runtime("ldap", db, resultset, false, replace, {}, {}, {}, {});
 		GloMyLdapAuth->wrunlock();
 
 		// Checksums are always generated - 'admin-checksum_*' deprecated
