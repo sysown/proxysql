@@ -267,22 +267,10 @@ __conn_register_label:
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			// 'my1' can be NULL due to connection cleanup
 			if (my1 == nullptr) continue;
-
 			assert(my!=my1);
-			//assert(my->net.fd!=my1->net.fd); // FIXME: we changed this with the next section of code
-			if (my->net.fd == my1->net.fd) {
-				// FIXME: we need to identify still why a connection with error 2013 is here
-				if (my1->net.last_errno == 2013) {
-					// we remove the connection
-					conns->remove_index_fast(i);
-					goto __conn_register_label; // we return to the loop
-				} else {
-					// we crash again, as in the old logic
-					assert(my->net.fd!=my1->net.fd);
-				}
-			}
 		}
-		//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
+		proxy_debug(PROXY_DEBUG_MONITOR, 7, 
+			"Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
 		conns->add(my);
 		pthread_mutex_unlock(&m2);
 #endif // DEBUG
@@ -311,7 +299,8 @@ __conn_register_label:
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			if (my1 == my) {
 				conns->remove_index_fast(i);
-				//proxy_info("Un-registering MYSQL with FD %d\n", my->net.fd);
+				proxy_debug(PROXY_DEBUG_MONITOR, 7, 
+					"Un-registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
 				pthread_mutex_unlock(&m2);
 				return;
 			}
@@ -364,7 +353,6 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 						if (k!=j) {
 							MYSQL *my2 = (MYSQL *)srv->conns->index(k);
 							assert(my1!=my2);
-							assert(my1->net.fd!=my2->net.fd);
 						}
 					}
 				}
@@ -396,7 +384,6 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 						if (!my1) continue;
 
 						assert(my!=my1);
-						assert(my->net.fd!=my1->net.fd);
 					}
 					//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, my);
 
