@@ -7483,7 +7483,7 @@ void MySQL_Monitor::monitor_ping_async(SQLite3_result* resultset) {
 
 	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 30, 50, &MySQL_Monitor::monitor_ping_process_ready_tasks, this);
 
-	if (monitor_poll.event_loop(mysql_thread___monitor_ping_timeout, args) == false) {
+	if (monitor_poll.event_loop(10, args) == false) {
 		return;
 	}
 }
