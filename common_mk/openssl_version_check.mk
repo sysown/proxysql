@@ -11,7 +11,7 @@ check_openssl_version:
 			echo "OpenSSL header file not found at $$header_path"; \
 			exit 1; \
 		fi; \
-		version_number=$$(grep -oP '# define OPENSSL_VERSION_STR "\K[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?' $$header_path | tr -d '[:space:]'); \
+		version_number=$$(grep OPENSSL_VERSION_STR $$header_path | awk -F\" '{print $2}'); \
 		if [ -z "$$version_number" ]; then \
 			echo "Failed to extract OPENSSL_VERSION_STR from $$header_path"; \
 			exit 1; \
