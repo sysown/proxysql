@@ -741,7 +741,7 @@ std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(c
 
 	while (pos < input.size()) {
 		// Skip leading spaces
-		while (pos < input.size() && std::isspace(input[pos])) {
+		while (pos < input.size() && fast_isspace(input[pos])) {
 			++pos;
 		}
 
@@ -751,7 +751,7 @@ std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(c
 			pos += 2; // Skip "-c", "--"
 		}
 
-		while (pos < input.size() && std::isspace(input[pos])) {
+		while (pos < input.size() && fast_isspace(input[pos])) {
 			++pos;
 		}
 
@@ -772,7 +772,7 @@ std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(c
 		bool last_was_escape = false;
 		while (pos < input.size()) {
 			char c = input[pos];
-			if (std::isspace(c) && !last_was_escape) {
+			if (fast_isspace(c) && !last_was_escape) {
 				break;
 			}
 			if (c == '\\' && !last_was_escape) {

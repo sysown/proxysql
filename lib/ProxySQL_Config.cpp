@@ -92,7 +92,7 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
 		sprintf(query,q, prefix, n, value_string.c_str());
 		//fprintf(stderr, "%s\n", query);
-  	admindb->execute(query);
+  		admindb->execute(query);
 		free(query);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");

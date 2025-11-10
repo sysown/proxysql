@@ -6557,7 +6557,7 @@ std::vector<std::string> PgSQL_DateStyle_Util::split_datestyle(std::string_view 
 			int* lastNonSpace = (currentToken == 1) ? &lastNonSpace1 : &lastNonSpace2;
 
 			// Cache is-space check.
-			bool is_space = std::isspace(static_cast<unsigned char>(c));
+			bool is_space = fast_isspace(static_cast<unsigned char>(c));
 			// Skip leading whitespace for a new token.
 			if (currentStr->empty() && is_space) {
 				continue;
