@@ -51,7 +51,7 @@ endif
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
 ENABLE_EPOLL := -DENABLE_EPOLL
-ifeq (,$(findstring $(UNAME_S),Darwin FreeBSD))
+ifneq (,$(findstring $(UNAME_S),Darwin FreeBSD))
 	ENABLE_EPOLL :=
 endif
 
