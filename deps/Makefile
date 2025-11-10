@@ -302,7 +302,7 @@ pcre: pcre/pcre/.libs/libpcre.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a:
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
-	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
+	cd postgresql/postgresql && patch -p0 -l < ../get_result_from_pgconn.patch
 	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch
 	cd postgresql/postgresql && patch -p0 < ../fmt_err_msg.patch
 	cd postgresql/postgresql && patch -p0 < ../bind_fmt_text.patch
