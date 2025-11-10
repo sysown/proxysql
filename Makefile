@@ -6,7 +6,7 @@
 ### when not available, specify GIT_VERSION on commnad line:
 ###
 ### ```
-### export GIT_VERSION=2.x-dev
+### export GIT_VERSION=3.x.y-dev
 ### ```
 
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
@@ -43,7 +43,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 3.0.3
+CURVER ?= 3.0.4
 #export DEBUG
 #export EXTRALINK
 export MAKE
