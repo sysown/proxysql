@@ -17,6 +17,11 @@
 #include <vector>
 #include <list>
 
+#ifdef __FreeBSD__
+#include <sys/limits.h>
+#define ULONG_LONG_MAX ULLONG_MAX
+#endif
+
 using std::function;
 using std::unique_ptr;
 using std::vector;
