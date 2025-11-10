@@ -1612,8 +1612,10 @@ bool PgSQL_Protocol::generate_ready_for_query_packet(bool send, char trx_state, 
 	// to avoid memory leak
 	assert(send == true || _ptr);
 
-	PG_pkt pgpkt{};
-	pgpkt.write_ReadyForQuery(trx_state);
+	PG_pkt pgpkt(8);
+	pgpkt.put_char('Z');
+	pgpkt.put_uint32(5);
+	pgpkt.put_char(trx_state); // transaction state
 	auto buff = pgpkt.detach();
 	if (send == true) {
 		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
@@ -1696,15 +1698,13 @@ bool PgSQL_Protocol::generate_describe_completion_packet(bool send, bool ready, 
 bool PgSQL_Protocol::generate_close_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-	PG_pkt pgpkt{};
+	PG_pkt pgpkt(16);
+	pgpkt.put_char('3');
+	pgpkt.put_uint32(4);
 	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
-	}
-	// Close completion message
-	pgpkt.write_CloseCompletion();
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5); // size of the ReadyForQuery packet
+		pgpkt.put_char(trx_state); // transaction state
 	}
 	auto buff = pgpkt.detach();
 	if (send == true) {
@@ -1720,15 +1720,13 @@ bool PgSQL_Protocol::generate_close_completion_packet(bool send, bool ready, cha
 bool PgSQL_Protocol::generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-	PG_pkt pgpkt{};
+	PG_pkt pgpkt(16);
+	pgpkt.put_char('2');
+	pgpkt.put_uint32(4);
 	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
-	}
-	// Bind completion message
-	pgpkt.write_BindCompletion();
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5); // size of the ReadyForQuery packet
+		pgpkt.put_char(trx_state); // transaction state
 	}
 	auto buff = pgpkt.detach();
 	if (send == true) {
@@ -1743,7 +1741,7 @@ bool PgSQL_Protocol::generate_bind_completion_packet(bool send, bool ready, char
 bool PgSQL_Protocol::generate_no_data_packet(bool send, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-	PG_pkt pgpkt(5);
+	PG_pkt pgpkt(8);
 	pgpkt.put_char('n');
 	pgpkt.put_uint32(4); // size of the NoData packet (Fixed 4 bytes)
 	auto buff = pgpkt.detach();
@@ -1759,21 +1757,14 @@ bool PgSQL_Protocol::generate_no_data_packet(bool send, PtrSize_t* _ptr) {
 bool PgSQL_Protocol::generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-
-	PG_pkt pgpkt{};
-
+	PG_pkt pgpkt(16);
+	pgpkt.put_char('1');
+	pgpkt.put_uint32(4);
 	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5); // size of the ReadyForQuery packet
+		pgpkt.put_char(trx_state); // transaction state
 	}
-
-	// Parse completion message
-	pgpkt.write_ParseCompletion();
-	
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
-	}
-
 	auto buff = pgpkt.detach();
 	if (send == true) {
 		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
