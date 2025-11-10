@@ -226,10 +226,10 @@ public:
 	//PtrArray* mysql_sessions;
 	PtrArray* mirror_queue_mysql_sessions;
 	PtrArray* mirror_queue_mysql_sessions_cache;
+	CopyCmdMatcher *copy_cmd_matcher;
 #ifdef IDLE_THREADS
 	PtrArray* idle_mysql_sessions;
 	PtrArray* resume_mysql_sessions;
-	CopyCmdMatcher *copy_cmd_matcher;
 	pgsql_conn_exchange_t myexchange;
 #endif // IDLE_THREADS
 
