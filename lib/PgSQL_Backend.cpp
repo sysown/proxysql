@@ -25,5 +25,6 @@ void PgSQL_Backend::reset() {
 	if (server_myds) {
 		server_myds->reset_connection();
 		delete server_myds;
+		server_myds = NULL;
 	}
 }

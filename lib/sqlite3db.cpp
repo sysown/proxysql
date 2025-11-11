@@ -1008,6 +1008,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_get_autocommit = NULL;
 	proxy_sqlite3_free = NULL;
 	proxy_sqlite3_status = NULL;
+	proxy_sqlite3_status64 = NULL;
 	proxy_sqlite3_changes = NULL;
 	proxy_sqlite3_step = NULL;
 	proxy_sqlite3_shutdown = NULL;
@@ -1086,6 +1087,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_get_autocommit = sqlite3_get_autocommit;
 		proxy_sqlite3_free = sqlite3_free;
 		proxy_sqlite3_status = sqlite3_status;
+		proxy_sqlite3_status64 = sqlite3_status64;
 		proxy_sqlite3_changes = sqlite3_changes;
 		proxy_sqlite3_step = sqlite3_step;
 		proxy_sqlite3_shutdown = sqlite3_shutdown;
@@ -1114,6 +1116,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_get_autocommit);
 	assert(proxy_sqlite3_free);
 	assert(proxy_sqlite3_status);
+	assert(proxy_sqlite3_status64);
 	assert(proxy_sqlite3_changes);
 	assert(proxy_sqlite3_step);
 	assert(proxy_sqlite3_shutdown);

@@ -1,0 +1,22 @@
+diff --git src/interfaces/libpq/fe-exec.c src/interfaces/libpq/fe-exec.c
+index d572bde..99bab2c 100644
+--- src/interfaces/libpq/fe-exec.c
++++ src/interfaces/libpq/fe-exec.c
+@@ -1855,8 +1855,15 @@ PQsendQueryGuts(PGconn *conn,
+ 			}
+ 			else
+ 			{
+-				/* text parameter, do not use paramLengths */
+-				nbytes = strlen(paramValues[i]);
++				/* text parameter */
++				if (paramLengths && paramLengths[i] >= 0)
++				{
++					nbytes = paramLengths[i];  // use supplied length
++				}
++				else
++				{
++					nbytes = strlen(paramValues[i]);  // fallback to strlen
++				}
+ 			}
+ 			if (pqPutInt(nbytes, 4, conn) < 0 ||
+ 				pqPutnchar(paramValues[i], nbytes, conn) < 0)

@@ -1,6 +1,6 @@
 --- sqlite3.c	2024-03-22 19:22:47.046093173 +0100
 +++ sqlite3-pass-exts.c	2024-03-22 19:24:09.557303716 +0100
-@@ -25168,6 +25168,183 @@
+@@ -26313,6 +26313,183 @@
    sqlite3ResultStrAccum(context, &sRes);
  }
  
@@ -184,7 +184,7 @@
  /*
  ** current_time()
  **
-@@ -129263,6 +129440,9 @@
+@@ -133269,6 +133269,9 @@
      FUNCTION(substr,             3, 0, 0, substrFunc       ),
      FUNCTION(substring,          2, 0, 0, substrFunc       ),
      FUNCTION(substring,          3, 0, 0, substrFunc       ),

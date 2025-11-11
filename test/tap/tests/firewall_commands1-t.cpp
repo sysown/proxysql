@@ -51,10 +51,6 @@ std::vector<std::string> queries = {
 	"LOAD MYSQL FIREWALL TO RUNTIME",
 };
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
 int main() {
 	CommandLine cl;
 

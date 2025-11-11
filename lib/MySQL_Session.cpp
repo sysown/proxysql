@@ -56,6 +56,8 @@ using json = nlohmann::json;
 #define SELECT_VARIABLE_IDENTITY_LEN 17
 #define SELECT_VARIABLE_IDENTITY_LIMIT1 "SELECT @@IDENTITY LIMIT 1"
 #define SELECT_VARIABLE_IDENTITY_LIMIT1_LEN 25
+#define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
+#define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
 #define EXPMARIA
 
@@ -1394,6 +1396,34 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
+
+	// Handle SHOW STATUS LIKE 'Ssl_version%'
+	if ((pkt->size >= SHOW_STATUS_LIKE_SSL_VERSION_LEN + 5) && (strncasecmp(SHOW_STATUS_LIKE_SSL_VERSION, (char*)pkt->ptr + 5, SHOW_STATUS_LIKE_SSL_VERSION_LEN) == 0)) {
+		SQLite3_result* resultset = new SQLite3_result(2);
+		resultset->add_column_definition(SQLITE_TEXT, "Variable_name");
+		resultset->add_column_definition(SQLITE_TEXT, "Value");
+
+		const char* ssl_version = "";
+		if (client_myds->encrypted && client_myds->ssl) {
+			ssl_version = SSL_get_version(client_myds->ssl);
+		}
+
+		char* pta[2];
+		pta[0] = (char*)"Ssl_version";
+		pta[1] = (char*)ssl_version;
+		resultset->add_row(pta);
+
+		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+		delete resultset;
+
+		if (mirror == false) {
+			RequestEnd(NULL);
+		}
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
+
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
 	if ( (pkt->size >= 22 + 5) && (strncasecmp((char *)"LOAD DATA LOCAL INFILE",(char *)pkt->ptr+5, 22)==0) ) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
@@ -3322,7 +3352,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			l_free(pkt.size,pkt.ptr);
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
-			CurrentQuery.end_time=thread->curtime;
+			CurrentQuery.set_end_time(thread->curtime);
 			CurrentQuery.end();
 		} else {
 			mybe=find_or_create_backend(current_hostgroup);
@@ -3640,6 +3670,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			break;
 		case _MYSQL_COM_RESET_CONNECTION:
 			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(pkt);
+			break;
+		case _MYSQL_COM_REFRESH:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_REFRESH(pkt);
 			break;
 		default:
 			return false;
@@ -5789,6 +5822,21 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_REFRESH(PtrSize_t *pkt) {
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_REFRESH packet\n");
+
+	l_free(pkt->size, pkt->ptr);
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+
+	unsigned int nTrx = NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
+	if (autocommit)
+		setStatus |= SERVER_STATUS_AUTOCOMMIT;
+
+	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
+	client_myds->DSS=STATE_SLEEP;
+}
+
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -7187,7 +7235,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #ifdef STRESSTESTPOOL_MEASURE
 		timespec begint;
 		timespec endt;
-		clock_gettime(CLOCK_MONOTONIC,&begint);
+		clock_gettime(PROXYSQL_CLOCK_MONOTONIC, &begint);
 #endif // STRESSTESTPOOL_MEASURE
 		for (unsigned int loops=0; loops < NUM_SLOW_LOOPS; loops++) {
 #endif // STRESSTEST_POOL
@@ -7213,7 +7261,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 #ifdef STRESSTEST_POOL
 #ifdef STRESSTESTPOOL_MEASURE
-		clock_gettime(CLOCK_MONOTONIC,&endt);
+		clock_gettime(PROXYSQL_CLOCK_MONOTONIC, &endt);
 		thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
 			(endt.tv_sec*1000000000+endt.tv_nsec) -
 			(begint.tv_sec*1000000000+begint.tv_nsec);
@@ -7527,7 +7575,7 @@ unsigned long long MySQL_Session::IdleTime() {
 void MySQL_Session::LogQuery(MySQL_Data_Stream *myds, const unsigned int myerrno, const char * errmsg) {
 	// we need to access statistics before calling CurrentQuery.end()
 	// so we track the time here
-	CurrentQuery.end_time=thread->curtime;
+	CurrentQuery.set_end_time(thread->curtime);
 
 	if (qpo) {
 		if (qpo->log==1) {
@@ -8067,4 +8115,43 @@ void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection() {
 		}
 		warning_in_hg = -1;
 	}
+}
+
+char* MySQL_Session::get_current_query(int max_length) {
+	const char *query_ptr = NULL;
+	int query_len = 0;
+
+	if (!(mybe && mybe->server_myds && mybe->server_myds->myconn)) {
+		return NULL;
+	}
+
+	if (CurrentQuery.stmt_info == NULL) { // text protocol
+		query_ptr = mybe->server_myds->myconn->query.ptr;
+		query_len = mybe->server_myds->myconn->query.length;
+	} else { // prepared statement
+		query_ptr = CurrentQuery.stmt_info->query;
+		query_len = CurrentQuery.stmt_info->query_length;
+	}
+
+	bool trunc_query = false;
+	if (max_length > 0 && query_len > max_length) {
+		query_len = max_length;
+		trunc_query = true;
+	}
+
+	char *res = NULL;
+
+	if (query_len > 0) {
+		res = (char *) malloc(query_len + 1);
+		if (trunc_query) {
+			// for truncated queries, add three dots at the end
+			strncpy(res, query_ptr, query_len - 3);
+			strncpy(res + (query_len - 3), "...", 3);
+		} else {
+			strncpy(res, query_ptr, query_len);
+		}
+		res[query_len] = '\0';
+	}
+
+	return res;
 }

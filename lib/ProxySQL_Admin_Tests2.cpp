@@ -23,6 +23,7 @@ extern MySQL_Query_Processor* GloMyQPro;
 extern PgSQL_Query_Processor* GloPgQPro;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Threads_Handler *GloMTH;
+extern PgSQL_Threads_Handler* GloPTH;
 
 static pthread_mutex_t test_mysql_firewall_whitelist_mutex = PTHREAD_MUTEX_INITIALIZER;
 static std::unordered_map<std::string, void *> map_test_mysql_firewall_whitelist_rules;
@@ -534,6 +535,89 @@ bool ProxySQL_Admin::ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* du
 	proxy_info("Duration: %lums\n", *duration);
 	return true;
 }
+
+template<typename ThreadType>
+bool RunWatchdogTest(const char* label, ThreadType* worker, unsigned int poll_timeout) {
+	if (!worker) return false;
+
+	if (worker->watchdog_test__simulated_delay_ms > 0 ||
+		worker->watchdog_test__missed_heartbeats > 0) {
+		proxy_error("Watchdog test already running, please wait for it to finish.\n");
+		return false;
+	}
+	if (poll_timeout == 0) {
+		proxy_error("Invalid poll_timeout value: %u\n", poll_timeout);
+		return false;
+	}
+
+	proxy_info("Starting Watchdog test for %s threads...\n", label);
+
+	const unsigned int target_missed = GloVars.restart_on_missing_heartbeats;
+	const uint64_t time_per_miss_ms = poll_timeout + 1000 + 200;
+	const uint64_t total_expected_time_ms = target_missed * time_per_miss_ms;
+
+	worker->watchdog_test__simulated_delay_ms = static_cast<unsigned int>(total_expected_time_ms);
+	const unsigned int timeout_ms = static_cast<unsigned int>(total_expected_time_ms * 1.25);
+
+	constexpr unsigned int poll_interval_ms = 200;
+	unsigned int waited_ms = 0;
+	unsigned int last_missed = 0;
+	bool success = false;
+
+	while (waited_ms < timeout_ms) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+		waited_ms += poll_interval_ms;
+
+		unsigned int missed = worker->watchdog_test__missed_heartbeats;
+		if (missed != last_missed) {
+			last_missed = missed;
+			proxy_info("Watchdog test: Missed heartbeats: %u\n", missed);
+		}
+
+		if (success == false && missed == target_missed) {
+			success = true;
+			break;
+		}
+	}
+
+	// Clean-up
+	worker->watchdog_test__simulated_delay_ms = 0;
+	worker->watchdog_test__missed_heartbeats = 0;
+
+	if (success) {
+		proxy_info("Watchdog test passed. Missed heartbeats: %u\n", target_missed);
+	} else {
+		proxy_error("Watchdog test failed. Timeout hit before reaching %u missed heartbeats (got: %u)\n",
+			target_missed, last_missed);
+	}
+
+	return success;
+}
+
+bool ProxySQL_Admin::ProxySQL_Test___WatchDog(int type) {
+	if (GloVars.restart_on_missing_heartbeats <= 0) {
+		proxy_error("Watchdog test is disabled (restart_on_missing_heartbeats is 0)\n");
+		return false;
+	}
+
+	if (type == 0 && GloMTH && GloMTH->num_threads > 0) {
+		if (!RunWatchdogTest("MySQL", GloMTH->mysql_threads[0].worker, GloMTH->variables.poll_timeout)) {
+			proxy_error("MySQL Watchdog test failed.\n");
+			return false;
+		}
+	} else if (type == 1 && GloPTH && GloPTH->num_threads > 0) {
+		if (!RunWatchdogTest("PgSQL", GloPTH->pgsql_threads[0].worker, GloPTH->variables.poll_timeout)) {
+			proxy_error("PgSQL Watchdog test failed.\n");
+			return false;
+		}
+	} else {
+		proxy_error("Invalid type %d for ProxySQL_Test___WatchDog\n", type);
+		return false;
+	}
+
+	return true;
+}
+
 #endif //DEBUG
 
 
@@ -872,6 +956,15 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				}
 			}
 			break;
+			case 55:
+				// test_arg1: 1 = POSTGRESQL, 0 = MYSQL
+				if (SPA->ProxySQL_Test___WatchDog(test_arg1)) {
+					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
+				} else {
+					SPA->send_error_msg_to_client(sess, (char*)"WatchDog test failed");
+				}
+				run_query = false;
+				break;
 #endif // DEBUG
 			default:
 				SPA->send_error_msg_to_client(sess, (char *)"Invalid test");
