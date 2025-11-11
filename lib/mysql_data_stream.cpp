@@ -576,7 +576,15 @@ int MySQL_Data_Stream::read_from_net() {
 		} else {
 			// Shutdown if we either received the EOF, or operation failed with non-retryable error.
 			if (ssl_recv_bytes==0 || (ssl_recv_bytes==-1 && errno != EINTR && errno != EAGAIN)) {
-				proxy_debug(PROXY_DEBUG_NET, 5, "Received EOF, shutting down soft socket -- Session=%p, Datastream=%p\n", sess, this);
+				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && ssl_recv_bytes==0) {
+					if (sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+						sess->backend_closed_in_fast_forward = true;
+						sess->fast_forward_grace_start_time = sess->thread->curtime;
+						sess->client_myds->defer_close_due_to_fast_forward = true;
+						return 0;
+					}
+				}
+				proxy_debug(PROXY_DEBUG_NET, 5, "Received EOF, shutting down soft socket -- Session=%p, Datastream=%p", sess, this);
 				shut_soft();
 				return -1;
 			}
@@ -590,6 +598,14 @@ int MySQL_Data_Stream::read_from_net() {
 		if (encrypted==false) {
 			int myds_errno=errno;
 			if (r==0 || (r==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
+				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && r==0) {
+					if (sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+						sess->backend_closed_in_fast_forward = true;
+						sess->fast_forward_grace_start_time = sess->thread->curtime;
+						sess->client_myds->defer_close_due_to_fast_forward = true;
+						return 0;
+					}
+				}
 				shut_soft();
 			}
 		} else {
@@ -622,7 +638,15 @@ int MySQL_Data_Stream::read_from_net() {
 		if ( (revents & POLLHUP) ) {
 			// this is a final check
 			// Only if the amount of data read is 0 or less, then we check POLLHUP
-			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d\n", sess, this, revents, r);
+			if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward) {
+				if (sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+					sess->backend_closed_in_fast_forward = true;
+					sess->fast_forward_grace_start_time = sess->thread->curtime;
+					sess->client_myds->defer_close_due_to_fast_forward = true;
+					return 0;
+				}
+			}
+			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d", sess, this, revents, r);
 			shut_soft();
 		}
 	} else {

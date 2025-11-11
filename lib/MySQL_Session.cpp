@@ -684,6 +684,8 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+	backend_closed_in_fast_forward = false;
+	fast_forward_grace_start_time = 0;
 }
 
 /**
@@ -715,6 +717,8 @@ void MySQL_Session::reset() {
 	mybe=NULL;
 
 	with_gtid = false;
+	backend_closed_in_fast_forward = false;
+	fast_forward_grace_start_time = 0;
 
 	//gtid_trxid = 0;
 	gtid_hid = -1;
@@ -3778,6 +3782,25 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 		case FAST_FORWARD:
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+			// Fast Forward Grace Close Logic:
+			// If the backend closed during fast forward mode, we defer session closure to allow
+			// pending client output buffers to drain, preventing data loss.
+			// Detect if backend closed during fast forward
+			if (mybe->server_myds->status == MYSQL_SERVER_STATUS_OFFLINE_HARD || mybe->server_myds->fd == -1) {
+				if (!backend_closed_in_fast_forward) {
+					backend_closed_in_fast_forward = true;
+					fast_forward_grace_start_time = thread->curtime;
+				}
+			}
+			if (backend_closed_in_fast_forward) {
+				if (client_myds->PSarrayOUT->len == 0 && (client_myds->queueOUT.head - client_myds->queueOUT.tail) == 0) {
+					// buffers empty, close
+					handler_ret = -1;
+				} else if (thread->curtime - fast_forward_grace_start_time > (unsigned long long)mysql_thread___fast_forward_grace_close_ms * 1000) {
+					// timeout, close
+					handler_ret = -1;
+				}
+			}
 			break;
 		// This state is required because it covers the following situation:
 		//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.

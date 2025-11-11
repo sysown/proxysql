@@ -112,6 +112,8 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
+//__thread int mysql_thread___fast_forward_grace_close_ms;
+
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
@@ -511,6 +513,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"proxy_protocol_networks",
 	(char *)"protocol_compression_level",
 	(char *)"ignore_min_gtid_annotations",
+	(char *)"fast_forward_grace_close_ms",
 	NULL
 };
 
@@ -1073,8 +1076,12 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 		variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
 	}
 	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
+    // fast_forward_grace_close_ms: Configurable timeout (in milliseconds) for the "fast forward grace close" feature.
+    // This feature prevents data loss in fast forward mode by deferring session closure when the backend
+    // connection closes unexpectedly, allowing time for pending client output to drain.
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
+	variables.fast_forward_grace_close_ms=5000;
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
@@ -2283,6 +2290,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["handle_unknown_charset"]        = make_tuple(&variables.handle_unknown_charset,        0, HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE, false);
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
+		VariablesPointers_int["fast_forward_grace_close_ms"]    = make_tuple(&variables.fast_forward_grace_close_ms,    0,      3600*1000, false);
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
