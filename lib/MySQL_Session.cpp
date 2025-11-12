@@ -3798,7 +3798,6 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			if (mybe->server_myds->status == MYSQL_SERVER_STATUS_OFFLINE_HARD || mybe->server_myds->fd == -1) {
 				if (!backend_closed_in_fast_forward) {
 					backend_closed_in_fast_forward = true;
-					cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << fast_forward_grace_start_time << " to " << thread->curtime << endl;
 					fast_forward_grace_start_time = thread->curtime;
 				}
 			}

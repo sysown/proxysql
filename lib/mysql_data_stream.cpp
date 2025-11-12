@@ -590,11 +590,9 @@ int MySQL_Data_Stream::read_from_net() {
 					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
 						if (sess->backend_closed_in_fast_forward == false) {
 							sess->backend_closed_in_fast_forward = true;
-							//cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << sess->fast_forward_grace_start_time << " to " << sess->thread->curtime << endl;
 							sess->fast_forward_grace_start_time = sess->thread->curtime;
 							sess->client_myds->defer_close_due_to_fast_forward = true;
 						}
-						//return 0;
 					}
 				}
 				proxy_debug(PROXY_DEBUG_NET, 5, "Received EOF, shutting down soft socket -- Session=%p, Datastream=%p", sess, this);
@@ -619,11 +617,9 @@ int MySQL_Data_Stream::read_from_net() {
 					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
 						if (sess->backend_closed_in_fast_forward == false) {
 							sess->backend_closed_in_fast_forward = true;
-							//cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << sess->fast_forward_grace_start_time << " to " << sess->thread->curtime << endl;
 							sess->fast_forward_grace_start_time = sess->thread->curtime;
 							sess->client_myds->defer_close_due_to_fast_forward = true;
 						}
-						//return 0;
 					}
 				}
 				shut_soft();
@@ -666,11 +662,9 @@ int MySQL_Data_Stream::read_from_net() {
 				if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
 					if (sess->backend_closed_in_fast_forward == false) {
 						sess->backend_closed_in_fast_forward = true;
-						//cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << sess->fast_forward_grace_start_time << " to " << sess->thread->curtime << endl;
 						sess->fast_forward_grace_start_time = sess->thread->curtime;
 						sess->client_myds->defer_close_due_to_fast_forward = true;
 					}
-					//return 0;
 				}
 			}
 			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d", sess, this, revents, r);
