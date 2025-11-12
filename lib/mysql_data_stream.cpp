@@ -576,6 +576,16 @@ int MySQL_Data_Stream::read_from_net() {
 		} else {
 			// Shutdown if we either received the EOF, or operation failed with non-retryable error.
 			if (ssl_recv_bytes==0 || (ssl_recv_bytes==-1 && errno != EINTR && errno != EAGAIN)) {
+				/*
+				 * Fast Forward Grace Close Logic:
+				 * When the backend connection closes unexpectedly (EOF) during fast forward mode,
+				 * instead of immediately closing the session, we check if there are pending
+				 * client output buffers. If so, we initiate a grace period to allow the
+				 * buffers to drain before closing the session.
+				 *
+				 * This prevents data loss in fast forward scenarios where ProxySQL forwards
+				 * packets without buffering, and the backend closes before all data is sent.
+				 */
 				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && ssl_recv_bytes==0) {
 					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
 						if (sess->backend_closed_in_fast_forward == false) {
@@ -601,6 +611,10 @@ int MySQL_Data_Stream::read_from_net() {
 		if (encrypted==false) {
 			int myds_errno=errno;
 			if (r==0 || (r==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
+				/*
+				 * Fast Forward Grace Close Logic:
+				 * Similar check for non-encrypted connections when backend closes with EOF.
+				 */
 				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && r==0) {
 					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
 						if (sess->backend_closed_in_fast_forward == false) {
@@ -644,6 +658,10 @@ int MySQL_Data_Stream::read_from_net() {
 		if ( (revents & POLLHUP) ) {
 			// this is a final check
 			// Only if the amount of data read is 0 or less, then we check POLLHUP
+			/*
+			 * Fast Forward Grace Close Logic:
+			 * Handle POLLHUP event similarly, initiating grace close if buffers are pending.
+			 */
 			if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward) {
 				if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
 					if (sess->backend_closed_in_fast_forward == false) {
@@ -799,6 +817,13 @@ void MySQL_Data_Stream::set_pollout() {
 	} else {
 		_pollfd->events = POLLIN;
 		if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && sess->backend_closed_in_fast_forward == true) {
+			/*
+			 * Fast Forward Grace Close Logic:
+			 * During the grace period after backend closure, we manage polling to avoid busy-waiting.
+			 * If POLLIN is set, poll() will return immediately since the socket is closed,
+			 * causing the thread to spin. To prevent this, we clear POLLIN during the grace period
+			 * and rely on timeouts to eventually close the session.
+			 */
 			// this is a fast forward session where the backend connection was already closed
 			// if we set POLLIN : the thread will spin on poll() until the socket is closed
 			// if we do not set POLLIN : we won't be able to timeout

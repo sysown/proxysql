@@ -1,4 +1,20 @@
 #include <algorithm>
+/*
+ * Fast Forward Grace Close Test
+ *
+ * This test validates the fast forward grace close feature in ProxySQL.
+ * The feature prevents data loss by allowing pending client output buffers
+ * to drain before closing sessions when the backend closes unexpectedly
+ * in fast forward mode.
+ *
+ * Test Strategy:
+ * - Generate a large binlog on the backend.
+ * - Connect via ProxySQL and read the binlog in a throttled manner to trigger
+ *   fast forward mode closure.
+ * - Verify that the grace close logic allows buffers to drain without data loss.
+ * - Really slow connection should fail
+ */
+
 #include <string>
 #include <string.h>
 #include <stdio.h>
@@ -36,7 +52,7 @@ int main() {
 	// 0 means no limit
 	// we skip 8 because or the edge
 	std::vector<long> target_times = {0, 1, 2, 3, 4, 5, 6, 7, /* 8, */ 20, 30, 60};
-	plan(9 + target_times.size());
+	plan(8 + target_times.size());
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -52,9 +68,9 @@ int main() {
 	}
 	ok(1, "Connected to backend server");
 	MYSQL_QUERY(backend_conn, "CREATE TABLE IF NOT EXISTS dummy_log_table (id INT PRIMARY KEY AUTO_INCREMENT, data LONGTEXT)");
-//	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
-//	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
-//	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
+	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
+	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
+	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
 	int rc = mysql_query(backend_conn, "FLUSH LOGS");
 	ok(rc == 0, "Generated data and flushed logs on backend");
 
@@ -69,8 +85,8 @@ int main() {
 
 	rc = mysql_query(proxysql_admin, "UPDATE global_variables SET variable_value='8000' WHERE variable_name='mysql-fast_forward_grace_close_ms'");
 	ok(rc == 0, "Set mysql-fast_forward_grace_close_ms=8000");
-	rc = mysql_query(proxysql_admin, "SET mysql-have_ssl=0");
-	ok(rc == 0, "Set mysql-have_ssl=0");
+//	rc = mysql_query(proxysql_admin, "SET mysql-have_ssl=0");
+//	ok(rc == 0, "Set mysql-have_ssl=0");
 	rc = mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	ok(rc == 0, "Loaded MYSQL variables to runtime");
 

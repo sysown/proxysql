@@ -3782,9 +3782,18 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 		case FAST_FORWARD:
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-			// Fast Forward Grace Close Logic:
-			// If the backend closed during fast forward mode, we defer session closure to allow
-			// pending client output buffers to drain, preventing data loss.
+			/*
+			 * Fast Forward Grace Close Logic:
+			 * In fast forward mode, ProxySQL forwards packets without buffering them.
+			 * If the backend connection closes unexpectedly while client data is still
+			 * being sent, we risk data loss. To mitigate this, we implement a grace
+			 * period where the session remains open until all pending client output
+			 * buffers are drained or a timeout (mysql_thread___fast_forward_grace_close_ms)
+			 * is reached.
+			 *
+			 * This logic detects backend closure, starts the grace timer, and waits
+			 * for buffers to empty before closing the session.
+			 */
 			// Detect if backend closed during fast forward
 			if (mybe->server_myds->status == MYSQL_SERVER_STATUS_OFFLINE_HARD || mybe->server_myds->fd == -1) {
 				if (!backend_closed_in_fast_forward) {
