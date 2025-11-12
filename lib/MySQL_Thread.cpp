@@ -112,8 +112,6 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
-//__thread int mysql_thread___fast_forward_grace_close_ms;
-
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
@@ -2290,7 +2288,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["handle_unknown_charset"]        = make_tuple(&variables.handle_unknown_charset,        0, HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE, false);
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
-		VariablesPointers_int["fast_forward_grace_close_ms"]    = make_tuple(&variables.fast_forward_grace_close_ms,    0,      3600*1000, false);
+		VariablesPointers_int["fast_forward_grace_close_ms"]   = make_tuple(&variables.fast_forward_grace_close_ms,   0,      3600*1000, false);
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
@@ -3756,7 +3754,25 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 						// if this is a backend without fast_forward, do not set unhealthy: it will be handled by client library
 						if (myds->sess->session_fast_forward) { // if fast forward
 							if (myds->myds_type==MYDS_BACKEND) { // and backend
-								myds->sess->set_unhealthy(); // set unhealthy
+						//		myds->sess->set_unhealthy(); // set unhealthy
+							// Fast Forward Grace Close Logic:
+							// If the backend closed during fast forward mode, we defer session closure to allow
+							// pending client output buffers to drain, preventing data loss.
+							// Detect if backend closed during fast forward
+								if (myds->sess->backend_closed_in_fast_forward == false) {
+									myds->sess->backend_closed_in_fast_forward = true;
+									//cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << myds->sess->fast_forward_grace_start_time << " to " << curtime << endl;
+									myds->sess->fast_forward_grace_start_time = curtime;
+								}
+								if (myds->sess->backend_closed_in_fast_forward) {
+									if (myds->PSarrayIN->len == 0 && myds->sess->client_myds->PSarrayOUT->len == 0 && (myds->sess->client_myds->queueOUT.head - myds->sess->client_myds->queueOUT.tail) == 0) {
+										// buffers empty, close
+										myds->sess->set_unhealthy(); // set unhealthy
+									} else if (curtime - myds->sess->fast_forward_grace_start_time > (unsigned long long)mysql_thread___fast_forward_grace_close_ms * 1000) {
+										// timeout, close
+										myds->sess->set_unhealthy(); // set unhealthy
+									}
+								}
 							}
 						}
 					}
@@ -3933,9 +3949,17 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 					sess->client_myds->addr.port
 				);
 			} else {
+				string extra_info = "";
+				if (sess->backend_closed_in_fast_forward == true) {
+					unsigned long long lapse = curtime - sess->fast_forward_grace_start_time;
+					extra_info = "Yes , " + to_string(lapse/1000) + " ms ago"; 
+				} else {
+					extra_info = "No";
+				}
 				proxy_warning(
-					"Closing 'fast_forward' client connection %s:%d\n", sess->client_myds->addr.addr,
-					sess->client_myds->addr.port
+					"Closing 'fast_forward' client connection %s:%d . Backend already close: %s\n",
+					sess->client_myds->addr.addr, sess->client_myds->addr.port,
+					extra_info.c_str()
 				);
 			}
 		}
@@ -4145,6 +4169,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(connect_timeout_server);
 	REFRESH_VARIABLE_INT(connect_timeout_server_max);
 	REFRESH_VARIABLE_INT(free_connections_pct);
+	REFRESH_VARIABLE_INT(fast_forward_grace_close_ms);
 #ifdef IDLE_THREADS
 	REFRESH_VARIABLE_INT(session_idle_ms);
 #endif // IDLE_THREADS

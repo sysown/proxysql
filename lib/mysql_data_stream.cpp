@@ -577,11 +577,14 @@ int MySQL_Data_Stream::read_from_net() {
 			// Shutdown if we either received the EOF, or operation failed with non-retryable error.
 			if (ssl_recv_bytes==0 || (ssl_recv_bytes==-1 && errno != EINTR && errno != EAGAIN)) {
 				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && ssl_recv_bytes==0) {
-					if (sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
-						sess->backend_closed_in_fast_forward = true;
-						sess->fast_forward_grace_start_time = sess->thread->curtime;
-						sess->client_myds->defer_close_due_to_fast_forward = true;
-						return 0;
+					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+						if (sess->backend_closed_in_fast_forward == false) {
+							sess->backend_closed_in_fast_forward = true;
+							//cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << sess->fast_forward_grace_start_time << " to " << sess->thread->curtime << endl;
+							sess->fast_forward_grace_start_time = sess->thread->curtime;
+							sess->client_myds->defer_close_due_to_fast_forward = true;
+						}
+						//return 0;
 					}
 				}
 				proxy_debug(PROXY_DEBUG_NET, 5, "Received EOF, shutting down soft socket -- Session=%p, Datastream=%p", sess, this);
@@ -599,11 +602,14 @@ int MySQL_Data_Stream::read_from_net() {
 			int myds_errno=errno;
 			if (r==0 || (r==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
 				if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && r==0) {
-					if (sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
-						sess->backend_closed_in_fast_forward = true;
-						sess->fast_forward_grace_start_time = sess->thread->curtime;
-						sess->client_myds->defer_close_due_to_fast_forward = true;
-						return 0;
+					if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+						if (sess->backend_closed_in_fast_forward == false) {
+							sess->backend_closed_in_fast_forward = true;
+							//cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << sess->fast_forward_grace_start_time << " to " << sess->thread->curtime << endl;
+							sess->fast_forward_grace_start_time = sess->thread->curtime;
+							sess->client_myds->defer_close_due_to_fast_forward = true;
+						}
+						//return 0;
 					}
 				}
 				shut_soft();
@@ -639,11 +645,14 @@ int MySQL_Data_Stream::read_from_net() {
 			// this is a final check
 			// Only if the amount of data read is 0 or less, then we check POLLHUP
 			if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward) {
-				if (sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
-					sess->backend_closed_in_fast_forward = true;
-					sess->fast_forward_grace_start_time = sess->thread->curtime;
-					sess->client_myds->defer_close_due_to_fast_forward = true;
-					return 0;
+				if (PSarrayIN->len > 0 || sess->client_myds->PSarrayOUT->len > 0 || queue_data(sess->client_myds->queueOUT) > 0) {
+					if (sess->backend_closed_in_fast_forward == false) {
+						sess->backend_closed_in_fast_forward = true;
+						//cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << sess->fast_forward_grace_start_time << " to " << sess->thread->curtime << endl;
+						sess->fast_forward_grace_start_time = sess->thread->curtime;
+						sess->client_myds->defer_close_due_to_fast_forward = true;
+					}
+					//return 0;
 				}
 			}
 			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft. revents=%d , bytes read = %d", sess, this, revents, r);
@@ -789,6 +798,15 @@ void MySQL_Data_Stream::set_pollout() {
 		_pollfd->events = myconn->wait_events;
 	} else {
 		_pollfd->events = POLLIN;
+		if (myds_type == MYDS_BACKEND && sess && sess->session_fast_forward && sess->backend_closed_in_fast_forward == true) {
+			// this is a fast forward session where the backend connection was already closed
+			// if we set POLLIN : the thread will spin on poll() until the socket is closed
+			// if we do not set POLLIN : we won't be able to timeout
+			if (sess->thread->curtime - sess->fast_forward_grace_start_time < (unsigned long long)mysql_thread___fast_forward_grace_close_ms * 1000) {
+				// for the reason listed above, we remove POLLIN unless the timeout has reached
+				_pollfd->events = 0;
+			}
+		}
 		//if (PSarrayOUT->len || available_data_out() || queueOUT.partial || (encrypted && !SSL_is_init_finished(ssl))) {
 		if (PSarrayOUT->len || available_data_out() || queueOUT.partial) {
 			_pollfd->events |= POLLOUT;

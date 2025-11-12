@@ -3789,11 +3789,16 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			if (mybe->server_myds->status == MYSQL_SERVER_STATUS_OFFLINE_HARD || mybe->server_myds->fd == -1) {
 				if (!backend_closed_in_fast_forward) {
 					backend_closed_in_fast_forward = true;
+					cerr << __FILE__ << ":" << __LINE__ << " grace_start_time from " << fast_forward_grace_start_time << " to " << thread->curtime << endl;
 					fast_forward_grace_start_time = thread->curtime;
 				}
 			}
 			if (backend_closed_in_fast_forward) {
-				if (client_myds->PSarrayOUT->len == 0 && (client_myds->queueOUT.head - client_myds->queueOUT.tail) == 0) {
+				if (
+					( mybe->server_myds == nullptr || ( mybe->server_myds && mybe->server_myds->PSarrayIN->len == 0 ) )
+					&&
+					(client_myds->PSarrayOUT->len == 0 && (client_myds->queueOUT.head - client_myds->queueOUT.tail) == 0)
+				) {
 					// buffers empty, close
 					handler_ret = -1;
 				} else if (thread->curtime - fast_forward_grace_start_time > (unsigned long long)mysql_thread___fast_forward_grace_close_ms * 1000) {
