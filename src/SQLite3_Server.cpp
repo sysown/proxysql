@@ -948,18 +948,44 @@ __run_query:
 						query = static_cast<char*>(malloc(ro_q.size() + 1));
 						sprintf(query, "%s", ro_q.c_str());
 					} else if (
-						strcasecmp(*q_match, TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY)
-						|| strcasecmp(*q_match, TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY)
+						strcasecmp(*q_match, TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY) == 0
+						|| strcasecmp(*q_match, TEST_QUERY___INNODB_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY) == 0
 					) {
-						const string cluster_name { get_cluster_name(query_no_space + strlen(*q_match)) };
+						const string hostname { query_no_space + strlen(*q_match) };
+						const string cluster_name { get_cluster_name(hostname) };
+
+						const string ro_q {
+							"SELECT read_only FROM MYSQL_RDS_TOPOLOGY WHERE endpoint='" + hostname + "'"
+						};
 						const string multi_az_q {
-							"SELECT read_only,id,endpoint,port FROM MYSQL_RDS_TOPOLOGY"
-								" WHERE endpoint LIKE '%" + cluster_name + "%'"
+							"SELECT (" + ro_q + ") AS read_only,id,endpoint,port"
+							" FROM MYSQL_RDS_TOPOLOGY"
+							" WHERE endpoint LIKE '%" + cluster_name + "%'"
+						};
+
+						query = static_cast<char*>(malloc(multi_az_q.size() + 1));
+						sprintf(query, "%s", multi_az_q.c_str());
+					} else if (
+						strcasecmp(*q_match, TEST_QUERY___READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY) == 0
+						|| strcasecmp(*q_match, TEST_QUERY___INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY) == 0
+					) {
+
+						const string hostname { query_no_space + strlen(*q_match) };
+						const string cluster_name { get_cluster_name(hostname) };
+
+						const string ro_q {
+							"SELECT read_only FROM MYSQL_RDS_TOPOLOGY WHERE endpoint='" + hostname + "'"
+						};
+						const string multi_az_q {
+							"SELECT (" + ro_q + ") AS read_only,id,endpoint,port,role,status,version"
+							" FROM MYSQL_RDS_TOPOLOGY"
+							" WHERE endpoint LIKE '%" + cluster_name + "%'"
 						};
 
 						query = static_cast<char*>(malloc(multi_az_q.size() + 1));
 						sprintf(query, "%s", multi_az_q.c_str());
 					} else {
+						assert(0 && "Query should have been intercepted, faulty match!");
 					}
 
 					pthread_mutex_unlock(&GloSQLite3Server->aws_rds_mutex);

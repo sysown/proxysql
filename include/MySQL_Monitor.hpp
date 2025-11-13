@@ -87,7 +87,7 @@ A single AWS_Aurora_monitor_node will have a AWS_Aurora_status_entry per check.
 
 #endif
 
-#ifdef TEST_AWS_RDS
+#if defined(TEST_AWS_RDS) || defined(TEST_READONLY)
 
 #define TEST_QUERY___READ_ONLY "SELECT @@global.read_only read_only "
 #define TEST_QUERY___READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port "
