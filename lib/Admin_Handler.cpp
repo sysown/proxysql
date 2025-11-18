@@ -89,6 +89,9 @@ extern "C" void __gcov_dump();
 extern "C" void __gcov_reset();
 #endif
 
+// Function declarations for issue 5186
+extern void ProxySQL_Main_init_main_modules();
+
 
 #ifdef DEBUG
 //#define BENCHMARK_FASTROUTING_LOAD
@@ -482,6 +485,24 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 		bool rc = false;
 
+		// Handle PROXYSQL START after PROXYSQL STOP (issue 5186)
+		if (glovars.stop_state == STOP_STATE_STOPPED) {
+			proxy_info("PROXYSQL START: Restarting modules after STOP\n");
+
+			// Reinitialize modules after STOP
+			ProxySQL_Main_init_main_modules();
+
+			// Reset state to running
+			glovars.stop_state = STOP_STATE_RUNNING;
+			glovars.reload = 0;
+			glovars.shutdown = 0;
+
+			proxy_info("PROXYSQL START: Modules restarted successfully\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// Handle normal START (initial startup)
 		if (admin_nostart_) {
 			rc = __sync_bool_compare_and_swap(&GloVars.global.nostart, 1, 0);
 		}
@@ -536,6 +557,16 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			}
 		}
 
+		// Check if already stopped (issue 5186)
+		if (glovars.stop_state == STOP_STATE_STOPPED) {
+			SPA->send_error_msg_to_client(sess, (char*)"ProxySQL modules are already stopped");
+			return false;
+		}
+
+		// Set state to DRAINING - stop accepting new admin queries (issue 5186)
+		glovars.stop_state = STOP_STATE_DRAINING;
+		proxy_info("PROXYSQL STOP: Setting state to DRAINING, waiting for %lu admin queries to complete\n", (unsigned long)glovars.active_admin_queries);
+
 		char buf[32];
 
 		// ----- MySQL module stop -----
@@ -558,8 +589,30 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloPTH->set_variable((char*)"wait_timeout", buf);
 		GloPTH->commit();
 
+		// ----- Wait for admin queries to complete (issue 5186) -----
+		int wait_time_ms = 0;
+		int max_wait_time_ms = 30000; // 30 seconds timeout
+
+		while (glovars.active_admin_queries > 0 && wait_time_ms < max_wait_time_ms) {
+			usleep(100000); // 100ms intervals
+			wait_time_ms += 100;
+
+			if (wait_time_ms % 1000 == 0) {
+				proxy_info("PROXYSQL STOP: Waiting for %lu admin queries to complete (%d/%ds)...\n",
+						  (unsigned long)glovars.active_admin_queries, wait_time_ms/1000, max_wait_time_ms/1000);
+			}
+		}
+
+		if (glovars.active_admin_queries > 0) {
+			proxy_warning("PROXYSQL STOP: %lu admin queries still active after timeout, proceeding with shutdown\n",
+						  (unsigned long)glovars.active_admin_queries);
+		} else {
+			proxy_info("PROXYSQL STOP: All admin queries completed, proceeding with shutdown\n");
+		}
+
 		// ----- Common shutdown actions -----
 		glovars.reload = 2;
+		glovars.stop_state = STOP_STATE_STOPPED;
 
 		// Reset Prometheus counters
 		if (GloVars.prometheus_registry)
@@ -574,6 +627,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			usleep(1000);
 		}
 
+		proxy_info("PROXYSQL STOP: Shutdown completed, modules stopped\n");
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 
 		return false;
@@ -2332,6 +2386,10 @@ template<typename S>
 void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
+
+	// Increment admin query counter for issue 5186
+	// This tracks active admin queries during PROXYSQL STOP
+	__sync_fetch_and_add(&glovars.active_admin_queries, 1);
 	bool needs_vacuum = false;
 	char *error=NULL;
 	int cols;
@@ -2597,9 +2655,16 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (!strncasecmp(CLUSTER_QUERY_MYSQL_USERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_USERS))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
-			pthread_mutex_lock(&users_mutex);
-			resultset = GloMyAuth->get_current_mysql_users();
-			pthread_mutex_unlock(&users_mutex);
+			if (glovars.stop_state == STOP_STATE_RUNNING) {
+				pthread_mutex_lock(&users_mutex);
+				resultset = GloMyAuth->get_current_mysql_users();
+				pthread_mutex_unlock(&users_mutex);
+			} else {
+				// Return empty resultset when modules are stopped (issue 5186)
+				resultset = new SQLite3_result(2);
+				resultset->add_column_definition(SQLITE_TEXT, "username");
+				resultset->add_column_definition(SQLITE_TEXT, "password");
+			}
 			if (resultset != nullptr) {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 				run_query=false;
@@ -2610,28 +2675,37 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES))) {
-			GloMyQPro->wrlock();
-			resultset = GloMyQPro->get_current_query_rules_inner();
-			if (resultset == NULL) {
-				GloMyQPro->wrunlock(); // unlock first
-				resultset = GloMyQPro->get_current_query_rules();
-				if (resultset) {
+			if (glovars.stop_state == STOP_STATE_RUNNING) {
+				GloMyQPro->wrlock();
+				resultset = GloMyQPro->get_current_query_rules_inner();
+				if (resultset == NULL) {
+					GloMyQPro->wrunlock(); // unlock first
+					resultset = GloMyQPro->get_current_query_rules();
+					if (resultset) {
+						sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+						delete resultset;
+						run_query=false;
+					}
+				} else {
 					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-					delete resultset;
+					GloMyQPro->wrunlock();
 					run_query=false;
-					goto __run_query;
 				}
 			} else {
+				// Return empty resultset when modules are stopped (issue 5186)
+				resultset = new SQLite3_result(2);
+				resultset->add_column_definition(SQLITE_TEXT, "rule_id");
+				resultset->add_column_definition(SQLITE_TEXT, "active");
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-				//delete resultset; // DO NOT DELETE . This is the inner resultset of Query_Processor
-				GloMyQPro->wrunlock();
+				delete resultset;
 				run_query=false;
 				goto __run_query;
 			}
 		}
 		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING))) {
-			GloMyQPro->wrlock();
-			resultset = GloMyQPro->get_current_query_rules_fast_routing_inner();
+			if (glovars.stop_state == STOP_STATE_RUNNING) {
+				GloMyQPro->wrlock();
+				resultset = GloMyQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
 				GloMyQPro->wrunlock(); // unlock first
 				resultset = GloMyQPro->get_current_query_rules_fast_routing();
@@ -2648,6 +2722,16 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				run_query=false;
 				goto __run_query;
 			}
+			} else {
+				// Return empty resultset when modules are stopped (issue 5186)
+				resultset = new SQLite3_result(2);
+				resultset->add_column_definition(SQLITE_TEXT, "rule_id");
+				resultset->add_column_definition(SQLITE_TEXT, "hostname");
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				delete resultset;
+				run_query=false;
+				goto __run_query;
+			}
 		}
 	}
 
@@ -2655,7 +2739,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
 	// we just return the count
 	if (strcmp("SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing", query_no_space)==0) {
-		int cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
+		int cnt = 0;
+		if (glovars.stop_state == STOP_STATE_RUNNING) {
+			cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
+		}
 		l_free(query_length,query);
 		char buf[256];
 		sprintf(buf,"SELECT %d AS 'COUNT(*)'", cnt);
@@ -4137,6 +4224,12 @@ __run_query:
 			pthread_mutex_unlock(&pa->sql_query_global_mutex);
 		}
 	}
+
+__exit_cleanup:
+	// Decrement admin query counter for issue 5186
+	// This tracks active admin queries during PROXYSQL STOP
+	__sync_fetch_and_sub(&glovars.active_admin_queries, 1);
+
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
 }

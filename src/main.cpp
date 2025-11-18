@@ -1322,6 +1322,11 @@ void ProxySQL_Main_init() {
 #else
 	glovars.has_debug=false;
 #endif /* DEBUG */
+
+	// Initialize stop state management for issue 5186
+	glovars.stop_state = STOP_STATE_RUNNING;
+	glovars.active_admin_queries = 0;
+
 //	__thr_sfp=l_mem_init();
 	proxysql_init_debug_prometheus_metrics();
 }
