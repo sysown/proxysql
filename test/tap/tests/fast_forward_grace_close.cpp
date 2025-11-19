@@ -67,6 +67,7 @@ int main() {
 		return -1;
 	}
 	ok(1, "Connected to backend server");
+	MYSQL_QUERY(backend_conn, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(backend_conn, "CREATE TABLE IF NOT EXISTS dummy_log_table (id INT PRIMARY KEY AUTO_INCREMENT, data LONGTEXT)");
 	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
 	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
