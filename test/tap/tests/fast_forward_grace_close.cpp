@@ -62,7 +62,7 @@ int main() {
 
 	// 1. Generate a large binlog file
 	MYSQL* backend_conn = mysql_init(NULL);
-	if (!mysql_real_connect(backend_conn, cl.host, cl.username, cl.password, "information_schema", cl.port, NULL, 0)) {
+	if (!mysql_real_connect(backend_conn, cl.host, cl.mysql_username, cl.mysql_password, "information_schema", cl.port, NULL, 0)) {
 		diag("Backend connection failed: %s", mysql_error(backend_conn));
 		return -1;
 	}
