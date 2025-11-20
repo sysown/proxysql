@@ -403,6 +403,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
+	// Fast forward grace close flags: track backend closure during fast forward mode
+	// to allow pending client data to drain before closing the session.
+	bool backend_closed_in_fast_forward;
+	unsigned long long fast_forward_grace_start_time;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum mysql_variable_name changing_variable_idx;

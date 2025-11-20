@@ -316,8 +316,10 @@ struct p_th_gauge {
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
 		__size
+
 	};
 };
+
 
 struct th_metrics_map_idx {
 	enum index {
@@ -428,6 +430,7 @@ class MySQL_Threads_Handler
 		char * monitor_replication_lag_use_percona_heartbeat;
 		int ping_interval_server_msec;
 		int ping_timeout_server;
+		int fast_forward_grace_close_ms;
 		int shun_on_failures;
 		int shun_recovery_time_sec;
 		int unshun_algorithm;

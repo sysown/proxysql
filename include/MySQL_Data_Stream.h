@@ -176,6 +176,9 @@ class MySQL_Data_Stream
 	char kill_type;
 
 	bool encrypted;
+	// defer_close_due_to_fast_forward: Flag to prevent immediate closure of data stream
+	// during fast forward grace close, allowing buffers to drain.
+	bool defer_close_due_to_fast_forward;
 	bool net_failure;
 
 	uint8_t pkt_sid;
