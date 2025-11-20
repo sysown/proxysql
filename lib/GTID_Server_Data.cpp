@@ -261,21 +261,7 @@ bool GTID_Server_Data::readall() {
 
 
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	std::string s = gtid_uuid;
-	auto it = gtid_executed.find(s);
-//	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
-	if (it == gtid_executed.end()) {
-//		fprintf(stderr,"NO\n");
-		return false;
-	}
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-		if (itr->contains((int64_t)gtid_trxid)) {
-//			fprintf(stderr,"YES\n");
-			return true;
-		}
-	}
-//	fprintf(stderr,"NO\n");
-	return false;
+	return gtid_executed.has_gtid((std::string)gtid_uuid, (gtid_t)gtid_trxid);
 }
 
 void GTID_Server_Data::read_all_gtids() {
@@ -313,6 +299,13 @@ bool GTID_Server_Data::writeout() {
 	return ret;
 }
 
+/*
+ * The wire format for the binlogreader is three distinct messages, in plaintext:
+ *
+ * ST=<uuid>:<gtid>[-<gtid>][,<uuid>:<gtid>[-<gtid>], ...] : Bootstrap message, providing individual GTID or GTID ranges for all seen UUID servers.
+ * I1=<uuid>:<gtid>[-<gtid>]                               : Latest seen GTID/GTID ranges for a given UUID.
+ * I2=<gtid>[-<gtid>]                                      : Latest seen GTID/GTID ranges.
+ */
 bool GTID_Server_Data::read_next_gtid() {
 	if (len==0) {
 		return false;
@@ -358,10 +351,8 @@ bool GTID_Server_Data::read_next_gtid() {
 						}
 					}
 				} else { // we are reading the trxids
-					std::string s = uuid_server;
-					gtid_interval_t iv = Gtid_Interval(subtoken);
-					updated = addGtidInterval(s, iv, gtid_executed) || updated;
-			   }
+					updated = gtid_executed.add((std::string)uuid_server, subtoken) || updated;
+				}
 			}
 		}
 		pos += l+1;
@@ -375,7 +366,6 @@ bool GTID_Server_Data::read_next_gtid() {
 		pos += l+1;
 		rec_msg[l] = 0;
 		if (rec_msg[0]=='I') {
-			uint64_t rec_trxid = 0;
 			char *a = NULL;
 			int ul = 0;
 			switch (rec_msg[1]) {
@@ -384,89 +374,17 @@ bool GTID_Server_Data::read_next_gtid() {
 					ul = a-rec_msg-3;
 					strncpy(uuid_server,rec_msg+3,ul);
 					uuid_server[ul] = 0;
-					rec_trxid=atoll(a+1);
+					gtid_executed.add((std::string)uuid_server, a+1);
 					break;
 				case '2':
-					rec_trxid=atoll(rec_msg+3);
+					gtid_executed.add((std::string)uuid_server, rec_msg+3);
 					break;
 				default:
 					break;
 			}
-			std::string s = uuid_server;
-			gtid_interval_t iv = Gtid_Interval(rec_trxid);
-			addGtidInterval(s, iv, gtid_executed);
 			events_read++;
 		}
 	}
-	return true;
-}
-
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
-	std::string gtid_set;
-	for (auto it=gtid_executed.begin(); it!=gtid_executed.end(); ++it) {
-		std::string s = it->first;
-		s.insert(8,"-");
-		s.insert(13,"-");
-		s.insert(18,"-");
-		s.insert(23,"-");
-		s = s + ":";
-		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-			gtid_set += s + itr->to_string() + ",";
-		}
-	}
-	// Extract latest comma only in case 'gtid_executed' isn't empty
-	if (gtid_set.empty() == false) {
-		gtid_set.pop_back();
-	}
-	return gtid_set;
-}
-
-
-// Merges a GTID interval into a gitd_executed instance. Returns true if gtid_executed was updated, false otherwise.
-bool addGtidInterval(const std::string& uuid, const gtid_interval_t &iv, gtid_set_t& gtid_executed) {
-	auto it = gtid_executed.find(uuid);
-	if (it == gtid_executed.end()) {
-		// new UUID entry
-		gtid_executed[uuid].emplace_back(iv);
-		return true;
-	}
-
-	if (!it->second.empty()) {
-		if (it->second.back().append(iv)) {
-			// if appending to the last GTID range succeded, gtid_executed was modified, but remains optimized - nothing else to do
-			return true;
-		}
-	}
-
-	// insert/merge GTID interval...
-	auto pos = it->second.begin();
-	for (; pos != it->second.end(); ++pos) {
-		if (pos->contains(iv)) {
-			// GTID interval is already present, nothing to do
-			return false;
-		}
-		if (pos->merge(iv))
-			break;
-	}
-	if (pos == it->second.end()) {
-		it->second.emplace_back(iv);
-	}
-
-	// ...and merge overlapping GTID ranges, if any
-	it->second.sort();
-	auto a = it->second.begin();
-	while (a != it->second.end()) {
-		auto b = std::next(a);
-		if (b == it->second.end()) {
-			break;
-		}
-		if (a->merge(*b)) {
-				it->second.erase(b);
-				continue;
-		}
-		a++;
-	}
-
 	return true;
 }
 

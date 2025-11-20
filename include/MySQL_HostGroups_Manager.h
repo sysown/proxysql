@@ -138,9 +138,6 @@ class MyHGC;
 struct peer_runtime_mysql_servers_t;
 struct peer_mysql_servers_v2_t;
 
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
-
 #include "GTID_Server_Data.h"
 
 /*

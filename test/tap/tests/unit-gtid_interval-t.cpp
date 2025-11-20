@@ -7,11 +7,13 @@
 using std::string;
 
 int testGtidIntervalFromString_Count() {
-    return 2;
+    return 4;
 }
 void testGtidIntervalFromString() {
-	ok(gtid_interval_t("123-456") == gtid_interval_t(123, 456), "GTID interval from range string");
-	ok(gtid_interval_t("111") == gtid_interval_t(111, 111), "GTID interval from single GTID string");
+	ok(gtid_interval_t("123-456") == gtid_interval_t(123, 456), "GTID interval from range C string");
+	ok(gtid_interval_t(std::string("789-1234")) == gtid_interval_t(789, 1234), "GTID interval from range C++ string");
+	ok(gtid_interval_t("111") == gtid_interval_t(111, 111), "GTID interval from single GTID C string");
+	ok(gtid_interval_t(std::string("222")) == gtid_interval_t(222, 222), "GTID interval from single GTID C++ string");
 }
 
 int testGtidIntervalContains_Count() {
@@ -45,22 +47,6 @@ void testGtidIntervalAppend() {
 	iv = gtid_interval_t(123, 456);
 	ok(iv.append(gtid_interval_t(200, 600)), "append with overlap");
 	ok(iv.to_string() == "123-600", "append with overlap result");
-}
-
-int testAddGtidInterval_Count() {
-	return 8;
-}
-void testAddGtidInterval() {
-	gtid_set_t gtid_set;
-
-	ok(addGtidInterval("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_interval_t(10, 20), gtid_set), "new GTID range for server A");
-	ok(addGtidInterval("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_interval_t(9, 22), gtid_set), "new GTID range with partial overlap for server A");
-	ok(addGtidInterval("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_interval_t(18, 30), gtid_set), "new GTID range with partial overlap for server A");
-	ok(!addGtidInterval("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_interval_t(15, 22), gtid_set), "GTID range is already fully contained for server A");
-	ok(addGtidInterval("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_interval_t(40, 50), gtid_set), "new GTID range with gap for server A");
-	ok(addGtidInterval("bbbbbbbb333344445555bbbbbbbbbbbb", gtid_interval_t(10, 30), gtid_set), "new GTID range for server B");
-	ok(addGtidInterval("bbbbbbbb333344445555bbbbbbbbbbbb", gtid_interval_t(31, 50), gtid_set), "new GTID range for server B");
-	ok(gtid_set_to_string(gtid_set) == "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:10-30,aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:40-50,bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb:10-50", "add interval result");
 }
 
 int testGtidIntervalMerge_Count() {
@@ -100,19 +86,72 @@ void testGtidIntervalMerge() {
 	ok(iv == want, "merge append at end result");
 }
 
+int testGtidSetAdd_Count() {
+	return 9;
+}
+void testGtidSetAdd() {
+	gtid_set_t gtid_set;
+
+	ok(gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_interval_t(10, 20)), "new GTID range for server A");
+	ok(!gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_t(14)), "single GTID range for server A, contained");
+	ok(gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", "9-22"), "new GTID range with partial overlap for server A");
+	ok(gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", std::string("18-30")), "new GTID range with partial overlap for server A");
+	ok(!gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_interval_t(15, 22)), "GTID range is already fully contained for server A");
+	ok(gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", gtid_t(40), gtid_t(50)), "new GTID range with gap for server A");
+	ok(gtid_set.add("bbbbbbbb333344445555bbbbbbbbbbbb", gtid_interval_t(10, 30)), "new GTID range for server B");
+	ok(gtid_set.add("bbbbbbbb333344445555bbbbbbbbbbbb", "31-50"), "new GTID range for server B");
+
+	ok(gtid_set.to_string() == "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:10-30,aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:40-50,bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb:10-50", "add interval result");
+}
+
+int testGtidSetContains_Count() {
+	return 19;
+}
+void testGtidSetContains() {
+	gtid_set_t gtid_set;
+
+	ok(gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", "10-20"), "new GTID range for server A");
+	ok(gtid_set.add("aaaaaaaa000011112222aaaaaaaaaaaa", "30-40"), "split GTID range for server A");
+	ok(gtid_set.add("bbbbbbbb333344445555bbbbbbbbbbbb", gtid_interval_t(100, 200)), "new GTID range for server B");
+
+	ok(!gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 7), "before GTID range for server A");
+	ok(gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 10), "in GTID range for server A");
+	ok(gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 16), "in GTID range for server A");
+	ok(gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 20), "in GTID range for server A");
+	ok(!gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 55), "past GTID range for server A");
+
+	ok(!gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 74), "before GTID range for server B");
+	ok(gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 100), "in GTID range for server B");
+	ok(gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 168), "in GTID range for server B");
+	ok(gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 200), "in GTID range for server B");
+	ok(!gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 201), "past GTID range for server B");
+
+	gtid_set.clear();
+
+	ok(!gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 7), "no GTID ranges after clear for server A");
+	ok(!gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 16), "no GTID ranges after clear for server A");
+	ok(!gtid_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 55), "no GTID ranges after clear for server A");
+
+	ok(!gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 74), "no GTID ranges after clear for server B");
+	ok(!gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 168), "no GTID ranges after clear for server B");
+	ok(!gtid_set.has_gtid("bbbbbbbb333344445555bbbbbbbbbbbb", 345), "no GTID ranges after clear for server B");
+}
+
 std::function<int(void)> testFunctionCounts[] = {
 	testGtidIntervalFromString_Count,
 	testGtidIntervalContains_Count,
 	testGtidIntervalAppend_Count,
 	testGtidIntervalMerge_Count,
-	testAddGtidInterval_Count,
+	testGtidSetAdd_Count,
+	testGtidSetContains_Count,
 };
 std::function<void(void)> testFunctions[] = {
 	testGtidIntervalFromString,
 	testGtidIntervalContains,
 	testGtidIntervalAppend,
 	testGtidIntervalMerge,
-	testAddGtidInterval,
+	testGtidSetAdd,
+	testGtidSetContains,
 };
 
 int main(int argc, char** argv) {
