@@ -2,12 +2,17 @@
 %define          debug_package %{nil}
 %define        __os_install_post %{_dbpath}/brp-compress
 
+# systemd-sysusers macros for proper user/group handling
+%sysusers_requires
+%sysusers_generate_pre %{name}.conf $name %{name}
+
 Summary: A high-performance MySQL and PostgreSQL proxy
 Name: proxysql
 Version: %{version}
 Release: 1
 License: GPL-3.0-only
 Source: %{name}-%{version}.tar.gz
+Source1: %{name}.conf
 URL: https://proxysql.com/
 Requires: gnutls, (openssl >= 3.0.0 or openssl3 >= 3.0.0)
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
@@ -32,15 +37,17 @@ fi
 /bin/rm -rf %{buildroot}
 /bin/mkdir -p %{buildroot}
 /bin/cp -a * %{buildroot}
+# Install sysusers file
+mkdir -p %{buildroot}%{_sysusersdir}
+install -m 644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
 
 %clean
 /bin/rm -rf %{buildroot}
 
 %post
-# Create relevant user, directories and configuration files
+# Create relevant directories and configuration files
 if [ ! -d /var/run/%{name} ]; then /bin/mkdir /var/run/%{name} ; fi
 if [ ! -d /var/lib/%{name} ]; then /bin/mkdir /var/lib/%{name} ; fi
-if ! id -u %{name} > /dev/null 2>&1; then useradd -r -U -s /bin/false -d /var/lib/%{name} -c "ProxySQL Server" %{name}; fi
 /bin/chown -R %{name}: /var/lib/%{name} /var/run/%{name}
 /bin/chown root:%{name} /etc/%{name}.cnf
 /bin/chmod 640 /etc/%{name}.cnf
@@ -84,6 +91,7 @@ fi
 %{_bindir}/*
 %{_sysconfdir}/systemd/system/%{name}.service
 %{_sysconfdir}/systemd/system/%{name}-initial.service
+%{_sysusersdir}/%{name}.conf
 /usr/share/proxysql/tools/proxysql_galera_checker.sh
 /usr/share/proxysql/tools/proxysql_galera_writer.pl
 
