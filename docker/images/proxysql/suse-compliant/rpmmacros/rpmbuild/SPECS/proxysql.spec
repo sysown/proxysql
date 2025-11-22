@@ -4,7 +4,7 @@
 
 # systemd-sysusers macros for proper user/group handling
 %sysusers_requires
-%sysusers_generate_pre %{name}.conf $name %{name}
+%sysusers_generate_pre %{name}.conf %{name} %{name}
 
 Summary: A high-performance MySQL and PostgreSQL proxy
 Name: proxysql
@@ -91,7 +91,7 @@ fi
 %{_bindir}/*
 %{_sysconfdir}/systemd/system/%{name}.service
 %{_sysconfdir}/systemd/system/%{name}-initial.service
-%{_sysusersdir}/%{name}.conf
+%config(noreplace) %{_sysusersdir}/%{name}.conf
 /usr/share/proxysql/tools/proxysql_galera_checker.sh
 /usr/share/proxysql/tools/proxysql_galera_writer.pl
 
