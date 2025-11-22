@@ -139,7 +139,7 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	enum sslstatus status;
 	int n = SSL_do_handshake(ssl);
 	if (n == 1) {
-		//proxy_info("SSL handshake completed\n");
+		proxy_info("SSL handshake completed\n");
 		X509 *cert;
 		cert = SSL_get_peer_certificate(ssl);
 		if (cert) {
@@ -164,6 +164,10 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 					}
 				}
 			}
+
+			// This returns the subject line as '/C=US/ST=California/L=Mountain View/O=Google Inc/CN=*.google.com'
+			x509_subject_name = strdup(X509_NAME_oneline(X509_get_subject_name((X509*)cert), NULL, 0));
+			proxy_info("SSL cert subject = %s\n", x509_subject_name);
 
 			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
 			X509_free(cert);
@@ -221,6 +225,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 
 	addr.addr=NULL;
 	addr.port=0;
+	addr.hostname=NULL;
 	proxy_addr.addr=NULL;
 	proxy_addr.port=0;
 
@@ -260,6 +265,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
 	auth_in_progress = 0;
 	x509_subject_alt_name=NULL;
+	x509_subject_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;
@@ -294,6 +300,10 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (addr.addr) {
 		free(addr.addr);
 		addr.addr=NULL;
+	}
+	if (addr.hostname) {
+		free(addr.hostname);
+		addr.hostname=NULL;
 	}
 	if (proxy_addr.addr) {
 		free(proxy_addr.addr);
@@ -380,6 +390,12 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		free(x509_subject_alt_name);
 		x509_subject_alt_name=NULL;
 	}
+
+	if (x509_subject_name) {
+		free(x509_subject_name);
+		x509_subject_name=NULL;
+	}
+
 }
 
 // this function initializes a MySQL_Data_Stream 
@@ -1634,6 +1650,7 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 	jc1["stream"]["bytes_recv"] = bytes_info.bytes_recv;
 	jc1["stream"]["bytes_sent"] = bytes_info.bytes_sent;
 	jc1["client_addr"]["address"] = ( addr.addr ? addr.addr : "" );
+	jc1["client_addr"]["hostname"] = ( addr.hostname ? addr.hostname : "" );
 	jc1["client_addr"]["port"] = addr.port;
 	jc1["proxy_addr"]["address"] = ( proxy_addr.addr ? proxy_addr.addr : "" );
 	jc1["proxy_addr"]["port"] = proxy_addr.port;

@@ -425,6 +425,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"query_digests_normalize_digest_text",
 	(char*)"query_digests_track_hostname",
 	(char*)"query_digests_keep_comment",
+    (char *)"dns_reverse_lookup",
 	(char*)"parse_failure_logs_digest",
 	(char*)"servers_stats",
 	(char*)"default_reconnect",
@@ -1053,6 +1054,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_digests_normalize_digest_text = false;
 	variables.query_digests_track_hostname = false;
 	variables.query_digests_keep_comment = false;
+    variables.dns_reverse_lookup=false;
 	variables.parse_failure_logs_digest = false;
 	variables.min_num_servers_lantency_awareness = 1000;
 	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
@@ -2030,6 +2032,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["commands_stats"] = make_tuple(&variables.commands_stats, false);
 		VariablesPointers_bool["connection_warming"] = make_tuple(&variables.connection_warming, false);
 		VariablesPointers_bool["default_reconnect"] = make_tuple(&variables.default_reconnect, false);
+        VariablesPointers_bool["dns_reverse_lookup"] = make_tuple(&variables.dns_reverse_lookup, false);
 		VariablesPointers_bool["enable_client_deprecate_eof"] = make_tuple(&variables.enable_client_deprecate_eof, false);
 		VariablesPointers_bool["enable_server_deprecate_eof"] = make_tuple(&variables.enable_server_deprecate_eof, false);
 		VariablesPointers_bool["enable_load_data_local_infile"] = make_tuple(&variables.enable_load_data_local_infile, false);
@@ -3781,6 +3784,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___connect_timeout_client = GloPTH->get_variable_int((char*)"connect_timeout_client");
 	pgsql_thread___connect_timeout_server = GloPTH->get_variable_int((char*)"connect_timeout_server");
 	pgsql_thread___connect_timeout_server_max = GloPTH->get_variable_int((char*)"connect_timeout_server_max");
+	pgsql_thread___dns_reverse_lookup = (bool)GloPTH->get_variable_int((char*)"dns_reverse_lookup");
 	pgsql_thread___connection_warming = (bool)GloPTH->get_variable_int((char*)"connection_warming");
 	pgsql_thread___log_unhealthy_connections = (bool)GloPTH->get_variable_int((char*)"log_unhealthy_connections");
 	pgsql_thread___throttle_max_bytes_per_second_to_client = GloPTH->get_variable_int((char*)"throttle_max_bytes_per_second_to_client");
@@ -4131,6 +4135,29 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 			inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
 			sess->client_myds->addr.addr = strdup(buf);
 			sess->client_myds->addr.port = htons(ipv4->sin_port);
+            if (pgsql_thread___dns_reverse_lookup) {
+                struct sockaddr structSockAddr;
+                struct in_addr inIp;
+                memset(&structSockAddr, 0, sizeof(structSockAddr));
+
+                structSockAddr.sa_family = AF_INET;
+                int inetPtonReturnValue = inet_pton(AF_INET, buf, &structSockAddr.sa_data[2]);
+                char hostBuffer[NI_MAXHOST];
+                char serviceBuffer[NI_MAXSERV];
+                int getNameInfoReturnValue = getnameinfo(&structSockAddr,
+                                    sizeof(structSockAddr),
+                                    hostBuffer,
+                                    sizeof(hostBuffer),
+                                    serviceBuffer,
+                                    sizeof(serviceBuffer),
+                                    NI_NAMEREQD);
+                if (getNameInfoReturnValue) {
+                     proxy_warning("DNS reverse lookup of '%s' failed with the error %i\n", buf, getNameInfoReturnValue);
+                }
+                sess->client_myds->addr.hostname = strdup(hostBuffer);
+                proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- IP %s resolved to host %s\n", sess, buf, hostBuffer);
+            }
+
 			break;
 		}
 		case AF_INET6: {

@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #include <vector>       // std::vector
 #include <thread>
 #include <future>
+#include <string>
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "pcrecpp.h"
@@ -93,7 +94,66 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	return s;
 }
 
-static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_regex) {
+static std::string replace_token(const char *source, const char *token, const char *val)  {
+    std::string src, t, v;
+    src = source;
+    t = token;
+    v = val;
+
+    std::size_t pos = -1;
+    while (1) {
+        pos = src.find(t,pos+1);
+        if (pos != std::string::npos) {
+            src.replace(pos,t.length(),v);
+        } else {
+            break;
+        }
+    }
+
+    return src;
+}
+
+static std::string replace_all_token(const char *source, char *hostname, char *username, char *x509_subject_name)  {
+
+   // username
+    std::string res = replace_token(source,"@USERNAME@",username);
+
+   // hostname if reverse lookup is enabled
+   if (mysql_thread___dns_reverse_lookup) {
+       if (strlen(hostname) > 0) {
+           res = replace_token(res.c_str(),"@HOSTNAME@",hostname);
+       } else {
+           // in case of error or timeout with DNS, maybe unneeded
+           res = replace_token(res.c_str(),"@HOSTNAME@","");
+       }
+   }
+
+   // it is not optimal to extract the CN every time here, should be in mysql_data_stream.cpp
+   // for the POC, it is ok (and simpler)
+   if (x509_subject_name) {
+       // CN,  regexp to extract from x509_subject_name: .*\/CN=([a-zA-Z0-9\*\.\-]*).*
+       // typical subject can be: /C=US/ST=California/L=Mountain View/O=Google Inc/CN=*.google.com
+       RE2 re(".*/CN=([a-zA-Z0-9\052\056\055]*).*",RE2::Quiet);
+
+       // to remove when proved to compile ok
+       if (!re.ok()) {
+           proxy_error("Regex compile error extracting CN: %s\n", re.error().c_str());
+       }
+
+       string cn;
+       if (RE2::FullMatch(x509_subject_name, re, &cn)) {
+           res = replace_token(res.c_str(),"@CN@",cn.c_str());
+       }
+
+       // could eventually add extraction for the other fields like C, ST, L, O
+   }
+
+   proxy_info("With tokens replaced = %s\n", res.c_str());
+
+    return res;
+}
+
+static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_regex, char *hostname, char *username, char *x509_subject_name) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
 	r->re1=NULL;
@@ -105,9 +165,9 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_rege
 			r->opt2->set_case_sensitive(false);
 		}
 		if (i==1) {
-			r->re2=new RE2(qr->match_digest, *r->opt2);
+			r->re2=new RE2(replace_all_token(qr->match_digest,hostname,username,x509_subject_name).c_str(), *r->opt2);
 		} else if (i==2) {
-			r->re2=new RE2(qr->match_pattern, *r->opt2);
+			r->re2=new RE2(replace_all_token(qr->match_pattern,hostname,username,x509_subject_name).c_str(), *r->opt2);
 		}
 	} else {
 		r->opt1=new pcrecpp::RE_Options();
@@ -115,9 +175,9 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_rege
 			r->opt1->set_caseless(true);
 		}
 		if (i==1) {
-			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
+			r->re1=new pcrecpp::RE(replace_all_token(qr->match_digest,hostname,username,x509_subject_name).c_str(), *r->opt1);
 		} else if (i==2) {
-			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
+			r->re1=new pcrecpp::RE(replace_all_token(qr->match_pattern,hostname,username,x509_subject_name).c_str(), *r->opt1);
 		}
 	}
 	return r;
@@ -135,6 +195,7 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->proxy_addr);
 	if (qr->match_digest)
 		free(qr->match_digest);
+
 	if (qr->match_pattern)
 		free(qr->match_pattern);
 	if (qr->replace_pattern)
@@ -1304,11 +1365,13 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: %s\n", qr2->rule_id, qr2->match_digest);
-					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex),sess->client_myds->addr.hostname,
+                                                                  sess->client_myds->myconn->userinfo->username,sess->client_myds->x509_subject_name);
 				}
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: %s\n", qr2->rule_id, qr2->match_pattern);
-					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex),sess->client_myds->addr.hostname,
+                                                                  sess->client_myds->myconn->userinfo->username,sess->client_myds->x509_subject_name);
 				}
 				_thr_SQP_rules->push_back(qr2);
 			}
