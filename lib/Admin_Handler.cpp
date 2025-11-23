@@ -592,25 +592,38 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		// ----- Wait for admin queries to complete (issue 5186) -----
 		int wait_time_ms = 0;
 		int max_wait_time_ms = 30000; // 30 seconds timeout
+		uint64_t last_active_queries = glovars.active_admin_queries;
+		int stable_count = 0;
 
-		while (glovars.active_admin_queries > 0 && wait_time_ms < max_wait_time_ms) {
+		proxy_info("PROXYSQL STOP: Initial admin query count: %lu\n", (unsigned long)glovars.active_admin_queries);
+
+		// Wait for all other admin queries to complete (subtract 1 for current PROXYSQL STOP query)
+		while (glovars.active_admin_queries > 1 && wait_time_ms < max_wait_time_ms) {
 			usleep(100000); // 100ms intervals
 			wait_time_ms += 100;
 
+			if (last_active_queries == glovars.active_admin_queries) {
+				stable_count++;
+			} else {
+				stable_count = 0;
+				last_active_queries = glovars.active_admin_queries;
+				proxy_info("PROXYSQL STOP: Admin query count changed to: %lu\n", (unsigned long)glovars.active_admin_queries);
+			}
+
 			if (wait_time_ms % 1000 == 0) {
-				proxy_info("PROXYSQL STOP: Waiting for %lu admin queries to complete (%d/%ds)...\n",
-						  (unsigned long)glovars.active_admin_queries, wait_time_ms/1000, max_wait_time_ms/1000);
+				proxy_info("PROXYSQL STOP: Waiting for %lu admin queries to complete (%d/%ds), stable for %d cycles\n",
+						  (unsigned long)(glovars.active_admin_queries - 1), wait_time_ms/1000, max_wait_time_ms/1000, stable_count);
 			}
 		}
 
-		if (glovars.active_admin_queries > 0) {
-			proxy_warning("PROXYSQL STOP: %lu admin queries still active after timeout, proceeding with shutdown\n",
-						  (unsigned long)glovars.active_admin_queries);
+		if (glovars.active_admin_queries > 1) {
+			proxy_warning("PROXYSQL STOP: %lu admin queries still active after timeout (stable count: %d), proceeding with module stop\n",
+						  (unsigned long)(glovars.active_admin_queries - 1), stable_count);
 		} else {
-			proxy_info("PROXYSQL STOP: All admin queries completed, proceeding with shutdown\n");
+			proxy_info("PROXYSQL STOP: All admin queries completed, proceeding with module stop\n");
 		}
 
-		// ----- Common shutdown actions -----
+		// ----- Common module stop actions -----
 		glovars.reload = 2;
 		glovars.stop_state = STOP_STATE_STOPPED;
 
@@ -618,16 +631,30 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (GloVars.prometheus_registry)
 			GloVars.prometheus_registry->ResetCounters();
 
-		// Signal shutdown and wait for completion
+		// Signal module stop and wait for completion
+		proxy_info("PROXYSQL STOP: Starting thread shutdown sequence\n");
 		__sync_bool_compare_and_swap(&glovars.shutdown, 0, 1);
-		GloMTH->signal_all_threads(0);
-		GloPTH->signal_all_threads(0);
 
+		proxy_info("PROXYSQL STOP: Signaling MySQL threads to shutdown\n");
+		GloMTH->signal_all_threads(0);
+		proxy_info("PROXYSQL STOP: MySQL threads signaled\n");
+
+		proxy_info("PROXYSQL STOP: Signaling PgSQL threads to shutdown\n");
+		GloPTH->signal_all_threads(0);
+		proxy_info("PROXYSQL STOP: PgSQL threads signaled\n");
+
+		proxy_info("PROXYSQL STOP: Entering shutdown wait loop\n");
+		int wait_count = 0;
 		while (__sync_fetch_and_add(&glovars.shutdown, 0) == 1) {
 			usleep(1000);
+			wait_count++;
+			if (wait_count % 1000 == 0) { // Log every 1 second
+				proxy_info("PROXYSQL STOP: Still waiting for thread shutdown, count=%d\n", wait_count);
+			}
 		}
+		proxy_info("PROXYSQL STOP: Exited shutdown wait loop after %d iterations\n", wait_count);
 
-		proxy_info("PROXYSQL STOP: Shutdown completed, modules stopped\n");
+		proxy_info("PROXYSQL STOP: Module stop completed, all modules stopped\n");
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 
 		return false;
@@ -2950,6 +2977,39 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 	{
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		// Check if this is a dangerous query that should be blocked during STOP states (issue 5186)
+		if (glovars.stop_state != STOP_STATE_RUNNING && sess->session_type == PROXYSQL_SESSION_ADMIN) {
+			// Block dangerous runtime_* queries that access destroyed modules
+			if (!strncasecmp(query_no_space, "SELECT COUNT(*) FROM runtime_mysql_query_rules", strlen("SELECT COUNT(*) FROM runtime_mysql_query_rules")) ||
+				!strncasecmp(query_no_space, "SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing", strlen("SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing")) ||
+				!strncasecmp(query_no_space, "SELECT COUNT(*) FROM runtime_mysql_users", strlen("SELECT COUNT(*) FROM runtime_mysql_users")) ||
+				!strncasecmp(query_no_space, "SELECT COUNT(*) FROM stats_mysql_query_digest", strlen("SELECT COUNT(*) FROM stats_mysql_query_digest")) ||
+				!strncasecmp(query_no_space, "SELECT * FROM runtime_mysql_query_rules", strlen("SELECT * FROM runtime_mysql_query_rules")) ||
+				!strncasecmp(query_no_space, "SELECT * FROM runtime_mysql_query_rules_fast_routing", strlen("SELECT * FROM runtime_mysql_query_rules_fast_routing")) ||
+				!strncasecmp(query_no_space, "SELECT * FROM runtime_mysql_users", strlen("SELECT * FROM runtime_mysql_users")) ||
+				!strncasecmp(query_no_space, "SELECT * FROM stats_mysql_query_digest", strlen("SELECT * FROM stats_mysql_query_digest"))) {
+
+				// Return empty resultset instead of crashing
+				l_free(query_length, query);
+
+				SQLite3_result *resultset = new SQLite3_result(1);
+				resultset->add_column_definition(SQLITE_TEXT, "COUNT(*)");
+
+				// Add a single row with 0 for COUNT(*) queries
+				SQLite3_row *row = new SQLite3_row(1);
+				char *field_val = strdup("0");
+				row->fields[0] = field_val;
+				resultset->add_row(row);
+
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				delete resultset;
+				delete row;
+				free(field_val);
+
+				run_query = false;
+				goto __run_query;
+			}
+		}
 		needs_vacuum = SPA->GenericRefreshStatistics(query_no_space,query_no_space_length, ( sess->session_type == PROXYSQL_SESSION_ADMIN ? true : false )  );
 	}
 
