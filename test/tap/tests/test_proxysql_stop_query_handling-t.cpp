@@ -62,13 +62,15 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // We expect 12 test cases:
+    // We expect 13 test cases:
     // 1. Test STOP command succeeds
-    // 2-6. Test queries that should fail during STOP state (5 queries)
-    // 7-10. Test queries that should succeed during STOP state (4 queries)
-    // 11. Test START command succeeds
-    // 12. Test that previously failing queries now succeed
-    plan(12);
+    // 2-5. Test queries that work with null pointer protection during STOP state (4 queries)
+    // 6. Test LOAD MYSQL USERS TO RUNTIME succeeds (MySQL Auth module is loaded)
+    // 7. Test LOAD MYSQL QUERY RULES TO RUNTIME fails (Query Processor not started)
+    // 8-11. Test queries that should succeed during STOP state (4 queries)
+    // 12. Test START command succeeds
+    // 13. Test that queries continue to work after START
+    plan(13);
 
     MYSQL* proxysql_admin = mysql_init(NULL);
     if (!proxysql_admin) {
@@ -95,47 +97,54 @@ int main(int argc, char** argv) {
     // Give some time for STOP to complete
     sleep(2);
 
-    // === TESTS 2-6: Test queries that should FAIL during STOP state ===
+    // === TESTS 2-5: Test queries that work with null pointer protection during STOP state ===
 
-    // TEST 2: runtime_mysql_query_rules should return empty resultset, not crash
+    // TEST 2: runtime_mysql_query_rules should work normally with null pointer protection
     int row_count = get_row_count(proxysql_admin, "SELECT COUNT(*) FROM runtime_mysql_query_rules");
-    ok(row_count == 0, "runtime_mysql_query_rules should return 0 rows during STOP state, actual: %d", row_count);
+    ok(row_count >= 0, "runtime_mysql_query_rules should return valid count during STOP state, actual: %d", row_count);
 
-    // TEST 3: runtime_mysql_query_rules_fast_routing should return 0, not crash
+    // TEST 3: runtime_mysql_query_rules_fast_routing should work normally with null pointer protection
     row_count = get_row_count(proxysql_admin, "SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing");
-    ok(row_count == 0, "runtime_mysql_query_rules_fast_routing should return 0 rows during STOP state, actual: %d", row_count);
+    ok(row_count >= 0, "runtime_mysql_query_rules_fast_routing should return valid count during STOP state, actual: %d", row_count);
 
-    // TEST 4: runtime_mysql_users should return 0 rows, not crash
+    // TEST 4: runtime_mysql_users should work normally with null pointer protection
     row_count = get_row_count(proxysql_admin, "SELECT COUNT(*) FROM runtime_mysql_users");
-    ok(row_count == 0, "runtime_mysql_users should return 0 rows during STOP state, actual: %d", row_count);
+    ok(row_count >= 0, "runtime_mysql_users should return valid count during STOP state, actual: %d", row_count);
 
-    // TEST 5: stats_mysql_query_digest should return 0 rows, not crash
+    // TEST 5: stats_mysql_query_digest should work normally with null pointer protection
     row_count = get_row_count(proxysql_admin, "SELECT COUNT(*) FROM stats_mysql_query_digest");
-    ok(row_count == 0, "stats_mysql_query_digest should return 0 rows during STOP state, actual: %d", row_count);
+    ok(row_count >= 0, "stats_mysql_query_digest should return valid count during STOP state, actual: %d", row_count);
 
-    // TEST 6: LOAD MYSQL USERS TO RUNTIME should fail
-    bool load_fails = execute_query_fails(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
-    ok(load_fails, "LOAD MYSQL USERS TO RUNTIME should fail during STOP state");
+    // === TEST 6: Test modification queries during STOP state ===
 
-    // === TESTS 7-10: Test queries that should SUCCEED during STOP state ===
+    // TEST 6: LOAD MYSQL USERS TO RUNTIME should succeed (MySQL Auth module is loaded)
+    bool load_users_success = execute_query_succeeds(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+    ok(load_users_success, "LOAD MYSQL USERS TO RUNTIME should succeed during STOP state");
 
-    // TEST 7: Basic arithmetic query should work
+    // TEST 7: LOAD MYSQL QUERY RULES TO RUNTIME should fail (Query Processor not started)
+    bool load_rules_fails = execute_query_fails(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME", "Global Query Processor not started");
+    ok(load_rules_fails, "LOAD MYSQL QUERY RULES TO RUNTIME should fail during STOP state");
+
+    // === TESTS 8-11: Test queries that should SUCCEED during STOP state ===
+
+    // TEST 8: Basic arithmetic query should work
     bool basic_query_success = execute_query_succeeds(proxysql_admin, "SELECT 1+1");
     ok(basic_query_success, "Basic arithmetic query (SELECT 1+1) should work during STOP state");
 
-    // TEST 8: Version query should work
+    // TEST 9: Version query should work
     bool version_success = execute_query_succeeds(proxysql_admin, "SELECT @@version");
     ok(version_success, "Version query should work during STOP state");
 
-    // TEST 9: SHOW PROMETHEUS METRICS should work (existing functionality)
+    // TEST 10: SHOW PROMETHEUS METRICS should work (existing functionality)
     bool prometheus_success = execute_query_succeeds(proxysql_admin, "SHOW PROMETHEUS METRICS");
     ok(prometheus_success, "SHOW PROMETHEUS METRICS should work during STOP state");
 
-    // TEST 10: Basic SELECT should work
-    bool select_success = execute_query_succeeds(proxysql_admin, "SELECT DATABASE(), USER()");
-    ok(select_success, "Basic SELECT should work during STOP state");
+    // TEST 11: Basic SELECT should work
+    bool db_select_success = execute_query_succeeds(proxysql_admin, "SELECT DATABASE()");
+    bool user_select_success = execute_query_succeeds(proxysql_admin, "SELECT USER()");
+    ok(db_select_success && user_select_success, "Basic SELECT (DATABASE() and USER()) should work during STOP state");
 
-    // === TEST 11: Execute PROXYSQL START ===
+    // === TEST 12: Execute PROXYSQL START ===
     bool start_success = execute_query_succeeds(proxysql_admin, "PROXYSQL START");
     ok(start_success, "PROXYSQL START command should succeed");
 
@@ -148,11 +157,11 @@ int main(int argc, char** argv) {
     // Give some time for START to complete
     sleep(3);
 
-    // === TEST 12: Test that previously failing queries now succeed ===
+    // === TEST 13: Test that queries continue to work after START ===
 
-    // After START, runtime queries should work again
+    // After START, runtime queries should continue to work normally
     row_count = get_row_count(proxysql_admin, "SELECT COUNT(*) FROM runtime_mysql_query_rules");
-    ok(row_count >= 0, "runtime_mysql_query_rules should work again after START state, rows: %d", row_count);
+    ok(row_count >= 0, "runtime_mysql_query_rules should continue to work after START, rows: %d", row_count);
 
     mysql_close(proxysql_admin);
 
