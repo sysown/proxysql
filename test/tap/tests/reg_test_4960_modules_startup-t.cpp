@@ -157,7 +157,6 @@ bool check_port_listening(int port, int timeout = 2) {
             }
             diag("DEBUG: Port %d is NOT listening (result=%d)", port, result);
         }
-        sleep(1);
     }
     diag("DEBUG: Port %d timeout completed, returning false", port);
     return false;
