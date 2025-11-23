@@ -489,20 +489,50 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (glovars.stop_state == STOP_STATE_STOPPED) {
 			proxy_info("PROXYSQL START: Restarting modules after STOP\n");
 
-			// Reinitialize modules after STOP
-			ProxySQL_Main_init_main_modules();
+			/*
+			 * CRITICAL: Why proper restart after PROXYSQL STOP is essential
+			 * =================================================================
+			 *
+			 * PROXYSQL STOP performs a complete shutdown of all core modules:
+			 * 1. MySQL and PgSQL thread pools (GloMTH, GloPTH) are shutdown
+			 * 2. Query Processors (GloMyQPro, GloMyAuth, etc.) are destroyed
+			 * 3. All global module pointers are set to NULL
+			 * 4. Thread synchronization objects are cleaned up
+			 *
+			 * Simply calling ProxySQL_Main_init_main_modules() is INSUFFICIENT because:
+			 * - It doesn't properly reinitialize thread synchronization
+			 * - It doesn't restart the MySQL/PgSQL thread pools
+			 * - It doesn't ensure proper thread initialization sequencing
+			 * - It leaves modules in inconsistent state
+			 *
+			 * Without complete reinitialization, admin queries will crash with:
+			 * - Segmentation faults accessing destroyed Query Processor modules
+			 * - Race conditions with partially initialized thread pools
+			 * - NULL pointer dereferences in GloMyQPro, GloMyAuth, etc.
+			 * - Lock contention on destroyed synchronization objects
+			 *
+			 * SOLUTION: Simulate initial startup conditions:
+			 * 1. Set GloVars.global.nostart = 1 (simulate "not started" state)
+			 * 2. Set admin_nostart_ = true (trigger startup logic)
+			 * 3. Let the normal START sequence reinitialize everything properly
+			 * 4. Ensure thread pools, query processors, and sync objects are rebuilt
+			 * 5. Maintain same initialization order as initial startup
+			 *
+			 * This prevents crashes and ensures full STOP/START functionality.
+			 */
 
-			// Reset state to running
+			// Reset state to running and set nostart_ to trigger normal startup sequence
 			glovars.stop_state = STOP_STATE_RUNNING;
 			glovars.reload = 0;
 			glovars.shutdown = 0;
+			// Set nostart_ to true so the normal startup logic will trigger
+			GloVars.global.nostart = 1;
 
-			proxy_info("PROXYSQL START: Modules restarted successfully\n");
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
+			// Continue to normal startup logic below
+			admin_nostart_ = true;
 		}
 
-		// Handle normal START (initial startup)
+		// Handle normal START (initial startup or restart after STOP)
 		if (admin_nostart_) {
 			rc = __sync_bool_compare_and_swap(&GloVars.global.nostart, 1, 0);
 		}
