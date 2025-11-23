@@ -4282,6 +4282,13 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 }
 
 void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runtime) {
+	// Check if Query Processor is initialized (issue 5186)
+	// Prevent crashes during PROXYSQL START race conditions
+	if (GloMyQPro == nullptr) {
+		proxy_warning("MySQL Query Processor not initialized, skipping save_mysql_query_rules_fast_routing_from_runtime\n");
+		return;
+	}
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_mysql_query_rules_fast_routing");
 	} else {
@@ -4347,6 +4354,13 @@ void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runt
 }
 
 void ProxySQL_Admin::save_pgsql_query_rules_fast_routing_from_runtime(bool _runtime) {
+	// Check if PgSQL Query Processor is initialized (issue 5186)
+	// Prevent crashes during PROXYSQL START race conditions
+	if (GloPgQPro == nullptr) {
+		proxy_warning("PgSQL Query Processor not initialized, skipping save_pgsql_query_rules_fast_routing_from_runtime\n");
+		return;
+	}
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_pgsql_query_rules_fast_routing");
 	}
@@ -4416,6 +4430,13 @@ void ProxySQL_Admin::save_pgsql_query_rules_fast_routing_from_runtime(bool _runt
 }
 
 void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
+	// Check if Query Processor is initialized (issue 5186)
+	// Prevent crashes during PROXYSQL START race conditions
+	if (GloMyQPro == nullptr) {
+		proxy_warning("MySQL Query Processor not initialized, skipping save_mysql_query_rules_from_runtime\n");
+		return;
+	}
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_mysql_query_rules");
 	} else {
@@ -4501,6 +4522,13 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 }
 
 void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
+	// Check if PgSQL Query Processor is initialized (issue 5186)
+	// Prevent crashes during PROXYSQL START race conditions
+	if (GloPgQPro == nullptr) {
+		proxy_warning("PgSQL Query Processor not initialized, skipping save_pgsql_query_rules_from_runtime\n");
+		return;
+	}
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_pgsql_query_rules");
 	}
