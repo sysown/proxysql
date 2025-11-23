@@ -55,11 +55,13 @@ int launch_proxysql_instance(const TestCase& test_case, const CommandLine& cl, i
 
     // Clean up existing datadir if it exists
     string cleanup_cmd = "rm -rf " + test_datadir;
-    system(cleanup_cmd.c_str());
+    int cleanup_result = system(cleanup_cmd.c_str());
+    (void)cleanup_result; // Suppress unused warning
 
     // Create test datadir
     string mkdir_cmd = "mkdir -p " + test_datadir;
-    system(mkdir_cmd.c_str());
+    int mkdir_result = system(mkdir_cmd.c_str());
+    (void)mkdir_result; // Suppress unused warning
 
     // Create config file
     std::ofstream config_file(test_config_file);
@@ -190,14 +192,16 @@ int run_test_case(const TestCase& test_case, const CommandLine& cl) {
     string cleanup_mysql_worker = "fuser -k " + std::to_string(test_case.mysql_worker_port) + "/tcp 2>/dev/null || true";
     string cleanup_pgsql_worker = "fuser -k " + std::to_string(test_case.pgsql_worker_port) + "/tcp 2>/dev/null || true";
 
-    system(cleanup_mysql_admin.c_str());
-    system(cleanup_pgsql_admin.c_str());
-    system(cleanup_mysql_worker.c_str());
-    system(cleanup_pgsql_worker.c_str());
+    int result1 = system(cleanup_mysql_admin.c_str());
+    int result2 = system(cleanup_pgsql_admin.c_str());
+    int result3 = system(cleanup_mysql_worker.c_str());
+    int result4 = system(cleanup_pgsql_worker.c_str());
+    (void)result1; (void)result2; (void)result3; (void)result4; // Suppress unused warnings
 
     // Also kill any remaining ProxySQL processes from previous test cases
     string kill_all_cmd = "pkill -f \"proxysql.*reg_test_4960_node_\" 2>/dev/null || true";
-    system(kill_all_cmd.c_str());
+    int kill_result = system(kill_all_cmd.c_str());
+    (void)kill_result; // Suppress unused warning
     sleep(2);  // Give time for cleanup to complete
 
     diag("  Pre-test cleanup completed");
@@ -295,7 +299,8 @@ int run_test_case(const TestCase& test_case, const CommandLine& cl) {
     // Force kill any remaining ProxySQL processes to ensure cleanup
     diag("  Force killing any remaining ProxySQL processes...");
     string kill_cmd = "pkill -f \"proxysql.*" + string { cl.workdir } + "reg_test_4960_node_" + test_case.name + "\" 2>/dev/null || true";
-    system(kill_cmd.c_str());
+    int force_kill_result = system(kill_cmd.c_str());
+    (void)force_kill_result; // Suppress unused warning
     sleep(1);
 
     // Additional cleanup - kill by port if needed
@@ -308,10 +313,11 @@ int run_test_case(const TestCase& test_case, const CommandLine& cl) {
     }
 
     // Additional post-test cleanup for safety
-    system(cleanup_mysql_admin.c_str());
-    system(cleanup_pgsql_admin.c_str());
-    system(cleanup_mysql_worker.c_str());
-    system(cleanup_pgsql_worker.c_str());
+    int post_result1 = system(cleanup_mysql_admin.c_str());
+    int post_result2 = system(cleanup_pgsql_admin.c_str());
+    int post_result3 = system(cleanup_mysql_worker.c_str());
+    int post_result4 = system(cleanup_pgsql_worker.c_str());
+    (void)post_result1; (void)post_result2; (void)post_result3; (void)post_result4; // Suppress unused warnings
 
     diag("  Post-test cleanup completed");
 
@@ -330,7 +336,9 @@ int main(int argc, char** argv) {
 
     // Check for required system tools upfront
     diag("Checking for required system tools...");
-    if (system("which nc >/dev/null 2>&1") != 0) {
+    int nc_check_result = system("which nc >/dev/null 2>&1");
+    (void)nc_check_result; // Suppress unused result warning
+    if (nc_check_result != 0) {
         diag("ERROR: 'nc' (netcat) command not found. Please install netcat to run this test.");
         diag("On Ubuntu/Debian: sudo apt-get install netcat-openbsd");
         diag("On CentOS/RHEL: sudo yum install nc");
@@ -384,7 +392,7 @@ int main(int argc, char** argv) {
             "{\n"
             "    interfaces=\"127.0.0.1:13757\"\n"
             "}\n",
-            13754, 13755, 13756, 13757, true, false, false, false, true
+            13754, 13755, 13756, 13757, true, false, true, false, false
         },
 
         // 0010: only mysql-admin enabled
@@ -494,7 +502,7 @@ int main(int argc, char** argv) {
             "{\n"
             "    interfaces=\"127.0.0.1:13777\"\n"
             "}\n",
-            13774, 13775, 13776, 13777, true, true, true, false, false
+            13774, 13775, 13776, 13777, true, true, false, false, true
         },
 
         // 0111: pgsql-workers + mysql-admin + pgsql-admin enabled
@@ -582,7 +590,7 @@ int main(int argc, char** argv) {
             "{\n"
             "    interfaces=\"127.0.0.1:13793\"\n"
             "}\n",
-            13790, 13791, 13792, 13793, true, true, true, true, false
+            13790, 13791, 13792, 13793, true, true, false, true, false
         },
 
         // 1011: mysql-workers + mysql-admin + pgsql-admin enabled
@@ -648,7 +656,7 @@ int main(int argc, char** argv) {
             "{\n"
             "    interfaces=\"127.0.0.1:13805\"\n"
             "}\n",
-            13802, 13803, 13804, 13805, true, false, true, true, false
+            13802, 13803, 13804, 13805, true, false, true, true, true
         },
 
         // 1110: both workers + mysql-admin enabled
@@ -670,7 +678,7 @@ int main(int argc, char** argv) {
             "{\n"
             "    interfaces=\"127.0.0.1:13809\"\n"
             "}\n",
-            13806, 13807, 13808, 13809, true, true, true, true, false
+            13806, 13807, 13808, 13809, true, true, false, true, true
         },
 
         // 1111: all enabled (default)
@@ -692,7 +700,7 @@ int main(int argc, char** argv) {
             "{\n"
             "    interfaces=\"127.0.0.1:13813\"\n"
             "}\n",
-            13810, 13811, true, true, true
+            13810, 13811, 13812, 13813, true, true, true, true, true
         }
     };
 
