@@ -3019,9 +3019,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				!strncasecmp(query_no_space, "SELECT * FROM runtime_mysql_users", strlen("SELECT * FROM runtime_mysql_users")) ||
 				!strncasecmp(query_no_space, "SELECT * FROM stats_mysql_query_digest", strlen("SELECT * FROM stats_mysql_query_digest"))) {
 
-				// Return empty resultset instead of crashing
-				l_free(query_length, query);
+				//l_free(query_length, query); // ASAN correctly reports a double free
 
+				// Return empty resultset instead of crashing
 				SQLite3_result *resultset = new SQLite3_result(1);
 				resultset->add_column_definition(SQLITE_TEXT, "COUNT(*)");
 
