@@ -128,9 +128,13 @@ int launch_proxysql_instance(const MonitorTestCase& test_case, const CommandLine
         cmd += " " + string(arg);
     }
 
-    // Start ProxySQL in background
-    diag("  Starting ProxySQL with command: %s", cmd.c_str());
-    int start_result = system((cmd + " &").c_str());
+    // Create log file path
+    const string log_file = test_datadir + "/proxysql.log";
+
+    // Start ProxySQL in background with output redirected to log file
+    diag("  Starting ProxySQL with output redirected to %s", log_file.c_str());
+    string full_cmd = cmd + " > " + log_file + " 2>&1 &";
+    int start_result = system(full_cmd.c_str());
     (void)start_result;
 
     // Wait a bit for startup
