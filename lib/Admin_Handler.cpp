@@ -3005,7 +3005,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			goto __run_query;
 		}
 	}
+#if 0
 	{
+		// this block seems unnecessary, as we have enough fencing
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		// Check if this is a dangerous query that should be blocked during STOP states (issue 5186)
 		if (glovars.stop_state != STOP_STATE_RUNNING && sess->session_type == PROXYSQL_SESSION_ADMIN) {
@@ -3042,7 +3044,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 		needs_vacuum = SPA->GenericRefreshStatistics(query_no_space,query_no_space_length, ( sess->session_type == PROXYSQL_SESSION_ADMIN ? true : false )  );
 	}
-
+#endif // 0
 
 	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'read_only'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'read_only'"))) {
 		l_free(query_length,query);
