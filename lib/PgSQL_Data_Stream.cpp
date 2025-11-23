@@ -6,7 +6,7 @@
 #define UNIX_PATH_MAX    108
 #endif 
 
-#include "MySQL_PreparedStatement.h"
+#include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Data_Stream.h"
 
 #include "openssl/x509v3.h"
@@ -224,10 +224,10 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	proxy_addr.port = 0;
 
 	sess = NULL;
-	mysql_real_query.pkt.ptr = NULL;
-	mysql_real_query.pkt.size = 0;
-	mysql_real_query.QueryPtr = NULL;
-	mysql_real_query.QuerySize = 0;
+	pgsql_real_query.pkt.ptr = NULL;
+	pgsql_real_query.pkt.size = 0;
+	pgsql_real_query.QueryPtr = NULL;
+	pgsql_real_query.QuerySize = 0;
 
 	query_retries_on_failure = 0;
 	connect_retries_on_failure = 0;
@@ -235,6 +235,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	wait_until = 0;
 	pause_until = 0;
 	kill_type = 0;
+	cancel_query = false;
 	connect_tries = 0;
 	poll_fds_idx = -1;
 	//resultset_length = 0;
@@ -267,8 +268,8 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	CompPktOUT.pkt.ptr = NULL;
 	CompPktOUT.pkt.size = 0;
 	CompPktOUT.partial = 0;
-	multi_pkt.ptr = NULL;
-	multi_pkt.size = 0;
+	//multi_pkt.ptr = NULL;
+	//multi_pkt.size = 0;
 
 	statuses.questions = 0;
 	statuses.pgconnpoll_get = 0;
@@ -296,7 +297,7 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		proxy_addr.addr = NULL;
 	}
 
-	free_mysql_real_query();
+	free_pgsql_real_query();
 
 	if (com_field_wild) {
 		free(com_field_wild);
@@ -319,15 +320,8 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		}
 		delete PSarrayOUT;
 	}
-	/*if (resultset) {
-		while (resultset->len) {
-			resultset->remove_index_fast(0, &pkt);
-			l_free(pkt.size, pkt.ptr);
-		}
-		delete resultset;
-	}*/
-	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
+	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
 	if (fd > 0) {
 		//	// Changing logic here. The socket should be closed only if it is not a backend
@@ -353,11 +347,11 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		}
 		if (ssl) SSL_free(ssl);
 	}
-	if (multi_pkt.ptr) {
-		l_free(multi_pkt.size, multi_pkt.ptr);
-		multi_pkt.ptr = NULL;
-		multi_pkt.size = 0;
-	}
+	//if (multi_pkt.ptr) {
+	//	l_free(multi_pkt.size, multi_pkt.ptr);
+	//	multi_pkt.ptr = NULL;
+	//	multi_pkt.size = 0;
+	//}
 	if (CompPktIN.pkt.ptr) {
 		l_free(CompPktIN.pkt.size, CompPktIN.pkt.ptr);
 		CompPktIN.pkt.ptr = NULL;
@@ -404,7 +398,7 @@ void PgSQL_Data_Stream::reinit_queues() {
 }
 
 // this function initializes a PgSQL_Data_Stream with arguments
-void PgSQL_Data_Stream::init(enum MySQL_DS_type _type, PgSQL_Session* _sess, int _fd) {
+void PgSQL_Data_Stream::init(PgSQL_DS_type _type, PgSQL_Session* _sess, int _fd) {
 	myds_type = _type;
 	sess = _sess;
 	init();
@@ -446,7 +440,7 @@ void PgSQL_Data_Stream::shut_hard() {
 void PgSQL_Data_Stream::check_data_flow() {
 	if ((PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
 		// there is data at both sides of the data stream: this is considered a fatal error
-		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
+		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a PgSQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
 		shut_soft();
 		generate_coredump();
 	}
@@ -550,7 +544,7 @@ int PgSQL_Data_Stream::read_from_net() {
 		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, n, BIO_number_written(rbio_ssl), BIO_number_read(rbio_ssl));
 		if (n > 0 || BIO_number_written(rbio_ssl) > BIO_number_read(rbio_ssl)) {
 			//on_read_cb(buf, (size_t)n);
-
+			enum pgsql_sslstatus status;
 			char buf2[MY_SSL_BUFFER];
 			int n2;
 			//enum pgsql_sslstatus pgsql_status;
@@ -974,7 +968,7 @@ int PgSQL_Data_Stream::array2buffer() {
 
 					//explicitly disable compression
 					//myconn->options.compression_min_length = 0;
-					myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
+					myconn->set_status(false, STATUS_PGSQL_CONNECTION_COMPRESSION);
 				}
 				
 #ifdef DEBUG
@@ -1104,7 +1098,7 @@ int PgSQL_Data_Stream::array2buffer_full() {
 	return rc;
 }
 
-int PgSQL_Data_Stream::assign_fd_from_mysql_conn() {
+int PgSQL_Data_Stream::assign_fd_from_pgsql_conn() {
 	assert(myconn);
 	//proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->myconn.net.fd);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->fd);
@@ -1148,7 +1142,8 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	unsigned long long intv = pgsql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
-		((intv) && (mc->last_time_used > mc->creation_time + intv))
+		(((intv) && (mc->last_time_used > mc->creation_time + intv)) ||
+		(mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloPTH->variables.max_stmts_per_connection))
 		&&
 		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
 		// no need to reset the session. The destruction and creation of a new
@@ -1169,9 +1164,9 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	}
 }
 
-void PgSQL_Data_Stream::free_mysql_real_query() {
-	if (mysql_real_query.QueryPtr) {
-		mysql_real_query.end();
+void PgSQL_Data_Stream::free_pgsql_real_query() {
+	if (pgsql_real_query.QueryPtr) {
+		pgsql_real_query.end();
 	}
 }
 
@@ -1207,12 +1202,16 @@ bool PgSQL_Data_Stream::data_in_rbio() {
 void PgSQL_Data_Stream::reset_connection() {
 	if (myconn) {
 		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true &&
-			myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
+			myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE &&
+			myconn->is_pipeline_active() == false) {
 			myconn->last_time_used = sess->thread->curtime;
 			return_MySQL_Connection_To_Pool();
 		} else {
 			if (sess && sess->session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
-				destroy_MySQL_Connection_From_Pool(true);
+				// If the startup connection includes untracked session parameters (passed via options=),
+				// the connection must be destroyed instead of returned to the pool. Issue #5102
+				bool can_reuse_connection = sess->untracked_option_parameters.empty();
+				destroy_MySQL_Connection_From_Pool(can_reuse_connection);
 			} else {
 				destroy_MySQL_Connection_From_Pool(false);
 			}
@@ -1233,7 +1232,6 @@ int PgSQL_Data_Stream::buffer2array() {
 	if ((queueIN.pkt.size == 0) && queue_data(queueIN) >= sizeof(header)) {
 		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new packet\n", sess);
 		memcpy(header, queue_r_ptr(queueIN), sizeof(header));
-		//pkt_sid=queueIN.hdr.pkt_id;
 		queue_r(queueIN, sizeof(header));
 		uint32_t pkgsize = 0;
 

@@ -17,6 +17,10 @@
 
 #include "proxysql_typedefs.h"
 
+#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    2 * 1024 * 1024  //  2 MiB
+#define PROCESSLIST_MAX_QUERY_LEN_MIN        1 * 1024         //  1 KiB
+#define PROCESSLIST_MAX_QUERY_LEN_MAX       32 * 1024 * 1024  // 32 MiB
+
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
 class ProxySQL_Restapi;
@@ -146,13 +150,13 @@ extern int admin__web_verbosity;
 
 struct incoming_servers_t {
 	SQLite3_result* incoming_mysql_servers_v2 = NULL;
-	SQLite3_result* runtime_mysql_servers = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_group_replication_hostgroups = NULL;
 	SQLite3_result* incoming_galera_hostgroups = NULL;
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
 	SQLite3_result* incoming_mysql_servers_ssl_params = NULL;
+	SQLite3_result* runtime_mysql_servers = NULL;
 
 	incoming_servers_t();
 	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
@@ -195,9 +199,9 @@ struct peer_mysql_servers_v2_t {
 
 struct incoming_pgsql_servers_t {
 	SQLite3_result* incoming_pgsql_servers_v2 = NULL;
-	SQLite3_result* runtime_pgsql_servers = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
+	SQLite3_result* runtime_pgsql_servers = NULL;
 
 	incoming_pgsql_servers_t();
 	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
@@ -237,6 +241,13 @@ struct peer_pgsql_servers_v2_t {
 	peer_pgsql_servers_v2_t(SQLite3_result*, const pgsql_servers_v2_checksum_t&);
 };
 
+struct processlist_config_t {
+#ifdef IDLE_THREADS
+	bool show_idle_session;
+#endif
+	int show_extended;
+	int max_query_length;
+};
 
 class ProxySQL_Admin {
 	private:
@@ -317,8 +328,6 @@ class ProxySQL_Admin {
 		int stats_mysql_eventslog_sync_buffer_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
-		int mysql_show_processlist_extended;
-		int pgsql_show_processlist_extended;
 		bool restapi_enabled;
 		bool restapi_enabled_old;
 		int restapi_port;
@@ -335,6 +344,13 @@ class ProxySQL_Admin {
 		int coredump_generation_interval_ms;
 		int coredump_generation_threshold;
 		char* ssl_keylog_file;
+		/**
+		 *   Processlist configurations are owned by MySQL/PgSQL Threads_Handlers.
+		 *   At runtime, ProxySQL_Admin keeps a copy of those variables and uses them
+		 *   for collecting stats.
+		 */
+		processlist_config_t mysql_processlist;
+		processlist_config_t pgsql_processlist;
 	} variables;
 
 	unsigned long long last_p_memory_metrics_ts;
@@ -425,6 +441,7 @@ class ProxySQL_Admin {
 	void disk_upgrade_mysql_users();
 	void disk_upgrade_scheduler();
 	void disk_upgrade_rest_api_routes();
+	void disk_upgrade_pgsql_replication_hostgroups();
 
 #ifdef DEBUG
 	template<enum SERVER_TYPE>
@@ -665,6 +682,7 @@ class ProxySQL_Admin {
 		const bool reset, const bool copy, const SQLite3_result* resultset,
 		const umap_query_digest* digest_umap, const umap_query_digest_text* digest_text_umap
 	);
+	void stats___pgsql_prepared_statements_info();
 
 	void stats___proxysql_servers_checksums();
 	void stats___proxysql_servers_metrics();
@@ -801,6 +819,7 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
+	bool ProxySQL_Test___WatchDog(int type);
 #endif
 	template<typename S>
 	friend void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);

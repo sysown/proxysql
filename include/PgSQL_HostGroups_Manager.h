@@ -46,7 +46,7 @@
 #define MYHGM_PgSQL_SERVERS "CREATE TABLE pgsql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 5432 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define MYHGM_PgSQL_SERVERS_INCOMING "CREATE TABLE pgsql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 5432 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
 #endif /* DEBUG */
-#define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
+#define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
 #define PGHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname, port"
 
@@ -106,36 +106,31 @@ class PgSQL_SrvConnList;
 class PgSQL_SrvC;
 class PgSQL_SrvList;
 class PgSQL_HGC;
-class PgSQL_Errors_stats;
 
-typedef std::unordered_map<std::uint64_t, PgSQL_Errors_stats*> umap_pgsql_errors;
+class PgSQL_Errors_stats {
+public:
+	PgSQL_Errors_stats(int _hostgroup, const char* _hostname, int _port, const char* _username, const char* _address, const char* _dbname,
+		const char* _sqlstate, const char* _errmsg, time_t tn);
+	~PgSQL_Errors_stats();
+	char** get_row();
+	void add_time(unsigned long long n, const char* le);
+	void free_row(char** pta);
 
-class PgSQL_GTID_Server_Data {
-	public:
-	char *address;
-	uint16_t port;
-	uint16_t pgsql_port;
-	char *data;
-	size_t len;
-	size_t size;
-	size_t pos;
-	struct ev_io *w;
-	char uuid_server[64];
-	unsigned long long events_read;
-	gtid_set_t gtid_executed;
-	bool active;
-	PgSQL_GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _pgsql_port);
-	void resize(size_t _s);
-	~PgSQL_GTID_Server_Data();
-	bool readall();
-	bool writeout();
-	bool read_next_gtid();
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
-	void read_all_gtids();
-	void dump();
+private:
+	int hostgroup;
+	char* hostname;
+	int port;
+	char* username;
+	char* client_address;
+	char* dbname;
+	char sqlstate[5 + 1];
+	char* errmsg;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned long long count_star;
 };
 
-
+typedef std::unordered_map<std::uint64_t, std::unique_ptr<PgSQL_Errors_stats>> umap_pgsql_errors;
 
 class PgSQL_SrvConnList {
 	private:
@@ -557,12 +552,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	SQLite3_result* incoming_pgsql_servers_v2;
 
-	std::thread *HGCU_thread;
-
-	std::thread *GTID_syncer_thread;
-	//pthread_t GTID_syncer_thread_id;
-	//pthread_t HGCU_thread_id;
-
 	char rand_del[8];
 	pthread_mutex_t pgsql_errors_mutex;
 	umap_pgsql_errors pgsql_errors_umap;
@@ -593,12 +582,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 */
 	SQLite3_result* pgsql_servers_to_monitor;
 
-	pthread_rwlock_t gtid_rwlock;
-	std::unordered_map <string, PgSQL_GTID_Server_Data *> gtid_map;
-	struct ev_async * gtid_ev_async;
-	struct ev_loop * gtid_ev_loop;
-	struct ev_timer * gtid_ev_timer;
-	bool gtid_missing_nodes;
 	struct {
 		unsigned int servers_table_version;
 		pthread_mutex_t servers_table_version_lock;
@@ -850,7 +833,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	void add_pgsql_errors(int hostgroup, const char* hostname, int port, const char* username, const char* address,
 		const char* dbname, const char* sqlstate, const char* errmsg);
-	SQLite3_result *get_pgsql_errors(bool);
+	std::unique_ptr<SQLite3_result> get_pgsql_errors(bool);
 
 	void shutdown();
 	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);

@@ -306,15 +306,32 @@ public:
 	}
 
 	const std::shared_ptr<http_response> render_POST(const http_request& req) {
-		std::string params=req.get_content();
+		std::string req_path = req.get_path();
+		std::string req_body = req.get_content();
+		std::string content_type = req.get_header(http::http_utils::http_header_content_type);
+
+		// validate Context-Type header
+		// reject unsupported content types
+		if (!content_type.empty() &&
+			content_type.find("application/json") == std::string::npos &&
+			content_type.find("text/json") == std::string::npos &&
+			content_type.find("text/plain") == std::string::npos) {
+#ifdef DEBUG
+			proxy_debug(PROXY_DEBUG_RESTAPI, 1, "Rejected POST - req: '%s', content-type: '%s', req_body: `%s`\n",
+			                                              req_path.c_str(), content_type.c_str(), req_body.c_str());
+#endif
+			auto response = std::shared_ptr<http_response>(new string_response(
+				"{\"error\": \"Unsupported Content-Type\"}",
+				http::http_utils::http_unsupported_media_type
+			));
+			add_headers(response);
+			return response;
+		}
 
 #ifdef DEBUG
-		const char* req_path { req.get_path().c_str() };
-		const char* p_params { params.c_str() };
-		proxy_debug(PROXY_DEBUG_RESTAPI, 1, "Processing POST - req: '%s', params: `%s`\n", req_path, p_params);
+		proxy_debug(PROXY_DEBUG_RESTAPI, 1, "Processing POST - req: '%s', params: `%s`\n", req_path.c_str(), req_body.c_str());
 #endif
-
-		return process_request(req, params);
+		return process_request(req, req_body);
 	}
 
 };
@@ -352,9 +369,15 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	// in the current mode concurrency on serving requests is low, and throughput is directly related with
 	// the time required to execute the target script, since each of the calls are blocking.
 #if defined(__FreeBSD__) || defined(__APPLE__)
-	ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p).start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)));
+	ws = std::unique_ptr<httpserver::webserver>(new webserver(
+		create_webserver(p)
+			.no_post_process()
+			.start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)
+	));
 #else
-	ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p)));
+	ws = std::unique_ptr<httpserver::webserver>(new webserver(
+		create_webserver(p).no_post_process()
+	));
 #endif
 	// NOTE: Enable for benchmarking purposes. In this mode each request will be served by it's own thread.
 	// ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p).start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)));
@@ -392,4 +415,3 @@ void ProxySQL_RESTAPI_Server::init() {
 void ProxySQL_RESTAPI_Server::print_version() {
     fprintf(stderr,"Standard ProxySQL REST API Server Handler rev. %s -- %s -- %s\n", PROXYSQL_RESTAPI_SERVER_VERSION, __FILE__, __TIMESTAMP__);
 }
-

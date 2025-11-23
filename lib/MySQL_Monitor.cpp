@@ -693,9 +693,9 @@ void MySQL_Monitor_State_Data::init_async() {
 			query_ += std::string(hostname) + ":" + std::to_string(port);
 		}
 #else
-		// MySQL-8: Query dependent on 'COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE'; deprecating the previously
+		// From MySQL-8: Query dependent on 'COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE'; deprecating the previously
 		// used `sys.gr_member_routing_candidate_status` view.
-		if (strncasecmp(this->mysql->server_version, "8", 1) == 0) {
+		if (mysql_get_server_version(mysql) >= 80000) {
 			query_ = MYSQL_8_GR_QUERY;
 		} else {
 			// If not MySQL 8 we default back to the old check

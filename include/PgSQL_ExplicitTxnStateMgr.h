@@ -41,7 +41,8 @@ struct TxnCmd {
         ROLLBACK, 
         SAVEPOINT, 
         RELEASE, 
-        ROLLBACK_TO 
+        ROLLBACK_TO,
+        ROLLBACK_AND_CHAIN
     } type = Type::UNKNOWN;
     std::string savepoint; //< The name of the savepoint, if applicable.
 };
@@ -63,6 +64,7 @@ private:
     TxnCmd parse_rollback(size_t& pos) noexcept;
     TxnCmd parse_savepoint(size_t& pos) noexcept;
     TxnCmd parse_release(size_t& pos) noexcept;
+    TxnCmd parse_start(size_t& pos) noexcept;
 
     // Helpers
     static std::string to_lower(std::string_view s) noexcept {
@@ -101,7 +103,7 @@ private:
 
     void start_transaction();
     void commit();
-    void rollback();
+    void rollback(bool rollback_and_chain);
     bool add_savepoint(std::string_view name);
     bool rollback_to_savepoint(std::string_view name);
     bool release_savepoint(std::string_view name);

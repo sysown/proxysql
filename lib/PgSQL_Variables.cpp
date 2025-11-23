@@ -36,10 +36,8 @@ PgSQL_Variables::PgSQL_Variables() {
 			assert(strcmp(pgsql_tracked_variables[i].set_variable_name, pgsql_tracked_variables[i - 1].set_variable_name) > 0);
 		}
 
-		// we initialized all the internal_variable_name if set to NULL
-		if (pgsql_tracked_variables[i].internal_variable_name == NULL) {
-			pgsql_tracked_variables[i].internal_variable_name = pgsql_tracked_variables[i].set_variable_name;
-		}
+		// internal_variable_name should not be null
+		assert(pgsql_tracked_variables[i].internal_variable_name != NULL);
 
 		PgSQL_Variables::verifiers[i] = verify_server_variable;
 		PgSQL_Variables::updaters[i] = update_server_variable;
@@ -263,16 +261,11 @@ inline bool verify_server_variable(PgSQL_Session* session, int idx, uint32_t cli
 		session->changing_variable_idx = (enum pgsql_variable_name)idx;
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
-				session->previous_status.push(PROCESSING_QUERY);
-				break;
-			/*
 			case PROCESSING_STMT_PREPARE:
-				session->previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
+			case PROCESSING_STMT_DESCRIBE:
 			case PROCESSING_STMT_EXECUTE:
-				session->previous_status.push(PROCESSING_STMT_EXECUTE);
+				session->previous_status.push(session->status);
 				break;
-			*/
 			default:
 				// LCOV_EXCL_START
 				proxy_error("Wrong status %d\n", session->status);
