@@ -179,7 +179,7 @@ PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	options.init_connect = NULL;
 	options.init_connect_sent = false;
 	userinfo = new PgSQL_Connection_userinfo();
-	local_stmts = new PgSQL_STMTs_local_v14(false); // false by default, it is a backend
+	local_stmts = new PgSQL_STMT_Local(false); // false by default, it is a backend
 
 	//for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
 	//	variables[i].value = NULL;
@@ -2499,7 +2499,7 @@ void PgSQL_Connection::reset() {
 	reusable = true;
 	creation_time = monotonic_time();
 	delete local_stmts;
-	local_stmts = new PgSQL_STMTs_local_v14(false);
+	local_stmts = new PgSQL_STMT_Local(false);
 
 	// reset all variables
 	for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {

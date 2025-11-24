@@ -149,7 +149,7 @@ struct PgSQL_Extended_Query_Info {
 	const char* stmt_client_name;
 	const char* stmt_client_portal_name;
 	const PgSQL_Bind_Message* bind_msg;
-	PgSQL_STMT_Global_info* stmt_info;
+	const PgSQL_STMT_Global_info* stmt_info;
 	uint64_t stmt_global_id;
 	uint32_t stmt_backend_id;
 	uint8_t stmt_type;
