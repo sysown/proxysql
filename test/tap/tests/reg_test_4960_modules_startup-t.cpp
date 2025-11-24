@@ -30,6 +30,9 @@
 using std::string;
 using std::vector;
 
+// Global PID for ProxySQL process - safe since only one test runs at a time
+static int g_proxysql_pid = -1;
+
 struct TestCase {
     string name;
     vector<const char*> cli_args;
@@ -45,7 +48,7 @@ struct TestCase {
     bool pgsql_worker_expected;
 };
 
-int launch_proxysql_instance(const TestCase& test_case, const CommandLine& cl, int& proxy_pid) {
+int launch_proxysql_instance(const TestCase& test_case, const CommandLine& cl) {
     const string test_datadir = string { cl.workdir } + "reg_test_4960_node_" + test_case.name;
     const string test_config_file = test_datadir + "/proxysql.cfg";
     const string test_log_file = test_datadir + "/proxysql.log";
@@ -77,8 +80,11 @@ int launch_proxysql_instance(const TestCase& test_case, const CommandLine& cl, i
         diag("    %s", config_line.c_str());
     }
 
-    // Launch ProxySQL using the same pattern as reg_test_3847_admin_lock-t.cpp
-    std::thread launch_proxy([&cl, &test_case, &test_config_file, &test_log_file, &proxy_pid] (int& err_code) -> void {
+    // Launch ProxySQL using thread (now safe with global PID)
+    const std::string config_file_copy = test_config_file;
+    const std::string log_file_copy = test_log_file;
+
+    std::thread launch_proxy([&cl, &test_case, config_file_copy, log_file_copy] () -> void {
         to_opts_t wexecvp_opts {};
         wexecvp_opts.poll_to_us = 100 * 1000;
         wexecvp_opts.waitpid_delay_us = 500 * 1000;
@@ -86,15 +92,15 @@ int launch_proxysql_instance(const TestCase& test_case, const CommandLine& cl, i
         wexecvp_opts.sigkill_to_us = 3000 * 1000;
 
         const string proxysql_path { string { getenv("WORKSPACE") } + "/src/proxysql" };
-        vector<const char*> proxy_args = { "-f", "-c", test_config_file.c_str() };
+        vector<const char*> proxy_args = { "-f", "-c", config_file_copy.c_str() };
 
         // Add test-specific CLI arguments
         for (const auto& arg : test_case.cli_args) {
             proxy_args.push_back(arg);
         }
 
-        // Build and display the full command for manual testing (with timeout)
-        string full_command = "timeout 30 " + proxysql_path;
+        // Build and display the full command for manual testing
+        string full_command = proxysql_path;
         for (const auto& arg : proxy_args) {
             full_command += " " + string(arg);
         }
@@ -104,33 +110,31 @@ int launch_proxysql_instance(const TestCase& test_case, const CommandLine& cl, i
         string s_stdout {};
         string s_stderr {};
 
-        diag("  Starting ProxySQL (with 30s timeout)...");
-        int w_res = wexecvp(proxysql_path, proxy_args, wexecvp_opts, s_stdout, s_stderr);
-        if (w_res != EXIT_SUCCESS) {
-            diag("'wexecvp' failed with error: %d for test case: %s", w_res, test_case.name.c_str());
-            diag("Command: %s", proxysql_path.c_str());
-            for (size_t i = 0; i < proxy_args.size(); i++) {
-                diag("  arg[%zu]: %s", i, proxy_args[i]);
-            }
+        diag("  Starting ProxySQL in background...");
+        g_proxysql_pid = wexecvp(proxysql_path, proxy_args, wexecvp_opts, s_stdout, s_stderr);
+
+        if (g_proxysql_pid <= 0) {
+            diag("Failed to start ProxySQL for test case: %s", test_case.name.c_str());
             if (!s_stderr.empty()) {
                 diag("stderr: %s", s_stderr.c_str());
             }
+            return;
         }
+
+        diag("  ProxySQL started with PID: %d", g_proxysql_pid);
 
         // Write process output to log file
         try {
-            std::ofstream os_logfile { test_log_file, std::ios::out };
+            std::ofstream os_logfile { log_file_copy, std::ios::out };
             os_logfile << s_stderr;
         } catch (const std::exception& ex) {
             fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, ex.what());
         }
-
-        err_code = w_res;
-    }, std::ref(proxy_pid));
+    });
 
     launch_proxy.detach();
 
-    // Wait for startup
+    // Give ProxySQL time to start up
     diag("  Waiting for ProxySQL to start (3 seconds)...");
     sleep(3);
     diag("  ProxySQL startup wait completed");
@@ -206,8 +210,11 @@ int run_test_case(const TestCase& test_case, const CommandLine& cl) {
 
     diag("  Pre-test cleanup completed");
 
+    // Reset global PID before launch
+    g_proxysql_pid = -1;
+
     // Launch ProxySQL instance
-    if (launch_proxysql_instance(test_case, cl, proxy_pid) != EXIT_SUCCESS) {
+    if (launch_proxysql_instance(test_case, cl) != EXIT_SUCCESS) {
         diag("Failed to launch ProxySQL for test case: %s", test_case.name.c_str());
         return EXIT_FAILURE;
     }
@@ -324,13 +331,14 @@ int run_test_case(const TestCase& test_case, const CommandLine& cl) {
     (void)force_kill_result; // Suppress unused warning
     sleep(1);
 
-    // Additional cleanup - kill by port if needed
-    if (proxy_pid > 0) {
-        diag("  Ensuring ProxySQL (PID: %d) is terminated...", proxy_pid);
-        kill(proxy_pid, SIGKILL);  // Use SIGKILL to ensure termination
+    // Additional cleanup - kill by global PID if needed
+    if (g_proxysql_pid > 0) {
+        diag("  Ensuring ProxySQL (PID: %d) is terminated...", g_proxysql_pid);
+        kill(g_proxysql_pid, SIGKILL);  // Use SIGKILL to ensure termination
         sleep(1);
         int status;
-        waitpid(proxy_pid, &status, WNOHANG);  // Non-blocking wait
+        waitpid(g_proxysql_pid, &status, WNOHANG);  // Non-blocking wait
+        g_proxysql_pid = -1;  // Reset global PID
     }
 
     // Additional post-test cleanup for safety
