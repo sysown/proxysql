@@ -735,6 +735,73 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	check_and_build_standard_tables(configdb, tables_defs_config);
 	check_and_build_standard_tables(statsdb, tables_defs_stats);
 
+	// Create triggers to enforce one backend user per hostgroup constraint
+	// This ensures hostgroup-based backend credential mapping is unambiguous
+	const char* mysql_users_trigger = R"(
+		CREATE TRIGGER IF NOT EXISTS tr_mysql_users_backend_hostgroup_unique
+		BEFORE INSERT ON mysql_users
+		WHEN NEW.backend = 1 AND EXISTS (
+			SELECT 1 FROM mysql_users
+			WHERE backend = 1
+			  AND default_hostgroup = NEW.default_hostgroup
+			  AND username != NEW.username
+		)
+		BEGIN
+			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
+		END;
+	)";
+
+	const char* mysql_users_trigger_update = R"(
+		CREATE TRIGGER IF NOT EXISTS tr_mysql_users_backend_hostgroup_unique_update
+		BEFORE UPDATE ON mysql_users
+		WHEN NEW.backend = 1 AND EXISTS (
+			SELECT 1 FROM mysql_users
+			WHERE backend = 1
+			  AND default_hostgroup = NEW.default_hostgroup
+			  AND username != NEW.username
+		)
+		BEGIN
+			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
+		END;
+	)";
+
+	const char* pgsql_users_trigger = R"(
+		CREATE TRIGGER IF NOT EXISTS tr_pgsql_users_backend_hostgroup_unique
+		BEFORE INSERT ON pgsql_users
+		WHEN NEW.backend = 1 AND EXISTS (
+			SELECT 1 FROM pgsql_users
+			WHERE backend = 1
+			  AND default_hostgroup = NEW.default_hostgroup
+			  AND username != NEW.username
+		)
+		BEGIN
+			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
+		END;
+	)";
+
+	const char* pgsql_users_trigger_update = R"(
+		CREATE TRIGGER IF NOT EXISTS tr_pgsql_users_backend_hostgroup_unique_update
+		BEFORE UPDATE ON pgsql_users
+		WHEN NEW.backend = 1 AND EXISTS (
+			SELECT 1 FROM pgsql_users
+			WHERE backend = 1
+			  AND default_hostgroup = NEW.default_hostgroup
+			  AND username != NEW.username
+		)
+		BEGIN
+			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
+		END;
+	)";
+
+	admindb->execute(mysql_users_trigger);
+	admindb->execute(mysql_users_trigger_update);
+	admindb->execute(pgsql_users_trigger);
+	admindb->execute(pgsql_users_trigger_update);
+	configdb->execute(mysql_users_trigger);
+	configdb->execute(mysql_users_trigger_update);
+	configdb->execute(pgsql_users_trigger);
+	configdb->execute(pgsql_users_trigger_update);
+
 	__attach_db(admindb, configdb, (char *)"disk");
 	__attach_db(admindb, statsdb, (char *)"stats");
 	__attach_db(admindb, monitordb, (char *)"monitor");

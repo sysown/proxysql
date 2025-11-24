@@ -94,7 +94,7 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 	myhash.Final(&hash1,&hash2);
 
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
-	
+
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
@@ -533,6 +533,70 @@ char * PgSQL_Authentication::lookup(char * username, enum cred_username_type use
 #endif
 	return ret;
 
+}
+
+pgsql_account_details_t* PgSQL_Authentication::lookup_backend_for_hostgroup(int hostgroup_id) {
+	pgsql_account_details_t* ret = NULL;
+
+	creds_group_t &cg = creds_backends;
+
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&cg.lock);
+#else
+	spin_rdlock(&cg.lock);
+#endif
+
+	// Iterate through backend users to find the one for this hostgroup
+	for (const auto& pair : cg.bt_map) {
+		pgsql_account_details_t* ad = pair.second;
+		if (ad->default_hostgroup == hostgroup_id) {
+			// Found the backend user for this hostgroup
+			ret = (pgsql_account_details_t*)malloc(sizeof(pgsql_account_details_t));
+
+			ret->username = strdup(ad->username);
+			ret->password = strdup(ad->password);
+			ret->use_ssl = ad->use_ssl;
+			ret->default_hostgroup = ad->default_hostgroup;
+			ret->transaction_persistent = ad->transaction_persistent;
+			ret->fast_forward = ad->fast_forward;
+			ret->max_connections = ad->max_connections;
+			ret->num_connections_used = 0;  // Reset for new connection
+
+			if (ad->sha1_pass) {
+				ret->sha1_pass = malloc(SHA_DIGEST_LENGTH);
+				memcpy(ret->sha1_pass, ad->sha1_pass, SHA_DIGEST_LENGTH);
+			} else {
+				ret->sha1_pass = NULL;
+			}
+
+			if (ad->attributes) {
+				ret->attributes = strdup(ad->attributes);
+			} else {
+				ret->attributes = NULL;
+			}
+
+			if (ad->comment) {
+				ret->comment = strdup(ad->comment);
+			} else {
+				ret->comment = NULL;
+			}
+
+			ret->__frontend = false;
+			ret->__backend = true;
+			ret->__active = true;
+
+			// Only one backend user per hostgroup is allowed, so we can break
+			break;
+		}
+	}
+
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
+	spin_rdunlock(&cg.lock);
+#endif
+
+	return ret;
 }
 
 bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {

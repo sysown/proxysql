@@ -129,7 +129,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	myhash.Final(&hash1,&hash2);
 
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
-	
+
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
@@ -691,6 +691,71 @@ account_details_t MySQL_Authentication::lookup(
 	return ret;
 }
 
+account_details_t MySQL_Authentication::lookup_backend_for_hostgroup(int hostgroup_id) {
+	account_details_t ret {};
+
+	creds_group_t &cg = creds_backends;
+
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&cg.lock);
+#else
+	spin_rdlock(&cg.lock);
+#endif
+
+	// Iterate through backend users to find the one for this hostgroup
+	for (const auto& pair : cg.bt_map) {
+		account_details_t* ad = pair.second;
+
+		if (ad->default_hostgroup == hostgroup_id) {
+			// Found the backend user for this hostgroup
+
+			ret.username = strdup(ad->username);
+			ret.password = strdup(ad->password);
+
+			if (ad->clear_text_password[PASSWORD_TYPE::PRIMARY]) {
+				ret.clear_text_password[PASSWORD_TYPE::PRIMARY] =
+					strdup(ad->clear_text_password[PASSWORD_TYPE::PRIMARY]);
+			}
+			if (ad->clear_text_password[PASSWORD_TYPE::ADDITIONAL]) {
+				ret.clear_text_password[PASSWORD_TYPE::ADDITIONAL] =
+					strdup(ad->clear_text_password[PASSWORD_TYPE::ADDITIONAL]);
+			}
+
+			ret.use_ssl = ad->use_ssl;
+			ret.default_hostgroup = ad->default_hostgroup;
+
+			if (ad->default_schema) {
+				ret.default_schema = strdup(ad->default_schema);
+			}
+
+			ret.schema_locked = ad->schema_locked;
+			ret.transaction_persistent = ad->transaction_persistent;
+			ret.fast_forward = ad->fast_forward;
+			ret.max_connections = ad->max_connections;
+
+			if (ad->sha1_pass) {
+				ret.sha1_pass = malloc(SHA_DIGEST_LENGTH);
+				memcpy(ret.sha1_pass, ad->sha1_pass, SHA_DIGEST_LENGTH);
+			}
+
+			if (ad->attributes) {
+				ret.attributes = strdup(ad->attributes);
+			}
+
+			// Only one backend user per hostgroup is allowed, so we can break
+			break;
+		}
+	}
+
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
+	spin_rdunlock(&cg.lock);
+#endif
+
+	return ret;
+}
+
 bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
@@ -800,7 +865,7 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
 
 	// The following order is assumed for the resulset received fields:
-	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, 
+	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked,
 	// 	  transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment.
 	umap_auth f_accs_map {};
 	umap_auth b_accs_map {};
