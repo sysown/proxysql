@@ -24,6 +24,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "test_proxysql_stop_query_handling.hpp"
 
 using std::string;
 using std::vector;
@@ -206,6 +207,27 @@ int run_monitor_test_case(const MonitorTestCase& test_case, const CommandLine& c
         }
 
         mysql_close(mysql);
+
+        // Run PROXYSQL STOP/START tests since we have MySQL admin interface and all checks passed
+        if (result == EXIT_SUCCESS) {
+            diag("  Running PROXYSQL STOP/START tests for monitor test case...");
+
+            // Configure STOP/START test with current test case name for better diagnostics
+            ProxySQLStopStartTestConfig stop_start_config;
+            stop_start_config.test_name_prefix = test_case.name + "_monitor";
+            stop_start_config.verbose_logging = true; // Enable detailed logging for debugging
+
+            int stop_start_result = test_proxysql_stop_start_with_connection(
+                "127.0.0.1", "admin", "admin", test_case.mysql_admin_port, stop_start_config);
+
+            if (stop_start_result == -1) {
+                diag("  ❌ PROXYSQL STOP/START tests failed for monitor test case: %s", test_case.name.c_str());
+                result = EXIT_FAILURE;
+            } else {
+                diag("  ✅ PROXYSQL STOP/START tests passed for monitor test case: %s", test_case.name.c_str());
+                // Note: The STOP/START tests already perform their own ok() calls internally
+            }
+        }
     }
 
     // Force cleanup
@@ -307,7 +329,11 @@ int main(int argc, char** argv) {
         }
     };
 
-    plan(test_cases.size());
+    // All monitor tests use MySQL admin interface, so all get STOP/START tests
+    // Base tests + STOP/START tests (PROXYSQL_STOP_START_TEST_COUNT tests each)
+    plan(static_cast<int>(test_cases.size()) + (static_cast<int>(test_cases.size()) * PROXYSQL_STOP_START_TEST_COUNT));
+    diag("Running %d monitor tests + %d STOP/START tests (%d each for %d test cases)",
+         static_cast<int>(test_cases.size()), static_cast<int>(test_cases.size()) * PROXYSQL_STOP_START_TEST_COUNT, PROXYSQL_STOP_START_TEST_COUNT, static_cast<int>(test_cases.size()));
 
     // Run all monitor test cases
     for (const auto& test_case : test_cases) {

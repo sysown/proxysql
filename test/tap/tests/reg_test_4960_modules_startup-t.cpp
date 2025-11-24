@@ -25,6 +25,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "test_proxysql_stop_query_handling.hpp"
 
 using std::string;
 using std::vector;
@@ -292,6 +293,27 @@ int run_test_case(const TestCase& test_case, const CommandLine& cl) {
             result = EXIT_FAILURE;
         } else {
             diag("  ✅ PgSQL worker interface correctly NOT listening on port %d", test_case.pgsql_worker_port);
+        }
+    }
+
+    // Run PROXYSQL STOP/START tests if MySQL admin is enabled and all checks passed so far
+    if (test_case.mysql_admin_expected && result == EXIT_SUCCESS) {
+        diag("  Running PROXYSQL STOP/START tests for MySQL admin interface...");
+
+        // Configure STOP/START test with current test case name for better diagnostics
+        ProxySQLStopStartTestConfig stop_start_config;
+        stop_start_config.test_name_prefix = test_case.name + "_mysql_admin";
+        stop_start_config.verbose_logging = true; // Enable detailed logging for debugging
+
+        int stop_start_result = test_proxysql_stop_start_with_connection(
+            "127.0.0.1", "admin", "admin", test_case.mysql_admin_port, stop_start_config);
+
+        if (stop_start_result == -1) {
+            diag("  ❌ PROXYSQL STOP/START tests failed for test case: %s", test_case.name.c_str());
+            result = EXIT_FAILURE;
+        } else {
+            diag("  ✅ PROXYSQL STOP/START tests passed for test case: %s", test_case.name.c_str());
+            // Note: The STOP/START tests already perform their own ok() calls internally
         }
     }
 
@@ -703,7 +725,18 @@ int main(int argc, char** argv) {
         }
     };
 
-    plan(test_cases.size());
+    // Count test cases with MySQL admin enabled for STOP/START tests
+    int mysql_admin_tests = 0;
+    for (const auto& test_case : test_cases) {
+        if (test_case.mysql_admin_expected) {
+            mysql_admin_tests++;
+        }
+    }
+
+    // Base tests + STOP/START tests (PROXYSQL_STOP_START_TEST_COUNT tests per MySQL admin case)
+    plan(static_cast<int>(test_cases.size()) + (mysql_admin_tests * PROXYSQL_STOP_START_TEST_COUNT));
+    diag("Running %d module startup tests + %d STOP/START tests (%d each for %d MySQL admin cases)",
+         static_cast<int>(test_cases.size()), mysql_admin_tests * PROXYSQL_STOP_START_TEST_COUNT, PROXYSQL_STOP_START_TEST_COUNT, mysql_admin_tests);
 
     // Run all test cases
     for (const auto& test_case : test_cases) {
