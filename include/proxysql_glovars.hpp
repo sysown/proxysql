@@ -87,8 +87,50 @@ class ProxySQL_GlobalVariables {
 		unsigned long long start_time;
 		bool gdbg;
 		bool nostart;
+		/**
+		 * @brief Disable/Enable the MySQL Monitor module.
+		 * @details Meant to be configured as an startup switch. Possible to change it's value only via a
+		 *  command line switch or via config file option.
+		 */
 		bool my_monitor;
+		/**
+		 * @brief Disable/Enable the PostgreSQL Monitor module.
+		 * @details Meant to be configured as an startup switch. Possible to change it's value only via a
+		 *  command line switch or via config file option.
+		 */
 		bool pg_monitor;
+		/**
+		 * @brief Disable/Enable the MySQL Workers module. This disables ProxySQL capability for handling
+		 *  MySQL traffic to be routed to the MySQL backend servers.
+		 * @details Meant to be configured as an startup switch. Possible to change it's value only via a
+		 *  command line switch or via config file option. Disabling this module doesn't affect MySQL
+		 *  Monitoring.
+		 */
+		bool mysql_workers;
+		/**
+		 * @brief Disable/Enable the PostgreSQL Workers module. This disables ProxySQL capability for handling
+		 *  PostgreSQL traffic to be routed to the PostgreSQL backend servers.
+		 * @details Meant to be configured as an startup switch. Possible to change it's value only via a
+		 *  command line switch or via config file option. Disabling this module doesn't affect PostgreSQL
+		 *  Monitoring.
+		 */
+		bool pgsql_workers;
+		/**
+		 * @brief Disable/Enable MySQL Admin module. This disables access, via MySQL protocol, to
+		 *  ProxySQL Administration interface.
+		 * @details Meant to be configured as an startup switch. Possible to change it's value only via a
+		 *  command line switch or via config file option. It's important to notice that Administrative access
+		 *  remains possible via PostgreSQL Admin interface, if enabled.
+		 */
+		bool mysql_admin;
+		/**
+		 * @brief Disable/Enable PostgreSQL Admin module. This disables access, via PostgreSQL
+		 *  protocol, to ProxySQL Administration interface.
+		 * @details Meant to be configured as an startup switch. Possible to change it's value only via a
+		 *  command line switch or via config file option. It's important to notice that Administrative access
+		 *  remains possible via the MySQL Admin interface, if enabled.
+		 */
+		bool pgsql_admin;
 		bool version_check;
 #ifdef SO_REUSEPORT
 		bool reuseport;
