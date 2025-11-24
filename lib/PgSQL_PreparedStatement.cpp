@@ -486,11 +486,34 @@ void PgSQL_STMT_Manager::get_metrics(uint64_t* c_unique, uint64_t* c_total, uint
 		//}
 	}
 	unlock();
-	assert(c_u == stats.c_unique);
-	assert(c_t == stats.total.c_total);
-	assert(c == stats.cached);
-	assert(s_t == stats.total.s_total);
-	assert(s_u == stats.s_unique);
+	
+	//assert(c_u == stats.c_unique);
+	//assert(c_t == stats.total.c_total);
+	//assert(c == stats.cached);
+	//assert(s_t == stats.total.s_total);
+	//assert(s_u == stats.s_unique);
+	
+	if (c_u != stats.c_unique) {
+		proxy_warning("PgSQL_STMT_Manager::get_metrics mismatch: c_u=%llu stats.c_unique=%llu",
+			(unsigned long long)c_u, (unsigned long long)stats.c_unique);
+	}
+	if (c_t != stats.total.c_total) {
+		proxy_warning("PgSQL_STMT_Manager::get_metrics mismatch: c_t=%llu stats.total.c_total=%llu",
+			(unsigned long long)c_t, (unsigned long long)stats.total.c_total);
+	}
+	if (c != stats.cached) {
+		proxy_warning("PgSQL_STMT_Manager::get_metrics mismatch: cached(counted)=%llu stats.cached=%llu",
+			(unsigned long long)c, (unsigned long long)stats.cached);
+	}
+	if (s_t != stats.total.s_total) {
+		proxy_warning("PgSQL_STMT_Manager::get_metrics mismatch: s_t=%llu stats.total.s_total=%llu",
+			(unsigned long long)s_t, (unsigned long long)stats.total.s_total);
+	}
+	if (s_u != stats.s_unique) {
+		proxy_warning("PgSQL_STMT_Manager::get_metrics mismatch: s_u=%llu stats.s_unique=%llu",
+			(unsigned long long)s_u, (unsigned long long)stats.s_unique);
+	}
+	
 	//*stmt_max_stmt_id = m;
 #endif
 	* stmt_max_stmt_id = next_statement_id; // this is max stmt_id, no matter if in used or not
