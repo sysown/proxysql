@@ -1103,6 +1103,30 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 
 bool PgSQL_Session::handler_again___verify_backend_user_db() {
 	PgSQL_Data_Stream* myds = mybe->server_myds;
+
+	// Check if we should use hostgroup-specific backend credentials
+	int target_hostgroup = mybe->hostgroup_id;
+	pgsql_account_details_t* backend_acct = GloPgAuth->lookup_backend_for_hostgroup(target_hostgroup);
+
+	if (backend_acct && backend_acct->username) {
+		// Set the backend connection's userinfo to the hostgroup-specific credentials
+		// Use client's dbname since pgsql_account_details_t doesn't have default_schema
+		myds->myconn->userinfo->set(
+			backend_acct->username,
+			backend_acct->password,
+			client_myds->myconn->userinfo->dbname,
+			(char*)backend_acct->sha1_pass
+		);
+		GloPgAuth->free_account_details(backend_acct);
+		// Return immediately - no need to compare with client credentials
+		// as we've now configured the correct backend credentials
+		return false;
+	}
+	if (backend_acct) {
+		GloPgAuth->free_account_details(backend_acct);
+	}
+
+	// Fallback: original logic for when no hostgroup-specific credentials exist
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->dbname, mybe->server_myds->myconn->userinfo->dbname);
 	if (client_myds->myconn->userinfo->hash != mybe->server_myds->myconn->userinfo->hash) {

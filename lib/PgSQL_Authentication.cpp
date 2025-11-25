@@ -599,6 +599,17 @@ pgsql_account_details_t* PgSQL_Authentication::lookup_backend_for_hostgroup(int 
 	return ret;
 }
 
+void PgSQL_Authentication::free_account_details(pgsql_account_details_t* acct) {
+	if (acct == NULL) return;
+
+	if (acct->username) free(acct->username);
+	if (acct->password) free(acct->password);
+	if (acct->sha1_pass) free(acct->sha1_pass);
+	if (acct->attributes) free(acct->attributes);
+	if (acct->comment) free(acct->comment);
+	free(acct);
+}
+
 bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 

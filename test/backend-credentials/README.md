@@ -13,12 +13,12 @@ cd test/backend-credentials
 
 This will:
 1. Build ProxySQL from source with the new feature
-2. Start 5 MySQL containers (2 read, 2 write, 1 standard mode)
+2. Start 10 database containers (5 MySQL + 5 PostgreSQL)
 3. Configure separate frontend/backend credentials
-4. Run 8 automated validation tests
+4. Run 14 automated validation tests (8 MySQL + 6 PostgreSQL)
 5. Display results and clean up
 
-**Expected result:** All 8 tests pass ✅
+**Expected result:** All 14 tests pass ✅
 
 For manual testing or detailed exploration, continue reading below.
 
@@ -69,10 +69,11 @@ For manual testing or detailed exploration, continue reading below.
 
 ### 1. **ProxySQL** (built from source)
 - Port 6033: MySQL interface (frontend)
+- Port 6543: PostgreSQL interface (frontend)
 - Port 6032: Admin interface
 - Configuration: `proxysql.cnf` + SQL-based user setup
 
-### 2. **MySQL Servers**
+### 2. **MySQL Servers** (5 containers)
 - **Hostgroup 10** (Read): `mysql-hg10-1`, `mysql-hg10-2`
   - Backend credentials: `reader_user / reader_pass_456`
   - Permissions: SELECT only
@@ -85,11 +86,24 @@ For manual testing or detailed exploration, continue reading below.
   - Backend credentials: `standard_user / standard_pass_999` (same as frontend)
   - Tests backward compatibility with classic ProxySQL behavior
 
-### 3. **Test Runner**
-- Executes 8 automated validation tests
-- Connects as frontend users `app_user` and `standard_user`
+### 3. **PostgreSQL Servers** (5 containers)
+- **Hostgroup 10** (Read): `pgsql-hg10-1`, `pgsql-hg10-2`
+  - Backend credentials: `pgsql_reader / pgsql_reader_pass`
+  - Permissions: SELECT only
+
+- **Hostgroup 20** (Write): `pgsql-hg20-1`, `pgsql-hg20-2`
+  - Backend credentials: `pgsql_writer / pgsql_writer_pass`
+  - Permissions: ALL on testdb
+
+- **Hostgroup 30** (Standard mode): `pgsql-hg30-1`
+  - Backend credentials: `pgsql_standard / pgsql_standard_pass` (same as frontend)
+  - Tests backward compatibility with classic ProxySQL behavior
+
+### 4. **Test Runner**
+- Executes 14 automated validation tests (8 MySQL + 6 PostgreSQL)
+- Connects as frontend users `app_user`, `standard_user`, `pgsql_app`, `pgsql_standard`
 - Verifies queries are routed correctly with proper backend credentials
-- Tests both new feature and standard ProxySQL mode
+- Tests both new feature and standard ProxySQL mode for both MySQL and PostgreSQL
 
 ## Configuration Details
 
@@ -143,7 +157,7 @@ VALUES ('standard_user', 'standard_pass_999', 30, 'testdb', 1, 1, 'Standard mode
 
 ### Prerequisites
 - Docker and Docker Compose installed
-- Sufficient resources (5 MySQL containers + ProxySQL)
+- Sufficient resources (10 database containers + ProxySQL: 5 MySQL + 5 PostgreSQL)
 
 ### Automated Test Suite (Recommended)
 
@@ -156,9 +170,9 @@ cd test/backend-credentials
 
 This script will:
 1. Build ProxySQL from source with the new feature
-2. Start 5 MySQL server containers
+2. Start 10 database containers (5 MySQL + 5 PostgreSQL)
 3. Configure ProxySQL with separate frontend/backend credentials
-4. Run 8 automated validation tests
+4. Run 14 automated validation tests (8 MySQL + 6 PostgreSQL)
 5. Display test results
 6. Clean up resources
 
@@ -190,8 +204,11 @@ Attempting connection as standard user (standard_user)...
 ✅ Standard user can connect (backend: mysql-hg30-1, classic ProxySQL mode)
 
 ==========================================
-Running Functional Tests
+MYSQL TESTS
 ==========================================
+
+Running MySQL Functional Tests (8 tests)
+----------------------------------------
 
 🧪 Testing: Frontend connection as app_user (verify HG10 backend)... PASSED
 🧪 Testing: Read query to hostgroup 10... PASSED
@@ -199,13 +216,22 @@ Running Functional Tests
 🧪 Testing: INSERT into write servers (using @@hostname)... PASSED
 🧪 Testing: Verify write landed on HG20 server... PASSED
 🧪 Testing: SELECT FOR UPDATE routed to HG20... PASSED
-
-==========================================
-Standard ProxySQL Mode Test (HG30)
-==========================================
-
 🧪 Testing: Standard user connection (verify HG30 backend)... PASSED
 🧪 Testing: Standard user query to HG30... PASSED
+
+==========================================
+POSTGRESQL TESTS
+==========================================
+
+Running PostgreSQL Functional Tests (6 tests)
+----------------------------------------
+
+🧪 Testing: PG Frontend connection as pgsql_app... PASSED
+🧪 Testing: PG Read query to hostgroup 10... PASSED
+🧪 Testing: PG INSERT into write servers... PASSED
+🧪 Testing: PG Verify write landed on HG20 server... PASSED
+🧪 Testing: PG Standard user connection (verify HG30 backend)... PASSED
+🧪 Testing: PG Standard user query to HG30... PASSED
 
 ==========================================
 Backend Credential Verification
@@ -222,13 +248,10 @@ Hostgroup 20 (Write) - Expected backend user: writer_user
   Checking mysql-hg20-2... Backend user connections detected
 
 ==========================================
-Test Summary
+OVERALL TEST SUMMARY
 ==========================================
 
-Passed: 8
-Failed: 0
-
-✅ All tests passed!
+✅ All 14 tests passed! (8 MySQL + 6 PostgreSQL)
 
 The hostgroup-based backend credentials feature is working correctly:
   • Frontend user 'app_user' connects to ProxySQL
@@ -283,10 +306,11 @@ docker exec -it proxysql-test mysql -h 127.0.0.1 -P 6033 -uapp_user -papp_passwo
 
 ## Validating the Feature
 
-### Automated Test Suite (8 Tests)
+### Automated Test Suite (14 Tests)
 
-The test suite validates:
+The test suite validates both MySQL and PostgreSQL implementations:
 
+**MySQL Tests (8 tests):**
 1. **Test 1**: Frontend connection uses correct backend (HG10) - verifies using `@@hostname`
 2. **Test 2**: Read queries return data from HG10 servers
 3. **Test 3**: SELECT statements execute on read servers
@@ -295,6 +319,14 @@ The test suite validates:
 6. **Test 6**: SELECT FOR UPDATE is routed to HG20 (write hostgroup)
 7. **Test 7**: Standard mode connection works (frontend=backend=1)
 8. **Test 8**: Standard mode queries execute correctly
+
+**PostgreSQL Tests (6 tests):**
+9. **Test 9**: PG Frontend connection with separate credentials
+10. **Test 10**: PG Read queries use pgsql_reader backend credentials
+11. **Test 11**: PG Write queries use pgsql_writer backend credentials
+12. **Test 12**: PG Writes land on correct HG20 servers
+13. **Test 13**: PG Standard mode (frontend=backend=1)
+14. **Test 14**: Backend credential verification for all PG hostgroups
 
 ### How to Confirm It's Working
 

@@ -86,9 +86,14 @@ class PgSQL_Authentication {
 	 *  Only one backend user per hostgroup is allowed, ensuring unambiguous credential mapping.
 	 * @param hostgroup_id The hostgroup ID to lookup backend credentials for
 	 * @return Pointer to allocated pgsql_account_details_t containing the backend user credentials, or NULL if none found
-	 *  Caller is responsible for freeing the returned structure and its contents.
+	 *  Caller is responsible for freeing the returned structure using free_account_details().
 	 */
 	pgsql_account_details_t* lookup_backend_for_hostgroup(int hostgroup_id);
+	/**
+	 * @brief Free a pgsql_account_details_t structure returned by lookup_backend_for_hostgroup.
+	 * @param acct Pointer to the account details structure to free (can be NULL)
+	 */
+	void free_account_details(pgsql_account_details_t* acct);
 	int dump_all_users(pgsql_account_details_t***, bool _complete=true);
 	int increase_frontend_user_connections(char *username, int *mc=NULL);
 	void decrease_frontend_user_connections(char *username);
