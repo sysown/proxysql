@@ -228,7 +228,6 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_multiple_variables(MySQL_Connection *);
-	bool set_backend_credentials_for_hostgroup(MySQL_Connection *myconn, int hostgroup_id);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
@@ -269,6 +268,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
 
 	// these functions have code that used to be inline, and split into functions for readibility
+	bool set_backend_credentials_for_hostgroup(MySQL_Connection *myconn, int hostgroup_id);
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds);
 	void SetQueryTimeout();
 	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params);
