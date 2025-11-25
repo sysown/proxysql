@@ -1,5 +1,11 @@
 #ifndef CLASS_GTID_Server_Data_H
 #define CLASS_GTID_Server_Data_H
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <proxysql_gtid.h>
+
 class GTID_Server_Data {
 	public:
 	char *address;
@@ -24,4 +30,7 @@ class GTID_Server_Data {
 	void read_all_gtids();
 	void dump();
 };
+
+bool addGtidInterval(gtid_set_t& gtid_executed, std::string server_uuid, int64_t txid_start, int64_t txid_end);
+
 #endif // CLASS_GTID_Server_Data_H

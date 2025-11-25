@@ -59,7 +59,7 @@ class MyHGC;
 
 const int MYSQL_ERRORS_STATS_FIELD_NUM = 11;
 
-struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port);
+struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t mysql_port);
 void * GTID_syncer_run();
 
 static int wait_for_mysql(MYSQL *mysql, int status) {
@@ -1680,80 +1680,101 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	return ret;
 }
 
+/**
+ * @brief Generates and manages GTID connection tables for all MySQL servers
+ *
+ * This function synchronizes the GTID server connections with the current MySQL server
+ * configuration. It handles server additions, removals, and reconnections with improved
+ * lifecycle management for stable operation.
+ *
+ * The function operates in several phases:
+ * 1. Mark all existing GTID connections as potentially stale
+ * 2. Iterate through configured MySQL servers to validate existing connections
+ * 3. Establish new connections for servers that don't have active GTID connections
+ * 4. Clean up stale connections for servers that are no longer configured
+ *
+ * Key improvements in this implementation:
+ * - Uses stale_server tracking for efficient cleanup
+ * - Maintains proper lock ordering (gtid_rwlock → wrlock)
+ * - Reuses existing GTID_Server_Data objects when possible
+ * - Proper cleanup of ev_io watchers and socket resources
+ *
+ * @note This function must be called with appropriate locking to prevent race conditions
+ * @note Servers with OFFLINE_HARD status are skipped for connection establishment
+ *
+ * @thread_safety Thread-safe when called with proper external synchronization
+ */
 void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
-	pthread_rwlock_wrlock(&gtid_rwlock);
-	// first, set them all as active = false
-	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si) {
-			gtid_si->active = false;
-		}
-		it++;
-	}
-
 	// NOTE: We are required to lock while iterating over 'MyHostGroups'. Otherwise race conditions could take place,
 	// e.g. servers could be purged by 'purge_mysql_servers_table' and invalid memory be accessed.
 	wrlock();
+
+	pthread_rwlock_wrlock(&gtid_rwlock);
+
+	// first, add them all as stale entries
+	std::unordered_set<string> stale_server;
+	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
+	while(it != gtid_map.end()) {
+		stale_server.emplace(it->first);
+		it++;
+	}
+
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			if (mysrvc->gtid_port) {
-				std::string s1 = mysrvc->address;
-				s1.append(":");
-				s1.append(std::to_string(mysrvc->port));
-				std::unordered_map <string, GTID_Server_Data *>::iterator it2;
-				it2 = gtid_map.find(s1);
-				GTID_Server_Data *gtid_is=NULL;
-				if (it2!=gtid_map.end()) {
-					gtid_is=it2->second;
-					if (gtid_is == NULL) {
-						gtid_map.erase(it2);
-					}
+				std::string srv = mysrvc->address;
+				srv.append(":");
+				srv.append(std::to_string(mysrvc->port));
+
+				GTID_Server_Data *gtid_sd = nullptr;
+				it = gtid_map.find(srv);
+				if (it != gtid_map.end()) {
+					gtid_sd = it->second;
+					stale_server.erase(srv);
 				}
-				if (gtid_is) {
-					gtid_is->active = true;
-				} else if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-					// we didn't find it. Create it
-					/*
-					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
-					gtid_is = new GTID_Server_Data(watcher, mysrvc->address, mysrvc->port, mysrvc->gtid_port);
-					gtid_map.emplace(s1,gtid_is);
-					*/
-					struct ev_io * c = NULL;
-					c = new_connector(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					if (c) {
-						gtid_is = (GTID_Server_Data *)c->data;
-						gtid_map.emplace(s1,gtid_is);
-						//pthread_mutex_lock(&ev_loop_mutex);
-						ev_io_start(MyHGM->gtid_ev_loop,c);
-						//pthread_mutex_unlock(&ev_loop_mutex);
+
+				if (gtid_sd && gtid_sd->active) {
+					continue;
+				}
+
+				if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+					// a new server with gtid port
+					// OR an existing server, but we lost connection with binlog_reader
+					struct ev_io *cw = new_connect_watcher(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
+					if (cw) {
+						if (!gtid_sd) {
+							gtid_sd = new GTID_Server_Data(cw, mysrvc->address, mysrvc->gtid_port, mysrvc->port);
+							cw->data = (void *)gtid_sd;
+							gtid_map.emplace(srv, gtid_sd);
+						} else {
+							gtid_sd->w = cw;
+							gtid_sd->active = true;
+							cw->data = (void *)gtid_sd;
+						}
+						ev_io_start(MyHGM->gtid_ev_loop, cw);
 					}
 				}
 			}
 		}
 	}
-	wrunlock();
-	std::vector<string> to_remove;
-	it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si && gtid_si->active == false) {
-			to_remove.push_back(it->first);
+
+	for (auto &srv : stale_server) {
+		it = gtid_map.find(srv);
+		GTID_Server_Data *gtid_sd = it->second;
+		if (gtid_sd->w) {
+			ev_io_stop(MyHGM->gtid_ev_loop, gtid_sd->w);
+			close(gtid_sd->w->fd);
+			free(gtid_sd->w);
 		}
-		it++;
+		gtid_map.erase(srv);
+		delete gtid_sd;
 	}
-	for (std::vector<string>::iterator it3=to_remove.begin(); it3!=to_remove.end(); ++it3) {
-		it = gtid_map.find(*it3);
-		GTID_Server_Data * gtid_si = it->second;
-		ev_io_stop(MyHGM->gtid_ev_loop, gtid_si->w);
-		close(gtid_si->w->fd);
-		free(gtid_si->w);
-		gtid_map.erase(*it3);
-	}
+
 	pthread_rwlock_unlock(&gtid_rwlock);
+	wrunlock();
 }
 
 /**
@@ -5807,48 +5828,39 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 
 	std::unordered_map<string, GTID_Server_Data*>::iterator it = gtid_map.begin();
 	while(it != gtid_map.end()) {
-		GTID_Server_Data* gtid_si = it->second;
-		std::string address {};
-		std::string port {};
-		std::string endpoint_id {};
-
-		if (gtid_si) {
-			address = std::string(gtid_si->address);
-			port = std::to_string(gtid_si->mysql_port);
-		} else {
-			std::string s = it->first;
-			std::size_t found = s.find_last_of(":");
-			address = s.substr(0, found);
-			port = s.substr(found + 1);
+		GTID_Server_Data* gtid_sd = it->second;
+		if (!gtid_sd) {
+			// invalid state
+			continue;
 		}
-		endpoint_id = address + ":" + port;
 
-		const auto& gitd_id_counter = this->status.p_gtid_executed_map.find(endpoint_id);
+		std::string endpoint = it->first;
+		std::string address = std::string(gtid_sd->address);
+		std::string port = std::to_string(gtid_sd->mysql_port);
+
 		prometheus::Counter* gtid_counter = nullptr;
-
-		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
-			auto& gitd_counter =
+		const auto& pc_itr = this->status.p_gtid_executed_map.find(endpoint);
+		if (pc_itr == this->status.p_gtid_executed_map.end()) {
+			auto& gtid_counter_group =
 				this->status.p_dyn_counter_array[p_hg_dyn_counter::gtid_executed];
 
-			gtid_counter = std::addressof(gitd_counter->Add({
+			gtid_counter = std::addressof(gtid_counter_group->Add({
 				{ "hostname", address },
 				{ "port", port },
 			}));
 
 			this->status.p_gtid_executed_map.insert(
 				{
-					endpoint_id,
+					endpoint,
 					gtid_counter
 				}
 			);
 		} else {
-			gtid_counter = gitd_id_counter->second;
+			gtid_counter = pc_itr->second;
 		}
 
-		if (gtid_si) {
-			const auto& cur_executed_gtid = gtid_counter->Value();
-			gtid_counter->Increment(gtid_si->events_read - cur_executed_gtid);
-		}
+		const auto& cur_executed_gtid = gtid_counter->Value();
+		gtid_counter->Increment(gtid_sd->events_read - cur_executed_gtid);
 
 		it++;
 	}
