@@ -148,7 +148,7 @@ void PgSQL_STMT_Local::client_insert(std::shared_ptr<const PgSQL_STMT_Global_inf
 		return;
 	}
 
-	// New statement name — just insert
+	// New statement name - just insert
 	stmt_name_to_global_info.emplace(client_stmt_name, stmt_info);
 	GloPgStmt->ref_count_client(stmt_info.get(), 1);
 }
@@ -190,8 +190,8 @@ uint32_t PgSQL_STMT_Local::generate_new_backend_stmt_id() {
 }
 
 void PgSQL_STMT_Local::backend_insert(std::shared_ptr<const PgSQL_STMT_Global_info>& stmt_info, uint32_t backend_stmt_id) {
-	backend_stmt_to_global_info.insert(std::make_pair(backend_stmt_id, stmt_info));
-	global_stmt_to_backend_ids.insert(std::make_pair(stmt_info->statement_id, backend_stmt_id));
+	backend_stmt_to_global_info.emplace(backend_stmt_id, stmt_info);
+	global_stmt_to_backend_ids.emplace(stmt_info->statement_id, backend_stmt_id);
 }
 
 uint32_t PgSQL_STMT_Local::find_backend_stmt_id_from_global_id(uint64_t global_id) const {
