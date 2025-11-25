@@ -4823,21 +4823,14 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				client_myds->myconn->userinfo->dbname,  // Use client's database name
 				(char*)backend_acct->sha1_pass
 			);
-			// Free the allocated account details
-			if (backend_acct->username) free(backend_acct->username);
-			if (backend_acct->password) free(backend_acct->password);
-			if (backend_acct->sha1_pass) free(backend_acct->sha1_pass);
-			if (backend_acct->attributes) free(backend_acct->attributes);
-			if (backend_acct->comment) free(backend_acct->comment);
-			free(backend_acct);
+			GloPgAuth->free_account_details(backend_acct);
 		} else {
 			// Fallback: use client credentials (backward compatibility)
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d, using client credentials\n",
 				this, target_hostgroup);
 			myconn->userinfo->set(client_myds->myconn->userinfo);
 			if (backend_acct) {
-				// Free the empty structure
-				free(backend_acct);
+				GloPgAuth->free_account_details(backend_acct);
 			}
 		}
 

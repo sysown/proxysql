@@ -15,17 +15,17 @@
 #endif
 
 void free_account_details(account_details_t& ad) {
+	if (ad.username) {
+		free(ad.username);
+		ad.username = nullptr;
+	}
 	if (ad.password) {
 		free(ad.password);
 		ad.password = nullptr;
 	}
 	if (ad.sha1_pass) {
 		free(ad.sha1_pass);
-		ad.sha1_pass=NULL;
-	}
-	if (ad.password) {
-		free(ad.password);
-		ad.password = nullptr;
+		ad.sha1_pass = nullptr;
 	}
 	if (ad.clear_text_password[PASSWORD_TYPE::PRIMARY]) {
 		free(ad.clear_text_password[PASSWORD_TYPE::PRIMARY]);
