@@ -20,26 +20,10 @@
 
 using namespace std;
 
-#define MULTI_STATEMENTS_USE "Unable to parse multi-statements command with USE statement"
-
-static void remove_quotes(string& v) {
-	if (v.length() > 2) {
-		char firstChar = v[0];
-		char lastChar = v[v.length()-1];
-		if (firstChar == lastChar) {
-			if (firstChar == '\'' || firstChar == '"' || firstChar == '`') {
-				v.erase(v.length()-1, 1);
-				v.erase(0, 1);
-			}
-		}
-	}
-}
-
 #ifdef PARSERDEBUG
 PgSQL_Set_Stmt_Parser::PgSQL_Set_Stmt_Parser(std::string nq, int verb) {
 	verbosity = verb;
 #else
-
 PgSQL_Set_Stmt_Parser::PgSQL_Set_Stmt_Parser(std::string nq) {
 #endif
 	parse1v2_init = false;
@@ -69,13 +53,9 @@ void PgSQL_Set_Stmt_Parser::generateRE_parse1v2() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
 #endif // DEBUG
 
-	//const std::string pattern = "(?:(?P<scope>SESSION|LOCAL)\\s+)?(?:(?P<parameter>[^=\\s][^=;]*?)\\s*(?:=|TO)\\s*(?P<value>[^;]+)|(?P<parameter_kw>TIME\\s+ZONE|NAMES|SCHEMA|AUTHORIZATION|TRANSACTION\\s+ISOLATION\\s+LEVEL|CHARACTERISTICS\\s+AS\\s+TRANSACTION\\s+ISOLATION\\s+LEVEL)\\s+(?P<value_kw>[^;]+))\\s*;?\\s*";
-	
 	// Function Call: Check if Group 3 is populated.
 	// Literal: Check if Group 4 is populated.
-	//const std::string pattern = "(?:(SESSION|LOCAL)\\s+)?((?:\\S+(?:\\s+\\S+)*?))(?:\\s+(?:TO|=)\\s+|\\s+)(?:(\\w+\\s*\\([^)]*\\))|((?:'(?:''|[^'])*'|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|t|true|f|false|on|off|default|\\S+)))\\s*;?";
-	//const std::string pattern = "(?:(SESSION|LOCAL)\\s+)?((?:\\S+(?:\\s+\\S+)*?))(?:\\s*(?:TO|=)\\s*|\\s+)(?:(\\w+\\s*\\([^)]*\\))|((?:'(?:''|[^'])*'|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|true|t|1|yes|false|f|0|no|on|off|default|\\S+)))\\s*;?";
-	const std::string pattern = R"((?:(SESSION)\s+)?((?:\S+(?:\s+\S+)*?))(?:\s*(?:TO|=)\s*|\s+)(?:(\w+\s*\([^)]*\))|((?:'(?:''|[^'])*'|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[^;]+)))\s*;?)";
+	const std::string pattern = R"(^\s*(?:(?:(SESSION)\s+)?((?:TIME\s+ZONE|TRANSACTION\s+ISOLATION\s+LEVEL|XML\s+OPTION|(?:(?:[^\s=]{1,4}|[^\s=]{6}|[^\s=]{8,}|(?:[^lL][^\s=]{4}|[lL][^oO][^\s=]{3}|[lL][oO][^cC][^\s=]{2}|[lL][oO][cC][^aA][^\s=]|[lL][oO][cC][aA][^lL])|(?:[^sS][^\s=]{6}|[sS][^eE][^\s=]{5}|[sS][eE][^sS][^\s=]{4}|[sS][eE][sS][^sS][^\s=]{3}|[sS][eE][sS][sS][^iI][^\s=]{2}|[sS][eE][sS][sS][iI][^oO][^\s=]|[sS][eE][sS][sS][iI][oO][^nN])))))(?:\s*(=)\s*|\s+(TO)\s+|\s+())(?:([A-Za-z_][\w$\.]*)\s*\(\s*('(?:''|[^'])*'|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[^\s();]+)\s*\)|('(?:''|[^'])*'|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|(?:(?:[^\s= T;()][^;()]*|\s+[^=T;()][^;()]*)|=[^;()]+|TO[^;()]+|T[^O;()][^;()]*|T)))\s*;?)\s*$)";
 
 #ifdef DEBUG
 VALGRIND_DISABLE_ERROR_REPORTING;
@@ -91,9 +71,27 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 
 	parse1v2_pattern = pattern;
 	parse1v2_re = new re2::RE2(parse1v2_pattern, *parse1v2_opt2);
+	
+	if (!parse1v2_re->ok()) {
+		proxy_error("Error in RE2 regex pattern: %s\n", parse1v2_re->error().c_str());
+		assert(false);
+	}
+
 	parse1v2_init = true;
 }
 
+void PgSQL_Set_Stmt_Parser::unquote_if_quoted(std::string& v) {
+	if (v.length() >= 2) {
+		char firstChar = v[0];
+		char lastChar = v[v.length() - 1];
+		if (firstChar == lastChar) {
+			if (firstChar == '\'' || firstChar == '"' || firstChar == '`') {
+				v.erase(v.length() - 1, 1);
+				v.erase(0, 1);
+			}
+		}
+	}
+}
 
 std::map<std::string,std::vector<std::string>> PgSQL_Set_Stmt_Parser::parse1v2() {
 
@@ -112,38 +110,36 @@ std::map<std::string,std::vector<std::string>> PgSQL_Set_Stmt_Parser::parse1v2()
 VALGRIND_ENABLE_ERROR_REPORTING;
 #endif // DEBUG
 	std::string var;
-	std::string scope, param_name, param_val, param_val_func;
+	std::string scope, unknown, param_name, param_val_func, equal, to, empty, param_val_func_args, param_val;
 	re2::StringPiece input(query);
-	while (re2::RE2::Consume(&input, *parse1v2_re, &scope, &param_name, &param_val_func, &param_val)) {
+	while (re2::RE2::Consume(&input, *parse1v2_re, &scope, &param_name, &equal, &to, &empty, &param_val_func, &param_val_func_args, &param_val)) {
 		// FIXME: verify if we reached end of query. Did we parse everything?
 		std::vector<std::string> op;
 #ifdef DEBUG
-		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: scope='%s' , parameter name='%s' , parameter value='%s' parameter_value_func='%s'\n", scope.c_str(), param_name.c_str(), param_val.c_str(), param_val_func.c_str());
+		std::string oper;
+		if (!equal.empty()) oper = "=";
+		else if (!to.empty()) oper = "TO";
+		else oper = "";
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: scope='%s', parameter name='%s' , operator='%s' , parameter value='%s' , parameter_value_func='%s' , parameter_value_func_args='%s'\n", scope.c_str(), param_name.c_str(), oper.c_str(), param_val.c_str(), param_val_func.c_str(), param_val_func_args.c_str());
 #endif // DEBUG
-		std::string key;
 
 		if (param_val_func.empty() == false) return {};
+
+		unquote_if_quoted(param_name);
+
+		size_t pos = param_val.find_last_not_of(" \n\r\t,");
+		if (pos != param_val.npos) {
+			param_val.erase(pos + 1);
+		}
 
 		if (param_name.empty() || param_val.empty()) {
 			continue;
 		}
 		
-		key = param_name;
-		remove_quotes(key);
-		size_t pos = param_val.find_last_not_of(" \n\r\t,");
-		if (pos != param_val.npos) {
-			param_val.erase(pos+1);
-		}
+		op.emplace_back(param_val);
 
-		if (param_val == "''" || param_val == "\"\"") {
-			op.push_back("");
-		} else {
-			remove_quotes(param_val);
-			op.push_back(param_val);
-		}
-
-		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-		result[key] = op;
+		std::transform(param_name.begin(), param_name.end(), param_name.begin(), ::tolower);
+		result[param_name] = op;
 	}
 	if (input.size() != 0) {
 #ifdef PARSERDEBUG
@@ -156,77 +152,6 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	return result;
 }
 
-
-std::map<std::string,std::vector<std::string>> PgSQL_Set_Stmt_Parser::parse2() {
-
-#ifdef DEBUG
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
-#endif // DEBUG
-	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-	opt2->set_case_sensitive(false);
-	opt2->set_longest_match(false);
-
-	re2::RE2 re0("^\\s*SET\\s+", *opt2);
-	re2::RE2::Replace(&query, re0, "");
-
-	std::map<std::string,std::vector<std::string>> result;
-
-	// Regex used:
-	// SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))
-	const std::string pattern="(|SESSION) *TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))";
-	re2::RE2 re(pattern, *opt2);
-	std::string var;
-	std::string value1, value2, value3, value4, value5;
-	re2::StringPiece input(query);
-	while (re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4, &value5)) {
-		std::vector<std::string> op;
-#ifdef DEBUG
-		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
-#endif // DEBUG
-		std::string key;
-		//if (value1 != "") { // session is specified
-			if (value2 != "") { // isolation level
-				key = value1 + ":" + value2;
-				std::transform(value3.begin(), value3.end(), value3.begin(), ::toupper);
-				op.push_back(value3);
-			} else {
-				key = value1 + ":" + value4;
-				std::transform(value5.begin(), value5.end(), value5.begin(), ::toupper);
-				op.push_back(value5);
-			}
-		//}
-		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-		result[key] = op;
-	}
-
-	delete opt2;
-	return result;
-}
-
-#if 0
-std::string PgSQL_Set_Stmt_Parser::parse_character_set() {
-#ifdef DEBUG
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
-#endif // DEBUG
-	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-	opt2->set_case_sensitive(false);
-	opt2->set_longest_match(false);
-
-	re2::RE2 re0("^\\s*SET\\s+", *opt2);
-	re2::RE2::Replace(&query, re0, "");
-
-	std::map<std::string,std::vector<std::string>> result;
-	const std::string pattern = "(client_encoding|names)\\s*(=|TO)\\s*['\"]?([A-Z_0-9]+)['\"]?";
-	re2::RE2 re(pattern, *opt2);
-	std::string var;
-	std::string value1, value2, value3;
-	re2::StringPiece input(query);
-	re2::RE2::Consume(&input, re, &value1, &value2, &value3);
-
-	delete opt2;
-	return value3;
-}
-#endif
 std::string PgSQL_Set_Stmt_Parser::remove_comments(const std::string& q) {
     std::string result = "";
     bool in_multiline_comment = false;

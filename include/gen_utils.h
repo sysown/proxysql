@@ -272,6 +272,11 @@ public:
 #endif /* __CLASS_PTR_ARRAY_H */
 
 
+#ifdef CLOCK_MONOTONIC_RAW
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC_RAW
+#else
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
+#endif
 
 #ifndef __GEN_FUNCTIONS
 #define __GEN_FUNCTIONS
@@ -304,7 +309,7 @@ static void clock_gettime(int clk_id, struct timespec *tp) {
 
 inline unsigned long long monotonic_time() {
   struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  clock_gettime(PROXYSQL_CLOCK_MONOTONIC, &ts);
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
@@ -367,8 +372,6 @@ inline bool get_uint16be(const unsigned char* pkt, uint16_t* dst_p) {
 	return true;
 }
 
-#endif /* __GEN_FUNCTIONS */
-
 bool Proxy_file_exists(const char *);
 bool Proxy_file_regular(const char *);
 
@@ -380,10 +383,8 @@ bool mywildcmp(const char *p, const char *str);
 std::string trim(const std::string& s);
 char* escape_string_single_quotes_and_backslashes(char* input, bool free_it);
 const char* escape_string_backslash_spaces(const char* input);
-
-// null-safe strdup wrapper
-char* s_strdup(const char* str);
-
+std::string strip_schema_from_query(const char* query, const char* schema,
+                                    const std::vector<std::string>& tables = {}, bool ansi_quotes = false);
 /**
  * @brief Helper function that converts a MYSQL_RES into a 'SQLite3_result'.
  * @param resultset The resultset to be converted into a 'SQLite3_result'.
@@ -392,3 +393,5 @@ char* s_strdup(const char* str);
 std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);
 
 std::vector<std::string> split_string(const std::string& str, char delimiter);
+
+#endif /* __GEN_FUNCTIONS */

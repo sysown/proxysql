@@ -9,7 +9,7 @@ extern "C" {
 #include "usual/time.h"
 }
 //#include "usual/time.c"
-
+extern PgSQL_Threads_Handler* GloPTH;
 extern PgSQL_Authentication* GloPgAuth;
 
 /*
@@ -196,7 +196,8 @@ void PG_pkt::write_RowDescription(const char *tupdesc, ...) {
 	finish_packet();
 }
 
-void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error, int affected_rows, const char *query_type, char txn_state) {
+void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error, int affected_rows, const char *query_type, bool send_ready_for_query,
+	char txn_state) {
 	assert(psa != NULL);
 	const char *fs = strchr(query_type, ' ');
 	int qtlen = strlen(query_type);
@@ -256,7 +257,7 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 			pkt.write_CommandComplete(buf);
 		}
 		pkt.to_PtrSizeArray(psa);
-		pkt.write_ReadyForQuery(txn_state);
+		if (send_ready_for_query) pkt.write_ReadyForQuery(txn_state);
 		pkt.to_PtrSizeArray(psa);
 	} else { // no resultset
 		PG_pkt pkt(64);
@@ -626,8 +627,65 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		return true;
 	}
 
+	if (hdr.type == PG_PKT_CANCEL) {	
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. CANCEL_REQUEST packet received. len=%u\n", (*myds)->sess, (*myds), len);
+
+		/*
+		 * CancelRequest Message Format
+		 *
+		 * Int32 (16)
+		 *   - Length of message contents in bytes (includes self).
+		 *
+		 * Int32 (80877102)
+		 *   - Cancel request code.
+		 *   - Encodes 1234 in the high 16 bits and 5678 in the low 16 bits.
+		 *   - Must not match any protocol version number.
+		 *
+		 * Int32
+		 *   - Process ID of the target backend.
+		 *
+		 * Byten
+		 *   - Secret key for the target backend.
+		 *   - Runs until the end of the message (length field defines size).
+		 *   - Maximum length: 256 bytes.
+		 */
+		if (len < 16 || len > 268) { // 16 = min length, 268 = max length (12 + 256)
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+				"Session=%p , DS=%p. malformed cancel request packet (len=%u)\n",
+				(*myds)->sess, (*myds), len);
+			return false;
+		}
+		
+		// --- Parse fields from payload ---
+		int offset = 0;
+		uint32 pid = 0;
+		uint32 key = 0;
+
+		// Backend PID
+		if (!get_uint32be((unsigned char*)hdr.data.ptr + offset, &pid)) {
+			return false;
+		}
+		offset += 4;
+		
+		// Secret key
+		if (!get_uint32be((unsigned char*)hdr.data.ptr + offset, &key)) {
+			return false;
+		}
+		offset += 4;
+
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8,
+			"Session=%p , DS=%p. Cancel request for pid=%u key=%u\n",
+			(*myds)->sess, (*myds), pid, key);
+
+		GloPTH->kill_connection_or_query(pid, key, nullptr, true);
+		
+		// close connection
+		return false;
+	}
+
 	//PG_PKT_STARTUP_V2 not supported
 	if (hdr.type != PG_PKT_STARTUP) {
+		proxy_error("Unsupported packet type '%u' received from client %s:%d\n", hdr.type, (*myds)->addr.addr, (*myds)->addr.port);
 		return false;
 	}
 
@@ -774,7 +832,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	user = (char*)(*myds)->myconn->conn_params.get_value(PG_USER);
 
 	if (!user || *user == '\0') {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Client password pkt before startup packet.\n", (*myds), (*myds)->sess, user);
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Client password pkt before startup packet.\n", (*myds)->sess, (*myds), user);
 		generate_error_packet(true, false, "client password pkt before startup packet", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 		goto __exit_process_pkt_handshake_response;
 	}
@@ -788,7 +846,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		for (int i = 2; i < lpass - 1; i++) {
 			tmp_pass[i] = '*';
 		}
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds), (*myds)->sess, user, tmp_pass);
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds)->sess, (*myds), user, tmp_pass);
 		free(tmp_pass);
 #endif // debug
 		(*myds)->sess->default_hostgroup = default_hostgroup;
@@ -826,7 +884,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	}
 
 	if (password) {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%s\n", (*myds), (*myds)->sess, user, AUTHENTICATION_METHOD_STR[(int)(*myds)->auth_method]);
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%s\n", (*myds)->sess, (*myds), user, AUTHENTICATION_METHOD_STR[(int)(*myds)->auth_method]);
 		switch ((*myds)->auth_method) {
 		case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		{
@@ -841,7 +899,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 
 			if (!pass || *pass == '\0') {
-				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds), (*myds)->sess, user);
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds)->sess, (*myds), user);
 				generate_error_packet(true, false, "empty password returned by client", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 				break;
 			}
@@ -879,7 +937,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			using_password = (pass_len > 0);
 
 			if (!pass || *pass == '\0') {
-				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds), (*myds)->sess, user);
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds)->sess, (*myds), user);
 				generate_error_packet(true, false, "empty password returned by client", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 				break;
 			}
@@ -910,36 +968,36 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				int pos = get_string((const char*)hdr.data.ptr, hdr.data.size, &mech);
 
 				if (pos == 0) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL mechanism not found.\n", (*myds), (*myds)->sess, user);
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL mechanism not found.\n", (*myds)->sess, (*myds), user);
 					break;
 				}
 
 				read_pos = pos;
 
-				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Selected SASL mechanism: %s.\n", (*myds), (*myds)->sess, user, mech);
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Selected SASL mechanism: %s.\n", (*myds)->sess, (*myds), user, mech);
 				if (strcmp(mech, "SCRAM-SHA-256") != 0) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Client selected an invalid SASL authentication mechanism: %s.\n", (*myds), (*myds)->sess, user, mech);
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Client selected an invalid SASL authentication mechanism: %s.\n", (*myds)->sess, (*myds), user, mech);
 					generate_error_packet(true, false, "client selected an invalid SASL authentication mechanism", 
 						PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 					break;
 				}
 
 				if (get_uint32be(((unsigned char*)hdr.data.ptr) + read_pos, &length) == false) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed packet.\n", (*myds), (*myds)->sess, user);
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed packet.\n", (*myds)->sess, (*myds), user);
 					break;
 				}
 
 				read_pos += 4;
 
 				if ((hdr.data.size - read_pos) < length) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed packet.\n", (*myds), (*myds)->sess, user);
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed packet.\n", (*myds)->sess, (*myds), user);
 					break;
 				}
 
 				// check mem boundry
 
 				if (!scram_handle_client_first((*myds)->scram_state, &stored_user_info, ((const unsigned char*)hdr.data.ptr) + read_pos, length)) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed\n", (*myds), (*myds)->sess, user);
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed\n", (*myds)->sess, (*myds),  user);
 					generate_error_packet(true, false, "SASL authentication failed", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 					break;
 				}
@@ -975,19 +1033,19 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					ret = EXECUTION_STATE::SUCCESSFUL;
 				}
 				else {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed.\n", (*myds), (*myds)->sess, user);
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed.\n", (*myds)->sess, (*myds), user);
 					//generate_error_packet(false, "SASL authentication failed", NULL, true);
 				}
 			}
 		}
 		break;
 		default:
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth method\n", (*myds), (*myds)->sess, user);
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth method\n", (*myds)->sess, (*myds), user);
 			//generate_error_packet(true, false, "authentication method not supported", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 			break;
 		}
 	} else {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. User not found in the database.\n", (*myds), (*myds)->sess, user);
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. User not found in the database.\n", (*myds)->sess, (*myds), user);
 		generate_error_packet(true, false, "User not found", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 	}
 
@@ -1095,8 +1153,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
 				if (i == PGSQL_NAME_LAST_LOW_WM)
 					continue;
-				if (strncmp(param_key.c_str(), pgsql_tracked_variables[i].set_variable_name, 
-					strlen(pgsql_tracked_variables[i].set_variable_name)) == 0) {
+				// using internal_variable_name because it follows the lowercase naming convention
+				if (strcmp(param_key.c_str(), pgsql_tracked_variables[i].internal_variable_name) == 0) {
 					idx = i;
 					break;
 				}
@@ -1224,16 +1282,22 @@ void PgSQL_Protocol::welcome_client() {
 		pgpkt.write_ParameterStatus("application_name", application_name);
 
 	/*
-	const char* client_encoding = pgsql_variables.client_get_value((*myds)->sess, PGSQL_CLIENT_ENCODING); //(*myds)->myconn->conn_params.get_value(PG_CLIENT_ENCODING);
-	if (client_encoding)
-		pgpkt.write_ParameterStatus("client_encoding", client_encoding);
-	else 
-		assert(0);
+	 * PostgreSQL has two possible internal representations for date/time values:
+	 *   - 64-bit integers (microsecond precision)
+	 *   - floating-point doubles (less precise)
+	 *
+	 * Since PostgreSQL 10, the floating-point option has been removed and
+	 * integer_datetimes is always compiled in and fixed to "on".
+	 *
+	 * The GUC "integer_datetimes" still exists but is read-only and will
+	 * always report "on". In other words, modern PostgreSQL cannot be built
+	 * without 64-bit datetime support.
+	 */
+	pgpkt.write_ParameterStatus("integer_datetimes", "on");
 
-	const char* datestyle = pgsql_variables.client_get_value((*myds)->sess, PGSQL_DATESTYLE);
-	if (datestyle)
-		pgpkt.write_ParameterStatus("datestyle", datestyle);
-	*/
+	// using SCRAM_SHA_256_DEFAULT_ITERATIONS value
+	pgpkt.write_ParameterStatus("scram_iterations", "4096"); 
+
 	for (unsigned int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 
 		if (pgsql_variables.client_get_hash((*myds)->sess, idx) == 0)
@@ -1241,7 +1305,7 @@ void PgSQL_Protocol::welcome_client() {
 
 		const char* val = pgsql_variables.client_get_value(sess, idx);
 		if (val)
-			pgpkt.write_ParameterStatus(pgsql_tracked_variables[idx].internal_variable_name, val);
+			pgpkt.write_ParameterStatus(pgsql_tracked_variables[idx].set_variable_name, val);
 	}
 
 	if (pgsql_thread___server_version)
@@ -1250,6 +1314,24 @@ void PgSQL_Protocol::welcome_client() {
 	if (pgsql_thread___server_encoding)
 		pgpkt.write_ParameterStatus("server_encoding", pgsql_thread___server_encoding);
 
+	// Backend Key Data
+	uint8_t backend_key_data[8];
+	uint32_t backend_pid = (*myds)->sess->thread_session_id;
+	uint32_t cancel_key = -1;
+	if (RAND_bytes((unsigned char*)&cancel_key, sizeof(cancel_key)) != 1) {
+		// Fallback: use libc PRNG
+		cancel_key = (uint32_t)random();
+	}
+	(*myds)->sess->cancel_secret_key = cancel_key;
+
+	// we store pid and key in network byte order
+	uint32_t net_backend_pid = htonl(backend_pid);
+	uint32_t net_cancel_key = htonl(cancel_key);
+
+	memcpy(&backend_key_data[0], &net_backend_pid, sizeof(net_backend_pid));
+	memcpy(&backend_key_data[4], &net_cancel_key, sizeof(net_cancel_key));
+
+	pgpkt.write_BackendKeyData(backend_key_data);
 	pgpkt.write_ReadyForQuery();
 	pgpkt.set_multi_pkt_mode(false);
 
@@ -1283,7 +1365,6 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 		pgpkt.set_multi_pkt_mode(false);
 	}
 
-	
 	auto buff = pgpkt.detach();
 	if (send) {
 		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
@@ -1334,7 +1415,7 @@ bool PgSQL_Protocol::scram_handle_client_first(ScramState* scram_state, PgCreden
 	ibuf[datalen] = '\0';
 
 	input = ibuf;
-	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM client-first-message = \"%s\"\n", (*myds), (*myds)->sess, user->name, input);
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM client-first-message = \"%s\"\n", (*myds)->sess, (*myds), user->name, input);
 	if (!read_client_first_message(input,
 		&scram_state->cbind_flag,
 		&scram_state->client_first_message_bare,
@@ -1342,10 +1423,10 @@ bool PgSQL_Protocol::scram_handle_client_first(ScramState* scram_state, PgCreden
 		goto failed;
 
 	if (!user->mock_auth) {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. stored secret = \"%s\"\n", (*myds), (*myds)->sess, user->name, user->passwd);
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. stored secret = \"%s\"\n", (*myds)->sess, (*myds), user->name, user->passwd);
 		switch (get_password_type(user->passwd)) {
 		case PASSWORD_TYPE_MD5:
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM authentication failed: user has MD5 secret\n", (*myds), (*myds)->sess, user->name);
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM authentication failed: user has MD5 secret\n", (*myds)->sess, (*myds), user->name);
 			goto failed;
 		case PASSWORD_TYPE_PLAINTEXT:
 		case PASSWORD_TYPE_SCRAM_SHA_256:
@@ -1356,7 +1437,7 @@ bool PgSQL_Protocol::scram_handle_client_first(ScramState* scram_state, PgCreden
 	if (!build_server_first_message(scram_state, user->name, user->mock_auth ? NULL : user->passwd))
 		goto failed;
 
-	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM server-first-message = \"%s\"\n", (*myds), (*myds)->sess, user->name, scram_state->server_first_message);
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM server-first-message = \"%s\"\n", (*myds)->sess, (*myds), user->name, scram_state->server_first_message);
 	{
 		PG_pkt pgpkt{};
 		pgpkt.write_AuthenticationRequest(PG_PKT_AUTH_SASL_CONT, (const uint8_t*)scram_state->server_first_message, strlen(scram_state->server_first_message));
@@ -1388,14 +1469,14 @@ bool PgSQL_Protocol::scram_handle_client_final(ScramState* scram_state, PgCreden
 	ibuf[datalen] = '\0';
 
 	input = ibuf;
-	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM client-final-message = \"%s\"\n", (*myds), (*myds)->sess, user->name, input);
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM client-final-message = \"%s\"\n", (*myds)->sess, (*myds), user->name, input);
 	if (!read_client_final_message(scram_state, data, input,
 		&client_final_nonce,
 		&proof))
 		goto failed;
 
-	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM client-final-message-without-proof = \"%s\"\n", (*myds), 
-		(*myds)->sess, user->name, scram_state->client_final_message_without_proof);
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SCRAM client-final-message-without-proof = \"%s\"\n", (*myds)->sess, (*myds),
+		user->name, scram_state->client_final_message_without_proof);
 
 	if (!verify_final_nonce(scram_state, client_final_nonce)) {
 		proxy_error("Invalid SCRAM response (nonce does not match)\n");
@@ -1403,16 +1484,16 @@ bool PgSQL_Protocol::scram_handle_client_final(ScramState* scram_state, PgCreden
 	}
 
 	if (!verify_client_proof(scram_state, proof)) {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s. Password authentication failed\n", (*myds),
-			(*myds)->sess, user->name);
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s. Password authentication failed\n", (*myds)->sess, 
+			(*myds), user->name);
 		goto failed;
 	}
 
 	server_final_message = build_server_final_message(scram_state);
 	if (!server_final_message)
 		goto failed;
-	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s. SCRAM server-final-message = \"%s\"\n", (*myds),
-		(*myds)->sess, user->name, server_final_message);
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s. SCRAM server-final-message = \"%s\"\n", (*myds)->sess, 
+		(*myds), user->name, server_final_message);
 
 	{
 		PG_pkt pgpkt{};
@@ -1543,6 +1624,7 @@ bool PgSQL_Protocol::generate_ready_for_query_packet(bool send, char trx_state, 
 	return true;
 }
 
+/* Not Used anymore. To be removed in next iteration
 bool PgSQL_Protocol::generate_describe_completion_packet(bool send, bool ready, const PgSQL_Describe_Prepared_Info* desc, uint8_t stmt_type, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
@@ -1608,7 +1690,7 @@ bool PgSQL_Protocol::generate_describe_completion_packet(bool send, bool ready, 
 		_ptr->size = buff.second;
 	}
 	return true;
-}
+}*/
 
 //generate close statement completion packet
 bool PgSQL_Protocol::generate_close_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
@@ -1648,6 +1730,22 @@ bool PgSQL_Protocol::generate_bind_completion_packet(bool send, bool ready, char
 		pgpkt.write_ReadyForQuery(trx_state);
 		pgpkt.set_multi_pkt_mode(false);
 	}
+	auto buff = pgpkt.detach();
+	if (send == true) {
+		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
+	} else {
+		_ptr->ptr = buff.first;
+		_ptr->size = buff.second;
+	}
+	return true;
+}
+
+bool PgSQL_Protocol::generate_no_data_packet(bool send, PtrSize_t* _ptr) {
+	// to avoid memory leak
+	assert(send == true || _ptr);
+	PG_pkt pgpkt(5);
+	pgpkt.put_char('n');
+	pgpkt.put_uint32(4); // size of the NoData packet (Fixed 4 bytes)
 	auto buff = pgpkt.detach();
 	if (send == true) {
 		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
@@ -2240,6 +2338,167 @@ unsigned int PgSQL_Protocol::copy_out_response_end_to_PgSQL_Query_Result(bool se
 	return size;
 }
 
+unsigned int PgSQL_Protocol::copy_no_data_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result) {
+	assert(pg_query_result);
+	const unsigned int size = 1 + 4; // 'n', length
+	bool alloced_new_buffer = false;
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+	PG_pkt pgpkt(_ptr, size);
+	pgpkt.put_char('n');
+	pgpkt.put_uint32(size - 1); // length
+	if (send == true) {
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
+	pg_query_result->resultset_size += size;
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
+	}
+	pg_query_result->pkt_count++;
+	return size;
+}
+
+unsigned int PgSQL_Protocol::copy_parse_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result) {
+	assert(pg_query_result);
+	const unsigned int size = 1 + 4; // '1', length
+	bool alloced_new_buffer = false;
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(size);
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+	PG_pkt pgpkt(_ptr, size);
+	pgpkt.put_char('1');
+	pgpkt.put_uint32(size - 1);
+	if (send == true) {
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
+	pg_query_result->resultset_size += size;
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, size);
+	}
+	pg_query_result->pkt_count++;
+	return size;
+}
+
+unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
+	const PGresult* result, uint8_t stmt_type) {
+	assert(pg_query_result);
+	assert(result);
+
+	unsigned int total_size = 0;
+
+	// ----------------- Parameter Description -----------------
+	unsigned int param_desc_size = 0;
+	int param_types_count = PQnparams(result);
+	if (stmt_type == 'S') {
+		// Message type (1) + length (4) + param count (2) + OIDs
+		param_desc_size = 1 + sizeof(uint32_t) + sizeof(uint16_t) +
+			(param_types_count * sizeof(uint32_t));
+		
+		total_size += param_desc_size;
+	}
+
+	// ----------------- Row Description or NoData -----------------
+	unsigned int row_desc_size = 0;
+	int column_count = PQnfields(result);
+	if (column_count > 0) {
+
+		// Base size: type (1) + length (4) + field count (2)
+		row_desc_size = 1 + sizeof(uint32_t) + sizeof(uint16_t);
+
+		// Per-column fixed-size fields
+		row_desc_size += column_count * (
+			sizeof(uint32_t) + // table OID
+			sizeof(uint16_t) + // column index
+			sizeof(uint32_t) + // type OID
+			sizeof(uint16_t) + // column length
+			sizeof(uint32_t) + // type modifier
+			sizeof(uint16_t)   // format code
+			);
+
+		for (int i = 0; i < column_count; i++) {
+			const char* col_name = PQfname(result, i);
+			// PostgreSQL guarantees col_name is non-null, but be defensive
+			row_desc_size += (col_name ? strlen(col_name) : 0) + 1; // NOSONAR : field name + null terminator
+		}
+		total_size += row_desc_size;
+	} else {
+		// NoData packet: type (1) + length (4)
+		total_size += 1 + sizeof(uint32_t); // NoData packet
+	}
+
+	// ----------------- Buffer allocation -----------------
+	bool alloced_new_buffer = false;
+	unsigned char* _ptr = pg_query_result->buffer_reserve_space(total_size);
+	// buffer is not enough to store the new row. Remember we have already pushed data to PSarrayOUT
+	if (_ptr == NULL) {
+		_ptr = (unsigned char*)l_alloc(total_size);
+		alloced_new_buffer = true;
+	}
+
+	PG_pkt pgpkt(_ptr, total_size);
+
+	// ----------- Parameter Description ('t') -----------
+	if (stmt_type == 'S') {
+		pgpkt.put_char('t');
+		pgpkt.put_uint32(param_desc_size - 1); /// length field excludes type byte
+		// If there are no parameters, we still need to write a zero
+		pgpkt.put_uint16(param_types_count); // number of parameters
+		for (int i = 0; i < param_types_count; i++) {
+			pgpkt.put_uint32(PQparamtype(result, i)); // parameter type OID
+		}
+	}
+	// ----------- Row Description ('T') or NoData ('n') -----------
+	if (column_count > 0) {
+		pgpkt.put_char('T');
+		pgpkt.put_uint32(row_desc_size - 1); // length field excludes type byte
+		pgpkt.put_uint16(column_count); // Field count
+		for (int i = 0; i < column_count; i++) {
+			const char* col_name = PQfname(result, i);
+			if (col_name) {
+				pgpkt.put_string(col_name); // NOSONAR : field name
+			} else {
+				pgpkt.put_char('\0'); // NOSONAR : null terminator for empty field name
+			}
+			pgpkt.put_uint32(PQftable(result, i));   // table OID
+			pgpkt.put_uint16(PQftablecol(result, i)); // column index
+			pgpkt.put_uint32(PQftype(result, i));     // type OID
+			pgpkt.put_uint16(PQfsize(result, i));     // column length
+			pgpkt.put_uint32(PQfmod(result, i));      // type modifier
+			pgpkt.put_uint16(PQfformat(result, i));   // format code
+		}
+	} else {
+		pgpkt.put_char('n');
+		pgpkt.put_uint32(4); // size of the packet, including the type byte
+	}
+
+	if (send == true) {
+		// not supported
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+	}
+	pg_query_result->resultset_size += total_size;
+	if (alloced_new_buffer) {
+		// we created new buffer
+		//pg_query_result->buffer_to_PSarrayOut();
+		pg_query_result->PSarrayOUT.add(_ptr, total_size);
+	}
+	pg_query_result->pkt_count++;
+	return total_size;
+}
+
+/* Not Used anymore. To be removed in next iteration
 PgSQL_Describe_Prepared_Info::PgSQL_Describe_Prepared_Info() {
 	parameter_types = NULL;
 	parameter_types_count = 0;
@@ -2320,6 +2579,7 @@ void PgSQL_Describe_Prepared_Info::extract_columns(const PGresult* result) {
 		columns[i].format = (uint16_t)PQfformat(result, i);
 	}
 }
+*/
 
 PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer = NULL;
@@ -2427,7 +2687,7 @@ unsigned int PgSQL_Query_Result::add_error(const PGresult* result) {
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
 			} else {
 				proto->generate_error_packet(false, false, (char*)"Query execution was interrupted",
-					PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED, false, false, &pkt);
+					PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE, false, false, &pkt);
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1317);
 			}
 		} else if (conn->is_error_present()) {
@@ -2519,6 +2779,24 @@ unsigned int PgSQL_Query_Result::add_command_completion(const PGresult* result, 
 		myds->sess->CurrentQuery.affected_rows = affected_rows;
 		myds->sess->CurrentQuery.last_insert_id = 0; // not supported
 	}*/
+	return bytes;
+}
+
+unsigned int PgSQL_Query_Result::add_no_data() {
+	const unsigned int bytes = proto->copy_no_data_to_PgSQL_Query_Result(false, this);
+	//result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
+	return bytes;
+}
+
+unsigned int PgSQL_Query_Result::add_parse_completion() {
+	const unsigned int bytes = proto->copy_parse_completion_to_PgSQL_Query_Result(false, this);
+	result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
+	return bytes;
+}
+
+unsigned int PgSQL_Query_Result::add_describe_completion(const PGresult* result, uint8_t stmt_type) {
+	const unsigned int bytes = proto->copy_describe_completion_to_PgSQL_Query_Result(false, this, result, stmt_type);
+	result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 	return bytes;
 }
 

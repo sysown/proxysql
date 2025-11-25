@@ -106,36 +106,31 @@ class PgSQL_SrvConnList;
 class PgSQL_SrvC;
 class PgSQL_SrvList;
 class PgSQL_HGC;
-class PgSQL_Errors_stats;
 
-typedef std::unordered_map<std::uint64_t, PgSQL_Errors_stats*> umap_pgsql_errors;
+class PgSQL_Errors_stats {
+public:
+	PgSQL_Errors_stats(int _hostgroup, const char* _hostname, int _port, const char* _username, const char* _address, const char* _dbname,
+		const char* _sqlstate, const char* _errmsg, time_t tn);
+	~PgSQL_Errors_stats();
+	char** get_row();
+	void add_time(unsigned long long n, const char* le);
+	void free_row(char** pta);
 
-class PgSQL_GTID_Server_Data {
-	public:
-	char *address;
-	uint16_t port;
-	uint16_t pgsql_port;
-	char *data;
-	size_t len;
-	size_t size;
-	size_t pos;
-	struct ev_io *w;
-	char uuid_server[64];
-	unsigned long long events_read;
-	gtid_set_t gtid_executed;
-	bool active;
-	PgSQL_GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _pgsql_port);
-	void resize(size_t _s);
-	~PgSQL_GTID_Server_Data();
-	bool readall();
-	bool writeout();
-	bool read_next_gtid();
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
-	void read_all_gtids();
-	void dump();
+private:
+	int hostgroup;
+	char* hostname;
+	int port;
+	char* username;
+	char* client_address;
+	char* dbname;
+	char sqlstate[5 + 1];
+	char* errmsg;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned long long count_star;
 };
 
-
+typedef std::unordered_map<std::uint64_t, std::unique_ptr<PgSQL_Errors_stats>> umap_pgsql_errors;
 
 class PgSQL_SrvConnList {
 	private:
@@ -587,12 +582,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 */
 	SQLite3_result* pgsql_servers_to_monitor;
 
-	pthread_rwlock_t gtid_rwlock;
-	std::unordered_map <string, PgSQL_GTID_Server_Data *> gtid_map;
-	struct ev_async * gtid_ev_async;
-	struct ev_loop * gtid_ev_loop;
-	struct ev_timer * gtid_ev_timer;
-	bool gtid_missing_nodes;
 	struct {
 		unsigned int servers_table_version;
 		pthread_mutex_t servers_table_version_lock;
@@ -844,7 +833,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	void add_pgsql_errors(int hostgroup, const char* hostname, int port, const char* username, const char* address,
 		const char* dbname, const char* sqlstate, const char* errmsg);
-	SQLite3_result *get_pgsql_errors(bool);
+	std::unique_ptr<SQLite3_result> get_pgsql_errors(bool);
 
 	void shutdown();
 	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);

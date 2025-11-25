@@ -88,25 +88,6 @@ uint64_t measure_avg_query_time(
 	return avg;
 }
 
-MYSQL* init_mysql_conn(char* host, char* user, char* pass, int port, bool cmp=false) {
-	diag("Creating MySQL conn   host=\"%s\" port=\"%d\" cmp=\"%d\"", user, port, cmp);
-
-	MYSQL* mysql = mysql_init(NULL);
-
-	if (!mysql) {
-		return nullptr;
-	}
-	if (cmp) {
-		if (mysql_options(mysql, MYSQL_OPT_COMPRESS, nullptr)) {
-			return nullptr;
-		}
-	}
-	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, 0)) {
-		return nullptr;
-	}
-
-	return mysql;
-}
 
 const char version_comment_query[] { "select @@version_comment limit 1" };
 
@@ -140,13 +121,13 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_username, cl.admin_password, cl.admin_port);
+	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = init_mysql_conn(cl.host, cl.username, cl.password, cl.port);
+	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
@@ -185,17 +166,17 @@ int main(int argc, char** argv) {
 			" (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4) as u4;"
 	);
 
-	MYSQL* proxy_cmp = init_mysql_conn(cl.host, cl.username, cl.password, cl.port, true);
+	MYSQL* proxy_cmp = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, false, true);
 	if (!proxy_cmp) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_cmp));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql = init_mysql_conn(cl.host, cl.username, cl.password, cl.mysql_port, false);
+	MYSQL* mysql = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, false);
 	if (!mysql) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql_cmp = init_mysql_conn(cl.host, cl.username, cl.password, cl.mysql_port, true);
+	MYSQL* mysql_cmp = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, true);
 	if (!mysql_cmp) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_cmp));
 		return EXIT_FAILURE;

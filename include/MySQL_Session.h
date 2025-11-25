@@ -96,7 +96,32 @@ class Query_Info {
 	void end();
 	char *get_digest_text();
 	bool is_select_NOT_for_update();
+	void set_end_time(unsigned long long time);
 };
+
+/**
+ * @brief Assigns query end time.
+ * @details In addition to being a setter for end_time member variable, this
+ * method ensures that end_time is always greater than or equal to start_time.
+ * Refer https://github.com/sysown/proxysql/issues/4950 for more details.
+ * @param time query end time
+ */
+inline void Query_Info::set_end_time(unsigned long long time) {
+	end_time = time;
+
+#ifndef CLOCK_MONOTONIC_RAW
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is greater than end_time, assign current monotonic time
+	end_time = monotonic_time();
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is still greater than end_time, set the difference to 0
+	end_time = start_time;
+#endif // CLOCK_MONOTONIC_RAW
+}
 
 /**
  * @class MySQL_Session
@@ -129,6 +154,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 */
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_REFRESH(PtrSize_t *pkt);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
 	/**
@@ -331,7 +357,6 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	unsigned int active_transactions;
 	int transaction_persistent_hostgroup;
 	int to_process;
-	int pending_connect;
 	enum proxysql_session_type session_type;
 
 	// bool
@@ -378,6 +403,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
+	// Fast forward grace close flags: track backend closure during fast forward mode
+	// to allow pending client data to drain before closing the session.
+	bool backend_closed_in_fast_forward;
+	unsigned long long fast_forward_grace_start_time;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum mysql_variable_name changing_variable_idx;
@@ -443,8 +472,16 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute=true);
+	char* get_current_query(int max_length = -1);
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
+
+#if defined(__clang__)
+	template<typename SESS, typename DS, typename BE, typename THD>
+	friend class Base_Session;
+#else
+	friend class Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>;
+#endif
 };
 
 #define KILL_QUERY       1

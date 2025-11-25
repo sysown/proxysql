@@ -5,6 +5,26 @@
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
+enum class PGSQL_LOG_EVENT_TYPE {
+	SIMPLE_QUERY,
+	AUTH_OK,
+	AUTH_ERR,
+	AUTH_CLOSE,
+	AUTH_QUIT,
+	INITDB,
+	ADMIN_AUTH_OK,
+	ADMIN_AUTH_ERR,
+	ADMIN_AUTH_CLOSE,
+	ADMIN_AUTH_QUIT,
+	SQLITE_AUTH_OK,
+	SQLITE_AUTH_ERR,
+	SQLITE_AUTH_CLOSE,
+	SQLITE_AUTH_QUIT,
+	STMT_EXECUTE,
+	STMT_DESCRIBE,
+	STMT_PREPARE
+};
+
 class PgSQL_Event {
 	private:
 	uint32_t thread_id;
@@ -24,7 +44,7 @@ class PgSQL_Event {
 	size_t client_len;
 	//uint64_t total_length;
 	unsigned char buf[10];
-	enum log_event_type et;
+	PGSQL_LOG_EVENT_TYPE et;
 	uint64_t hid;
 	char *extra_info;
 	char *client_stmt_name;
@@ -35,7 +55,7 @@ class PgSQL_Event {
 	uint64_t rows_sent;
 	
 	public:
-	PgSQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
+	PgSQL_Event(PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f, PgSQL_Session *sess);
 	uint64_t write_query_format_1(std::fstream *f);
 	uint64_t write_query_format_2_json(std::fstream *f);
@@ -89,7 +109,7 @@ class PgSQL_Logger {
 	void audit_set_datadir(char *);
 	void audit_set_base_filename();
 	void log_request(PgSQL_Session *, PgSQL_Data_Stream *);
-	void log_audit_entry(log_event_type, PgSQL_Session *, PgSQL_Data_Stream *, char *e = NULL);
+	void log_audit_entry(PGSQL_LOG_EVENT_TYPE, PgSQL_Session *, PgSQL_Data_Stream *, char *e = NULL);
 	void flush();
 	void wrlock();
 	void wrunlock();

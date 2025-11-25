@@ -9,6 +9,7 @@
 #include <fstream>
 #include <unistd.h>
 #include <utility>
+#include <time.h>
 
 #include "curl/curl.h"
 #include "mysql.h"
@@ -17,6 +18,12 @@
 
 #include "command_line.h"
 #include "mysql.h"
+
+#ifdef CLOCK_MONOTONIC_RAW
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC_RAW
+#else
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
+#endif
 
 template <typename T>
 using rc_t = std::pair<int,T>;
@@ -969,8 +976,8 @@ struct srv_addr_t {
 
 // Helpers using 'wait_for_cond' on 'stats_mysql_connection'
 void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
-void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
-void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
+void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg=-1);
+void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg=-1);
 
 /**
  * @brief Fetches the ProxySQL nodes configured in the supplied instance.
@@ -1001,5 +1008,8 @@ int check_nodes_sync(
 const char* get_env_str(const char* envname, const char* envdefault);
 int get_env_int(const char* envname, int envdefault);
 bool get_env_bool(const char* envname, bool envdefault);
+
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
+int run_q(MYSQL *mysql, const char *q);
 
 #endif // #define UTILS_H

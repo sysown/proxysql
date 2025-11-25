@@ -63,4 +63,5 @@ extern const pgsql_variable_validator pgsql_variable_validator_bytea_output;
 extern const pgsql_variable_validator pgsql_variable_validator_extra_float_digits;
 extern const pgsql_variable_validator pgsql_variable_validator_maintenance_work_mem;
 extern const pgsql_variable_validator pgsql_variable_validator_client_encoding;
+extern const pgsql_variable_validator pgsql_variable_validator_search_path;
 #endif // PGSQL_VARIABLES_VALIDATOR_H

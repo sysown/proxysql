@@ -431,6 +431,14 @@ struct cpu_timer
 	unsigned long long begin;
 };
 */
+static char *s_strdup(char *s) {
+	char *ret=NULL;
+	if (s) {
+		ret=strdup(s);
+	}
+	return ret;
+}
+
 
 static int __ClickHouse_Server_refresh_interval=1000;
 extern MySQL_Query_Cache *GloMyQC;

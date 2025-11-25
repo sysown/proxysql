@@ -1468,6 +1468,8 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 }
 
 void ProxySQL_Main_init_phase3___start_all() {
+
+	srandom((unsigned int)(time(NULL) ^ getpid()));
 	{
 		cpu_timer t;
 		GloMyLogger->events_set_datadir(GloVars.datadir);

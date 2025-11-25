@@ -96,6 +96,7 @@ deps/re2/re2-*/
 deps/sqlite3/sqlite-amalgamation-*/
 deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
+deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
 deps/json/json-*/
 deps/abseil/abseil-cpp-*/
@@ -155,3 +156,4 @@ proxysql-save.cfg
 test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
+GEMINI.md

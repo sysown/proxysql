@@ -13,7 +13,7 @@
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
 class PgSQL_STMTs_local_v14;
-class PgSQL_Describe_Prepared_Info;
+//class PgSQL_Describe_Prepared_Info;
 class PgSQL_Bind_Info;
 //#define STATUS_PGSQL_CONNECTION_SEQUENCE			 0x00000001
 #define STATUS_PGSQL_CONNECTION_COMPRESSION          0x00000002
@@ -317,8 +317,40 @@ public:
      */
     void stmt_execute_cont(short event);
 
-	void reset_session_start();
-	void reset_session_cont(short event);
+    /**
+     * @brief Initiates the asynchronous reset of the PostgreSQL connection.
+     *
+     * Starts the internal state machine that resets connection to a clean,
+     * reusable state so it can safely re-enter the multiplexing pool.
+     *
+     */
+    void reset_session_start();
+
+    /**
+     * @brief Continues the asynchronous reset of the PostgreSQL session.
+     *
+     * This method advances the state machine initiated by reset_session_start()
+     * to asynchronously reset the backend connection to a clean, reusable state.
+     *
+     * @param event The event flag indicating the current I/O event.
+     */
+    void reset_session_cont(short event);
+
+    /**
+     * @brief Start a resynchronization attempt for the current backend connection.
+     *
+     * Send protocol-level Sync (or otherwise trigger the backend to reach
+     * ReadyForQuery) and transition the connection into the resynchronizing state.
+     *
+     */
+    void resync_start();
+
+    /**
+	 * @brief Continue a previously started resynchronization in response to an event.
+	 *
+	 * @param event The event flag indicating the current I/O event.
+	 */
+    void resync_cont(short event);
 	
 	int async_connect(short event);
 	int async_query(short event, const char* stmt, unsigned long length, const char* backend_stmt_name = nullptr, 
@@ -326,6 +358,7 @@ public:
 	int async_ping(short event);
 	int async_reset_session(short event);
 	int async_send_simple_command(short event, char* stmt, unsigned long length); // no result set expected
+	int async_perform_resync(short event);
 
 	void next_event(PG_ASYNC_ST new_st);
 	bool is_connected() const;
@@ -436,13 +469,14 @@ public:
 	void reset_error() { reset_error_info(error_info, false); }
 
 	bool reset_session_in_txn = false;
+	bool reset_session_in_pipeline = false;
 
 	PGresult* get_result();
 	void next_multi_statement_result(PGresult* result);
 	bool set_single_row_mode();
 	void update_bytes_recv(uint64_t bytes_recv);
 	void update_bytes_sent(uint64_t bytes_sent);
-	void ProcessQueryAndSetStatusFlags(char* query_digest_text, int savepoint_count);
+	void ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count);
 
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
 	inline int get_pg_server_version() { return PQserverVersion(pgsql_conn); }
@@ -473,9 +507,9 @@ public:
 	const char* get_pg_transaction_status_str();
 	unsigned int get_memory_usage() const;
 	char get_transaction_status_char();
-
-	inline
-	int get_backend_pid() { return (pgsql_conn) ? get_pg_backend_pid() : -1; }
+	inline int get_backend_pid() { return (pgsql_conn) ? get_pg_backend_pid() : -1; }
+	bool is_pipeline_active() { return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF); }
+	const char* get_pg_backend_state() const;
 
 	static int char_to_encoding(const char* name) {
 		return pg_char_to_encoding(name);
@@ -501,7 +535,7 @@ public:
 	void set_query(const char* stmt, unsigned long length, const char* _backend_stmt_name = nullptr, const PgSQL_Extended_Query_Info* extended_query_info = nullptr);
 	void reset();
 
-	bool IsKeepMultiplexEnabledVariables(char* query_digest_text);
+	bool IsKeepMultiplexEnabledVariables(const char* query_digest_text);
 
 	/**
 	 * @brief Retrieves startup parameter and it's hash
@@ -588,7 +622,6 @@ public:
 	PSresult  ps_result;
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
-	PgSQL_Describe_Prepared_Info* stmt_metadata_result;
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
@@ -603,6 +636,8 @@ public:
 	bool processing_multi_statement;
 	bool multiplex_delayed;
 	bool is_client_connection; // true if this is a client connection, false if it is a server connection
+	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
+	bool resync_failed; // true if the last resync attempt failed
 
 	PgSQL_STMTs_local_v14* local_stmts;
 	PgSQL_SrvC *parent;
@@ -623,7 +658,9 @@ private:
 	// Set end state for the fetch result to indicate that it originates from a simple query or statement execution.
 	ASYNC_ST fetch_result_end_st = ASYNC_QUERY_END;
 	inline void set_fetch_result_end_state(ASYNC_ST st) {
-		assert(st == ASYNC_QUERY_END || st == ASYNC_STMT_EXECUTE_END);
+		assert(st == ASYNC_QUERY_END || st == ASYNC_STMT_EXECUTE_END || 
+			st == ASYNC_STMT_DESCRIBE_END || st == ASYNC_STMT_PREPARE_END ||
+			st == ASYNC_RESYNC_END);
 		fetch_result_end_st = st;
 	}
 	// Handles the COPY OUT response from the server.
@@ -631,6 +668,7 @@ private:
 	bool handle_copy_out(const PGresult* result, uint64_t* processed_bytes);
 	static void notice_handler_cb(void* arg, const PGresult* result);
 	static void unhandled_notice_cb(void* arg, const PGresult* result);
+	void init_query_result();
 
 	/**
 	 * @brief Checks if a substring at a given position in a string matches the format of a formatted PostgreSQL error header.
@@ -664,21 +702,40 @@ private:
 	static std::map<std::string, std::vector<std::string>> parse_pq_error_message(const std::string& error_str);
 };
 
-class PgSQL_CancelQueryArgs {
+class PgSQL_Backend_Kill_Args {
 public:
-	PGconn* conn;
-	PgSQL_Thread* mt;
-	char* username;
-	char* hostname;
-	unsigned int port;
-	int backend_pid;
-	unsigned int hid;
+	enum class TYPE {
+		CANCEL_QUERY = 0,
+		TERMINATE_CONNECTION
+	};
+	PGcancel* cancel_conn;
+	PgSQL_Thread* pgsql_thd;
 
-	PgSQL_CancelQueryArgs(PGconn* _conn, const char* user, const char* host,
-		unsigned int _port, unsigned int _hid, int _backend_pid, PgSQL_Thread* _mt);
-	~PgSQL_CancelQueryArgs();
+	char* username;
+	char* password;
+	char* hostname;
+	char* dbname;
+	unsigned int port;
+
+	int backend_pid;
+	unsigned int hostgroup_id;
+	TYPE type;
+
+	// SSL options
+	struct SSLConfig {
+		bool use_ssl = false;
+		char* sslkey;
+		char* sslcert;
+		char* sslrootcert;
+		char* sslcrl;
+		char* sslcrldir;
+	} ssl_config;
+
+	PgSQL_Backend_Kill_Args(PGconn* conn, const char* user, const char* pass, const char* db, const char* host,
+		unsigned int port, unsigned int hid, bool ssl, TYPE typ, PgSQL_Thread* thd);
+	~PgSQL_Backend_Kill_Args();
 };
 
-void* PgSQL_cancel_query_thread(void* arg);
+void* PgSQL_backend_kill_thread(void* arg);
 
 #endif /* __CLASS_PGSQL_CONNECTION_H */

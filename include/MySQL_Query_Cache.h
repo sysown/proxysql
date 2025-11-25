@@ -3,7 +3,7 @@
 
 #include "proxysql.h"
 #include "cpp.h"
-#include "query_cache.hpp"
+#include "Query_Cache.h"
 
 typedef struct _MySQL_QC_entry : public QC_entry_t {
 	uint32_t column_eof_pkt_offset;

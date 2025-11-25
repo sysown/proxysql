@@ -539,87 +539,145 @@ void test_empty_stmt() {
 }
 
 void test_prepare_statement_mix() {
-	diag("Test %d: Prepare statement + Query", test_count++);
+	diag("Test %d: Prepare statement + Simple Query", test_count++);
 	auto conn = create_connection();
 	if (!conn) return;
 
 	try {
 		conn->prepareStatement("test_stmt_mix", "SELECT 1", false);
-
 		conn->sendQuery("SELECT 2");
 		
 		char type;
-		int parse_count = 0;
-		int row_desc_count = 0;
-		int row_data_count = 0;
-		int command_completion_count = 0;
-		int other_count = 0;
-		bool got_ready = false;
+		std::vector<uint8_t> buffer;
 
-		while (!got_ready) {
-			std::vector<uint8_t> buffer;
-			conn->readMessage(type, buffer);
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received parse complete for prepared statement");
 
-			if (type == PgConnection::PARSE_COMPLETE) {
-				parse_count++;
-			} else if (type == PgConnection::ROW_DESCRIPTION) {
-				row_desc_count++;
-			} else if (type == PgConnection::DATA_ROW) {
-				row_data_count++;
-			} else if (type == PgConnection::COMMAND_COMPLETE) {
-				command_completion_count++;
-			} else if (type == PgConnection::READY_FOR_QUERY) {
-				got_ready = true;
-			} else {
-				other_count++;
-			}
-		}
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received row description for query");
 
-		ok(parse_count == 1, "Received parse complete for prepared statement (%d/1)", parse_count);
-		ok(row_desc_count == 1, "Received row description for query (%d/1)", row_desc_count);
-		ok(row_data_count == 1, "Received row data for query (%d/1)", row_data_count);
-		ok(command_completion_count == 1, "Received command completion for query (%d/1)", command_completion_count);
-		ok(got_ready, "Received ready for query");
-		ok(other_count == 0, "No other messages received (%d)", other_count);
-		
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received row data for query");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received command completion for query");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query");
+
 		// Now send sync
 		conn->sendSync();
 
 		// Should get ready for query
-		got_ready = false;
-		parse_count = 0;
-		row_desc_count = 0;
-		row_data_count = 0;
-		command_completion_count = 0;
-		other_count = 0;
-
-		while (!got_ready) {
-			std::vector<uint8_t> buffer;
-			conn->readMessage(type, buffer);
-			if (type == PgConnection::PARSE_COMPLETE) {
-				parse_count++;
-			} else if (type == PgConnection::ROW_DESCRIPTION) {
-				row_desc_count++;
-			} else if (type == PgConnection::DATA_ROW) {
-				row_data_count++;
-			} else if (type == PgConnection::COMMAND_COMPLETE) {
-				command_completion_count++;
-			} else if (type == PgConnection::READY_FOR_QUERY) {
-				got_ready = true;
-			} else {
-				other_count++;
-			}
-		}
-		// After sync, we should not receive any parse, row description, row data or command completion
-		ok(parse_count == 0, "No parse complete after sync (%d/0)", parse_count);
-		ok(row_desc_count == 0, "No row description after sync (%d/0)", row_desc_count);
-		ok(row_data_count == 0, "No row data after sync (%d/0)", row_data_count);
-		ok(command_completion_count == 0, "No command completion after sync (%d/0)", command_completion_count);
-		ok(got_ready, "Received ready for query after sync");
-		ok(other_count == 0, "No other messages received after sync (%d)", other_count);
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query after sync");
 	}
 	catch (const PgException& e) {
-		ok(false, " Prepare statement + Query failed with error: %s", e.what());
+		ok(false, "Prepare statement + Simple Query failed with error: %s", e.what());
+	}
+}
+
+void test_extended_query_prepared_describe_execute_simple_query_without_sync() {
+	diag("Test %d: Extended Query (Prepare, Describe, Execute) + Simple Query without sync", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+	try {
+		// Prepare without sync
+		conn->prepareStatement("test_stmt_eq", "SELECT $1::int + 1", false);
+		conn->describeStatement("test_stmt_eq", false);
+		PgConnection::Param param = { "41", 0 };
+		conn->bindStatement("test_stmt_eq", "", { param }, { 0 }, false);
+		conn->executePortal("", 0, false);
+		// Now send simple query without sync
+		conn->sendQuery("SELECT 2");
+		// Finally send sync
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received parse complete for prepared statement");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARAMETER_DESCRIPTION, "Received parameter description for prepared statement");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received row description for prepared statement");
+		{
+			BufferReader reader(buffer);
+			// Read row description
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "Row description has 1 field (%d/1)", fieldCount);
+			// Read field name
+			std::string fieldName = reader.readString();
+			ok(fieldName == "?column?", "Field name is '?column?'");
+
+			// Read field table OID
+			unsigned int tableOid = reader.readInt32();
+			ok(tableOid == 0, "Field table OID is 0 (no table)");
+
+			// Read field attribute number
+			unsigned int attrNum = reader.readInt16();
+			ok(attrNum == 0, "Field attribute number is 0 (no specific column)");
+
+			unsigned int typeOid = reader.readInt32();
+			ok(typeOid == 23, "Parameter type OID is 23 (int)");
+
+			// Read field type size
+			unsigned int typeSize = reader.readInt16();
+			ok(typeSize == 4, "Field type size is 4 (integer size)");
+
+			// Read field type modifier
+			unsigned int typeModifier = reader.readInt32();
+			ok(typeModifier == -1, "Field type modifier is -1 (default)");
+
+			// Read field format code
+			unsigned int formatCode = reader.readInt16();
+			ok(formatCode == 0, "Field format code is 0 (text format)");
+		}
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received bind complete for prepared statement");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received data row for prepared statement");
+
+		{
+			BufferReader reader(buffer);
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "Received 1 field in data row for prepared statement");
+			int valueLen = reader.readInt32();
+			ok(valueLen == 2, "Field length is 2 bytes");
+			auto val = reader.readBytes(2);
+			ok(val[0] == '4' && val[1] == '2' , "Received correct value 42 from prepared statement");
+		}
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received command complete for prepared statement");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received row description for simple query");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received data row for simple query");
+		{
+			BufferReader reader(buffer);
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "Received 1 field in data row for simple query");
+			int valueLen = reader.readInt32();
+			ok(valueLen == 1, "Field length is 1 byte");
+			uint8_t val = reader.readByte();
+			ok(val == '2', "Received correct value 2 from simple query");
+		}
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received command complete for simple query");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query after all commands");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query + Simple Query without sync failed with error: %s", e.what());
 	}
 }
 
@@ -1283,46 +1341,6 @@ void test_describe_result_metadata() {
 	}
 }
 
-void test_describe_after_execute() {
-	diag("Test %d: Describe after execution", test_count++);
-	auto conn = create_connection();
-	if (!conn) return;
-
-	try {
-	   // conn->prepareStatement("post_exec", , true);
-
-		// Execute statement
-	   // const char* param = "5";
-	  //  conn->sendExecute("post_exec", 1, &param, nullptr, nullptr, true);
-		PgConnection::Param param = { "5", 1 };
-		conn->executeParams("post_exec", "SELECT $1::int", { param });
-		conn->readResult();
-
-		// Describe after execution
-		conn->describeStatement("post_exec", true);
-
-		// Verify response
-		char type;
-		std::vector<uint8_t> buffer;
-
-		conn->readMessage(type, buffer); // Param desc
-		ok(type == PgConnection::PARAMETER_DESCRIPTION,
-			"Received parameter description after execution");
-		conn->readMessage(type, buffer); // Row desc
-		ok(type == PgConnection::ROW_DESCRIPTION,
-			"Received row description after execution");
-		conn->readMessage(type, buffer); // Ready for query
-		ok(type == PgConnection::READY_FOR_QUERY,
-			"Received ready for query after execution");
-
-		ok(true, "Describe works after execution");
-	}
-	catch (const PgException& e) {
-		diag("Exception: %s", e.what());
-		ok(false, "Describe after execute failed");
-	}
-}
-
 void test_describe_prepared_noname() {
 	diag("Test %d: Describe prepared with noname statement", test_count++);
 	auto conn = create_connection();
@@ -1471,43 +1489,6 @@ void test_close_unnamed_statement() {
 	}
 	catch (const PgException& e) {
 		ok(false, "Close unnamed failed with error:%s", e.what());
-	}
-}
-
-void test_close_after_execute() {
-	diag("Test %d: Close after successful execution", test_count++);
-	auto conn = create_connection();
-	if (!conn) return;
-
-	try {
-		// Prepare and execute
-		conn->prepareStatement("post_exec_stmt", "SELECT $1::int", true);
-		PgConnection::Param param = { "1", 1 };
-		conn->executeParams("post_exec_stmt", "SELECT $1::int", { param });
-		conn->readResult();
-
-		// Close after execution
-		conn->closeStatement("post_exec_stmt", false);
-		conn->sendSync();
-
-		char type;
-		std::vector<uint8_t> buffer;
-		conn->readMessage(type, buffer);
-		ok(type == PgConnection::CLOSE_COMPLETE,
-			"Received CloseComplete after execution");
-
-		// Verify closed
-		try {
-			conn->executeParams("post_exec_stmt", "SELECT $1::int", { param });
-			conn->readResult();
-			ok(false, "Execute succeeded after close");
-		}
-		catch (...) {
-			ok(true, "Execute fails after close");
-		}
-	}
-	catch (const PgException& e) {
-		ok(false, "Close after execute failed with error:%s", e.what());
 	}
 }
 
@@ -1670,43 +1651,6 @@ void test_close_twice() {
 		ok(false, "Close twice failed with error:%s", e.what());
 	}
 }
-
-/*
-void test_close_during_transaction() {
-	diag("Test %d: Close during transaction", test_count++);
-	auto conn = create_connection();
-	if (!conn) return;
-
-	try {
-		// Start transaction
-		conn->sendQuery("BEGIN");
-		conn->consumeInputUntilReady();
-
-		// Prepare and close in transaction
-		conn->prepareStatement("tx_stmt", "SELECT 1", true);
-		conn->closeStatement("tx_stmt", true);
-
-		// Rollback transaction
-		conn->sendQuery("ROLLBACK");
-		conn->consumeInputUntilReady();
-
-		// Verify statement remains closed
-		try {
-			char type;
-			std::vector<uint8_t> buffer;
-			conn->describeStatement("tx_stmt", true);
-			conn->readMessage(type, buffer);
-			ok(type == PgConnection::ERROR_RESPONSE,
-				"Describe fails after transaction rollback");
-		}
-		catch (...) {
-			ok(true, "Statement remains closed after rollback");
-		}
-	}
-	catch (const PgException& e) {
-		ok(false, "Close during transaction failed with error:%s", e.what());
-	}
-}*/
 
 void test_close_without_prepare() {
 	diag("Test %d: Close without preparing", test_count++);
@@ -1871,7 +1815,7 @@ void test_bind_basic() {
 		// Bind parameters directly to statement
 		PgConnection::Param param = { "42", 0 };
 		conn->bindStatement("basic_bind", "", { param }, {}, false);
-		
+		conn->describePortal("", false);
 		// Execute statement directly
 		conn->executeStatement(0, false);
 		conn->sendSync();
@@ -2129,6 +2073,7 @@ void test_binary_parameters() {
 		};
 
 		conn->bindStatement("binary_params", "", { param }, { 1 }, false);
+		conn->describePortal("", false);
 		conn->executeStatement(0, false);
 		conn->sendSync();
 
@@ -2209,6 +2154,7 @@ void test_bind_large_data() {
 		PgConnection::Param param = { large_data, 1 };
 
 		conn->bindStatement("large_data", "", { param }, {1}, false);
+		conn->describePortal("", false);
 		conn->executeStatement(0, false);
 		conn->sendSync();
 
@@ -2282,6 +2228,7 @@ void test_bind_null_parameters() {
 		// Bind NULL parameter
 		std::vector<PgConnection::Param> params = { { {}, 1} };  // is_null = true
 		conn->bindStatement("null_params", "", params, {}, false);
+		conn->describePortal("", false);
 		conn->executeStatement(0, false);
 		conn->sendSync();
 
@@ -2422,34 +2369,6 @@ void test_malformed_execute_packet() {
 	}
 }
 
-/*
-void test_bind_transaction_state() {
-	diag("Test %d: Bind in different transaction states", test_count++);
-	auto conn = create_connection();
-	if (!conn) return;
-
-	try {
-		conn->sendQuery("BEGIN");
-		conn->consumeInputUntilReady();
-
-		// Prepare and bind in transaction
-		conn->prepareStatement("tx_bind", "SELECT 1", true);
-		PgConnection::Param param = { "1", 1 };
-		conn->bindStatement("tx_bind", "", { param }, {}, true);
-
-		conn->sendQuery("ROLLBACK");
-		conn->consumeInputUntilReady();
-
-		// Bind should still work after rollback
-		conn->bindStatement("tx_bind", "", { param }, {}, true);
-		ok(true, "Bind after transaction rollback succeeded");
-	}
-	catch (const PgException& e) {
-		ok(false, "Bind in transaction state failed with error:%s", e.what());
-	}
-}
-*/
-
 void test_bind_named_portal() {
 	diag("Test %d: Bind with named portal (should fail)", test_count++);
 	auto conn = create_connection();
@@ -2503,6 +2422,7 @@ void test_describe_portal() {
 		// Bind with unnamed portal
 		PgConnection::Param param = { "1", 0 };
 		conn->bindStatement("stmt_desc_portal", "", { param }, {}, false);
+		conn->describePortal("", false);
 		conn->executePortal("", 0, false);
 		conn->describePortal("", false);
 		conn->sendSync();
@@ -2658,7 +2578,7 @@ void test_portal_lifecycle() {
 
 		param1 = { "42", 0 }; // Change value for next bind
 		conn->bindStatement("stmt_portal_life", "", { param1 }, {}, false);
-
+		conn->describePortal("", false);
 		// Execute and verify
 		conn->executeStatement(0, false);
 		conn->sendSync();
@@ -2964,8 +2884,9 @@ void test_multiple_execute_on_single_bind() {
 		// Bind and create portal
 		PgConnection::Param param = { "1", 0 };
 		conn->bindStatement("stmt_mul_execute", "", { param }, {}, false);
-
+		conn->describePortal("", false);
 		conn->executePortal("", 0, false);
+		conn->describePortal("", false);
 		conn->executePortal("", 0, false);
 		// Should get close complete
 		conn->sendSync();
@@ -3085,7 +3006,7 @@ void test_insert_command_complete() {
 
 		conn->readMessage(type, buf);
 		ok(type == PgConnection::BIND_COMPLETE, "BindComplete for CREATE TEMP TABLE");
-
+		
 		conn->readMessage(type, buf);
 		ok(type == PgConnection::COMMAND_COMPLETE,
 			"CommandComplete for CREATE TEMP TABLE");
@@ -3278,11 +3199,302 @@ void test_set_statement_tracked() {
 		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for SET EXECUTE");
 		conn->readMessage(type, buf);
 		ok(type == PgConnection::READY_FOR_QUERY, "ReadyForQuery after SET STATEMENT");
-
+		usleep(1000);
 		ok(check_logs_for_command(".*\\[WARNING\\] Unable to parse unknown SET query from client.*") == false, "Should not be locked on a hostgroup");
 	}
 	catch (const PgException& e) {
 		ok(false, "Extended Query SET Statement Tracked test failed: %s", e.what());
+	}
+}
+
+void test_set_statement_tracked_with_describe() {
+	diag("Test %d: Extended Query SET Statement Tracked with Describe", test_count++);
+	auto conn = create_connection(); if (!conn) return;
+	try {
+		conn->prepareStatement("set_tracked_stmt_2", "SET client_min_messages TO 'error'", false);
+		conn->bindStatement("set_tracked_stmt_2", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buf;
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete for SET STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete for SET STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::NO_DATA, "NoData for SET DESCRIBE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for SET EXECUTE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::READY_FOR_QUERY, "ReadyForQuery after SET STATEMENT");
+		usleep(1000);
+		ok(check_logs_for_command(".*\\[WARNING\\] Unable to parse unknown SET query from client.*") == false, "Should not be locked on a hostgroup");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query SET Statement Tracked test failed: %s", e.what());
+	}
+}
+
+void test_set_statement_with_simple_query_mix() {
+	diag("Test %d: Extended Query SET Statement with Simple Query Mix", test_count++);
+	auto conn = create_connection(); if (!conn) return;
+	try {
+		conn->prepareStatement("set_stmt_mix", "SET client_min_messages TO 'error'", false);
+		conn->bindStatement("set_stmt_mix", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->execute("SHOW client_min_messages");
+
+		char type;
+		std::vector<uint8_t> buf;
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete for SET STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete for SET STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::NO_DATA, "NoData for SET DESCRIBE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for SET EXECUTE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription for SHOW");
+		BufferReader buff(buf);
+		int16_t fields = buff.readInt16();
+		ok(fields == 1, "One field in RowDescription for SHOW (%d/1)", fields);
+		std::string field_name = buff.readString();
+		ok(field_name == "client_min_messages", "Field name is 'client_min_messages' (%s)", field_name.c_str());
+		unsigned int table_oid = buff.readInt32();
+		ok(table_oid == 0, "Field table OID is 0 (no table)");
+		unsigned int attr_num = buff.readInt16();
+		ok(attr_num == 0, "Field attribute number is 0 (no specific column)");
+		unsigned int type_oid = buff.readInt32();
+		ok(type_oid == 25, "Field type OID is 25 (text)");
+		unsigned int type_size = buff.readInt16();
+		ok(type_size == -1, "Field type size is -1 (text size)");
+		unsigned int type_modifier = buff.readInt32();
+		ok(type_modifier == -1, "Field type modifier is -1 (default)");
+		unsigned int format_code = buff.readInt16();
+		ok(format_code == 0, "Field format code is 0 (text format)");
+
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::DATA_ROW, "DataRow for SHOW");
+		buff = buf;
+		int16_t cols = buff.readInt16();
+		ok(cols == 1, "One column in DataRow for SHOW (%d/1)", cols);
+		// Read column length
+		int32_t col_len = buff.readInt32();
+		ok(col_len == 5, "Column length is 5 (text size)");
+		std::vector<uint8_t> val = buff.readBytes(col_len);
+		ok(memcmp((char*)val.data(), "error", col_len) == 0, "SHOW returned 'error'");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for SHOW");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::READY_FOR_QUERY, "ReadyForQuery after SET STATEMENT and SHOW");
+		
+		usleep(1000);
+		ok(check_logs_for_command(".*\\[WARNING\\] Unable to parse unknown SET query from client.*") == false, "Should not be locked on a hostgroup");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query SET Statement Tracked test failed: %s", e.what());
+	}
+}
+
+void test_reset_statement_with_simple_query_mix() {
+	diag("Test %d: Extended Query RESET Statement with Simple Query Mix", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+	try {
+		conn->execute("SET client_min_messages='notice'");
+		conn->waitForReady();
+
+		conn->prepareStatement("reset_stmt_mix", "RESET client_min_messages", false);
+		conn->bindStatement("reset_stmt_mix", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->execute("SHOW client_min_messages");
+
+		char type;
+		std::vector<uint8_t> buf;
+
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete for RESET STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete for RESET STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::NO_DATA, "NoData for RESET DESCRIBE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for RESET EXECUTE");
+
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription for SHOW after RESET");
+
+		BufferReader buff(buf);
+		int16_t fields = buff.readInt16();
+		ok(fields == 1, "One field in RowDescription for SHOW (%d/1)", fields);
+
+		std::string field_name = buff.readString();
+		ok(field_name == "client_min_messages", "Field name is 'client_min_messages' (%s)", field_name.c_str());
+
+		buff.readInt32(); // table_oid
+		buff.readInt16(); // attr_num
+		unsigned int type_oid = buff.readInt32();
+		ok(type_oid == 25, "Field type OID is 25 (text)");
+
+		buff.readInt16(); // type_size
+		buff.readInt32(); // type_modifier
+		buff.readInt16(); // format_code
+
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::DATA_ROW, "DataRow for SHOW after RESET");
+
+		buff = buf;
+		int16_t cols = buff.readInt16();
+		ok(cols == 1, "One column in DataRow (%d/1)", cols);
+
+		int32_t col_len = buff.readInt32();
+		std::vector<uint8_t> val = buff.readBytes(col_len);
+		ok(col_len == 6, "Column length is 6 (text size) after RESET");
+		ok(memcmp((char*)val.data(), "notice", col_len) == 0, "SHOW after RESET returned 'notice'");
+
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for SHOW");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::READY_FOR_QUERY, "ReadyForQuery after RESET and SHOW");
+
+		usleep(1000);
+		ok(check_logs_for_command(".*\\[WARNING\\] Unable to parse unknown RESET query from client.*") == false,
+			"Should not be locked on a hostgroup");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query RESET Statement test failed: %s", e.what());
+	}
+}
+
+void test_discard_statement_with_simple_query_mix() {
+	diag("Test %d: Extended Query DISCARD Statement with Simple Query Mix", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+	try {
+		conn->prepareStatement("discard_stmt_mix", "DISCARD TEMP", false);
+		conn->bindStatement("discard_stmt_mix", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->execute("SELECT 1");
+
+		char type;
+		std::vector<uint8_t> buf;
+
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete for DISCARD STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete for DISCARD STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::NO_DATA, "NoData for DISCARD DESCRIBE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for DISCARD EXECUTE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription for SELECT after DISCARD");
+		BufferReader buff(buf);
+		int16_t fields = buff.readInt16();
+		ok(fields == 1, "One field in RowDescription for SELECT (%d/1)", fields);
+		std::string field_name = buff.readString();
+		ok(field_name == "?column?", "Field name is '?column?' (%s)", field_name.c_str());
+		unsigned int table_oid = buff.readInt32();
+		ok(table_oid == 0, "Field table OID is 0 (no table)");
+		unsigned int attr_num = buff.readInt16();
+		ok(attr_num == 0, "Field attribute number is 0 (no specific column)");
+		unsigned int type_oid = buff.readInt32();
+		ok(type_oid == 23, "Field type OID is 23 (integer)");
+		unsigned int type_size = buff.readInt16();
+		ok(type_size == 4, "Field type size is 4 (integer size)");
+		unsigned int type_modifier = buff.readInt32();
+		ok(type_modifier == -1, "Field type modifier is -1 (default)");
+		unsigned int format_code = buff.readInt16();
+		ok(format_code == 0, "Field format code is 0 (text format)");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::DATA_ROW, "DataRow for SELECT after DISCARD");
+		buff = buf;
+		int16_t cols = buff.readInt16();
+		ok(cols == 1, "One column in DataRow for SELECT (%d/1)", cols);
+		// Read column length
+		int32_t col_len = buff.readInt32();
+		ok(col_len == 1, "Column length is 1 (text size)");
+		std::vector<uint8_t> val = buff.readBytes(col_len);
+		ok(memcmp((char*)val.data(), "1", col_len) == 0, "SELECT after DISCARD returned '1'");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for SELECT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::READY_FOR_QUERY, "ReadyForQuery after DISCARD and SELECT");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query DISCARD Statement with Simple Query Mix test failed: %s", e.what());
+	}
+}
+
+void test_deallocate_statement_with_simple_query_mix() {
+	diag("Test %d: Extended Query DEALLOCATE Statement with Simple Query Mix", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+	try {
+		// Prepare a dummy statement first
+		conn->prepareStatement("dummy_stmt", "SELECT 1", false);
+
+		// Now DEALLOCATE it
+		conn->prepareStatement("dealloc_stmt_mix", "DEALLOCATE dummy_stmt", false);
+		conn->bindStatement("dealloc_stmt_mix", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->execute("SELECT 1");
+
+		char type;
+		std::vector<uint8_t> buf;
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete for DEALLOCATE STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete for DEALLOCATE STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete for DEALLOCATE STATEMENT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::NO_DATA, "NoData for DEALLOCATE DESCRIBE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for DEALLOCATE EXECUTE");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription for SELECT after DEALLOCATE");
+		BufferReader buff(buf);
+		int16_t fields = buff.readInt16();
+		ok(fields == 1, "One field in RowDescription for SELECT (%d/1)", fields);
+		std::string field_name = buff.readString();
+		ok(field_name == "?column?", "Field name is '?column?' (%s)", field_name.c_str());
+		unsigned int table_oid = buff.readInt32();
+		ok(table_oid == 0, "Field table OID is 0 (no table)");
+		unsigned int attr_num = buff.readInt16();
+		ok(attr_num == 0, "Field attribute number is 0 (no specific column)");
+		unsigned int type_oid = buff.readInt32();
+		ok(type_oid == 23, "Field type OID is 23 (integer)");
+		unsigned int type_size = buff.readInt16();
+		ok(type_size == 4, "Field type size is 4 (integer size)");
+		unsigned int type_modifier = buff.readInt32();
+		ok(type_modifier == -1, "Field type modifier is -1 (default)");
+		unsigned int format_code = buff.readInt16();
+		ok(format_code == 0, "Field format code is 0 (text format)");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::DATA_ROW, "DataRow for SELECT after DEALLOCATE");
+		buff = buf;
+		int16_t cols = buff.readInt16();
+		ok(cols == 1, "One column in DataRow for SELECT (%d/1)", cols);
+		// Read column length
+		int32_t col_len = buff.readInt32();
+		ok(col_len == 1, "Column length is 1 (text size)");
+		std::vector<uint8_t> val = buff.readBytes(col_len);
+		ok(memcmp((char*)val.data(), "1", col_len) == 0, "SELECT after DEALLOCATE returned '1'");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete for SELECT");
+		conn->readMessage(type, buf);
+		ok(type == PgConnection::READY_FOR_QUERY, "ReadyForQuery after DEALLOCATE and SELECT");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query DEALLOCATE Statement with Simple Query Mix test failed: %s", e.what());
 	}
 }
 
@@ -3640,202 +3852,1212 @@ void test_deallocate_non_existent_stmt() {
 	}
 }
 
-/*
-void test_update_delete_commands_extended() {
-	diag("Test %d: Extended Query UPDATE and DELETE tags", test_count++);
+void test_describe_portal_returns_no_data() {
+	diag("Test %d: Extended Query - Describe Returns No Data", test_count++);
 	auto conn = create_connection(); if (!conn) return;
+	if (!conn) return;
 	try {
-		// CREATE table
-		conn->parseStatement("ctb",
-			"CREATE TEMP TABLE ud_test(id INT, val INT)",
-			false);
-		char type; std::vector<uint8_t> buf;
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for CREATE TEMP TABLE ud_test");
-		conn->bindStatement("ctb", "ctb_portal", {}, {}, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for CREATE TEMP TABLE ud_test");
-		conn->executeStatement(0, false);
-		// consume Ready
-		while (type != PgConnection::READY_FOR_QUERY)
-			conn->readMessage(type, buf);
+		conn->execute("CREATE TEMP TABLE test_describe (id integer)");
+		conn->waitForReady();
 
-		// INSERT rows
-		conn->parseStatement("ins2",
-			"INSERT INTO ud_test VALUES(1,10),(2,20),(3,30)",
-			false);
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for INSERT ud_test");
-		conn->bindStatement("ins2", "ins2_portal", {}, {}, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for INSERT ud_test");
+		conn->prepareStatement("describe_no_data_stmt", "INSERT INTO test_describe VALUES (42)", false);
+		conn->bindStatement("describe_no_data_stmt", "", {}, {}, false);
+		conn->describePortal("", false);
 		conn->executeStatement(0, false);
-		while (type != PgConnection::READY_FOR_QUERY)
-			conn->readMessage(type, buf);
+		conn->sendSync();
 
-		// UPDATE
-		conn->parseStatement("upd_stmt",
-			"UPDATE ud_test SET val = val + 1 WHERE id < 3",
-			false);
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for UPDATE");
-		conn->bindStatement("upd_stmt", "upd_portal", {}, {}, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for UPDATE");
-		conn->executeStatement(0, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::COMMAND_COMPLETE,
-			"CommandComplete for UPDATE");
-		auto tag = BufferReader(buf).readString();
-		ok(tag.rfind("UPDATE 2", 0) == 0,
-			"UPDATE tag reports 2 rows: %s", tag.c_str());
-		conn->readMessage(type, buf); ok(type == PgConnection::READY_FOR_QUERY,
-			"Ready after UPDATE");
-
-		// DELETE
-		conn->parseStatement("del_stmt",
-			"DELETE FROM ud_test WHERE id = 3",
-			false);
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for DELETE");
-		conn->bindStatement("del_stmt", "del_portal", {}, {}, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for DELETE");
-		conn->executeStatement(0, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::COMMAND_COMPLETE,
-			"CommandComplete for DELETE");
-		tag = BufferReader(buf).readString();
-		ok(tag.rfind("DELETE 1", 0) == 0,
-			"DELETE tag reports 1 row: %s", tag.c_str());
-		conn->readMessage(type, buf); ok(type == PgConnection::READY_FOR_QUERY,
-			"Ready after DELETE");
+		char type;
+		std::vector<uint8_t> buffer;
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete was received for describe no data statement");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete was received for describe no data statement");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "NoData was received for describe no data statement");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for describe no data statement");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query after describe no data statement");
 	}
 	catch (const PgException& e) {
-		ok(false, "UPDATE/DELETE Extended Query test failed: %s", e.what());
+		ok(false, "Extended Query Describe Returns No Data failed with error:%s", e.what());
 	}
 }
 
-void test_copy_out_extended() {
-	diag("Test %d: Extended Query COPY OUT protocol", test_count++);
+void test_multiple_parse_bind_describe_execute_fail() {
+	diag("Test %d: Extended Query - Multiple Parse/Bind/Describe/Execute Fail", test_count++);
 	auto conn = create_connection(); if (!conn) return;
+	if (!conn) return;
 	try {
-		// CREATE & INSERT
-		conn->parseStatement("ctb2",
-			"CREATE TEMP TABLE copy_test(id INT, txt TEXT)",
-			false);
-		char type; std::vector<uint8_t> buf;
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for CREATE copy_test");
-		conn->bindStatement("ctb2", "ctb2_portal", {}, {}, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for CREATE copy_test");
+		// Prepare a valid statement
+		conn->prepareStatement("multi_stmt", "SELECT 1", false);
+		conn->bindStatement("multi_stmt", "", {}, {}, false);
+		conn->describePortal("", false);
 		conn->executeStatement(0, false);
-		while (type != PgConnection::READY_FOR_QUERY)
-			conn->readMessage(type, buf);
-
-		conn->parseStatement("ins3",
-			"INSERT INTO copy_test VALUES(1,'a'),(2,'b')",
-			false);
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for INSERT copy_test");
-		conn->bindStatement("ins3", "ins3_portal", {}, {}, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for INSERT copy_test");
+		conn->prepareStatement("multi_stmt2", "SELECT 1/0", false);
+		conn->bindStatement("multi_stmt2", "", {}, {}, false);
+		conn->describePortal("", false);
 		conn->executeStatement(0, false);
-		while (type != PgConnection::READY_FOR_QUERY)
-			conn->readMessage(type, buf);
-
-		// COPY OUT
-		conn->parseStatement("copy_stmt",
-			"COPY copy_test TO STDOUT",
-			false);
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for COPY OUT");
-		conn->bindStatement("copy_stmt", "copy_portal", {}, {}, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for COPY OUT");
+		conn->prepareStatement("multi_stmt3", "SELECT 2", false);
+		conn->bindStatement("multi_stmt3", "", {}, {}, false);
+		conn->describePortal("", false);
 		conn->executeStatement(0, false);
+		conn->sendSync();
+		char type;
+		std::vector<uint8_t> buffer;
 
-		// Expect COPY_OUT
-		PGresult* res = PQgetResult(conn.get());
-		ok(PQresultStatus(res) == PGRES_COPY_OUT,
-			"COPY OUT started via Extended Query");
-		PQclear(res);
-
-		int rows = 0;
-		bool done = false;
-		while (!done) {
-			conn->readMessage(type, buf);
-			if (type == PgConnection::DATA_ROW) {
-				rows++;
-			}
-			else if (type == PgConnection::COMMAND_COMPLETE) {
-				auto tag2 = BufferReader(buf).readString();
-				ok(tag2.rfind("COPY 2", 0) == 0,
-					"COPY tag reports 2 rows: %s", tag2.c_str());
-			}
-			else if (type == PgConnection::READY_FOR_QUERY) {
-				done = true;
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete was received for multi_stmt");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete was received for multi_stmt");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for multi_stmt");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "DataRow was received for multi_stmt");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for multi_stmt");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete was received for multi_stmt2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "BindComplete was received for multi_stmt2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE, "ErrorResponse was received for multi_stmt2");
+		std::string errormsg;
+		std::string errorcode;
+		if (type == PgConnection::ERROR_RESPONSE) {
+			BufferReader reader(buffer);
+			char field;
+			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+				if (field == 'M') errormsg = reader.readString();
+				else if (field == 'C') errorcode = reader.readString();
+				else reader.readString();
 			}
 		}
-		ok(rows == 2, "Received two DATA_ROW messages for COPY OUT");
+		ok(errorcode == "22012", "Received ERRCODE_DIVISION_BY_ZERO Error:%s", errormsg.c_str());
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query after multi_stmt2 error");
 	}
 	catch (const PgException& e) {
-		ok(false, "COPY OUT Extended Query test failed: %s", e.what());
+		ok(false, "Extended Query Multiple Parse/Bind/Describe/Execute Fail failed with error:%s", e.what());
 	}
 }
 
-void test_bind_multiple_types_and_formats_extended() {
-	diag("Test %d: Extended Query Bind multiple types with mixed formats", test_count++);
+void test_send_multiple_simple_query_without_waiting_for_response() {
+	diag("Test %d: Simple Query - Send multiple queries without waiting for response", test_count++);
 	auto conn = create_connection(); if (!conn) return;
+	if (!conn) return;
 	try {
-		// PREPARE
-		conn->parseStatement("mix_bind",
-			"SELECT $1::int AS i, $2::text AS t, $3::bool AS b",
-			false);
-		char type; std::vector<uint8_t> buf;
-		conn->readMessage(type, buf); ok(type == PgConnection::PARSE_COMPLETE,
-			"ParseComplete for mix_bind");
+		// Send multiple simple queries without waiting for response
+		conn->execute("SELECT 1");
+		conn->execute("SELECT 2");
+		conn->execute("SELECT 3");
+		conn->execute("SELECT 4");
+		conn->execute("SELECT 5");
 
-		// BIND with int(binary), text, bool(binary)
-		int32_t bi = htonl(7);
-		PgConnection::Param p1{ std::string(reinterpret_cast<char*>(&bi), sizeof(bi)), 1 };
-		PgConnection::Param p2{ "world", 0 };
-		char truth = 1;
-		PgConnection::Param p3{ std::string(&truth,1), 1 };
-		conn->bindStatement("mix_bind", "mix_portal",
-			std::vector<PgConnection::Param>{p1, p2, p3},
-			std::vector<int>{1, 0, 1},
-			false);
-		conn->readMessage(type, buf); ok(type == PgConnection::BIND_COMPLETE,
-			"BindComplete for mix_bind");
-
-		conn->executeStatement(0, false);
-		conn->readMessage(type, buf); ok(type == PgConnection::ROW_DESCRIPTION,
-			"RowDescription for mix_bind");
-		conn->readMessage(type, buf); ok(type == PgConnection::DATA_ROW,
-			"DataRow for mix_bind");
-		conn->readMessage(type, buf); ok(type == PgConnection::COMMAND_COMPLETE,
-			"CommandComplete for mix_bind");
-		conn->readMessage(type, buf); ok(type == PgConnection::READY_FOR_QUERY,
-			"Ready after mix_bind");
+		char type;
+		std::vector<uint8_t> buffer;
+		
+		for (int i = 1; i <= 5; i++) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for SELECT %d", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::DATA_ROW, "DataRow was received for SELECT %d", i);
+			BufferReader reader(buffer);
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "DataRow has 1 field for SELECT %d", i);
+			int valueLen = reader.readInt32();
+			ok(valueLen == 1, "DataRow value length is 1 for SELECT %d", i);
+			uint8_t value = reader.readByte();
+			ok(value == (i + '0'), "DataRow value is %c for SELECT %d", value, i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for SELECT %d", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query for SELECT %d", i);
+		}
 	}
 	catch (const PgException& e) {
-		ok(false, "Mix bind Extended Query test failed: %s", e.what());
+		ok(false, "Simple Query - Send multiple queries without waiting for response failed with error:%s", e.what());
 	}
 }
-*/
+
+void test_send_multiple_simple_query_in_transaction_without_waiting_for_response() {
+	diag("Test %d: Simple Query - Send multiple queries in transaction without waiting for response", test_count++);
+	auto conn = create_connection(); if (!conn) return;
+	if (!conn) return;
+	try {
+		// Send multiple simple queries without waiting for response
+		conn->execute("BEGIN");
+		conn->execute("SELECT 1");
+		conn->execute("SELECT 2");
+		conn->execute("SELECT 3");
+		conn->execute("SELECT 4");
+		conn->execute("SELECT 5");
+		conn->execute("COMMIT");
+		char type;
+		std::vector<uint8_t> buffer;
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for BEGIN");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query after BEGIN");
+
+		for (int i = 1; i <= 5; i++) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for SELECT %d", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::DATA_ROW, "DataRow was received for SELECT %d", i);
+			BufferReader reader(buffer);
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "DataRow has 1 field for SELECT %d", i);
+			int valueLen = reader.readInt32();
+			ok(valueLen == 1, "DataRow value length is 1 for SELECT %d", i);
+			uint8_t value = reader.readByte();
+			ok(value == (i + '0'), "DataRow value is %c for SELECT %d", value, i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for SELECT %d", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query for SELECT %d", i);
+		}
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for COMMIT");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query after all SELECTs and COMMIT");
+	}
+	catch (const PgException& e) {
+		ok(false, "Simple Query - Send multiple queries in transaction without waiting for response failed with error:%s", e.what());
+	}
+}
+
+void test_send_multiple_simple_query_without_waiting_for_response_proxysql_fast_forward_mode(PGconn* admin_conn) {
+	diag("Test %d: Simple Query - Send multiple queries without waiting for response (ProxySQL Fast Forward Mode)", test_count++);
+	// Enable ProxySQL Fast Forward Mode
+	executeQueries(admin_conn, { "UPDATE pgsql_users SET fast_forward=1",
+		"LOAD PGSQL USERS TO RUNTIME" });
+
+	test_send_multiple_simple_query_without_waiting_for_response();
+
+	// Restore ProxySQL Fast Forward Mode to default (disabled)
+	executeQueries(admin_conn, { "UPDATE pgsql_users SET fast_forward=0", 
+		"LOAD PGSQL USERS TO RUNTIME" });
+}
+
+void test_send_multiple_simple_query_in_transaction_without_waiting_for_response_proxysql_fast_forward_mode(PGconn* admin_conn) {
+	diag("Test %d: Simple Query - Send multiple queries in transaction without waiting for response (ProxySQL Fast Forward Mode)", test_count++);
+	// Enable ProxySQL Fast Forward Mode
+	executeQueries(admin_conn, { "UPDATE pgsql_users SET fast_forward=1",
+		"LOAD PGSQL USERS TO RUNTIME" });
+
+	test_send_multiple_simple_query_in_transaction_without_waiting_for_response();
+
+	// Restore ProxySQL Fast Forward Mode to default (disabled)
+	executeQueries(admin_conn, { "UPDATE pgsql_users SET fast_forward=0",
+		"LOAD PGSQL USERS TO RUNTIME" });
+}
+
+void test_send_simple_query_and_extended_query_without_waiting_for_response() {
+	diag("Test %d: Simple Query and Extended Query without waiting for response", test_count++);
+	auto conn = create_connection(); if (!conn) return;
+	if (!conn) return;
+	try {
+		// Send multiple simple queries without waiting for response
+		conn->execute("SELECT 1");
+		conn->execute("SELECT 2");
+		conn->execute("SELECT 3");
+		conn->execute("SELECT 4");
+		conn->execute("SELECT 5");
+
+		conn->prepareStatement("ext_stmt", "SELECT $1", false);
+		PgConnection::Param param = { "1", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "2", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "3", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "4", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "5", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		param = { "1", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "2", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "3", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "4", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		param = { "5", 0 };
+		conn->bindStatement("ext_stmt", "", { param }, {}, false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		for (int i = 1; i <= 5; i++) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for SELECT %d", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::DATA_ROW, "DataRow was received for SELECT %d", i);
+			BufferReader reader(buffer);
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "DataRow has 1 field for SELECT %d", i);
+			int valueLen = reader.readInt32();
+			ok(valueLen == 1, "DataRow value length is 1 for SELECT %d", i);
+			uint8_t value = reader.readByte();
+			ok(value == (i + '0'), "DataRow value is %c for SELECT %d", value, i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for SELECT %d", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query for SELECT %d", i);
+		}
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "ParseComplete was received for extended query");
+
+		for (int i = 1; i <= 5; i++) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::BIND_COMPLETE, "BindComplete was received (extended query P1)");
+			//conn->readMessage(type, buffer);
+			//ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for SELECT %d (extended query P1)", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::DATA_ROW, "DataRow was received for SELECT %d (extended query P1)", i);
+			BufferReader reader(buffer);
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "DataRow has 1 field for SELECT %d (extended query P1)", i);
+			int valueLen = reader.readInt32();
+			ok(valueLen == 1, "DataRow value length is 1 for SELECT %d (extended query P1)", i);
+			uint8_t value = reader.readByte();
+			ok(value == (i + '0'), "DataRow value is %c for SELECT %d (extended query P1)", value, i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for SELECT %d (extended query P1)", i);
+		}
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query (extended query P1)");
+
+		for (int i = 1; i <= 5; i++) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::BIND_COMPLETE, "BindComplete was received (extended query P2)");
+			//conn->readMessage(type, buffer);
+			//ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for SELECT %d (extended query P2)", i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::DATA_ROW, "DataRow was received for SELECT %d (extended query P2)", i);
+			BufferReader reader(buffer);
+			int fieldCount = reader.readInt16();
+			ok(fieldCount == 1, "DataRow has 1 field for SELECT %d (extended query P2)", i);
+			int valueLen = reader.readInt32();
+			ok(valueLen == 1, "DataRow value length is 1 for SELECT %d (extended query P2)", i);
+			uint8_t value = reader.readByte();
+			ok(value == (i + '0'), "DataRow value is %c for SELECT %d (extended query P2)", value, i);
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete was received for SELECT %d (extended query P2)", i);
+		}
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ready for query (extended query P2)");
+	}
+	catch (const PgException& e) {
+		ok(false, "Simple Query and Extended Query without waiting for response failed with error:%s", e.what());
+	}
+}
+
+void test_send_simple_query_and_extended_query_without_waiting_for_response_proxysql_fast_forward_mode(PGconn* admin_conn) {
+	diag("Test %d: Simple Query and Extended Query without waiting for response (ProxySQL Fast Forward Mode)", test_count++);
+	// Enable ProxySQL Fast Forward Mode
+	executeQueries(admin_conn, { "UPDATE pgsql_users SET fast_forward=1",
+		"LOAD PGSQL USERS TO RUNTIME" });
+
+	test_send_simple_query_and_extended_query_without_waiting_for_response();
+
+	// Restore ProxySQL Fast Forward Mode to default (disabled)
+	executeQueries(admin_conn, { "UPDATE pgsql_users SET fast_forward=0",
+		"LOAD PGSQL USERS TO RUNTIME" });
+}
+
+void test_pipeline_error() {
+	diag("Test %d: Extended Query - Pipeline Error Handling", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->prepareStatement("basic_bind", "SELECT 1/0", false);
+		conn->bindStatement("basic_bind", "", { }, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->prepareStatement("basic_bind2", "SELECT 2", false);
+		conn->bindStatement("basic_bind2", "", { }, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		// Verify results
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// Read parse complete
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE, "Received ErrorResponse for division by zero");
+		std::string errormsg;
+		std::string errorcode;
+		if (type == PgConnection::ERROR_RESPONSE) {
+			BufferReader reader(buffer);
+			char field;
+			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+				if (field == 'M') errormsg = reader.readString();
+				else if (field == 'C') errorcode = reader.readString();
+				else reader.readString();
+			}
+		}
+		ok(errorcode == "22012", "Received ERRCODE_DIVISION_BY_ZERO Error:%s", errormsg.c_str());
+		// Read ready for query
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after error");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query Pipeline Error Handling failed with error:%s", e.what());
+	}
+}
+
+void test_pipeline_error_2() {
+	diag("Test %d: Extended Query - Pipeline Error Handling 2", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->prepareStatement("basic_bind", "SELECT 1/0", false);
+		conn->bindStatement("basic_bind", "", { }, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		// Verify results
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// Read parse complete
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE, "Received ErrorResponse for division by zero");
+		std::string errormsg;
+		std::string errorcode;
+		if (type == PgConnection::ERROR_RESPONSE) {
+			BufferReader reader(buffer);
+			char field;
+			while (reader.remaining() > 0 && (field = reader.readByte()) != 0) {
+				if (field == 'M') errormsg = reader.readString();
+				else if (field == 'C') errorcode = reader.readString();
+				else reader.readString();
+			}
+		}
+		ok(errorcode == "22012", "Received ERRCODE_DIVISION_BY_ZERO Error:%s", errormsg.c_str());
+		// Read ready for query
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after error");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query Pipeline Error Handling 2 failed with error:%s", e.what());
+	}
+}
+
+void test_pipeline_exit() {
+	diag("Test %d: Extended Query - Pipeline exit", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->prepareStatement("basic_bind", "SELECT 1", false);
+		conn->bindStatement("basic_bind", "", { }, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->prepareStatement("basic_bind2", "SELECT 1", false);
+		conn->execute("SELECT 2");
+
+		// Verify results
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// Read parse complete
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for second statement");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for simple query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "DataRow was received for simple query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for simple query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all commands");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query Pipeline Error Handling failed with error:%s", e.what());
+	}
+}
+
+void test_pipeline_exit_2() {
+	diag("Test %d: Extended Query - Pipeline exit 2", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->prepareStatement("basic_bind", "SELECT 1", false);
+		conn->bindStatement("basic_bind", "", { }, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		// Verify results
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// Read parse complete
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all commands");
+	}
+	catch (const PgException& e) {
+		ok(false, " Extended Query - Pipeline exit 2 failed with error:%s", e.what());
+	}
+}
+
+void test_pipeline_exit_3() {
+	diag("Test %d: Extended Query - Pipeline exit 3", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->prepareStatement("basic_bind", "SELECT 1", false);
+		conn->bindStatement("basic_bind", "", { }, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->prepareStatement("basic_bind2", "SELECT 1", false);
+		conn->sendSync();
+
+		// Verify results
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// Read parse complete
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for second statement");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all commands");
+	}
+	catch (const PgException& e) {
+		ok(false, " Extended Query - Pipeline exit 3 failed with error:%s", e.what());
+	}
+}
+
+void test_pipeline_transaction_exit() {
+	diag("Test %d: Extended Query - Pipeline exit in transaction", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->execute("BEGIN");
+		conn->prepareStatement("basic_bind", "SELECT 1", false);
+		conn->bindStatement("basic_bind", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->prepareStatement("basic_bind2", "SELECT 1", false);
+		conn->execute("SELECT 2");
+		conn->execute("ROLLBACK");
+		// Verify results
+		char type;
+		std::vector<uint8_t> buffer;
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for BEGIN");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after BEGIN");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for second statement");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "RowDescription was received for simple query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "DataRow was received for simple query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for simple query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all commands");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ROLLBACK");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all commands");
+	}
+	catch (const PgException& e) {
+		ok(false, "Extended Query Pipeline exit in transaction failed with error:%s", e.what());
+	}
+}
+
+void test_implicit_txn_error_first_insert() {
+	diag("Test %d: Implicit transaction - error on first insert should rollback all", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->execute("CREATE TEMP TABLE temp_test(id INT)");
+
+		// First insert has error (text instead of int)
+		conn->prepareStatement("ins1", "INSERT INTO temp_test VALUES('abc')", false);
+		conn->bindStatement("ins1", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		// Second insert should not execute
+		conn->prepareStatement("ins2", "INSERT INTO temp_test VALUES(2)", false);
+		conn->bindStatement("ins2", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// Consume until ReadyForQuery
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for CREATE TEMP TABLE");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after CREATE TEMP TABLE");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE, "Received ErrorResponse for first insert");
+		conn->readMessage(type, buffer); // ReadyForQuery
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after first insert error");
+
+		// Now check count
+		conn->execute("SELECT count(*) FROM temp_test");
+		int rows = 0;
+		conn->readMessage(type, buffer); 
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer); // DataRow
+		ok(type == PgConnection::DATA_ROW, "Received RowData");
+		BufferReader reader(buffer);
+		int fieldCount = reader.readInt16();
+		ok(fieldCount == 1, "Received 1 field in data row");
+		int valueLen = reader.readInt32();
+		ok(valueLen == 1, "Field length is 1 bytes");
+		uint8_t val = reader.readByte();
+		ok(val == '0', "Received correct value '0' for count query");
+		conn->readMessage(type, buffer); // CommandComplete
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for count query");
+		conn->readMessage(type, buffer); // ReadyForQuery
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after count query");
+	}
+	catch (const PgException& e) {
+		ok(false, "Implicit txn error-first-insert test failed: %s", e.what());
+	}
+}
+
+void test_implicit_txn_error_middle_insert() {
+	diag("Test %d: Implicit transaction - error on middle insert should rollback all", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->execute("CREATE TEMP TABLE temp_test(id INT)");
+
+		// First insert valid
+		conn->prepareStatement("ins1", "INSERT INTO temp_test VALUES(1)", false);
+		conn->bindStatement("ins1", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		// Second insert invalid
+		conn->prepareStatement("ins2", "INSERT INTO temp_test VALUES('oops')", false);
+		conn->bindStatement("ins2", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		// Third insert valid (should be rolled back)
+		conn->prepareStatement("ins3", "INSERT INTO temp_test VALUES(3)", false);
+		conn->bindStatement("ins3", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// CREATE TABLE
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for CREATE TEMP TABLE");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after CREATE TEMP TABLE");
+
+		// First insert
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for first insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for first insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for first insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for first insert");
+
+		// Second insert fails
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE, "Received ErrorResponse for second insert error");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after error");
+
+		// Verify rollback (should have 0 rows)
+		conn->execute("SELECT count(*) FROM temp_test");
+
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		BufferReader reader(buffer);
+		int fieldCount = reader.readInt16();
+		ok(fieldCount == 1, "Received 1 field in data row");
+		int valueLen = reader.readInt32();
+		ok(valueLen == 1, "Field length is 1 byte");
+		uint8_t val = reader.readByte();
+		ok(val == '0', "Received correct value '0' for count query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for count query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after count query");
+	}
+	catch (const PgException& e) {
+		ok(false, "Implicit txn error-middle-insert test failed: %s", e.what());
+	}
+}
+
+void test_implicit_txn_error_last_insert() {
+	diag("Test %d: Implicit transaction - error on last insert should rollback all", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		conn->execute("CREATE TEMP TABLE temp_test(id INT)");
+
+		// First insert valid
+		conn->prepareStatement("ins1", "INSERT INTO temp_test VALUES(1)", false);
+		conn->bindStatement("ins1", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		// Second insert valid
+		conn->prepareStatement("ins2", "INSERT INTO temp_test VALUES(2)", false);
+		conn->bindStatement("ins2", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		// Third insert invalid
+		conn->prepareStatement("ins3", "INSERT INTO temp_test VALUES('bad')", false);
+		conn->bindStatement("ins3", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// CREATE TABLE
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for CREATE TEMP TABLE");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after CREATE TEMP TABLE");
+
+		// First insert ok
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for first insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for first insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for first insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for first insert");
+
+		// Second insert ok
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for second insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for second insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for second insert");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for second insert");
+
+		// Third insert fails
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE, "Received ErrorResponse for third insert error");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after error");
+
+		// Verify rollback (should have 0 rows)
+		conn->execute("SELECT count(*) FROM temp_test");
+		int rows = 0;
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		BufferReader reader(buffer);
+		int fieldCount = reader.readInt16();
+		ok(fieldCount == 1, "Received 1 field in data row");
+		int valueLen = reader.readInt32();
+		ok(valueLen == 1, "Field length is 1 byte");
+		uint8_t val = reader.readByte();
+		ok(val == '0', "Received correct value '0' for count query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for count query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after count query");
+	}
+	catch (const PgException& e) {
+		ok(false, "Implicit txn error-last-insert test failed: %s", e.what());
+	}
+}
+
+void test_explicit_txn_error_with_rollback_extended() {
+	diag("Test %d: Explicit transaction - extended query pipeline inside transaction, error -> ROLLBACK", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		// Create temp table and begin explicit transaction (simple commands; we verify their responses)
+		conn->execute("CREATE TEMP TABLE temp_test(id INT)");
+		conn->execute("BEGIN");
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// CREATE TABLE response
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for CREATE TEMP TABLE");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after CREATE TEMP TABLE");
+
+		// BEGIN response
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for BEGIN");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after BEGIN");
+
+		// Now issue three INSERTs using extended query pipeline (two good, one bad)
+		conn->prepareStatement("ins1", "INSERT INTO temp_test VALUES(1)", false);
+		conn->bindStatement("ins1", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->prepareStatement("ins2", "INSERT INTO temp_test VALUES(2)", false);
+		conn->bindStatement("ins2", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->prepareStatement("ins3", "INSERT INTO temp_test VALUES('bad')", false);
+		conn->bindStatement("ins3", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->sendSync();
+
+		// Read extended-protocol responses in sequence
+		// ins1
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ins1");
+
+		// ins2
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ins2");
+
+		// ins3 (error)
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE || type == PgConnection::ERROR_RESPONSE,
+			"Received ParseComplete or ErrorResponse for ins3 (got %d)", (int)type);
+		if (type == PgConnection::PARSE_COMPLETE) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins3");
+			conn->readMessage(type, buffer);
+		}
+		ok(type == PgConnection::ERROR_RESPONSE, "Received ErrorResponse for ins3 (bad value)");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after ins3 error");
+
+		// Now ROLLBACK the explicit transaction
+		conn->execute("ROLLBACK");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ROLLBACK");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after ROLLBACK");
+
+		// Verify table is empty
+		conn->execute("SELECT count(*) FROM temp_test");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		BufferReader reader(buffer);
+		int fieldCount = reader.readInt16();
+		ok(fieldCount == 1, "Received 1 field in data row");
+		int valueLen = reader.readInt32();
+		ok(valueLen == 1, "Field length is 1 byte");
+		uint8_t val = reader.readByte();
+		ok(val == '0', "Received correct value '0' after rollback");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for count query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after count query");
+	}
+	catch (const PgException& e) {
+		ok(false, "Explicit txn (extended) error-with-rollback test failed: %s", e.what());
+	}
+}
+
+void test_explicit_txn_error_with_commit_extended() {
+	diag("Test %d: Explicit transaction - extended query pipeline inside transaction, error -> COMMIT", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		// Create temp table and BEGIN
+		conn->execute("CREATE TEMP TABLE temp_test(id INT)");
+		conn->execute("BEGIN");
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// CREATE TABLE response
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for CREATE TEMP TABLE");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after CREATE TEMP TABLE");
+
+		// BEGIN response
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for BEGIN");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after BEGIN");
+
+		// Extended pipeline: two good inserts and one bad
+		conn->prepareStatement("ins1", "INSERT INTO temp_test VALUES(1)", false);
+		conn->bindStatement("ins1", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->prepareStatement("ins2", "INSERT INTO temp_test VALUES(2)", false);
+		conn->bindStatement("ins2", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->prepareStatement("ins3", "INSERT INTO temp_test VALUES('bad')", false);
+		conn->bindStatement("ins3", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->sendSync();
+
+		// Read responses for ins1
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ins1");
+
+		// ins2
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ins2");
+
+		// ins3 error
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE || type == PgConnection::ERROR_RESPONSE,
+			"Received ParseComplete or ErrorResponse for ins3 (got %d)", (int)type);
+		if (type == PgConnection::PARSE_COMPLETE) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins3");
+			conn->readMessage(type, buffer);
+		}
+		ok(type == PgConnection::ERROR_RESPONSE, "Received ErrorResponse for ins3 (bad value)");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after ins3 error");
+
+		// Attempt COMMIT of aborted transaction
+		conn->execute("COMMIT");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE || type == PgConnection::COMMAND_COMPLETE,
+			"Received response for COMMIT after error (either ErrorResponse or CommandComplete)");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after COMMIT");
+
+		// Verify that no rows were committed (transaction was aborted and commit did not persist inserts)
+		conn->execute("SELECT count(*) FROM temp_test");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		BufferReader reader(buffer);
+		int fieldCount = reader.readInt16();
+		ok(fieldCount == 1, "Received 1 field in data row");
+		int valueLen = reader.readInt32();
+		ok(valueLen == 1, "Field length is 1 byte");
+		uint8_t val = reader.readByte();
+		ok(val == '0', "Received correct value '0' after commit of aborted txn");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for count query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after count query");
+	}
+	catch (const PgException& e) {
+		ok(false, "Explicit txn (extended) error-with-commit test failed: %s", e.what());
+	}
+}
+
+void test_explicit_txn_success_then_rollback_extended() {
+	diag("Test %d: Explicit transaction - extended inserts succeed but ROLLBACK discards them", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+
+	try {
+		// Create temp table and BEGIN
+		conn->execute("CREATE TEMP TABLE temp_test(id INT)");
+		conn->execute("BEGIN");
+
+		char type;
+		std::vector<uint8_t> buffer;
+
+		// CREATE TABLE response
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for CREATE TEMP TABLE");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after CREATE TEMP TABLE");
+
+		// BEGIN response
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for BEGIN");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after BEGIN");
+
+		// Extended pipeline: three valid inserts
+		conn->prepareStatement("ins1", "INSERT INTO temp_test VALUES(1)", false);
+		conn->bindStatement("ins1", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->prepareStatement("ins2", "INSERT INTO temp_test VALUES(2)", false);
+		conn->bindStatement("ins2", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->prepareStatement("ins3", "INSERT INTO temp_test VALUES(3)", false);
+		conn->bindStatement("ins3", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+
+		conn->sendSync();
+
+		// Read responses for ins1
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for ins1");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ins1");
+
+		// ins2
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for ins2");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ins2");
+
+		// ins3
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for ins3");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for ins3");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for ins3");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ins3");
+
+		// End of batch
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all inserts");
+
+		// Now ROLLBACK explicitly
+		conn->execute("ROLLBACK");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for ROLLBACK");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after ROLLBACK");
+
+		// Verify rollback (table should be empty)
+		conn->execute("SELECT count(*) FROM temp_test");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ROW_DESCRIPTION, "Received RowDescription");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::DATA_ROW, "Received DataRow");
+		BufferReader reader(buffer);
+		int fieldCount = reader.readInt16();
+		ok(fieldCount == 1, "Received 1 field in data row");
+		int valueLen = reader.readInt32();
+		ok(valueLen == 1, "Field length is 1 byte");
+		uint8_t val = reader.readByte();
+		ok(val == '0', "Received correct value '0' after rollback of successful inserts");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete for count query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after count query");
+	}
+	catch (const PgException& e) {
+		ok(false, "Explicit txn (extended) success-then-rollback test failed: %s", e.what());
+	}
+}
+
+void test_empty_query_describe_portal_returns_no_data() {
+	diag("Test %d: Describe Portal Returns No Data for empty query", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+	try{
+		conn->prepareStatement("empty_query_stmt", "", false);
+		conn->bindStatement("empty_query_stmt", "", {}, {}, false);
+		conn->describePortal("", false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buffer;
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for empty query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for empty query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::NO_DATA, "Received NoData for empty query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::EMPTY_QUERY_RESPONSE, "Received EmptyQueryResponse for empty query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all commands");
+	}
+	catch (const PgException& e) {
+		ok(false, "Describe Portal Returns No Data for empty query failed with error:%s", e.what());
+	}
+}
+
+void test_empty_query_without_describe_portal() {
+	diag("Test %d: Execute empty query without Describe Portal", test_count++);
+	auto conn = create_connection();
+	if (!conn) return;
+	try {
+		conn->prepareStatement("empty_query2_stmt", "", false);
+		conn->bindStatement("empty_query2_stmt", "", {}, {}, false);
+		conn->executeStatement(0, false);
+		conn->sendSync();
+
+		char type;
+		std::vector<uint8_t> buffer;
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::PARSE_COMPLETE, "Received ParseComplete for empty query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for empty query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::EMPTY_QUERY_RESPONSE, "Received EmptyQueryResponse for empty query");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after all commands");
+	}
+	catch (const PgException& e) {
+		ok(false, "Execute empty query without Describe Portal failed with error:%s", e.what());
+	}
+}
 
 int main(int argc, char** argv) {
 	if (cl.getEnv())
 		return exit_status();
 
-	std::string f_path{ get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
+	std::string f_path{get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log"};
 	int of_err = open_file_and_seek_end(f_path, f_proxysql_log);
 	if (of_err != EXIT_SUCCESS) {
 		return exit_status();
 	}
 
-	plan(411); // Adjust based on number of tests
+	plan(1061); // Adjust based on number of tests
 
 	auto admin_conn = createNewConnection(ConnType::ADMIN, "", false);
 
@@ -3843,6 +5065,7 @@ int main(int argc, char** argv) {
 		BAIL_OUT("Error: failed to connect to the database in file %s, line %d", __FILE__, __LINE__);
 		return exit_status();
 	}
+
 
 	if (executeQueries(admin_conn.get(), { "SET pgsql-authentication_method=1",
 										   "LOAD PGSQL VARIABLES TO RUNTIME" }) == false) {
@@ -3859,7 +5082,7 @@ int main(int argc, char** argv) {
 		test_multiple_parse();
 		test_only_sync();
 		test_empty_stmt();
-		//test_prepare_statement_mix();
+		test_prepare_statement_mix();
 		test_invalid_query_parse_packet();
 		test_parse_use_same_stmt_name();
 		test_parse_use_unnamed_stmt();
@@ -3873,19 +5096,16 @@ int main(int argc, char** argv) {
 		test_multiple_describe_calls();
 		test_describe_parameter_types();
 		test_describe_result_metadata();
-		//test_describe_after_execute(); // FIXME: not implemented in PgConnection
 		test_describe_prepared_noname();
 		
 		// Close Statement
 		test_close_existing_statement();
 		test_close_nonexistent_statement();
 		test_close_unnamed_statement();
-		//test_close_after_execute();
 		test_close_without_sync();
 		test_multiple_close_without_sync();
 		test_close_malformed_packet();
 		test_close_twice();
-		//test_close_during_transaction();
 		test_close_without_prepare();
 		test_close_during_pending_ops();
 		test_close_all_types();
@@ -3901,7 +5121,6 @@ int main(int argc, char** argv) {
 		test_bind_null_parameters();
 		test_malformed_bind_packet();
 		test_malformed_execute_packet();
-		//test_bind_transaction_state();
 
 		// Portals
 		test_bind_named_portal(); 
@@ -3909,17 +5128,21 @@ int main(int argc, char** argv) {
 		test_close_portal();   
 		test_portal_lifecycle(); 
 		test_describe_closed_portal();    
+		test_describe_portal_returns_no_data();
 
 		// random tests
 		test_libpq_style_execute();       
 		test_multiple_execute_on_single_bind(); 
-
+		test_multiple_parse_bind_describe_execute_fail();
 		test_insert_command_complete();
 		test_parse_with_param_type();
 
 		// SET statement tracking
 		test_set_statement_tracked();
+		test_set_statement_tracked_with_describe();
 		test_set_statement_untracked();
+		test_set_statement_with_simple_query_mix();
+		test_reset_statement_with_simple_query_mix();
 
 		// DEALLOCATE statements
 		test_deallocate_having_stmt_name_via_simple_query();
@@ -3927,6 +5150,42 @@ int main(int argc, char** argv) {
 		test_deallocate_all_via_simple_query();
 		test_deallocate_all_via_prepared();
 		test_deallocate_non_existent_stmt();
+		test_deallocate_statement_with_simple_query_mix();
+
+		// Tests for sending multiple simple queries and extended queries without waiting for response
+		test_send_multiple_simple_query_without_waiting_for_response();
+		test_send_multiple_simple_query_in_transaction_without_waiting_for_response();
+		test_send_simple_query_and_extended_query_without_waiting_for_response();
+		test_send_multiple_simple_query_without_waiting_for_response_proxysql_fast_forward_mode(admin_conn.get());
+		test_send_multiple_simple_query_in_transaction_without_waiting_for_response_proxysql_fast_forward_mode(admin_conn.get());
+		test_send_simple_query_and_extended_query_without_waiting_for_response_proxysql_fast_forward_mode(admin_conn.get());
+
+		// Extended Query (without sync) + Simple Query 
+		test_extended_query_prepared_describe_execute_simple_query_without_sync();
+		test_prepare_statement_mix();
+
+		// DISCARD
+		test_discard_statement_with_simple_query_mix();
+
+		// Pipeline tests
+		test_pipeline_error();
+		test_pipeline_error_2();
+		test_pipeline_exit();
+		test_pipeline_exit_2();
+		test_pipeline_exit_3();
+		test_pipeline_transaction_exit();
+
+		// Implicit transaction tests
+		test_implicit_txn_error_first_insert();
+		test_implicit_txn_error_middle_insert();
+		test_implicit_txn_error_last_insert();
+		test_explicit_txn_error_with_rollback_extended();
+		test_explicit_txn_error_with_commit_extended();
+		test_explicit_txn_success_then_rollback_extended();
+
+		// Empty query tests
+		test_empty_query_describe_portal_returns_no_data();
+		test_empty_query_without_describe_portal();
 	}
 	catch (const std::exception& e) {
 		diag("Fatal error: %s",e.what());

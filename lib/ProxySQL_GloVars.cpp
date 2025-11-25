@@ -443,20 +443,23 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	update_string_var_if_set(&global.gr_bootstrap_ssl_key, opt, "--ssl-key");
 	update_string_var_if_set(&global.gr_bootstrap_ssl_mode, opt, "--ssl-mode");
 
-	config_file=GloVars.__cmd_proxysql_config_file;
-
-	if (config_file==NULL) {
-		config_file=(char *)"proxysql.cnf";
-		if (Proxy_file_regular(config_file)==false) {
-			config_file=(char *)"proxysql.cfg";
-			if (Proxy_file_regular(config_file)==false) {
-				config_file=(char *)"/etc/proxysql.cnf";
-				if (Proxy_file_regular(config_file)==false) {
-					config_file=(char *)"/etc/proxysql.cfg";
+	config_file = GloVars.__cmd_proxysql_config_file;
+	if (!config_file) {
+		config_file = strdup("proxysql.cnf");
+		if (!Proxy_file_regular(config_file)) {
+			free(config_file);
+			config_file = strdup("proxysql.cfg");
+			if (!Proxy_file_regular(config_file)) {
+				free(config_file);
+				config_file = strdup("/etc/proxysql.cnf");
+				if (!Proxy_file_regular(config_file)) {
+					free(config_file);
+					config_file = strdup("/etc/proxysql.cfg");
 				}
 			}
 		}
 	}
+
 #ifdef DEBUG
 	init_debug_struct();
 #endif

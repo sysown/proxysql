@@ -22,10 +22,6 @@ This test verifies a variety of things:
 
 const int NUM_CONNS = 5;
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
 
 int main(int argc, char** argv) {
 	CommandLine cl;
