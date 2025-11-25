@@ -766,6 +766,11 @@ std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
 	std::fstream& f_stream, const std::string& regex, bool get_matches=false
 );
 
+// Overload to scan only the last N lines
+std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
+	std::fstream& f_stream, const std::string& regex, bool get_matches, size_t max_lines
+);
+
 /**
  * @brief Row entries from 'debug_log' table, from debug database.
  */

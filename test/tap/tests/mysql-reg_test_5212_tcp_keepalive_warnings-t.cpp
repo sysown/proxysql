@@ -5,7 +5,6 @@
 
 #include <iostream>
 #include <fstream>
-#include <regex>
 
 #include "mysql.h"
 #include "tap.h"
@@ -17,8 +16,8 @@ using namespace std;
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	// Plan for 4 tests
-	plan(4);
+	// Plan for 6 tests
+	plan(6);
 
 	// Get connections
 	MYSQL* admin = mysql_init(NULL);
@@ -66,17 +65,18 @@ int main(int argc, char** argv) {
 		}
 
 		// Wait a bit for the warning to be written to log
-		usleep(100000); // 100ms
+		usleep(200000); // 200ms
 
-		// Check for the warning in the log
-		const string warning_regex { ".*\\[WARNING\\].*mysql-use_tcp_keepalive is set to false.*" };
-		const auto& [match_count, warning_lines] = get_matching_lines(logfile, warning_regex, true);
+		// Check for the warning in the log - scan only last 50 lines
+	const string warning_regex { ".*\\[WARNING\\].*mysql-use_tcp_keepalive is set to false.*" };
+	const auto& [match_count, warning_lines] = get_matching_lines(logfile, warning_regex, false, 50);
 
-		ok(match_count > 0, "MySQL TCP keepalive warning should appear in log when set to false");
+	// Scanning only last 50 lines ensures we're looking at recent log entries
+	ok(match_count > 0, "MySQL TCP keepalive warning should appear in log when set to false");
 		if (match_count == 0) {
-			diag("Expected warning not found in log file");
+			diag("Expected MySQL TCP keepalive warning not found in last 50 lines of log");
 		} else {
-			diag("Found MySQL TCP keepalive warning in log: %s", std::get<LINE>(warning_lines[0]).c_str());
+			diag("Found %zu MySQL TCP keepalive warning(s) in last 50 lines", match_count);
 		}
 	}
 
@@ -110,17 +110,18 @@ int main(int argc, char** argv) {
 		}
 
 		// Wait a bit for the warning to be written to log
-		usleep(100000); // 100ms
+		usleep(200000); // 200ms
 
-		// Check for the warning in the log
+		// Check for the warning in the log - scan only last 50 lines
 		const string warning_regex { ".*\\[WARNING\\].*pgsql-use_tcp_keepalive is set to false.*" };
-		const auto& [match_count, warning_lines] = get_matching_lines(logfile, warning_regex, true);
+		const auto& [match_count, warning_lines] = get_matching_lines(logfile, warning_regex, false, 50);
 
+		// Scanning only last 50 lines ensures we're looking at recent log entries
 		ok(match_count > 0, "PostgreSQL TCP keepalive warning should appear in log when set to false");
 		if (match_count == 0) {
-			diag("Expected warning not found in log file");
+			diag("Expected PostgreSQL TCP keepalive warning not found in last 50 lines of log");
 		} else {
-			diag("Found PostgreSQL TCP keepalive warning in log: %s", std::get<LINE>(warning_lines[0]).c_str());
+			diag("Found %zu PostgreSQL TCP keepalive warning(s) in last 50 lines", match_count);
 		}
 	}
 

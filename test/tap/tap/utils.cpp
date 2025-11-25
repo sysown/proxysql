@@ -1627,6 +1627,61 @@ pair<size_t,vector<line_match_t>> get_matching_lines(
 	return { insp_lines, found_matches };
 }
 
+pair<size_t,vector<line_match_t>> get_matching_lines(
+  fstream& f_stream, const string& s_regex, bool get_matches, size_t max_lines
+) {
+	vector<line_match_t> found_matches {};
+	vector<string> recent_lines {};
+	size_t insp_lines { 0 };
+
+	string next_line {};
+	fstream::pos_type init_pos { f_stream.tellg() };
+
+	// First, read the last max_lines from the file
+	vector<string> all_lines {};
+	while (getline(f_stream, next_line)) {
+		all_lines.push_back(next_line);
+	}
+
+	// Get only the last max_lines (or fewer if file has less lines)
+	size_t start_idx = 0;
+	if (all_lines.size() > max_lines) {
+		start_idx = all_lines.size() - max_lines;
+	}
+
+	// Process only the recent lines
+	for (size_t i = start_idx; i < all_lines.size(); i++) {
+		next_line = all_lines[i];
+		insp_lines++;
+
+		re2::RE2 regex { s_regex };
+		re2::StringPiece match;
+
+		if (get_matches) {
+			if (RE2::PartialMatch(next_line, regex, &match)) {
+				found_matches.push_back({ f_stream.tellg(), next_line, match.ToString() });
+			}
+		} else {
+			if (RE2::PartialMatch(next_line, regex)) {
+				found_matches.push_back({ f_stream.tellg(), next_line, "" });
+			}
+		}
+	}
+
+	if (found_matches.empty() == false) {
+		const string& last_match { std::get<LINE_MATCH_T::LINE>(found_matches.back()) };
+		const fstream::pos_type last_match_pos { std::get<LINE_MATCH_T::POS>(found_matches.back()) };
+
+		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
+		f_stream.seekg(last_match_pos);
+	} else {
+		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
+		f_stream.seekg(init_pos);
+	}
+
+	return { insp_lines, found_matches };
+}
+
 const uint32_t USLEEP_SQLITE_LOCKED = 100;
 
 int open_sqlite3_db(const string& f_path, sqlite3** db, int flags) {
