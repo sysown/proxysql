@@ -549,38 +549,36 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
+
 		/**
-	 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.
-	 *
-	 * This safety check warns users when mysql-use_tcp_keepalive is set to false,
-	 * which can cause connection instability in certain deployment scenarios.
-	 *
-	 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
-	 *   - Network load balancers with idle connection timeouts
-	 *   - NAT firewalls with connection state timeout
-	 *   - Cloud environments with connection pooling
-	 *   - Any intermediate network device that drops idle connections
-	 *
-	 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
-	 * When disabled:
-	 *   - Load balancers may drop connections from their connection pools
-	 *   - NAT devices may remove connection state from their tables
-	 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
-	 *     connections during idle periods
-	 *   - Results in sudden connection failures and "connection reset" errors
-	 *   - Can cause application downtime and poor user experience
-	 *
-	 * @recommendation Always set mysql-use_tcp_keepalive=true when deploying
-	 * behind load balancers or in cloud environments.
-	 */
-	// Check for TCP keepalive setting and warn if disabled
-	char *mysql_use_tcp_keepalive = GloMTH->get_variable_string((char *)"use_tcp_keepalive");
-	if (mysql_use_tcp_keepalive && strcmp(mysql_use_tcp_keepalive, "false") == 0) {
-		proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
-	}
-	if (mysql_use_tcp_keepalive) {
-		free(mysql_use_tcp_keepalive);
-	}
+		 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.
+		 *
+		 * This safety check warns users when mysql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @recommendation Always set mysql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int mysql_use_tcp_keepalive = GloMTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (mysql_use_tcp_keepalive == 0) {
+			proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
+		}
 	}
 	if (resultset) delete resultset;
 }
@@ -917,42 +915,40 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
 		);
 		*/
+	
 		/**
-	 * @brief Check and warn if TCP keepalive is disabled for PostgreSQL connections.
-	 *
-	 * This safety check warns users when pgsql-use_tcp_keepalive is set to false,
-	 * which can cause connection instability in certain deployment scenarios.
-	 *
-	 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
-	 *   - Network load balancers with idle connection timeouts
-	 *   - NAT firewalls with connection state timeout
-	 *   - Cloud environments with connection pooling
-	 *   - Any intermediate network device that drops idle connections
-	 *
-	 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
-	 * When disabled for PostgreSQL:
-	 *   - Load balancers may drop connections from their connection pools
-	 *   - NAT devices may remove connection state from their tables
-	 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
-	 *     connections during idle periods
-	 *   - PostgreSQL connections may appear "stale" to the database server
-	 *   - Results in sudden connection failures and "connection reset" errors
-	 *   - Can cause application downtime and poor user experience
-	 *
-	 * @note PostgreSQL connections are often long-lived and benefit greatly from
-	 * TCP keepalive, especially in connection-pooled environments.
-	 *
-	 * @recommendation Always set pgsql-use_tcp_keepalive=true when deploying
-	 * behind load balancers or in cloud environments.
-	 */
-	// Check for TCP keepalive setting and warn if disabled
-	char *pgsql_use_tcp_keepalive = GloPTH->get_variable_string((char *)"use_tcp_keepalive");
-	if (pgsql_use_tcp_keepalive && strcmp(pgsql_use_tcp_keepalive, "false") == 0) {
-		proxy_warning("pgsql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
-	}
-	if (pgsql_use_tcp_keepalive) {
-		free(pgsql_use_tcp_keepalive);
-	}
+		 * @brief Check and warn if TCP keepalive is disabled for PostgreSQL connections.
+		 *
+		 * This safety check warns users when pgsql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled for PostgreSQL:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - PostgreSQL connections may appear "stale" to the database server
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @note PostgreSQL connections are often long-lived and benefit greatly from
+		 * TCP keepalive, especially in connection-pooled environments.
+		 *
+		 * @recommendation Always set pgsql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int pgsql_use_tcp_keepalive = GloPTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (pgsql_use_tcp_keepalive == 0) {
+			proxy_warning("pgsql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
+		}
 	}
 	if (resultset) delete resultset;
 }
