@@ -225,6 +225,35 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___verify_ldap_user_variable();
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
+	/**
+	 * @brief Verify and configure session variable tracking on backend connections.
+	 *
+	 * === PR 5166: Backend Configuration Entry Point ===
+	 *
+	 * This function is the main orchestrator for setting up session tracking on backend
+	 * connections. It's called during connection initialization to ensure tracking is
+	 * properly configured before query processing begins.
+	 *
+	 * CONFIGURATION LOGIC:
+	 * 1. Check if global mysql-session_track_variables is enabled
+	 * 2. For each tracking flag that's not yet set on the connection:
+	 *    - Mark the flag as sent (prevents duplicate configuration)
+	 *    - Transition session to appropriate configuration state
+	 *    - Return true to indicate state machine needs re-processing
+	 *
+	 * STATE MACHINE INTEGRATION:
+	 * - SETTING_SESSION_TRACK_VARIABLES: Sets session_track_system_variables="*"
+	 * - SETTING_SESSION_TRACK_STATE: Sets session_track_state_change=ON
+	 * - Returns true to continue state machine processing until both are configured
+	 *
+	 * WHY THIS APPROACH:
+	 * - Ensures tracking is configured exactly once per backend connection
+	 * - Integrates cleanly with existing ProxySQL session state machine
+	 * - Handles both tracking capabilities independently for flexibility
+	 * - Prevents redundant SET commands on already configured connections
+	 *
+	 * @return true if session state needs to be re-processed (configuration pending), false otherwise
+	 */
 	bool handler_again___verify_backend_session_track_variables();
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
@@ -233,7 +262,27 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
+	/**
+	 * @brief Handle the SETTING_SESSION_TRACK_VARIABLES state.
+	 *
+	 * This method executes the SET command to configure session_track_system_variables="*"
+	 * on the backend connection, enabling the server to track changes to all system
+	 * variables and report them back to ProxySQL.
+	 *
+	 * @param _rc Pointer to return code that will be set with the operation result
+	 * @return true if session state needs to be re-processed, false otherwise
+	 */
 	bool handler_again___status_SETTING_SESSION_TRACK_VARIABLES(int *);
+	/**
+	 * @brief Handle the SETTING_SESSION_TRACK_STATE state.
+	 *
+	 * This method executes the SET command to configure session_track_state_change=ON
+	 * on the backend connection, enabling the server to report when session state
+	 * changes occur (including system variable changes).
+	 *
+	 * @param _rc Pointer to return code that will be set with the operation result
+	 * @return true if session state needs to be re-processed, false otherwise
+	 */
 	bool handler_again___status_SETTING_SESSION_TRACK_STATE(int *);
 	bool handler_again___status_CHANGING_CHARSET(int *_rc);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
@@ -283,6 +332,34 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	int RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
+	/**
+	 * @brief Process session variable changes from backend connection response.
+	 *
+	 * === PR 5166: Variable Processing Workflow ===
+	 *
+	 * This function is the core of the variable tracking system and is called after
+	 * every successful query execution when SERVER_SESSION_STATE_CHANGED flag is set.
+	 *
+	 * DETAILED WORKFLOW:
+	 * 1. Extract variable changes from MySQL's session tracking data via get_variables()
+	 * 2. Iterate through all tracked variables in mysql_tracked_variables array
+	 * 3. For each variable that changed in the backend:
+	 *    - Update both client and server variable maps for state consistency
+	 *    - Handle character set variables specially (convert names to internal IDs)
+	 * 4. This ensures ProxySQL's internal state matches the actual backend state
+	 *
+	 * WHY THIS IS NEEDED:
+	 * - SQL statement parsing cannot detect all variable changes (e.g., stored procedures)
+	 * - Some variables are changed implicitly by MySQL server operations
+	 * - Without this tracking, client and backend states can diverge
+	 *
+	 * PERFORMANCE CONSIDERATIONS:
+	 * - Only called when SERVER_SESSION_STATE_CHANGED flag is set
+	 * - Processes all tracked variables but only updates those that actually changed
+	 * - Character set conversions are done only for relevant variables
+	 *
+	 * @param myconn Pointer to the MySQL connection from which to extract variable changes
+	 */
 	void handler_rc0_Process_Variables(MySQL_Connection *myconn);
 	void handler_rc0_RefreshActiveTransactions(MySQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);

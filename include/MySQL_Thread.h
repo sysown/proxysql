@@ -336,10 +336,41 @@ struct th_metrics_map_idx {
 	};
 };
 
+/**
+ * @brief Configuration structure for session variable tracking functionality.
+ *
+ * === PR 5166: Session Variable Tracking Architecture ===
+ *
+ * This PR introduces comprehensive tracking of session-specific system variables
+ * by leveraging MySQL's native session tracking capabilities. The overall workflow
+ * consists of three main phases:
+ *
+ * 1. CONFIGURATION PHASE:
+ *    - Global enable/disable via mysql-session_track_variables variable
+ *    - Per-connection tracking state managed via flags in MySQL_Connection
+ *    - New session states handle configuration of tracking on backends
+ *
+ * 2. BACKEND SETUP PHASE:
+ *    - When enabled, configure session_track_system_variables="*"
+ *    - Configure session_track_state_change=ON
+ *    - MySQL server then automatically tracks all system variable changes
+ *
+ * 3. PROCESSING PHASE:
+ *    - After each query, check SERVER_SESSION_STATE_CHANGED flag
+ *    - Extract variable changes via MySQL's session tracking protocol
+ *    - Update both client and server variable maps for state consistency
+ *    - Special handling for character set variables (name → ID conversion)
+ *
+ * BENEFITS:
+ * - Captures changes that SQL parsing alone cannot detect (stored procedures, etc.)
+ * - Redundant tracking ensures accurate client/backend state synchronization
+ * - Leverages MySQL server's native capabilities for reliability
+ * - Performance optimized: only processes when session state actually changes
+ */
 struct session_track_variables {
 	enum mode {
-		DISABLED = 0,
-		ENABLED
+		DISABLED = 0,	///< Session variable tracking is disabled (default)
+		ENABLED			///< Session variable tracking is enabled
 	};
 };
 
@@ -597,6 +628,15 @@ class MySQL_Threads_Handler
 		int processlist_max_query_length;
 
 		bool ignore_min_gtid_annotations;
+		/**
+		 * @brief Configuration flag to enable/disable session variable tracking.
+		 *
+		 * When set to session_track_variables::ENABLED (1), ProxySQL will configure
+		 * backend connections to track system variable changes using MySQL's
+		 * session_track_system_variables and session_track_state_change capabilities.
+		 *
+		 * Default: session_track_variables::DISABLED (0)
+		 */
 		int session_track_variables;
 	} variables;
 	struct {

@@ -88,9 +88,9 @@ class MySQL_Connection {
 		char * session_track_gtids;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
-		bool session_track_gtids_sent;
-		bool session_track_variables_sent;
-		bool session_track_state_sent;
+		bool session_track_gtids_sent;		///< Flag indicating if GTID session tracking has been configured on this connection
+		bool session_track_variables_sent;	///< Flag indicating if session_track_system_variables has been configured on this connection
+		bool session_track_state_sent;		///< Flag indicating if session_track_state_change has been configured on this connection
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
 		int8_t last_set_autocommit;
@@ -264,6 +264,35 @@ class MySQL_Connection {
 	void reset();
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	/**
+	 * @brief Extract session variable changes from MySQL's session tracking system.
+	 *
+	 * === PR 5166: Backend Variable Extraction ===
+	 *
+	 * This method is the interface to MySQL's native session tracking protocol and
+	 * extracts system variable changes that occurred during the last query execution.
+	 *
+	 * TECHNICAL DETAILS:
+	 * - Uses mysql_session_track_get_first/next() to iterate through SESSION_TRACK_SYSTEM_VARIABLES
+	 * - Only processes when SERVER_SESSION_STATE_CHANGED flag is set and no errors occurred
+	 * - Handles the variable/value pairing protocol where variables and values are returned alternately
+	 * - Populates a map with variable names as keys and their new values as values
+	 *
+	 * PROTOCOL FLOW:
+	 * 1. Check if session state changed and no errors occurred
+	 * 2. Get first tracked system variable (name)
+	 * 3. Iterate to get corresponding value, next variable name, etc.
+	 * 4. Build variable_name → value mappings in the provided map
+	 *
+	 * INTEGRATION POINT:
+	 * This is called by handler_rc0_Process_Variables() which then processes the
+	 * extracted changes to update ProxySQL's internal state. The separation allows
+	 * for testing and potential future extensions of the tracking protocol.
+	 *
+	 * @param variables Reference to unordered_map that will be populated with
+	 *                 variable names as keys and their new values as values
+	 * @return true if session variable changes were found and extracted, false otherwise
+	 */
 	bool get_variables(std::unordered_map<std::string, std::string>&);
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
