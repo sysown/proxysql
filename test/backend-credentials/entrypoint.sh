@@ -55,8 +55,8 @@ echo "⚙️  Configuring users via SQL..."
 mysql -h 127.0.0.1 -P 6032 -uadmin -padmin <<'SQL'
 -- Frontend user (app connects with this)
 DELETE FROM mysql_users WHERE username='app_user';
-INSERT INTO mysql_users (username, password, default_hostgroup, default_schema, frontend, backend, max_connections, comment)
-VALUES ('app_user', 'app_password_123', 10, 'testdb', 1, 0, 1000, 'Frontend user');
+INSERT INTO mysql_users (username, password, default_hostgroup, default_schema, frontend, backend, max_connections, transaction_persistent, comment)
+VALUES ('app_user', 'app_password_123', 10, 'testdb', 1, 0, 1000, 1, 'Frontend user');
 
 -- Backend user for hostgroup 10 (read servers)
 DELETE FROM mysql_users WHERE username='reader_user';
@@ -124,8 +124,8 @@ echo "⚙️  Configuring PostgreSQL users via SQL..."
 mysql -h 127.0.0.1 -P 6032 -uadmin -padmin <<'SQL'
 -- Frontend user (app connects with this)
 DELETE FROM pgsql_users WHERE username='pgsql_app';
-INSERT INTO pgsql_users (username, password, default_hostgroup, frontend, backend, max_connections, comment)
-VALUES ('pgsql_app', 'pgsql_app_password', 10, 1, 0, 1000, 'PG Frontend user');
+INSERT INTO pgsql_users (username, password, default_hostgroup, frontend, backend, max_connections, transaction_persistent, comment)
+VALUES ('pgsql_app', 'pgsql_app_password', 10, 1, 0, 1000, 1, 'PG Frontend user');
 
 -- Backend user for hostgroup 10 (read servers)
 DELETE FROM pgsql_users WHERE username='pgsql_reader';
