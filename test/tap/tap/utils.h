@@ -766,9 +766,10 @@ std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
 	std::fstream& f_stream, const std::string& regex, bool get_matches=false
 );
 
-// Overload to scan only the last N lines
-std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
-	std::fstream& f_stream, const std::string& regex, bool get_matches, size_t max_lines
+
+// Function to scan last N lines from filename (no stream sharing issues)
+std::pair<size_t,std::vector<line_match_t>> get_matching_lines_from_filename(
+	const std::string& filename, const std::string& regex, bool get_matches, size_t max_lines
 );
 
 /**

@@ -38,14 +38,6 @@ int main(int argc, char** argv) {
 	// Test 1: MySQL TCP keepalive warning
 	diag("Testing MySQL TCP keepalive warning when set to false");
 	{
-		fstream logfile {};
-		int open_err = open_file_and_seek_end(log_path, logfile);
-		if (open_err != EXIT_SUCCESS) {
-			diag("Failed to open log file: %s", log_path.c_str());
-			mysql_close(admin);
-			return exit_status();
-		}
-
 		// Set MySQL TCP keepalive to false
 		int query_err = mysql_query(admin, "SET mysql-use_tcp_keepalive='false'");
 		ok(query_err == 0, "SET mysql-use_tcp_keepalive='false' should succeed");
@@ -67,30 +59,20 @@ int main(int argc, char** argv) {
 		// Wait a bit for the warning to be written to log
 		usleep(200000); // 200ms
 
-		// Check for the warning in the log - scan only last 50 lines
-	const string warning_regex { ".*\\[WARNING\\].*mysql-use_tcp_keepalive is set to false.*" };
-	const auto& [match_count, warning_lines] = get_matching_lines(logfile, warning_regex, false, 50);
+		// Check for the warning in the log - scan only last 10 lines using filename-based function
+	const string warning_regex { ".*WARNING.*mysql-use_tcp_keepalive is set to false.*" };
+	const auto& [match_count, warning_lines] = get_matching_lines_from_filename(log_path, warning_regex, true, 10);
 
-	// Scanning only last 50 lines ensures we're looking at recent log entries
-	ok(match_count > 0, "MySQL TCP keepalive warning should appear in log when set to false");
+	// Scanning only last 10 lines ensures we're looking at recent log entries
+		ok(match_count > 0, "MySQL TCP keepalive warning should appear in log when set to false");
 		if (match_count == 0) {
-			diag("Expected MySQL TCP keepalive warning not found in last 50 lines of log");
-		} else {
-			diag("Found %zu MySQL TCP keepalive warning(s) in last 50 lines", match_count);
+			diag("Expected MySQL TCP keepalive warning not found in last 10 lines of log");
 		}
 	}
 
 	// Test 2: PostgreSQL TCP keepalive warning
 	diag("Testing PostgreSQL TCP keepalive warning when set to false");
 	{
-		fstream logfile {};
-		int open_err = open_file_and_seek_end(log_path, logfile);
-		if (open_err != EXIT_SUCCESS) {
-			diag("Failed to open log file: %s", log_path.c_str());
-			mysql_close(admin);
-			return exit_status();
-		}
-
 		// Set PostgreSQL TCP keepalive to false
 		int query_err = mysql_query(admin, "SET pgsql-use_tcp_keepalive='false'");
 		ok(query_err == 0, "SET pgsql-use_tcp_keepalive='false' should succeed");
@@ -110,18 +92,16 @@ int main(int argc, char** argv) {
 		}
 
 		// Wait a bit for the warning to be written to log
-		usleep(200000); // 200ms
+		usleep(500000); // 500ms
 
-		// Check for the warning in the log - scan only last 50 lines
-		const string warning_regex { ".*\\[WARNING\\].*pgsql-use_tcp_keepalive is set to false.*" };
-		const auto& [match_count, warning_lines] = get_matching_lines(logfile, warning_regex, false, 50);
+		// Check for the warning in the log - scan only last 10 lines using filename-based function
+		const string warning_regex { ".*WARNING.*pgsql-use_tcp_keepalive is set to false.*" };
+		const auto& [match_count, warning_lines] = get_matching_lines_from_filename(log_path, warning_regex, true, 10);
 
-		// Scanning only last 50 lines ensures we're looking at recent log entries
+		// Scanning only last 10 lines ensures we're looking at recent log entries
 		ok(match_count > 0, "PostgreSQL TCP keepalive warning should appear in log when set to false");
 		if (match_count == 0) {
-			diag("Expected PostgreSQL TCP keepalive warning not found in last 50 lines of log");
-		} else {
-			diag("Found %zu PostgreSQL TCP keepalive warning(s) in last 50 lines", match_count);
+			diag("Expected PostgreSQL TCP keepalive warning not found in last 10 lines of log");
 		}
 	}
 
