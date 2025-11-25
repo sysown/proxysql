@@ -737,70 +737,37 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	// Create triggers to enforce one backend user per hostgroup constraint
 	// This ensures hostgroup-based backend credential mapping is unambiguous
-	const char* mysql_users_trigger = R"(
-		CREATE TRIGGER IF NOT EXISTS tr_mysql_users_backend_hostgroup_unique
-		BEFORE INSERT ON mysql_users
-		WHEN NEW.backend = 1 AND EXISTS (
-			SELECT 1 FROM mysql_users
-			WHERE backend = 1
-			  AND default_hostgroup = NEW.default_hostgroup
-			  AND username != NEW.username
-		)
-		BEGIN
-			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
-		END;
-	)";
+	auto create_backend_user_trigger = [](const char* table_name, const char* event) {
+		char buf[1024];
+		snprintf(buf, sizeof(buf), R"(
+			CREATE TRIGGER IF NOT EXISTS tr_%s_backend_hostgroup_unique_%s
+			BEFORE %s ON %s
+			WHEN NEW.backend = 1 AND EXISTS (
+				SELECT 1 FROM %s
+				WHERE backend = 1
+				  AND default_hostgroup = NEW.default_hostgroup
+				  AND username != NEW.username
+			)
+			BEGIN
+				SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
+			END;
+		)", table_name, event, event, table_name, table_name);
+		return std::string(buf);
+	};
 
-	const char* mysql_users_trigger_update = R"(
-		CREATE TRIGGER IF NOT EXISTS tr_mysql_users_backend_hostgroup_unique_update
-		BEFORE UPDATE ON mysql_users
-		WHEN NEW.backend = 1 AND EXISTS (
-			SELECT 1 FROM mysql_users
-			WHERE backend = 1
-			  AND default_hostgroup = NEW.default_hostgroup
-			  AND username != NEW.username
-		)
-		BEGIN
-			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
-		END;
-	)";
+	std::string mysql_insert = create_backend_user_trigger("mysql_users", "INSERT");
+	std::string mysql_update = create_backend_user_trigger("mysql_users", "UPDATE");
+	std::string pgsql_insert = create_backend_user_trigger("pgsql_users", "INSERT");
+	std::string pgsql_update = create_backend_user_trigger("pgsql_users", "UPDATE");
 
-	const char* pgsql_users_trigger = R"(
-		CREATE TRIGGER IF NOT EXISTS tr_pgsql_users_backend_hostgroup_unique
-		BEFORE INSERT ON pgsql_users
-		WHEN NEW.backend = 1 AND EXISTS (
-			SELECT 1 FROM pgsql_users
-			WHERE backend = 1
-			  AND default_hostgroup = NEW.default_hostgroup
-			  AND username != NEW.username
-		)
-		BEGIN
-			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
-		END;
-	)";
-
-	const char* pgsql_users_trigger_update = R"(
-		CREATE TRIGGER IF NOT EXISTS tr_pgsql_users_backend_hostgroup_unique_update
-		BEFORE UPDATE ON pgsql_users
-		WHEN NEW.backend = 1 AND EXISTS (
-			SELECT 1 FROM pgsql_users
-			WHERE backend = 1
-			  AND default_hostgroup = NEW.default_hostgroup
-			  AND username != NEW.username
-		)
-		BEGIN
-			SELECT RAISE(ABORT, 'Only one backend user allowed per hostgroup');
-		END;
-	)";
-
-	admindb->execute(mysql_users_trigger);
-	admindb->execute(mysql_users_trigger_update);
-	admindb->execute(pgsql_users_trigger);
-	admindb->execute(pgsql_users_trigger_update);
-	configdb->execute(mysql_users_trigger);
-	configdb->execute(mysql_users_trigger_update);
-	configdb->execute(pgsql_users_trigger);
-	configdb->execute(pgsql_users_trigger_update);
+	admindb->execute(mysql_insert.c_str());
+	admindb->execute(mysql_update.c_str());
+	admindb->execute(pgsql_insert.c_str());
+	admindb->execute(pgsql_update.c_str());
+	configdb->execute(mysql_insert.c_str());
+	configdb->execute(mysql_update.c_str());
+	configdb->execute(pgsql_insert.c_str());
+	configdb->execute(pgsql_update.c_str());
 
 	__attach_db(admindb, configdb, (char *)"disk");
 	__attach_db(admindb, statsdb, (char *)"stats");
