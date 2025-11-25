@@ -1680,6 +1680,30 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	return ret;
 }
 
+/**
+ * @brief Generates and manages GTID connection tables for all MySQL servers
+ *
+ * This function synchronizes the GTID server connections with the current MySQL server
+ * configuration. It handles server additions, removals, and reconnections with improved
+ * lifecycle management for stable operation.
+ *
+ * The function operates in several phases:
+ * 1. Mark all existing GTID connections as potentially stale
+ * 2. Iterate through configured MySQL servers to validate existing connections
+ * 3. Establish new connections for servers that don't have active GTID connections
+ * 4. Clean up stale connections for servers that are no longer configured
+ *
+ * Key improvements in this implementation:
+ * - Uses stale_server tracking for efficient cleanup
+ * - Maintains proper lock ordering (gtid_rwlock → wrlock)
+ * - Reuses existing GTID_Server_Data objects when possible
+ * - Proper cleanup of ev_io watchers and socket resources
+ *
+ * @note This function must be called with appropriate locking to prevent race conditions
+ * @note Servers with OFFLINE_HARD status are skipped for connection establishment
+ *
+ * @thread_safety Thread-safe when called with proper external synchronization
+ */
 void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	// NOTE: We are required to lock while iterating over 'MyHostGroups'. Otherwise race conditions could take place,
 	// e.g. servers could be purged by 'purge_mysql_servers_table' and invalid memory be accessed.
