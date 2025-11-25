@@ -1101,29 +1101,47 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 	return false;
 }
 
-bool PgSQL_Session::handler_again___verify_backend_user_db() {
-	PgSQL_Data_Stream* myds = mybe->server_myds;
+/**
+ * @brief Set backend credentials for a specific hostgroup on a PgSQL connection.
+ * @details Looks up backend credentials for the given hostgroup and sets them on the connection.
+ *          If no hostgroup-specific credentials are found, falls back to client credentials.
+ * @param myconn The PgSQL connection to set credentials on
+ * @param hostgroup_id The hostgroup ID to lookup credentials for
+ * @return true if hostgroup-specific credentials were found and set, false if using client credentials
+ */
+bool PgSQL_Session::set_backend_credentials_for_hostgroup(PgSQL_Connection *myconn, int hostgroup_id) {
+	pgsql_account_details_t* backend_acct = GloPgAuth->lookup_backend_for_hostgroup(hostgroup_id);
 
-	// Check if we should use hostgroup-specific backend credentials
-	int target_hostgroup = mybe->hostgroup_id;
-	pgsql_account_details_t* backend_acct = GloPgAuth->lookup_backend_for_hostgroup(target_hostgroup);
-
-	if (backend_acct && backend_acct->username) {
-		// Set the backend connection's userinfo to the hostgroup-specific credentials
-		// Use client's dbname since pgsql_account_details_t doesn't have default_schema
-		myds->myconn->userinfo->set(
+	if (backend_acct && backend_acct->username && backend_acct->password) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- Using backend credentials for hostgroup %d: user=%s\n",
+			this, hostgroup_id, backend_acct->username);
+		myconn->userinfo->set(
 			backend_acct->username,
 			backend_acct->password,
 			client_myds->myconn->userinfo->dbname,
 			(char*)backend_acct->sha1_pass
 		);
 		GloPgAuth->free_account_details(backend_acct);
+		return true;
+	} else {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d, using client credentials\n",
+			this, hostgroup_id);
+		myconn->userinfo->set(client_myds->myconn->userinfo);
+		if (backend_acct) {
+			GloPgAuth->free_account_details(backend_acct);
+		}
+		return false;
+	}
+}
+
+bool PgSQL_Session::handler_again___verify_backend_user_db() {
+	PgSQL_Data_Stream* myds = mybe->server_myds;
+
+	// Check if we should use hostgroup-specific backend credentials
+	if (set_backend_credentials_for_hostgroup(myds->myconn, mybe->hostgroup_id)) {
 		// Return immediately - no need to compare with client credentials
 		// as we've now configured the correct backend credentials
 		return false;
-	}
-	if (backend_acct) {
-		GloPgAuth->free_account_details(backend_acct);
 	}
 
 	// Fallback: original logic for when no hostgroup-specific credentials exist
@@ -4809,30 +4827,8 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- PgSQL Connection has no FD\n", this);
 		PgSQL_Connection* myconn = mybe->server_myds->myconn;
 
-		// Try to lookup backend credentials for this hostgroup
-		int target_hostgroup = mybe->hostgroup_id;
-		pgsql_account_details_t* backend_acct = GloPgAuth->lookup_backend_for_hostgroup(target_hostgroup);
-
-		if (backend_acct && backend_acct->username && backend_acct->password) {
-			// Use hostgroup-specific backend credentials
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- Using backend credentials for hostgroup %d: user=%s\n",
-				this, target_hostgroup, backend_acct->username);
-			myconn->userinfo->set(
-				backend_acct->username,
-				backend_acct->password,
-				client_myds->myconn->userinfo->dbname,  // Use client's database name
-				(char*)backend_acct->sha1_pass
-			);
-			GloPgAuth->free_account_details(backend_acct);
-		} else {
-			// Fallback: use client credentials (backward compatibility)
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d, using client credentials\n",
-				this, target_hostgroup);
-			myconn->userinfo->set(client_myds->myconn->userinfo);
-			if (backend_acct) {
-				GloPgAuth->free_account_details(backend_acct);
-			}
-		}
+		// Set backend credentials for this hostgroup
+		set_backend_credentials_for_hostgroup(myconn, mybe->hostgroup_id);
 
 		myconn->handler(0);
 		mybe->server_myds->fd = myconn->fd;

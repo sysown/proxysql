@@ -2138,31 +2138,47 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	return false;
 }
 
-bool MySQL_Session::handler_again___verify_backend_user_schema() {
-	MySQL_Data_Stream *myds=mybe->server_myds;
+/**
+ * @brief Set backend credentials for a specific hostgroup on a MySQL connection.
+ * @details Looks up backend credentials for the given hostgroup and sets them on the connection.
+ *          If no hostgroup-specific credentials are found, falls back to client credentials.
+ * @param myconn The MySQL connection to set credentials on
+ * @param hostgroup_id The hostgroup ID to lookup credentials for
+ * @return true if hostgroup-specific credentials were found and set, false if using client credentials
+ */
+bool MySQL_Session::set_backend_credentials_for_hostgroup(MySQL_Connection *myconn, int hostgroup_id) {
+	account_details_t backend_acct = GloMyAuth->lookup_backend_for_hostgroup(hostgroup_id);
 
-	// CRITICAL: Set correct backend credentials for this hostgroup BEFORE any comparisons
-	int target_hostgroup = mybe->hostgroup_id;
-	account_details_t backend_acct = GloMyAuth->lookup_backend_for_hostgroup(target_hostgroup);
-
-	bool has_hostgroup_credentials = (backend_acct.username && backend_acct.password);
-
-	if (has_hostgroup_credentials) {
-		myds->myconn->userinfo->set(
+	if (backend_acct.username && backend_acct.password) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- Using backend credentials for hostgroup %d: user=%s\n",
+			this, hostgroup_id, backend_acct.username);
+		myconn->userinfo->set(
 			backend_acct.username,
 			backend_acct.password,
 			backend_acct.default_schema ? backend_acct.default_schema : client_myds->myconn->userinfo->schemaname,
 			(char*)backend_acct.sha1_pass
 		);
 		free_account_details(backend_acct);
+		return true;
+	} else {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d, using client credentials\n",
+			this, hostgroup_id);
+		myconn->userinfo->set(client_myds->myconn->userinfo);
+		return false;
+	}
+}
 
+bool MySQL_Session::handler_again___verify_backend_user_schema() {
+	MySQL_Data_Stream *myds=mybe->server_myds;
+
+	// CRITICAL: Set correct backend credentials for this hostgroup BEFORE any comparisons
+	if (set_backend_credentials_for_hostgroup(myds->myconn, mybe->hostgroup_id)) {
 		// With hostgroup-specific credentials, we EXPECT client != backend username
 		// This is intentional, so we should NOT trigger CHANGING_USER_SERVER
 		// The credentials are already correctly set
 		return false;  // Done - credentials are correct, no need to change anything
-	} else {
-		// Note: For backward compatibility, if no backend credentials exist, fall through to original logic
 	}
+	// Fallback: For backward compatibility, if no backend credentials exist, fall through to original logic
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
@@ -3122,20 +3138,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	myconn->local_stmts=new MySQL_STMTs_local_v14(false); // false by default, it is a backend
 
 	// CRITICAL: Update userinfo BEFORE async_change_user is called
-	int target_hostgroup = mybe->hostgroup_id;
-	account_details_t backend_acct = GloMyAuth->lookup_backend_for_hostgroup(target_hostgroup);
-
-	if (backend_acct.username && backend_acct.password) {
-		myconn->userinfo->set(
-			backend_acct.username,
-			backend_acct.password,
-			backend_acct.default_schema ? backend_acct.default_schema : client_myds->myconn->userinfo->schemaname,
-			(char*)backend_acct.sha1_pass
-		);
-		free_account_details(backend_acct);
-	} else {
-		myconn->userinfo->set(client_myds->myconn->userinfo);
-	}
+	set_backend_credentials_for_hostgroup(myconn, mybe->hostgroup_id);
 
 	if (mysql_thread___connect_timeout_server_max) {
 		if (mybe->server_myds->max_connect_time==0) {
@@ -3146,28 +3149,8 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
 
-		// Try to lookup backend credentials for this hostgroup
-		int target_hostgroup = mybe->hostgroup_id;
-		account_details_t backend_acct = GloMyAuth->lookup_backend_for_hostgroup(target_hostgroup);
-
-		if (backend_acct.username && backend_acct.password) {
-			// Use hostgroup-specific backend credentials
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- Using backend credentials after change_user for hostgroup %d: user=%s\n",
-				this, target_hostgroup, backend_acct.username);
-			myds->myconn->userinfo->set(
-				backend_acct.username,
-				backend_acct.password,
-				backend_acct.default_schema ? backend_acct.default_schema : client_myds->myconn->userinfo->schemaname,
-				(char*)backend_acct.sha1_pass
-			);
-			// Free the allocated account details
-			free_account_details(backend_acct);
-		} else {
-			// Fallback: use client credentials (backward compatibility)
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d after change_user, using client credentials\n",
-				this, target_hostgroup);
-			myds->myconn->userinfo->set(client_myds->myconn->userinfo);
-		}
+		// Set backend credentials after change_user
+		set_backend_credentials_for_hostgroup(myds->myconn, mybe->hostgroup_id);
 
 		myds->myconn->reset();
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -7417,28 +7400,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection has no FD\n", this);
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
 
-		// Try to lookup backend credentials for this hostgroup
-		int target_hostgroup = mybe->hostgroup_id;
-		account_details_t backend_acct = GloMyAuth->lookup_backend_for_hostgroup(target_hostgroup);
-
-		if (backend_acct.username && backend_acct.password) {
-			// Use hostgroup-specific backend credentials
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- Using backend credentials for hostgroup %d: user=%s\n",
-				this, target_hostgroup, backend_acct.username);
-			myconn->userinfo->set(
-				backend_acct.username,
-				backend_acct.password,
-				backend_acct.default_schema ? backend_acct.default_schema : client_myds->myconn->userinfo->schemaname,
-				(char*)backend_acct.sha1_pass
-			);
-			// Free the allocated account details
-			free_account_details(backend_acct);
-		} else {
-			// Fallback: use client credentials (backward compatibility)
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d, using client credentials\n",
-				this, target_hostgroup);
-			myconn->userinfo->set(client_myds->myconn->userinfo);
-		}
+		// Set backend credentials for this hostgroup
+		set_backend_credentials_for_hostgroup(myconn, mybe->hostgroup_id);
 
 		myconn->handler(0);
 		mybe->server_myds->fd=myconn->fd;
@@ -7451,25 +7414,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->myds_type=MYDS_BACKEND;
 		mybe->server_myds->DSS=STATE_READY;
 
-		// For reused connections, update userinfo BEFORE change_user is called
-		int target_hostgroup = mybe->hostgroup_id;
-		account_details_t backend_acct = GloMyAuth->lookup_backend_for_hostgroup(target_hostgroup);
-
-		if (backend_acct.username && backend_acct.password) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- Updating reused connection credentials for hostgroup %d: user=%s\n",
-				this, target_hostgroup, backend_acct.username);
-			mybe->server_myds->myconn->userinfo->set(
-				backend_acct.username,
-				backend_acct.password,
-				backend_acct.default_schema ? backend_acct.default_schema : client_myds->myconn->userinfo->schemaname,
-				(char*)backend_acct.sha1_pass
-			);
-			free_account_details(backend_acct);
-		} else {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d on reused connection, using client credentials\n",
-				this, target_hostgroup);
-			mybe->server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
-		}
+		// Set backend credentials for reused connection
+		set_backend_credentials_for_hostgroup(mybe->server_myds->myconn, mybe->hostgroup_id);
 
 		if (session_fast_forward) {
 			status=FAST_FORWARD;

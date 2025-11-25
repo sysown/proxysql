@@ -228,6 +228,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_multiple_variables(MySQL_Connection *);
+	bool set_backend_credentials_for_hostgroup(MySQL_Connection *myconn, int hostgroup_id);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);

@@ -444,6 +444,14 @@ private:
 	 */
 	void switch_fast_forward_to_normal_mode();
 
+	/**
+	 * @brief Set backend credentials for a specific hostgroup on a PgSQL connection.
+	 * @param myconn The PgSQL connection to set credentials on
+	 * @param hostgroup_id The hostgroup ID to lookup credentials for
+	 * @return true if hostgroup-specific credentials were found and set, false if using client credentials
+	 */
+	bool set_backend_credentials_for_hostgroup(PgSQL_Connection *myconn, int hostgroup_id);
+
 public:
 	inline bool is_extended_query_frame_empty() const {
 		return extended_query_frame.empty();
