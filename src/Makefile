@@ -13,7 +13,7 @@ IDIRS := -I$(PROXYSQL_IDIR)       \
 		-I$(LIBCONFIG_IDIR)       \
 		-I$(LIBDAEMON_IDIR)       \
 		-I$(RE2_IDIR)             \
-		-L$(PCRE_IDIR)            \
+		-I$(PCRE_IDIR)            \
 		-I$(MICROHTTPD_IDIR)      \
 		-I$(LIBHTTPSERVER_IDIR)   \
 		-I$(LIBINJECTION_IDIR)    \
@@ -21,10 +21,10 @@ IDIRS := -I$(PROXYSQL_IDIR)       \
 		-I$(EV_IDIR)              \
 		-I$(PROMETHEUS_IDIR)      \
 		-I$(POSTGRESQL_IDIR)      \
+		-I$(LIBUSUAL_IDIR)        \
 		-I$(LIBSCRAM_IDIR)        \
 		-I$(SQLITE3_IDIR)         \
 		-I$(CLICKHOUSE_CPP_IDIR)  \
-		-I$(CLICKHOUSE_CPP_CDIR)  \
 		-I$(JSON_IDIR)            \
 		-I$(ABSL_IDIR)            \
 		-I$(PROTOBUF_IDIR)        \
