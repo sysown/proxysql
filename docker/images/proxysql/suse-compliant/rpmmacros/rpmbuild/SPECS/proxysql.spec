@@ -11,6 +11,7 @@ Source: %{name}-%{version}.tar.gz
 URL: https://proxysql.com/
 Requires: gnutls, (openssl >= 3.0.0 or openssl3 >= 3.0.0)
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
+Provides: group(%{name})
 
 %description
 %{summary}
@@ -23,6 +24,7 @@ BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 if [ -f /var/lib/%{name}/PROXYSQL_UPGRADE ]; then
     rm -fr /var/lib/%{name}/PROXYSQL_UPGRADE
 fi
+if ! id -u %{name} > /dev/null 2>&1; then useradd -r -U -s /bin/false -d /var/lib/%{name} -c "ProxySQL Server" %{name}; fi
 
 %build
 # Packages are pre-built, nothing to do
@@ -40,7 +42,6 @@ fi
 # Create relevant user, directories and configuration files
 if [ ! -d /var/run/%{name} ]; then /bin/mkdir /var/run/%{name} ; fi
 if [ ! -d /var/lib/%{name} ]; then /bin/mkdir /var/lib/%{name} ; fi
-if ! id -u %{name} > /dev/null 2>&1; then useradd -r -U -s /bin/false -d /var/lib/%{name} -c "ProxySQL Server" %{name}; fi
 /bin/chown -R %{name}: /var/lib/%{name} /var/run/%{name}
 /bin/chown root:%{name} /etc/%{name}.cnf
 /bin/chmod 640 /etc/%{name}.cnf
