@@ -6423,23 +6423,6 @@ bool PgSQL_Session::handler___rc0_PROCESSING_STMT_PREPARE(enum session_status& s
 	return false;
 }
 
-/* FIXME: Not Used anymore. To be removed in next iteration
-void PgSQL_Session::handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_Stream* myds) {
-	//thread->status_variables.stvar[st_var_backend_stmt_describe]++;
-	const PgSQL_Extended_Query_Info& extended_query_info = CurrentQuery.extended_query_info;
-	assert(extended_query_info.stmt_info);
-	bool send_ready_packet = is_extended_query_ready_for_query();
-	char txn_state = myds->myconn->get_transaction_status_char();
-	
-	client_myds->myprot.generate_describe_completion_packet(true, send_ready_packet, myds->myconn->stmt_metadata_result, 
-		extended_query_info.stmt_type, txn_state);
-	LogQuery(myds);
-	if (myds->myconn->stmt_metadata_result) {
-		delete myds->myconn->stmt_metadata_result;
-		myds->myconn->stmt_metadata_result = NULL;
-	}
-}*/
-
 char* PgSQL_Session::get_current_query(int max_length) {
 	const char *query_ptr = NULL;
 	int query_len = 0;

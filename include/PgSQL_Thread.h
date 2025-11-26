@@ -46,7 +46,6 @@ constexpr const char* AUTHENTICATION_METHOD_STR[] = {
 #define SQLITE_HOSTGROUP -4
 
 
-#define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
 #define MYSQL_DEFAULT_MAX_JOIN_SIZE	"18446744073709551615"
@@ -1018,7 +1017,6 @@ public:
 		char* init_connect;
 		char* ldap_user_variable;
 		char* add_ldap_user_comment;
-		char* default_session_track_gtids;
 		char* default_variables[PGSQL_NAME_LAST_LOW_WM];
 		char* firewall_whitelist_errormsg;
 #ifdef DEBUG
@@ -1049,13 +1047,7 @@ public:
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
-		bool client_session_track_gtid;
-		bool enable_client_deprecate_eof;
-		bool enable_server_deprecate_eof;
-		bool enable_load_data_local_infile;
-		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
-		int handle_warnings;
 		char* server_version;
 		char* server_encoding;
 		/**

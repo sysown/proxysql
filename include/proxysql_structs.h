@@ -1166,7 +1166,6 @@ __thread int  pgsql_thread___query_digests_max_query_length;
 __thread int  pgsql_thread___query_digests_grouping_limit;
 __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
-__thread bool pgsql_thread___enable_load_data_local_infile;
 __thread char* pgsql_thread___auditlog_filename;
 __thread int pgsql_thread___auditlog_filesize;
 __thread char* pgsql_thread___eventslog_filename;
@@ -1468,7 +1467,6 @@ extern __thread int  pgsql_thread___query_digests_max_query_length;
 extern __thread int  pgsql_thread___query_digests_grouping_limit;
 extern __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
-extern __thread bool pgsql_thread___enable_load_data_local_infile;
 extern __thread char* pgsql_thread___auditlog_filename;
 extern __thread int pgsql_thread___auditlog_filesize;
 extern __thread char* pgsql_thread___eventslog_filename;

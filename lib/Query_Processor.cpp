@@ -1877,8 +1877,8 @@ template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uint64_t digest, char* digest_text, int hid, 
 	TypeConnInfo* ui, unsigned long long t, unsigned long long n, const char* client_addr, unsigned long long rows_affected,
 	unsigned long long rows_sent) {
+	QP_query_digest_stats* qds;
 	pthread_rwlock_wrlock(&digest_rwlock);
-	QP_query_digest_stats *qds;
 
 	std::unordered_map<uint64_t, void *>::iterator it;
 	it=digest_umap.find(digest_total);
