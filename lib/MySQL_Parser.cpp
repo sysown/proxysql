@@ -42,19 +42,19 @@ extern void mysql_yy_set_extra(YY_EXTRA_TYPE* b, yyscan_t yyscanner);
 extern int mysql_yyparse(yyscan_t yyscanner, MySQLParser::Parser* parser_context);
 
 void mysql_yyerror(yyscan_t, MySQLParser::Parser* parser_context, const char* msg) {
-    if (!parser_context) {
-        assert(0 && "Invalid param: Context must be 'this' from 'mysqlparser::parser'.");
-    } else {
-        parser_context->internal_add_error(msg);
-    }
+	if (!parser_context) {
+		assert(0 && "Invalid param: Context must be 'this' from 'mysqlparser::parser'.");
+	} else {
+		parser_context->internal_add_error(msg);
+	}
 }
 
 void mysql_yyerror(MYSQL_YYLTYPE*, yyscan_t, MySQLParser::Parser* parser_context, const char* msg) {
-    if (!parser_context) {
-        assert(0 && "Invalid param: Context must be 'this' from 'mysqlparser::parser'.");
-    } else {
-        parser_context->internal_add_error(msg);
-    }
+	if (!parser_context) {
+		assert(0 && "Invalid param: Context must be 'this' from 'mysqlparser::parser'.");
+	} else {
+		parser_context->internal_add_error(msg);
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -62,66 +62,66 @@ void mysql_yyerror(MYSQL_YYLTYPE*, yyscan_t, MySQLParser::Parser* parser_context
 namespace MySQLParser {
 
 Parser::Parser() : ast_root_(nullptr), scanner_state_(nullptr) {
-    if (mysql_yylex_init_extra(this, &scanner_state_)) {
-        throw std::runtime_error("MySQLParser: Failed to initialize Flex scanner.");
-    }
+	if (mysql_yylex_init_extra(this, &scanner_state_)) {
+		throw std::runtime_error("MySQLParser: Failed to initialize Flex scanner.");
+	}
 }
 
 Parser::~Parser() {
-    if (scanner_state_) {
-        mysql_yylex_destroy(scanner_state_);
-    }
+	if (scanner_state_) {
+		mysql_yylex_destroy(scanner_state_);
+	}
 }
 
 const vector<string>& Parser::get_errors() const {
-    return errors_;
+	return errors_;
 }
 
 const ParserOpts& Parser::get_opts() const {
-    return opts_;
+	return opts_;
 }
 
 unique_ptr<AstNode> Parser::parse(const string_view& sql, const ParserOpts& opts) {
-    // Clear current state before updating with data from new query
-    this->errors_.clear();
-    this->ast_root_.reset();
+	// Clear current state before updating with data from new query
+	this->errors_.clear();
+	this->ast_root_.reset();
 
-    // Update the options to be forwarded as ctx (via 'this')
-    this->opts_ = opts;
+	// Update the options to be forwarded as ctx (via 'this')
+	this->opts_ = opts;
 
-    if (!scanner_state_) {
-        errors_.push_back("MySQLParser: Scanner not initialized.");
-        return nullptr;
-    }
+	if (!scanner_state_) {
+		errors_.push_back("MySQLParser: Scanner not initialized.");
+		return nullptr;
+	}
 
-    YY_BUFFER_STATE buffer_state = mysql_yy_scan_bytes(sql.data(), sql.length(), scanner_state_);
-    if (!buffer_state) {
-        errors_.push_back("MySQLParser: Error setting up scanner buffer for query.");
-        return nullptr;
-    }
+	YY_BUFFER_STATE buffer_state = mysql_yy_scan_bytes(sql.data(), sql.length(), scanner_state_);
+	if (!buffer_state) {
+		errors_.push_back("MySQLParser: Error setting up scanner buffer for query.");
+		return nullptr;
+	}
 
-    // Call mysql_yyparse (function from the C++ compiled .tab.c)
-    int parse_result = mysql_yyparse(scanner_state_, this);
+	// Call mysql_yyparse (function from the C++ compiled .tab.c)
+	int parse_result = mysql_yyparse(scanner_state_, this);
 
-    mysql_yy_delete_buffer(buffer_state, scanner_state_);
+	mysql_yy_delete_buffer(buffer_state, scanner_state_);
 
-    if (parse_result == 0) {
-        return std::move(ast_root_);
-    }
+	if (parse_result == 0) {
+		return std::move(ast_root_);
+	}
 
-    return nullptr;
+	return nullptr;
 }
 
 void Parser::internal_set_ast(AstNode* root) {
-    ast_root_.reset(root);
+	ast_root_.reset(root);
 }
 
 void Parser::internal_add_error(const std::string& msg) {
-    errors_.push_back(msg);
+	errors_.push_back(msg);
 }
 
 void Parser::internal_add_error_at(const std::string& msg, int line, int column) {
-    errors_.push_back("Line " + std::to_string(line) + ", Col " + std::to_string(column) + ": " + msg);
+	errors_.push_back("Line " + std::to_string(line) + ", Col " + std::to_string(column) + ": " + msg);
 }
 
 } // namespace MySQLParser
