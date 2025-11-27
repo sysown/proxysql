@@ -12,6 +12,10 @@ services:
       - CURVER
       - PKG_RELEASE
       - PROXYSQL_BUILD_TYPE
+      - WITHGCOV
+      - NOJEMALLOC
+      - WITHASAN
+      - BLD_NAME
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
 ####################################################################################################
@@ -19,7 +23,7 @@ services:
   centos9_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-centos9-v3.0.0
+    image: proxysql/packaging:build-centos9-v3.0.3
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -32,7 +36,7 @@ services:
   centos9_clang_build:
     extends:
       service: centos9_build
-    image: proxysql/packaging:build-clang-centos9-v3.0.0
+    image: proxysql/packaging:build-clang-centos9-v3.0.3
     environment:
       - PKG_RELEASE=centos9-clang
 
@@ -44,11 +48,39 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  centos10_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-centos10-v3.0.3
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=centos10
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  centos10_clang_build:
+    extends:
+      service: centos10_build
+    image: proxysql/packaging:build-clang-centos10-v3.0.3
+    environment:
+      - PKG_RELEASE=centos10-clang
+
+  centos10_dbg_build:
+    extends:
+      service: centos10_build
+    environment:
+      - PKG_RELEASE=dbg-centos10
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   fedora40_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-fedora40-v3.0.0
+    image: proxysql/packaging:build-fedora40-v3.0.3
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -61,7 +93,7 @@ services:
   fedora40_clang_build:
     extends:
       service: fedora40_build
-    image: proxysql/packaging:build-clang-fedora40-v3.0.0
+    image: proxysql/packaging:build-clang-fedora40-v3.0.3
     environment:
       - PKG_RELEASE=fedora40-clang
 
@@ -76,7 +108,7 @@ services:
   fedora41_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-fedora41-v3.0.0
+    image: proxysql/packaging:build-fedora41-v3.0.3
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -89,7 +121,7 @@ services:
   fedora41_clang_build:
     extends:
       service: fedora41_build
-    image: proxysql/packaging:build-clang-fedora41-v3.0.0
+    image: proxysql/packaging:build-clang-fedora41-v3.0.3
     environment:
       - PKG_RELEASE=fedora41-clang
 
@@ -101,11 +133,39 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  fedora42_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-fedora42-v3.0.3
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=fedora42
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora42_clang_build:
+    extends:
+      service: fedora42_build
+    image: proxysql/packaging:build-clang-fedora42-v3.0.3
+    environment:
+      - PKG_RELEASE=fedora42-clang
+
+  fedora42_dbg_build:
+    extends:
+      service: fedora42_build
+    environment:
+      - PKG_RELEASE=dbg-fedora42
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   debian12_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-debian12-v3.0.0
+    image: proxysql/packaging:build-debian12-v3.0.3
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -117,7 +177,7 @@ services:
   debian12_clang_build:
     extends:
       service: debian12_build
-    image: proxysql/packaging:build-clang-debian12-v3.0.0
+    image: proxysql/packaging:build-clang-debian12-v3.0.3
     environment:
       - PKG_RELEASE=debian12-clang
 
@@ -129,11 +189,38 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  debian13_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-debian13-v3.0.3
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=debian13
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  debian13_clang_build:
+    extends:
+      service: debian13_build
+    image: proxysql/packaging:build-clang-debian13-v3.0.3
+    environment:
+      - PKG_RELEASE=debian13-clang
+
+  debian13_dbg_build:
+    extends:
+      service: debian13_build
+    environment:
+      - PKG_RELEASE=dbg-debian13
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   ubuntu22_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-ubuntu22-v3.0.0
+    image: proxysql/packaging:build-ubuntu22-v3.0.3
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -145,7 +232,7 @@ services:
   ubuntu22_clang_build:
     extends:
       service: ubuntu22_build
-    image: proxysql/packaging:build-clang-ubuntu22-v3.0.0
+    image: proxysql/packaging:build-clang-ubuntu22-v3.0.3
     environment:
       - PKG_RELEASE=ubuntu22-clang
 
@@ -160,7 +247,7 @@ services:
   ubuntu24_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-ubuntu24-v3.0.0
+    image: proxysql/packaging:build-ubuntu24-v3.0.3
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -172,7 +259,7 @@ services:
   ubuntu24_clang_build:
     extends:
       service: ubuntu24_build
-    image: proxysql/packaging:build-clang-ubuntu24-v3.0.0
+    image: proxysql/packaging:build-clang-ubuntu24-v3.0.3
     environment:
       - PKG_RELEASE=ubuntu24-clang
 
@@ -188,7 +275,7 @@ services:
   opensuse15_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-opensuse15-v3.0.0
+    image: proxysql/packaging:build-opensuse15-v3.0.3
     volumes:
       - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -201,7 +288,7 @@ services:
   opensuse15_clang_build:
     extends:
       service: opensuse15_build
-    image: proxysql/packaging:build-clang-opensuse15-v3.0.0
+    image: proxysql/packaging:build-clang-opensuse15-v3.0.3
     environment:
       - PKG_RELEASE=opensuse15-clang
 
@@ -213,11 +300,39 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  opensuse16_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-opensuse16-v3.0.3
+    volumes:
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=opensuse16
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  opensuse16_clang_build:
+    extends:
+      service: opensuse16_build
+    image: proxysql/packaging:build-clang-opensuse16-v3.0.3
+    environment:
+      - PKG_RELEASE=opensuse16-clang
+
+  opensuse16_dbg_build:
+    extends:
+      service: opensuse16_build
+    environment:
+      - PKG_RELEASE=dbg-opensuse16
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   almalinux8_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-almalinux8-v3.0.0
+    image: proxysql/packaging:build-almalinux8-v3.0.3
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -230,7 +345,7 @@ services:
   almalinux8_clang_build:
     extends:
       service: almalinux8_build
-    image: proxysql/packaging:build-clang-almalinux8-v3.0.0
+    image: proxysql/packaging:build-clang-almalinux8-v3.0.3
     environment:
       - PKG_RELEASE=almalinux8-clang
 
@@ -245,7 +360,7 @@ services:
   almalinux9_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-almalinux9-v3.0.0
+    image: proxysql/packaging:build-almalinux9-v3.0.3
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -258,7 +373,7 @@ services:
   almalinux9_clang_build:
     extends:
       service: almalinux9_build
-    image: proxysql/packaging:build-clang-almalinux9-v3.0.0
+    image: proxysql/packaging:build-clang-almalinux9-v3.0.3
     environment:
       - PKG_RELEASE=almalinux9-clang
 
@@ -269,6 +384,33 @@ services:
       - PKG_RELEASE=dbg-almalinux9
       - PROXYSQL_BUILD_TYPE=debug
 
+####################################################################################################
+  almalinux10_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-almalinux10-v3.0.3
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=almalinux10
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  almalinux10_clang_build:
+    extends:
+      service: almalinux10_build
+    image: proxysql/packaging:build-clang-almalinux10-v3.0.3
+    environment:
+      - PKG_RELEASE=almalinux10-clang
+
+  almalinux10_dbg_build:
+    extends:
+      service: almalinux10_build
+    environment:
+      - PKG_RELEASE=dbg-almalinux10
+      - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
 ####################################################################################################

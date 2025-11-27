@@ -6,13 +6,21 @@
 ### when not available, specify GIT_VERSION on commnad line:
 ###
 ### ```
-### export GIT_VERSION=2.x-dev
+### export GIT_VERSION=3.x.y-dev
 ### ```
 
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
     $(error GIT_VERSION is not set)
 endif
+export GIT_VERSION
+
+### NOTES:
+### SOURCE_DATE_EPOCH is used for reproducible builds
+### for details consult https://reproducible-builds.org/docs/source-date-epoch/
+
+SOURCE_DATE_EPOCH ?= $(shell git show -s --format=%ct HEAD || date +%s)
+export SOURCE_DATE_EPOCH
 
 ### NOTES:
 ### to compile without jemalloc, set environment variable NOJEMALLOC=1
@@ -35,7 +43,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 3.0.1
+CURVER ?= 3.0.4
 #export DEBUG
 #export EXTRALINK
 export MAKE
@@ -307,25 +315,25 @@ pkglist: $(REL_ARCH)-pkglist
 
 amd64-%: SYS_ARCH := x86_64
 amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
-amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
-amd64-centos: centos9 centos9-clang centos9-dbg
-amd64-debian: debian12 debian12-clang debian12-dbg
-amd64-fedora: fedora40 fedora40-clang fedora40-dbg fedora41 fedora41-clang fedora41-dbg
+amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg almalinux10 almalinux10-clang almalinux10-dbg
+amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
+amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
+amd64-fedora: fedora40 fedora40-clang fedora40-dbg fedora41 fedora41-clang fedora41-dbg fedora42 fedora42-clang fedora42-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
-	@make -nk amd64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
+	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
 
 arm64-%: SYS_ARCH := aarch64
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
-arm64-almalinux: almalinux8 almalinux9
-arm64-centos: centos9
-arm64-debian: debian12
-arm64-fedora: fedora40 fedora41
+arm64-almalinux: almalinux8 almalinux9 almalinux10
+arm64-centos: centos9 centos10
+arm64-debian: debian12 debian13
+arm64-fedora: fedora40 fedora41 fedora42
 arm64-opensuse: opensuse15
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:
-	@make -nk arm64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
+	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
 
 almalinux%: build-almalinux% ;
 centos%: build-centos% ;
@@ -339,7 +347,7 @@ ubuntu%: build-ubuntu% ;
 .NOTPARALLEL: build-%
 build-%: BLD_NAME=$(patsubst build-%,%,$@)
 build-%: PKG_VERS=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),$(DEB_VERS),$(RPM_VERS))
-build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Po '\-de?bu?g'),-dbg -debug),-dbg,)
+build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Po '\-de?bu?g|\-test|\-tap'),-dbg -debug -test -tap),-dbg,)
 build-%: PKG_NAME=$(firstword $(subst -, ,$(BLD_NAME)))
 build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Po '\-clang'),-clang),-clang,)
 build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(RPM_ARCH))
@@ -347,16 +355,13 @@ build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Po '[a-z]+'),de
 build-%: PKG_FILE=binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND)
 build-%:
 	@echo 'building $@'
-	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) $(MAKE) $(PKG_FILE)
+	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) BLD_NAME=$(BLD_NAME) $(MAKE) $(PKG_FILE)
 
 .NOTPARALLEL: binaries/proxysql%
 binaries/proxysql%:
-	cd deps && ${MAKE} cleanall
-	cd lib && ${MAKE} clean
-	cd src && ${MAKE} clean
-	cd test/tap && ${MAKE} clean
-	cd test/deps && ${MAKE} cleanall
-	find . -not -path "./binaries/*" -not -path "./.git/*" -exec touch -h --date=@`git show -s --format=%ct HEAD` {} \;
+	${MAKE} cleanbuild
+	${MAKE} cleantest
+	find . -not -path "./binaries/*" -not -path "./.git/*" | xargs touch -h --date=@${SOURCE_DATE_EPOCH}
 	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
 	@docker compose -p "${GIT_VERSION/./}" up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
 	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
@@ -372,6 +377,22 @@ clean:
 	cd test/deps && ${MAKE} clean
 	rm -f pkgroot || true
 
+.PHONY: cleandeps
+cleandeps:
+	cd deps && ${MAKE} cleanall
+	cd lib && ${MAKE} clean
+	cd src && ${MAKE} clean
+
+.PHONY: cleandev
+cleandev:
+	cd lib && ${MAKE} clean
+	cd src && ${MAKE} clean
+
+.PHONY: cleantest
+cleantest:
+	cd test/tap && ${MAKE} clean
+	cd test/deps && ${MAKE} cleanall
+
 .PHONY: cleanall
 cleanall:
 	cd deps && ${MAKE} cleanall
@@ -379,9 +400,7 @@ cleanall:
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	cd test/deps && ${MAKE} cleanall
-	rm -f binaries/*deb || true
-	rm -f binaries/*rpm || true
-	rm -f binaries/*id-hash || true
+	rm -f binaries/* || true
 	rm -rf pkgroot || true
 
 .PHONY: cleanbuild
@@ -389,6 +408,7 @@ cleanbuild:
 	cd deps && ${MAKE} cleanall
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
+	rm -rf pkgroot || true
 
 
 ### install targets

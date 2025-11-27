@@ -289,12 +289,9 @@ int configure_mysql_shunning_variables(MYSQL* proxysql_admin) {
 
 int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
 	// Configure Admin variables with lower thresholds
-	MYSQL_QUERY(proxysql_admin, "SET mysql-shun_recovery_time_sec=1");
-	diag("Line:%d running admin query: SET mysql-shun_recovery_time_sec=1", __LINE__);
-
+	MYSQL_QUERY(proxysql_admin, ("SET mysql-shun_recovery_time_sec=" + _TO_S(SHUN_RECOVERY_TIME)).c_str());
 	// Set verbosity up for extra information in ProxySQL log
 	MYSQL_QUERY(proxysql_admin, "SET mysql-hostgroup_manager_verbose=3");
-	diag("Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", __LINE__);
 
 	// Configure the relevant variables for the desired UNSHUNNING behavior
 	if (configure_mysql_shunning_variables(proxysql_admin)) {
@@ -333,6 +330,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 		int shunn_err = shunn_all_servers(proxysql_admin);
 		if (shunn_err) { return EXIT_FAILURE; }
 
+		diag("Sleeping SHUN_RECOVERY_TIME(%d+1)s before server wakeup...", SHUN_RECOVERY_TIME);
+		sleep(SHUN_RECOVERY_TIME + 1);
+
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
 			wakup_target_server(proxysql_mysql, i);
 
@@ -352,6 +352,10 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
 		if (shunn_err) { return EXIT_FAILURE; }
+
+		diag("Sleeping SHUN_RECOVERY_TIME(%d+1)s before server wakeup...", SHUN_RECOVERY_TIME);
+		sleep(SHUN_RECOVERY_TIME + 1);
+
 		diag(" "); // empty line
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
 			wakup_target_server(proxysql_mysql, i);
@@ -372,6 +376,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
 		if (shunn_err) { return EXIT_FAILURE; }
+
+		diag("Sleeping SHUN_RECOVERY_TIME(%d+1)s before server wakeup...", SHUN_RECOVERY_TIME);
+		sleep(SHUN_RECOVERY_TIME + 1);
 
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
 			wakup_target_server(proxysql_mysql, i);

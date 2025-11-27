@@ -15,6 +15,9 @@ using json = nlohmann::json;
 #include <dirent.h>
 #include <libgen.h>
 
+#include <unordered_map>
+#include <string>
+
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else
@@ -46,6 +49,206 @@ using ml_gauge_tuple =
 
 using qc_counter_vector = std::vector<ml_counter_tuple>;
 using qc_gauge_vector = std::vector<ml_gauge_tuple>;
+
+
+#include <functional>
+
+using ValueConverter = std::function<void(const MYSQL_BIND*, unsigned long, std::string&)>;
+
+struct BufferTypeInfo {
+	std::string typeName;
+	ValueConverter converter; // Callback to convert the value.
+};
+
+
+// Helper lambda to convert binary data to a hex string.
+auto binaryToHex = [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+	std::ostringstream oss;
+	oss << "0x";
+	const unsigned char* data = reinterpret_cast<const unsigned char*>(bind->buffer);
+	for (unsigned long i = 0; i < len; i++) {
+		oss << std::setw(2) << std::setfill('0') << std::hex << (int)data[i];
+	}
+	out = oss.str();
+};
+
+static const std::unordered_map<unsigned int, BufferTypeInfo> bufferTypeInfoMap = {
+	{ MYSQL_TYPE_DECIMAL,
+		{ "DECIMAL", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+		}}
+	},
+	{ MYSQL_TYPE_TINY,
+		{ "TINY", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			out = std::to_string(static_cast<int>(*reinterpret_cast<int8_t*>(bind->buffer)));
+		}}
+	},
+	{ MYSQL_TYPE_SHORT,
+		{ "SHORT", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			out = std::to_string(*reinterpret_cast<int16_t*>(bind->buffer));
+		}}
+	},
+	{ MYSQL_TYPE_LONG,
+		{ "LONG", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			out = std::to_string(*reinterpret_cast<int32_t*>(bind->buffer));
+		}}
+	},
+	{ MYSQL_TYPE_FLOAT,
+		{ "FLOAT", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			out = std::to_string(*reinterpret_cast<float*>(bind->buffer));
+		}}
+	},
+	{ MYSQL_TYPE_DOUBLE,
+		{ "DOUBLE", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			out = std::to_string(*reinterpret_cast<double*>(bind->buffer));
+		}}
+	},
+	{ MYSQL_TYPE_NULL,
+		{ "NULL", [](const MYSQL_BIND* /*bind*/, unsigned long /*len*/, std::string &out) {
+			out = "NULL";
+		}}
+	},
+	{ MYSQL_TYPE_TIMESTAMP,
+		{ "TIMESTAMP", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
+		}}
+	},
+	{ MYSQL_TYPE_LONGLONG,
+		{ "LONGLONG", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			out = std::to_string(*reinterpret_cast<int64_t*>(bind->buffer));
+		}}
+	},
+	{ MYSQL_TYPE_INT24,
+		{ "INT24", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			// INT24: stored in 32 bits
+			out = std::to_string(*reinterpret_cast<int32_t*>(bind->buffer));
+		}}
+	},
+	{ MYSQL_TYPE_DATE,
+		{ "DATE", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
+		}}
+	},
+	{ MYSQL_TYPE_TIME,
+		{ "TIME", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
+		}}
+	},
+	{ MYSQL_TYPE_DATETIME,
+		{ "DATETIME", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
+		}}
+	},
+	{ MYSQL_TYPE_YEAR,
+		{ "YEAR", [](const MYSQL_BIND* bind, unsigned long /*len*/, std::string &out) {
+			out = std::to_string(*reinterpret_cast<int16_t*>(bind->buffer));
+		}}
+	},
+	{ MYSQL_TYPE_NEWDATE,
+		{ "NEWDATE", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+		}}
+	},
+	{ MYSQL_TYPE_VARCHAR,
+		{ "VARCHAR", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+		}}
+	},
+	{ MYSQL_TYPE_BIT,
+		{ "BIT", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			// For simplicity, treat BIT as hex.
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_TIMESTAMP2,
+		{ "TIMESTAMP2", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_DATETIME2,
+		{ "DATETIME2", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_TIME2,
+		{ "TIME2", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_JSON,
+		{ "JSON", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+		}}
+	},
+	{ MYSQL_TYPE_NEWDECIMAL,
+		{ "NEWDECIMAL", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+		}}
+	},
+	{ MYSQL_TYPE_ENUM,
+		{ "ENUM", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+		}}
+	},
+	{ MYSQL_TYPE_SET,
+		{ "SET", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+		}}
+	},
+	{ MYSQL_TYPE_TINY_BLOB,
+		{ "TINY_BLOB", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_MEDIUM_BLOB,
+		{ "MEDIUM_BLOB", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_LONG_BLOB,
+		{ "LONG_BLOB", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_BLOB,
+		{ "BLOB", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_VAR_STRING,
+		{ "VAR_STRING", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_STRING,
+		{ "STRING", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	},
+	{ MYSQL_TYPE_GEOMETRY,
+		{ "GEOMETRY", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
+			binaryToHex(bind, len, out);
+		}}
+	}
+};
+
+/*
+static inline std::string getBufferTypeName(unsigned int buffer_type) {
+	auto it = bufferTypeNameMap.find(buffer_type);
+	return (it != bufferTypeNameMap.end()) ? it->second : "unknown";
+}
+*/
+
+static inline std::pair<std::string, std::string> getValueForBind(const MYSQL_BIND* bind, unsigned long len) {
+	auto it = bufferTypeInfoMap.find(bind->buffer_type);
+	std::string convertedValue;
+	if (it != bufferTypeInfoMap.end()) {
+		it->second.converter(bind, len, convertedValue);
+		return { it->second.typeName, convertedValue };
+	}
+	// Fallback if type is not found.
+	return { "unknown", "unknown" };
+}
 
 const std::tuple<qc_counter_vector, qc_gauge_vector>
 ml_metrics_map = std::make_tuple(
@@ -146,7 +349,7 @@ static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t l
 	return len;
 }
 
-MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len) {
+MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len, MySQL_Session *sess_ptr) {
 	thread_id=_thread_id;
 	username=_username;
 	schemaname=_schemaname;
@@ -167,6 +370,7 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	rows_sent=0;
 	client_stmt_id=0;
 	gtid = NULL;
+	session = sess_ptr;
 	errmsg = nullptr;
 	myerrno = 0;
 	free_on_delete = false; // by default, this is false. This because pointers do not belong to this object
@@ -320,6 +524,11 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 		case PROXYSQL_SQLITE_AUTH_QUIT:
 			write_auth(f, sess);
 			break;
+		case PROXYSQL_METADATA:
+			if (mysql_thread___eventslog_format==1) { // format 1 , binary
+				total_bytes=write_query_format_1(f);
+			}
+			break;
 		default:
 			break;
 	}
@@ -447,6 +656,63 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 }
 
+/**
+ * @brief Writes a query event to the given file stream in a specifically encoded format.
+ *
+ * This function assembles and writes a MySQL query event record to the provided std::fstream.
+ * It computes the total byte size of the record by encoding various fields (such as thread ID, username, schema name,
+ * client information, timestamps, and the actual query) and then writes the record in binary format, prefixed by its total length.
+ *
+ * Detailed Process:
+ *   - The function begins by initializing a total_bytes counter, incrementing it by the number of bytes each field will occupy
+ *     after being encoded.
+ *   - It encodes fundamental fields including:
+ *       • Event type (et) encoded in 1 byte.
+ *       • Thread ID, whose encoded length is computed using mysql_encode_length.
+ *       • Username and schema name: their lengths are determined via strlen(), then the lengths are encoded, and finally the raw
+ *         string data is accounted for.
+ *       • Client and server information: similar encoding is applied. For the server details, encoding is conditionally applied only if
+ *         the host id (hid) is not UINT64_MAX.
+ *       • Timestamps (start_time and end_time) along with other numeric fields such as client statement ID, affected_rows, last_insert_id,
+ *         and rows_sent are also encoded based on their variable-length representation.
+ *
+ *   - If a non-standard SQL statement type is detected (specifically, if the event type is PROXYSQL_COM_STMT_EXECUTE),
+ *     additional processing is performed:
+ *       • The function accesses statement execution metadata (stmt_execute_metadata_t) from the current session.
+ *       • It calculates and writes the encoded count of parameters.
+ *       • A null bitmap is constructed to indicate which parameters are NULL, with one bit per parameter.
+ *       • For each parameter, the function writes:
+ *            - The parameter type (2 bytes).
+ *            - The length of the parameter value (using a custom encoding scheme with mysql_encode_length),
+ *              followed by the raw parameter value bytes, which are obtained through a conversion function (getValueForBind)
+ *              producing a string representation.
+ *
+ *   - Before writing the actual data, the total length of the event (total_bytes) is written as a fixed-size 8-byte field.
+ *     Then, each encoded part (event type, field lengths, raw data, and any additional parameters) is sequentially written to the stream.
+ *
+ * Thread Safety & Performance Considerations:
+ *   - The critical write lock (wrlock) for accessing the underlying file or resource is acquired just before writing to disk,
+ *     minimizing the duration for which the resource is locked.
+ *   - The function depends on external helper routines:
+ *       • mysql_encode_length: to determine the number of bytes required to store an integer in a variable-length format.
+ *       • write_encoded_length: to actually write the encoded lengths to the buffer and then to the file stream.
+ *       • getValueForBind: to convert parameter data bound to a query into a string representation.
+ *
+ * @param f[in,out] Pointer to a std::fstream object representing the file stream to write the query event record.
+ *
+ * @return Returns the total size in bytes (as a uint64_t) that was written to the file stream.
+ *
+ * @note The function assumes that the session and associated metadata for prepared statements (stmt_meta) are valid and
+ *       available when processing a COM_STMT_EXECUTE event.
+ *
+ * @warning Ensure that the passed file stream pointer is valid and opened for writing, as no internal checks on the stream's state
+ *          are performed.
+ *
+ * @see mysql_encode_length, write_encoded_length, getValueForBind, stmt_execute_metadata_t, MYSQL_BIND
+ *
+ * Returns:
+ *   The total number of bytes written for the event log.
+ */
 uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	uint64_t total_bytes=0;
 	total_bytes+=1; // et
@@ -473,6 +739,60 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	total_bytes+=mysql_encode_length(query_digest,NULL);
 
 	total_bytes+=mysql_encode_length(query_len,NULL)+query_len;
+
+	// --- Account for extra parameters for COM_STMT_EXECUTE ---
+	// When the event type (et) is PROXYSQL_COM_STMT_EXECUTE:
+	if (et == PROXYSQL_COM_STMT_EXECUTE) {
+		// Validate Session and Statement Metadata:
+		// The code checks whether the session pointer and the current query's statement metadata (stmt_meta)
+		// are non-null to ensure that parameter details are available.
+		if (mysql_thread___eventslog_stmt_parameters > 0 && session != nullptr && session->CurrentQuery.stmt_meta != nullptr) {
+			stmt_execute_metadata_t *meta = session->CurrentQuery.stmt_meta;
+			uint16_t num_params = meta->num_params;
+			// Add bytes for encoded parameter count.
+			uint8_t paramCountLen = mysql_encode_length(num_params, NULL);
+			total_bytes += paramCountLen;
+			// Add bytes for the null bitmap.
+			size_t bitmap_size = (num_params + 7) / 8;
+			total_bytes += bitmap_size;
+			// For each parameter:
+			for (uint16_t i = 0; i < num_params; i++) {
+				// 2 bytes for parameter type.
+				total_bytes += sizeof(uint16_t);
+				std::string convertedValue;
+				const MYSQL_BIND *bind = meta->binds ? &meta->binds[i] : nullptr;
+				if (bind != nullptr && !(meta->is_nulls && meta->is_nulls[i])) {
+					unsigned long len = meta->lengths ? meta->lengths[i] : 0;
+					auto bt = bind->buffer_type;
+					switch (bt) {
+						case MYSQL_TYPE_TIMESTAMP:
+						case MYSQL_TYPE_DATE:
+						case MYSQL_TYPE_TIME:
+						case MYSQL_TYPE_DATETIME:
+							len = sizeof(MYSQL_TIME);
+							break;
+						default:
+							break;
+					}
+					// Use getValueForBind() to produce a string representation.
+					auto[valType, convVal] = getValueForBind(bind, len);
+					convertedValue = convVal;
+				}
+				uint64_t value_len = convertedValue.size();
+				// Add bytes for the encoded length of the value.
+				uint8_t valueLenEnc = mysql_encode_length(value_len, NULL);
+				total_bytes += valueLenEnc;
+				// Add the raw bytes of the parameter value.
+				total_bytes += value_len;
+			}
+		} else {
+			// Deterministic binary logging: always report 0 parameters.
+			uint16_t num_params = 0;
+			uint8_t paramCountLen = mysql_encode_length(num_params, buf);
+			total_bytes += paramCountLen;
+		}
+	}
+
 
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
@@ -553,9 +873,142 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 		f->write(query_ptr,query_len);
 	}
 
+	// --- Now write the parameters block for COM_STMT_EXECUTE ---
+	// This section ensures that all parameter-related information for COM_STMT_EXECUTE events are logged
+	// in a consistent and efficiently decodable format. The careful handling of variable-length encoded values,
+	// null bitmap construction, and per-parameter processing facilitates accurate reconstruction of the original
+	// query parameters during later analysis.
+	if (et == PROXYSQL_COM_STMT_EXECUTE) {
+		// Ensure stmt_meta is available.
+		// Validate Session and Statement Metadata:
+		// The code checks whether the session pointer and the current query's statement metadata (stmt_meta)
+		// are non-null to ensure that parameter details are available.
+		if (mysql_thread___eventslog_stmt_parameters > 0 && session != nullptr && session->CurrentQuery.stmt_meta != nullptr) {
+			stmt_execute_metadata_t *meta = session->CurrentQuery.stmt_meta;
+			// Write the number of parameters.
+			// Writing the Encoded Parameter Count:
+			// - Retrieves the number of parameters (num_params) from stmt_meta.
+			// - Encodes the parameter count using mysql_encode_length() and writes the resulting bytes.
+			uint16_t num_params = meta->num_params;
+			uint8_t paramCountLen = mysql_encode_length(num_params, buf);
+			write_encoded_length(buf, num_params, paramCountLen, buf[0]);
+			f->write((char *)buf, paramCountLen);
+
+			if (num_params) {
+				// Build and write the null bitmap.
+				// Constructing and Writing the Null Bitmap:
+				// - Calculates the required bitmap size as (num_params + 7) / 8 bytes where each bit represents
+				//   whether a parameter value is null.
+				// - Iterates over each parameter, setting the corresponding bit in the bitmap if the parameter is null.
+				// - Writes the complete null bitmap to the file stream.
+				size_t bitmap_size = (num_params + 7) / 8;  // one bit per parameter
+				std::vector<unsigned char> null_bitmap(bitmap_size, 0);
+				for (uint16_t i = 0; i < num_params; i++) {
+					if (meta->is_nulls && meta->is_nulls[i]) {
+						null_bitmap[i / 8] |= (1 << (i % 8));
+					}
+				}
+				f->write(reinterpret_cast<char*>(null_bitmap.data()), bitmap_size);
+
+				// For each parameter, write:
+				// - Parameter type as 2 bytes.
+				// - Encoded parameter value (first length, then raw bytes)
+				for (uint16_t i = 0; i < num_params; i++) {
+					// - Writes the parameter type:
+					//   * Retrieves a 2-byte parameter type from the MYSQL_BIND structure associated with the current parameter.
+					//   * Writes these 2 bytes directly to the file stream.
+					const MYSQL_BIND *bind = meta->binds ? &meta->binds[i] : nullptr;
+					uint16_t param_type = (bind ? bind->buffer_type : 0);
+					// Write parameter type (2 bytes).
+					f->write(reinterpret_cast<char*>(&param_type), sizeof(uint16_t));
+
+					// - Logging the Parameter Value:
+					//   * If the parameter is not null (as determined by the null bitmap), the code uses getValueForBind() to
+					//       obtain a string representation of the parameter value.
+					//   * Determines the length of this converted value.
+					// * Encodes the length using mysql_encode_length() and writes the encoded length.
+					// * Finally, writes the raw bytes representing the parameter value.
+					std::string convertedValue;
+					if (bind && bind->buffer && !(meta->is_nulls && meta->is_nulls[i])) {
+						unsigned long len = meta->lengths ? meta->lengths[i] : 0;
+						auto bt = bind->buffer_type;
+						switch (bt) {
+							case MYSQL_TYPE_TIMESTAMP:
+							case MYSQL_TYPE_DATE:
+							case MYSQL_TYPE_TIME:
+							case MYSQL_TYPE_DATETIME:
+								len = sizeof(MYSQL_TIME);
+								break;
+							default:
+								break;
+						}
+						auto[valType, convVal] = getValueForBind(bind, len);
+						convertedValue = convVal;
+					} else {
+						convertedValue = "";
+					}
+					// Write the length of the parameter value.
+					uint64_t value_len = convertedValue.size();
+					uint8_t valueLenEnc = mysql_encode_length(value_len, buf);
+					write_encoded_length(buf, value_len, valueLenEnc, buf[0]);
+					f->write((char *)buf, valueLenEnc);
+					// Write the parameter value bytes.
+					if (value_len > 0) {
+						f->write(convertedValue.data(), value_len);
+					}
+				}
+			}
+		} else {
+			// Deterministic binary logging: always report 0 parameters.
+			uint16_t num_params = 0;
+			uint8_t paramCountLen = mysql_encode_length(num_params, buf);
+			write_encoded_length(buf, num_params, paramCountLen, buf[0]);
+			f->write((char *)buf, paramCountLen);
+		}
+	}
+
 	return total_bytes;
 }
 
+/**
+ * @brief Writes the MySQL event details in JSON format to a file stream.
+ *
+ * This method generates a JSON object containing various details about the MySQL event,
+ * including query information, timestamps, execution metadata, error information, and
+ * performance metrics. The resulting JSON string is then written to the provided file stream.
+ *
+ * The JSON object includes the following keys (when applicable):
+ * - "hostgroup_id": The hostgroup identifier if set; otherwise, it defaults to -1.
+ * - "thread_id": The identifier of the thread where the event was logged.
+ * - "event": A string representing the type of event (e.g., "COM_STMT_EXECUTE", "COM_STMT_PREPARE", or "COM_QUERY").
+ * - "username": The username associated with the event.
+ * - "schemaname": The name of the schema related to the event.
+ * - "client": The client information.
+ * - "server": The server details, only logged if the hostgroup ID is valid.
+ * - "rows_affected": Number of rows affected by the query, logged if related data is present.
+ * - "last_insert_id": The last insert identifier if it is non-zero.
+ * - "rows_sent": The number of rows sent in the response.
+ * - "last_gtid": The last GTID (Global Transaction Identifier) if it is available.
+ * - "errno": The error number associated with the event.
+ * - "error": A string describing the error message, if one exists.
+ * - "query": The full SQL query associated with the event, constructed from a pointer and length.
+ * - "starttime_timestamp_us": The event start time in microseconds.
+ * - "starttime": Human-readable start time with microseconds precision.
+ * - "endtime_timestamp_us": The event end time in microseconds.
+ * - "endtime": Human-readable end time with microseconds precision.
+ * - "duration_us": The duration of the event in microseconds.
+ * - "digest": A hexadecimal string representation of the query digest.
+ * - "client_stmt_id": Identifier for the client statement (logged for prepared or executed statements), if present.
+ *
+ * Additionally, for executed statements (PROXYSQL_COM_STMT_EXECUTE), if session data is available,
+ * prepared statement parameters and added to the JSON.
+ *
+ * The generated JSON is dumped into the given file stream with error replacement settings to ensure
+ * proper serialization even in the presence of encoding errors.
+ *
+ * @param[out] f Pointer to a std::fstream where the JSON string will be written.
+ * @return uint64_t Always returns 0, as the current implementation does not compute total bytes written.
+ */
 uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	json j = {};
 	uint64_t total_bytes=0;
@@ -647,6 +1100,13 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
 		j["client_stmt_id"] = client_stmt_id;
 	}
+	if (et == PROXYSQL_COM_STMT_EXECUTE) {
+		if (session != nullptr) {
+			if (mysql_thread___eventslog_stmt_parameters != 0) {
+				extractStmtExecuteMetadataToJson(j);
+			}
+		}
+	}
 
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
@@ -657,6 +1117,49 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	return total_bytes; // always 0
 }
 
+void MySQL_Event::extractStmtExecuteMetadataToJson(json &j) {
+	if (session == nullptr) {
+		return;
+	}
+	if (et != PROXYSQL_COM_STMT_EXECUTE) {
+		return;
+	}
+	if (session->CurrentQuery.stmt_info == nullptr) {
+		return;
+	}
+	if (session->CurrentQuery.stmt_meta == nullptr) {
+		return;
+	}
+
+	stmt_execute_metadata_t *meta = session->CurrentQuery.stmt_meta;
+
+	// Create a JSON vector of objects each with "type" and "value"
+	json jparams = json::array();
+	for (uint16_t i = 0; i < meta->num_params; i++) {
+		json jparam;
+		// Check if parameter is NULL
+		if (meta->is_nulls && meta->is_nulls[i]) {
+			jparam["type"] = "NULL";
+			jparam["value"] = nullptr;
+		} else {
+			// Extract the MYSQL_BIND for this parameter.
+			MYSQL_BIND *bind = meta->binds ? &meta->binds[i] : nullptr;
+			if (bind && bind->buffer) {
+				// Use the length in meta->lengths[i] if available.
+				unsigned long len = meta->lengths ? meta->lengths[i] : 0;
+				auto[valType, convertedValue] = getValueForBind(bind, len);
+				jparam["type"] = valType;
+				jparam["value"] = convertedValue;
+			} else {
+				jparam["type"] = "unknown";
+				jparam["value"] = nullptr;
+			}
+		}
+		jparams.push_back(jparam);
+	}
+	j["parameters"] = jparams;
+
+}
 extern MySQL_Query_Processor* GloMyQPro;
 
 //MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
@@ -778,6 +1281,26 @@ void MySQL_Logger::events_open_log_unlocked() {
 	try {
 		events.logfile->open(filen , std::ios::out | std::ios::binary);
 		proxy_info("Starting new mysql event log file %s\n", filen);
+		if (mysql_thread___eventslog_format == 1) {
+			// create a new event, type PROXYSQL_METADATA, that writes the ProxySQL version as part of the payload
+			json j = {};
+			j["version"] = string(PROXYSQL_VERSION);
+			string msg = j.dump();
+			MySQL_Event metaEvent(
+				PROXYSQL_METADATA,    // event type for metadata
+				0,                    // thread_id (0 for metadata events)
+				(char*)msg.c_str(),   // using "metadata" as the username
+				(char*)"",            // empty schemaname
+				0,                    // start_time (current time)
+				0,                    // end_time (current time)
+				0,                    // query_digest not used for metadata
+				(char *)"",           // client field holds the version string
+				0,                    // length of version string
+				nullptr               // no session associated
+			);
+			metaEvent.set_query((char *)"",0);
+			metaEvent.write(events.logfile, nullptr);
+		}
 	}
 	catch (const std::ofstream::failure&) {
 		proxy_error("Error creating new mysql event log file %s\n", filen);
@@ -940,7 +1463,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
 		query_digest,
-		ca, cl
+		ca, cl, sess
 	);
 	char *c = NULL;
 	int ql = 0;

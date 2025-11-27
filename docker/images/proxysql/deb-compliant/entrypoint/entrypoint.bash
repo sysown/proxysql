@@ -25,25 +25,27 @@ echo "==> Building"
 git config --system --add safe.directory '/opt/proxysql'
 cd /opt/proxysql
 echo "==> ProxySQL '$(git describe --long --abbrev=7)'"
-#export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
-#echo "==> Setting SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
-#find /opt/proxysql -not -path "/opt/proxysql/binaries/*" -exec touch -h --date=@${SOURCE_DATE_EPOCH} {} \;
+export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+echo "==> Setting SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
+# touch is expensive, do it before, outside of container
+#find . -not -path "./binaries/*" -not -path "./.git/*" | xargs touch -h --date=@${SOURCE_DATE_EPOCH}
 
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
 	deps_target="build_deps"
 	build_target=""
+elif [[ ${BLD_NAME} =~ \-test|\-tap ]]; then
+	deps_target="build_deps"
+	build_target="build_tap_test_debug"
 else
 	deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
-#${MAKE} cleanbuild
-${MAKE} ${MAKEOPT} "${deps_target}"
 
-if [[ -z ${build_target} ]] ; then
-	${MAKE} ${MAKEOPT}
-else
-	${MAKE} ${MAKEOPT} "${build_target}"
-fi
+# clean is expensive, do it before, outside of container
+#${MAKE} cleanbuild
+${MAKE} ${MAKEOPT} ${deps_target}
+${MAKE} ${MAKEOPT} ${build_target}
+
 touch /opt/proxysql/src/proxysql
 
 # Prepare package files and build DEB

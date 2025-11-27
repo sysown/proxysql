@@ -2,10 +2,10 @@
 #define __PROXYSQL_UTILS_H
 
 #include <cstdarg>
-#include <functional>
 #include <type_traits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -13,7 +13,6 @@
 #include <sys/resource.h>
 #include <assert.h>
 
-#include "sqlite3db.h"
 #include "../deps/json/json.hpp"
 
 #ifndef ProxySQL_Checksum_Value_LENGTH
@@ -203,6 +202,19 @@ int wexecvp(
  */
 uint64_t get_timestamp_us();
 
+ /**
+  * @brief Converts a string to its hexadecimal representation.
+  * @param str The input string to convert.
+  * @return The hexadecimal representation of the input string. Empty for empty input.
+  */
+std::string hex(const std::string_view& str);
+/**
+ * @brief Converts a hexadecimal string to its original string representation.
+ * @param hex The hexadecimal string to convert.
+ * @return The original string representation of the input hexadecimal string. Empty for empty input.
+ */
+std::string unhex(const std::string_view& hex);
+
 /**
  * @brief Helper function to replace all the occurrences in a string of a matching substring in favor
  *   of another string.
@@ -307,7 +319,9 @@ struct free_deleter {
 template <typename T>
 using mf_unique_ptr = std::unique_ptr<T, free_deleter>;
 
-static inline void set_thread_name(const char name[16], const bool en = true) {
+template<std::size_t LEN>
+static inline void set_thread_name(const char(&name)[LEN], const bool en = true) {
+	static_assert(LEN < 17, "Thread name must not exceed 16 characters");
 	if (en == false) {
 		return;
 	}

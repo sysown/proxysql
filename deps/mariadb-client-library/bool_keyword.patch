@@ -1,0 +1,44 @@
+--- include/ma_global.h	2023-11-01 10:28:04.000000000 +0000
++++ include/ma_global.h	2025-10-02 07:54:12.969658934 +0000
+@@ -684,7 +684,7 @@
+ typedef char		my_bool; /* Small bool */
+ typedef unsigned long long my_ulonglong;
+ #if !defined(bool) && !defined(bool_defined) && (!defined(HAVE_BOOL) || !defined(__cplusplus))
+-typedef char		bool;	/* Ordinary boolean values 0 1 */
++typedef char		bbool;	/* Ordinary boolean values 0 1 */
+ #endif
+ 	/* Macros for converting *constants* to the right type */
+ #define INT8(v)		(int8) (v)
+diff -ru mariadb-connector-c-3.3.8-src.O/unittest/libmariadb/ssl.c mariadb-connector-c-3.3.8-src/unittest/libmariadb/ssl.c
+--- unittest/libmariadb/ssl.c	2023-11-01 10:28:04.000000000 +0000
++++ unittest/libmariadb/ssl.c	2025-10-02 07:54:18.398535220 +0000
+@@ -1238,7 +1238,7 @@
+ static int test_mdev14101(MYSQL *my __attribute__((unused)))
+ {
+   struct {
+-    bool do_yassl;
++    bbool do_yassl;
+     const char *opt_tls_version;
+     const char *expected;
+   } combinations[]= {
+@@ -1251,9 +1251,9 @@
+ 
+   int i;
+ #ifdef HAVE_SCHANNEL
+-  bool skip_tlsv12= 1;
++  bbool skip_tlsv12= 1;
+ #else
+-  bool skip_tlsv12= !have_openssl;
++  bbool skip_tlsv12= !have_openssl;
+ #endif
+ 
+ #if defined(HAVE_OPENSSL) && defined(TLS1_3_VERSION)
+@@ -1264,7 +1264,7 @@
+   for (i=0; combinations[i].expected; i++)
+   {
+     MYSQL *mysql;
+-    bool val=1;
++    bbool val=1;
+     char *tls_version;
+ 
+     if (!combinations[i].do_yassl && skip_tlsv12)

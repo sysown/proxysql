@@ -24,6 +24,7 @@ static char* commands_counters_desc[MYSQL_COM_QUERY___NONE] = {
 	[MYSQL_COM_QUERY_BEGIN] = (char*)"BEGIN",
 	[MYSQL_COM_QUERY_CALL] = (char*)"CALL",
 	[MYSQL_COM_QUERY_CHANGE_MASTER] = (char*)"CHANGE_MASTER",
+	[MYSQL_COM_QUERY_CHANGE_REPLICATION_SOURCE] = (char*)"MYSQL_COM_QUERY_CHANGE_REPLICATION_SOURCE",
 	[MYSQL_COM_QUERY_COMMIT] = (char*)"COMMIT",
 	[MYSQL_COM_QUERY_CREATE_DATABASE] = (char*)"CREATE_DATABASE",
 	[MYSQL_COM_QUERY_CREATE_INDEX] = (char*)"CREATE_INDEX",
@@ -55,7 +56,9 @@ static char* commands_counters_desc[MYSQL_COM_QUERY___NONE] = {
 	[MYSQL_COM_QUERY_RELEASE_SAVEPOINT] = (char*)"RELEASE_SAVEPOINT",
 	[MYSQL_COM_QUERY_RENAME_TABLE] = (char*)"RENAME_TABLE",
 	[MYSQL_COM_QUERY_RESET_MASTER] = (char*)"RESET_MASTER",
+	[MYSQL_COM_QUERY_RESET_BINARY_LOGS_AND_GTIDS] = (char*)"RESET_BINARY_LOGS_AND_GTIDS",
 	[MYSQL_COM_QUERY_RESET_SLAVE] = (char*)"RESET_SLAVE",
+	[MYSQL_COM_QUERY_RESET_REPLICA] = (char*)"RESET_REPLICA",
 	[MYSQL_COM_QUERY_REPLACE] = (char*)"REPLACE",
 	[MYSQL_COM_QUERY_REVOKE] = (char*)"REVOKE",
 	[MYSQL_COM_QUERY_ROLLBACK] = (char*)"ROLLBACK",
@@ -263,6 +266,10 @@ __remove_paranthesis:
 				ret = MYSQL_COM_QUERY_CHANGE_MASTER;
 				break;
 			}
+			if (!strcasecmp("REPLICATION", token)) {
+				ret = MYSQL_COM_QUERY_CHANGE_REPLICATION_SOURCE;
+				break;
+			}
 			break;
 		}
 		if (!strcasecmp("COMMIT", token)) { // COMMIT
@@ -442,8 +449,16 @@ __remove_paranthesis:
 				ret = MYSQL_COM_QUERY_RESET_MASTER;
 				break;
 			}
+			if (!strcasecmp("BINARY", token)) {
+				ret = MYSQL_COM_QUERY_RESET_BINARY_LOGS_AND_GTIDS;
+				break;
+			}
 			if (!strcasecmp("SLAVE", token)) {
 				ret = MYSQL_COM_QUERY_RESET_SLAVE;
+				break;
+			}
+			if (!strcasecmp("REPLICA", token)) {
+				ret = MYSQL_COM_QUERY_RESET_REPLICA;
 				break;
 			}
 			break;

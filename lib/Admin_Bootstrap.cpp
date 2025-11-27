@@ -520,6 +520,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	bool admindb_file_exists=Proxy_file_exists(GloVars.admindb);
 
 	configdb=new SQLite3DB();
+	if (access(GloVars.admindb, F_OK) == 0) {
+		if (access(GloVars.admindb, W_OK) != 0) {
+			proxy_error("Database file '%s' exists but is not writable\n", GloVars.admindb);
+			exit(EXIT_SUCCESS);
+		}
+	}
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	// Fully synchronous is not required. See to #1055
 	// https://sqlite.org/pragma.html#pragma_synchronous
@@ -682,6 +688,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_free_connections", STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_users", STATS_SQLITE_TABLE_PGSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_processlist", STATS_SQLITE_TABLE_PGSQL_PROCESSLIST);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_stat_activity", STATS_SQLITE_TABLE_PGSQL_STAT_ACTIVITY);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_errors", STATS_SQLITE_TABLE_PGSQL_ERRORS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_errors_reset", STATS_SQLITE_TABLE_PGSQL_ERRORS_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_client_host_cache", STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE);
@@ -690,6 +697,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_commands_counters", STATS_SQLITE_TABLE_PGSQL_COMMANDS_COUNTERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_query_digest_reset", STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_prepared_statements_info", STATS_SQLITE_TABLE_PGSQL_PREPARED_STATEMENTS_INFO);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
@@ -719,6 +727,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	// upgrade restapi_routes if needed (upgrade from previous version)
 	disk_upgrade_rest_api_routes();
+
+	// upgrade pgsql_replication_hostgroups if needed (upgrade from previous version)
+	disk_upgrade_pgsql_replication_hostgroups();
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);
@@ -802,22 +813,31 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial || admindb_file_exists==false) { // see #617
 		if (GloVars.configfile_open) {
-			proxysql_config().Read_MySQL_Servers_from_configfile();
-			proxysql_config().Read_MySQL_Users_from_configfile();
+			// ignore validation errors during init
+			std::string e;
+
+			proxysql_config().Read_MySQL_Servers_from_configfile(e);
+			proxysql_config().Read_MySQL_Users_from_configfile(e);
 			proxysql_config().Read_MySQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("admin");
 			proxysql_config().Read_Global_Variables_from_configfile("mysql");
 
-			proxysql_config().Read_PgSQL_Servers_from_configfile();
-			proxysql_config().Read_PgSQL_Users_from_configfile();
+			proxysql_config().Read_PgSQL_Servers_from_configfile(e);
+			proxysql_config().Read_PgSQL_Users_from_configfile(e);
 			proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 
 			proxysql_config().Read_Scheduler_from_configfile();
 			proxysql_config().Read_Restapi_from_configfile();
-			proxysql_config().Read_ProxySQL_Servers_from_configfile();
+			proxysql_config().Read_ProxySQL_Servers_from_configfile(e);
 			__insert_or_replace_disktable_select_maintable();
 		}
+	}
+
+	if (admindb_file_exists && GloVars.config_file) {
+		proxy_info("Ignoring configuration file at %s\n", GloVars.config_file);
+		proxy_info("Loading configuration from the config DB (%s) as it has higher precedence over the config file.\n", GloVars.admindb);
+		proxy_info("NOTE: Changes to %s will be ignored while the config DB exists. For more information, refer: https://proxysql.com/documentation/configuring-proxysql\n", GloVars.config_file);
 	}
 
 	/**

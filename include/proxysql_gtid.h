@@ -2,6 +2,7 @@
 #define PROXYSQL_GTID
 // highly inspired by libslave
 // https://github.com/vozbu/libslave/
+#include <string>
 #include <unordered_map>
 #include <list>
 #include <utility>

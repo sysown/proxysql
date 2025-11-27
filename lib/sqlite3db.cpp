@@ -260,6 +260,26 @@ int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 	return rc;
 }
 
+void stmt_deleter_t::operator()(sqlite3_stmt* x) const {
+	proxy_sqlite3_finalize(x);
+}
+
+std::pair<int,stmt_unique_ptr> SQLite3DB::prepare_v2(const char* query) {
+	int rc { 0 };
+	sqlite3_stmt* stmt { nullptr };
+
+	do {
+		rc = (*proxy_sqlite3_prepare_v2)(db, query, -1, &stmt, nullptr);
+
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {
+			struct timespec ts { .tv_sec = 0, .tv_nsec = USLEEP_SQLITE_LOCKED * 1000 };
+			nanosleep(&ts, nullptr);
+		}
+	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
+
+	return { rc, stmt_unique_ptr(stmt) };
+}
+
 /**
  * @brief Executes a SQL statement and returns the result set.
  * 
@@ -988,6 +1008,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_get_autocommit = NULL;
 	proxy_sqlite3_free = NULL;
 	proxy_sqlite3_status = NULL;
+	proxy_sqlite3_status64 = NULL;
 	proxy_sqlite3_changes = NULL;
 	proxy_sqlite3_step = NULL;
 	proxy_sqlite3_shutdown = NULL;
@@ -1066,6 +1087,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_get_autocommit = sqlite3_get_autocommit;
 		proxy_sqlite3_free = sqlite3_free;
 		proxy_sqlite3_status = sqlite3_status;
+		proxy_sqlite3_status64 = sqlite3_status64;
 		proxy_sqlite3_changes = sqlite3_changes;
 		proxy_sqlite3_step = sqlite3_step;
 		proxy_sqlite3_shutdown = sqlite3_shutdown;
@@ -1094,6 +1116,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_get_autocommit);
 	assert(proxy_sqlite3_free);
 	assert(proxy_sqlite3_status);
+	assert(proxy_sqlite3_status64);
 	assert(proxy_sqlite3_changes);
 	assert(proxy_sqlite3_step);
 	assert(proxy_sqlite3_shutdown);

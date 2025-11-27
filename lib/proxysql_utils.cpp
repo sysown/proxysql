@@ -19,6 +19,7 @@
 
 using std::function;
 using std::string;
+using std::string_view;
 using std::unique_ptr;
 using std::vector;
 
@@ -120,6 +121,35 @@ uint64_t get_timestamp_us() {
 	uint64_t start_timestamp = (1000000ull * start_tv.tv_sec) + start_tv.tv_usec;
 
 	return start_timestamp;
+}
+
+string hex(const string_view& str) {
+	std::ostringstream hex_stream;
+
+	 for (unsigned char c : str) {
+		hex_stream << std::hex << std::setfill('0') << std::setw(2) <<
+			std::uppercase << static_cast<uint64_t>(c);
+	}
+
+	return hex_stream.str();
+}
+
+string unhex(const string_view& hex) {
+	if (hex.size() % 2 || hex.size() == 0) { return {}; };
+
+	string result {};
+
+	for (size_t i = 0; i < hex.size() - 1; i += 2) {
+		string hex_char { string { hex[i] } + hex[i+1] };
+		uint64_t char_val { 0 };
+
+		std::istringstream stream { hex_char };
+		stream >> std::hex >> char_val;
+
+		result += string { static_cast<char>(char_val) };
+	}
+
+	return result;
 }
 
 /**

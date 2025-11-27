@@ -44,6 +44,7 @@ class ProxySQL_Poll {
 	ProxySQL_Poll();
 	~ProxySQL_Poll();
 	void add(uint32_t _events, int _fd, T *_myds, unsigned long long sent_time);
+	void update_fd_at_index(unsigned int idx, int _fd);
 	void remove_index_fast(unsigned int i);
 	int find_index(int fd);
 };
