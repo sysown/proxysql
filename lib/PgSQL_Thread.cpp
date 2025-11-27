@@ -3913,7 +3913,6 @@ void PgSQL_Thread::refresh_variables() {
 
 	variables.query_cache_stores_empty_result = (bool)GloPTH->get_variable_int((char*)"query_cache_stores_empty_result");
 
-	pgsql_thread___enable_load_data_local_infile = (bool)GloPTH->get_variable_int((char*)"enable_load_data_local_infile");
 	GloPTH->wrunlock();
 	pthread_mutex_unlock(&GloVars.global.ext_glopth_mutex);
 }
