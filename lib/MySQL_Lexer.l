@@ -61,6 +61,7 @@ union MYSQL_YYSTYPE;
 	"SET"                 { return TOKEN_SET; }
 	"NAMES"               { return TOKEN_NAMES; }
 	"CHARACTER"           { return TOKEN_CHARACTER; }
+	"CHARSET"             { return TOKEN_CHARSET; }
 	"GLOBAL"              { return TOKEN_GLOBAL; }
 	"SESSION"             { return TOKEN_SESSION; }
 	"PERSIST"             { return TOKEN_PERSIST; }

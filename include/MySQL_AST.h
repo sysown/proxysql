@@ -11,6 +11,9 @@ namespace MySQLParser {
 enum class NodeType {
 	NODE_UNKNOWN,
 	NODE_COMMAND,               // General command like QUIT
+	NODE_INPUT_STATEMENT,
+	NODE_EMPTY_STATEMENT,       // Empty statement
+	NODE_INPUT_STATEMENT_LIST,  // Entry parsing point
 	NODE_SELECT_STATEMENT,
 	NODE_INSERT_STATEMENT,
 	NODE_DELETE_STATEMENT,
@@ -30,11 +33,10 @@ enum class NodeType {
 	NODE_SYSTEM_VARIABLE,         // e.g., @@global.var
 	NODE_VARIABLE_SCOPE,          // GLOBAL, SESSION, PERSIST, etc.
 	NODE_EXPR,                    // Placeholder for more complex expressions (and functions)
-	NODE_SIMPLE_EXPRESSION,       // More specific expression type
-	NODE_INTERVAL_EXPRESSION,     // More specific expression type
 	NODE_AGGREGATE_FUNCTION_CALL, // For COUNT, SUM, AVG etc.
 	NODE_SET_NAMES,
 	NODE_SET_CHARSET,
+	NODE_SET_TRANSACTION,
 	NODE_DELETE_OPTIONS,        // LOW_PRIORITY, QUICK, IGNORE for DELETE
 	NODE_TABLE_NAME_LIST,       // For multi-table DELETE or other lists of tables
 	NODE_FROM_CLAUSE,
@@ -104,10 +106,6 @@ enum class NodeType {
 	NODE_SHOW_OPTION_FIELDS,    // For SHOW ... FIELDS
 	NODE_SHOW_TARGET_DATABASES, // For SHOW DATABASES
 	NODE_TABLE_SPECIFICATION,   // For FROM table_name in SHOW FIELDS
-
-	// Added for IS NULL / IS NOT NULL
-	NODE_IS_NULL_EXPRESSION,
-	NODE_IS_NOT_NULL_EXPRESSION
 };
 
 struct AstNode;
@@ -129,9 +127,17 @@ struct AstNode {
 	 */
 	std::string value;
 	/**
+	 * @brief Stores a special representation for the node.
+	 * @details When performing node processing, we try to optimize allocation, so we favor accessing already
+	 *  allocated memory instead of copying. If during processing nodes require special representations, those
+	 *  allocations are stored here. This way node values can be uniformly exposed as 'string_views' (or
+	 *  'const char*'), no matter the internal storage.
+	 */
+	std::string repr;
+	/**
 	 * @brief The child nodes of this AST node.
 	 */
-	std::vector<AstNode*> children;
+	std::vector<AstNode*> children {};
 	/**
 	 * @brief The starting position of the value in the source code.
 	 */
@@ -191,6 +197,9 @@ struct AstNode {
 inline std::string to_string(NodeType t) {
 	if (t == NodeType::NODE_UNKNOWN) { return "UNKNOWN"; }
 	else if (t == NodeType::NODE_COMMAND) { return "COMMAND"; }
+	else if (t == NodeType::NODE_INPUT_STATEMENT) { return "INPUT_STATEMENT"; }
+	else if (t == NodeType::NODE_EMPTY_STATEMENT) { return "EMPTY_STATEMENT"; }
+	else if (t == NodeType::NODE_INPUT_STATEMENT_LIST) { return "INPUT_STATEMENT_LIST"; }
 	else if (t == NodeType::NODE_SELECT_STATEMENT) { return "SELECT_STMT"; }
 	else if (t == NodeType::NODE_INSERT_STATEMENT) { return "INSERT_STMT"; }
 	else if (t == NodeType::NODE_DELETE_STATEMENT) { return "DELETE_STMT"; }
@@ -210,11 +219,10 @@ inline std::string to_string(NodeType t) {
 	else if (t == NodeType::NODE_SYSTEM_VARIABLE) { return "SYSTEM_VAR"; }
 	else if (t == NodeType::NODE_VARIABLE_SCOPE) { return "VAR_SCOPE"; }
 	else if (t == NodeType::NODE_EXPR) { return "EXPR"; }
-	else if (t == NodeType::NODE_SIMPLE_EXPRESSION) { return "SIMPLE_EXPRESSION"; }
-	else if (t == NodeType::NODE_INTERVAL_EXPRESSION) { return "INTERVAL_EXPRESSION"; }
 	else if (t == NodeType::NODE_AGGREGATE_FUNCTION_CALL) { return "AGGREGATE_FUNC_CALL"; }
 	else if (t == NodeType::NODE_SET_NAMES) { return "SET_NAMES"; }
 	else if (t == NodeType::NODE_SET_CHARSET) { return "SET_CHARSET"; }
+	else if (t == NodeType::NODE_SET_TRANSACTION) { return "SET_TRANSACTION"; }
 	else if (t == NodeType::NODE_DELETE_OPTIONS) { return "DELETE_OPTIONS"; }
 	else if (t == NodeType::NODE_TABLE_NAME_LIST) { return "TABLE_NAME_LIST"; }
 	else if (t == NodeType::NODE_FROM_CLAUSE) { return "FROM_CLAUSE"; }
@@ -271,8 +279,6 @@ inline std::string to_string(NodeType t) {
 	else if (t == NodeType::NODE_SHOW_OPTION_FIELDS) { return "SHOW_OPT_FIELDS"; }
 	else if (t == NodeType::NODE_SHOW_TARGET_DATABASES) { return "SHOW_TARGET_DB"; }
 	else if (t == NodeType::NODE_TABLE_SPECIFICATION) { return "TABLE_SPEC"; }
-	else if (t == NodeType::NODE_IS_NULL_EXPRESSION) { return "IS_NULL_EXPR"; }
-	else if (t == NodeType::NODE_IS_NOT_NULL_EXPRESSION) { return "IS_NOT_NULL_EXPR"; }
 	else {
 		return "UNHANDLED_TYPE(" + std::to_string(static_cast<int>(t)) + ")";
 	}
