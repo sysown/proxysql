@@ -3,18 +3,26 @@
 #include <cassert>
 #include <stdexcept>
 
+using std::string;
+using std::string_view;
+using std::unique_ptr;
+using std::vector;
+
 //                 Flex Utility Functions (MySQL_Lexer.yy.c)
 ////////////////////////////////////////////////////////////////////////////////
 
 // Forward declaration for the opaque Flex buffer type
 struct yy_buffer_state;
 typedef struct yy_buffer_state *YY_BUFFER_STATE;
+typedef MySQLParser::ParserOpts* YY_EXTRA_TYPE;
 
 // No extern "C" required, as their definitions will also have C++ linkage.
 extern int mysql_yylex_init_extra(MySQLParser::Parser* user_defined, yyscan_t* yyscanner_r);
 extern int mysql_yylex_destroy(yyscan_t yyscanner);
 extern YY_BUFFER_STATE mysql_yy_scan_string(const char *yy_str, yyscan_t yyscanner);
+extern YY_BUFFER_STATE mysql_yy_scan_bytes(const char *yy_bytes, int len, yyscan_t yyscanner);
 extern void mysql_yy_delete_buffer(YY_BUFFER_STATE b, yyscan_t yyscanner);
+extern void mysql_yy_set_extra(YY_EXTRA_TYPE* b, yyscan_t yyscanner);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -65,24 +73,28 @@ Parser::~Parser() {
     }
 }
 
-void Parser::clear_errors() {
-    errors_.clear();
-}
-
-const std::vector<std::string>& Parser::get_errors() const {
+const vector<string>& Parser::get_errors() const {
     return errors_;
 }
 
-std::unique_ptr<AstNode> Parser::parse(const std::string& sql_query) {
-    clear_errors();
-    ast_root_.reset();
+const ParserOpts& Parser::get_opts() const {
+    return opts_;
+}
+
+unique_ptr<AstNode> Parser::parse(const string_view& sql, const ParserOpts& opts) {
+    // Clear current state before updating with data from new query
+    this->errors_.clear();
+    this->ast_root_.reset();
+
+    // Update the options to be forwarded as ctx (via 'this')
+    this->opts_ = opts;
 
     if (!scanner_state_) {
         errors_.push_back("MySQLParser: Scanner not initialized.");
         return nullptr;
     }
 
-    YY_BUFFER_STATE buffer_state = mysql_yy_scan_string(sql_query.c_str(), scanner_state_);
+    YY_BUFFER_STATE buffer_state = mysql_yy_scan_bytes(sql.data(), sql.length(), scanner_state_);
     if (!buffer_state) {
         errors_.push_back("MySQLParser: Error setting up scanner buffer for query.");
         return nullptr;
@@ -96,6 +108,7 @@ std::unique_ptr<AstNode> Parser::parse(const std::string& sql_query) {
     if (parse_result == 0) {
         return std::move(ast_root_);
     }
+
     return nullptr;
 }
 

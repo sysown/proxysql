@@ -1,8 +1,9 @@
-#ifndef MYSQL_PARSER_PARSER_H
-#define MYSQL_PARSER_PARSER_H
+#ifndef MYSQL_PARSER_H
+#define MYSQL_PARSER_H
 
 #include "MySQL_AST.h" // Uses MySQLParser::AstNode
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 
@@ -12,6 +13,10 @@
 typedef void* yyscan_t;
 
 namespace MySQLParser {
+
+struct ParserOpts {
+	const char* srv_ver { nullptr };
+};
 
 /**
  * @class Parser
@@ -38,16 +43,17 @@ public:
 	 * @param sql_query The SQL query string to parse.
 	 * @return Root node of the generated AST, or nullptr on failure.
 	 */
-	std::unique_ptr<AstNode> parse(const std::string& sql_query);
+	std::unique_ptr<AstNode> parse(const std::string_view& sql_query, const ParserOpts& opts = {});
 	/**
 	 * @brief Retrieves the list of errors encountered during parsing.
 	 * @return A constant reference to the vector of error messages.
 	 */
 	const std::vector<std::string>& get_errors() const;
 	/**
-	 * @brief Clears the list of errors.
+	 * @brief Returns a const reference to the options used to parse the current query.
+	 * @return A const reference to the private ParserOpts field.
 	 */
-	void clear_errors();
+	const ParserOpts& get_opts() const;
 
 	/**
 	 * @brief Internal method used by Bison to set the root of the AST.
@@ -68,16 +74,20 @@ public:
 	 * @param column The column number where the error occurred.
 	 */
 	void internal_add_error_at(const std::string& msg, int line, int column);
-
-private:
 	/**
 	 * @brief The root node of the Abstract Syntax Tree (AST).
 	 */
 	std::unique_ptr<AstNode> ast_root_;
+
+private:
 	/**
 	 * @brief Vector with the error messages encountered during parsing.
 	 */
 	std::vector<std::string> errors_;
+	/**
+	 * @brief Holds the parsers options used for the current query.
+	 */
+	ParserOpts opts_;
 	/**
 	 * @brief The Flex scanner state.
 	 */
@@ -106,4 +116,4 @@ void mysql_yyerror(
 	MYSQL_YYLTYPE* yyloc, yyscan_t yyscanner, MySQLParser::Parser* parser_context, const char* msg
 );
 
-#endif // MYSQL_PARSER_PARSER_H
+#endif // MYSQL_PARSER_H

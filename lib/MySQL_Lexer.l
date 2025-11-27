@@ -4,19 +4,25 @@
 
 %{
 
-#define ECHO /* This makes ECHO do nothing */
+// #define ECHO /* This makes ECHO do nothing */
 
 // C++ code to be included in the generated lexer
 #include "MySQL_Parser.h"         // For MySQLParser::Parser, yyscan_t
 #include "MySQL_AST.h"            // For MySQLParser::AstNode, etc.
 #include "MySQL_Parser.tab.h"     // Bison-generated: token enums, defines union MYSQL_YYSTYPE
 
+#include <cassert>
 #include <string>
 #include <vector>
 
 union MYSQL_YYSTYPE;
 #undef YY_DECL
-#define YY_DECL int mysql_yylex (union MYSQL_YYSTYPE *yylval_param, MYSQL_YYLTYPE* yylloc, yyscan_t yyscanner, MySQLParser::Parser* parser_context)
+#define YY_DECL int mysql_yylex (\
+	union MYSQL_YYSTYPE *yylval_param,\
+	MYSQL_YYLTYPE* yylloc,\
+	yyscan_t yyscanner,\
+	MySQLParser::Parser* parser\
+)
 
 #define SAVE_TOKEN_STRING yylval_param->str_val = new std::string(yytext)
 #define YY_USER_ACTION                          \
@@ -31,9 +37,12 @@ union MYSQL_YYSTYPE;
 			yylloc->last_column++;              \
 		}                                       \
 	}
+
 %}
 
 %x COMMENT
+%x COMMAND
+%x HINT
 %x SQSTRING
 %x DQSTRING
 %x BTIDENT
@@ -44,9 +53,36 @@ union MYSQL_YYSTYPE;
 
 <INITIAL>{
 	"/*"                  { BEGIN(COMMENT); }
-	"-- ".* { /* MySQL -- comment (note space); ignore */ }
+	"/*!"[0-9]*           {
+		if (!parser) { assert(0 && "Invalid Lexer initialization, parser **must** be supplied as context"); }
+
+		if (!parser->get_opts().srv_ver) {
+			BEGIN(COMMAND);
+		} else {
+			char ver[7] { 0 };
+			size_t ver_len = strlen(yytext + 3);
+
+			if (ver_len == 5) {
+				ver[0] = '0';
+				ver[1] = *(yytext + 3);
+
+				strncpy(ver + 2, yytext + 4, 4);
+			} else if (ver_len == 6) {
+				strncpy(ver, yytext, 6);
+			}
+
+			int cmp = strcasecmp(parser->get_opts().srv_ver, ver);
+			if (cmp >= 0) {
+				BEGIN(COMMAND);
+			} else {
+				BEGIN(COMMENT);
+			}
+		}
+	}
+	"*/"                  { /* Ignore COMMENT ending; reachable by COMMAND */ }
+	"-- ".*               { /* MySQL -- comment (note space); ignore */ }
 	"--\n"                { /* MySQL -- comment followed by newline; ignore */ }
-	"#".* { /* MySQL # comment; ignore */ }
+	"#".*                 { /* MySQL # comment; ignore */ }
 
 	[ \t\n\r]+            { /* Ignore whitespace and carriage returns */ }
 
@@ -260,8 +296,8 @@ union MYSQL_YYSTYPE;
 	.                     {
 		char err_msg[100];
 		snprintf(err_msg, sizeof(err_msg), "Lexer: Unknown character: '%s'", yytext);
-		if (parser_context) {
-			parser_context->internal_add_error(err_msg);
+		if (parser) {
+			parser->internal_add_error(err_msg);
 		} else {
 			fprintf(stderr, "%s\n", err_msg);
 		}
@@ -273,7 +309,29 @@ union MYSQL_YYSTYPE;
 	[^*\n]+               { /* Eat comment content */ }
 	"*"                   { /* Eat isolated asterisks */ }
 	\n                    { /* Newlines in comments */ }
-	<<EOF>>               { if(parser_context) parser_context->internal_add_error("Unterminated /* comment"); BEGIN(INITIAL); return YY_NULL; }
+	<<EOF>>               {
+		if(parser) {
+			parser->internal_add_error("Unterminated /* comment");
+		}
+
+		BEGIN(INITIAL);
+		return YY_NULL;
+	}
+}
+
+<COMMAND>{
+	"*/"                  { yyless(0); yylloc->last_column = yylloc->first_column; BEGIN(INITIAL); }
+	[^*\n]+               { ECHO; yymore(); yylloc->last_column = yylloc->first_column; }
+	"*"                   { ECHO; yymore(); yylloc->last_column = yylloc->first_column; }
+	\n                    { ECHO; yymore(); yylloc->last_column = yylloc->first_column; }
+	<<EOF>>               {
+		if(parser) {
+			parser->internal_add_error("Unterminated /*! command");
+		}
+
+		BEGIN(INITIAL);
+		return YY_NULL;
+	}
 }
 
 <SQSTRING>{
@@ -294,7 +352,14 @@ union MYSQL_YYSTYPE;
 		BEGIN(INITIAL);
 		return TOKEN_STRING_LITERAL;
 	}
-	<<EOF>>               { if(parser_context) parser_context->internal_add_error("Unterminated single-quoted string"); BEGIN(INITIAL); return YY_NULL; }
+	<<EOF>>               {
+		if (parser) {
+			parser->internal_add_error("Unterminated single-quoted string");
+		}
+
+		BEGIN(INITIAL);
+		return YY_NULL;
+	}
 }
 
 <DQSTRING>{
@@ -315,7 +380,14 @@ union MYSQL_YYSTYPE;
 		BEGIN(INITIAL);
 		return TOKEN_STRING_LITERAL;
 	}
-	<<EOF>>               { if(parser_context) parser_context->internal_add_error("Unterminated double-quoted string"); BEGIN(INITIAL); return YY_NULL; }
+	<<EOF>>               {
+		if (parser) {
+			parser->internal_add_error("Unterminated double-quoted string");
+		}
+
+		BEGIN(INITIAL);
+		return YY_NULL;
+	}
 }
 
 <BTIDENT>{
@@ -325,10 +397,25 @@ union MYSQL_YYSTYPE;
 		*(yylval_param->str_val) += "`";
 		yylloc->first_column -= yylval_param->str_val->size() - 1;
 		BEGIN(INITIAL);
+
 		return TOKEN_IDENTIFIER;
 	}
-	\n                    { if(parser_context) parser_context->internal_add_error("Newline in backticked identifier"); BEGIN(INITIAL); /* Error, but return to INITIAL */ }
-	<<EOF>>               { if(parser_context) parser_context->internal_add_error("Unterminated backticked identifier"); BEGIN(INITIAL); return YY_NULL; }
+	\n                    {
+		/* Error, but return to INITIAL */
+		if (parser) {
+			parser->internal_add_error("Newline in backticked identifier");
+		}
+
+		BEGIN(INITIAL);
+	}
+	<<EOF>>               {
+		if (parser) {
+			parser->internal_add_error("Unterminated backticked identifier");
+		}
+
+		BEGIN(INITIAL);
+		return YY_NULL;
+	}
 }
 
 %%
