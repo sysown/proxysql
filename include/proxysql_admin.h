@@ -313,6 +313,9 @@ class ProxySQL_Admin {
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
 		int cluster_ldap_variables_diffs_before_sync;
+		int cluster_pgsql_query_rules_diffs_before_sync;
+		int cluster_pgsql_servers_diffs_before_sync;
+		int cluster_pgsql_users_diffs_before_sync;
 		int cluster_mysql_servers_sync_algorithm;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
@@ -321,6 +324,9 @@ class ProxySQL_Admin {
 		bool cluster_mysql_variables_save_to_disk;
 		bool cluster_admin_variables_save_to_disk;
 		bool cluster_ldap_variables_save_to_disk;
+		bool cluster_pgsql_query_rules_save_to_disk;
+		bool cluster_pgsql_servers_save_to_disk;
+		bool cluster_pgsql_users_save_to_disk;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;

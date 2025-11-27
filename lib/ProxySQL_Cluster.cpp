@@ -43,6 +43,8 @@ extern ProxySQL_Cluster * GloProxyCluster;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 extern MySQL_Authentication* GloMyAuth;
+extern PgSQL_Authentication *GloPgAuth;
+extern PgSQL_Query_Processor* GloPgQPro;
 
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	pthread_attr_t thread_attr;
@@ -412,6 +414,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	unsigned int diff_ps = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync,0);
 	unsigned int diff_mv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
 	unsigned int diff_lv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync,0);
+	unsigned int diff_pqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync,0);
+	unsigned int diff_ms_pgsql = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_servers_diffs_before_sync,0);
+	unsigned int diff_mu_pgsql = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_users_diffs_before_sync,0);
 
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 
@@ -1081,6 +1086,105 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps * 10));
 				proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_proxysql_servers_version_one]->Increment();
+			}
+		}
+	}
+
+	// PostgreSQL Query Rules Sync
+	if (diff_pqr) {
+		v = &checksums_values.pgsql_query_rules;
+		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_query_rules.version,0);
+		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_query_rules.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_query_rules.checksum,0);
+		const std::string v_exp_checksum { v->checksum };
+
+		if (v->version > 1) {
+			if (
+				(own_version == 1) // we just booted
+				||
+				(v->epoch > own_epoch) // epoch is newer
+			) {
+				if (v->diff_check >= diff_pqr) {
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_query_rules version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					proxy_info("Cluster: detected a peer %s:%d with pgsql_query_rules version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					GloProxyCluster->pull_pgsql_query_rules_from_peer(v_exp_checksum, v->epoch);
+				}
+			}
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_pqr*10)) == 0)) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_query_rules version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL QUERY RULES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_pqr * 10));
+				proxy_error("Cluster: detected a peer %s:%d with pgsql_query_rules version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL QUERY RULES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_pqr*10));
+			}
+		} else {
+			if (v->diff_check && (v->diff_check % (diff_pqr*10)) == 0) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected a peer %s:%d with pgsql_query_rules version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL QUERY RULES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_pqr * 10));
+				proxy_warning("Cluster: detected a peer %s:%d with pgsql_query_rules version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL QUERY RULES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_pqr*10));
+			}
+		}
+	}
+
+	// PostgreSQL Users Sync
+	if (diff_mu_pgsql) {
+		v = &checksums_values.pgsql_users;
+		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_users.version,0);
+		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_users.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_users.checksum,0);
+		const std::string v_exp_checksum { v->checksum };
+
+		if (v->version > 1) {
+			if (
+				(own_version == 1) // we just booted
+				||
+				(v->epoch > own_epoch) // epoch is newer
+			) {
+				if (v->diff_check >= diff_mu_pgsql) {
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_users version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					proxy_info("Cluster: detected a peer %s:%d with pgsql_users version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					GloProxyCluster->pull_pgsql_users_from_peer(v_exp_checksum, v->epoch);
+				}
+			}
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mu_pgsql*10)) == 0)) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_users version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL USERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mu_pgsql * 10));
+				proxy_error("Cluster: detected a peer %s:%d with pgsql_users version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL USERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mu_pgsql*10));
+			}
+		} else {
+			if (v->diff_check && (v->diff_check % (diff_mu_pgsql*10)) == 0) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected a peer %s:%d with pgsql_users version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL USERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mu_pgsql * 10));
+				proxy_warning("Cluster: detected a peer %s:%d with pgsql_users version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL USERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mu_pgsql*10));
+			}
+		}
+	}
+
+	// PostgreSQL Servers Sync
+	if (diff_ms_pgsql) {
+		v = &checksums_values.pgsql_servers_v2;
+		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_servers_v2.version,0);
+		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_servers_v2.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_servers_v2.checksum,0);
+		const std::string v_exp_checksum { v->checksum };
+
+		if (v->version > 1) {
+			if (
+				(own_version == 1) // we just booted
+				||
+				(v->epoch > own_epoch) // epoch is newer
+			) {
+				if (v->diff_check >= diff_ms_pgsql) {
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					proxy_info("Cluster: detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					// Create checksum structures for PostgreSQL servers
+					pgsql_servers_v2_checksum_t pgsql_servers_v2_checksum{v_exp_checksum, v->epoch};
+					runtime_pgsql_servers_checksum_t runtime_pgsql_servers_checksum{v_exp_checksum, v->epoch};
+					GloProxyCluster->pull_pgsql_servers_v2_from_peer(pgsql_servers_v2_checksum, runtime_pgsql_servers_checksum, true);
+				}
+			}
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ms_pgsql*10)) == 0)) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms_pgsql * 10));
+				proxy_error("Cluster: detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms_pgsql*10));
+			}
+		} else {
+			if (v->diff_check && (v->diff_check % (diff_ms_pgsql*10)) == 0) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms_pgsql * 10));
+				proxy_warning("Cluster: detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms_pgsql*10));
 			}
 		}
 	}
@@ -2676,6 +2780,449 @@ __exit_pull_proxysql_servers_from_peer:
 	if (fetch_failed == true) sleep(1);
 }
 
+void ProxySQL_Cluster::pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch) {
+	char * hostname = NULL;
+	char * ip_address = NULL;
+	uint16_t port = 0;
+	bool fetch_failed = false;
+	pthread_mutex_lock(&GloProxyCluster->update_mysql_users_mutex); // Reuse mysql_users mutex for pgsql_users
+	nodes.get_peer_to_sync_pgsql_users(&hostname, &port, &ip_address);
+	if (hostname) {
+		cluster_creds_t creds {};
+
+		MYSQL *conn = mysql_init(NULL);
+		if (conn==NULL) {
+			proxy_error("Unable to run mysql_init()\n");
+			goto __exit_pull_pgsql_users_from_peer;
+		}
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
+			unsigned int timeout = 1;
+			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
+			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
+			proxy_info("Cluster: Fetching PostgreSQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
+
+			MYSQL* rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0);
+			if (rc_conn == nullptr) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				proxy_info("Cluster: Fetching PostgreSQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment(); // Reuse mysql_users counter
+				fetch_failed = true;
+				goto __exit_pull_pgsql_users_from_peer;
+			}
+
+			MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
+
+			int rc_query = mysql_query(conn, CLUSTER_QUERY_PGSQL_USERS);
+			if (rc_query == 0) {
+				MYSQL_RES* pgsql_users_result = mysql_store_result(conn);
+
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Users from peer %s:%d completed\n", hostname, port);
+				proxy_info("Cluster: Fetching PostgreSQL Users from peer %s:%d completed\n", hostname, port);
+
+				unique_ptr<SQLite3_result> pgsql_users_resultset { nullptr };
+				const uint64_t users_raw_checksum = get_mysql_users_checksum(pgsql_users_result, nullptr, pgsql_users_resultset);
+				const string computed_checksum { get_checksum_from_hash(users_raw_checksum) };
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for PostgreSQL Users from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
+				proxy_info("Cluster: Computed checksum for PostgreSQL Users from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
+
+				if (expected_checksum == computed_checksum) {
+					update_mysql_users(pgsql_users_result); // Reuse update_mysql_users for pgsql_users
+					mysql_free_result(pgsql_users_result);
+
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime PostgreSQL Users from peer %s:%d\n", hostname, port);
+					proxy_info("Cluster: Loading to runtime PostgreSQL Users from peer %s:%d\n", hostname, port);
+
+					GloAdmin->init_pgsql_users(std::move(pgsql_users_resultset), expected_checksum, epoch);
+					if (GloProxyCluster->cluster_pgsql_users_save_to_disk == true) {
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Users from peer %s:%d\n", hostname, port);
+						proxy_info("Cluster: Saving to disk PostgreSQL Users from peer %s:%d\n", hostname, port);
+						GloAdmin->flush_pgsql_users__from_memory_to_disk();
+					} else {
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "NOT saving to disk PostgreSQL Users from peer %s:%d\n", hostname, port);
+						proxy_info("Cluster: NOT saving to disk PostgreSQL Users from peer %s:%d\n", hostname, port);
+					}
+
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_success]->Increment(); // Reuse mysql_users counter
+				} else {
+					if (pgsql_users_result) {
+						mysql_free_result(pgsql_users_result);
+					}
+
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Users from peer %s:%d failed: Checksum changed from %s to %s\n",
+						hostname, port, expected_checksum.c_str(), computed_checksum.c_str());
+					proxy_info(
+						"Cluster: Fetching PostgreSQL Users from peer %s:%d failed: Checksum changed from %s to %s\n",
+						hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
+					);
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment(); // Reuse mysql_users counter
+					fetch_failed = true;
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				proxy_info("Cluster: Fetching PostgreSQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment(); // Reuse mysql_users counter
+				fetch_failed = true;
+			}
+		}
+__exit_pull_pgsql_users_from_peer:
+		if (conn) {
+			if (conn->net.pvio) {
+				mysql_close(conn);
+			}
+		}
+		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
+	}
+	pthread_mutex_unlock(&GloProxyCluster->update_mysql_users_mutex);
+	if (fetch_failed == true) sleep(1);
+}
+
+void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expected_checksum, const time_t epoch) {
+	char * hostname = NULL;
+	char * ip_address = NULL;
+	uint16_t port = 0;
+	bool fetch_failed = false;
+	pthread_mutex_lock(&GloProxyCluster->update_mysql_query_rules_mutex); // Reuse mysql_query_rules mutex for pgsql_query_rules
+	nodes.get_peer_to_sync_pgsql_query_rules(&hostname, &port, &ip_address);
+	if (hostname) {
+		cluster_creds_t creds {};
+
+		MYSQL *conn = mysql_init(NULL);
+		if (conn==NULL) {
+			proxy_error("Unable to run mysql_init()\n");
+			goto __exit_pull_pgsql_query_rules_from_peer;
+		}
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
+			unsigned int timeout = 1;
+			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
+			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
+			proxy_info("Cluster: Fetching PostgreSQL Query Rules from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
+
+			MYSQL* rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0);
+			if (rc_conn == nullptr) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				proxy_info("Cluster: Fetching PostgreSQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment(); // Reuse mysql_query_rules counter
+				fetch_failed = true;
+				goto __exit_pull_pgsql_query_rules_from_peer;
+			}
+
+			MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
+
+			int rc_query = mysql_query(conn, CLUSTER_QUERY_PGSQL_QUERY_RULES);
+			if (rc_query == 0) {
+				MYSQL_RES* query_rules_result = mysql_store_result(conn);
+				MYSQL_RES* fast_routing_result = nullptr;
+
+				// Fetch fast routing rules
+				int rc_query_fast = mysql_query(conn, CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING);
+				if (rc_query_fast == 0) {
+					fast_routing_result = mysql_store_result(conn);
+				}
+
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules from peer %s:%d completed\n", hostname, port);
+				proxy_info("Cluster: Fetching PostgreSQL Query Rules from peer %s:%d completed\n", hostname, port);
+
+				unique_ptr<SQLite3_result> query_rules_resultset { nullptr };
+				unique_ptr<SQLite3_result> fast_routing_resultset { nullptr };
+				const uint64_t rules_raw_checksum = get_mysql_query_rules_checksum(query_rules_result, fast_routing_result, query_rules_resultset, fast_routing_resultset);
+				const string computed_checksum { get_checksum_from_hash(rules_raw_checksum) };
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for PostgreSQL Query Rules from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
+				proxy_info("Cluster: Computed checksum for PostgreSQL Query Rules from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
+
+				if (expected_checksum == computed_checksum) {
+					update_mysql_query_rules(query_rules_result, fast_routing_result); // Reuse update_mysql_query_rules
+					mysql_free_result(query_rules_result);
+					if (fast_routing_result) {
+						mysql_free_result(fast_routing_result);
+					}
+
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
+					proxy_info("Cluster: Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
+
+					GloAdmin->load_pgsql_query_rules_to_runtime(std::move(query_rules_resultset), std::move(fast_routing_resultset), expected_checksum, epoch);
+					if (GloProxyCluster->cluster_pgsql_query_rules_save_to_disk == true) {
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
+						proxy_info("Cluster: Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
+						// TODO: Add flush_pgsql_query_rules__from_memory_to_disk() when implemented
+					} else {
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
+						proxy_info("Cluster: NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
+					}
+
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_success]->Increment(); // Reuse mysql_query_rules counter
+				} else {
+					if (query_rules_result) {
+						mysql_free_result(query_rules_result);
+					}
+					if (fast_routing_result) {
+						mysql_free_result(fast_routing_result);
+					}
+
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules from peer %s:%d failed: Checksum changed from %s to %s\n",
+						hostname, port, expected_checksum.c_str(), computed_checksum.c_str());
+					proxy_info(
+						"Cluster: Fetching PostgreSQL Query Rules from peer %s:%d failed: Checksum changed from %s to %s\n",
+						hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
+					);
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment(); // Reuse mysql_query_rules counter
+					fetch_failed = true;
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				proxy_info("Cluster: Fetching PostgreSQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment(); // Reuse mysql_query_rules counter
+				fetch_failed = true;
+			}
+		}
+__exit_pull_pgsql_query_rules_from_peer:
+		if (conn) {
+			if (conn->net.pvio) {
+				mysql_close(conn);
+			}
+		}
+		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
+	}
+	pthread_mutex_unlock(&GloProxyCluster->update_mysql_query_rules_mutex);
+	if (fetch_failed == true) sleep(1);
+}
+
+void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server) {
+	char * hostname = NULL;
+	char * ip_address = NULL;
+	uint16_t port = 0;
+	bool fetch_failed = false;
+	pthread_mutex_lock(&GloProxyCluster->update_runtime_mysql_servers_mutex); // Reuse mysql_servers mutex for pgsql_servers
+	nodes.get_peer_to_sync_runtime_pgsql_servers(&hostname, &port, nullptr, &ip_address);
+	if (hostname) {
+		cluster_creds_t creds {};
+
+		MYSQL *conn = mysql_init(NULL);
+		if (conn==NULL) {
+			proxy_error("Unable to run mysql_init()\n");
+			goto __exit_pull_runtime_pgsql_servers_from_peer;
+		}
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
+			unsigned int timeout = 1;
+			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
+			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching Runtime PostgreSQL Servers from peer %s:%d started.\n", hostname, port);
+			proxy_info("Cluster: Fetching Runtime PostgreSQL Servers from peer %s:%d started.\n", hostname, port);
+
+			MYSQL* rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0);
+			if (rc_conn == nullptr) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching Runtime PostgreSQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				proxy_info("Cluster: Fetching Runtime PostgreSQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment(); // Reuse mysql_servers counter
+				fetch_failed = true;
+				goto __exit_pull_runtime_pgsql_servers_from_peer;
+			}
+
+			MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
+
+			const fetch_query f_queries[] = {
+				{
+					CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS,
+					p_cluster_counter::pulled_mysql_servers_success,
+					p_cluster_counter::pulled_mysql_servers_failure,
+					{
+						"Cluster: Fetching Runtime PostgreSQL Servers from peer " + string(hostname) + ":" + std::to_string(port) + " completed.",
+						"Cluster: Loading to runtime PostgreSQL Servers from peer " + string(hostname) + ":" + std::to_string(port) + ".",
+						"Cluster: NOT saving to disk PostgreSQL Servers from peer " + string(hostname) + ":" + std::to_string(port) + "."
+					}
+				}
+			};
+
+			string computed_checksum;
+			int rc_query = -1;
+			MYSQL_RES* result = nullptr;
+			string tmp_expected_checksum = peer_runtime_pgsql_server.checksum;
+
+			for (const auto& f_query : f_queries) {
+				if (tmp_expected_checksum.empty()) { break; }
+
+				proxy_info("%s\n", f_query.msgs[0].c_str());
+				rc_query = fetch_and_store(conn, f_query, &result);
+
+				if (rc_query != 0) {
+					computed_checksum.clear();
+					break;
+				}
+
+				const uint64_t hash_val = mysql_raw_checksum(result);
+				computed_checksum = get_checksum_from_hash(hash_val);
+
+				if (computed_checksum == tmp_expected_checksum) {
+					proxy_info("%s\n", f_query.msgs[1].c_str());
+					// TODO: Call load_pgsql_servers_to_runtime when integrated with cluster sync
+					// GloAdmin->load_pgsql_servers_to_runtime(result, {}, computed_checksum, peer_runtime_pgsql_server.epoch);
+					metrics.p_counter_array[f_query.success_counter]->Increment();
+				} else {
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum mismatch while syncing Runtime PostgreSQL Servers. Expected: %s, Computed: %s\n",
+						tmp_expected_checksum.c_str(), computed_checksum.c_str());
+					proxy_info("Cluster: Checksum mismatch while syncing Runtime PostgreSQL Servers. Expected: %s, Computed: %s\n",
+						tmp_expected_checksum.c_str(), computed_checksum.c_str());
+					metrics.p_counter_array[f_query.failure_counter]->Increment();
+					fetch_failed = true;
+				}
+
+				if (result) {
+					mysql_free_result(result);
+					result = nullptr;
+				}
+			}
+		}
+__exit_pull_runtime_pgsql_servers_from_peer:
+		if (conn) {
+			if (conn->net.pvio) {
+				mysql_close(conn);
+			}
+		}
+		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
+	}
+	pthread_mutex_unlock(&GloProxyCluster->update_runtime_mysql_servers_mutex);
+	if (fetch_failed == true) sleep(1);
+}
+
+void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
+	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, bool fetch_runtime_pgsql_servers) {
+	char * hostname = NULL;
+	char * ip_address = NULL;
+	uint16_t port = 0;
+	bool fetch_failed = false;
+	pthread_mutex_lock(&GloProxyCluster->update_mysql_servers_v2_mutex); // Reuse mysql_servers_v2 mutex for pgsql_servers_v2
+	nodes.get_peer_to_sync_pgsql_servers_v2(&hostname, &port, nullptr, nullptr, &ip_address);
+	if (hostname) {
+		cluster_creds_t creds {};
+
+		MYSQL *conn = mysql_init(NULL);
+		if (conn==NULL) {
+			proxy_error("Unable to run mysql_init()\n");
+			goto __exit_pull_pgsql_servers_v2_from_peer;
+		}
+
+		creds = GloProxyCluster->get_credentials();
+		if (creds.user.size()) { // do not monitor if the username is empty
+			// READ/WRITE timeouts were enforced as an attempt to prevent deadlocks in the original
+			// implementation. They were proven unnecessary, leaving only 'CONNECT_TIMEOUT'.
+			unsigned int timeout = 1;
+			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
+			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Servers v2 from peer %s:%d started.\n", hostname, port);
+			proxy_info("Cluster: Fetching PostgreSQL Servers v2 from peer %s:%d started.\n", hostname, port);
+
+			MYSQL* rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0);
+			if (rc_conn == nullptr) {
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Servers v2 from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				proxy_info("Cluster: Fetching PostgreSQL Servers v2 from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment(); // Reuse mysql_servers counter
+				fetch_failed = true;
+				goto __exit_pull_pgsql_servers_v2_from_peer;
+			}
+
+			MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
+
+			const fetch_query f_queries[] = {
+				{
+					CLUSTER_QUERY_PGSQL_SERVERS_V2,
+					p_cluster_counter::pulled_mysql_servers_success,
+					p_cluster_counter::pulled_mysql_servers_failure,
+					{
+						"Cluster: Fetching PostgreSQL Servers v2 from peer " + string(hostname) + ":" + std::to_string(port) + " completed.",
+						"Cluster: Loading to runtime PostgreSQL Servers from peer " + string(hostname) + ":" + std::to_string(port) + ".",
+						"Cluster: NOT saving to disk PostgreSQL Servers from peer " + string(hostname) + ":" + std::to_string(port) + "."
+					}
+				}
+			};
+
+			string computed_checksum;
+			int rc_query = -1;
+			MYSQL_RES* result = nullptr;
+			string tmp_expected_checksum = peer_pgsql_server_v2.checksum;
+
+			for (const auto& f_query : f_queries) {
+				if (tmp_expected_checksum.empty()) { break; }
+
+				proxy_info("%s\n", f_query.msgs[0].c_str());
+				rc_query = fetch_and_store(conn, f_query, &result);
+
+				if (rc_query != 0) {
+					computed_checksum.clear();
+					break;
+				}
+
+				const uint64_t hash_val = mysql_raw_checksum(result);
+				computed_checksum = get_checksum_from_hash(hash_val);
+
+				if (computed_checksum == tmp_expected_checksum) {
+					proxy_info("%s\n", f_query.msgs[1].c_str());
+					// TODO: Call load_pgsql_servers_to_runtime when integrated with cluster sync
+					// GloAdmin->load_pgsql_servers_to_runtime(result, {}, computed_checksum, peer_pgsql_server_v2.epoch);
+					metrics.p_counter_array[f_query.success_counter]->Increment();
+				} else {
+					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum mismatch while syncing PostgreSQL Servers v2. Expected: %s, Computed: %s\n",
+						tmp_expected_checksum.c_str(), computed_checksum.c_str());
+					proxy_info("Cluster: Checksum mismatch while syncing PostgreSQL Servers v2. Expected: %s, Computed: %s\n",
+						tmp_expected_checksum.c_str(), computed_checksum.c_str());
+					metrics.p_counter_array[f_query.failure_counter]->Increment();
+					fetch_failed = true;
+				}
+
+				if (result) {
+					mysql_free_result(result);
+					result = nullptr;
+				}
+			}
+		}
+__exit_pull_pgsql_servers_v2_from_peer:
+		if (conn) {
+			if (conn->net.pvio) {
+				mysql_close(conn);
+			}
+		}
+		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
+	}
+	pthread_mutex_unlock(&GloProxyCluster->update_mysql_servers_v2_mutex);
+	if (fetch_failed == true) sleep(1);
+}
+
 void ProxySQL_Node_Entry::set_metrics(MYSQL_RES *_r, unsigned long long _response_time) {
 	MYSQL_ROW row;
 	metrics_idx_prev = metrics_idx;
@@ -3502,6 +4049,276 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 		*ip_address = ip_addr;
 		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with proxysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
 		proxy_info("Cluster: detected peer %s:%d with proxysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
+	}
+}
+
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_users(char **host, uint16_t *port, char** ip_address) {
+	unsigned long long version = 0;
+	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
+	char *hostname = NULL;
+	char *ip_addr = NULL;
+	uint16_t p = 0;
+	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_users_diffs_before_sync,0);
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_users;
+		if (v->version > 1) {
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check >= diff_mu) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
+					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
+					p = node->get_port();
+				}
+			}
+		}
+		it++;
+	}
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with pgsql_users epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
+		}
+	}
+	if (hostname) {
+		*host = hostname;
+		*port = p;
+		*ip_address = ip_addr;
+		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
+		proxy_info("Cluster: detected peer %s:%d with pgsql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
+	}
+}
+
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_query_rules(char **host, uint16_t *port, char** ip_address) {
+	unsigned long long version = 0;
+	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
+	char *hostname = NULL;
+	char *ip_addr = NULL;
+	uint16_t p = 0;
+	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync,0);
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_query_rules;
+		if (v->version > 1) {
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check >= diff_mu) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
+					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
+					p = node->get_port();
+				}
+			}
+		}
+		it++;
+	}
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with pgsql_query_rules epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
+		}
+	}
+	if (hostname) {
+		*host = hostname;
+		*port = p;
+		*ip_address = ip_addr;
+		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_query_rules version %llu, epoch %llu\n", hostname, p, version, epoch);
+		proxy_info("Cluster: detected peer %s:%d with pgsql_query_rules version %llu, epoch %llu\n", hostname, p, version, epoch);
+	}
+}
+
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_runtime_pgsql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address) {
+	unsigned long long version = 0;
+	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
+	char *hostname = NULL;
+	char *ip_addr = NULL;
+	uint16_t p = 0;
+	char *checksum = NULL;
+	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_servers_diffs_before_sync,0);
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_servers;
+		if (v->version > 1) {
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check >= diff_ms) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
+					if (checksum) {
+						free(checksum);
+					}
+					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
+					p = node->get_port();
+					checksum = strdup(v->checksum);
+				}
+			}
+		}
+		it++;
+	}
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with runtime_pgsql_servers epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
+			if (checksum) {
+				free(checksum);
+				checksum = NULL;
+			}
+		}
+	}
+	if (hostname) {
+		*host = hostname;
+		*port = p;
+		*ip_address = ip_addr;
+		if (peer_checksum) {
+			*peer_checksum = checksum;
+		} else {
+			if (checksum)
+				free(checksum);
+		}
+		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with runtime_pgsql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
+		proxy_info("Cluster: detected peer %s:%d with runtime_pgsql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
+	}
+}
+
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_servers_v2(char** host, uint16_t* port, char** peer_pgsql_servers_v2_checksum,
+	char** peer_runtime_pgsql_servers_checksum, char** ip_address) {
+	unsigned long long version = 0;
+	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
+	char *hostname = NULL;
+	char *ip_addr = NULL;
+	uint16_t p = 0;
+	char *checksum_v2 = NULL;
+	char *checksum_runtime = NULL;
+	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_servers_diffs_before_sync,0);
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_servers_v2;
+		if (v->version > 1) {
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check >= diff_ms) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
+					if (checksum_v2) {
+						free(checksum_v2);
+					}
+					if (checksum_runtime) {
+						free(checksum_runtime);
+					}
+					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
+					p = node->get_port();
+					checksum_v2 = strdup(v->checksum);
+					// Get runtime checksum as well
+					ProxySQL_Checksum_Value_2 * v_runtime = &node->checksums_values.pgsql_servers;
+					if (v_runtime->version > 1) {
+						checksum_runtime = strdup(v_runtime->checksum);
+					}
+				}
+			}
+		}
+		it++;
+	}
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with pgsql_servers_v2 epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
+			if (checksum_v2) {
+				free(checksum_v2);
+				checksum_v2 = NULL;
+			}
+			if (checksum_runtime) {
+				free(checksum_runtime);
+				checksum_runtime = NULL;
+			}
+		}
+	}
+	if (hostname) {
+		*host = hostname;
+		*port = p;
+		*ip_address = ip_addr;
+		if (peer_pgsql_servers_v2_checksum) {
+			*peer_pgsql_servers_v2_checksum = checksum_v2;
+		} else {
+			if (checksum_v2)
+				free(checksum_v2);
+		}
+		if (peer_runtime_pgsql_servers_checksum) {
+			*peer_runtime_pgsql_servers_checksum = checksum_runtime;
+		} else {
+			if (checksum_runtime)
+				free(checksum_runtime);
+		}
+		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu\n", hostname, p, version, epoch);
+		proxy_info("Cluster: detected peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
 }
 

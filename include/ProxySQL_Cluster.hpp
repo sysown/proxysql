@@ -61,6 +61,21 @@
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_query_rules_fast_routing'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING "PROXY_SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN"
 
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_servers'. See top comment for details. */
+#define CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"ONLINE\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"ONLINE\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_pgsql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'pgsql_servers_v2'. See top comment for details. */
+#define CLUSTER_QUERY_PGSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, CASE WHEN status=\"SHUNNED\" THEN \"ONLINE\" ELSE status END AS status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_users'. See top comment for details. */
+#define CLUSTER_QUERY_PGSQL_USERS "PROXY_SELECT username, password, use_ssl, default_hostgroup, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_pgsql_users"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_query_rules'. See top comment for details. */
+#define CLUSTER_QUERY_PGSQL_QUERY_RULES "PROXY_SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment FROM runtime_pgsql_query_rules ORDER BY rule_id"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_query_rules_fast_routing'. See top comment for details. */
+#define CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING "PROXY_SELECT username, database, flagIN, destination_hostgroup, comment FROM runtime_pgsql_query_rules_fast_routing ORDER BY username, database, flagIN"
+
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
 	time_t last_updated;
@@ -161,6 +176,10 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 mysql_users;
 		ProxySQL_Checksum_Value_2 proxysql_servers;
 		ProxySQL_Checksum_Value_2 mysql_servers_v2;
+		ProxySQL_Checksum_Value_2 pgsql_query_rules;
+		ProxySQL_Checksum_Value_2 pgsql_servers;
+		ProxySQL_Checksum_Value_2 pgsql_users;
+		ProxySQL_Checksum_Value_2 pgsql_servers_v2;
 	} checksums_values;
 	uint64_t global_checksum;
 };
@@ -259,6 +278,11 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_admin_variables(char **host, uint16_t* port, char** ip_address);
 	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char ** ip_address);
+	void get_peer_to_sync_pgsql_query_rules(char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_runtime_pgsql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
+	void get_peer_to_sync_pgsql_servers_v2(char** host, uint16_t* port, char** peer_pgsql_servers_v2_checksum,
+		char** peer_runtime_pgsql_servers_checksum, char** ip_address);
+	void get_peer_to_sync_pgsql_users(char **host, uint16_t *port, char** ip_address);
 };
 
 struct p_cluster_counter {
@@ -425,6 +449,9 @@ public:
 	int cluster_mysql_variables_diffs_before_sync;
 	int cluster_ldap_variables_diffs_before_sync;
 	int cluster_admin_variables_diffs_before_sync;
+	int cluster_pgsql_query_rules_diffs_before_sync;
+	int cluster_pgsql_servers_diffs_before_sync;
+	int cluster_pgsql_users_diffs_before_sync;
 	int cluster_mysql_servers_sync_algorithm;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;
@@ -433,6 +460,9 @@ public:
 	bool cluster_mysql_variables_save_to_disk;
 	bool cluster_ldap_variables_save_to_disk;
 	bool cluster_admin_variables_save_to_disk;
+	bool cluster_pgsql_query_rules_save_to_disk;
+	bool cluster_pgsql_servers_save_to_disk;
+	bool cluster_pgsql_users_save_to_disk;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();
 	void init() {};
@@ -491,5 +521,10 @@ public:
 	 */
 	void pull_global_variables_from_peer(const std::string& type, const std::string& expected_checksum, const time_t epoch);
 	void pull_proxysql_servers_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_pgsql_query_rules_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server);
+	void pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
+		const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {}, bool fetch_runtime_pgsql_servers = false);
+	void pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */
