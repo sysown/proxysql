@@ -110,8 +110,6 @@ enum class NodeType {
 
 struct AstNode;
 
-inline void print_ast(const AstNode* node, int indent = 0);
-
 /**
  * @brief Structure for an Abstract Syntax Tree (AST) Node.
  * @details Represents a node in the AST, storing its type, value, children, and position information.
@@ -285,19 +283,17 @@ inline std::string to_string(NodeType t) {
 }
 
 // Helper function to print the AST (for debugging)
-inline void print_ast(const AstNode* node, int indent) {
-	if (!node) return;
+inline void print_ast(const AstNode* n, std::string&& prefix = {}, bool is_last = true) {
+	if (!n) { return; }
 
-	for (int i = 0; i < indent; ++i) std::cout << "  ";
+	std::cout << prefix;
+	std::cout << (is_last ? "`-- " : "|-- ");
+	std::cout << "[" << to_string(n->type) << "] " <<
+		(n->value.empty() ? "" : "('" + n->value + "')") << "\n";
 
-	std::cout << "Type: " << to_string(node->type);
-	if (!node->value.empty()) {
-		std::cout << ", Value: '" << node->value << "'";
-	}
-	std::cout << std::endl;
-
-	for (const AstNode* child : node->children) {
-		print_ast(child, indent + 1);
+	for (size_t i = 0; i < n->children.size(); ++i) {
+		std::string next_prefix { prefix + (is_last ? "    " : "|   ") };
+		print_ast(n->children[i], std::move(next_prefix), i == n->children.size() - 1);
 	}
 }
 
