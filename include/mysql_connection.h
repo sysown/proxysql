@@ -264,6 +264,7 @@ class MySQL_Connection {
 	bool get_gtid(char *buff, uint64_t *trx_id);
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
+	bool match_ff_req_options(const MySQL_Connection *c);
 	bool match_tracked_options(const MySQL_Connection *c);
 	bool requires_CHANGE_USER(const MySQL_Connection *client_conn);
 	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);

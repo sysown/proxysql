@@ -1,0 +1,93 @@
+diff --git src/bin/psql/startup.c src/bin/psql/startup.c
+index 5a28b6f..c11f3d9 100644
+--- src/bin/psql/startup.c
++++ src/bin/psql/startup.c
+@@ -1135,9 +1135,13 @@ verbosity_hook(const char *newval)
+ 		pset.verbosity = PQERRORS_TERSE;
+ 	else if (pg_strcasecmp(newval, "sqlstate") == 0)
+ 		pset.verbosity = PQERRORS_SQLSTATE;
++	else if (pg_strcasecmp(newval, "formatted_default") == 0)
++		pset.verbosity = PSERRORS_FORMATTED_DEFAULT;
++	else if (pg_strcasecmp(newval, "formatted_verbose") == 0)
++		pset.verbosity = PSERRORS_FORMATTED_VERBOSE;
+ 	else
+ 	{
+-		PsqlVarEnumError("VERBOSITY", newval, "default, verbose, terse, sqlstate");
++		PsqlVarEnumError("VERBOSITY", newval, "default, verbose, terse, sqlstate, formatted_default, formatted_verbose");
+ 		return false;
+ 	}
+ 
+diff --git src/interfaces/libpq/fe-protocol3.c src/interfaces/libpq/fe-protocol3.c
+index e1fb48b..7ad19ba 100644
+--- src/interfaces/libpq/fe-protocol3.c
++++ src/interfaces/libpq/fe-protocol3.c
+@@ -1016,6 +1016,54 @@ pqBuildErrorMessage3(PQExpBuffer msg, const PGresult *res,
+ 		return;
+ 	}
+ 
++	if (verbosity == PSERRORS_FORMATTED_DEFAULT || verbosity == PSERRORS_FORMATTED_VERBOSE)
++	{
++		size_t i;
++
++		// Always included fields
++		static const char default_fields[] = {
++			PG_DIAG_SEVERITY,
++			PG_DIAG_SQLSTATE,
++			PG_DIAG_MESSAGE_PRIMARY
++		};
++
++		// Verbose-only fields
++		static const char verbose_fields[] = {
++			PG_DIAG_MESSAGE_DETAIL,
++			PG_DIAG_MESSAGE_HINT,
++			PG_DIAG_STATEMENT_POSITION,
++			PG_DIAG_INTERNAL_POSITION,
++			PG_DIAG_INTERNAL_QUERY,
++			PG_DIAG_CONTEXT,
++			PG_DIAG_SOURCE_FILE,
++			PG_DIAG_SOURCE_LINE,
++			PG_DIAG_SOURCE_FUNCTION,
++			PG_DIAG_SCHEMA_NAME,
++			PG_DIAG_TABLE_NAME,
++			PG_DIAG_COLUMN_NAME,
++			PG_DIAG_DATATYPE_NAME,
++			PG_DIAG_CONSTRAINT_NAME
++		};
++	
++		for (i = 0; i < sizeof(default_fields) / sizeof(default_fields[0]); ++i)
++		{
++			val = PQresultErrorField(res, default_fields[i]);
++			if (val)
++				appendPQExpBuffer(msg, "%c:%d:%s", default_fields[i], (int)strlen(val), val);
++		}
++	
++		if (verbosity != PSERRORS_FORMATTED_VERBOSE)
++			return;
++	
++		for (i = 0; i < sizeof(verbose_fields) / sizeof(verbose_fields[0]); ++i)
++		{
++			val = PQresultErrorField(res, verbose_fields[i]);
++			if (val)
++				appendPQExpBuffer(msg, "%c:%d:%s", verbose_fields[i], (int)strlen(val), val);
++		}
++		return;
++	}
++
+ 	/* Else build error message from relevant fields */
+ 	val = PQresultErrorField(res, PG_DIAG_SEVERITY);
+ 	if (val)
+diff --git src/interfaces/libpq/libpq-fe.h src/interfaces/libpq/libpq-fe.h
+index cd2f31d..47f25e0 100644
+--- src/interfaces/libpq/libpq-fe.h
++++ src/interfaces/libpq/libpq-fe.h
+@@ -127,7 +127,9 @@ typedef enum
+ 	PQERRORS_TERSE,				/* single-line error messages */
+ 	PQERRORS_DEFAULT,			/* recommended style */
+ 	PQERRORS_VERBOSE,			/* all the facts, ma'am */
+-	PQERRORS_SQLSTATE			/* only error severity and SQLSTATE code */
++	PQERRORS_SQLSTATE,			/* only error severity and SQLSTATE code */
++	PSERRORS_FORMATTED_DEFAULT,	/* formatted default error message */
++	PSERRORS_FORMATTED_VERBOSE 	/* formatted verbose error message */
+ } PGVerbosity;
+ 
+ typedef enum

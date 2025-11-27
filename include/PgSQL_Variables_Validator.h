@@ -9,7 +9,8 @@ typedef enum {
 	VARIABLE_TYPE_BOOL, /**< Boolean variable type. */
 	VARIABLE_TYPE_STRING, /**< String variable type. */
 	VARIABLE_TYPE_DATESTYLE, /**< DateStyle variable type. */
-	VARIABLE_TYPE_MAINTENANCE_WORK_MEM
+	VARIABLE_TYPE_MAINTENANCE_WORK_MEM, /**< MaintenanceWorkMem variable type. */
+	VARIABLE_TYPE_CLIENT_ENCODING /**< ClientEncoding variable type. */
 } pgsql_variable_type_t;
 
 
@@ -61,5 +62,6 @@ extern const pgsql_variable_validator pgsql_variable_validator_client_min_messag
 extern const pgsql_variable_validator pgsql_variable_validator_bytea_output;
 extern const pgsql_variable_validator pgsql_variable_validator_extra_float_digits;
 extern const pgsql_variable_validator pgsql_variable_validator_maintenance_work_mem;
-
+extern const pgsql_variable_validator pgsql_variable_validator_client_encoding;
+extern const pgsql_variable_validator pgsql_variable_validator_search_path;
 #endif // PGSQL_VARIABLES_VALIDATOR_H

@@ -105,6 +105,48 @@ bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
     return true;
 }
 
+bool prepareAndExec(PGconn* conn,
+    const char* stmtName,
+    const char* query,
+    int nParams = 0,
+    const Oid* paramTypes = nullptr,
+    int nExecParams = 0,
+    const char* const* execValues = nullptr)
+{
+    // Prepare
+    diag("Preparing statement '%s': %s", stmtName, query);
+    PGresult* res = PQprepare(conn, stmtName, query, nParams, paramTypes);
+    if (!res) {
+        diag("PQprepare returned NULL: %s", PQerrorMessage(conn));
+        return false;
+    }
+    bool ok = PQresultStatus(res) == PGRES_COMMAND_OK;
+    if (!ok) {
+        diag("PQprepare failed for '%s': %s", stmtName, PQerrorMessage(conn));
+        PQclear(res);
+        return false;
+    }
+    PQclear(res);
+
+    // Execute prepared
+    diag("Executing prepared statement '%s'", stmtName);
+    res = PQexecPrepared(conn, stmtName, nExecParams, execValues, /*paramLengths*/ nullptr,
+        /*paramFormats*/ nullptr, /*resultFormat*/ 0);
+    if (!res) {
+        diag("PQexecPrepared returned NULL: %s", PQerrorMessage(conn));
+        return false;
+    }
+    ok = PQresultStatus(res) == PGRES_TUPLES_OK || PQresultStatus(res) == PGRES_COMMAND_OK;
+    if (!ok) {
+        diag("PQexecPrepared failed for '%s': %s", stmtName, PQerrorMessage(conn));
+        PQclear(res);
+        return false;
+    }
+    PQclear(res);
+
+    return true;
+}
+
 void run_pgsleep_thread(double* timer_result) {
     PGConnPtr pg_conn = createNewConnection(ConnType::BACKEND, false);
 
@@ -911,6 +953,90 @@ void execute_query_cache_notice_test(PGconn* admin_conn, PGconn* conn) {
         return;
 }
 
+void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
+    // 1) Enable query-cache-for-SELECT rules (same as basic test) so the system *would* cache
+    //    simple queries — but extended query protocol should bypass cache.
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "LOAD PGSQL VARIABLES TO RUNTIME"
+        })) {
+        return;
+    }
+
+    // Collect baseline metrics
+    metrics.before = getQueryCacheMetrics(admin_conn);
+
+    // 2) Prepare and execute (extended query) - should NOT create a cache entry
+    if (!prepareAndExec(conn, "ps_select_1", "SELECT 1")) {
+        // attempt cleanup before returning
+        executeQueries(admin_conn, { "DELETE FROM pgsql_query_rules", "LOAD PGSQL QUERY RULES TO RUNTIME" });
+        return;
+    }
+
+    // Read metrics after extended-query run
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    printQueryCacheMetrics();
+
+    // Expectation: extended/prepared queries are not cached -> no changes in cache metrics
+    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+
+    metrics.swap();
+
+    executeQueries(conn, { "DEALLOCATE ps_select_1" });
+    // 3) Execute prepared statement again (same extended protocol). Still should not touch cache.
+    if (!prepareAndExec(conn, "ps_select_1", "SELECT 1")) {
+        // cleanup below
+    }
+
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    printQueryCacheMetrics();
+
+    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+
+    metrics.swap();
+
+    // 4) test that a simple (non-prepared) SELECT would create a cache entry here
+    //    (verifies rule is active).
+    
+    if (!executeQueries(conn, { "SELECT 1" }))
+        return;
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    printQueryCacheMetrics();
+    checkMetricDelta<>("Query_Cache_Entries", 1, std::equal_to<int>());
+    metrics.swap();
+    
+
+    // 5) Cleanup: remove rules and restore variables as in basic test
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=256 WHERE variable_name='pgsql-query_cache_size_MB'",
+        "LOAD PGSQL VARIABLES TO RUNTIME"
+        })) {
+        return;
+    }
+
+    // 6) Deallocate prepared statement on connection (best-effort; ignore failure)
+    executeQueries(conn, { "DEALLOCATE ps_select_1" });
+}
+
 std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Basic Test", execute_basic_test },
 	{ "Data Manipulation Test", execute_data_manipulation_test },
@@ -920,7 +1046,8 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Multi Threaded Purge Test", execute_multi_threaded_purge_test },
 	{ "Transaction Status Test", execute_transaction_status_test },
     { "Query Cache Store Empty Result Test", execute_query_cache_store_empty_result_test },
-    { "Query Cache Store Notice Result Test", execute_query_cache_notice_test }
+    { "Query Cache Store Notice Result Test", execute_query_cache_notice_test },
+	{ "Prepared Statement Test", execute_prepared_test },
 };
 
 void execute_tests(bool with_ssl, bool diff_conn) {
@@ -967,7 +1094,7 @@ void execute_tests(bool with_ssl, bool diff_conn) {
 
 int main(int argc, char** argv) {
 
-    plan(189*2); // Total number of tests planned
+    plan(206*2); // Total number of tests planned
 
     if (cl.getEnv())
         return exit_status();

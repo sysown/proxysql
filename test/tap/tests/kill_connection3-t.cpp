@@ -18,10 +18,6 @@ This test verifies that client connections are dropped because of:
 
 const int NUM_CONNS = 35;
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
 
 MYSQL * conns[NUM_CONNS];
 unsigned long mythreadid[NUM_CONNS];

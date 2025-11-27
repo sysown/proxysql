@@ -86,6 +86,9 @@ int pull_replication(MYSQL *mysql, int server_id) {
 		if (print_diag == true)
 			diag("server_id %d , event: %d , received events: %d , received heartbeats: %d", server_id, event->event_type, num_events, num_heartbeats);
 	}
+	if (num_heartbeats < NHB && event == nullptr) {
+		diag("'mariadb_rpl_fetch': Repl log ended before exp   error=\"%s\"", mysql_error(mysql));
+	}
 	// we expects NHB heartbeats
 	ok(num_heartbeats == NHB , "For server_id %d received %d heartbeats", server_id, num_heartbeats);
 	mariadb_free_rpl_event(event);
@@ -116,12 +119,17 @@ int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::v
 
 	if (!mysql)
 		return exit_status();
+
+	// NOTE: This must be forced. ProxySQL is going to honor CLIENT_DEPRECATE_EOF for fast-forward conns, and
+	// during fast-forward conns transitions. This test attempts to convert a conn with mismatched
+	// capabilities, '!CLIENT_DEPRECATE_EOF' on frontend and 'CLIENT_DEPRECATE_EOF' on backend, into a
+	// fast-forward one, resulting in a disconnect.
+	mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+
 	if (frontend_ssl) {
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	}
-//	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 	if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
-	//if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, 3306, NULL, 0)) {
 		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();
 	}

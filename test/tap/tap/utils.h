@@ -9,6 +9,7 @@
 #include <fstream>
 #include <unistd.h>
 #include <utility>
+#include <time.h>
 
 #include "curl/curl.h"
 #include "mysql.h"
@@ -17,6 +18,12 @@
 
 #include "command_line.h"
 #include "mysql.h"
+
+#ifdef CLOCK_MONOTONIC_RAW
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC_RAW
+#else
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
+#endif
 
 template <typename T>
 using rc_t = std::pair<int,T>;
@@ -64,6 +71,14 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line);
 
 }
 
+static inline int mysql_query_override(MYSQL* mysql, const std::string& query, const char* file, int line) {
+	return mysql_query_override(mysql, query.c_str(), file, line);
+}
+
+#else
+static inline int mysql_query(MYSQL* mysql, const std::string& query) {
+	return mysql_query(mysql, query.c_str());
+}
 #endif 
 
 /**
@@ -131,6 +146,9 @@ std::pair<int,std::vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl,
  * @return Result of calling 'mysql_query'.
  */
 int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, const char* fn);
+inline static int mysql_query_t__(MYSQL* mysql, const std::string& query, const char* f, int ln, const char* fn) {
+	return mysql_query_t__(mysql, query.c_str(), f, ln, fn);
+}
 
 /**
  * @brief Convenience macro with query logging.
@@ -157,8 +175,7 @@ int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, cons
 
 #define MYSQL_QUERY_T(mysql, query) \
 	do { \
-		diag("Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port); \
-		if (mysql_query(mysql, query)) { \
+		if (mysql_query_t(mysql, query)) { \
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
 			return EXIT_FAILURE; \
 		} \
@@ -268,7 +285,7 @@ struct ext_val_t {
 };
 
 /**
- * @brief Specifications of function 'ext_single_row_val' for different types.
+ * @brief Specializations of function 'ext_single_row_val' for different types.
  * @details These functions serve as the extension point for `mysql_query_ext_val`. A new specialization of
  *  the function is required for each type that `mysql_query_ext_val` should support for the default value.
  * @param row The row from which the first value is going to be extracted and parsed.
@@ -848,6 +865,31 @@ struct POOL_STATS_IDX {
 	};
 };
 
+struct hg_pool_st_t {
+	uint32_t hostgroup;
+	uint32_t conn_used;
+	uint32_t conn_free;
+	uint32_t conn_ok;
+	uint32_t conn_err;
+	uint32_t max_conn_used;
+	uint32_t queries;
+};
+
+/**
+ * @brief A more complex type specialization of 'ext_single_row_val'.
+ * @details For internal use of function 'get_conn_pool_hg_stats'.
+ * @param row The row from which the first value is going to be extracted and parsed.
+ * @param def_val The default value to use in case of failure to extract.
+ * @return An `ext_val_t<T>` where T is the type of the provided default value.
+ */
+ext_val_t<hg_pool_st_t> ext_single_row_val(const mysql_res_row& row, const hg_pool_st_t& def_val);
+/**
+ * @brief Fetches the stats from a particular hostgroup.
+ * @param admin An already opened connection to MySQL admin.
+ * @return An `ext_val_t` wrapping the extracted values.
+ */
+ext_val_t<hg_pool_st_t> get_conn_pool_hg_stats(MYSQL* admin, uint32_t hg);
+
 /**
  * @brief Dumps a resultset with fields from the supplied hgs from 'stats_mysql_connection_pool'.
  * @details The fetched fields are 'hostgroup,ConnUsed,ConnFree,ConnOk,ConnERR,MaxConnUsed,Queries'.
@@ -864,6 +906,7 @@ using pool_state_t = std::map<uint32_t,mysql_row_t>;
  * @return A pair of the shape {err_code, pool_state_t}.
  */
 std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
+
 /**
  * @brief Waits for a generic condition.
  * @details Wait finishes by a non-zero return code by the condition or by timeout.
@@ -933,8 +976,8 @@ struct srv_addr_t {
 
 // Helpers using 'wait_for_cond' on 'stats_mysql_connection'
 void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
-void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
-void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
+void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg=-1);
+void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg=-1);
 
 /**
  * @brief Fetches the ProxySQL nodes configured in the supplied instance.
@@ -965,5 +1008,8 @@ int check_nodes_sync(
 const char* get_env_str(const char* envname, const char* envdefault);
 int get_env_int(const char* envname, int envdefault);
 bool get_env_bool(const char* envname, bool envdefault);
+
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
+int run_q(MYSQL *mysql, const char *q);
 
 #endif // #define UTILS_H

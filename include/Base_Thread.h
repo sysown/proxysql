@@ -28,16 +28,24 @@ private:
 	void* re;
 	char* s;
 public:
-	Session_Regex(char* p);
+	Session_Regex(const char* p);
 	~Session_Regex();
-	bool match(char* m);
+	bool match(const char* m);
 };
 
 class MySQL_Thread;
 class PgSQL_Thread;
 
 class Base_Thread {
-	private:
+public:
+#ifdef DEBUG 
+	// This block is only used for Watchdog unit tests:
+	// Specifically for PROXYSQLTEST cases 55 0 and 55 1.
+	std::atomic<unsigned int> watchdog_test__simulated_delay_ms {0};
+	std::atomic<unsigned int> watchdog_test__missed_heartbeats {0};
+#endif // DEBUG
+
+private:
 	bool maintenance_loop;
 	public:
 	unsigned long long curtime;

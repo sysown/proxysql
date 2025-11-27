@@ -311,7 +311,7 @@ std::size_t count_matches(const string& str, const string& substr) {
 }
 
 int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, const char* fn) {
-	diag("%s:%d:%s(): Issuing query '%s' to ('%s':%d)", f, ln, fn, query, mysql->host, mysql->port);
+	diag("%s:%d:%s(): Issuing query \"%s\" to ('%s':%d)", f, ln, fn, query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);
 }
 
@@ -475,7 +475,7 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 
 unsigned long long monotonic_time() {
   struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  clock_gettime(PROXYSQL_CLOCK_MONOTONIC, &ts);
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
@@ -656,9 +656,9 @@ ext_val_t<int32_t> ext_single_row_val(const mysql_res_row& row, const int32_t& d
 	if (row.empty() || row.front().empty()) {
 		return { -1, def_val, {} };
 	} else {
-        errno = 0;
-        char* p_end {};
-        const int32_t val = std::strtol(row.front().c_str(), &p_end, 10);
+		errno = 0;
+		char* p_end {};
+		const int32_t val = std::strtol(row.front().c_str(), &p_end, 10);
 
 		if (row[0] == p_end || errno == ERANGE) {
 			return { -2, def_val, string { row[0] } };
@@ -672,9 +672,9 @@ ext_val_t<uint32_t> ext_single_row_val(const mysql_res_row& row, const uint32_t&
 	if (row.empty() || row.front().empty()) {
 		return { -1, def_val, {} };
 	} else {
-        errno = 0;
-        char* p_end {};
-        const uint32_t val = std::strtoul(row.front().c_str(), &p_end, 10);
+		errno = 0;
+		char* p_end {};
+		const uint32_t val = std::strtoul(row.front().c_str(), &p_end, 10);
 
 		if (row[0] == p_end || errno == ERANGE) {
 			return { -2, def_val, string { row[0] } };
@@ -689,9 +689,9 @@ ext_val_t<int64_t> ext_single_row_val(const mysql_res_row& row, const int64_t& d
 	if (row.empty() || row.front().empty()) {
 		return { -1, def_val, {} };
 	} else {
-        errno = 0;
-        char* p_end {};
-        const int64_t val = std::strtoll(row.front().c_str(), &p_end, 10);
+		errno = 0;
+		char* p_end {};
+		const int64_t val = std::strtoll(row.front().c_str(), &p_end, 10);
 
 		if (row[0] == p_end || errno == ERANGE) {
 			return { -2, def_val, string { row[0] } };
@@ -705,9 +705,9 @@ ext_val_t<uint64_t> ext_single_row_val(const mysql_res_row& row, const uint64_t&
 	if (row.empty() || row.front().empty()) {
 		return { -1, def_val, {} };
 	} else {
-        errno = 0;
-        char* p_end {};
-        const uint64_t val = std::strtoull(row.front().c_str(), &p_end, 10);
+		errno = 0;
+		char* p_end {};
+		const uint64_t val = std::strtoull(row.front().c_str(), &p_end, 10);
 
 		if (row[0] == p_end || errno == ERANGE) {
 			return { -2, def_val, string { row[0] } };
@@ -744,12 +744,17 @@ CURLcode perform_simple_post(
 ) {
 	CURL *curl;
 	CURLcode res;
+	struct curl_slist *headers = NULL;
 
 	curl_global_init(CURL_GLOBAL_ALL);
 
 	curl = curl_easy_init();
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+
+		headers = curl_slist_append(headers, "Content-Type: application/json");
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, params.c_str());
 		struct memory response = { 0 };
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -765,6 +770,7 @@ CURLcode perform_simple_post(
 		}
 
 		free(response.data);
+		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 	}
 
@@ -1933,6 +1939,61 @@ int dump_conn_stats(MYSQL* admin, const vector<uint32_t> hgs) {
 	return EXIT_SUCCESS;
 }
 
+string row_to_str(const mysql_res_row& row) {
+	string res { "[" };
+
+	for (const auto& e : row) {
+		res += "\"" + e + "\"";
+
+		if (&e != &row.back()) {
+			res += ",";
+		}
+	}
+
+	res += "]";
+
+	return res;
+}
+
+ext_val_t<hg_pool_st_t> ext_single_row_val(const mysql_res_row& row, const hg_pool_st_t& def_val) {
+	if (row.empty() || row.size() != sizeof(hg_pool_st_t)/sizeof(uint32_t)) {
+		return { -1, def_val, {} };
+	} else {
+		for (int i = 0; i < sizeof(hg_pool_st_t)/sizeof(uint32_t); i++) {
+			if (row[i].empty()) {
+				return { -1, def_val, {} };
+			}
+		}
+
+		errno = 0;
+		char* p_end { nullptr };
+		hg_pool_st_t res {};
+		const string row_str { row_to_str(row) };
+
+		res.hostgroup = std::strtoull(row.front().c_str(), &p_end, 10);
+		if (row[0].c_str() == p_end || errno == ERANGE) { return { -2, def_val, row_str }; }
+		res.conn_used = std::strtoull(row[1].c_str(), &p_end, 10);
+		if (row[1].c_str() == p_end || errno == ERANGE) { return { -2, def_val, row_str }; }
+		res.conn_free = std::strtoull(row[2].c_str(), &p_end, 10);
+		if (row[2].c_str() == p_end || errno == ERANGE) { return { -2, def_val, row_str }; }
+		res.conn_ok = std::strtoull(row[3].c_str(), &p_end, 10);
+		if (row[3].c_str() == p_end || errno == ERANGE) { return { -2, def_val, row_str }; }
+		res.conn_err = std::strtoull(row[4].c_str(), &p_end, 10);
+		if (row[4].c_str() == p_end || errno == ERANGE) { return { -2, def_val, row_str }; }
+		res.max_conn_used = std::strtoull(row[5].c_str(), &p_end, 10);
+		if (row[5].c_str() == p_end || errno == ERANGE) { return { -2, def_val, row_str }; }
+		res.max_conn_used = std::strtoull(row[6].c_str(), &p_end, 10);
+		if (row[6].c_str() == p_end || errno == ERANGE) { return { -2, def_val, row_str }; }
+
+		return { EXIT_SUCCESS, res, row_str };
+	}
+}
+
+ext_val_t<hg_pool_st_t> get_conn_pool_hg_stats(MYSQL* admin, uint32_t hg) {
+	const string HG_STATS_QUERY { gen_conn_stats_query({ hg }) };
+	return mysql_query_ext_val(admin, HG_STATS_QUERY, hg_pool_st_t {});
+}
+
 pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const vector<uint32_t> hgs) {
 	const string stats_query { gen_conn_stats_query(hgs) };
 	const pair<int,vector<mysql_row_t>> conn_pool_stats { exec_dql_query(admin, stats_query, true) };
@@ -1985,6 +2046,8 @@ int check_cond(MYSQL* mysql, const string& q) {
 					res = 0;
 				}
 			}
+
+			mysql_free_result(myres);
 		}
 	} else {
 		diag("Check failed with error '%s'", mysql_error(mysql));
@@ -2111,11 +2174,14 @@ void check_conn_count(MYSQL* admin, const string& conn_type, uint32_t conn_num, 
 
 void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg) {
 	const string queries_s { to_string(queries) };
-	const string hg_s { to_string(hg) };
 
-	const string select_hg_queries {
-		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
-	};
+	string select_hg_queries;
+	if (hg == -1) {
+		select_hg_queries = "SELECT SUM(Queries) FROM stats_mysql_connection_pool";
+	} else {
+		select_hg_queries = "SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg);
+	}
+
 	const string check_queries {
 		"SELECT IIF((" + select_hg_queries + ")=" + queries_s + ",'TRUE','FALSE')"
 	};
@@ -2136,11 +2202,14 @@ void check_query_count(MYSQL* admin, vector<uint32_t> queries, uint32_t hg) {
 			}
 		)
 	};
-	const string hg_s { to_string(hg) };
 
-	const string select_hg_queries {
-		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
-	};
+	string select_hg_queries;
+	if (hg == -1) {
+		select_hg_queries = "SELECT SUM(Queries) FROM stats_mysql_connection_pool";
+	} else {
+		select_hg_queries = "SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg);
+	}
+
 	const string check_queries {
 		"SELECT IIF((" + select_hg_queries + ") IN (" + queries_s + "),'TRUE','FALSE')"
 	};
@@ -2259,3 +2328,38 @@ bool get_env_bool(const char* envname, bool envdefault) {
 
 	return (bool) res;
 };
+
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, bool cmp) {
+	diag("Creating MySQL conn  host=\"%s\" port=\"%d\" user=\"%s\" ssl=\"%d\" cmp=\"%d\"", host, port, user, ssl, cmp);
+
+	MYSQL* mysql = mysql_init(NULL);
+
+	if (!mysql) {
+		return nullptr;
+	}
+	if (cmp) {
+		if (mysql_options(mysql, MYSQL_OPT_COMPRESS, nullptr)) {
+			return nullptr;
+		}
+	}
+
+	int cflags = 0;
+
+	if (ssl) {
+		if (mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL)) {
+			return nullptr;
+		}
+		cflags |= CLIENT_SSL;
+	}
+
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) {
+		return nullptr;
+	}
+
+	return mysql;
+}
+
+int run_q(MYSQL *mysql, const char *q) {
+	MYSQL_QUERY_T(mysql,q);
+	return 0;
+}

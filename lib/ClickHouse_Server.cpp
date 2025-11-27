@@ -1146,6 +1146,8 @@ __end_show_commands:
 			||
 			(strncasecmp("SHOW SLAVE STATUS",query_no_space,17)==0)
 			||
+			(strncasecmp("SHOW REPLICA STATUS",query_no_space,19)==0)
+			||
 			(strncasecmp("SHOW MASTER LOGS",query_no_space,16)==0)
 		) {
 			GloClickHouseServer->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Access Denied");

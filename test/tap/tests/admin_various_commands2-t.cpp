@@ -103,10 +103,6 @@ void add_commands_set1(std::vector<std::string>& queries, std::string m, bool wi
 	}
 }
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
 int main() {
 	CommandLine cl;
 

@@ -456,6 +456,8 @@ MySQL_Connection::MySQL_Connection() {
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.session_track_gtids_int=0;
+	options.server_capabilities=0;
+
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -729,6 +731,19 @@ unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_
 	return ret;
 }
 
+bool MySQL_Connection::match_ff_req_options(const MySQL_Connection *c) {
+	// 'server_capabilities' is empty for backend connections
+	const MySQL_Connection* backend { !c->options.server_capabilities ? c : this };
+	const MySQL_Connection* frontend { c->options.server_capabilities ? c : this };
+
+	// Only required to be checked for fast_forward sessions
+	if (frontend->myds && frontend->myds->sess->session_fast_forward) {
+		return (frontend->options.client_flag & CLIENT_DEPRECATE_EOF) ==
+				(backend->mysql->server_capabilities & CLIENT_DEPRECATE_EOF);
+	} else {
+		return true;
+	}
+}
 
 bool MySQL_Connection::match_tracked_options(const MySQL_Connection *c) {
 	uint32_t cf1 = options.client_flag; // own client flags
