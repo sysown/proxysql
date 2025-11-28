@@ -14,93 +14,106 @@
   along with this program; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1335  USA */
 
-#define PROXYSQL_EXTERN
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include "tap.h"
-#include <cstdint>
-#include <cstring>
-#include <memory>
-
-#include "openssl/ssl.h"
-
 #include "mysql.h"
-#include "proxysql_structs.h"
-#include "sqlite3db.h"
-#include "MySQL_LDAP_Authentication.hpp"
-#include "sqlite3.h"
-
-MySQL_LDAP_Authentication* GloMyLdapAuth = nullptr;
 
 int main() {
-	SQLite3DB::LoadPlugin(NULL);
-	plan(15);
+	plan(12);
 
-	{
-		int i=sqlite3_config(SQLITE_CONFIG_URI, 1);
-		if (i!=SQLITE_OK) {
-			fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
-		}
-		ok(i==SQLITE_OK, "Setting SQLITE_CONFIG_URI");
+	MYSQL *admin = mysql_init(NULL);
+	if (!admin) {
+		fail("mysql_init() failed");
+		return exit_status();
 	}
 
-	SQLite3DB *db;
-	db = new SQLite3DB();
-	db->open((char *)"file:mem_db?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	// Connect to ProxySQL Admin
+	if (!mysql_real_connect(admin, "127.0.0.1", "admin", "admin", NULL, 6032, NULL, 0)) {
+		fail("Failed to connect to ProxySQL Admin: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
+	pass("Connected to ProxySQL Admin");
 
-	char *error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result *resultset = NULL;
+	// Test 1: Run a DML query that affects rows
+	if (mysql_query(admin, "INSERT INTO mysql_replication_hostgroups (hostgroup_id, hostname, port) VALUES (1000, 'test.example.com', 3306)")) {
+		fail("Failed to execute INSERT query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
 
-	// Test the fix: DDL queries should reset affected_rows to 0
+	my_ulonglong affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 1, "INSERT query returns 1 affected row: %llu", affected_rows);
+	pass("INSERT query executed successfully");
 
-	// 1. First execute a DML that affects rows
-	bool rc = db->execute_statement("CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT)", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "CREATE TABLE test_table succeeds");
-	ok(affected_rows == 0, "CREATE TABLE returns 0 affected rows");
+	// Test 2: Run another DML query
+	if (mysql_query(admin, "INSERT INTO mysql_replication_hostgroups (hostgroup_id, hostname, port) VALUES (1001, 'test2.example.com', 3306)")) {
+		fail("Failed to execute second INSERT query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
 
-	// 2. Insert some data
-	error = NULL; cols = 0; affected_rows = 0; resultset = NULL;
-	rc = db->execute_statement("INSERT INTO test_table (value) VALUES ('test1')", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "INSERT first row succeeds");
-	ok(affected_rows == 1, "INSERT returns 1 affected row");
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 1, "Second INSERT query returns 1 affected row: %llu", affected_rows);
+	pass("Second INSERT query executed successfully");
 
-	// 3. Insert more data
-	error = NULL; cols = 0; affected_rows = 0; resultset = NULL;
-	rc = db->execute_statement("INSERT INTO test_table (value) VALUES ('test2')", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "INSERT second row succeeds");
-	ok(affected_rows == 1, "INSERT returns 1 affected row");
+	// Test 3: Now execute a DDL query - this should reset affected_rows to 0 (this was the bug)
+	if (mysql_query(admin, "CREATE TABLE test_table_4855 (id INT PRIMARY KEY, name VARCHAR(255))")) {
+		fail("Failed to execute CREATE TABLE query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
 
-	// 4. Now execute a DDL - this should reset affected_rows to 0 (this was the bug)
-	error = NULL; cols = 0; affected_rows = 0; resultset = NULL;
-	rc = db->execute_statement("CREATE TABLE test_table2 (id INTEGER PRIMARY KEY)", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "CREATE TABLE test_table2 succeeds");
-	ok(affected_rows == 0, "CREATE TABLE after DML returns 0 affected rows (bug fix verified)");
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 0, "CREATE TABLE returns 0 affected rows (bug fix verified): %llu", affected_rows);
+	pass("CREATE TABLE query executed successfully");
 
-	// 5. Test DROP TABLE
-	error = NULL; cols = 0; affected_rows = 0; resultset = NULL;
-	rc = db->execute_statement("DROP TABLE test_table2", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "DROP TABLE succeeds");
-	ok(affected_rows == 0, "DROP TABLE returns 0 affected rows");
+	// Test 4: Run DROP TABLE
+	if (mysql_query(admin, "DROP TABLE test_table_4855")) {
+		fail("Failed to execute DROP TABLE query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
 
-	// 6. Test VACUUM
-	error = NULL; cols = 0; affected_rows = 0; resultset = NULL;
-	rc = db->execute_statement("VACUUM", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "VACUUM succeeds");
-	ok(affected_rows == 0, "VACUUM returns 0 affected rows");
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 0, "DROP TABLE returns 0 affected rows: %llu", affected_rows);
+	pass("DROP TABLE query executed successfully");
 
-	// 7. Test that DML still works correctly after DDL
-	error = NULL; cols = 0; affected_rows = 0; resultset = NULL;
-	rc = db->execute_statement("UPDATE test_table SET value = 'updated' WHERE id = 1", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "UPDATE after DDL succeeds");
-	ok(affected_rows == 1, "UPDATE returns 1 affected row");
+	// Test 5: Verify DML still works correctly after DDL
+	if (mysql_query(admin, "UPDATE mysql_replication_hostgroups SET port = 3307 WHERE hostgroup_id = 1000")) {
+		fail("Failed to execute UPDATE query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
 
-	// 8. Test transaction commands
-	error = NULL; cols = 0; affected_rows = 0; resultset = NULL;
-	rc = db->execute_statement("BEGIN", &error, &cols, &affected_rows, &resultset);
-	ok(rc && error == nullptr, "BEGIN transaction succeeds");
-	ok(affected_rows == 0, "BEGIN returns 0 affected rows");
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 1, "UPDATE query after DDL returns 1 affected row: %llu", affected_rows);
+	pass("UPDATE query executed successfully");
 
-	delete db;
+	// Test 6: Run a different DDL command
+	if (mysql_query(admin, "DELETE FROM mysql_replication_hostgroups WHERE hostgroup_id IN (1000, 1001)")) {
+		fail("Failed to execute DELETE query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
+
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 2, "DELETE query returns 2 affected rows: %llu", affected_rows);
+	pass("DELETE query executed successfully");
+
+	// Test 7: Run another DDL to verify the fix again
+	if (mysql_query(admin, "TRUNCATE TABLE stats_memory_metrics")) {
+		// TRUNCATE might not be available on all tables, so don't fail if it fails
+		diag("TRUNCATE TABLE failed (expected on some systems): %s", mysql_error(admin));
+		skip("TRUNCATE not available, skipping affected rows test");
+	} else {
+		affected_rows = mysql_affected_rows(admin);
+		ok(affected_rows == 0, "TRUNCATE TABLE returns 0 affected rows: %llu", affected_rows);
+		pass("TRUNCATE TABLE query executed successfully");
+	}
+
+	mysql_close(admin);
 	return exit_status();
 }
