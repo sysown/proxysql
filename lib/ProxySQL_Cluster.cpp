@@ -4318,6 +4318,53 @@ static bool safe_update_peer_info(char** existing_hostname, char** existing_ip_a
 }
 
 /**
+ * @brief Helper function to safely update peer information with proper memory management.
+ *
+ * This function eliminates the common memory management pattern found in all peer
+ * selection functions. It safely frees existing allocations and creates new ones,
+ * handling error cases and preventing memory leaks.
+ *
+ * @param existing_hostname Pointer to existing hostname string (may be NULL)
+ * @param existing_ip_addr Pointer to existing IP address string (may be NULL)
+ * @param new_hostname New hostname to allocate (may be NULL)
+ * @param new_ip_addr New IP address to allocate (may be NULL)
+ *
+ * @return Returns true if allocation succeeded, false on memory allocation failure
+ */
+static bool safe_update_peer_info(char** existing_hostname, char** existing_ip_addr,
+                                   const char* new_hostname, const char* new_ip_addr) {
+	// Free existing allocations
+	if (*existing_hostname) {
+		free(*existing_hostname);
+		*existing_hostname = NULL;
+	}
+	if (*existing_ip_addr) {
+		free(*existing_ip_addr);
+		*existing_ip_addr = NULL;
+	}
+
+	// Allocate new values
+	if (new_hostname) {
+		*existing_hostname = strdup(new_hostname);
+		if (*existing_hostname == NULL) {
+			return false; // Memory allocation failed
+		}
+	}
+	if (new_ip_addr) {
+		*existing_ip_addr = strdup(new_ip_addr);
+		if (*existing_ip_addr == NULL) {
+			if (*existing_hostname) {
+				free(*existing_hostname);
+				*existing_hostname = NULL;
+			}
+			return false; // Memory allocation failed
+		}
+	}
+
+	return true;
+}
+
+/**
  * @brief Identifies the optimal cluster peer for PostgreSQL users synchronization.
  *
  * This function scans all available cluster nodes to find the best peer for synchronizing
