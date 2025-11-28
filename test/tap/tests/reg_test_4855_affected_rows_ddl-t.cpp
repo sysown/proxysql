@@ -25,7 +25,7 @@
 #include "mysql.h"
 
 int main(int argc, char** argv) {
-	plan(12);
+	plan(14);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -47,19 +47,34 @@ int main(int argc, char** argv) {
 	}
 	ok(true, "Connected to ProxySQL Admin");
 
-	// Test 1: Run a DML query that affects rows
-	if (mysql_query(admin, "INSERT INTO mysql_replication_hostgroups (hostgroup_id, hostname, port) VALUES (1000, 'test.example.com', 3306)")) {
-		diag("Failed to execute INSERT query: %s", mysql_error(admin));
+	// Clean up any existing test tables
+	mysql_query(admin, "DROP TABLE IF EXISTS test_table_4855");
+	mysql_query(admin, "DROP TABLE IF EXISTS test_table_4855_2");
+
+	// Test 1: Run a DDL query - should return 0 affected rows (this was the bug)
+	if (mysql_query(admin, "CREATE TABLE test_table_4855 (id INT PRIMARY KEY, name VARCHAR(255))")) {
+		diag("Failed to execute CREATE TABLE query: %s", mysql_error(admin));
 		mysql_close(admin);
 		return exit_status();
 	}
 
 	my_ulonglong affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 0, "CREATE TABLE returns 0 affected rows (bug fix verified): %llu", affected_rows);
+	diag("CREATE TABLE query executed successfully");
+
+	// Test 2: Run a DML query that affects rows
+	if (mysql_query(admin, "INSERT INTO test_table_4855 (id, name) VALUES (1, 'test1')")) {
+		diag("Failed to execute INSERT query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
+
+	affected_rows = mysql_affected_rows(admin);
 	ok(affected_rows == 1, "INSERT query returns 1 affected row: %llu", affected_rows);
 	diag("INSERT query executed successfully");
 
-	// Test 2: Run another DML query
-	if (mysql_query(admin, "INSERT INTO mysql_replication_hostgroups (hostgroup_id, hostname, port) VALUES (1001, 'test2.example.com', 3306)")) {
+	// Test 3: Run another DML query
+	if (mysql_query(admin, "INSERT INTO test_table_4855 (id, name) VALUES (2, 'test2')")) {
 		diag("Failed to execute second INSERT query: %s", mysql_error(admin));
 		mysql_close(admin);
 		return exit_status();
@@ -69,18 +84,40 @@ int main(int argc, char** argv) {
 	ok(affected_rows == 1, "Second INSERT query returns 1 affected row: %llu", affected_rows);
 	diag("Second INSERT query executed successfully");
 
-	// Test 3: Now execute a DDL query - this should reset affected_rows to 0 (this was the bug)
-	if (mysql_query(admin, "CREATE TABLE test_table_4855 (id INT PRIMARY KEY, name VARCHAR(255))")) {
-		diag("Failed to execute CREATE TABLE query: %s", mysql_error(admin));
+	// Test 4: Run another DDL query - should return 0 affected rows
+	if (mysql_query(admin, "CREATE TABLE test_table_4855_2 (id INT PRIMARY KEY, value TEXT)")) {
+		diag("Failed to execute second CREATE TABLE query: %s", mysql_error(admin));
 		mysql_close(admin);
 		return exit_status();
 	}
 
 	affected_rows = mysql_affected_rows(admin);
-	ok(affected_rows == 0, "CREATE TABLE returns 0 affected rows (bug fix verified): %llu", affected_rows);
-	diag("CREATE TABLE query executed successfully");
+	ok(affected_rows == 0, "Second CREATE TABLE returns 0 affected rows: %llu", affected_rows);
+	diag("Second CREATE TABLE query executed successfully");
 
-	// Test 4: Run DROP TABLE
+	// Test 5: Run an UPDATE query - should return correct affected rows
+	if (mysql_query(admin, "UPDATE test_table_4855 SET name = 'updated' WHERE id = 1")) {
+		diag("Failed to execute UPDATE query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
+
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 1, "UPDATE query returns 1 affected row: %llu", affected_rows);
+	diag("UPDATE query executed successfully");
+
+	// Test 6: Run a DELETE query - should return correct affected rows
+	if (mysql_query(admin, "DELETE FROM test_table_4855 WHERE id IN (1, 2)")) {
+		diag("Failed to execute DELETE query: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
+
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 2, "DELETE query returns 2 affected rows: %llu", affected_rows);
+	diag("DELETE query executed successfully");
+
+	// Test 7: Run DROP TABLE - should return 0 affected rows
 	if (mysql_query(admin, "DROP TABLE test_table_4855")) {
 		diag("Failed to execute DROP TABLE query: %s", mysql_error(admin));
 		mysql_close(admin);
@@ -91,76 +128,68 @@ int main(int argc, char** argv) {
 	ok(affected_rows == 0, "DROP TABLE returns 0 affected rows: %llu", affected_rows);
 	diag("DROP TABLE query executed successfully");
 
-	// Test 5: Verify DML still works correctly after DDL
-	if (mysql_query(admin, "UPDATE mysql_replication_hostgroups SET port = 3307 WHERE hostgroup_id = 1000")) {
-		diag("Failed to execute UPDATE query: %s", mysql_error(admin));
+	// Test 8: Run another DDL to verify the fix again (ALTER TABLE)
+	if (mysql_query(admin, "ALTER TABLE test_table_4855_2 ADD COLUMN extra INTEGER")) {
+		diag("Failed to execute ALTER TABLE query: %s", mysql_error(admin));
 		mysql_close(admin);
 		return exit_status();
 	}
 
 	affected_rows = mysql_affected_rows(admin);
-	ok(affected_rows == 1, "UPDATE query after DDL returns 1 affected row: %llu", affected_rows);
-	diag("UPDATE query executed successfully");
+	ok(affected_rows == 0, "ALTER TABLE returns 0 affected rows: %llu", affected_rows);
+	diag("ALTER TABLE query executed successfully");
 
-	// Test 6: Run a different DML query
-	if (mysql_query(admin, "DELETE FROM mysql_replication_hostgroups WHERE hostgroup_id IN (1000, 1001)")) {
-		diag("Failed to execute DELETE query: %s", mysql_error(admin));
+	// Test 9: Test with comments followed by DDL (this was mentioned in the issue)
+	if (mysql_query(admin, "/* This is a comment */ CREATE TABLE test_table_4855 (id INT PRIMARY KEY)")) {
+		diag("Failed to execute CREATE TABLE with comment: %s", mysql_error(admin));
 		mysql_close(admin);
 		return exit_status();
 	}
 
 	affected_rows = mysql_affected_rows(admin);
-	ok(affected_rows == 2, "DELETE query returns 2 affected rows: %llu", affected_rows);
-	diag("DELETE query executed successfully");
+	ok(affected_rows == 0, "CREATE TABLE with comment returns 0 affected rows: %llu", affected_rows);
+	diag("CREATE TABLE with comment executed successfully");
 
-	// Test 7: Run another DDL to verify the fix again
-	if (mysql_query(admin, "TRUNCATE TABLE stats_memory_metrics")) {
-		// TRUNCATE might fail if table doesn't exist, but we test affected rows anyway
-		diag("TRUNCATE TABLE query executed (may fail if table doesn't exist)");
-		ok(true, "TRUNCATE TABLE query attempted");
-	} else {
-		affected_rows = mysql_affected_rows(admin);
-		ok(affected_rows == 0, "TRUNCATE TABLE returns 0 affected rows: %llu", affected_rows);
-		diag("TRUNCATE TABLE query executed successfully");
-	}
-
-	// Test 8: Run a VACUUM command on sqlite server
-	MYSQL* sqlite_mysql = mysql_init(NULL);
-	ok(sqlite_mysql != NULL, "Failed to initialize SQLite connection");
-	if (!sqlite_mysql) {
+	// Test 10: Insert data and run SELECT to verify normal operation
+	if (mysql_query(admin, "INSERT INTO test_table_4855 (id) VALUES (1), (2), (3)")) {
+		diag("Failed to execute INSERT with multiple values: %s", mysql_error(admin));
 		mysql_close(admin);
 		return exit_status();
 	}
 
-	if (!mysql_real_connect(sqlite_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		diag("Failed to connect to SQLite3 Server: %s", mysql_error(sqlite_mysql));
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 3, "INSERT with multiple values returns 3 affected rows: %llu", affected_rows);
+	diag("INSERT with multiple values executed successfully");
+
+	// Test 11: Run VACUUM - should return 0 affected rows
+	if (mysql_query(admin, "VACUUM")) {
+		diag("Failed to execute VACUUM query: %s", mysql_error(admin));
 		mysql_close(admin);
-		mysql_close(sqlite_mysql);
-		return exit_status();
-	}
-	ok(true, "Connected to SQLite3 Server");
-
-	// Insert some data first
-	mysql_query(sqlite_mysql, "CREATE TABLE IF NOT EXISTS test_vacuum_4855 (id INTEGER PRIMARY KEY, name TEXT)");
-	mysql_query(sqlite_mysql, "DELETE FROM test_vacuum_4855");
-	mysql_query(sqlite_mysql, "INSERT INTO test_vacuum_4855 (name) VALUES ('test1')");
-
-	affected_rows = mysql_affected_rows(sqlite_mysql);
-	ok(affected_rows == 1, "INSERT on SQLite3 Server returns 1 affected row: %llu", affected_rows);
-
-	// Now run VACUUM - this should return 0 affected rows
-	if (mysql_query(sqlite_mysql, "VACUUM")) {
-		diag("Failed to execute VACUUM query: %s", mysql_error(sqlite_mysql));
-		mysql_close(admin);
-		mysql_close(sqlite_mysql);
 		return exit_status();
 	}
 
-	affected_rows = mysql_affected_rows(sqlite_mysql);
-	ok(affected_rows == 0, "VACUUM returns 0 affected rows (bug fix verified): %llu", affected_rows);
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 0, "VACUUM returns 0 affected rows: %llu", affected_rows);
 	diag("VACUUM query executed successfully");
 
-	mysql_close(sqlite_mysql);
+	// Test 12: Clean up - DROP remaining tables individually
+	if (mysql_query(admin, "DROP TABLE IF EXISTS test_table_4855")) {
+		diag("Failed to execute final DROP TABLE: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
+
+	affected_rows = mysql_affected_rows(admin);
+	ok(affected_rows == 0, "Final DROP TABLE returns 0 affected rows: %llu", affected_rows);
+	diag("Final DROP TABLE query executed successfully");
+
+	// Additional cleanup without test assertion
+	if (mysql_query(admin, "DROP TABLE IF EXISTS test_table_4855_2")) {
+		diag("Failed to execute second DROP TABLE: %s", mysql_error(admin));
+		mysql_close(admin);
+		return exit_status();
+	}
+	diag("Additional cleanup DROP TABLE executed");
 	mysql_close(admin);
 	return exit_status();
 }
