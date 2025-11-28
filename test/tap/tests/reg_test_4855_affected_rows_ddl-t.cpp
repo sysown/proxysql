@@ -27,6 +27,7 @@
 #include "proxysql_structs.h"
 #include "sqlite3db.h"
 #include "MySQL_LDAP_Authentication.hpp"
+#include "sqlite3.h"
 
 MySQL_LDAP_Authentication* GloMyLdapAuth = nullptr;
 
