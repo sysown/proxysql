@@ -191,59 +191,39 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-计划(plan, 6);
+plan(6);
 
 	// Connect to admin interfaces
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!proxysql_admin) {
 		diag("mysql_init() failed");
-		return EXIT_FAILURE;
+		return exit_status();
 	}
 
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		diag("Failed to connect to primary admin: %s", mysql_error(proxysql_admin));
-		return EXIT_FAILURE;
+		return exit_status();
 	}
 
 	// For this test, we'll just verify that PostgreSQL checksums are present
 	// In a full cluster test, we would connect to a replica and verify sync
 
 	int res = check_pgsql_checksums_in_runtime_table(proxysql_admin);
-	if (res == EXIT_SUCCESS) {
-		pass("PostgreSQL checksums are present in runtime_checksums_values");
-	} else {
-		fail("PostgreSQL checksums missing from runtime_checksums_values");
-	}
+	ok(res == EXIT_SUCCESS, "PostgreSQL checksums are present in runtime_checksums_values");
 
 	// Test basic PostgreSQL configuration is supported
 	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_servers LIMIT 1");
-	if (mysql_errno(proxysql_admin) == 0) {
-		pass("PostgreSQL servers table is accessible");
-	} else {
-		fail("PostgreSQL servers table not accessible: %s", mysql_error(proxysql_admin));
-	}
+	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL servers table is accessible");
 
 	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_users LIMIT 1");
-	if (mysql_errno(proxysql_admin) == 0) {
-		pass("PostgreSQL users table is accessible");
-	} else {
-		fail("PostgreSQL users table not accessible: %s", mysql_error(proxysql_admin));
-	}
+	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL users table is accessible");
 
 	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_query_rules LIMIT 1");
-	if (mysql_errno(proxysql_admin) == 0) {
-		pass("PostgreSQL query rules table is accessible");
-	} else {
-		fail("PostgreSQL query rules table not accessible: %s", mysql_error(proxysql_admin));
-	}
+	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL query rules table is accessible");
 
 	// Check cluster variables exist
 	MYSQL_QUERY(proxysql_admin, "SHOW VARIABLES LIKE 'cluster_pgsql_%'");
-	if (mysql_errno(proxysql_admin) == 0) {
-		pass("PostgreSQL cluster variables are accessible");
-	} else {
-		fail("PostgreSQL cluster variables not accessible: %s", mysql_error(proxysql_admin));
-	}
+	ok(mysql_errno(proxysql_admin) == 0, "PostgreSQL cluster variables are accessible");
 
 	mysql_close(proxysql_admin);
 
