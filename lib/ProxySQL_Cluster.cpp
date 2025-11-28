@@ -13,6 +13,8 @@
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
+#include "PgSQL_Authentication.h"
+#include "PgSQL_Query_Processor.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -1172,8 +1174,8 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					proxy_info("Cluster: detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					// Create checksum structures for PostgreSQL servers
-					pgsql_servers_v2_checksum_t pgsql_servers_v2_checksum{v_exp_checksum, v->epoch};
-					runtime_pgsql_servers_checksum_t runtime_pgsql_servers_checksum{v_exp_checksum, v->epoch};
+					pgsql_servers_v2_checksum_t pgsql_servers_v2_checksum{v_exp_checksum, static_cast<time_t>(v->epoch)};
+					runtime_pgsql_servers_checksum_t runtime_pgsql_servers_checksum{v_exp_checksum, static_cast<time_t>(v->epoch)};
 					GloProxyCluster->pull_pgsql_servers_v2_from_peer(pgsql_servers_v2_checksum, runtime_pgsql_servers_checksum, true);
 				}
 			}
