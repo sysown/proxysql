@@ -18,14 +18,6 @@
 #define USLEEP_SQLITE_LOCKED 100
 
 /**
- * @brief Check if a SQL statement is a DDL query that doesn't affect rows
- *
- * @param query The SQL statement to check
- * @return True if the statement is a DDL query that doesn't affect rows
- */
-static bool is_ddl_query_without_row_changes(const char *query);
-
-/**
  * @brief Constructor for the SQLite3_column class.
  * 
  * @param a The datatype of the column.
@@ -349,6 +341,8 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 	*cols = (*proxy_sqlite3_column_count)(statement);
 	if (*cols==0) { // not a SELECT
 		*resultset=NULL;
+		// Get total changes before executing the statement
+		long long total_changes_before = (*proxy_sqlite3_total_changes64)(db);
 		do {
 			rc=(*proxy_sqlite3_step)(statement);
 			if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
@@ -360,14 +354,9 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 			}
 		} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 		if (rc==SQLITE_DONE) {
-			int changes = (*proxy_sqlite3_changes)(db);
-			// For DDL queries that don't affect rows, reset affected_rows to 0
-			// to prevent incorrect reporting of previous DML affected rows
-			if (is_ddl_query_without_row_changes(str)) {
-				*affected_rows = 0;
-			} else {
-				*affected_rows = changes;
-			}
+			// Calculate affected rows as the difference in total changes
+			long long total_changes_after = (*proxy_sqlite3_total_changes64)(db);
+			*affected_rows = (int)(total_changes_after - total_changes_before);
 			ret=true;
 		} else {
 			*error=strdup((*proxy_sqlite3_errmsg)(db));
@@ -382,40 +371,6 @@ __exit_execute_statement:
 	(*proxy_sqlite3_reset)(statement);
 	(*proxy_sqlite3_finalize)(statement);
 	return ret;
-}
-
-/**
- * @brief Check if a SQL statement is a DDL query that doesn't affect rows
- *
- * @param query The SQL statement to check
- * @return True if the statement is a DDL query that doesn't affect rows
- */
-static bool is_ddl_query_without_row_changes(const char *query) {
-	if (!query) return false;
-
-	// Skip leading whitespace
-	while (isspace(*query)) {
-		query++;
-	}
-
-	// Check for DDL statements that don't affect row counts
-	return (
-		(strncasecmp(query, "CREATE", 6) == 0) ||
-		(strncasecmp(query, "DROP", 4) == 0) ||
-		(strncasecmp(query, "ALTER", 5) == 0) ||
-		(strncasecmp(query, "TRUNCATE", 8) == 0) ||
-		(strncasecmp(query, "VACUUM", 6) == 0) ||
-		(strncasecmp(query, "REINDEX", 7) == 0) ||
-		(strncasecmp(query, "ANALYZE", 7) == 0) ||
-		(strncasecmp(query, "CHECKPOINT", 10) == 0) ||
-		(strncasecmp(query, "PRAGMA", 6) == 0) ||
-		(strncasecmp(query, "BEGIN", 5) == 0) ||
-		(strncasecmp(query, "COMMIT", 6) == 0) ||
-		(strncasecmp(query, "ROLLBACK", 8) == 0) ||
-		(strncasecmp(query, "SAVEPOINT", 9) == 0) ||
-		(strncasecmp(query, "RELEASE", 7) == 0) ||
-		(strncasecmp(query, "EXPLAIN", 7) == 0)
-	);
 }
 
 /**
@@ -442,6 +397,8 @@ bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, 
 	*cols = (*proxy_sqlite3_column_count)(*statement);
 	if (*cols==0) { // not a SELECT
 		//*resultset=NULL;
+		// Get total changes before executing the statement
+		long long total_changes_before = (*proxy_sqlite3_total_changes64)(db);
 		do {
 			rc=(*proxy_sqlite3_step)(*statement);
 			if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
@@ -449,14 +406,9 @@ bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, 
 			}
 		} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 		if (rc==SQLITE_DONE) {
-			int changes = (*proxy_sqlite3_changes)(db);
-			// For DDL queries that don't affect rows, reset affected_rows to 0
-			// to prevent incorrect reporting of previous DML affected rows
-			if (is_ddl_query_without_row_changes(str)) {
-				*affected_rows = 0;
-			} else {
-				*affected_rows = changes;
-			}
+			// Calculate affected rows as the difference in total changes
+			long long total_changes_after = (*proxy_sqlite3_total_changes64)(db);
+			*affected_rows = (int)(total_changes_after - total_changes_before);
 			ret=true;
 		} else {
 			*error=strdup((*proxy_sqlite3_errmsg)(db));
@@ -1065,6 +1017,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_status = NULL;
 	proxy_sqlite3_status64 = NULL;
 	proxy_sqlite3_changes = NULL;
+	proxy_sqlite3_total_changes64 = NULL;
 	proxy_sqlite3_step = NULL;
 	proxy_sqlite3_shutdown = NULL;
 	proxy_sqlite3_prepare_v2 = NULL;
@@ -1144,6 +1097,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_status = sqlite3_status;
 		proxy_sqlite3_status64 = sqlite3_status64;
 		proxy_sqlite3_changes = sqlite3_changes;
+		proxy_sqlite3_total_changes64 = sqlite3_total_changes64;
 		proxy_sqlite3_step = sqlite3_step;
 		proxy_sqlite3_shutdown = sqlite3_shutdown;
 		proxy_sqlite3_prepare_v2 = sqlite3_prepare_v2;
@@ -1173,6 +1127,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_status);
 	assert(proxy_sqlite3_status64);
 	assert(proxy_sqlite3_changes);
+	assert(proxy_sqlite3_total_changes64);
 	assert(proxy_sqlite3_step);
 	assert(proxy_sqlite3_shutdown);
 	assert(proxy_sqlite3_prepare_v2);
