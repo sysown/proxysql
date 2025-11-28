@@ -3075,7 +3075,7 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 			string computed_checksum;
 			int rc_query = -1;
 			MYSQL_RES* result = nullptr;
-			string tmp_expected_checksum = peer_runtime_pgsql_server.checksum;
+			string tmp_expected_checksum = peer_runtime_pgsql_server.value;
 
 			for (const auto& f_query : f_queries) {
 				if (tmp_expected_checksum.empty()) { break; }
@@ -3183,7 +3183,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 			string computed_checksum;
 			int rc_query = -1;
 			MYSQL_RES* result = nullptr;
-			string tmp_expected_checksum = peer_pgsql_server_v2.checksum;
+			string tmp_expected_checksum = peer_pgsql_server_v2.value;
 
 			for (const auto& f_query : f_queries) {
 				if (tmp_expected_checksum.empty()) { break; }
