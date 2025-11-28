@@ -2941,15 +2941,24 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Query Rules from peer %s:%d completed\n", hostname, port);
 				proxy_info("Cluster: Fetching PostgreSQL Query Rules from peer %s:%d completed\n", hostname, port);
 
-				unique_ptr<SQLite3_result> query_rules_resultset { nullptr };
-				unique_ptr<SQLite3_result> fast_routing_resultset { nullptr };
-				const uint64_t rules_raw_checksum = get_mysql_query_rules_checksum(query_rules_result, fast_routing_result, query_rules_resultset, fast_routing_resultset);
+				// Compute checksum from the MySQL resultset
+				const uint64_t query_rules_raw_checksum = mysql_raw_checksum(query_rules_result);
+				const uint64_t fast_routing_raw_checksum = fast_routing_result ? mysql_raw_checksum(fast_routing_result) : 0;
+
+				// Combine both checksums using the same pattern as MySQL query rules
+				SpookyHash myhash {};
+				myhash.Init(19, 3);
+				myhash.Update(&query_rules_raw_checksum, sizeof(query_rules_raw_checksum));
+				myhash.Update(&fast_routing_raw_checksum, sizeof(fast_routing_raw_checksum));
+
+				uint64_t rules_raw_checksum = 0, hash2 = 0;
+				myhash.Final(&rules_raw_checksum, &hash2);
+
 				const string computed_checksum { get_checksum_from_hash(rules_raw_checksum) };
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for PostgreSQL Query Rules from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 				proxy_info("Cluster: Computed checksum for PostgreSQL Query Rules from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 				if (expected_checksum == computed_checksum) {
-					update_mysql_query_rules(query_rules_result, fast_routing_result); // Reuse update_mysql_query_rules
 					mysql_free_result(query_rules_result);
 					if (fast_routing_result) {
 						mysql_free_result(fast_routing_result);
@@ -2958,7 +2967,9 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 					proxy_info("Cluster: Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 
-					GloAdmin->load_pgsql_query_rules_to_runtime(std::move(query_rules_resultset), std::move(fast_routing_resultset), expected_checksum, epoch);
+					// For cluster sync, we pass nullptr to let load_pgsql_query_rules_to_runtime fetch from database
+					// This is the same pattern used for other cluster sync operations
+					GloAdmin->load_pgsql_query_rules_to_runtime(nullptr, nullptr, expected_checksum, epoch);
 					if (GloProxyCluster->cluster_pgsql_query_rules_save_to_disk == true) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
