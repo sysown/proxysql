@@ -12,6 +12,15 @@
 #define PROXYSQL_NODE_METRICS_LEN	5
 
 /**
+ * @file ProxySQL_Cluster.hpp
+ * @brief ProxySQL Cluster synchronization and management definitions.
+ *
+ * This file contains definitions for ProxySQL's clustering functionality, including:
+ * - Cluster query definitions for MySQL and PostgreSQL module synchronization
+ * - Node management and metrics collection
+ * - Checksum computation and comparison algorithms
+ * - Peer selection and synchronization logic
+ *
  * CLUSTER QUERIES DEFINITION
  * ==========================
  *
@@ -19,11 +28,20 @@
  * the queries issued for generating the checksum for each of the target modules, for simpler reasoning, they should
  * also represent the actual resultset being received when issuing them, since this resultset is used for computing the
  * 'expected checksum' for the fetched config before loading it to runtime. This is done for the following modules:
+ *
+ * MySQL modules:
  *   - 'runtime_mysql_servers': tables 'mysql_servers'
  *   - 'runtime_mysql_users'.
  *   - 'runtime_mysql_query_rules'.
  *   - 'mysql_servers_v2': tables admin 'mysql_servers', 'mysql_replication_hostgroups', 'mysql_group_replication_hostroups',
  *     'mysql_galera_hostgroups', 'mysql_aws_aurora_hostgroups', 'mysql_hostgroup_attributes'.
+ *
+ * PostgreSQL modules:
+ *   - 'runtime_pgsql_servers': runtime PostgreSQL server status and configuration
+ *   - 'runtime_pgsql_users': runtime PostgreSQL user authentication settings
+ *   - 'runtime_pgsql_query_rules': runtime PostgreSQL query routing rules
+ *   - 'pgsql_servers_v2': static PostgreSQL server configuration
+ *
  * IMPORTANT: For further clarify this means that it's important that the actual resultset produced by the intercepted
  * query preserve the filtering and ordering expressed in this queries.
  */
@@ -61,19 +79,129 @@
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_query_rules_fast_routing'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING "PROXY_SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_servers'. See top comment for details. */
+/**
+ * @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_servers'.
+ *
+ * This query retrieves the current operational status and configuration of PostgreSQL servers
+ * from the runtime_pgsql_servers table. It includes server health metrics, connection settings,
+ * and current operational status. The query filters out OFFLINE_HARD servers and converts
+ * numeric status values to human-readable format.
+ *
+ * Result columns:
+ * - hostgroup_id: Logical grouping identifier for PostgreSQL servers
+ * - hostname: Server hostname or IP address
+ * - port: PostgreSQL server port number
+ * - status: Converted status string (ONLINE, OFFLINE_SOFT, OFFLINE_HARD)
+ * - weight: Load balancing weight for the server
+ * - compression: Whether compression is enabled
+ * - max_connections: Maximum allowed connections
+ * - max_replication_lag: Maximum acceptable replication lag
+ * - use_ssl: SSL/TLS connection requirement
+ * - max_latency_ms: Maximum acceptable latency
+ * - comment: Administrative comments
+ *
+ * @see runtime_pgsql_servers
+ * @see pull_runtime_pgsql_servers_from_peer()
+ */
 #define CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"ONLINE\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"ONLINE\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_pgsql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'pgsql_servers_v2'. See top comment for details. */
+/**
+ * @brief Query to be intercepted by 'ProxySQL_Admin' for 'pgsql_servers_v2'.
+ *
+ * This query retrieves the static configuration of PostgreSQL servers from the pgsql_servers_v2 table.
+ * It includes connection parameters, load balancing settings, and server metadata. The query
+ * filters out OFFLINE_HARD servers and converts SHUNNED status to ONLINE for cluster synchronization.
+ *
+ * Result columns:
+ * - hostgroup_id: Logical grouping identifier for PostgreSQL servers
+ * - hostname: Server hostname or IP address
+ * - port: PostgreSQL server port number
+ * - status: Server status (SHUNNED converted to ONLINE for sync)
+ * - weight: Load balancing weight for the server
+ * - compression: Whether compression is enabled
+ * - max_connections: Maximum allowed connections
+ * - max_replication_lag: Maximum acceptable replication lag
+ * - use_ssl: SSL/TLS connection requirement
+ * - max_latency_ms: Maximum acceptable latency
+ * - comment: Administrative comments
+ *
+ * @see pgsql_servers_v2
+ * @see pull_pgsql_servers_v2_from_peer()
+ */
 #define CLUSTER_QUERY_PGSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, CASE WHEN status=\"SHUNNED\" THEN \"ONLINE\" ELSE status END AS status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_users'. See top comment for details. */
+/**
+ * @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_users'.
+ *
+ * This query retrieves PostgreSQL user authentication configuration from the runtime_pgsql_users table.
+ * It includes credentials, connection settings, and user behavior preferences that are used for
+ * authenticating and managing PostgreSQL client connections.
+ *
+ * Result columns:
+ * - username: PostgreSQL username
+ * - password: Authentication password/hash
+ * - use_ssl: SSL/TLS connection requirement
+ * - default_hostgroup: Default hostgroup for routing
+ * - transaction_persistent: Whether transactions persist across connections
+ * - fast_forward: Fast forwarding mode setting
+ * - backend: Backend connection settings
+ * - frontend: Frontend connection settings
+ * - max_connections: Maximum connections per user
+ * - attributes: Additional user attributes (JSON)
+ * - comment: Administrative comments
+ *
+ * @see runtime_pgsql_users
+ * @see pull_pgsql_users_from_peer()
+ */
 #define CLUSTER_QUERY_PGSQL_USERS "PROXY_SELECT username, password, use_ssl, default_hostgroup, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_pgsql_users"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_query_rules'. See top comment for details. */
+/**
+ * @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_query_rules'.
+ *
+ * This query retrieves PostgreSQL query routing rules from the runtime_pgsql_query_rules table.
+ * It includes comprehensive rule definitions for query matching, routing, caching, and behavior
+ * control. Rules are ordered by rule_id to ensure consistent processing and checksum generation.
+ *
+ * Key result columns:
+ * - rule_id: Unique identifier for the rule
+ * - username: Filter by PostgreSQL username
+ * - database: Filter by database name (PostgreSQL-specific, replaces schemaname)
+ * - flagIN, flagOUT: Rule processing flags
+ * - match_digest, match_pattern: Query matching criteria
+ * - destination_hostgroup: Target hostgroup for matching queries
+ * - cache_ttl, cache_timeout: Query caching settings
+ * - timeout, retries, delay: Query execution parameters
+ * - mirror_hostgroup: Query mirroring destination
+ * - error_msg, ok_msg: Custom response messages
+ * - sticky_conn, multiplex: Connection pooling behavior
+ * - log, apply: Logging and application flags
+ * - attributes: Additional rule attributes (JSON)
+ * - comment: Administrative comments
+ *
+ * @see runtime_pgsql_query_rules
+ * @see pull_pgsql_query_rules_from_peer()
+ */
 #define CLUSTER_QUERY_PGSQL_QUERY_RULES "PROXY_SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment FROM runtime_pgsql_query_rules ORDER BY rule_id"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_query_rules_fast_routing'. See top comment for details. */
+/**
+ * @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_query_rules_fast_routing'.
+ *
+ * This query retrieves PostgreSQL fast routing rules from the runtime_pgsql_query_rules_fast_routing table.
+ * Fast routing provides a lightweight mechanism for direct query routing based on username, database,
+ * and processing flags without complex pattern matching. This enables efficient routing for common
+ * use cases and reduces processing overhead.
+ *
+ * Result columns:
+ * - username: PostgreSQL username for routing rule
+ * - database: Database name for routing rule (PostgreSQL-specific)
+ * - flagIN: Input processing flag for rule matching
+ * - destination_hostgroup: Target hostgroup for direct routing
+ * - comment: Administrative comments
+ *
+ * @see runtime_pgsql_query_rules_fast_routing
+ * @see pull_pgsql_query_rules_from_peer()
+ * @see CLUSTER_QUERY_PGSQL_QUERY_RULES
+ */
 #define CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING "PROXY_SELECT username, database, flagIN, destination_hostgroup, comment FROM runtime_pgsql_query_rules_fast_routing ORDER BY username, database, flagIN"
 
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {

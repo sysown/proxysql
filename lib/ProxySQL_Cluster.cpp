@@ -404,6 +404,53 @@ ProxySQL_Node_Metrics * ProxySQL_Node_Entry::get_metrics_prev() {
 	return m;
 }
 
+/**
+ * @brief Processes checksum updates from a cluster peer and triggers synchronization when needed.
+ *
+ * This function is the core of ProxySQL's cluster monitoring and synchronization system. It processes
+ * checksum data received from peer nodes, compares it with local checksums, and initiates synchronization
+ * when differences are detected and thresholds are met.
+ *
+ * The function processes checksums for the following modules:
+ * MySQL modules:
+ * - admin_variables: ProxySQL admin configuration
+ * - mysql_query_rules: MySQL query routing rules
+ * - mysql_servers_v2: MySQL server configuration
+ * - runtime_mysql_servers: Runtime MySQL server status
+ * - mysql_users: MySQL user credentials
+ * - mysql_variables: MySQL server variables
+ * - ldap_variables: LDAP authentication settings
+ * - proxysql_servers: ProxySQL cluster node configuration
+ *
+ * PostgreSQL modules:
+ * - pgsql_query_rules: PostgreSQL query routing rules
+ * - pgsql_servers_v2: PostgreSQL server configuration
+ * - runtime_pgsql_servers: Runtime PostgreSQL server status
+ * - pgsql_users: PostgreSQL user credentials
+ *
+ * Synchronization Logic:
+ * 1. For each module, it compares local and peer checksums
+ * 2. If checksums differ, it checks the epoch timestamp to determine recency
+ * 3. If the peer is more recent and diff_check exceeds configured thresholds, sync is triggered
+ * 4. Conflict resolution handles cases where multiple nodes have the same epoch
+ * 5. Appropriate pull functions are called to fetch updated configuration
+ *
+ * Thresholds and Configuration:
+ * Each module has a corresponding *_diffs_before_sync variable that controls how many
+ * consecutive differences must be observed before triggering synchronization. This prevents
+ * excessive network traffic due to transient changes.
+ *
+ * @param _r MySQL result set containing checksum data from a peer node
+ *
+ * @note This function is thread-safe and requires GloVars.checksum_mutex to be held
+ * @note The function logs detailed information about checksum changes and synchronization decisions
+ * @note Metrics are updated to track successful and failed synchronization attempts
+ * @see ProxySQL_Cluster::pull_mysql_query_rules_from_peer()
+ * @see ProxySQL_Cluster::pull_pgsql_query_rules_from_peer()
+ * @see ProxySQL_Cluster::pull_pgsql_users_from_peer()
+ * @see ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer()
+ * @see cluster_*_diffs_before_sync variables
+ */
 void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	MYSQL_ROW row;
 	time_t now = time(NULL);
@@ -1229,6 +1276,33 @@ uint64_t mysql_raw_checksum(MYSQL_RES* resultset) {
 	return res_hash;
 }
 
+/**
+ * @brief Pulls MySQL query rules configuration from a cluster peer node.
+ *
+ * This function fetches MySQL query rules from a peer ProxySQL instance when the peer's
+ * checksum differs from the local checksum and the difference exceeds the configured
+ * threshold (cluster_mysql_query_rules_diffs_before_sync). It retrieves both regular query
+ * rules and fast routing rules.
+ *
+ * The function performs the following steps:
+ * 1. Identifies the optimal peer to sync from using get_peer_to_sync_mysql_query_rules()
+ * 2. Establishes a MySQL connection to the peer's admin interface
+ * 3. Executes CLUSTER_QUERY_MYSQL_QUERY_RULES and CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING
+ * 4. Computes checksums for the fetched data
+ * 5. Validates checksums match the expected values
+ * 6. Loads the query rules to runtime via load_mysql_query_rules_to_runtime()
+ * 7. Optionally saves configuration to disk if cluster_mysql_query_rules_save_to_disk is enabled
+ *
+ * @param expected_checksum The expected checksum of the query rules on the peer
+ * @param epoch The epoch timestamp of the query rules on the peer
+ *
+ * @note This function is thread-safe and requires the update_mysql_query_rules_mutex to be held
+ * @note The function will sleep(1) if the fetch operation fails to prevent busy loops
+ * @see get_peer_to_sync_mysql_query_rules()
+ * @see CLUSTER_QUERY_MYSQL_QUERY_RULES
+ * @see CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING
+ * @see load_mysql_query_rules_to_runtime()
+ */
 void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
 	char * ip_address = NULL;
@@ -2782,6 +2856,37 @@ __exit_pull_proxysql_servers_from_peer:
 	if (fetch_failed == true) sleep(1);
 }
 
+/**
+ * @brief Pulls PostgreSQL users configuration from a cluster peer node.
+ *
+ * This function fetches PostgreSQL users from a peer ProxySQL instance when the peer's
+ * checksum differs from the local checksum and the difference exceeds the configured
+ * threshold (cluster_pgsql_users_diffs_before_sync). It retrieves PostgreSQL user credentials
+ * including usernames, passwords, and connection settings for PostgreSQL authentication.
+ *
+ * The function performs the following steps:
+ * 1. Identifies the optimal peer to sync from using get_peer_to_sync_pgsql_users()
+ * 2. Establishes a MySQL connection to the peer's admin interface
+ * 3. Executes CLUSTER_QUERY_PGSQL_USERS to fetch user configuration
+ * 4. Computes checksums for the fetched data using get_mysql_users_checksum()
+ * 5. Validates checksums match the expected values
+ * 6. Loads the users to runtime via init_pgsql_users()
+ * 7. Optionally saves configuration to disk if cluster_pgsql_users_save_to_disk is enabled
+ *
+ * This function provides PostgreSQL-specific cluster synchronization for user credentials,
+ * ensuring consistent PostgreSQL authentication across all cluster nodes.
+ *
+ * @param expected_checksum The expected checksum of the PostgreSQL users on the peer
+ * @param epoch The epoch timestamp of the PostgreSQL users on the peer
+ *
+ * @note This function is thread-safe and reuses the update_mysql_users_mutex
+ * @note The function will sleep(1) if the fetch operation fails to prevent busy loops
+ * @note Reuses get_mysql_users_checksum() from MySQL users for consistency
+ * @see get_peer_to_sync_pgsql_users()
+ * @see CLUSTER_QUERY_PGSQL_USERS
+ * @see init_pgsql_users()
+ * @see get_mysql_users_checksum()
+ */
 void ProxySQL_Cluster::pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
 	char * ip_address = NULL;
@@ -2889,6 +2994,39 @@ __exit_pull_pgsql_users_from_peer:
 	if (fetch_failed == true) sleep(1);
 }
 
+/**
+ * @brief Pulls PostgreSQL query rules configuration from a cluster peer node.
+ *
+ * This function fetches PostgreSQL query rules from a peer ProxySQL instance when the peer's
+ * checksum differs from the local checksum and the difference exceeds the configured
+ * threshold (cluster_pgsql_query_rules_diffs_before_sync). It retrieves both regular query
+ * rules and fast routing rules, providing PostgreSQL-specific cluster synchronization.
+ *
+ * The function performs the following steps:
+ * 1. Identifies the optimal peer to sync from using get_peer_to_sync_pgsql_query_rules()
+ * 2. Establishes a MySQL connection to the peer's admin interface
+ * 3. Executes CLUSTER_QUERY_PGSQL_QUERY_RULES and CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING
+ * 4. Computes checksums for the fetched data using mysql_raw_checksum() and SpookyHash
+ * 5. Validates checksums match the expected values
+ * 6. Loads the query rules to runtime via load_pgsql_query_rules_to_runtime()
+ * 7. Optionally saves configuration to disk if cluster_pgsql_query_rules_save_to_disk is enabled
+ *
+ * This function implements the same synchronization pattern as MySQL query rules but
+ * for PostgreSQL-specific tables and query rule processing.
+ *
+ * @param expected_checksum The expected checksum of the PostgreSQL query rules on the peer
+ * @param epoch The epoch timestamp of the PostgreSQL query rules on the peer
+ *
+ * @note This function is thread-safe and reuses the update_mysql_query_rules_mutex
+ * @note The function will sleep(1) if the fetch operation fails to prevent busy loops
+ * @note Uses the same checksum computation algorithm as MySQL query rules for consistency
+ * @see get_peer_to_sync_pgsql_query_rules()
+ * @see CLUSTER_QUERY_PGSQL_QUERY_RULES
+ * @see CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING
+ * @see load_pgsql_query_rules_to_runtime()
+ * @see SpookyHash
+ * @see mysql_raw_checksum()
+ */
 void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
 	char * ip_address = NULL;
@@ -3021,6 +3159,40 @@ __exit_pull_pgsql_query_rules_from_peer:
 	if (fetch_failed == true) sleep(1);
 }
 
+/**
+ * @brief Pulls runtime PostgreSQL servers configuration from a cluster peer node.
+ *
+ * This function fetches runtime PostgreSQL servers status from a peer ProxySQL instance when the peer's
+ * checksum differs from the local checksum and the difference exceeds the configured
+ * threshold. It retrieves the current operational status, health metrics, and runtime statistics
+ * for PostgreSQL servers in the cluster.
+ *
+ * The function performs the following steps:
+ * 1. Identifies the optimal peer to sync from using get_peer_to_sync_runtime_pgsql_servers()
+ * 2. Establishes a MySQL connection to the peer's admin interface
+ * 3. Executes CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS to fetch runtime server status
+ * 4. Computes checksum for the fetched data using mysql_raw_checksum()
+ * 5. Validates checksum matches the expected value from peer_runtime_pgsql_server.value
+ * 6. Loads the runtime PostgreSQL servers status (TODO: integrate with load_pgsql_servers_to_runtime)
+ * 7. Optionally saves configuration to disk if save settings are enabled
+ *
+ * Runtime data includes:
+ * - Server status (ONLINE, OFFLINE, SHUNNED, etc.)
+ * - Current connections and load metrics
+ * - Health check results and response times
+ * - Error counts and statistics
+ *
+ * @param peer_runtime_pgsql_server The checksum structure containing expected checksum value and epoch timestamp for runtime PostgreSQL servers
+ *
+ * @note This function is thread-safe and requires the update_runtime_mysql_servers_mutex to be held (reused for pgsql_servers)
+ * @note The function will sleep(1) if the fetch operation fails to prevent busy loops
+ * @note The function reuses MySQL servers counters for metrics tracking
+ * @note Runtime loading integration is pending and marked as TODO
+ * @see get_peer_to_sync_runtime_pgsql_servers()
+ * @see CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS
+ * @see mysql_raw_checksum()
+ * @see get_checksum_from_hash()
+ */
 void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server) {
 	char * hostname = NULL;
 	char * ip_address = NULL;
@@ -3128,6 +3300,36 @@ __exit_pull_runtime_pgsql_servers_from_peer:
 	if (fetch_failed == true) sleep(1);
 }
 
+/**
+ * @brief Pulls PostgreSQL servers v2 configuration from a cluster peer node.
+ *
+ * This function fetches PostgreSQL servers configuration from a peer ProxySQL instance when the peer's
+ * checksum differs from the local checksum and the difference exceeds the configured
+ * threshold (cluster_pgsql_servers_diffs_before_sync). It retrieves PostgreSQL server definitions
+ * including hostgroup mappings, connection parameters, and server status.
+ *
+ * The function performs the following steps:
+ * 1. Identifies the optimal peer to sync from using get_peer_to_sync_pgsql_servers_v2()
+ * 2. Establishes a MySQL connection to the peer's admin interface
+ * 3. Executes CLUSTER_QUERY_PGSQL_SERVERS_V2 to fetch server configuration
+ * 4. Computes checksum for the fetched data using mysql_raw_checksum()
+ * 5. Validates checksum matches the expected value from peer_pgsql_server_v2.value
+ * 6. Loads the PostgreSQL servers configuration (TODO: integrate with load_pgsql_servers_to_runtime)
+ * 7. Optionally saves configuration to disk if cluster_pgsql_servers_save_to_disk is enabled
+ *
+ * @param peer_pgsql_server_v2 The checksum structure containing expected checksum value and epoch timestamp for pgsql_servers_v2
+ * @param peer_runtime_pgsql_server The checksum structure containing runtime PostgreSQL servers checksum (currently unused but reserved for future use)
+ * @param fetch_runtime_pgsql_servers Boolean flag indicating whether to fetch runtime PostgreSQL servers data (currently unused but reserved for future implementation)
+ *
+ * @note This function is thread-safe and requires the update_mysql_servers_v2_mutex to be held (reused for pgsql_servers_v2)
+ * @note The function will sleep(1) if the fetch operation fails to prevent busy loops
+ * @note The function reuses MySQL servers counters for metrics tracking
+ * @note Runtime loading integration is pending and marked as TODO
+ * @see get_peer_to_sync_pgsql_servers_v2()
+ * @see CLUSTER_QUERY_PGSQL_SERVERS_V2
+ * @see mysql_raw_checksum()
+ * @see get_checksum_from_hash()
+ */
 void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
 	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, bool fetch_runtime_pgsql_servers) {
 	char * hostname = NULL;
@@ -4065,6 +4267,30 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 	}
 }
 
+/**
+ * @brief Identifies the optimal cluster peer for PostgreSQL users synchronization.
+ *
+ * This function scans all available cluster nodes to find the best peer for synchronizing
+ * PostgreSQL users configuration. It selects a peer based on the following criteria:
+ * 1. The peer must have a valid pgsql_users checksum (version > 1)
+ * 2. The peer should have the latest epoch timestamp
+ * 3. The peer's diff_check count must exceed cluster_pgsql_users_diffs_before_sync threshold
+ *
+ * The algorithm prioritizes nodes with the most recent configuration changes while ensuring
+ * sufficient differences have accumulated to justify synchronization. This prevents excessive
+ * network traffic and unnecessary synchronization operations.
+ *
+ * @param host Pointer to store the hostname of the selected peer (caller must free)
+ * @param port Pointer to store the port number of the selected peer
+ * @param ip_address Pointer to store the IP address of the selected peer (caller must free)
+ *
+ * @note If no suitable peer is found, *host will be set to NULL
+ * @note If a peer has the maximum epoch but insufficient diff_check, a warning is logged and sync is skipped
+ * @note The function performs memory allocation for hostname and ip_address that must be freed by the caller
+ * @note This is a PostgreSQL counterpart to get_peer_to_sync_mysql_users()
+ * @see cluster_pgsql_users_diffs_before_sync
+ * @see ProxySQL_Checksum_Value_2::pgsql_users
+ */
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_users(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
@@ -4120,6 +4346,31 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_users(char **host, uint16_t 
 	}
 }
 
+/**
+ * @brief Identifies the optimal cluster peer for PostgreSQL query rules synchronization.
+ *
+ * This function scans all available cluster nodes to find the best peer for synchronizing
+ * PostgreSQL query rules configuration. It selects a peer based on the following criteria:
+ * 1. The peer must have a valid pgsql_query_rules checksum (version > 1)
+ * 2. The peer should have the latest epoch timestamp
+ * 3. The peer's diff_check count must exceed cluster_pgsql_query_rules_diffs_before_sync threshold
+ *
+ * The algorithm prioritizes nodes with the most recent query rules changes while ensuring
+ * sufficient differences have accumulated to justify synchronization. This prevents excessive
+ * network traffic and unnecessary synchronization operations for query rules that haven't
+ * changed significantly.
+ *
+ * @param host Pointer to store the hostname of the selected peer (caller must free)
+ * @param port Pointer to store the port number of the selected peer
+ * @param ip_address Pointer to store the IP address of the selected peer (caller must free)
+ *
+ * @note If no suitable peer is found, *host will be set to NULL
+ * @note If a peer has the maximum epoch but insufficient diff_check, a warning is logged and sync is skipped
+ * @note The function performs memory allocation for hostname and ip_address that must be freed by the caller
+ * @note This is a PostgreSQL counterpart to get_peer_to_sync_mysql_query_rules()
+ * @see cluster_pgsql_query_rules_diffs_before_sync
+ * @see ProxySQL_Checksum_Value_2::pgsql_query_rules
+ */
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_query_rules(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
@@ -4175,6 +4426,31 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_query_rules(char **host, uin
 	}
 }
 
+/**
+ * @brief Identifies the optimal cluster peer for runtime PostgreSQL servers synchronization.
+ *
+ * This function scans all available cluster nodes to find the best peer for synchronizing
+ * runtime PostgreSQL servers status and metrics. It selects a peer based on the following criteria:
+ * 1. The peer must have a valid pgsql_servers runtime checksum (version > 1)
+ * 2. The peer should have the latest epoch timestamp
+ * 3. The peer's diff_check count must exceed cluster_pgsql_servers_diffs_before_sync threshold
+ *
+ * The function focuses on runtime data synchronization, which includes server status,
+ * health metrics, connection counts, and other operational statistics. This enables
+ * cluster nodes to maintain consistent views of PostgreSQL server operational states.
+ *
+ * @param host Pointer to store the hostname of the selected peer (caller must free)
+ * @param port Pointer to store the port number of the selected peer
+ * @param peer_checksum Pointer to store the runtime checksum string of the selected peer (caller must free, optional)
+ * @param ip_address Pointer to store the IP address of the selected peer (caller must free)
+ *
+ * @note If no suitable peer is found, *host will be set to NULL
+ * @note If a peer has the maximum epoch but insufficient diff_check, a warning is logged and sync is skipped
+ * @note The function performs memory allocation for hostname, ip_address, and checksum that must be freed by the caller
+ * @note This is a PostgreSQL counterpart to get_peer_to_sync_runtime_mysql_servers()
+ * @see cluster_pgsql_servers_diffs_before_sync
+ * @see ProxySQL_Checksum_Value_2::pgsql_servers
+ */
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_runtime_pgsql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
@@ -4245,6 +4521,35 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_runtime_pgsql_servers(char **host,
 	}
 }
 
+/**
+ * @brief Identifies the optimal cluster peer for PostgreSQL servers v2 synchronization.
+ *
+ * This function scans all available cluster nodes to find the best peer for synchronizing
+ * PostgreSQL servers configuration. It selects a peer based on the following criteria:
+ * 1. The peer must have a valid pgsql_servers_v2 checksum (version > 1)
+ * 2. The peer should have the latest epoch timestamp
+ * 3. The peer's diff_check count must exceed cluster_pgsql_servers_diffs_before_sync threshold
+ *
+ * In addition to connection information, this function also provides checksums for both
+ * the static configuration (pgsql_servers_v2) and runtime status (pgsql_servers) if requested.
+ * This enables the caller to perform comprehensive synchronization of both configuration
+ * and runtime data.
+ *
+ * @param host Pointer to store the hostname of the selected peer (caller must free)
+ * @param port Pointer to store the port number of the selected peer
+ * @param peer_pgsql_servers_v2_checksum Pointer to store the pgsql_servers_v2 checksum string (caller must free, optional)
+ * @param peer_runtime_pgsql_servers_checksum Pointer to store the runtime pgsql_servers checksum string (caller must free, optional)
+ * @param ip_address Pointer to store the IP address of the selected peer (caller must free)
+ *
+ * @note If no suitable peer is found, *host will be set to NULL
+ * @note If a peer has the maximum epoch but insufficient diff_check, a warning is logged and sync is skipped
+ * @note The function performs memory allocation for all returned strings that must be freed by the caller
+ * @note Runtime checksum is only provided if the peer has valid runtime data (version > 1)
+ * @note This is a PostgreSQL counterpart to get_peer_to_sync_mysql_servers_v2()
+ * @see cluster_pgsql_servers_diffs_before_sync
+ * @see ProxySQL_Checksum_Value_2::pgsql_servers_v2
+ * @see ProxySQL_Checksum_Value_2::pgsql_servers
+ */
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_servers_v2(char** host, uint16_t* port, char** peer_pgsql_servers_v2_checksum,
 	char** peer_runtime_pgsql_servers_checksum, char** ip_address) {
 	unsigned long long version = 0;
