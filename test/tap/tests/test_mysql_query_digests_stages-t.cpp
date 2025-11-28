@@ -232,6 +232,7 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			bool no_digest = true;
 			int lowercase = 0;
 			bool keep_comment = false;
+			bool replace_null = true;
 
 			if (mz_test_def.contains("digest_max_size")) {
 				digest_max_size = mz_test_def.at("digest_max_size");
@@ -255,6 +256,9 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			if (mz_test_def.contains("keep_comment")) {
 				keep_comment = mz_test_def.at("keep_comment");
 			}
+			if (mz_test_def.contains("replace_null")) {
+				replace_null = mz_test_def.at("replace_null");
+			}
 
 			int backup_digest_max_length = mysql_thread___query_digests_max_query_length;
 			mysql_thread___query_digests_max_query_length = digest_max_size;
@@ -266,6 +270,8 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			mysql_thread___query_digests_no_digits = replace_digits;
 			int lowercase_backup = mysql_thread___query_digests_lowercase;
 			mysql_thread___query_digests_lowercase = lowercase_backup;
+			int replace_null_backup = mysql_thread___query_digests_replace_null;
+			mysql_thread___query_digests_replace_null = replace_null;
 			int keep_comment_backup = mysql_thread___query_digests_keep_comment;
 			mysql_thread___query_digests_keep_comment = keep_comment;
 
@@ -287,6 +293,7 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			mysql_thread___query_digests_no_digits = no_digits_backup;
 			mysql_thread___query_digests_lowercase = lowercase_backup;
 			mysql_thread___query_digests_keep_comment = keep_comment_backup;
+			mysql_thread___query_digests_replace_null = replace_null_backup;
 
 			if (query.size() >= QUERY_DIGEST_BUF) {
 				free(c_res);
@@ -772,9 +779,10 @@ int main(int argc, char** argv) {
 	bool exec_grouping_tests = true;
 	bool exec_regular_tests = true;
 	std::string tests_filter_str {};
+	std::string digests_file_arg {};
 
 	// check parameters for test filtering
-	if (argc == 2) {
+	if (argc >= 2) {
 		tests_filter_str = argv[1];
 
 		if (tests_filter_str.find("crashing") == std::string::npos) {
@@ -786,9 +794,15 @@ int main(int argc, char** argv) {
 		if (tests_filter_str.find("regular") == std::string::npos) {
 			exec_regular_tests = false;
 		}
+
+		if (argc == 3) {
+			digests_file_arg = argv[2];
+		}
 	}
 
-	const string digests_filepath { string(cl.workdir) + DIGESTS_TEST_FILENAME };
+	const string digests_filepath {
+		digests_file_arg.empty() ? string(cl.workdir) + DIGESTS_TEST_FILENAME : digests_file_arg
+	};
 	const string crashing_payloads { string(cl.workdir) + "tokenizer_payloads/crashing_payloads.hjson" };
 
 	uint32_t max_groups = 10;

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <unistd.h>
 #include <utility>
+#include <time.h>
 
 #include "curl/curl.h"
 #include "mysql.h"
@@ -17,6 +18,12 @@
 
 #include "command_line.h"
 #include "mysql.h"
+
+#ifdef CLOCK_MONOTONIC_RAW
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC_RAW
+#else
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
+#endif
 
 template <typename T>
 using rc_t = std::pair<int,T>;
@@ -64,6 +71,14 @@ my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line);
 
 }
 
+static inline int mysql_query_override(MYSQL* mysql, const std::string& query, const char* file, int line) {
+	return mysql_query_override(mysql, query.c_str(), file, line);
+}
+
+#else
+static inline int mysql_query(MYSQL* mysql, const std::string& query) {
+	return mysql_query(mysql, query.c_str());
+}
 #endif 
 
 /**
@@ -131,6 +146,9 @@ std::pair<int,std::vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl,
  * @return Result of calling 'mysql_query'.
  */
 int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, const char* fn);
+inline static int mysql_query_t__(MYSQL* mysql, const std::string& query, const char* f, int ln, const char* fn) {
+	return mysql_query_t__(mysql, query.c_str(), f, ln, fn);
+}
 
 /**
  * @brief Convenience macro with query logging.
@@ -157,8 +175,7 @@ int mysql_query_t__(MYSQL* mysql, const char* query, const char* f, int ln, cons
 
 #define MYSQL_QUERY_T(mysql, query) \
 	do { \
-		diag("Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port); \
-		if (mysql_query(mysql, query)) { \
+		if (mysql_query_t(mysql, query)) { \
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
 			return EXIT_FAILURE; \
 		} \
@@ -268,7 +285,7 @@ struct ext_val_t {
 };
 
 /**
- * @brief Specifications of function 'ext_single_row_val' for different types.
+ * @brief Specializations of function 'ext_single_row_val' for different types.
  * @details These functions serve as the extension point for `mysql_query_ext_val`. A new specialization of
  *  the function is required for each type that `mysql_query_ext_val` should support for the default value.
  * @param row The row from which the first value is going to be extracted and parsed.
@@ -749,6 +766,57 @@ std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
 	std::fstream& f_stream, const std::string& regex, bool get_matches=false
 );
 
+
+/**
+ * @brief Scan last N lines from a file and find lines matching a regex pattern.
+ *
+ * This function provides memory-efficient scanning of log files by processing only
+ * the last N lines instead of loading the entire file into memory. It uses a queue-based
+ * approach to maintain the most recent lines and applies regex matching to identify
+ * lines containing specific patterns.
+ *
+ * This is particularly useful for TAP tests that need to verify log messages were
+ * written during test execution, allowing efficient examination of recent log entries
+ * without loading entire log files that may be very large.
+ *
+ * @param filename Path to the file to scan
+ * @param regex Regular expression pattern to match against line content
+ * @param get_matches If true, capture and return the matched substrings; if false, only track matching lines
+ * @param max_lines Maximum number of lines from end of file to examine (controls memory usage and focus)
+ *
+ * @return std::pair<size_t, std::vector<line_match_t>> where:
+ *         - first: Number of matches found
+ *         - second: Vector of line_match_t tuples containing match information:
+ *                  * POS: File position (placeholder 0 for this implementation)
+ *                  * LINE: Complete line content that matched the pattern
+ *                  * MATCH: Matched substring if get_matches=true, empty string otherwise
+ *
+ * @note This function avoids stream sharing issues by opening its own file handle,
+ *       making it safe for multiple concurrent calls within the same test.
+ *
+ * @warning This function reads the entire file to extract the last max_lines, so
+ *          very large files will still incur I/O overhead, but memory usage is bounded.
+ *
+ * @example
+ * // Find TCP keepalive warnings in last 10 lines of ProxySQL log
+ * auto [match_count, matches] = get_matching_lines_from_filename(
+ *     "/var/log/proxysql.log",
+ *     ".*WARNING.*tcp_keepalive.*",
+ *     true,
+ *     10
+ * );
+ * if (match_count > 0) {
+ *     // Found TCP keepalive warnings
+ *     for (const auto& match : matches) {
+ *         const string& line = std::get<LINE>(match);
+ *         printf("Warning: %s\n", line.c_str());
+ *     }
+ * }
+ */
+std::pair<size_t,std::vector<line_match_t>> get_matching_lines_from_filename(
+	const std::string& filename, const std::string& regex, bool get_matches, size_t max_lines
+);
+
 /**
  * @brief Row entries from 'debug_log' table, from debug database.
  */
@@ -848,6 +916,31 @@ struct POOL_STATS_IDX {
 	};
 };
 
+struct hg_pool_st_t {
+	uint32_t hostgroup;
+	uint32_t conn_used;
+	uint32_t conn_free;
+	uint32_t conn_ok;
+	uint32_t conn_err;
+	uint32_t max_conn_used;
+	uint32_t queries;
+};
+
+/**
+ * @brief A more complex type specialization of 'ext_single_row_val'.
+ * @details For internal use of function 'get_conn_pool_hg_stats'.
+ * @param row The row from which the first value is going to be extracted and parsed.
+ * @param def_val The default value to use in case of failure to extract.
+ * @return An `ext_val_t<T>` where T is the type of the provided default value.
+ */
+ext_val_t<hg_pool_st_t> ext_single_row_val(const mysql_res_row& row, const hg_pool_st_t& def_val);
+/**
+ * @brief Fetches the stats from a particular hostgroup.
+ * @param admin An already opened connection to MySQL admin.
+ * @return An `ext_val_t` wrapping the extracted values.
+ */
+ext_val_t<hg_pool_st_t> get_conn_pool_hg_stats(MYSQL* admin, uint32_t hg);
+
 /**
  * @brief Dumps a resultset with fields from the supplied hgs from 'stats_mysql_connection_pool'.
  * @details The fetched fields are 'hostgroup,ConnUsed,ConnFree,ConnOk,ConnERR,MaxConnUsed,Queries'.
@@ -864,6 +957,7 @@ using pool_state_t = std::map<uint32_t,mysql_row_t>;
  * @return A pair of the shape {err_code, pool_state_t}.
  */
 std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
+
 /**
  * @brief Waits for a generic condition.
  * @details Wait finishes by a non-zero return code by the condition or by timeout.
@@ -966,7 +1060,7 @@ const char* get_env_str(const char* envname, const char* envdefault);
 int get_env_int(const char* envname, int envdefault);
 bool get_env_bool(const char* envname, bool envdefault);
 
-MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool cmp=false);
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
 int run_q(MYSQL *mysql, const char *q);
 int fetch_multiplex_disabled(MYSQL *mysql, bool& multiplex_disabled);
 

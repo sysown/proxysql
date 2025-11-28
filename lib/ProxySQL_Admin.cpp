@@ -1079,23 +1079,6 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 
 admin_main_loop_listeners S_amll;
 
-
-template <typename S>
-bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
-	uint32_t id=atoi(query_no_space+16);
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
-	bool rc=GloMTH->kill_session(id);
-	ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-	if (rc) {
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-	} else {
-		char buf[1024];
-		sprintf(buf,"Unknown thread id: %u", id);
-		SPA->send_error_msg_to_client(sess, buf);
-	}
-	return false;
-}
-
 void flush_logs_handler() {
 	GloAdmin->flush_logs();
 }
@@ -1103,6 +1086,9 @@ void flush_logs_handler() {
 void ProxySQL_Admin::flush_logs() {
 	if (GloMyLogger) {
 		GloMyLogger->flush_log();
+	}
+	if (GloPgSQL_Logger) {
+		GloPgSQL_Logger->flush_log();
 	}
 	this->flush_error_log();
 	proxysql_keylog_close();
@@ -1134,6 +1120,12 @@ void ProxySQL_Admin::flush_configdb() { // see #923
 	admindb->execute((char *)"DETACH DATABASE disk");
 	delete configdb;
 	configdb=new SQLite3DB();
+	if (access(GloVars.admindb, F_OK) == 0) {
+		if (access(GloVars.admindb, W_OK) != 0) {
+			proxy_error("Database file '%s' exists but is not writable\n", GloVars.admindb);
+			exit(EXIT_SUCCESS);
+		}
+	}
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	__attach_db(admindb, configdb, (char *)"disk");
 	// Fully synchronous is not required. See to #1055
@@ -1200,6 +1192,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_coredump_filters=false;
 
 	bool stats_mysql_prepared_statements_info = false;
+	bool stats_pgsql_prepared_statements_info = false;
 
 #ifdef PROXYSQLCLICKHOUSE
 	bool runtime_clickhouse_users = false;
@@ -1220,11 +1213,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
 	if (strcasestr(query_no_space, "pgsql processlist") ||
-		strcasestr(query_no_space, "stats_pgsql_processlist"))
+		strcasestr(query_no_space, "pgsql activity") ||
+		strcasestr(query_no_space, "stats_pgsql_processlist") ||
+		strcasestr(query_no_space, "stats_pgsql_stat_activity"))
 		// This will match the following usecases:
 		// SHOW PGSQL PROCESSLIST
 		// SHOW FULL PGSQL PROCESSLIST
+		// SHOW PGSQL ACTIVITY
+		// SHOW FULL PGSQL ACTIVITY
 		// SELECT * FROM stats_pgsql_processlist 
+		// SELECT * FROM stats_pgsql_stat_activity
 	{ 
 		stats_pgsql_processlist = true; refresh = true; 
 	} else if (strcasestr(query_no_space,"processlist"))
@@ -1354,6 +1352,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 */
 	if (strstr(query_no_space,"stats_mysql_prepared_statements_info")) {
 		stats_mysql_prepared_statements_info=true; refresh=true;
+	}
+	if (strstr(query_no_space, "stats_pgsql_prepared_statements_info")) {
+		stats_pgsql_prepared_statements_info = true; refresh = true;
 	}
 	if (admin) {
 		if (strstr(query_no_space,"global_variables"))
@@ -1555,6 +1556,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 //		}
 		if (stats_mysql_prepared_statements_info) {
 			stats___mysql_prepared_statements_info();
+		}
+
+		if (stats_pgsql_prepared_statements_info) {
+			stats___pgsql_prepared_statements_info();
 		}
 
 		if (stats_mysql_client_host_cache) {
@@ -1897,8 +1902,10 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_pgsql_connection_pool",
 		"stats_pgsql_connection_pool_reset",
 		"stats_mysql_prepared_statements_info",
+		"stats_pgsql_prepared_statements_info",
 		"stats_mysql_processlist",
 		"stats_pgsql_processlist",
+		"stats_pgsql_stat_activity",
 		"stats_mysql_query_digest",
 		"stats_mysql_query_digest_reset",
 		"stats_pgsql_query_digest",
@@ -2064,17 +2071,6 @@ void* child_postgres(void* arg) {
 
 	arg_proxysql_adm* myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
-
-	//struct sockaddr *addr = arg->addr;
-	//socklen_t addr_size;
-
-	GloPTH->wrlock();
-	{
-		char* s = GloPTH->get_variable((char*)"server_capabilities");
-		mysql_thread___server_capabilities = atoi(s);
-		free(s);
-	}
-	GloPTH->wrunlock();
 
 	struct pollfd fds[1];
 	nfds_t nfds = 1;
@@ -2498,10 +2494,6 @@ void update_modules_metrics() {
 	if (GloMTH) {
 		GloMTH->p_update_metrics();
 	}
-	// Update pgsql_threads_handler metrics
-	if (GloPTH) {
-		GloPTH->p_update_metrics();
-	}
 	// Update mysql_hostgroups_manager metrics
 	if (MyHGM) {
 		MyHGM->p_update_metrics();
@@ -2514,15 +2506,28 @@ void update_modules_metrics() {
 	if (GloMyQC) {
 		GloMyQC->p_update_metrics();
 	}
+#if 0 // Turning off Prometheus metrics collection for PostgreSQL modules in ProxySQL
+	// Update pgsql_threads_handler metrics
+	if (GloPTH) {
+		GloPTH->p_update_metrics();
+	}
+	// Update pgsql_hostgroups_manager metrics
+	if (PgHGM) {
+		PgHGM->p_update_metrics();
+	}
 	// Update pgsql query_cache metrics
 	if (GloPgQC) {
 		GloPgQC->p_update_metrics();
 	}
+#endif
 	// Update cluster metrics
 	if (GloProxyCluster) {
 		GloProxyCluster->p_update_metrics();
 	}
-
+	// Update Logger metrics
+	if (GloMyLogger) {
+		GloMyLogger->p_update_metrics();
+	}
 	// Update admin metrics
 	GloAdmin->p_update_metrics();
 }
@@ -2603,8 +2608,6 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;
-	variables.mysql_show_processlist_extended = false;
-	variables.pgsql_show_processlist_extended = false;
 	//variables.hash_passwords=true;	// issue #676
 	variables.vacuum_stats=true;	// issue #1011
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
@@ -2638,12 +2641,14 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.stats_mysql_connections = 60;
 	variables.stats_mysql_query_cache = 60;
 	variables.stats_mysql_query_digest_to_disk = 0;
+	variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
 	variables.stats_system_cpu = 60;
 	variables.stats_system_memory = 60;
 	GloProxyStats->variables.stats_mysql_connection_pool = 60;
 	GloProxyStats->variables.stats_mysql_connections = 60;
 	GloProxyStats->variables.stats_mysql_query_cache = 60;
 	GloProxyStats->variables.stats_mysql_query_digest_to_disk = 0;
+	GloProxyStats->variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
 	GloProxyStats->variables.stats_system_cpu = 60;
 #ifndef NOJEM
 	GloProxyStats->variables.stats_system_memory = 60;
@@ -2688,6 +2693,14 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
 	init_prometheus_dyn_gauge_array<admin_metrics_map_idx, p_admin_dyn_gauge>(admin_metrics_map, this->metrics.p_dyn_gauge_array);
+
+	// processlist configuration
+	variables.mysql_processlist.show_extended = 0;
+	variables.pgsql_processlist.show_extended = 0;
+	variables.mysql_processlist.show_idle_session = true;
+	variables.pgsql_processlist.show_idle_session = true;
+	variables.mysql_processlist.max_query_length = PROCESSLIST_MAX_QUERY_LEN_DEFAULT;
+	variables.pgsql_processlist.max_query_length = PROCESSLIST_MAX_QUERY_LEN_DEFAULT;
 
 	// NOTE: Imposing fixed value to 'version_info' matching 'mysqld_exporter'
 	this->metrics.p_gauge_array[p_admin_gauge::version_info]->Set(1);
@@ -3293,6 +3306,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 			sprintf(intbuf,"%d",variables.stats_mysql_query_digest_to_disk);
 			return strdup(intbuf);
 		}
+		if (!strcasecmp(name,"stats_mysql_eventslog_sync_buffer_to_disk")) {
+			sprintf(intbuf,"%d",variables.stats_mysql_eventslog_sync_buffer_to_disk);
+			return strdup(intbuf);
+		}
 		if (!strcasecmp(name,"stats_system_cpu")) {
 			sprintf(intbuf,"%d",variables.stats_system_cpu);
 			return strdup(intbuf);
@@ -3619,6 +3636,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			if (intv >= 0 && intv <= 24*3600) {
 				variables.stats_mysql_query_digest_to_disk=intv;
 				GloProxyStats->variables.stats_mysql_query_digest_to_disk=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_mysql_eventslog_sync_buffer_to_disk")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 24*3600) {
+				variables.stats_mysql_eventslog_sync_buffer_to_disk=intv;
+				GloProxyStats->variables.stats_mysql_eventslog_sync_buffer_to_disk=intv;
 				return true;
 			} else {
 				return false;

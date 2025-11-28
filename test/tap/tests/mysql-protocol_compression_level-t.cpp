@@ -121,13 +121,13 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
+	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password, false, false);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
+	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, false, false);
 	if (!proxy) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
@@ -166,17 +166,17 @@ int main(int argc, char** argv) {
 			" (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4) as u4;"
 	);
 
-	MYSQL* proxy_cmp = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, true);
+MYSQL* proxy_cmp = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, false, true);
 	if (!proxy_cmp) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_cmp));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false);
+MYSQL* mysql = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, false);
 	if (!mysql) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql_cmp = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, true);
+MYSQL* mysql_cmp = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, true);
 	if (!mysql_cmp) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_cmp));
 		return EXIT_FAILURE;

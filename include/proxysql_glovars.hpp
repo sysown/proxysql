@@ -137,7 +137,7 @@ class ProxySQL_GlobalVariables {
 		char* gr_bootstrap_ssl_key;
 		char* gr_bootstrap_ssl_mode;
 		pthread_mutex_t ext_glomth_mutex;
-
+		pthread_mutex_t ext_glopth_mutex;
 		bool ssl_keylog_enabled;
 	} global;
 	struct mysql {

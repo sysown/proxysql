@@ -10,58 +10,38 @@
 
 #include <sstream>
 
-
-/*static inline char is_digit(char c) {
-	if(c >= '0' && c <= '9')
-		return 1;
-	return 0;
-}*/
-
 pgsql_verify_var PgSQL_Variables::verifiers[PGSQL_NAME_LAST_HIGH_WM];
 pgsql_update_var PgSQL_Variables::updaters[PGSQL_NAME_LAST_HIGH_WM];
-
 
 PgSQL_Variables::PgSQL_Variables() {
 	// add here all the variables we want proxysql to recognize, but ignore
 	ignore_vars.push_back("application_name");
-	//ignore_vars.push_back("interactive_timeout");
-	//ignore_vars.push_back("wait_timeout");
-	//ignore_vars.push_back("net_read_timeout");
-	//ignore_vars.push_back("net_write_timeout");
-	//ignore_vars.push_back("net_buffer_length");
-	//ignore_vars.push_back("read_buffer_size");
-	//ignore_vars.push_back("read_rnd_buffer_size");
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	//ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";
+
+	/*
+	   NOTE:
+		make special ATTENTION that the order in pgsql_variable_name
+		and pgsqll_tracked_variables[] is THE SAME
+	   NOTE:
+		PgSQL_Variables::PgSQL_Variables() has a built-in check to make sure that the order is correct,
+		and that variables are in alphabetical order
+	*/
 	for (auto i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
-		// we initialized all the internal_variable_name if set to NULL
-		if (pgsql_tracked_variables[i].internal_variable_name == NULL) {
-			pgsql_tracked_variables[i].internal_variable_name = pgsql_tracked_variables[i].set_variable_name;
-		}
-	}
-/*
-   NOTE:
-	make special ATTENTION that the order in pgsql_variable_name
-	and pgsqll_tracked_variables[] is THE SAME
-   NOTE:
-	PgSQL_Variables::PgSQL_Variables() has a built-in check to make sure that the order is correct,
-	and that variables are in alphabetical order
-*/
-	for (int i = PGSQL_NAME_LAST_LOW_WM; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
+		//Array index and enum value (idx) should be same
 		assert(i == pgsql_tracked_variables[i].idx);
-		if (i > PGSQL_NAME_LAST_LOW_WM+1) {
-			assert(strcmp(pgsql_tracked_variables[i].set_variable_name, pgsql_tracked_variables[i-1].set_variable_name) > 0);
+
+		if (i > PGSQL_NAME_LAST_LOW_WM + 1) {
+			assert(strcmp(pgsql_tracked_variables[i].set_variable_name, pgsql_tracked_variables[i - 1].set_variable_name) > 0);
 		}
-	}
-	for (auto i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
-		if (i == PGSQL_CLIENT_ENCODING) {
-			PgSQL_Variables::updaters[i] = NULL;
-			PgSQL_Variables::verifiers[i] = NULL;
-		} else {
-			PgSQL_Variables::verifiers[i] = verify_server_variable;
-			PgSQL_Variables::updaters[i] = update_server_variable;
-		}
+
+		// internal_variable_name should not be null
+		assert(pgsql_tracked_variables[i].internal_variable_name != NULL);
+
+		PgSQL_Variables::verifiers[i] = verify_server_variable;
+		PgSQL_Variables::updaters[i] = update_server_variable;
+
 		if (pgsql_tracked_variables[i].status == SETTING_VARIABLE) {
 			variables_regexp += pgsql_tracked_variables[i].set_variable_name;
 			variables_regexp += "|";
@@ -74,6 +54,7 @@ PgSQL_Variables::PgSQL_Variables() {
 			}
 		}
 	}
+
 	for (std::vector<std::string>::iterator it=ignore_vars.begin(); it != ignore_vars.end(); it++) {
 		variables_regexp += *it;
 		variables_regexp += "|";
@@ -102,7 +83,7 @@ bool PgSQL_Variables::client_set_hash_and_value(PgSQL_Session* session, int idx,
 	return true;
 }
 
-void PgSQL_Variables::client_reset_value(PgSQL_Session* session, int idx) {
+void PgSQL_Variables::client_reset_value(PgSQL_Session* session, int idx, bool reorder_dynamic_variables_idx) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");
 		return;
@@ -116,7 +97,7 @@ void PgSQL_Variables::client_reset_value(PgSQL_Session* session, int idx) {
 			free(client_conn->variables[idx].value);
 			client_conn->variables[idx].value = NULL;
 		}
-		if (idx > PGSQL_NAME_LAST_LOW_WM) {
+		if (reorder_dynamic_variables_idx && idx > PGSQL_NAME_LAST_LOW_WM) {
 			// we now regererate dynamic_variables_idx
 			client_conn->reorder_dynamic_variables_idx();
 		}
@@ -135,7 +116,7 @@ void PgSQL_Variables::server_set_hash_and_value(PgSQL_Session* session, int idx,
 	session->mybe->server_myds->myconn->variables[idx].value = strdup(value);
 }
 
-bool PgSQL_Variables::client_set_value(PgSQL_Session* session, int idx, const std::string& value) {
+bool PgSQL_Variables::client_set_value(PgSQL_Session* session, int idx, const std::string& value, bool reorder_dynamic_variables_idx) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");
 		return false;
@@ -147,7 +128,7 @@ bool PgSQL_Variables::client_set_value(PgSQL_Session* session, int idx, const st
 	}
 	session->client_myds->myconn->variables[idx].value = strdup(value.c_str());
 
-	if (idx > PGSQL_NAME_LAST_LOW_WM) {
+	if (reorder_dynamic_variables_idx && idx > PGSQL_NAME_LAST_LOW_WM) {
 		// we now regererate dynamic_variables_idx
 		session->client_myds->myconn->reorder_dynamic_variables_idx();
 	}
@@ -168,7 +149,7 @@ uint32_t PgSQL_Variables::client_get_hash(PgSQL_Session* session, int idx) const
 	return session->client_myds->myconn->var_hash[idx];
 }
 
-void PgSQL_Variables::server_set_value(PgSQL_Session* session, int idx, const char* value) {
+void PgSQL_Variables::server_set_value(PgSQL_Session* session, int idx, const char* value, bool reorder_dynamic_variables_idx) {
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
@@ -181,13 +162,13 @@ void PgSQL_Variables::server_set_value(PgSQL_Session* session, int idx, const ch
 	}
 	session->mybe->server_myds->myconn->variables[idx].value = strdup(value);
 
-	if (idx > PGSQL_NAME_LAST_LOW_WM) {
+	if (reorder_dynamic_variables_idx && idx > PGSQL_NAME_LAST_LOW_WM) {
 		// we now regererate dynamic_variables_idx
 		session->mybe->server_myds->myconn->reorder_dynamic_variables_idx();
 	}
 }
 
-void PgSQL_Variables::server_reset_value(PgSQL_Session* session, int idx) {
+void PgSQL_Variables::server_reset_value(PgSQL_Session* session, int idx, bool reorder_dynamic_variables_idx) {
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
@@ -201,7 +182,7 @@ void PgSQL_Variables::server_reset_value(PgSQL_Session* session, int idx) {
 			free(backend_conn->variables[idx].value);
 			backend_conn->variables[idx].value = NULL;
 		}
-		if (idx > PGSQL_NAME_LAST_LOW_WM) {
+		if (reorder_dynamic_variables_idx && idx > PGSQL_NAME_LAST_LOW_WM) {
 			// we now regererate dynamic_variables_idx
 			backend_conn->reorder_dynamic_variables_idx();
 		}
@@ -253,98 +234,6 @@ bool PgSQL_Variables::verify_variable(PgSQL_Session* session, int idx) const {
 	return ret;
 }
 
-bool validate_charset(PgSQL_Session* session, int idx, int &_rc) {
-	/*if (idx == PGSQL_CLIENT_ENCODING || idx == PGSQL_SET_NAMES) {
-		PgSQL_Data_Stream *myds = session->mybe->server_myds;
-		PgSQL_Connection *myconn = myds->myconn;
-		char msg[128];
-		const MARIADB_CHARSET_INFO *ci = NULL;
-		const char* replace_collation = NULL;
-		const char* not_supported_collation = NULL;
-		unsigned int replace_collation_nr = 0;
-		std::stringstream ss;
-		int charset = atoi(pgsql_variables.client_get_value(session, idx));
-		if (charset >= 255 && myconn->pgsql->server_version[0] != '8') {
-			switch(pgsql_thread___handle_unknown_charset) {
-				case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
-					snprintf(msg,sizeof(msg),"Can't initialize character set %s", pgsql_variables.client_get_value(session, idx));
-					proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing client connection %s:%d.\n",
-							myconn->parent->address, myconn->parent->port, 2019, msg, session->client_myds->addr.addr, session->client_myds->addr.port);
-					myds->destroy_MySQL_Connection_From_Pool(false);
-					myds->fd=0;
-					_rc=-1;
-					return false;
-				case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
-					ci = proxysql_find_charset_nr(charset);
-					if (!ci) {
-						// LCOV_EXCL_START
-						proxy_error("Cannot find character set [%s]\n", pgsql_variables.client_get_value(session, idx));
-						assert(0);
-						// LCOV_EXCL_STOP
-					}
-					not_supported_collation = ci->name;
-
-					if (idx == SQL_COLLATION_CONNECTION) {
-						ci = proxysql_find_charset_collate(pgsql_thread___default_variables[idx]);
-					} else {
-						if (pgsql_thread___default_variables[idx]) {
-							ci = proxysql_find_charset_name(pgsql_thread___default_variables[idx]);
-						} else {
-							ci = proxysql_find_charset_name(pgsql_thread___default_variables[SQL_CHARACTER_SET]);
-						}
-					}
-
-					if (!ci) {
-						// LCOV_EXCL_START
-						proxy_error("Cannot find character set [%s]\n", pgsql_thread___default_variables[idx]);
-						assert(0);
-						// LCOV_EXCL_STOP
-					}
-					replace_collation = ci->name;
-					replace_collation_nr = ci->nr;
-
-					proxy_warning("Server doesn't support collation (%s) %s. Replacing it with the configured default (%d) %s. Client %s:%d\n",
-							pgsql_variables.client_get_value(session, idx), not_supported_collation, 
-							replace_collation_nr, replace_collation, session->client_myds->addr.addr, session->client_myds->addr.port);
-
-					ss << replace_collation_nr;
-					pgsql_variables.client_set_value(session, idx, ss.str());
-					_rc=0;
-					return true;
-				case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT:
-					if (idx == SQL_COLLATION_CONNECTION) {
-						ci = proxysql_find_charset_collate(pgsql_thread___default_variables[idx]);
-					} else {
-						if (pgsql_thread___default_variables[idx]) {
-							ci = proxysql_find_charset_name(pgsql_thread___default_variables[idx]);
-						} else {
-							ci = proxysql_find_charset_name(pgsql_thread___default_variables[SQL_CHARACTER_SET]);
-						}
-					}
-
-					if (!ci) {
-						// LCOV_EXCL_START
-						proxy_error("Cannot filnd charset [%s]\n", pgsql_thread___default_variables[idx]);
-						assert(0);
-						// LCOV_EXCL_STOP
-					}
-					replace_collation_nr = ci->nr;
-
-					ss << replace_collation_nr;
-					pgsql_variables.client_set_value(session, idx, ss.str());
-					_rc=0;
-					return true;
-				default:
-					proxy_error("Wrong configuration of the handle_unknown_charset\n");
-					_rc=-1;
-					return false;
-			}
-		}
-	}*/
-	_rc=0;
-	return true;
-}
-
 bool update_server_variable(PgSQL_Session* session, int idx, int &_rc) {
 	bool no_quote = true;
 	if (IS_PGTRACKED_VAR_OPTION_SET_QUOTE(pgsql_tracked_variables[idx])) no_quote = false;
@@ -352,47 +241,10 @@ bool update_server_variable(PgSQL_Session* session, int idx, int &_rc) {
 	const char *set_var_name = pgsql_tracked_variables[idx].set_variable_name;
 	bool ret = false;
 
-	if (!validate_charset(session, idx, _rc)) {
-		return false;
-	}
-
 	const char* value = pgsql_variables.client_get_value(session, idx);
-	pgsql_variables.server_set_value(session, idx, value);
+	pgsql_variables.server_set_value(session, idx, value, true);
 	ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, value, no_quote, st);
 	return ret;
-}
-
-bool verify_set_names(PgSQL_Session* session) {
-	uint32_t client_charset_hash = pgsql_variables.client_get_hash(session, PGSQL_CLIENT_ENCODING);
-	if (client_charset_hash == 0)
-		return false;
-
-	if (client_charset_hash != pgsql_variables.server_get_hash(session, PGSQL_CLIENT_ENCODING)) {
-		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				session->previous_status.push(PROCESSING_QUERY);
-				break;
-			/*
-			case PROCESSING_STMT_PREPARE:
-				session->previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				session->previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			*/
-			default:
-				// LCOV_EXCL_START
-				proxy_error("Wrong status %d\n", session->status);
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
-		session->set_status(SETTING_CHARSET);
-		const char* client_charset_value = pgsql_variables.client_get_value(session, PGSQL_CLIENT_ENCODING);
-		pgsql_variables.server_set_hash_and_value(session, PGSQL_CLIENT_ENCODING, client_charset_value, client_charset_hash);
-		return true;
-	}
-	return false;
 }
 
 inline bool verify_server_variable(PgSQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash) {
@@ -409,16 +261,11 @@ inline bool verify_server_variable(PgSQL_Session* session, int idx, uint32_t cli
 		session->changing_variable_idx = (enum pgsql_variable_name)idx;
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
-				session->previous_status.push(PROCESSING_QUERY);
-				break;
-			/*
 			case PROCESSING_STMT_PREPARE:
-				session->previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
+			case PROCESSING_STMT_DESCRIBE:
 			case PROCESSING_STMT_EXECUTE:
-				session->previous_status.push(PROCESSING_STMT_EXECUTE);
+				session->previous_status.push(session->status);
 				break;
-			*/
 			default:
 				// LCOV_EXCL_START
 				proxy_error("Wrong status %d\n", session->status);
@@ -427,7 +274,7 @@ inline bool verify_server_variable(PgSQL_Session* session, int idx, uint32_t cli
 				// LCOV_EXCL_STOP
 		}
 		session->set_status(pgsql_tracked_variables[idx].status);
-		pgsql_variables.server_set_value(session, idx, pgsql_variables.client_get_value(session, idx));
+		pgsql_variables.server_set_value(session, idx, pgsql_variables.client_get_value(session, idx), true);
 		return true;
 	}
 	return false;

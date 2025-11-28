@@ -12,8 +12,6 @@ class PgSQL_Backend
 	void * operator new(size_t);
 	void operator delete(void *);
 	int hostgroup_id; //< The ID of the host group this connection belongs to. Set to -1 if uninitialized
-	char gtid_uuid[128]; //< An array to store a unique identifier for each transaction : for now unused
-	uint64_t gtid_trxid; //< The ID of the current transaction : for now unused
 	PgSQL_Data_Stream *server_myds;
 	//  mysql_cp_entry_t *server_mycpe;
 	bytes_stats_t server_bytes_at_cmd; //< A structure storing the number of bytes received and sent

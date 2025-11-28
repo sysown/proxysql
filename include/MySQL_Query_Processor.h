@@ -6,7 +6,7 @@
 #include "query_processor.h"
 
 class Command_Counter;
-typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t { 
+typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t {
 	int gtid_from_hostgroup;
 } MySQL_Query_Processor_Rule_t;
 
@@ -75,14 +75,22 @@ private:
 	inline
 	void query_parser_first_comment_extended(const char* key, const char* value, MySQL_Query_Processor_Output* qpo) {
 		if (!strcasecmp(key, "min_gtid")) {
-			size_t l = strlen(value);
-			if (_is_valid_gtid((char*)value, l)) {
-				char* buf = (char*)malloc(l + 1);
-				strncpy(buf, value, l);
-				buf[l + 1] = '\0';
-				qpo->min_gtid = buf;
+			if (mysql_thread___ignore_min_gtid_annotations) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
 			} else {
-				proxy_warning("Invalid gtid value=%s\n", value);
+				size_t l = strlen(value);
+				if (_is_valid_gtid((char*)value, l)) {
+					char* buf = (char*)malloc(l + 1);
+					strncpy(buf, value, l);
+					buf[l] = '\0';
+
+					if (qpo->min_gtid) {
+						free(qpo->min_gtid);
+					}
+					qpo->min_gtid = buf;
+				} else {
+					proxy_warning("Invalid min_gtid value=%s\n", value);
+				}
 			}
 		}
 	}

@@ -90,6 +90,7 @@ int check_prepare_statement_mem_usage(MYSQL* proxysql_admin, MYSQL* proxysql, co
 		old_prep_stmt_backend_mem, new_prep_stmt_backend_mem);
 
 	mysql_stmt_close(stmt);
+	usleep(10000);
 	return EXIT_SUCCESS;
 }
 

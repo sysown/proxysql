@@ -127,6 +127,21 @@ void ProxySQL_Poll<T>::add(uint32_t _events, int _fd, T *_myds, unsigned long lo
 }
 
 /**
+ * @brief Updates the file descriptor (FD) at a specific index in the ProxySQL_Poll object.
+ *
+ * This function updates the file descriptor (FD) at a specific index in the ProxySQL_Poll object.
+ * It does not modify any other associated data or metadata.
+ *
+ * @param idx The index of the file descriptor (FD) to update.
+ * @param _fd The new file descriptor (FD) value.
+ */
+template<class T>
+void ProxySQL_Poll<T>::update_fd_at_index(unsigned int idx, int _fd) {
+	if ((int)idx == -1 || idx >= len) return;
+	fds[idx].fd = _fd;
+}
+
+/**
  * @brief Removes a file descriptor (FD) and its associated MySQL_Data_Stream from the ProxySQL_Poll object.
  * 
  * This function removes a file descriptor (FD) along with its associated MySQL_Data_Stream from the ProxySQL_Poll object.

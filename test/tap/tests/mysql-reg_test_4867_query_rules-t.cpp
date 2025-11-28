@@ -388,7 +388,7 @@ int main() {
         if (!res && mysql_field_count(proxysql_admin) == 0) {
             mysql_free_result(res);
             //rule_ids[i] = mysql_insert_id(proxysql_admin); // not supported in admin
-            MYSQL_QUERY_ON_ERR_CLEANUP(proxysql_admin, "SELECT last_insert_rowid()");
+            MYSQL_QUERY_ON_ERR_CLEANUP(proxysql_admin, "SELECT MAX(rule_id) FROM mysql_query_rules");
             MYSQL_ROW row;
             res = mysql_store_result(proxysql_admin);
             while ((row = mysql_fetch_row(res))) {
@@ -412,7 +412,7 @@ int main() {
         MYSQL_QUERY_ON_ERR_CLEANUP(proxysql_admin, query);
         MYSQL_RES* res = mysql_store_result(proxysql_admin);
         if (!res || mysql_num_rows(res) == 0) {
-            fprintf(stderr, "Rule %d not found", rule_ids[i]);
+            fprintf(stderr, "Rule %d not found\n", rule_ids[i]);
             if (res) mysql_free_result(res);
             continue;
         }
@@ -437,7 +437,7 @@ int main() {
         } 
         MYSQL_RES* res = mysql_store_result(proxysql_admin);
         if (!res || mysql_num_rows(res) == 0) {
-            fprintf(stderr, "Rule %d not found", rule_ids[i]);
+            fprintf(stderr, "Rule %d not found\n", rule_ids[i]);
             if (res) mysql_free_result(res);
             continue;
         }

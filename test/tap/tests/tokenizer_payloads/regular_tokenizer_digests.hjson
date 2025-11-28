@@ -24,7 +24,10 @@
 			"# random_comment\n select 1.1   #final_comment  \n  ",
 			"-- random_comment\n select 1.1 -- final_comment\n   ",
 			"-- random_comment\n select 1.1-- final_comment   \n",
-			"-- random_comment\n select 1.1   -- final_comment  \n  "
+			// NOTE: Reg check for last `-- ` comment with '4' chars
+			"select 1 -- aaaa",
+			// NOTE: Reg check for last `# ` comment with '1' chars
+			"select 1 # a"
 		],
 		"s1": "select ?",
 		"s2": "select ?",
@@ -951,6 +954,49 @@
 				"groups_grouping_limit": 1,
 				"replace_digits": 1,
 				"digest": "create table table_?_utf?_? (`pk` int primary key,`col_bigint_undef_signed` bigint,`col_bigint_undef_unsigned` bigint unsigned,`col_bigint_key_signed` bigint,`col_bigint_key_unsigned` bigint unsigned,`col_float_undef_signed` float,`col_float_undef_unsigned` float unsigned,`col_float_key_signed` float,`col_float_key_unsigned` float unsigned,`col_double_undef_signed` double,`col_double_undef_unsigned` double unsigned,`col_double_key_signed` double,`col_double_key_unsigned` double unsigned,`col_decimal(?,?)_undef_signed` decimal(?,?),`col_decimal(?,?)_undef_unsigned` decimal(?,?) unsigned,`col_decimal(?,?)_key_signed` decimal(?,?),`col_decimal(?,?)_key_unsigned` decimal(?,?) unsigned,`col_char(?)_undef_signed` char(?),`col_char(?)_key_signed` char(?),`col_varchar(?)_undef_signed` varchar(?),`col_varchar(?)_key_signed` varchar(?),`col_enum_undef_signed` enum(?,...),`col_enum_key_signed` enum(?,...),key (`col_bigint_key_signed`),key (`col_bigint_key_unsigned`),key (`col_float_key_signed`),key (`col_float_key_unsigned`),key (`col_double_key_signed`),key (`col_double_key_unsigned`),key (`col_decimal(?,?)_key_signed`),key (`col_decimal(?,?)_key_unsigned`),key (`col_char(?)_key_signed`),key (`col_varchar(?)_key_signed`),key (`col_enum_key_signed`)) character set utf? partition by hash(pk) partitions ?"
+			}
+		]
+	},
+	{
+		// Correct compression of final comment '--' with query exceeding 'query_digests_max_query_length'
+		"q": [
+			"insert into table (field1, field2, field3, field4, field5, field6) values ('00000000000000000000000000', null, '11111111111111111111111111', 'STOP', 1745624748961, '00000000000000000000000000') on duplicate key update field4 = 'STOP', field5 = 1745624748961, field6 = '11111111111111111111111111' -- cmt: OOOOOOOOOOOOOOOOOOOOOOOOOO:NNNNNNNNNNNNNNNNNNNNNNNNNN:N"
+		],
+		"mz": [
+			{
+				"digest_max_size": 299,
+				"grouping_limit": 3,
+				"replace_null": false,
+				"groups_grouping_limit": 10,
+				"digest": "insert into table (field1,field2,field3,field4,field5,field6) values (?,null,?,?,?,?) on duplicate key update field4 = ?,field5 = ?,field6 = ?"
+			}
+		]
+	},
+	{
+		// Correct compression of final comment '--' with query exceeding 'query_digests_max_query_length'
+		"q": [
+			"SELECT '01JSQMJPDJEF'  -- cmt: foo"
+		],
+		"mz": [
+			{
+				"digest_max_size": 25,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 10,
+				"digest": "SELECT ?"
+			}
+		]
+	},
+	{
+		// Correct compression of final comment '--' with query exceeding 'query_digests_max_query_length'
+		"q": [
+			"SELECT '01JSQMJPDJEF'  /* cmt: foo */"
+		],
+		"mz": [
+			{
+				"digest_max_size": 24,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 10,
+				"digest": "SELECT ?"
 			}
 		]
 	},
