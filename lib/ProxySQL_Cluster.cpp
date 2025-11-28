@@ -4268,6 +4268,56 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 }
 
 /**
+ * @brief Helper function to safely update peer information with proper memory management.
+ *
+ * This function eliminates the common memory management pattern found in all peer
+ * selection functions. It safely frees existing allocations and creates new ones,
+ * handling error cases and preventing memory leaks.
+ *
+ * @param existing_hostname Pointer to existing hostname string (may be NULL)
+ * @param existing_ip_addr Pointer to existing IP address string (may be NULL)
+ * @param new_hostname New hostname to allocate (may be NULL)
+ * @param new_ip_addr New IP address to allocate (may be NULL)
+ *
+ * @return Returns true if allocation succeeded, false on memory allocation failure
+ *
+ * @note This function handles the common pattern where we need to replace existing
+ *       hostname and ip_address allocations with new ones from a better peer
+ */
+static bool safe_update_peer_info(char** existing_hostname, char** existing_ip_addr,
+                                   const char* new_hostname, const char* new_ip_addr) {
+	// Free existing allocations
+	if (*existing_hostname) {
+		free(*existing_hostname);
+		*existing_hostname = NULL;
+	}
+	if (*existing_ip_addr) {
+		free(*existing_ip_addr);
+		*existing_ip_addr = NULL;
+	}
+
+	// Allocate new values
+	if (new_hostname) {
+		*existing_hostname = strdup(new_hostname);
+		if (*existing_hostname == NULL) {
+			return false; // Memory allocation failed
+		}
+	}
+	if (new_ip_addr) {
+		*existing_ip_addr = strdup(new_ip_addr);
+		if (*existing_ip_addr == NULL) {
+			if (*existing_hostname) {
+				free(*existing_hostname);
+				*existing_hostname = NULL;
+			}
+			return false; // Memory allocation failed
+		}
+	}
+
+	return true;
+}
+
+/**
  * @brief Identifies the optimal cluster peer for PostgreSQL users synchronization.
  *
  * This function scans all available cluster nodes to find the best peer for synchronizing
@@ -4308,16 +4358,11 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_users(char **host, uint16_t 
 				if (v->diff_check >= diff_mu) {
 					epoch = v->epoch;
 					version = v->version;
-					if (hostname) {
-						free(hostname);
-					}
-					if (ip_addr) {
-						free(ip_addr);
-					}
-					hostname=strdup(node->get_hostname());
 					const char* ip = node->get_ipaddress();
-					if (ip)
-						ip_addr = strdup(ip);
+					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), ip)) {
+						proxy_error("Memory allocation failed while updating pgsql_users peer info\n");
+						return;
+					}
 					p = node->get_port();
 				}
 			}
@@ -4327,14 +4372,8 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_users(char **host, uint16_t 
 	if (epoch) {
 		if (max_epoch > epoch) {
 			proxy_warning("Cluster: detected a peer with pgsql_users epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			if (hostname) {
-				free(hostname);
-				hostname = NULL;
-			}
-			if (ip_addr) {
-				free(ip_addr);
-				ip_addr = NULL;
-			}
+			// Clean up allocated memory using helper function
+			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
 		}
 	}
 	if (hostname) {
@@ -4388,16 +4427,11 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_query_rules(char **host, uin
 				if (v->diff_check >= diff_mu) {
 					epoch = v->epoch;
 					version = v->version;
-					if (hostname) {
-						free(hostname);
-					}
-					if (ip_addr) {
-						free(ip_addr);
-					}
-					hostname=strdup(node->get_hostname());
 					const char* ip = node->get_ipaddress();
-					if (ip)
-						ip_addr = strdup(ip);
+					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), ip)) {
+						proxy_error("Memory allocation failed while updating pgsql_query_rules peer info\n");
+						return;
+					}
 					p = node->get_port();
 				}
 			}
@@ -4407,14 +4441,8 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_query_rules(char **host, uin
 	if (epoch) {
 		if (max_epoch > epoch) {
 			proxy_warning("Cluster: detected a peer with pgsql_query_rules epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			if (hostname) {
-				free(hostname);
-				hostname = NULL;
-			}
-			if (ip_addr) {
-				free(ip_addr);
-				ip_addr = NULL;
-			}
+			// Clean up allocated memory using helper function
+			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
 		}
 	}
 	if (hostname) {
