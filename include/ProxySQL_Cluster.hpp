@@ -308,6 +308,7 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 pgsql_servers;
 		ProxySQL_Checksum_Value_2 pgsql_users;
 		ProxySQL_Checksum_Value_2 pgsql_servers_v2;
+		ProxySQL_Checksum_Value_2 pgsql_variables;
 	} checksums_values;
 	uint64_t global_checksum;
 };
@@ -450,6 +451,15 @@ struct p_cluster_counter {
 		pulled_ldap_variables_success,
 		pulled_ldap_variables_failure,
 
+		pulled_pgsql_query_rules_success,
+		pulled_pgsql_query_rules_failure,
+		pulled_pgsql_servers_success,
+		pulled_pgsql_servers_failure,
+		pulled_pgsql_users_success,
+		pulled_pgsql_users_failure,
+		pulled_pgsql_variables_success,
+		pulled_pgsql_variables_failure,
+
 		pulled_mysql_ldap_mapping_success,
 		pulled_mysql_ldap_mapping_failure,
 
@@ -580,6 +590,7 @@ public:
 	int cluster_pgsql_query_rules_diffs_before_sync;
 	int cluster_pgsql_servers_diffs_before_sync;
 	int cluster_pgsql_users_diffs_before_sync;
+	int cluster_pgsql_variables_diffs_before_sync;
 	int cluster_mysql_servers_sync_algorithm;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;
@@ -591,6 +602,7 @@ public:
 	bool cluster_pgsql_query_rules_save_to_disk;
 	bool cluster_pgsql_servers_save_to_disk;
 	bool cluster_pgsql_users_save_to_disk;
+	bool cluster_pgsql_variables_save_to_disk;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();
 	void init() {};
@@ -654,5 +666,6 @@ public:
 	void pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
 		const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {}, bool fetch_runtime_pgsql_servers = false);
 	void pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_pgsql_variables_from_peer(const std::string& expected_checksum, const time_t epoch);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */
