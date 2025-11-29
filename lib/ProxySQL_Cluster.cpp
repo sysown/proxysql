@@ -584,7 +584,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		{"pgsql_users", &checksums_values.pgsql_users, &GloVars.checksums_values.pgsql_users, &ProxySQL_Cluster::cluster_pgsql_users_diffs_before_sync,
 		 nullptr, nullptr, 0, 0, nullptr},
 		{"pgsql_variables", &checksums_values.pgsql_variables, &GloVars.checksums_values.pgsql_variables, &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
-		 nullptr, nullptr, 0, 0, nullptr}
+		 "pgsql", "LOAD PGSQL VARIABLES TO RUNTIME",
+		 static_cast<int>(p_cluster_counter::sync_conflict_pgsql_variables_share_epoch),
+		 static_cast<int>(p_cluster_counter::sync_delayed_pgsql_variables_version_one), nullptr}
 	};
 
 	while ( _r && (row = mysql_fetch_row(_r))) {
@@ -653,11 +655,12 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	// note that this is done outside the critical section
 	// as mutex on GloVars.checksum_mutex is already released
 
-	// Set of modules that need special sync decision processing (admin_variables, mysql_variables, ldap_variables)
+	// Set of modules that need special sync decision processing (admin_variables, mysql_variables, ldap_variables, pgsql_variables)
 	const std::unordered_set<std::string> sync_enabled_modules = {
 		"admin_variables",
 		"mysql_variables",
-		"ldap_variables"
+		"ldap_variables",
+		"pgsql_variables"
 	};
 
 	// Process sync decisions for modules that need special sync processing
@@ -5226,6 +5229,15 @@ cluster_metrics_map = std::make_tuple(
 				{ "reason", "servers_share_epoch" }
 			}
 		),
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_pgsql_variables_share_epoch,
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "pgsql_variables" },
+				{ "reason", "servers_share_epoch" }
+			}
+		),
 		// ====================================================================
 
 		// sync_delayed due to version one
@@ -5290,6 +5302,15 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "ldap_variables" },
+				{ "reason", "version_one" }
+			}
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_pgsql_variables_version_one,
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "pgsql_variables" },
 				{ "reason", "version_one" }
 			}
 		),

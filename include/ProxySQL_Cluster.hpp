@@ -471,6 +471,7 @@ struct p_cluster_counter {
 		sync_conflict_mysql_variables_share_epoch,
 		sync_conflict_admin_variables_share_epoch,
 		sync_conflict_ldap_variables_share_epoch,
+		sync_conflict_pgsql_variables_share_epoch,
 
 		sync_delayed_mysql_query_rules_version_one,
 		sync_delayed_mysql_servers_version_one,
@@ -479,6 +480,7 @@ struct p_cluster_counter {
 		sync_delayed_mysql_variables_version_one,
 		sync_delayed_admin_variables_version_one,
 		sync_delayed_ldap_variables_version_one,
+		sync_delayed_pgsql_variables_version_one,
 
 		__size
 	};
