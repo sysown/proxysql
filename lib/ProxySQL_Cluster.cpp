@@ -539,39 +539,40 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		ProxySQL_Checksum_Value_2* local_checksum;
 		ProxySQL_Checksum_Value* global_checksum;
 		std::atomic<int> ProxySQL_Cluster::*diff_member;
+		bool (*enabled_check)();  // Function to check if module is enabled (nullptr for always enabled)
 	};
 
 	// Initialize all supported modules with their respective checksum field pointers
 	ChecksumModuleInfo modules[] = {
-		{"admin_variables", &checksums_values.admin_variables, &GloVars.checksums_values.admin_variables, &ProxySQL_Cluster::cluster_admin_variables_diffs_before_sync},
-		{"mysql_query_rules", &checksums_values.mysql_query_rules, &GloVars.checksums_values.mysql_query_rules, &ProxySQL_Cluster::cluster_mysql_query_rules_diffs_before_sync},
-		{"mysql_servers", &checksums_values.mysql_servers, &GloVars.checksums_values.mysql_servers, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync},
-		{"mysql_servers_v2", &checksums_values.mysql_servers_v2, &GloVars.checksums_values.mysql_servers_v2, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync},
-		{"mysql_users", &checksums_values.mysql_users, &GloVars.checksums_values.mysql_users, &ProxySQL_Cluster::cluster_mysql_users_diffs_before_sync},
-		{"mysql_variables", &checksums_values.mysql_variables, &GloVars.checksums_values.mysql_variables, &ProxySQL_Cluster::cluster_mysql_variables_diffs_before_sync},
-		{"proxysql_servers", &checksums_values.proxysql_servers, &GloVars.checksums_values.proxysql_servers, &ProxySQL_Cluster::cluster_proxysql_servers_diffs_before_sync},
-		{"ldap_variables", &checksums_values.ldap_variables, &GloVars.checksums_values.ldap_variables, &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync},
-		{"pgsql_query_rules", &checksums_values.pgsql_query_rules, &GloVars.checksums_values.pgsql_query_rules, &ProxySQL_Cluster::cluster_pgsql_query_rules_diffs_before_sync},
-		{"pgsql_servers", &checksums_values.pgsql_servers, &GloVars.checksums_values.pgsql_servers, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync},
-		{"pgsql_servers_v2", &checksums_values.pgsql_servers_v2, &GloVars.checksums_values.pgsql_servers_v2, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync},
-		{"pgsql_users", &checksums_values.pgsql_users, &GloVars.checksums_values.pgsql_users, &ProxySQL_Cluster::cluster_pgsql_users_diffs_before_sync},
-		{"pgsql_variables", &checksums_values.pgsql_variables, &GloVars.checksums_values.pgsql_variables, &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync}
+		{"admin_variables", &checksums_values.admin_variables, &GloVars.checksums_values.admin_variables, &ProxySQL_Cluster::cluster_admin_variables_diffs_before_sync, nullptr},
+		{"mysql_query_rules", &checksums_values.mysql_query_rules, &GloVars.checksums_values.mysql_query_rules, &ProxySQL_Cluster::cluster_mysql_query_rules_diffs_before_sync, nullptr},
+		{"mysql_servers", &checksums_values.mysql_servers, &GloVars.checksums_values.mysql_servers, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync, nullptr},
+		{"mysql_servers_v2", &checksums_values.mysql_servers_v2, &GloVars.checksums_values.mysql_servers_v2, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync, nullptr},
+		{"mysql_users", &checksums_values.mysql_users, &GloVars.checksums_values.mysql_users, &ProxySQL_Cluster::cluster_mysql_users_diffs_before_sync, nullptr},
+		{"mysql_variables", &checksums_values.mysql_variables, &GloVars.checksums_values.mysql_variables, &ProxySQL_Cluster::cluster_mysql_variables_diffs_before_sync, nullptr},
+		{"proxysql_servers", &checksums_values.proxysql_servers, &GloVars.checksums_values.proxysql_servers, &ProxySQL_Cluster::cluster_proxysql_servers_diffs_before_sync, nullptr},
+		{"ldap_variables", &checksums_values.ldap_variables, &GloVars.checksums_values.ldap_variables, &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync, []() { return GloMyLdapAuth != nullptr; }},
+		{"pgsql_query_rules", &checksums_values.pgsql_query_rules, &GloVars.checksums_values.pgsql_query_rules, &ProxySQL_Cluster::cluster_pgsql_query_rules_diffs_before_sync, nullptr},
+		{"pgsql_servers", &checksums_values.pgsql_servers, &GloVars.checksums_values.pgsql_servers, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync, nullptr},
+		{"pgsql_servers_v2", &checksums_values.pgsql_servers_v2, &GloVars.checksums_values.pgsql_servers_v2, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync, nullptr},
+		{"pgsql_users", &checksums_values.pgsql_users, &GloVars.checksums_values.pgsql_users, &ProxySQL_Cluster::cluster_pgsql_users_diffs_before_sync, nullptr},
+		{"pgsql_variables", &checksums_values.pgsql_variables, &GloVars.checksums_values.pgsql_variables, &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync, nullptr}
 	};
 
 	while ( _r && (row = mysql_fetch_row(_r))) {
 		// Data-driven approach: find the matching module and process it
 		bool module_found = false;
 
-		// Special case for ldap_variables - only process if LDAP authentication is enabled
-		if (GloMyLdapAuth && strcmp(row[0],"ldap_variables")==0) {
-			module_found = true;
-		} else {
-			// Search for the module in our data structure
-			for (const auto& module : modules) {
-				if (strcmp(row[0], module.module_name) == 0) {
+		// Search for the module in our data structure and check if it's enabled
+		for (const auto& module : modules) {
+			if (strcmp(row[0], module.module_name) == 0) {
+				// Skip module if not enabled (for modules with optional dependencies like LDAP)
+				if (module.enabled_check && !module.enabled_check()) {
 					module_found = true;
 					break;
 				}
+				module_found = true;
+				break;
 			}
 		}
 
@@ -579,11 +580,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			// Find the module and get its diff threshold
 			for (const auto& module : modules) {
 				if (strcmp(row[0], module.module_name) == 0) {
-					// Skip ldap_variables if not enabled (handled above)
-					if (strcmp(row[0], "ldap_variables") == 0 && !GloMyLdapAuth) {
-						continue;
-					}
-
 					// Get diff threshold using member pointer with atomic load
 					unsigned int diff_threshold = (unsigned int)(GloProxyCluster->*(module.diff_member)).load();
 
@@ -629,7 +625,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	// note that this is done outside the critical section
 	// as mutex on GloVars.checksum_mutex is already released
 
-	// Data-driven approach for sync decisions of admin_variables and mysql_variables
+	// Data-driven approach for sync decisions of admin_variables, mysql_variables, and ldap_variables
 	struct SyncModuleConfig {
 		const char* name;
 		unsigned int diff_threshold;
@@ -639,21 +635,32 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		int sync_delayed_counter;
 		ProxySQL_Checksum_Value_2* local_checksum;
 		ProxySQL_Checksum_Value* global_checksum;
+		bool (*enabled_check)();  // Function to check if module is enabled (nullptr for always enabled)
 	};
 
 	SyncModuleConfig sync_modules[] = {
 		{"admin_variables", diff_av, "admin", "LOAD ADMIN VARIABLES TO RUNTIME",
 		 static_cast<int>(p_cluster_counter::sync_conflict_admin_variables_share_epoch),
 		 static_cast<int>(p_cluster_counter::sync_delayed_admin_variables_version_one),
-		 &checksums_values.admin_variables, &GloVars.checksums_values.admin_variables},
+		 &checksums_values.admin_variables, &GloVars.checksums_values.admin_variables, nullptr},
 		{"mysql_variables", diff_mv, "mysql", "LOAD MYSQL VARIABLES TO RUNTIME",
 		 static_cast<int>(p_cluster_counter::sync_conflict_mysql_variables_share_epoch),
 		 static_cast<int>(p_cluster_counter::sync_delayed_mysql_variables_version_one),
-		 &checksums_values.mysql_variables, &GloVars.checksums_values.mysql_variables}
+		 &checksums_values.mysql_variables, &GloVars.checksums_values.mysql_variables, nullptr},
+		{"ldap_variables", diff_lv, "ldap", "LOAD LDAP VARIABLES TO RUNTIME",
+		 static_cast<int>(p_cluster_counter::sync_conflict_ldap_variables_share_epoch),
+		 static_cast<int>(p_cluster_counter::sync_delayed_ldap_variables_version_one),
+		 &checksums_values.ldap_variables, &GloVars.checksums_values.ldap_variables,
+		 []() { return GloMyLdapAuth != nullptr; }}
 	};
 
-	// Process sync decisions for admin_variables and mysql_variables using loop
+	// Process sync decisions for admin_variables, mysql_variables, and ldap_variables using loop
 	for (const auto& module : sync_modules) {
+		// Skip module if not enabled (for modules with optional dependencies like LDAP)
+		if (module.enabled_check && !module.enabled_check()) {
+			continue;
+		}
+
 		if (module.diff_threshold > 0) {
 			ProxySQL_Checksum_Value_2 *v = module.local_checksum;
 			unsigned long long own_version = __sync_fetch_and_add(&module.global_checksum->version, 0);
@@ -838,39 +845,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 		}
 	}
-	if (GloMyLdapAuth && diff_lv) {
-		v = &checksums_values.ldap_variables;
-		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.ldap_variables.version, 0);
-		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.ldap_variables.epoch, 0);
-		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.ldap_variables.checksum, 0);
-		const string expected_checksum { v->checksum };
-
-		if (v->version > 1) {
-			if (
-				(own_version == 1) // we just booted
-				||
-				(v->epoch > own_epoch) // epoch is newer
-			) {
-				if (v->diff_check >= diff_lv) {
-					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					proxy_info("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					GloProxyCluster->pull_global_variables_from_peer("ldap", expected_checksum, v->epoch);
-				}
-			}
-			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_lv*10)) == 0)) {
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD LDAP VARIABLES is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_lv * 10));
-				proxy_error("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD LDAP VARIABLES is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_lv*10));
-				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_ldap_variables_share_epoch]->Increment();
-			}
-		} else {
-			if (v->diff_check && (v->diff_check % (diff_lv*10)) == 0) {
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD LDAP VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_lv * 10));
-				proxy_warning("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD LDAP VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_lv*10));
-				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_ldap_variables_version_one]->Increment();
-			}
-		}
-	}
-	// IMPORTANT-NOTE: This action should ALWAYS be performed the last, since the 'checksums_values' gets
+		// IMPORTANT-NOTE: This action should ALWAYS be performed the last, since the 'checksums_values' gets
 	// invalidated by 'pull_proxysql_servers_from_peer' and further memory accesses would be invalid.
 	if (diff_ps) {
 		v = &checksums_values.proxysql_servers;
