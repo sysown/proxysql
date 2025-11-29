@@ -1,5 +1,6 @@
 #include <utility>
 #include <unordered_set>
+#include <functional>
 
 #include "proxysql.h"
 #include "proxysql_utils.h"
@@ -3843,21 +3844,73 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 	}
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address) {
+/**
+ * @brief Unified function to find optimal peer for syncing variables modules
+ *
+ * Data-driven implementation that replaces separate functions for mysql_variables,
+ * admin_variables, and ldap_variables. Uses module configuration to determine:
+ * - Which cluster variable to check for diff threshold
+ * - Which checksum field to examine in each node
+ * - Module name for debug logging
+ *
+ * @param module_name The name of the module ("mysql_variables", "admin_variables", "ldap_variables", "pgsql_variables")
+ * @param host Pointer to store the selected peer's hostname
+ * @param port Pointer to store the selected peer's port
+ * @param ip_address Pointer to store the selected peer's IP address
+ */
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* module_name, char **host, uint16_t *port, char** ip_address) {
+	// Data-driven mapping of module names to their cluster configurations
+	struct VariablesModuleConfig {
+		const char* name;
+		std::atomic<int> ProxySQL_Cluster::*diff_member;
+		std::function<ProxySQL_Checksum_Value_2*(ProxySQL_Node_Entry*)> checksum_getter;
+	};
+
+	// Initialize all supported variables modules with their configuration
+	const VariablesModuleConfig modules[] = {
+		{"mysql_variables", &ProxySQL_Cluster::cluster_mysql_variables_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_variables; }},
+		{"admin_variables", &ProxySQL_Cluster::cluster_admin_variables_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.admin_variables; }},
+		{"ldap_variables", &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.ldap_variables; }},
+		{"pgsql_variables", &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }}
+	};
+
+	// Find the matching module configuration
+	const VariablesModuleConfig* config = nullptr;
+	for (const auto& module : modules) {
+		if (strcmp(module_name, module.name) == 0) {
+			config = &module;
+			break;
+		}
+	}
+
+	if (!config) {
+		proxy_error("Invalid module name supplied to get_peer_to_sync_variables_module: %s\n", module_name);
+		return;
+	}
+
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
 	char* ip_addr = NULL;
 	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_mysql_variables_diffs_before_sync;
+
+	// Get diff threshold using member pointer with atomic load
+	unsigned int diff_threshold = (unsigned int)(GloProxyCluster->*(config->diff_member)).load();
+
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
 		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_variables;
+		// Use function pointer to access the correct checksum field
+		ProxySQL_Checksum_Value_2 * v = config->checksum_getter(node);
+
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check >= diff_mu) {
+				if (v->diff_check >= diff_threshold) {
 					epoch = v->epoch;
 					version = v->version;
 					if (hostname) {
@@ -3874,11 +3927,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint1
 				}
 			}
 		}
-		it++;
+
+		++it;
 	}
+
 	if (epoch) {
 		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with mysql_variables epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			proxy_warning("Cluster: detected a peer with %s epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", config->name, max_epoch, epoch);
 			if (hostname) {
 				free(hostname);
 				hostname = NULL;
@@ -3892,121 +3947,25 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint1
 	if (hostname) {
 		*host = hostname;
 		*port = p;
-		*ip_address = ip_addr;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with mysql_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
+		if (ip_address) {
+			*ip_address = ip_addr;
+		}
+		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, config->name, version, epoch);
+		proxy_info("Cluster: detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, config->name, version, epoch);
 	}
+}
+
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address) {
+	get_peer_to_sync_variables_module("mysql_variables", host, port, ip_address);
 }
 
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint16_t *port, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char *ip_addr = NULL;
-	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_admin_variables_diffs_before_sync;
-	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.admin_variables;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_mu) {
-					epoch = v->epoch;
-					version = v->version;
-					if (hostname) {
-						free(hostname);
-					}
-					if (ip_addr) {
-						free(ip_addr);
-					}
-					hostname=strdup(node->get_hostname());
-					const char* ip = node->get_ipaddress();
-					if (ip)
-						ip_addr = strdup(ip);
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with admin_variables epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			if (hostname) {
-				free(hostname);
-				hostname = NULL;
-			}
-			if (ip_addr) {
-				free(ip_addr);
-				ip_addr = NULL;
-			}
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with admin_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with admin_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("admin_variables", host, port, ip_address);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char* ip_addr = NULL;
-	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_ldap_variables_diffs_before_sync;
-	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.ldap_variables;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_mu) {
-					epoch = v->epoch;
-					version = v->version;
-					if (hostname) {
-						free(hostname);
-					}
-					if (ip_addr) {
-						free(ip_addr);
-					}
-					hostname=strdup(node->get_hostname());
-					const char* ip = node->get_ipaddress();
-					if (ip)
-						ip_addr = strdup(ip);
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with ldap_variables epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			if (hostname) {
-				free(hostname);
-				hostname = NULL;
-			}
-			if (ip_addr) {
-				free(ip_addr);
-				ip_addr = NULL;
-			}
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with ldap_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with ldap_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("ldap_variables", host, port, ip_address);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char** ip_address) {

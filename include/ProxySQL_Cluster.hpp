@@ -404,6 +404,7 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, char** peer_mysql_servers_v2_checksum, 
 		char** peer_runtime_mysql_servers_checksum, char** ip_address);
 	void get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_variables_module(const char* module_name, char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_admin_variables(char **host, uint16_t* port, char** ip_address);
 	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address);
