@@ -454,8 +454,7 @@ ProxySQL_Node_Metrics * ProxySQL_Node_Entry::get_metrics_prev() {
 /**
  * @brief Helper function to process checksum updates for cluster components
  *
- * @param component_name Name of the component (e.g., "admin_variables")
- * @param row MySQL row containing checksum data
+ * @param row MySQL row containing checksum data (row[0] contains component name)
  * @param checksum Reference to the node's checksum value
  * @param global_checksum Reference to the global checksum value
  * @param now Current timestamp
@@ -465,7 +464,6 @@ ProxySQL_Node_Metrics * ProxySQL_Node_Entry::get_metrics_prev() {
  * @param port Peer port for logging
  */
 static void process_component_checksum(
-	const char* component_name,
 	MYSQL_ROW row,
 	ProxySQL_Checksum_Value_2& checksum,
 	ProxySQL_Checksum_Value& global_checksum,
@@ -493,27 +491,28 @@ static void process_component_checksum(
 
 		proxy_info(
 			"Cluster: detected a new checksum for %s from peer %s:%d, version %llu, epoch %llu, checksum %s . %s",
-			component_name, hostname, port, checksum.version, checksum.epoch, checksum.checksum, no_sync_message
+			row[0], hostname, port, checksum.version, checksum.epoch, checksum.checksum, no_sync_message
 		);
 
 		if (strcmp(checksum.checksum, global_checksum.checksum) == 0) {
 			proxy_info(
 				"Cluster: checksum for %s from peer %s:%d matches with local checksum %s , we won't sync.\n",
-				component_name, hostname, port, global_checksum.checksum
+				row[0], hostname, port, global_checksum.checksum
 			);
 		}
 	} else {
 		checksum.diff_check++;
 		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum for %s from peer %s:%d, version %llu, epoch %llu, checksum %s is different from local checksum %s. Incremented diff_check %d ...\n",
-			component_name, hostname, port, checksum.version, checksum.epoch, checksum.checksum, global_checksum.checksum, checksum.diff_check);
+			row[0], hostname, port, checksum.version, checksum.epoch, checksum.checksum, global_checksum.checksum, checksum.diff_check);
 	}
 
 	if (strcmp(checksum.checksum, global_checksum.checksum) == 0) {
 		checksum.diff_check = 0;
 		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum for %s from peer %s:%d matches with local checksum %s, reset diff_check to 0.\n",
-			component_name, hostname, port, global_checksum.checksum);
+			row[0], hostname, port, global_checksum.checksum);
 	}
 }
+
 
 void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	MYSQL_ROW row;
@@ -539,7 +538,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		const char* module_name;
 		ProxySQL_Checksum_Value_2* local_checksum;
 		ProxySQL_Checksum_Value* global_checksum;
-		std::atomic<int> (ProxySQL_Cluster::*diff_member);
+		std::atomic<int> ProxySQL_Cluster::*diff_member;
 	};
 
 	// Initialize all supported modules with their respective checksum field pointers
@@ -595,7 +594,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 						module.module_name);
 
 					process_component_checksum(
-						module.module_name, row,
+						row,
 						*module.local_checksum,
 						*module.global_checksum,
 						now, diff_threshold,
@@ -608,63 +607,22 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		}
 	}
 	if (_r == NULL) {
-		ProxySQL_Checksum_Value_2 *v = NULL;
-		v = &checksums_values.admin_variables;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.admin_variables.checksum) == 0) {
-			v->diff_check = 0;
+		// Update diff_check counters for all modules using data-driven approach
+		size_t module_count = sizeof(modules) / sizeof(modules[0]);
+		for (size_t i = 0; i < module_count; i++) {
+			ProxySQL_Checksum_Value_2* local_v = modules[i].local_checksum;
+			ProxySQL_Checksum_Value* global_v = modules[i].global_checksum;
+
+			if (local_v && global_v) {
+				local_v->last_updated = now;
+				if (strcmp(local_v->checksum, global_v->checksum) == 0) {
+					local_v->diff_check = 0;
+				}
+				if (local_v->diff_check) {
+					local_v->diff_check++;
+				}
+			}
 		}
-		if (v->diff_check)
-			v->diff_check++;
-		v = &checksums_values.mysql_query_rules;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.mysql_query_rules.checksum) == 0) {
-			v->diff_check = 0;
-		}
-		if (v->diff_check)
-			v->diff_check++;
-		v = &checksums_values.mysql_servers;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.mysql_servers.checksum) == 0) {
-			v->diff_check = 0;
-		}
-		if (v->diff_check)
-			v->diff_check++;
-		v = &checksums_values.mysql_servers_v2;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.mysql_servers_v2.checksum) == 0) {
-			v->diff_check = 0;
-		}
-		if (v->diff_check)
-			v->diff_check++;
-		v = &checksums_values.mysql_users;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.mysql_users.checksum) == 0) {
-			v->diff_check = 0;
-		}
-		if (v->diff_check)
-			v->diff_check++;
-		v = &checksums_values.mysql_variables;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.mysql_variables.checksum) == 0) {
-			v->diff_check = 0;
-		}
-		if (v->diff_check)
-			v->diff_check++;
-		v = &checksums_values.proxysql_servers;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.proxysql_servers.checksum) == 0) {
-			v->diff_check = 0;
-		}
-		if (v->diff_check)
-			v->diff_check++;
-		v = &checksums_values.ldap_variables;
-		v->last_updated = now;
-		if (strcmp(v->checksum, GloVars.checksums_values.ldap_variables.checksum) == 0) {
-			v->diff_check = 0;
-		}
-		if (v->diff_check)
-			v->diff_check++;
 	}
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
 	// we now do a series of checks, and we take action
