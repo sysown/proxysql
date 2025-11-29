@@ -5,6 +5,7 @@
 #include "thread.h"
 #include "wqueue.h"
 #include <vector>
+#include <atomic>
 
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
@@ -580,17 +581,17 @@ public:
 	char* admin_mysql_ifaces;
 	int cluster_check_interval_ms;
 	int cluster_check_status_frequency;
-	int cluster_mysql_query_rules_diffs_before_sync;
-	int cluster_mysql_servers_diffs_before_sync;
-	int cluster_mysql_users_diffs_before_sync;
-	int cluster_proxysql_servers_diffs_before_sync;
-	int cluster_mysql_variables_diffs_before_sync;
-	int cluster_ldap_variables_diffs_before_sync;
-	int cluster_admin_variables_diffs_before_sync;
-	int cluster_pgsql_query_rules_diffs_before_sync;
-	int cluster_pgsql_servers_diffs_before_sync;
-	int cluster_pgsql_users_diffs_before_sync;
-	int cluster_pgsql_variables_diffs_before_sync;
+	std::atomic<int> cluster_mysql_query_rules_diffs_before_sync;
+	std::atomic<int> cluster_mysql_servers_diffs_before_sync;
+	std::atomic<int> cluster_mysql_users_diffs_before_sync;
+	std::atomic<int> cluster_proxysql_servers_diffs_before_sync;
+	std::atomic<int> cluster_mysql_variables_diffs_before_sync;
+	std::atomic<int> cluster_ldap_variables_diffs_before_sync;
+	std::atomic<int> cluster_admin_variables_diffs_before_sync;
+	std::atomic<int> cluster_pgsql_query_rules_diffs_before_sync;
+	std::atomic<int> cluster_pgsql_servers_diffs_before_sync;
+	std::atomic<int> cluster_pgsql_users_diffs_before_sync;
+	std::atomic<int> cluster_pgsql_variables_diffs_before_sync;
 	int cluster_mysql_servers_sync_algorithm;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;

@@ -520,163 +520,91 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	time_t now = time(NULL);
 
 	// Fetch the cluster_*_diffs_before_sync variables to ensure consistency at local scope
-	unsigned int diff_av = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_admin_variables_diffs_before_sync,0);
-	unsigned int diff_mqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync,0);
-	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
-	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
-	unsigned int diff_ps = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync,0);
-	unsigned int diff_mv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
-	unsigned int diff_lv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync,0);
-	unsigned int diff_pqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync,0);
-	unsigned int diff_ms_pgsql = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_servers_diffs_before_sync,0);
-	unsigned int diff_mu_pgsql = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_users_diffs_before_sync,0);
-	unsigned int diff_mv_pgsql = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_variables_diffs_before_sync,0);
+	unsigned int diff_av = (unsigned int)GloProxyCluster->cluster_admin_variables_diffs_before_sync;
+	unsigned int diff_mqr = (unsigned int)GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync;
+	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_mysql_servers_diffs_before_sync;
+	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_mysql_users_diffs_before_sync;
+	unsigned int diff_ps = (unsigned int)GloProxyCluster->cluster_proxysql_servers_diffs_before_sync;
+	unsigned int diff_mv = (unsigned int)GloProxyCluster->cluster_mysql_variables_diffs_before_sync;
+	unsigned int diff_lv = (unsigned int)GloProxyCluster->cluster_ldap_variables_diffs_before_sync;
+	unsigned int diff_pqr = (unsigned int)GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync;
+	unsigned int diff_ms_pgsql = (unsigned int)GloProxyCluster->cluster_pgsql_servers_diffs_before_sync;
+	unsigned int diff_mu_pgsql = (unsigned int)GloProxyCluster->cluster_pgsql_users_diffs_before_sync;
+	unsigned int diff_mv_pgsql = (unsigned int)GloProxyCluster->cluster_pgsql_variables_diffs_before_sync;
 
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 
+	// Data-driven mapping of module names to their checksum fields and diff thresholds
+	struct ChecksumModuleInfo {
+		const char* module_name;
+		ProxySQL_Checksum_Value_2* local_checksum;
+		ProxySQL_Checksum_Value* global_checksum;
+		std::atomic<int> (ProxySQL_Cluster::*diff_member);
+	};
+
+	// Initialize all supported modules with their respective checksum field pointers
+	ChecksumModuleInfo modules[] = {
+		{"admin_variables", &checksums_values.admin_variables, &GloVars.checksums_values.admin_variables, &ProxySQL_Cluster::cluster_admin_variables_diffs_before_sync},
+		{"mysql_query_rules", &checksums_values.mysql_query_rules, &GloVars.checksums_values.mysql_query_rules, &ProxySQL_Cluster::cluster_mysql_query_rules_diffs_before_sync},
+		{"mysql_servers", &checksums_values.mysql_servers, &GloVars.checksums_values.mysql_servers, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync},
+		{"mysql_servers_v2", &checksums_values.mysql_servers_v2, &GloVars.checksums_values.mysql_servers_v2, &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync},
+		{"mysql_users", &checksums_values.mysql_users, &GloVars.checksums_values.mysql_users, &ProxySQL_Cluster::cluster_mysql_users_diffs_before_sync},
+		{"mysql_variables", &checksums_values.mysql_variables, &GloVars.checksums_values.mysql_variables, &ProxySQL_Cluster::cluster_mysql_variables_diffs_before_sync},
+		{"proxysql_servers", &checksums_values.proxysql_servers, &GloVars.checksums_values.proxysql_servers, &ProxySQL_Cluster::cluster_proxysql_servers_diffs_before_sync},
+		{"ldap_variables", &checksums_values.ldap_variables, &GloVars.checksums_values.ldap_variables, &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync},
+		{"pgsql_query_rules", &checksums_values.pgsql_query_rules, &GloVars.checksums_values.pgsql_query_rules, &ProxySQL_Cluster::cluster_pgsql_query_rules_diffs_before_sync},
+		{"pgsql_servers", &checksums_values.pgsql_servers, &GloVars.checksums_values.pgsql_servers, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync},
+		{"pgsql_servers_v2", &checksums_values.pgsql_servers_v2, &GloVars.checksums_values.pgsql_servers_v2, &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync},
+		{"pgsql_users", &checksums_values.pgsql_users, &GloVars.checksums_values.pgsql_users, &ProxySQL_Cluster::cluster_pgsql_users_diffs_before_sync},
+		{"pgsql_variables", &checksums_values.pgsql_variables, &GloVars.checksums_values.pgsql_variables, &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync}
+	};
+
 	while ( _r && (row = mysql_fetch_row(_r))) {
-		if (strcmp(row[0],"admin_variables")==0) {
-			process_component_checksum(
-				"admin_variables", row,
-				checksums_values.admin_variables,
-				GloVars.checksums_values.admin_variables,
-				now, diff_av,
-				"Not syncing due to 'admin-cluster_admin_variables_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"mysql_query_rules")==0) {
-			process_component_checksum(
-				"mysql_query_rules", row,
-				checksums_values.mysql_query_rules,
-				GloVars.checksums_values.mysql_query_rules,
-				now, diff_mqr,
-				"Not syncing due to 'admin-cluster_mysql_query_rules_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"mysql_servers")==0) {
-			process_component_checksum(
-				"mysql_servers", row,
-				checksums_values.mysql_servers,
-				GloVars.checksums_values.mysql_servers,
-				now, diff_ms,
-				"Not syncing due to 'admin-cluster_mysql_servers_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0], "mysql_servers_v2")==0) {
-			process_component_checksum(
-				"mysql_servers_v2", row,
-				checksums_values.mysql_servers_v2,
-				GloVars.checksums_values.mysql_servers_v2,
-				now, diff_ms,
-				"Not syncing due to 'admin-cluster_mysql_servers_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"mysql_users")==0) {
-			process_component_checksum(
-				"mysql_users", row,
-				checksums_values.mysql_users,
-				GloVars.checksums_values.mysql_users,
-				now, diff_mu,
-				"Not syncing due to 'admin-cluster_mysql_users_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"mysql_variables")==0) {
-			process_component_checksum(
-				"mysql_variables", row,
-				checksums_values.mysql_variables,
-				GloVars.checksums_values.mysql_variables,
-				now, diff_mv,
-				"Not syncing due to 'admin-cluster_mysql_variables_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"proxysql_servers")==0) {
-			process_component_checksum(
-				"proxysql_servers", row,
-				checksums_values.proxysql_servers,
-				GloVars.checksums_values.proxysql_servers,
-				now, diff_ps,
-				"Not syncing due to 'admin-cluster_proxysql_servers_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
+		// Data-driven approach: find the matching module and process it
+		bool module_found = false;
+
+		// Special case for ldap_variables - only process if LDAP authentication is enabled
 		if (GloMyLdapAuth && strcmp(row[0],"ldap_variables")==0) {
-			process_component_checksum(
-				"ldap_variables", row,
-				checksums_values.ldap_variables,
-				GloVars.checksums_values.ldap_variables,
-				now, diff_lv,
-				"Not syncing due to 'admin-cluster_ldap_variables_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
+			module_found = true;
+		} else {
+			// Search for the module in our data structure
+			for (const auto& module : modules) {
+				if (strcmp(row[0], module.module_name) == 0) {
+					module_found = true;
+					break;
+				}
+			}
 		}
-		if (strcmp(row[0],"pgsql_query_rules")==0) {
-			process_component_checksum(
-				"pgsql_query_rules", row,
-				checksums_values.pgsql_query_rules,
-				GloVars.checksums_values.pgsql_query_rules,
-				now, diff_pqr,
-				"Not syncing due to 'admin-cluster_pgsql_query_rules_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"pgsql_servers")==0) {
-			process_component_checksum(
-				"pgsql_servers", row,
-				checksums_values.pgsql_servers,
-				GloVars.checksums_values.pgsql_servers,
-				now, diff_ms_pgsql,
-				"Not syncing due to 'admin-cluster_pgsql_servers_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"pgsql_servers_v2")==0) {
-			process_component_checksum(
-				"pgsql_servers_v2", row,
-				checksums_values.pgsql_servers_v2,
-				GloVars.checksums_values.pgsql_servers_v2,
-				now, diff_ms_pgsql,
-				"Not syncing due to 'admin-cluster_pgsql_servers_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"pgsql_users")==0) {
-			process_component_checksum(
-				"pgsql_users", row,
-				checksums_values.pgsql_users,
-				GloVars.checksums_values.pgsql_users,
-				now, diff_mu_pgsql,
-				"Not syncing due to 'admin-cluster_pgsql_users_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
-		}
-		if (strcmp(row[0],"pgsql_variables")==0) {
-			process_component_checksum(
-				"pgsql_variables", row,
-				checksums_values.pgsql_variables,
-				GloVars.checksums_values.pgsql_variables,
-				now, diff_mv_pgsql,
-				"Not syncing due to 'admin-cluster_pgsql_variables_diffs_before_sync=0'.\n",
-				hostname, port
-			);
-			continue;
+
+		if (module_found) {
+			// Find the module and get its diff threshold
+			for (const auto& module : modules) {
+				if (strcmp(row[0], module.module_name) == 0) {
+					// Skip ldap_variables if not enabled (handled above)
+					if (strcmp(row[0], "ldap_variables") == 0 && !GloMyLdapAuth) {
+						continue;
+					}
+
+					// Get diff threshold using member pointer with atomic load
+					unsigned int diff_threshold = (unsigned int)(GloProxyCluster->*(module.diff_member)).load();
+
+					// Generate generalized sync message
+					char sync_msg[256];
+					snprintf(sync_msg, sizeof(sync_msg),
+						"Not syncing due to 'admin-cluster_%s_diffs_before_sync=0'.\n",
+						module.module_name);
+
+					process_component_checksum(
+						module.module_name, row,
+						*module.local_checksum,
+						*module.global_checksum,
+						now, diff_threshold,
+						sync_msg,
+						hostname, port
+					);
+					break;
+				}
+			}
 		}
 	}
 	if (_r == NULL) {
@@ -3708,7 +3636,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uin
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_mqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync,0);
+	unsigned int diff_mqr = (unsigned int)GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_query_rules;
@@ -3769,7 +3697,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_runtime_mysql_servers(char **host,
 	char *pc = NULL;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
+	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_mysql_servers_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_servers;
@@ -3839,7 +3767,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers_v2(char** host, uint
 	char* runtime_mysql_servers_checksum = NULL;
 	//pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync, 0);
+	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_mysql_servers_diffs_before_sync;
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry*>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry* node = it->second;
 		ProxySQL_Checksum_Value_2* v = &node->checksums_values.mysql_servers_v2;
@@ -3915,7 +3843,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
+	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_mysql_users_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_users;
@@ -3971,7 +3899,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint1
 	char *hostname = NULL;
 	char* ip_addr = NULL;
 	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
+	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_mysql_variables_diffs_before_sync;
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_variables;
@@ -4027,7 +3955,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint1
 	char *hostname = NULL;
 	char *ip_addr = NULL;
 	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_admin_variables_diffs_before_sync,0);
+	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_admin_variables_diffs_before_sync;
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.admin_variables;
@@ -4082,7 +4010,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16
 	char *hostname = NULL;
 	char* ip_addr = NULL;
 	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync,0);
+	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_ldap_variables_diffs_before_sync;
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.ldap_variables;
@@ -4139,7 +4067,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_ps = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync,0);
+	unsigned int diff_ps = (unsigned int)GloProxyCluster->cluster_proxysql_servers_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.proxysql_servers;
@@ -4270,7 +4198,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_users(char **host, uint16_t 
 	char *hostname = NULL;
 	char *ip_addr = NULL;
 	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_users_diffs_before_sync,0);
+	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_pgsql_users_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_users;
@@ -4339,7 +4267,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_query_rules(char **host, uin
 	char *hostname = NULL;
 	char *ip_addr = NULL;
 	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync,0);
+	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_query_rules;
@@ -4409,7 +4337,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_runtime_pgsql_servers(char **host,
 	char *ip_addr = NULL;
 	uint16_t p = 0;
 	char *checksum = NULL;
-	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_servers_diffs_before_sync,0);
+	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_pgsql_servers_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_servers;
@@ -4510,7 +4438,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_servers_v2(char** host, uint
 	uint16_t p = 0;
 	char *checksum_v2 = NULL;
 	char *checksum_runtime = NULL;
-	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_pgsql_servers_diffs_before_sync,0);
+	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_pgsql_servers_diffs_before_sync;
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_servers_v2;
