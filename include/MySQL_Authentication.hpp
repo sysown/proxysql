@@ -85,6 +85,14 @@ class MySQL_Authentication {
 	void print_version();
 	bool exists(char *username);
 	account_details_t lookup(char* username, enum cred_username_type usertype, const dup_account_details_t& dup_details);
+	/**
+	 * @brief Lookup backend credentials for a specific hostgroup.
+	 * @details Searches for a backend user (backend=1) that has the specified hostgroup as its default_hostgroup.
+	 *  Only one backend user per hostgroup is allowed, ensuring unambiguous credential mapping.
+	 * @param hostgroup_id The hostgroup ID to lookup backend credentials for
+	 * @return account_details_t containing the backend user credentials, or an empty struct if none found
+	 */
+	account_details_t lookup_backend_for_hostgroup(int hostgroup_id);
 	int dump_all_users(account_details_t ***, bool _complete=true);
 	int increase_frontend_user_connections(char *username, PASSWORD_TYPE::E passtype, int *mc=NULL);
 	void decrease_frontend_user_connections(char *username, PASSWORD_TYPE::E passtype);

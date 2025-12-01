@@ -1,0 +1,23 @@
+FROM debian:13
+
+# Install runtime dependencies and mariadb client
+RUN apt-get update && \
+    apt-get install -y \
+        libgnutls30t64 \
+        libjemalloc2 \
+        libssl3t64 \
+        mariadb-client \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install ProxySQL
+COPY binaries/proxysql_3.0.4-debian13_arm64.deb /tmp/proxysql.deb
+RUN dpkg -i /tmp/proxysql.deb || true \
+    && apt-get update && apt-get install -f -y \
+    && rm -f /tmp/proxysql.deb \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/proxysql /var/run/proxysql
+
+EXPOSE 6032 6033
+
+CMD ["proxysql", "-f", "-c", "/etc/proxysql.cnf"]

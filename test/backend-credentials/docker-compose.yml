@@ -1,0 +1,229 @@
+version: '3.8'
+
+services:
+  # ProxySQL - built from source with hostgroup backend credentials feature
+  proxysql:
+    build:
+      context: ../..
+      dockerfile: test/backend-credentials/Dockerfile.proxysql
+    container_name: proxysql-test
+    ports:
+      - "6033:6033"  # MySQL interface
+      - "6543:6543"  # PostgreSQL interface
+      - "6032:6032"  # Admin interface
+    volumes:
+      - ./proxysql.cnf:/etc/proxysql.cnf
+      - ./entrypoint.sh:/entrypoint.sh
+    depends_on:
+      - mysql-hg10-1
+      - mysql-hg10-2
+      - mysql-hg20-1
+      - mysql-hg20-2
+      - mysql-hg30-1
+      - pgsql-hg10-1
+      - pgsql-hg10-2
+      - pgsql-hg20-1
+      - pgsql-hg20-2
+      - pgsql-hg30-1
+    networks:
+      - proxysql-test-net
+    command: ["/bin/bash", "/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "mysql -h 127.0.0.1 -P 6032 -uadmin -padmin -e 'SELECT COUNT(*) FROM mysql_users WHERE backend=1' | grep -q 3 && mysql -h 127.0.0.1 -P 6032 -uadmin -padmin -e 'SELECT COUNT(*) FROM pgsql_users WHERE backend=1' | grep -q 3"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Hostgroup 10 - Read servers (backend user: reader_user / reader_pass)
+  mysql-hg10-1:
+    image: mysql:8.0
+    container_name: mysql-hg10-1
+    hostname: mysql-hg10-1
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: testdb
+    volumes:
+      - ./mysql-hg10-1/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_pass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mysql-hg10-2:
+    image: mysql:8.0
+    container_name: mysql-hg10-2
+    hostname: mysql-hg10-2
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: testdb
+    volumes:
+      - ./mysql-hg10-2/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_pass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Hostgroup 20 - Write servers (backend user: writer_user / writer_pass)
+  mysql-hg20-1:
+    image: mysql:8.0
+    container_name: mysql-hg20-1
+    hostname: mysql-hg20-1
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: testdb
+    volumes:
+      - ./mysql-hg20-1/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_pass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mysql-hg20-2:
+    image: mysql:8.0
+    container_name: mysql-hg20-2
+    hostname: mysql-hg20-2
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: testdb
+    volumes:
+      - ./mysql-hg20-2/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_pass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Hostgroup 30 - Standard ProxySQL mode (frontend=backend=1)
+  mysql-hg30-1:
+    image: mysql:8.0
+    container_name: mysql-hg30-1
+    hostname: mysql-hg30-1
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: testdb
+    volumes:
+      - ./mysql-hg30-1/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_pass"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # PostgreSQL Hostgroup 10 - Read servers
+  pgsql-hg10-1:
+    image: postgres:15
+    container_name: pgsql-hg10-1
+    hostname: pgsql-hg10-1
+    environment:
+      POSTGRES_PASSWORD: root_pass
+      POSTGRES_DB: testdb
+    volumes:
+      - ./pgsql-hg10-1/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pgsql-hg10-2:
+    image: postgres:15
+    container_name: pgsql-hg10-2
+    hostname: pgsql-hg10-2
+    environment:
+      POSTGRES_PASSWORD: root_pass
+      POSTGRES_DB: testdb
+    volumes:
+      - ./pgsql-hg10-2/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # PostgreSQL Hostgroup 20 - Write servers
+  pgsql-hg20-1:
+    image: postgres:15
+    container_name: pgsql-hg20-1
+    hostname: pgsql-hg20-1
+    environment:
+      POSTGRES_PASSWORD: root_pass
+      POSTGRES_DB: testdb
+    volumes:
+      - ./pgsql-hg20-1/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pgsql-hg20-2:
+    image: postgres:15
+    container_name: pgsql-hg20-2
+    hostname: pgsql-hg20-2
+    environment:
+      POSTGRES_PASSWORD: root_pass
+      POSTGRES_DB: testdb
+    volumes:
+      - ./pgsql-hg20-2/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # PostgreSQL Hostgroup 30 - Standard mode
+  pgsql-hg30-1:
+    image: postgres:15
+    container_name: pgsql-hg30-1
+    hostname: pgsql-hg30-1
+    environment:
+      POSTGRES_PASSWORD: root_pass
+      POSTGRES_DB: testdb
+    volumes:
+      - ./pgsql-hg30-1/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proxysql-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Test runner - executes validation tests
+  test-runner:
+    image: debian:13
+    container_name: test-runner
+    volumes:
+      - ./test-queries.sh:/test-queries.sh
+    networks:
+      - proxysql-test-net
+    depends_on:
+      proxysql:
+        condition: service_healthy
+    command: ["/bin/bash", "-c", "apt-get update && apt-get install -y mariadb-client postgresql-client && /bin/bash /test-queries.sh"]
+
+networks:
+  proxysql-test-net:
+    driver: bridge
+

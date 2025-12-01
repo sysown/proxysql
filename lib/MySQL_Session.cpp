@@ -219,10 +219,10 @@ const char* KillArgs::get_host_address() const {
 
 /**
  * @brief Thread function to kill a query or connection on a MySQL server.
- * 
+ *
  * This function is executed in a separate thread to kill a query or connection on a MySQL server.
  * It establishes a connection to the MySQL server and sends a kill command to terminate the specified query or connection.
- * 
+ *
  * @param[in] arg A pointer to a KillArgs structure containing the necessary parameters for killing the query or connection.
  * @return nullptr.
  */
@@ -1362,7 +1362,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			return true;
 		}
 	}
-	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// if query digest is disabled, warnings in ProxySQL are also deactivated,
 	// resulting in an empty response being sent to the client.
 	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, 13) == 0) &&
 		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
@@ -1381,7 +1381,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
-	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// if query digest is disabled, warnings in ProxySQL are also deactivated,
 	// resulting in zero warning count sent to the client.
 	if ((pkt->size == 27) && (strncasecmp((char*)"SHOW COUNT(*) WARNINGS", (char*)pkt->ptr + 5, 22) == 0) &&
 		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
@@ -2138,8 +2138,48 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	return false;
 }
 
+/**
+ * @brief Set backend credentials for a specific hostgroup on a MySQL connection.
+ * @details Looks up backend credentials for the given hostgroup and sets them on the connection.
+ *          If no hostgroup-specific credentials are found, falls back to client credentials.
+ * @param myconn The MySQL connection to set credentials on
+ * @param hostgroup_id The hostgroup ID to lookup credentials for
+ * @return true if hostgroup-specific credentials were found and set, false if using client credentials
+ */
+bool MySQL_Session::set_backend_credentials_for_hostgroup(MySQL_Connection *myconn, int hostgroup_id) {
+	account_details_t backend_acct = GloMyAuth->lookup_backend_for_hostgroup(hostgroup_id);
+
+	if (backend_acct.username && backend_acct.password) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- Using backend credentials for hostgroup %d: user=%s\n",
+			this, hostgroup_id, backend_acct.username);
+		myconn->userinfo->set(
+			backend_acct.username,
+			backend_acct.password,
+			backend_acct.default_schema ? backend_acct.default_schema : client_myds->myconn->userinfo->schemaname,
+			(char*)backend_acct.sha1_pass
+		);
+		free_account_details(backend_acct);
+		return true;
+	} else {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- No backend credentials for hostgroup %d, using client credentials\n",
+			this, hostgroup_id);
+		myconn->userinfo->set(client_myds->myconn->userinfo);
+		return false;
+	}
+}
+
 bool MySQL_Session::handler_again___verify_backend_user_schema() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
+
+	// CRITICAL: Set correct backend credentials for this hostgroup BEFORE any comparisons
+	if (set_backend_credentials_for_hostgroup(myds->myconn, mybe->hostgroup_id)) {
+		// With hostgroup-specific credentials, we EXPECT client != backend username
+		// This is intentional, so we should NOT trigger CHANGING_USER_SERVER
+		// The credentials are already correctly set
+		return false;  // Done - credentials are correct, no need to change anything
+	}
+	// Fallback: For backward compatibility, if no backend credentials exist, fall through to original logic
+
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
 	if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
@@ -2771,7 +2811,9 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	int rc=myconn->async_select_db(myds->revents);
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_init_db, 1);
-		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+		// Only update the schema name, keep existing username/password (which may be hostgroup-specific backend creds)
+		myds->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,
+			strlen(client_myds->myconn->userinfo->schemaname));
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
@@ -3094,6 +3136,10 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	// we recreate local_stmts : see issue #752
 	delete myconn->local_stmts;
 	myconn->local_stmts=new MySQL_STMTs_local_v14(false); // false by default, it is a backend
+
+	// CRITICAL: Update userinfo BEFORE async_change_user is called
+	set_backend_credentials_for_hostgroup(myconn, mybe->hostgroup_id);
+
 	if (mysql_thread___connect_timeout_server_max) {
 		if (mybe->server_myds->max_connect_time==0) {
 			mybe->server_myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
@@ -3102,7 +3148,10 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	int rc=myconn->async_change_user(myds->revents);
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
-		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+
+		// Set backend credentials after change_user
+		set_backend_credentials_for_hostgroup(myds->myconn, mybe->hostgroup_id);
+
 		myds->myconn->reset();
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st = previous_status.top();
@@ -4065,7 +4114,7 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 			}
 		}
 		set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
-	}	
+	}
 
 	return 0;
 }
@@ -4457,7 +4506,7 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 			proxy_error("Detected a lagging server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_LAGGING_SRV);
 		} else if (myconn->server_status == MYSQL_SERVER_STATUS_ONLINE && myconn->parent->myhgc->online_servers_within_threshold() == false) {
-			//proxy_error("Number of online servers detected in a hostgroup exceeds the configured maximum online servers. %s, %d, hostgroup:%u, num_online_servers:%u, max_online_servers:%u, session_id:%u\n", 
+			//proxy_error("Number of online servers detected in a hostgroup exceeds the configured maximum online servers. %s, %d, hostgroup:%u, num_online_servers:%u, max_online_servers:%u, session_id:%u\n",
 			//	myconn->parent->address, myconn->parent->port, myconn->parent->myhgc->hid, num_online_servers, myconn->parent->myhgc->attributes.max_num_online_servers, this->thread_session_id);
 			myconn->parent->myhgc->log_num_online_server_count_error();
 		} else {
@@ -5994,7 +6043,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
  * @brief Handle the generation and sending of an OK message packet in response to a successful query execution.
  *
  * This (formely inline) function is responsible for setting up and sending an OK message packet to the client in response
- * to a successful query execution. It updates the session state, generates the OK message packet using the 
+ * to a successful query execution. It updates the session state, generates the OK message packet using the
  * appropriate protocol functions, and frees the memory occupied by the original packet.
  *
  * @param[in,out] pkt Pointer to the packet data structure containing the original packet.
@@ -7350,7 +7399,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		// we didn't get a valid connection, we need to create one
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection has no FD\n", this);
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
-		myconn->userinfo->set(client_myds->myconn->userinfo);
+
+		// Set backend credentials for this hostgroup
+		set_backend_credentials_for_hostgroup(myconn, mybe->hostgroup_id);
 
 		myconn->handler(0);
 		mybe->server_myds->fd=myconn->fd;
@@ -7362,6 +7413,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->assign_fd_from_mysql_conn();
 		mybe->server_myds->myds_type=MYDS_BACKEND;
 		mybe->server_myds->DSS=STATE_READY;
+
+		// Set backend credentials for reused connection
+		set_backend_credentials_for_hostgroup(mybe->server_myds->myconn, mybe->hostgroup_id);
 
 		if (session_fast_forward) {
 			status=FAST_FORWARD;
@@ -7434,7 +7488,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
 			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
 				if (mysql_errno(mysql)==0 &&
-					(mysql_warning_count(mysql)==0 || 
+					(mysql_warning_count(mysql)==0 ||
 					 mysql_thread___query_cache_handle_warnings==1)) { // no errors
 					if (
 						(qpo->cache_empty_result==1)
@@ -7781,7 +7835,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 				MySQL_Connection *mc = client_myds->myconn;
 				if (mc->userinfo && mc->userinfo->username) {
 					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
-						char* qu = query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
+						char* qu = query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr),
 							mysql_thread___query_digests_lowercase);
 						string nq=string(qu,strlen(qu));
 						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
@@ -8136,7 +8190,7 @@ void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection() {
 	if (warning_in_hg > -1) {
 		// if we've reached this point, it means that warning was found in the previous query, but the
-		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and 
+		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and
 		// return connection back to the connection pool.
 		MySQL_Backend* _mybe = find_backend(warning_in_hg);
 		if (_mybe) {
