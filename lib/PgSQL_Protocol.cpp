@@ -404,7 +404,7 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 			// Fallback method: using a basic pseudo-random generator
 			srand((unsigned int)time(NULL));  
 			for (size_t i = 0; i < sizeof((*myds)->tmp_login_salt); i++) {
-				(*myds)->tmp_login_salt[i] = rand() % 256;  
+				(*myds)->tmp_login_salt[i] = rand_fast() % 256;
 			}
 		}
 		pgpkt.write_generic(type, "ib", PG_PKT_AUTH_MD5, (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));

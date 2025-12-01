@@ -820,7 +820,7 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 		rand_del[0] = '-';
 		for (int i = 1; i < 6; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[6] = '-';
 		rand_del[7] = 0;
@@ -2208,11 +2208,12 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 
 
 		unsigned int k;
-		if (New_sum > 32768) {
-			k=rand()%New_sum;
-		} else {
-			k=fastrand()%New_sum;
-		}
+		//if (New_sum > 32768) {
+		//	k=rand()%New_sum;
+		//} else {
+		//	k=fastrand()%New_sum;
+		//}
+		k = rand_fast() % New_sum;
 		k++;
 		New_sum=0;
 
@@ -2341,11 +2342,12 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 		}
 	}
 	if (l && ff==false && needs_warming==false) {
-		if (l>32768) {
-			i=rand()%l;
-		} else {
-			i=fastrand()%l;
-		}
+		//if (l>32768) {
+		//	i=rand()%l;
+		//} else {
+		//	i=fastrand()%l;
+		//}
+		i = rand_fast() % l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			PgSQL_Connection * client_conn = sess->client_myds->myconn;
 			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);

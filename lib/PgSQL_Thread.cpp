@@ -2943,7 +2943,7 @@ void PgSQL_Thread::run() {
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
 			if (idle_maintenance_thread == false) {
-				int r = rand() % (GloPTH->num_threads);
+				int r = rand_fast() % (GloPTH->num_threads);
 				PgSQL_Thread* thr = GloPTH->pgsql_threads_idles[r].worker;
 				worker_thread_assigns_sessions_to_idle_thread(thr);
 				worker_thread_gets_sessions_from_idle_thread();
@@ -2967,7 +2967,7 @@ void PgSQL_Thread::run() {
 			// The delay for the active-wait is a fraction of 'poll_timeout'. Since other
 			// threads may be waiting on poll for further operations, checks are meaningless
 			// until that timeout expires (other workers make progress).
-			usleep(std::min(std::max(pgsql_thread___poll_timeout/20, 10000), 40000) + (rand() % 2000));
+			usleep(std::min(std::max(pgsql_thread___poll_timeout/20, 10000), 40000) + (rand_fast() % 2000));
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
@@ -3124,7 +3124,7 @@ void PgSQL_Thread::run() {
 		__run_skip_2 :
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			// this is an idle thread
-			unsigned int w = rand() % (GloPTH->num_threads);
+			unsigned int w = rand_fast() % (GloPTH->num_threads);
 			PgSQL_Thread* thr = GloPTH->pgsql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
 				idle_thread_assigns_sessions_to_worker_thread(thr);
