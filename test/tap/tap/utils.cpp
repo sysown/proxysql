@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <fcntl.h>
 #include <iostream>
 #include <numeric>
@@ -13,6 +14,7 @@
 
 #include "json.hpp"
 #include "re2/re2.h"
+#include <regex>
 
 #include "proxysql_utils.h"
 
@@ -1625,6 +1627,84 @@ pair<size_t,vector<line_match_t>> get_matching_lines(
 	}
 
 	return { insp_lines, found_matches };
+}
+
+
+std::pair<size_t,std::vector<line_match_t>> get_matching_lines_from_filename(
+	const std::string& filename, const std::string& s_regex, bool get_matches, size_t max_lines
+) {
+	vector<line_match_t> found_matches {};
+
+	// Open file for reading
+	std::ifstream file(filename);
+	if (!file.is_open()) {
+		diag("get_matching_lines_from_filename ERROR: Cannot open file '%s'", filename.c_str());
+		return { 0, found_matches };
+	}
+
+	// Read file line by line, keeping only the last max_lines in a queue
+	std::deque<string> recent_lines {};
+	size_t total_lines_read = 0;
+
+	string next_line;
+	while (getline(file, next_line)) {
+		total_lines_read++;
+
+		// Add to queue and maintain size
+		recent_lines.push_back(next_line);
+		if (recent_lines.size() > max_lines) {
+			recent_lines.pop_front();
+		}
+	}
+
+	// Create regex object once before the loop
+	std::regex regex;
+	try {
+		regex = std::regex(s_regex);
+	} catch (const std::regex_error& e) {
+		diag("get_matching_lines_from_filename ERROR: Invalid regex '%s': %s", s_regex.c_str(), e.what());
+		return { 0, found_matches };
+	}
+
+	// Process the recent lines from the queue
+	for (const string& line : recent_lines) {
+		std::smatch match;
+
+		if (get_matches) {
+			if (std::regex_search(line, match, regex)) {
+				found_matches.push_back({ static_cast<fstream::pos_type>(0), line, match.str() });
+			}
+		} else {
+			if (std::regex_search(line, regex)) {
+				found_matches.push_back({ static_cast<fstream::pos_type>(0), line, "" });
+			}
+		}
+	}
+
+	// Debug output
+	diag("get_matching_lines_from_filename DEBUG: filename='%s', total_lines_read=%zu, max_lines=%zu, lines_examined=%zu, matches_found=%zu",
+		filename.c_str(), total_lines_read, max_lines, recent_lines.size(), found_matches.size());
+
+#if 0
+	// Print the last lines being examined for debugging
+	diag("=== DEBUG: Last %zu lines examined from '%s' ===", recent_lines.size(), filename.c_str());
+	for (size_t i = 0; i < recent_lines.size(); i++) {
+		diag("Line %zu: %s", i+1, recent_lines[i].c_str());
+	}
+	diag("=== END DEBUG LINES ===");
+
+	// Print all matching lines for debugging
+	for (size_t i = 0; i < found_matches.size(); i++) {
+		const string& match_line = std::get<LINE>(found_matches[i]);
+		diag("Match %zu: %s", i+1, match_line.c_str());
+	}
+#endif // 0
+
+	// Close file
+	file.close();
+
+	// Return actual number of matches found, not lines examined
+	return { found_matches.size(), found_matches };
 }
 
 const uint32_t USLEEP_SQLITE_LOCKED = 100;
