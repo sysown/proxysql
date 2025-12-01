@@ -41,7 +41,7 @@
 */
 
 // copy 4 bytes
-#define CPY4(x) *((uint32_t *)x)
+#define CPY4(x) *((uint32_t *)(x))
 
 // (un)set blocking mode on a file descriptor
 #define ioctl_FIONBIO(fd, mode) \

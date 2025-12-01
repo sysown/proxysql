@@ -109,51 +109,92 @@ bool test_transaction_rollback(const TestVariable& var) {
     auto conn = createNewConnection(ConnType::BACKEND, "", false);
     const auto original = getVariable(conn.get(), var.name);
 
-    executeQuery(conn.get(), "BEGIN");
-    executeQuery(conn.get(), "SET " + var.name + " = " + var.test_values[0]);
-    executeQuery(conn.get(), "ROLLBACK");
+    bool success = true;
 
-    const bool success = getVariable(conn.get(), var.name) == original;
+    for (const auto& val : var.test_values) {
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SET " + var.name + " = " + val);
+        executeQuery(conn.get(), "ROLLBACK");
+
+        success = getVariable(conn.get(), var.name) == original;
+        if (!success)
+            break;
+    }
+
+    return success;
+}
+
+bool test_transaction_abort(const TestVariable& var) {
+    auto conn = createNewConnection(ConnType::BACKEND, "", false);
+    const auto original = getVariable(conn.get(), var.name);
+
+    bool success = true;
+
+    for (const auto& val : var.test_values) {
+        executeQuery(conn.get(), "START TRANSACTION");
+        executeQuery(conn.get(), "SET " + var.name + " = " + val);
+        executeQuery(conn.get(), "ABORT");
+
+        success = getVariable(conn.get(), var.name) == original;
+        if (!success)
+            break;
+    }
     return success;
 }
 
 bool test_savepoint_rollback(const TestVariable& var) {
     auto conn = createNewConnection(ConnType::BACKEND, "", false);
     const auto original = getVariable(conn.get(), var.name);
-    executeQuery(conn.get(), "BEGIN");
-    executeQuery(conn.get(), "SAVEPOINT sp1");
-    executeQuery(conn.get(), "SET " + var.name + " = " + var.test_values[0]);
-    executeQuery(conn.get(), "ROLLBACK TO sp1");
-    executeQuery(conn.get(), "COMMIT");
 
-    const bool success = getVariable(conn.get(), var.name) == original;
+    bool success = true;
+
+    for (const auto& val : var.test_values) {
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SAVEPOINT sp1");
+        executeQuery(conn.get(), "SET " + var.name + " = " + val);
+        executeQuery(conn.get(), "ROLLBACK TO sp1");
+        executeQuery(conn.get(), "COMMIT");
+
+        success = getVariable(conn.get(), var.name) == original;
+        if (!success)
+            break;
+    }
     return success;
 }
 
 bool test_transaction_commit(const TestVariable& var, const std::map<std::string, std::string>& original_values) {
     auto conn = createNewConnection(ConnType::BACKEND, "", false);
-    const auto test_value = var.test_values[0];
+    
+    bool success = true;
+    
+    for (const auto& val : var.test_values) {
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SET " + var.name + " = " + val);
+        executeQuery(conn.get(), "COMMIT");
 
-    executeQuery(conn.get(), "BEGIN");
-    executeQuery(conn.get(), "SET " + var.name + " = " + test_value);
-    executeQuery(conn.get(), "COMMIT");
-
-    const bool success = getVariable(conn.get(), var.name) == test_value;
+        success = getVariable(conn.get(), var.name) == val;
+        if (!success)
+            break;
+    }
     reset_variable(conn.get(), var.name, original_values.at(var.name));
     return success;
 }
 
 bool test_savepoint_commit(const TestVariable& var, const std::map<std::string, std::string>& original_values) {
     auto conn = createNewConnection(ConnType::BACKEND, "", false);
-    const auto test_value = var.test_values[0];
+    bool success = true;
 
-    executeQuery(conn.get(), "BEGIN");
-    executeQuery(conn.get(), "SAVEPOINT sp1");
-    executeQuery(conn.get(), "SET " + var.name + " = " + test_value);
-    executeQuery(conn.get(), "RELEASE SAVEPOINT sp1");
-    executeQuery(conn.get(), "COMMIT");
+    for (const auto& val : var.test_values) {
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SAVEPOINT sp1");
+        executeQuery(conn.get(), "SET " + var.name + " = " + val);
+        executeQuery(conn.get(), "RELEASE SAVEPOINT sp1");
+        executeQuery(conn.get(), "COMMIT");
 
-    const bool success = getVariable(conn.get(), var.name) == test_value;
+        success = getVariable(conn.get(), var.name) == val;
+        if (!success)
+            break;
+    }
     reset_variable(conn.get(), var.name, original_values.at(var.name));
     return success;
 }
@@ -169,6 +210,57 @@ bool test_savepoint_release_commit(const TestVariable& var, const std::map<std::
     executeQuery(conn.get(), "COMMIT");
     const bool success = getVariable(conn.get(), var.name) == var.test_values[1];
     reset_variable(conn.get(), var.name, original_values.at(var.name));
+    return success;
+}
+
+bool has_warnings = false;
+
+void notice_processor(void* arg, const char* message) {
+    diag("NOTICE: %s", message);
+	has_warnings = true;
+}
+
+bool test_transaction_rollback_and_chain(const TestVariable& var) {
+    auto conn = createNewConnection(ConnType::BACKEND, "", false);
+    PQsetNoticeProcessor(conn.get(), notice_processor, NULL);
+
+    const auto original = getVariable(conn.get(), var.name);
+
+    bool success = true;
+
+    for (const auto& val : var.test_values) {
+
+        executeQuery(conn.get(), "START TRANSACTION");
+        executeQuery(conn.get(), "SET " + var.name + " = " + val);
+        executeQuery(conn.get(), "ROLLBACK AND CHAIN");
+
+		char tran_stat = PQtransactionStatus(conn.get());
+
+        if (tran_stat != PQTRANS_INTRANS) {
+            diag("Expected transaction status INTRANS after ROLLBACK AND CHAIN, got %d", tran_stat);
+            success = false;
+            break;
+		}
+
+        success = getVariable(conn.get(), var.name) == original;
+        if (success) {
+            executeQuery(conn.get(), "ROLLBACK");
+            tran_stat = PQtransactionStatus(conn.get());
+            if (tran_stat != PQTRANS_IDLE) {
+                diag("Expected transaction status IDLE after ROLLBACK, got %d", tran_stat);
+                success = false;
+                break;
+            }
+
+            if (has_warnings == false)
+                success = getVariable(conn.get(), var.name) == original;
+            else
+                success = false;
+        }
+        if (!success)
+            break;
+    }
+
     return success;
 }
 
@@ -226,6 +318,10 @@ int main(int argc, char** argv) {
             return test_transaction_rollback(var);
             });
 
+		add_test("Abort reverts " + var.name, [var]() {
+            return test_transaction_abort(var);
+			});
+
         add_test("Commit persists " + var.name, [&]() {
             return test_transaction_commit(var, original_values);
             });
@@ -237,6 +333,10 @@ int main(int argc, char** argv) {
         add_test("Savepoint commit for " + var.name, [&]() {
             return test_savepoint_commit(var, original_values);
             });
+
+		add_test("Rollback and chain for " + var.name, [var]() {
+			return test_transaction_rollback_and_chain(var);
+			});
 
         // Multi-value savepoint test
         if (var.test_values.size() > 1) {
@@ -275,6 +375,194 @@ int main(int argc, char** argv) {
             success = (getVariable(conn.get(), var.name) == original_values.at(var.name));
         }
         return success;
+        });
+
+    add_test("Mixed variables in transaction (ROLLBACK AND CHAIN)", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        bool success = true;
+
+        executeQuery(conn.get(), "BEGIN");
+        for (const auto& [name, var] : tracked_vars) {
+            executeQuery(conn.get(), "SET " + var.name + " = " + var.test_values[0]);
+        }
+        executeQuery(conn.get(), "ROLLBACK AND CHAIN");
+
+        for (const auto& [name, var] : tracked_vars) {
+            success = (getVariable(conn.get(), var.name) == original_values.at(var.name));
+        }
+        return success;
+        });
+
+    add_test("Prepared ROLLBACK statement", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+
+        executeQuery(conn.get(), "SET client_encoding = 'LATIN1'");
+        const auto original = getVariable(conn.get(), "client_encoding");
+
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SET client_encoding = 'UTF8'");
+
+        {
+            diag(">>> Create Prepared Statement [stmt_client_encoding]: ROLLBACK");
+            PGResultPtr res(PQprepare(conn.get(), "stmt_client_encoding", "ROLLBACK", 0, NULL), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Prepare failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        bool success = getVariable(conn.get(), "client_encoding") == "UTF8";
+
+        if (!success) {
+            diag("client_encoding not set to UTF8 as expected");
+            return false;
+		}
+
+        {
+            diag(">>> Executing Prepared Statement [stmt_client_encoding]: ROLLBACK");
+			PGResultPtr res(PQexecPrepared(conn.get(), "stmt_client_encoding", 0, NULL, NULL, NULL, 0), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Execute failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        success = getVariable(conn.get(), "client_encoding") == original;
+        if (!success) {
+            diag("client_encoding not restored after ROLLBACK");
+            return false;
+        }
+
+        return success;
+	});
+
+    add_test("Prepared ROLLBACK statement 2", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+
+        executeQuery(conn.get(), "SET standard_conforming_strings = off");
+        const auto original = getVariable(conn.get(), "standard_conforming_strings");
+
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SET standard_conforming_strings = on");
+
+        {
+            diag(">>> Create Prepared Statement [stmt_standard_conforming_strings]: ROLLBACK");
+            PGResultPtr res(PQprepare(conn.get(), "stmt_standard_conforming_strings", "ROLLBACK", 0, NULL), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Prepare failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        bool success = getVariable(conn.get(), "standard_conforming_strings") == "on";
+
+        if (!success) {
+            diag("standard_conforming_strings not set to 'on' as expected");
+            return false;
+        }
+
+        {
+            diag(">>> Executing Prepared Statement [stmt_standard_conforming_strings]: ROLLBACK");
+            PGResultPtr res(PQexecPrepared(conn.get(), "stmt_standard_conforming_strings", 0, NULL, NULL, NULL, 0), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Execute failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        success = getVariable(conn.get(), "standard_conforming_strings") == original;
+        if (!success) {
+            diag("standard_conforming_strings not restored after ROLLBACK");
+            return false;
+        }
+
+        return success;
+        });
+
+    add_test("Prepared ROLLBACK TO SAVEPOINT statement", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        const auto original = getVariable(conn.get(), "client_encoding");
+
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SET client_encoding = 'UTF8'");
+        executeQuery(conn.get(), "SAVEPOINT sp1");
+        executeQuery(conn.get(), "SET client_encoding = 'LATIN1'");
+
+        {
+			diag(">>> Create Prepared Statement [stmt_rollback_sp]: ROLLBACK TO SAVEPOINT sp1");
+            PGResultPtr res(PQprepare(conn.get(), "stmt_rollback_sp", "ROLLBACK TO SAVEPOINT sp1", 0, NULL), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Prepare failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        // Before executing prepared rollback, client_encoding should be 'LATIN1'
+        bool success = getVariable(conn.get(), "client_encoding") == "LATIN1";
+        if (!success) {
+            diag("client_encoding not changed to 'LATIN1' before rollback");
+            return false;
+        }
+
+        {
+			diag(">>> Executing Prepared Statement [stmt_rollback_sp]: ROLLBACK TO SAVEPOINT sp1");
+            PGResultPtr res(PQexecPrepared(conn.get(), "stmt_rollback_sp", 0, NULL, NULL, NULL, 0), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Execute failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        success = getVariable(conn.get(), "client_encoding") == original;
+        if (!success) {
+            diag("client_encoding not restored after ROLLBACK TO SAVEPOINT");
+            return false;
+        }
+
+        return true;
+        });
+    
+    add_test("Prepared ROLLBACK TO SAVEPOINT statement 2", [&]() {
+        auto conn = createNewConnection(ConnType::BACKEND, "", false);
+        const auto original = getVariable(conn.get(), "standard_conforming_strings");
+
+        executeQuery(conn.get(), "BEGIN");
+        executeQuery(conn.get(), "SET standard_conforming_strings = on");
+        executeQuery(conn.get(), "SAVEPOINT sp1");
+        executeQuery(conn.get(), "SET standard_conforming_strings = off");
+
+        {
+            diag(">>> Create Prepared Statement [stmt_rollback_sp2]: ROLLBACK TO SAVEPOINT sp1");
+            PGResultPtr res(PQprepare(conn.get(), "stmt_rollback_sp2", "ROLLBACK TO SAVEPOINT sp1", 0, NULL), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Prepare failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        // Before executing prepared rollback, client_encoding should be 'off'
+        bool success = getVariable(conn.get(), "standard_conforming_strings") == "off";
+        if (!success) {
+            diag("standard_conforming_strings not changed to 'off' before rollback");
+            return false;
+        }
+
+        {
+            diag(">>> Executing Prepared Statement [stmt_rollback_sp2]: ROLLBACK TO SAVEPOINT sp1");
+            PGResultPtr res(PQexecPrepared(conn.get(), "stmt_rollback_sp2", 0, NULL, NULL, NULL, 0), &PQclear);
+            if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+                diag("Execute failed: %s", PQerrorMessage(conn.get()));
+                return false;
+            }
+        }
+
+        success = getVariable(conn.get(), "standard_conforming_strings") == original;
+        if (!success) {
+            diag("standard_conforming_strings not restored after ROLLBACK TO SAVEPOINT");
+            return false;
+        }
+   
+        return true;
         });
 
     int total_tests = 0;

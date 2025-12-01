@@ -688,6 +688,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_free_connections", STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_users", STATS_SQLITE_TABLE_PGSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_processlist", STATS_SQLITE_TABLE_PGSQL_PROCESSLIST);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_stat_activity", STATS_SQLITE_TABLE_PGSQL_STAT_ACTIVITY);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_errors", STATS_SQLITE_TABLE_PGSQL_ERRORS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_errors_reset", STATS_SQLITE_TABLE_PGSQL_ERRORS_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_client_host_cache", STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE);
@@ -812,22 +813,31 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial || admindb_file_exists==false) { // see #617
 		if (GloVars.configfile_open) {
-			proxysql_config().Read_MySQL_Servers_from_configfile();
-			proxysql_config().Read_MySQL_Users_from_configfile();
+			// ignore validation errors during init
+			std::string e;
+
+			proxysql_config().Read_MySQL_Servers_from_configfile(e);
+			proxysql_config().Read_MySQL_Users_from_configfile(e);
 			proxysql_config().Read_MySQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("admin");
 			proxysql_config().Read_Global_Variables_from_configfile("mysql");
 
-			proxysql_config().Read_PgSQL_Servers_from_configfile();
-			proxysql_config().Read_PgSQL_Users_from_configfile();
+			proxysql_config().Read_PgSQL_Servers_from_configfile(e);
+			proxysql_config().Read_PgSQL_Users_from_configfile(e);
 			proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 
 			proxysql_config().Read_Scheduler_from_configfile();
 			proxysql_config().Read_Restapi_from_configfile();
-			proxysql_config().Read_ProxySQL_Servers_from_configfile();
+			proxysql_config().Read_ProxySQL_Servers_from_configfile(e);
 			__insert_or_replace_disktable_select_maintable();
 		}
+	}
+
+	if (admindb_file_exists && GloVars.config_file) {
+		proxy_info("Ignoring configuration file at %s\n", GloVars.config_file);
+		proxy_info("Loading configuration from the config DB (%s) as it has higher precedence over the config file.\n", GloVars.admindb);
+		proxy_info("NOTE: Changes to %s will be ignored while the config DB exists. For more information, refer: https://proxysql.com/documentation/configuring-proxysql\n", GloVars.config_file);
 	}
 
 	/**

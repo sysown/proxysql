@@ -22,22 +22,13 @@ public:
 	uint64_t statement_id;
 	char* first_comment;
 	uint64_t total_mem_usage;
-	PgSQL_Describe_Prepared_Info* stmt_metadata;
-	bool is_select_NOT_for_update;
-
 	Parse_Param_Types parse_param_types;// array of parameter types, used for prepared statements
 
 	PgSQL_STMT_Global_info(uint64_t id, char* u, char* d, char* q, unsigned int ql, char* fc, Parse_Param_Types&& ppt, uint64_t _h);
 	~PgSQL_STMT_Global_info();
-
-	void update_stmt_metadata(PgSQL_Describe_Prepared_Info** new_stmt_metadata);
 	void calculate_mem_usage();
-	void unlock() { pthread_rwlock_unlock(&rwlock_); }
-	void wrlock() { pthread_rwlock_wrlock(&rwlock_); }
-	void rdlock() { pthread_rwlock_rdlock(&rwlock_); }
 
 private:
-	pthread_rwlock_t rwlock_;
 	void compute_hash();
 };
 

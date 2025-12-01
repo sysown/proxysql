@@ -1079,23 +1079,6 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 
 admin_main_loop_listeners S_amll;
 
-
-template <typename S>
-bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
-	uint32_t id=atoi(query_no_space+16);
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
-	bool rc=GloMTH->kill_session(id);
-	ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-	if (rc) {
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-	} else {
-		char buf[1024];
-		sprintf(buf,"Unknown thread id: %u", id);
-		SPA->send_error_msg_to_client(sess, buf);
-	}
-	return false;
-}
-
 void flush_logs_handler() {
 	GloAdmin->flush_logs();
 }
@@ -1103,6 +1086,9 @@ void flush_logs_handler() {
 void ProxySQL_Admin::flush_logs() {
 	if (GloMyLogger) {
 		GloMyLogger->flush_log();
+	}
+	if (GloPgSQL_Logger) {
+		GloPgSQL_Logger->flush_log();
 	}
 	this->flush_error_log();
 	proxysql_keylog_close();
@@ -1227,11 +1213,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
 	if (strcasestr(query_no_space, "pgsql processlist") ||
-		strcasestr(query_no_space, "stats_pgsql_processlist"))
+		strcasestr(query_no_space, "pgsql activity") ||
+		strcasestr(query_no_space, "stats_pgsql_processlist") ||
+		strcasestr(query_no_space, "stats_pgsql_stat_activity"))
 		// This will match the following usecases:
 		// SHOW PGSQL PROCESSLIST
 		// SHOW FULL PGSQL PROCESSLIST
+		// SHOW PGSQL ACTIVITY
+		// SHOW FULL PGSQL ACTIVITY
 		// SELECT * FROM stats_pgsql_processlist 
+		// SELECT * FROM stats_pgsql_stat_activity
 	{ 
 		stats_pgsql_processlist = true; refresh = true; 
 	} else if (strcasestr(query_no_space,"processlist"))
@@ -1914,6 +1905,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_pgsql_prepared_statements_info",
 		"stats_mysql_processlist",
 		"stats_pgsql_processlist",
+		"stats_pgsql_stat_activity",
 		"stats_mysql_query_digest",
 		"stats_mysql_query_digest_reset",
 		"stats_pgsql_query_digest",
@@ -2502,10 +2494,6 @@ void update_modules_metrics() {
 	if (GloMTH) {
 		GloMTH->p_update_metrics();
 	}
-	// Update pgsql_threads_handler metrics
-	if (GloPTH) {
-		GloPTH->p_update_metrics();
-	}
 	// Update mysql_hostgroups_manager metrics
 	if (MyHGM) {
 		MyHGM->p_update_metrics();
@@ -2518,10 +2506,20 @@ void update_modules_metrics() {
 	if (GloMyQC) {
 		GloMyQC->p_update_metrics();
 	}
+#if 0 // Turning off Prometheus metrics collection for PostgreSQL modules in ProxySQL
+	// Update pgsql_threads_handler metrics
+	if (GloPTH) {
+		GloPTH->p_update_metrics();
+	}
+	// Update pgsql_hostgroups_manager metrics
+	if (PgHGM) {
+		PgHGM->p_update_metrics();
+	}
 	// Update pgsql query_cache metrics
 	if (GloPgQC) {
 		GloPgQC->p_update_metrics();
 	}
+#endif
 	// Update cluster metrics
 	if (GloProxyCluster) {
 		GloProxyCluster->p_update_metrics();
@@ -2530,7 +2528,6 @@ void update_modules_metrics() {
 	if (GloMyLogger) {
 		GloMyLogger->p_update_metrics();
 	}
-
 	// Update admin metrics
 	GloAdmin->p_update_metrics();
 }
@@ -2611,8 +2608,6 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;
-	variables.mysql_show_processlist_extended = false;
-	variables.pgsql_show_processlist_extended = false;
 	//variables.hash_passwords=true;	// issue #676
 	variables.vacuum_stats=true;	// issue #1011
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
@@ -2698,6 +2693,14 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
 	init_prometheus_dyn_gauge_array<admin_metrics_map_idx, p_admin_dyn_gauge>(admin_metrics_map, this->metrics.p_dyn_gauge_array);
+
+	// processlist configuration
+	variables.mysql_processlist.show_extended = 0;
+	variables.pgsql_processlist.show_extended = 0;
+	variables.mysql_processlist.show_idle_session = true;
+	variables.pgsql_processlist.show_idle_session = true;
+	variables.mysql_processlist.max_query_length = PROCESSLIST_MAX_QUERY_LEN_DEFAULT;
+	variables.pgsql_processlist.max_query_length = PROCESSLIST_MAX_QUERY_LEN_DEFAULT;
 
 	// NOTE: Imposing fixed value to 'version_info' matching 'mysqld_exporter'
 	this->metrics.p_gauge_array[p_admin_gauge::version_info]->Set(1);

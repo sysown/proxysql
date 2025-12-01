@@ -13,7 +13,6 @@
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
 
-
 class PgSQL_Query_Result;
 class PgSQL_ExplicitTxnStateMgr;
 class PgSQL_Parse_Message;
@@ -138,6 +137,30 @@ public:
 class PgSQL_STMT_Global_info;
 using Parse_Param_Types = std::vector<uint32_t>; // Vector of parameter types for prepared statements
 
+enum PgSQL_Extended_Query_Flags : uint8_t {
+	PGSQL_EXTENDED_QUERY_FLAG_NONE				= 0x00,
+	PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL	= 0x01,
+	PGSQL_EXTENDED_QUERY_FLAG_SYNC				= 0x02,
+	PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE  = 0x04,
+};
+
+enum ExtendedQueryPhase : uint8_t {
+	EXTQ_PHASE_IDLE						= 0x00,	// No extended query activity
+	EXTQ_PHASE_BUILDING					= 0x01,	// Collecting extended query messages (Parse/Bind/etc.)
+	EXTQ_PHASE_EXECUTING_SYNC_CLIENT	= 0x02,	// Executing after client-initiated Sync
+	EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT	= 0x04,	// Executing after implicit Sync (injected)
+	EXTQ_PHASE_PROCESSING_PARSE			= 0x08,	// Processing Parse message after Sync
+	EXTQ_PHASE_PROCESSING_DESCRIBE		= 0x10,	// Processing Describe message after Sync
+	EXTQ_PHASE_PROCESSING_CLOSE			= 0x20,	// Processing Close message after Sync
+	EXTQ_PHASE_PROCESSING_BIND			= 0x40,	// Processing Bind message after Sync
+	EXTQ_PHASE_PROCESSING_EXECUTE		= 0x80	// Processing Execute message after Sync
+};
+
+#define EXTQ_PHASE_PROCESSING_MASK \
+    (EXTQ_PHASE_PROCESSING_PARSE | EXTQ_PHASE_PROCESSING_DESCRIBE | \
+     EXTQ_PHASE_PROCESSING_CLOSE | EXTQ_PHASE_PROCESSING_BIND | \
+     EXTQ_PHASE_PROCESSING_EXECUTE)
+
 struct PgSQL_Extended_Query_Info {
 	const char* stmt_client_name;
 	const char* stmt_client_portal_name;
@@ -146,6 +169,7 @@ struct PgSQL_Extended_Query_Info {
 	uint64_t stmt_global_id;
 	uint32_t stmt_backend_id;
 	uint8_t stmt_type;
+	uint8_t flags;
 	Parse_Param_Types parse_param_types;
 };
 
@@ -164,8 +188,6 @@ public:
 	int QueryLength;
 	enum PGSQL_QUERY_command PgQueryCmd;
 
-	bool bool_is_select_NOT_for_update;
-	bool bool_is_select_NOT_for_update_computed;
 	bool have_affected_rows;
 
 	PgSQL_Query_Info();
@@ -178,19 +200,44 @@ public:
 	void begin(unsigned char* _p, int len, bool header = false);
 	void end();
 	char* get_digest_text();
-	bool is_select_NOT_for_update();
+	void set_end_time(unsigned long long time);
 
 private:
 	void reset_extended_query_info();
 	void init(unsigned char* _p, int len, bool header = false);
 };
 
+/**
+ * @brief Assigns query end time.
+ * @details In addition to being a setter for end_time member variable, this
+ * method ensures that end_time is always greater than or equal to start_time.
+ * Refer https://github.com/sysown/proxysql/issues/4950 for more details.
+ * @param time query end time
+ */
+inline void PgSQL_Query_Info::set_end_time(unsigned long long time) {
+	end_time = time;
+
+#ifndef CLOCK_MONOTONIC_RAW
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is greater than end_time, assign current monotonic time
+	end_time = monotonic_time();
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is still greater than end_time, set the difference to 0
+	end_time = start_time;
+#endif // CLOCK_MONOTONIC_RAW
+}
+
 class PgSQL_Session : public Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread> {
 private:
 	using PktType = std::variant<std::unique_ptr<PgSQL_Parse_Message>,std::unique_ptr<PgSQL_Describe_Message>,
 		std::unique_ptr<PgSQL_Close_Message>, std::unique_ptr<PgSQL_Bind_Message>, std::unique_ptr<PgSQL_Execute_Message>>;
 
-	bool extended_query_exec_qp = false;
+	bool extended_query_exec_qp { false };
+	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
 
@@ -255,7 +302,8 @@ private:
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_EXECUTE(PtrSize_t& pkt);
 	int handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC();
 	bool handler___rc0_PROCESSING_STMT_PREPARE(enum session_status& st, PgSQL_Data_Stream* myds);
-	void handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_Stream* myds);
+	// FIXME: unused. Remove in next iteration
+	//void handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_Stream* myds);
 	int handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
@@ -298,13 +346,13 @@ private:
 	 * @param myds If not null, should point to a PgSQL_Data_Stream (backend connection) which connection status
 	 *   should be updated, and previous query resources cleanup.
 	 */
-	void RequestEnd(PgSQL_Data_Stream*, const unsigned int myerrno = 0, const char * errmsg = nullptr);
+	void RequestEnd(PgSQL_Data_Stream*, bool called_on_failure);
 	void LogQuery(PgSQL_Data_Stream*);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
-
+	int handler_again___status_RESYNCHRONIZING_CONNECTION();
 
 	/**
 	 * @brief Initiates a new thread to kill current running query.
@@ -401,6 +449,15 @@ public:
 		return extended_query_frame.empty();
 	}
 
+	inline uint8_t get_extended_query_phase() const {
+		return extended_query_phase;
+	}
+
+	inline bool is_extended_query_ready_for_query() const {
+		return extended_query_frame.empty() &&
+			((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0);
+	}
+
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
 #if 0
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
@@ -408,10 +465,10 @@ public:
 	std::stack<enum session_status> previous_status;
 
 	PgSQL_Query_Info CurrentQuery;
-	PtrSize_t mirrorPkt;
 	PtrSize_t pkt;
 	std::string untracked_option_parameters;
 	PgSQL_DateStyle_t current_datestyle = {};
+	uint32_t cancel_secret_key;
 
 #ifdef DEBUG
 	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;
@@ -466,7 +523,6 @@ public:
 	unsigned int active_transactions;
 	int transaction_persistent_hostgroup;
 	int to_process;
-	int pending_connect;
 	enum proxysql_session_type session_type;
 	
 
@@ -571,6 +627,14 @@ public:
 	void detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, bool verbose = false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void set_previous_status_mode3(bool allow_execute = true);
+	char* get_current_query(int max_length = -1);
+
+#if defined(__clang__)
+	template<typename SESS, typename DS, typename BE, typename THD>
+	friend class Base_Session;
+#else
+	friend class Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>;
+#endif
 };
 
 

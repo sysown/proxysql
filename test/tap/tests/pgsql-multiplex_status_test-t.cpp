@@ -142,6 +142,35 @@ bool get_proxysql_lock_status(PGconn* conn, const std::string& type) {
     }
 }
 
+bool get_proxysql_is_multiplex_disabled(PGconn* conn) {
+    try {
+        PGresult* res = PQexec(conn, "PROXYSQL INTERNAL SESSION;");
+        check_result(res, conn);
+        const std::string json_str = PQgetvalue(res, 0, 0);
+        PQclear(res);
+        const json& j = json::parse(json_str);
+
+        if (!j.contains("backends") || !j["backends"].is_array() || j["backends"].empty()) {
+            return false;
+        }
+
+        const auto& backend = j["backends"][0];
+        if (!backend.contains("conn") || !backend["conn"].contains("MultiplexDisabled")) {
+            return false;
+        }
+
+        const auto& multiplex = backend["conn"]["MultiplexDisabled"];
+        if (!multiplex.is_boolean()) {
+            return false;
+        }
+
+        return multiplex.get<bool>();
+    }
+    catch (...) {
+        return false;
+    }
+}
+
 // 1. Table lock modes
 void test_table_locks(Oid test_table_oid) {
     const char* modes[] = {
@@ -356,12 +385,58 @@ void test_sequence() {
     }
 }
 
+// 6. Query Rules - Multiplex
+void test_query_rules_multiplex() {
+    PGConnPtr admin_conn = createNewConnection(ConnType::ADMIN, "", false);
+    if (!admin_conn || PQstatus(admin_conn.get()) != CONNECTION_OK) {
+        diag("Error: failed to connect to admin for query rules - multiplex test");
+        return;
+    }
+
+    PGConnPtr backend_conn = createNewConnection(ConnType::BACKEND, "", false);
+    if (!backend_conn || PQstatus(backend_conn.get()) != CONNECTION_OK) {
+        diag("Error: failed to connect to backend for query rules - multiplex test");
+        return;
+    }
+
+    try {
+        PGconn* admin = admin_conn.get();
+        PGconn* backend = backend_conn.get();
+        // Clean up any existing rules
+        executeQuery(admin, "DELETE FROM pgsql_query_rules WHERE rule_id > 1000;");
+        // Add rules to enable/disable multiplexing for SELECT queries
+        executeQuery(admin,
+            "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, apply, multiplex) "
+            "VALUES (1001, 1, '^SELECT 9998', 1, 0);");
+        executeQuery(admin,
+            "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, apply, multiplex) "
+            "VALUES (1002, 1, '^SELECT 9999', 1, 1);");
+        executeQuery(admin, "LOAD PGSQL QUERY RULES TO RUNTIME;");
+
+		executeQuery(backend, "SELECT 9998");
+
+		ok(get_proxysql_is_multiplex_disabled(backend), "'multiplex' disabled for 'SELECT 9998'");
+
+        executeQuery(backend, "SELECT 9999");
+
+        ok(!get_proxysql_is_multiplex_disabled(backend), "'multiplex' enabled for 'SELECT 9999'");
+
+        // Clean up: remove the rule
+        executeQuery(admin, "DELETE FROM pgsql_query_rules WHERE rule_id > 1000;");
+        executeQuery(admin, "LOAD PGSQL QUERY RULES TO RUNTIME;");
+    }
+    catch (const std::exception& e) {
+        diag("Exception during query rules - multiplex test: %s", e.what());
+        ok(false, "Query rules - multiplex test failed");
+    }
+}
+
 int main(int argc, char** argv) {
 
     if (cl.getEnv())
         return exit_status();
 
-    plan(78);
+    plan(80);
     
     PGConnPtr conn = createNewConnection(ConnType::BACKEND, "", false);
     if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
@@ -382,6 +457,7 @@ int main(int argc, char** argv) {
     test_advisory_session_cleanup();
 	test_temp_table();
 	test_sequence();
+    test_query_rules_multiplex();
     executeQuery(conn.get(), "DROP TABLE test_table;");
     return exit_status();
 }

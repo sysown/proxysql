@@ -379,7 +379,7 @@ bool PgSQL_Bind_Message::parse(PtrSize_t& pkt) {
 				return false;
 			}
 			offset += sizeof(uint32_t);
-			if (param_value_len != 0xFFFFFFFF) {
+			if (param_value_len != PGSQL_PARAM_NULL) {
 				// Ensure the parameter value size is valid
 				if (offset + param_value_len > pkt_len)
 					return false;

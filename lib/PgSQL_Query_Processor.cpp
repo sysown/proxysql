@@ -167,6 +167,8 @@ static char* commands_counters_desc[PGSQL_QUERY___NONE] = {
 	[PGSQL_QUERY_DROP_TABLESPACE] = (char*)"DROP_TABLESPACE",
 	[PGSQL_QUERY_CLUSTER] = (char*)"PGSQL_QUERY_CLUSTER",
 	[PGSQL_QUERY_START_REPLICATION] = (char*)"START_REPLICATION",
+	[PGSQL_QUERY_CANCEL_BACKEND] = (char*)"CANCEL_BACKEND",
+	[PGSQL_QUERY_TERMINATE_BACKEND] = (char*)"TERMINATE_BACKEND",
 	[PGSQL_QUERY_UNKNOWN] = (char*)"UNKNOWN",
 };
 
@@ -1094,7 +1096,11 @@ __remove_parenthesis:
 			break;
 		}
 		if (!strcasecmp("SELECT", token)) {
-			ret = PGSQL_QUERY_SELECT;
+			token = (char*)tokenize(&tok);
+			if (token == NULL) break;
+			if (!strncasecmp("pg_cancel_backend", token, sizeof("pg_cancel_backend") - 1)) ret = PGSQL_QUERY_CANCEL_BACKEND;
+			else if (!strncasecmp("pg_terminate_backend", token, sizeof("pg_terminate_backend") - 1)) ret = PGSQL_QUERY_TERMINATE_BACKEND;
+			else ret = PGSQL_QUERY_SELECT;
 			break;
 		}
 		if (!strcasecmp("SET", token)) {

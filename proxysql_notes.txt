@@ -97,7 +97,7 @@ proxysql_macros.h : a collection of few macros
 proxysql_mem.h : custom memory allocator using **per-thread** stacks. Memory allocated from per-thread stacks are **never** shared amoung threads.
 proxysql_session.hpp : unused , FIXME: to delete
 proxysql_structs.h : defines a lot of structures. The most important are _global_variable_entry_t (used to define any sort of global variable during the parsing of configuration) and _global_variables_t (global variables)
-query_cache.hpp : defines virtual class Query_Cache (then implemented as plugin)
+Query_Cache.h : defines virtual class Query_Cache (then implemented as plugin)
 query_processor.hpp : defines virtual class Query_Processor (then implemented as plugin)
 safe_btree*.h : A btree implementation of the STL set and map interfaces : https://code.google.com/p/cpp-btree/
 shared_query_cache.h : currently it only defines some constants . FIXME: move these constants somewhere else

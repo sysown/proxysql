@@ -434,7 +434,15 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		assert(previous_default_charset);
 		assert(previous_default_collation_connection);
 		flush_GENERIC_variables__process__database_to_runtime("mysql", db, resultset, false, replace, {}, {"session_debug"}, {"forward_autocommit"},
-			{"default_collation_connection", "default_charset", "show_processlist_extended"},
+			{
+				"default_collation_connection",
+				"default_charset",
+				"show_processlist_extended",
+#ifdef IDLE_THREADS
+				"session_idle_show_processlist",
+#endif // IDLE_THREADS
+				"processlist_max_query_length"
+			},
 			[](const std::string& varname, const char *varvalue, SQLite3DB* db) {
 				if (varname == "default_collation_connection" || varname == "default_charset") {
 					char *val=GloMTH->get_variable((char *)varname.c_str());
@@ -448,10 +456,16 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						free(val);
 					}
 				} else if (varname == "show_processlist_extended") {
-					GloAdmin->variables.mysql_show_processlist_extended = atoi(varvalue);
+					GloAdmin->variables.mysql_processlist.show_extended = atoi(varvalue);
+#ifdef IDLE_THREADS
+				} else if (varname == "session_idle_show_processlist") {
+					GloAdmin->variables.mysql_processlist.show_idle_session = atoi(varvalue);
+#endif // IDLE_THREADS
+				} else if (varname == "processlist_max_query_length") {
+					GloAdmin->variables.mysql_processlist.max_query_length = atoi(varvalue);
 				}
 			}
-			);
+		);
 		char q[1000];
 		char * default_charset = GloMTH->get_variable_string((char *)"default_charset");
 		char * default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
@@ -534,6 +548,36 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.
+		 *
+		 * This safety check warns users when mysql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @recommendation Always set mysql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int mysql_use_tcp_keepalive = GloMTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (mysql_use_tcp_keepalive == 0) {
+			proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
 		}
 	}
 	if (resultset) delete resultset;
@@ -795,7 +839,13 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0], value);
 				if (strcmp(r->fields[0], (char*)"show_processlist_extended") == 0) {
-					variables.pgsql_show_processlist_extended = atoi(value);
+					variables.pgsql_processlist.show_extended = atoi(value);
+#ifdef IDLE_THREADS
+				} else if (strcmp(r->fields[0], (char*)"session_idle_show_processlist") == 0) {
+					variables.pgsql_processlist.show_idle_session = atoi(value);
+#endif // IDLE_THREADS
+				} else if (strcmp(r->fields[0], (char*)"processlist_max_query_length") == 0) {
+					variables.pgsql_processlist.max_query_length = atoi(value);
 				}
 			}
 			//			}
@@ -865,6 +915,40 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
 		);
 		*/
+	
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for PostgreSQL connections.
+		 *
+		 * This safety check warns users when pgsql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled for PostgreSQL:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - PostgreSQL connections may appear "stale" to the database server
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @note PostgreSQL connections are often long-lived and benefit greatly from
+		 * TCP keepalive, especially in connection-pooled environments.
+		 *
+		 * @recommendation Always set pgsql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int pgsql_use_tcp_keepalive = GloPTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (pgsql_use_tcp_keepalive == 0) {
+			proxy_warning("pgsql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
+		}
 	}
 	if (resultset) delete resultset;
 }

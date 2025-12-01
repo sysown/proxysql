@@ -1,115 +1,50 @@
 #!/bin/make -f
 
 
-GIT_VERSION ?= $(shell git describe --long --abbrev=7)
-ifndef GIT_VERSION
-    $(error GIT_VERSION is not set)
-endif
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
-UNAME_S := $(shell uname -s)
-UNAME_M := $(shell uname -m)
-
-DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-
-CENTOSVER := Unknown
-ifneq (,$(wildcard /etc/system-release))
-	CENTOSVER := $(shell rpm --eval %rhel)
-endif
-
-IS_ARM := $(if $(findstring aarch64, $(UNAME_M)),true,false)
-IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
+include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
-PROXYSQL_PATH := ..
-PROXYSQL_IDIR := $(PROXYSQL_PATH)/include
-PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
+IDIRS :=	-I$(PROXYSQL_IDIR) \
+			-I$(JEMALLOC_IDIR) \
+			-I$(MARIADB_IDIR) \
+			-I$(LIBCONFIG_IDIR) \
+			-I$(LIBDAEMON_IDIR) \
+			-I$(RE2_IDIR) \
+			-I$(PCRE_IDIR) \
+			-I$(CLICKHOUSE_CPP_IDIR) \
+			-I$(MICROHTTPD_IDIR) \
+			-I$(LIBHTTPSERVER_IDIR) \
+			-I$(LIBINJECTION_IDIR) \
+			-I$(CURL_IDIR) \
+			-I$(EV_IDIR) \
+			-I$(PROMETHEUS_IDIR) \
+			-I$(LIBUSUAL_IDIR) \
+			-I$(LIBSCRAM_IDIR) \
+			-I$(SQLITE3_IDIR) \
+			-I$(POSTGRESQL_IDIR) \
+			-I$(JSON_IDIR) \
+			-I$(SSL_IDIR) \
 
-DEPS_PATH := $(PROXYSQL_PATH)/deps
-
-MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
-MARIADB_IDIR := $(MARIADB_PATH)/include
-MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
-
-LIBDAEMON_PATH := $(DEPS_PATH)/libdaemon/libdaemon
-LIBDAEMON_IDIR := $(LIBDAEMON_PATH)
-LIBDAEMON_LDIR := $(LIBDAEMON_PATH)/libdaemon/.libs
-
-JEMALLOC_PATH := $(DEPS_PATH)/jemalloc/jemalloc
-JEMALLOC_IDIR := $(JEMALLOC_PATH)/include/jemalloc
-JEMALLOC_LDIR := $(JEMALLOC_PATH)/lib
-
-LIBCONFIG_PATH := $(DEPS_PATH)/libconfig/libconfig
-LIBCONFIG_IDIR := $(LIBCONFIG_PATH)/lib
-LIBCONFIG_LDIR := $(LIBCONFIG_PATH)/lib/.libs
-
-PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
-PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
-PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
-
-RE2_PATH := $(DEPS_PATH)/re2/re2
-RE2_IDIR := $(RE2_PATH)
-RE2_LDIR := $(RE2_PATH)/obj
-
-PCRE_PATH := $(DEPS_PATH)/pcre/pcre
-PCRE_IDIR := $(PCRE_PATH)
-PCRE_LDIR := $(PCRE_PATH)/.libs
-
-SQLITE3_PATH := $(DEPS_PATH)/sqlite3/sqlite3
-SQLITE3_IDIR := $(SQLITE3_PATH)
-SQLITE3_LDIR := $(SQLITE3_PATH)
-
-CITYHASH_PATH := $(DEPS_PATH)/cityhash/cityhash
-CITYHASH_LDIR := $(CITYHASH_PATH)/src/.libs
-
-LZ4_PATH := $(DEPS_PATH)/lz4/lz4
-LZ4_LDIR := $(LZ4_PATH)/lib
-
-CLICKHOUSE_CPP_PATH := $(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
-CLICKHOUSE_CPP_CDIR := $(CLICKHOUSE_CPP_PATH)/contrib
-CLICKHOUSE_CPP_IDIR := $(CLICKHOUSE_CPP_PATH)
-CLICKHOUSE_CPP_LDIR := $(CLICKHOUSE_CPP_PATH)/clickhouse
-
-LIBINJECTION_PATH := $(DEPS_PATH)/libinjection/libinjection
-LIBINJECTION_IDIR := $(LIBINJECTION_PATH)/src
-LIBINJECTION_LDIR := $(LIBINJECTION_PATH)/src
-
-LIBHTTPSERVER_PATH := $(DEPS_PATH)/libhttpserver/libhttpserver
-LIBHTTPSERVER_IDIR := $(LIBHTTPSERVER_PATH)/src
-LIBHTTPSERVER_LDIR := $(LIBHTTPSERVER_PATH)/build/src/.libs/
-
-MICROHTTPD_PATH := $(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
-MICROHTTPD_IDIR := $(MICROHTTPD_PATH)/include
-MICROHTTPD_LDIR := $(MICROHTTPD_PATH)/microhttpd/.libs
-
-COREDUMPER_PATH := $(DEPS_PATH)/coredumper/coredumper
-COREDUMPER_IDIR := $(COREDUMPER_PATH)/include
-COREDUMPER_LDIR := $(COREDUMPER_PATH)/src
-
-CURL_PATH := $(DEPS_PATH)/curl/curl
-CURL_IDIR := $(CURL_PATH)/include
-CURL_LDIR := $(CURL_PATH)/lib/.libs
-
-include ../common_mk/openssl_flags.mk
-
-EV_PATH := $(DEPS_PATH)/libev/libev/
-EV_IDIR := $(EV_PATH)
-EV_LDIR := $(EV_PATH)/.libs
-
-POSTGRESQL_PATH := $(DEPS_PATH)/postgresql/postgresql/src
-POSTGRESQL_IDIR := $(POSTGRESQL_PATH)/include -I$(POSTGRESQL_PATH)/interfaces/libpq
-POSTGRESQL_LDIR := $(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port
-
-LIBUSUAL_PATH=$(DEPS_PATH)/libusual/libusual
-LIBUSUAL_IDIR=$(LIBUSUAL_PATH)
-LIBUSUAL_LDIR=$(LIBUSUAL_PATH)/.libs/
-
-LIBSCRAM_PATH=$(DEPS_PATH)/libscram/
-LIBSCRAM_IDIR=$(LIBSCRAM_PATH)/include/
-LIBSCRAM_LDIR=$(LIBSCRAM_PATH)/lib/
-
-IDIRS := -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBCONFIG_IDIR) -I$(LIBDAEMON_IDIR) -I$(RE2_IDIR) -L$(PCRE_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(PROMETHEUS_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(SQLITE3_IDIR) -I$(CLICKHOUSE_CPP_IDIR) -I$(CLICKHOUSE_CPP_CDIR) -I$(SSL_IDIR) -I$(0)
-LDIRS := -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) -L$(LIBCONFIG_LDIR) -L$(LIBDAEMON_LDIR) -L$(RE2_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR) -L$(POSTGRESQL_LDIR) -L$(LIBUSUAL_LDIR) -L$(LIBSCRAM_LDIR) -L$(SSL_LDIR)
-
+LDIRS :=	-L$(PROXYSQL_LDIR) \
+			-L$(JEMALLOC_LDIR) \
+			-L$(MARIADB_LDIR) \
+			-L$(LIBCONFIG_LDIR) \
+			-L$(LIBDAEMON_LDIR) \
+			-L$(RE2_LDIR) \
+			-L$(PCRE_LDIR) \
+			-L$(MICROHTTPD_LDIR) \
+			-L$(LIBHTTPSERVER_LDIR) \
+			-L$(LIBINJECTION_LDIR) \
+			-L$(CURL_LDIR) \
+			-L$(EV_LDIR) \
+			-L$(PROMETHEUS_LDIR) \
+			-L$(POSTGRESQL_LDIR) \
+			-L$(LIBUSUAL_LDIR) \
+			-L$(LIBSCRAM_LDIR) \
+			-L$(SSL_LDIR)
 
 ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
@@ -118,17 +53,6 @@ ifeq ($(UNAME_S),Darwin)
 	IDIRS += -I/usr/local/include
 	LDIRS += -L/usr/local/lib -L/opt/homebrew/lib
 endif
-
-
-### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201103L)
-    $(error Compiler must support at least c++11)
-endif
-endif
-STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
 ### handle clang issue https://bugs.llvm.org/show_bug.cgi?id=16404
@@ -146,31 +70,7 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
-WGCOV :=
-ifeq ($(WITHGCOV),1)
-	WGCOV := -DWITHGCOV -lgcov --coverage
-endif
 
-WASAN :=
-ifeq ($(WITHASAN),1)
-	WASAN := -fsanitize=address
-	# Force the disable of JEMALLOC, since ASAN isn't compatible.
-	export NOJEMALLOC=1
-	# workaroud ASAN limitation ASLR > 28bits
-	# https://github.com/google/sanitizers/issues/1716
-	# sudo sysctl vm.mmap_rnd_bits=28
-    $(warning ASAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
-endif
-ifeq ($(TEST_WITHASAN),1)
-	WASAN += -DTEST_WITHASAN
-endif
-
-NOJEMALLOC := $(shell echo $(NOJEMALLOC))
-ifeq ($(NOJEMALLOC),1)
-NOJEM=-DNOJEM
-else
-NOJEM=
-endif
 
 MYCXXFLAGS := $(STDCPP)
 ifeq ($(CXX),clang++)
@@ -179,7 +79,26 @@ endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
-STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lev -lscram -lusual -lpq -lpgcommon -lpgport
+STATICMYLIBS := -Wl,-Bstatic \
+				-lconfig \
+				-lproxysql \
+				-ldaemon \
+				-lconfig++ \
+				-lre2 \
+				-lpcrecpp \
+				-lpcre \
+				-lmariadbclient \
+				-lhttpserver \
+				-lmicrohttpd \
+				-linjection \
+				-lcurl \
+				-lev \
+				-lscram \
+				-lusual \
+				-lpq \
+				-lpgcommon \
+				-lpgport
+
 ifneq ($(NOJEMALLOC),1)
 	STATICMYLIBS += -ljemalloc
 endif
@@ -240,7 +159,7 @@ $(ODIR)/%.o: %.cpp
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib-static.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 endif

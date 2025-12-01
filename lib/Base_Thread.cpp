@@ -175,21 +175,26 @@ void Base_Thread::check_timing_out_session(unsigned int n) {
 	// check for timeout
 	// no events. This section is copied from process_data_on_data_stream()
 	T* thr = static_cast<T*>(this);
-	auto * _myds = thr->mypolls.myds[n];
-	if (_myds && _myds->sess) {
-		if (_myds->wait_until && curtime > _myds->wait_until) {
-			// timeout
-			_myds->sess->to_process=1;
-		} else {
-			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
-				// timeout
-				_myds->sess->to_process=1;
-			}
+	auto* _myds = thr->mypolls.myds[n];
+	if (!_myds) return;
+
+	auto* _sess = _myds->sess;
+	if (!_sess) return;
+
+	// Generic timeout checks (wait_until or pause_until)
+	if ((_myds->wait_until && curtime > _myds->wait_until) ||
+		(_sess->pause_until && curtime > _sess->pause_until)) {
+		_sess->to_process = 1;
+	}
+
+	// PostgreSQL-specific cancel query handling
+	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
+		// If a cancel query is requested and the data stream is a backend, mark the session for processing
+		if (_myds->cancel_query && _myds->myds_type == MYDS_BACKEND) {
+			_sess->to_process = 1;
 		}
 	}
 }
-
-
 
 
 /**
@@ -522,6 +527,16 @@ void Base_Thread::ProcessAllMyDS_BeforePoll() {
 			if (myds->sess) {
 				if (unlikely(myds->sess->pause_until > 0)) {
 					tune_timeout_for_session_needs_pause<T>(myds);
+				}
+			}
+			if constexpr (std::is_same_v<T, PgSQL_Thread>) {
+				// If there is a pending cancel_query request, we want poll() to return 
+				// immediatly and process the cancel request. For long-running queries (e.g., pg_sleep), 
+				// no data is sent to ProxySQL until the query completes, so poll() would only return 
+				// after the timeout expires. To avoid this delay, we set poll_timeout to 1ms (later this will be set to 0)
+				// so poll() wakes up promptly and the cancel request can be processed immediately. 
+				if (myds->cancel_query && myds->myds_type == MYDS_BACKEND) {
+					thr->mypolls.poll_timeout = 1; // we want to wake up immediately
 				}
 			}
 			myds->revents=0;

@@ -1,23 +1,9 @@
 #!/bin/make -f
 
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
-GIT_VERSION ?= $(shell git describe --long --abbrev=7)
-ifndef GIT_VERSION
-    $(error GIT_VERSION is not set)
-endif
+include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
-UNAME_S := $(shell uname -s)
-UNAME_M := $(shell uname -m)
-
-DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-
-CENTOSVER := Unknown
-ifneq (,$(wildcard /etc/system-release))
-	CENTOSVER := $(shell rpm --eval %rhel)
-endif
-
-IS_ARM := $(if $(findstring aarch64, $(UNAME_M)),true,false)
-IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
@@ -34,21 +20,30 @@ ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
 endif
 
 
-### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201103L)
-    $(error Compiler must support at least c++11)
-endif
-endif
-STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
+targets :=	check_openssl_version \
+			libconfig \
+			libdaemon \
+			jemalloc \
+			mariadb_client \
+			re2 \
+			sqlite3 \
+			pcre \
+			lz4 \
+			cityhash \
+			microhttpd \
+			curl \
+			ev \
+			libhttpserver \
+			libinjection \
+			prometheus-cpp \
+			postgresql \
+			libusual \
+			libscram
 
-
-targets := check_openssl_version libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libhttpserver libinjection prometheus-cpp postgresql libusual libscram
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
 endif
+
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	targets += clickhouse-cpp
 endif
@@ -59,6 +54,10 @@ default: $(targets)
 
 
 ### deps targets
+
+include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
+include $(PROXYSQL_PATH)/common_mk/openssl_version_check.mk
+
 
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
@@ -76,8 +75,6 @@ endif
 
 libinjection: libinjection/libinjection/src/libinjection.a
 
-include ../common_mk/openssl_flags.mk
-include ../common_mk/openssl_version_check.mk
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
@@ -111,15 +108,15 @@ ev: libev/libev/.libs/libev.a
 coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd coredumper && tar -zxf coredumper-*.tar.gz
-	cd coredumper/coredumper && patch -p1 < ../includes.patch
 	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
+
 coredumper: coredumper/coredumper/src/libcoredumper.a
+
 
 curl/curl/lib/.libs/libcurl.a:
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
-#	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
@@ -133,7 +130,6 @@ curl: curl/curl/lib/.libs/libcurl.a
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && tar -zxf libmicrohttpd-*.tar.gz
-#	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
@@ -156,15 +152,13 @@ lz4/lz4/lib/liblz4.a:
 lz4: lz4/lz4/lib/liblz4.a
 
 
-clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
+clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-*/ clickhouse-cpp
-	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
+	cd clickhouse-cpp && tar -zxf clickhouse-cpp-*.tar.gz
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
-clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a
+clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 
 
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
@@ -234,6 +228,9 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../cmakelists.txt.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.metadata_column_check.patch
+	# new compilers fix
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../bool_keyword.patch
+
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 
@@ -243,8 +240,7 @@ mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclien
 sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
-	cd sqlite3/sqlite3 && patch -p1 < ../from_unixtime.patch
-	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
+	cd sqlite3/sqlite3 && patch -p0 < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../throw.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
@@ -252,13 +248,14 @@ sqlite3/sqlite3/sqlite3.o:
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
-libconfig/libconfig/lib/.libs/libconfig++.a:
+
+libconfig/libconfig/out/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-*.tar.gz
-	cd libconfig/libconfig && ./configure --disable-examples
+	cd libconfig/libconfig && cmake -DBUILD_SHARED_LIBS=0 -DBUILD_EXAMPLES=0 -DBUILD_TESTS=0 -DBUILD_FUZZERS=0 .
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 
-libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
+libconfig: libconfig/libconfig/out/libconfig++.a
 
 
 prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
@@ -301,18 +298,21 @@ pcre/pcre/.libs/libpcre.a:
 
 pcre: pcre/pcre/.libs/libpcre.a
 
+
 postgresql/postgresql/src/interfaces/libpq/libpq.a:
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
 	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
 	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch
 	cd postgresql/postgresql && patch -p0 < ../fmt_err_msg.patch
+	cd postgresql/postgresql && patch -p0 < ../bind_fmt_text.patch
 	#cd postgresql/postgresql && LD_LIBRARY_PATH="$(shell pwd)/libssl/openssl" ./configure --with-ssl=openssl --with-includes="$(shell pwd)/libssl/openssl/include/" --with-libraries="$(shell pwd)/libssl/openssl/" --without-readline --enable-debug  CFLAGS="-ggdb -O0 -fno-omit-frame-pointer" CPPFLAGS="-g -O0"
 	cd postgresql/postgresql && LD_LIBRARY_PATH="$(SSL_LDIR)" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
 	#cd postgresql/postgresql && CC=${CC} CXX=${CXX} ${MAKE} -f src/interfaces/libpq/Makefile all
 
 postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
+
 
 libusual/libusual/.libs/libusual.a:
 	cd libusual && rm -rf libusual-*/ || true
@@ -323,11 +323,13 @@ libusual/libusual/.libs/libusual.a:
 
 libusual: libusual/libusual/.libs/libusual.a
 
+
 libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a 
 	cd libscram && rm -rf lib/* || true
 	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(SSL_IDIR)" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 
 libscram: libscram/lib/libscram.a
+
 
 ### clean targets
 
@@ -336,6 +338,7 @@ cleanpart:
 	cd jemalloc && rm -rf jemalloc-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd postgresql && rm -rf postgresql-*/ || true
+	cd postgresql && rm -rf postgres-*/ || true
 .PHONY: cleanpart
 
 cleanall:
@@ -348,7 +351,7 @@ cleanall:
 	cd re2 && rm -rf re2-*/ || true
 	cd pcre && rm -rf pcre-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
-	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-* || true
+	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd curl && rm -rf curl-*/ || true
@@ -358,7 +361,9 @@ cleanall:
 	cd cityhash && rm -rf cityhash-*/ || true
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd postgresql && rm -rf postgresql-*/ || true
+	cd postgresql && rm -rf postgres-*/ || true
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
+	cd json && rm -rf json-*/ || true
 .PHONY: cleanall
 

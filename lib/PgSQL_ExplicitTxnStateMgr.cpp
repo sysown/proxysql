@@ -34,7 +34,16 @@ void verify_server_variables(PgSQL_Session* session) {
         const char* conn_param_status = session->mybe->server_myds->myconn->get_pg_parameter_status(pgsql_tracked_variables[idx].set_variable_name);
         const char* param_value = session->mybe->server_myds->myconn->variables[idx].value;
         if (conn_param_status && param_value) {
-            assert(strcmp(conn_param_status, param_value) == 0);
+            //assert(strcmp(conn_param_status, param_value) == 0);
+            if (strcmp(conn_param_status, param_value) != 0) {
+				// This isn’t actually a bug, but it can occur in an edge case — for example, when a COPY FROM STDIN fails.
+				// In that situation, the ParameterStatus message sent from the server is received and forwarded to the client
+				// via fast-forwarding, so the internal ParameterStatus in libpq isn’t updated.
+				proxy_warning("Server variable '%s' mismatch. Parameter status value: '%s', Expected value: '%s'\n",
+                    pgsql_tracked_variables[idx].set_variable_name,
+                    conn_param_status,
+                    param_value);
+            }
         }
     }
 #endif
@@ -86,7 +95,7 @@ void PgSQL_ExplicitTxnStateMgr::commit() {
     verify_server_variables(session);
 }
 
-void PgSQL_ExplicitTxnStateMgr::rollback() {
+void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
 
     if (transaction_state.empty()) {
         proxy_warning("Received ROLLBACK command. There is no transaction in progress\n");
@@ -124,11 +133,15 @@ void PgSQL_ExplicitTxnStateMgr::rollback() {
         verify_server_variables(session);
 	}
 
-    // Clear savepoints and reset the initial snapshot
-    for (auto& tran_state : transaction_state) {
-        reset_variable_snapshot(tran_state);
+    // Keep the transaction state intact when executing ROLLBACK AND CHAIN
+    if (rollback_and_chain == false) {
+        // Clear savepoints and reset the initial snapshot
+        for (auto& tran_state : transaction_state) {
+            reset_variable_snapshot(tran_state);
+        }
+        transaction_state.clear();
     }
-    transaction_state.clear();
+
     savepoint.clear();
 }
 
@@ -296,7 +309,10 @@ bool PgSQL_ExplicitTxnStateMgr::handle_transaction(std::string_view input) {
         commit();
         break;
     case TxnCmd::ROLLBACK:
-        rollback();
+        rollback(false);
+        break;
+	case TxnCmd::ROLLBACK_AND_CHAIN:
+        rollback(true);
         break;
     case TxnCmd::SAVEPOINT:
         return add_savepoint(cmd.savepoint);
@@ -350,12 +366,14 @@ TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input, bool in_transaction_mod
 
     if (in_transaction_mode == true) {
         if (first == "begin") cmd.type = TxnCmd::BEGIN;
+		else if (first == "start") cmd = parse_start(pos);
         else if (first == "savepoint") cmd = parse_savepoint(pos);
         else if (first == "release") cmd = parse_release(pos);
         else if (first == "rollback") cmd = parse_rollback(pos);
     } else {
-        if (first == "commit") cmd.type = TxnCmd::COMMIT;
-        else if (first == "rollback" || (first == "abort")) cmd = parse_rollback(pos);
+        if (first == "commit" || first == "end") cmd.type = TxnCmd::COMMIT;
+		else if (first == "abort") cmd.type = TxnCmd::ROLLBACK;
+        else if (first == "rollback") cmd = parse_rollback(pos);
     }
     return cmd;
 }
@@ -368,6 +386,11 @@ TxnCmd PgSQL_TxnCmdParser::parse_rollback(size_t& pos) noexcept {
         cmd.type = TxnCmd::ROLLBACK_TO;
         if (++pos < tokens.size() && to_lower(tokens[pos]) == "savepoint") pos++;
         if (pos < tokens.size()) cmd.savepoint = tokens[pos++];
+    } else if (pos < tokens.size() && to_lower(tokens[pos]) == "and") {
+        if (++pos < tokens.size() && to_lower(tokens[pos]) == "chain") {
+            cmd.type = TxnCmd::ROLLBACK_AND_CHAIN;
+			pos++;
+        }
     }
     return cmd;
 }
@@ -382,5 +405,14 @@ TxnCmd PgSQL_TxnCmdParser::parse_release(size_t& pos) noexcept {
     TxnCmd cmd{ TxnCmd::RELEASE };
     if (pos < tokens.size() && to_lower(tokens[pos]) == "savepoint") pos++;
     if (pos < tokens.size()) cmd.savepoint = tokens[pos++];
+    return cmd;
+}
+
+TxnCmd PgSQL_TxnCmdParser::parse_start(size_t& pos) noexcept {
+    TxnCmd cmd{ TxnCmd::UNKNOWN };
+    if (pos < tokens.size() && to_lower(tokens[pos]) == "transaction") {
+        cmd.type = TxnCmd::BEGIN;
+		pos++;
+    }
     return cmd;
 }

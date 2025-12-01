@@ -4,6 +4,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+constexpr uint32_t PGSQL_PARAM_NULL = 0xFFFFFFFFu;
 
 /**
  * @brief Base class for handling PostgreSQL extended query messages.
@@ -105,6 +106,10 @@ struct PgSQL_Param_Value {
  * If count is non-zero but the buffer is invalid (malformed packet), this is detected and handled
  * during parsing before constructing the reader.
  *
+ * Ownership/lifetime: The reader only keeps raw pointers into the caller-provided buffer and
+ * does not allocate. Any T that exposes pointers (e.g., PgSQL_Param_Value) references the original
+ * buffer; ensure it outlives the reader and any consumer that accesses those pointers.
+ *
  * @tparam T The type of field to read (e.g., uint32_t, uint16_t, PgSQL_Param_Value).
  */
 template<class T>
@@ -136,6 +141,16 @@ public:
 	  *
 	  * For uint32_t and uint16_t, reads the value in big-endian order.
 	  * For PgSQL_Param_Value, reads the length and value pointer, handling NULL values.
+	  *
+	  * PgSQL_Param_Value decoding details:
+	  * - Reads a 4-byte big-endian length (uint32_t).
+	  *   * 0xFFFFFFFF => SQL NULL: out->len = -1 and out->value = nullptr.
+	  *   * 0x00000000 => empty, non-NULL value: out->len = 0 and out->value is set
+	  *     to an empty string.
+	  *   * Otherwise => non-empty: out->len = static_cast<int32_t>(len) and out->value points
+	  *     to the next len bytes starting at the current parse position.
+	  * - The internal cursor advances by out->len bytes only when out->len > 0.
+	  * - The pointer returned is non-owning and valid only as long as the source buffer is alive.
 	  */
 	bool next(T* out) {
 		if (remaining == 0) return false;
@@ -151,19 +166,34 @@ public:
 			}
 			current += sizeof(uint16_t);
 		} else if constexpr (std::is_same_v<T, PgSQL_Param_Value>) {
-			// Read length (big-endian)
+			// Read length (big-endian) from the wire
 			uint32_t len;
 			if (!get_uint32be(current, &len)) {
 				return false;
 			}
 			current += sizeof(uint32_t);
 
-			out->len = (len == 0xFFFFFFFF) ? -1 : static_cast<int32_t>(len);
-			out->value = (len == 0xFFFFFFFF) ? nullptr : current;
+			if (len != PGSQL_PARAM_NULL && len > INT32_MAX) {
+				return false; // Malformed: length does not fit into int32_t
+			}
 
-			// Advance pointer if not NULL
+			out->len = (len == PGSQL_PARAM_NULL) ? -1 : static_cast<int32_t>(len);
+
+			// Value pointer semantics:
+			// - NULL (len == -1): pointer is nullptr.
+			// - Empty (len == 0): pointer is set to empty string.
+			// - Non-empty (len > 0): pointer to the next 'len' bytes.
+			if (out->len == -1) {
+				out->value = nullptr; // NULL
+			} else if (out->len == 0) {
+				out->value = reinterpret_cast<const unsigned char*>(""); // empty string
+			} else {
+				out->value = current;
+			}
+
+			// Advance pointer only for non-empty values
 			if (out->len > 0) {
-				current += len;
+				current += out->len;
 			}
 		}
 		remaining--;
@@ -302,6 +332,10 @@ public:
 	 * @return True if parsing was successful, false otherwise.
 	 */
 	bool parse(PtrSize_t& pkt);
+
+	// Set by the Describe (P) handler. If the client sent Describe(portal),
+	// its row description is appended; otherwise it's omitted to avoid redundancy.
+	bool send_describe_portal_result = false; 
 };
 
 #endif /* CLASS_PGSQL_EXTENDED_QUERY_MESSAGE_H */

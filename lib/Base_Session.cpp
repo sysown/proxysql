@@ -304,6 +304,8 @@ void Base_Session<S, DS, B, T>::return_proxysql_internal(PtrSize_t* pkt) {
 			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 			delete resultset;
+			// NOTE: End request before freeing the packet; otherwise logging could use invalid memory
+			static_cast<MySQL_Session*>(this)->RequestEnd(NULL);
 			l_free(pkt->size, pkt->ptr);
 			return;
 		}
@@ -312,8 +314,8 @@ void Base_Session<S, DS, B, T>::return_proxysql_internal(PtrSize_t* pkt) {
 		string errmsg = "Unknown PROXYSQL INTERNAL command";
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1047, (char*)"08S01", errmsg.c_str(), true);
 		if (mirror == false) {
-			MyHGM->add_mysql_errors(current_hostgroup, (char *)"", 0, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, 1047, (char *)errmsg.c_str());
-			RequestEnd(NULL, 1047, errmsg.c_str());
+			MyHGM->add_mysql_errors(current_hostgroup, (char*)"", 0, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname, 1047, (char*)errmsg.c_str());
+			static_cast<MySQL_Session*>(this)->RequestEnd(NULL, 1047, errmsg.c_str());
 		}
 	}
 	else if constexpr (std::is_same_v<S, PgSQL_Session>) {
@@ -331,24 +333,24 @@ void Base_Session<S, DS, B, T>::return_proxysql_internal(PtrSize_t* pkt) {
 			char txn_state = (nTxn ? 'T' : 'I');
 			SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset, nullptr, 0, (const char*)pkt->ptr + 5, txn_state);
 			delete resultset;
+			// NOTE: End request before freeing the packet; otherwise logging could use invalid memory
+			static_cast<PgSQL_Session*>(this)->RequestEnd(NULL, false);
 			l_free(pkt->size, pkt->ptr);
 			return;
 		}
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_error_packet(true, true, "Unknown PROXYSQL INTERNAL command", PGSQL_ERROR_CODES::ERRCODE_SYNTAX_ERROR, false, true);
-	}
-	else {
+		if (mirror == false) {
+			PgHGM->add_pgsql_errors(current_hostgroup, (char*)"", 0, client_myds->myconn->userinfo->username,
+				(client_myds->addr.addr ? client_myds->addr.addr : (char*)"unknown"), client_myds->myconn->userinfo->schemaname,
+				PGSQL_GET_ERROR_CODE_STR(ERRCODE_SYNTAX_ERROR), "Unknown PROXYSQL INTERNAL command");
+			static_cast<PgSQL_Session*>(this)->RequestEnd(NULL, false);
+		}
+	} else {
 		assert(0);
 	}
-	if (mirror == false) {
-		if constexpr (std::is_same_v<S, MySQL_Session>) {
-			// do nothing , logic moded
-		}
-		else if constexpr (std::is_same_v<S, PgSQL_Session>) {
-			RequestEnd(NULL, 0, NULL);
-		}
-	}
-	else {
+	if (mirror == true) {
+
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 	}
@@ -515,7 +517,11 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 						myds->return_MySQL_Connection_To_Pool();
 					}
 				} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
-					myds->return_MySQL_Connection_To_Pool();
+					if (myds->myconn->is_pipeline_active() == true) {
+						create_new_session_and_reset_connection(myds);
+					} else {
+						myds->return_MySQL_Connection_To_Pool();
+					}
 				} else {
 					assert(0);
 				}

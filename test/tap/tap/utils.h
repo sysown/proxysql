@@ -9,6 +9,7 @@
 #include <fstream>
 #include <unistd.h>
 #include <utility>
+#include <time.h>
 
 #include "curl/curl.h"
 #include "mysql.h"
@@ -17,6 +18,12 @@
 
 #include "command_line.h"
 #include "mysql.h"
+
+#ifdef CLOCK_MONOTONIC_RAW
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC_RAW
+#else
+#define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
+#endif
 
 template <typename T>
 using rc_t = std::pair<int,T>;
@@ -759,6 +766,57 @@ std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
 	std::fstream& f_stream, const std::string& regex, bool get_matches=false
 );
 
+
+/**
+ * @brief Scan last N lines from a file and find lines matching a regex pattern.
+ *
+ * This function provides memory-efficient scanning of log files by processing only
+ * the last N lines instead of loading the entire file into memory. It uses a queue-based
+ * approach to maintain the most recent lines and applies regex matching to identify
+ * lines containing specific patterns.
+ *
+ * This is particularly useful for TAP tests that need to verify log messages were
+ * written during test execution, allowing efficient examination of recent log entries
+ * without loading entire log files that may be very large.
+ *
+ * @param filename Path to the file to scan
+ * @param regex Regular expression pattern to match against line content
+ * @param get_matches If true, capture and return the matched substrings; if false, only track matching lines
+ * @param max_lines Maximum number of lines from end of file to examine (controls memory usage and focus)
+ *
+ * @return std::pair<size_t, std::vector<line_match_t>> where:
+ *         - first: Number of matches found
+ *         - second: Vector of line_match_t tuples containing match information:
+ *                  * POS: File position (placeholder 0 for this implementation)
+ *                  * LINE: Complete line content that matched the pattern
+ *                  * MATCH: Matched substring if get_matches=true, empty string otherwise
+ *
+ * @note This function avoids stream sharing issues by opening its own file handle,
+ *       making it safe for multiple concurrent calls within the same test.
+ *
+ * @warning This function reads the entire file to extract the last max_lines, so
+ *          very large files will still incur I/O overhead, but memory usage is bounded.
+ *
+ * @example
+ * // Find TCP keepalive warnings in last 10 lines of ProxySQL log
+ * auto [match_count, matches] = get_matching_lines_from_filename(
+ *     "/var/log/proxysql.log",
+ *     ".*WARNING.*tcp_keepalive.*",
+ *     true,
+ *     10
+ * );
+ * if (match_count > 0) {
+ *     // Found TCP keepalive warnings
+ *     for (const auto& match : matches) {
+ *         const string& line = std::get<LINE>(match);
+ *         printf("Warning: %s\n", line.c_str());
+ *     }
+ * }
+ */
+std::pair<size_t,std::vector<line_match_t>> get_matching_lines_from_filename(
+	const std::string& filename, const std::string& regex, bool get_matches, size_t max_lines
+);
+
 /**
  * @brief Row entries from 'debug_log' table, from debug database.
  */
@@ -969,8 +1027,8 @@ struct srv_addr_t {
 
 // Helpers using 'wait_for_cond' on 'stats_mysql_connection'
 void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
-void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
-void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
+void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg=-1);
+void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg=-1);
 
 /**
  * @brief Fetches the ProxySQL nodes configured in the supplied instance.
@@ -1001,5 +1059,8 @@ int check_nodes_sync(
 const char* get_env_str(const char* envname, const char* envdefault);
 int get_env_int(const char* envname, int envdefault);
 bool get_env_bool(const char* envname, bool envdefault);
+
+MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
+int run_q(MYSQL *mysql, const char *q);
 
 #endif // #define UTILS_H

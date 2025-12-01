@@ -24,7 +24,7 @@ using json = nlohmann::json;
 
 extern PgSQL_Logger *GloPgSQL_Logger;
 
-static uint8_t mysql_encode_length(uint64_t len, unsigned char *hd) {
+static uint8_t encode_length(uint64_t len, unsigned char *hd) {
 	if (len < 251) return 1;
 	if (len < 65536) { if (hd) { *hd=0xfc; }; return 3; }
 	if (len < 16777216) { if (hd) { *hd=0xfd; }; return 4; }
@@ -43,7 +43,7 @@ static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t l
 	return len;
 }
 
-PgSQL_Event::PgSQL_Event (log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len) {
+PgSQL_Event::PgSQL_Event (PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len) {
 	thread_id=_thread_id;
 	username=_username;
 	schemaname=_schemaname;
@@ -85,6 +85,10 @@ void PgSQL_Event::set_extra_info(char *_err) {
 
 void PgSQL_Event::set_query(const char *ptr, int len) {
 	query_ptr=(char *)ptr;
+	// Adjust length: input length includes the null terminator
+	if (len > 0) {
+		len--;  // exclude '\0'
+	}
 	query_len=len;
 }
 
@@ -97,28 +101,29 @@ void PgSQL_Event::set_server(int _hid, const char *ptr, int len) {
 uint64_t PgSQL_Event::write(std::fstream *f, PgSQL_Session *sess) {
 	uint64_t total_bytes=0;
 	switch (et) {
-		case PROXYSQL_COM_QUERY:
-		case PROXYSQL_COM_STMT_EXECUTE:
-		case PROXYSQL_COM_STMT_PREPARE:
+		case PGSQL_LOG_EVENT_TYPE::SIMPLE_QUERY:
+		case PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE:
+		case PGSQL_LOG_EVENT_TYPE::STMT_PREPARE:
+		case PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE:
 			if (pgsql_thread___eventslog_format==1) { // format 1 , binary
 				total_bytes=write_query_format_1(f);
 			} else { // format 2 , json
 				total_bytes=write_query_format_2_json(f);
 			}
 			break;
-		case PROXYSQL_MYSQL_AUTH_OK:
-		case PROXYSQL_MYSQL_AUTH_ERR:
-		case PROXYSQL_MYSQL_AUTH_CLOSE:
-		case PROXYSQL_MYSQL_AUTH_QUIT:
-		case PROXYSQL_MYSQL_INITDB:
-		case PROXYSQL_ADMIN_AUTH_OK:
-		case PROXYSQL_ADMIN_AUTH_ERR:
-		case PROXYSQL_ADMIN_AUTH_CLOSE:
-		case PROXYSQL_ADMIN_AUTH_QUIT:
-		case PROXYSQL_SQLITE_AUTH_OK:
-		case PROXYSQL_SQLITE_AUTH_ERR:
-		case PROXYSQL_SQLITE_AUTH_CLOSE:
-		case PROXYSQL_SQLITE_AUTH_QUIT:
+		case PGSQL_LOG_EVENT_TYPE::AUTH_OK:
+		case PGSQL_LOG_EVENT_TYPE::AUTH_ERR:
+		case PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::AUTH_QUIT:
+		case PGSQL_LOG_EVENT_TYPE::INITDB:
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_OK:
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_ERR:
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_QUIT:
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_OK:
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_ERR:
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_QUIT:
 			write_auth(f, sess);
 			break;
 		default:
@@ -163,52 +168,52 @@ void PgSQL_Event::write_auth(std::fstream *f, PgSQL_Session *sess) {
 		j["extra_info"] = extra_info;
 	}
 	switch (et) {
-		case PROXYSQL_MYSQL_AUTH_OK:
-			j["event"]="MySQL_Client_Connect_OK";
+		case PGSQL_LOG_EVENT_TYPE::AUTH_OK:
+			j["event"]="PGSQL_Client_Connect_OK";
 			break;
-		case PROXYSQL_MYSQL_AUTH_ERR:
-			j["event"]="MySQL_Client_Connect_ERR";
+		case PGSQL_LOG_EVENT_TYPE::AUTH_ERR:
+			j["event"]="PGSQL_Client_Connect_ERR";
 			break;
-		case PROXYSQL_MYSQL_AUTH_CLOSE:
-			j["event"]="MySQL_Client_Close";
+		case PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE:
+			j["event"]="PGSQL_Client_Close";
 			break;
-		case PROXYSQL_MYSQL_AUTH_QUIT:
-			j["event"]="MySQL_Client_Quit";
+		case PGSQL_LOG_EVENT_TYPE::AUTH_QUIT:
+			j["event"]="PGSQL_Client_Quit";
 			break;
-		case PROXYSQL_MYSQL_INITDB:
-			j["event"]="MySQL_Client_Init_DB";
+		case PGSQL_LOG_EVENT_TYPE::INITDB:
+			j["event"]="PGSQL_Client_Init_DB";
 			break;
-		case PROXYSQL_ADMIN_AUTH_OK:
-			j["event"]="Admin_Connect_OK";
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_OK:
+			j["event"]="PGSQL_Admin_Connect_OK";
 			break;
-		case PROXYSQL_ADMIN_AUTH_ERR:
-			j["event"]="Admin_Connect_ERR";
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_ERR:
+			j["event"]="PGSQL_Admin_Connect_ERR";
 			break;
-		case PROXYSQL_ADMIN_AUTH_CLOSE:
-			j["event"]="Admin_Close";
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_CLOSE:
+			j["event"]="PGSQL_Admin_Close";
 			break;
-		case PROXYSQL_ADMIN_AUTH_QUIT:
-			j["event"]="Admin_Quit";
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_QUIT:
+			j["event"]="PGSQL_Admin_Quit";
 			break;
-		case PROXYSQL_SQLITE_AUTH_OK:
-			j["event"]="SQLite3_Connect_OK";
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_OK:
+			j["event"]="PGSQL_SQLite3_Connect_OK";
 			break;
-		case PROXYSQL_SQLITE_AUTH_ERR:
-			j["event"]="SQLite3_Connect_ERR";
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_ERR:
+			j["event"]="PGSQL_SQLite3_Connect_ERR";
 			break;
-		case PROXYSQL_SQLITE_AUTH_CLOSE:
-			j["event"]="SQLite3_Close";
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_CLOSE:
+			j["event"]="PGSQL_SQLite3_Close";
 			break;
-		case PROXYSQL_SQLITE_AUTH_QUIT:
-			j["event"]="SQLite3_Quit";
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_QUIT:
+			j["event"]="PGSQL_SQLite3_Quit";
 			break;
 		default:
 			break;
 	}
 	switch (et) {
-		case PROXYSQL_MYSQL_AUTH_CLOSE:
-		case PROXYSQL_ADMIN_AUTH_CLOSE:
-		case PROXYSQL_SQLITE_AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_CLOSE:
 			{
 				uint64_t curtime_real=realtime_time();
 				uint64_t curtime_mono=sess->thread->curtime;
@@ -251,29 +256,29 @@ void PgSQL_Event::write_auth(std::fstream *f, PgSQL_Session *sess) {
 uint64_t PgSQL_Event::write_query_format_1(std::fstream *f) {
 	uint64_t total_bytes=0;
 	total_bytes+=1; // et
-	total_bytes+=mysql_encode_length(thread_id, NULL);
+	total_bytes+=encode_length(thread_id, NULL);
 	username_len=strlen(username);
-	total_bytes+=mysql_encode_length(username_len,NULL)+username_len;
+	total_bytes+=encode_length(username_len,NULL)+username_len;
 	schemaname_len=strlen(schemaname);
-	total_bytes+=mysql_encode_length(schemaname_len,NULL)+schemaname_len;
+	total_bytes+=encode_length(schemaname_len,NULL)+schemaname_len;
 
-	total_bytes+=mysql_encode_length(client_len,NULL)+client_len;
+	total_bytes+=encode_length(client_len,NULL)+client_len;
 
-	total_bytes+=mysql_encode_length(hid, NULL);
+	total_bytes+=encode_length(hid, NULL);
 	if (hid!=UINT64_MAX) {
-		total_bytes+=mysql_encode_length(server_len,NULL)+server_len;
+		total_bytes+=encode_length(server_len,NULL)+server_len;
 	}
 
-	total_bytes+=mysql_encode_length(start_time,NULL);
-	total_bytes+=mysql_encode_length(end_time,NULL);
-	client_stmt_name_len=strlen(client_stmt_name);
-	total_bytes+=mysql_encode_length(client_stmt_name_len,NULL)+client_stmt_name_len;
-	total_bytes+=mysql_encode_length(affected_rows,NULL);
-	total_bytes+=mysql_encode_length(rows_sent,NULL);
+	total_bytes+=encode_length(start_time,NULL);
+	total_bytes+=encode_length(end_time,NULL);
+	client_stmt_name_len=client_stmt_name ? strlen(client_stmt_name) : 0;
+	total_bytes+=encode_length(client_stmt_name_len,NULL)+client_stmt_name_len;
+	total_bytes+=encode_length(affected_rows,NULL);
+	total_bytes+=encode_length(rows_sent,NULL);
 
-	total_bytes+=mysql_encode_length(query_digest,NULL);
+	total_bytes+=encode_length(query_digest,NULL);
 
-	total_bytes+=mysql_encode_length(query_len,NULL)+query_len;
+	total_bytes+=encode_length(query_len,NULL)+query_len;
 
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
@@ -287,64 +292,64 @@ uint64_t PgSQL_Event::write_query_format_1(std::fstream *f) {
 
 	f->write((char *)&et,1);
 
-	len=mysql_encode_length(thread_id,buf);
+	len=encode_length(thread_id,buf);
 	write_encoded_length(buf,thread_id,len,buf[0]);
 	f->write((char *)buf,len);
 
-	len=mysql_encode_length(username_len,buf);
+	len=encode_length(username_len,buf);
 	write_encoded_length(buf,username_len,len,buf[0]);
 	f->write((char *)buf,len);
 	f->write(username,username_len);
 
-	len=mysql_encode_length(schemaname_len,buf);
+	len=encode_length(schemaname_len,buf);
 	write_encoded_length(buf,schemaname_len,len,buf[0]);
 	f->write((char *)buf,len);
 	f->write(schemaname,schemaname_len);
 
-	len=mysql_encode_length(client_len,buf);
+	len=encode_length(client_len,buf);
 	write_encoded_length(buf,client_len,len,buf[0]);
 	f->write((char *)buf,len);
 	f->write(client,client_len);
 
-	len=mysql_encode_length(hid,buf);
+	len=encode_length(hid,buf);
 	write_encoded_length(buf,hid,len,buf[0]);
 	f->write((char *)buf,len);
 
 	if (hid!=UINT64_MAX) {
-		len=mysql_encode_length(server_len,buf);
+		len=encode_length(server_len,buf);
 		write_encoded_length(buf,server_len,len,buf[0]);
 		f->write((char *)buf,len);
 		f->write(server,server_len);
 	}
 
-	len=mysql_encode_length(start_time,buf);
+	len=encode_length(start_time,buf);
 	write_encoded_length(buf,start_time,len,buf[0]);
 	f->write((char *)buf,len);
 
-	len=mysql_encode_length(end_time,buf);
+	len=encode_length(end_time,buf);
 	write_encoded_length(buf,end_time,len,buf[0]);
 	f->write((char *)buf,len);
 
-	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
-		len = mysql_encode_length(client_stmt_name_len, buf);
+	if (et == PGSQL_LOG_EVENT_TYPE::STMT_PREPARE || et == PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE || et == PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE) {
+		len = encode_length(client_stmt_name_len, buf);
 		write_encoded_length(buf, client_stmt_name_len, len, buf[0]);
 		f->write((char*)buf, len);
 		f->write(client_stmt_name, client_stmt_name_len);
 	}
 
-	len=mysql_encode_length(affected_rows,buf);
+	len=encode_length(affected_rows,buf);
 	write_encoded_length(buf,affected_rows,len,buf[0]);
 	f->write((char *)buf,len);
 
-	len=mysql_encode_length(rows_sent,buf);
+	len=encode_length(rows_sent,buf);
 	write_encoded_length(buf,rows_sent,len,buf[0]);
 	f->write((char *)buf,len);
 
-	len=mysql_encode_length(query_digest,buf);
+	len=encode_length(query_digest,buf);
 	write_encoded_length(buf,query_digest,len,buf[0]);
 	f->write((char *)buf,len);
 
-	len=mysql_encode_length(query_len,buf);
+	len=encode_length(query_len,buf);
 	write_encoded_length(buf,query_len,len,buf[0]);
 	f->write((char *)buf,len);
 	if (query_len) {
@@ -364,30 +369,27 @@ uint64_t PgSQL_Event::write_query_format_2_json(std::fstream *f) {
 	}
 	j["thread_id"] = thread_id;
 	switch (et) {
-		case PROXYSQL_COM_STMT_EXECUTE:
-			j["event"]="COM_STMT_EXECUTE";
+		case PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE:
+			j["event"]="PGSQL_STMT_EXECUTE";
 			break;
-		case PROXYSQL_COM_STMT_PREPARE:
-			j["event"]="COM_STMT_PREPARE";
+		case PGSQL_LOG_EVENT_TYPE::STMT_PREPARE:
+			j["event"]="PGSQL_STMT_PREPARE";
+			break;
+		case PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE:
+			j["event"]="PGSQL_STMT_DESCRIBE";
 			break;
 		default:
-			j["event"]="COM_QUERY";
+			j["event"]="PGSQL_SIMPLE_QUERY";
 			break;
 	}
 	if (username) {
 		j["username"] = username;
-	//} else {
-	//	j["username"] = "";
 	}
 	if (schemaname) {
 		j["schemaname"] = schemaname;
-	//} else {
-	//	j["schemaname"] = "";
 	}
 	if (client) {
 		j["client"] = client;
-	//} else {
-	//	j["client"] = "";
 	}
 	if (hid!=UINT64_MAX) {
 		if (server) {
@@ -404,7 +406,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(std::fstream *f) {
 	if (have_rows_sent == true) {
 		j["rows_sent"] = rows_sent;
 	}
-	j["query"] = string(query_ptr,query_len);
+	j["query"] = string(query_ptr, query_len);
 	j["starttime_timestamp_us"] = start_time;
 	{
 		time_t timer=start_time/1000/1000;
@@ -432,8 +434,10 @@ uint64_t PgSQL_Event::write_query_format_2_json(std::fstream *f) {
 	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
 
-	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
-		j["client_stmt_name"] = client_stmt_name;
+	if (et == PGSQL_LOG_EVENT_TYPE::STMT_PREPARE || et == PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE || et == PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE) {
+		if (client_stmt_name) {
+			j["client_stmt_name"] = client_stmt_name;
+		}
 	}
 
 	// for performance reason, we are moving the write lock
@@ -554,10 +558,10 @@ void PgSQL_Logger::events_open_log_unlocked() {
 	events.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
 	try {
 		events.logfile->open(filen , std::ios::out | std::ios::binary);
-		proxy_info("Starting new mysql event log file %s\n", filen);
+		proxy_info("Starting new pgsql event log file %s\n", filen);
 	}
 	catch (const std::ofstream::failure&) {
-		proxy_error("Error creating new mysql event log file %s\n", filen);
+		proxy_error("Error creating new pgsql event log file %s\n", filen);
 		delete events.logfile;
 		events.logfile=NULL;
 	}
@@ -583,10 +587,10 @@ void PgSQL_Logger::audit_open_log_unlocked() {
 	audit.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
 	try {
 		audit.logfile->open(filen , std::ios::out | std::ios::binary);
-		proxy_info("Starting new audit log file %s\n", filen);
+		proxy_info("Starting new pgsql audit log file %s\n", filen);
 	}
 	catch (const std::ofstream::failure&) {
-		proxy_error("Error creating new audit log file %s\n", filen);
+		proxy_error("Error creating new pgsql audit log file %s\n", filen);
 		delete audit.logfile;
 		audit.logfile=NULL;
 	}
@@ -675,27 +679,34 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
-	enum log_event_type let = PROXYSQL_COM_QUERY; // default
+	PGSQL_LOG_EVENT_TYPE let = PGSQL_LOG_EVENT_TYPE::SIMPLE_QUERY; // default
 	switch (sess->status) {
 		case PROCESSING_STMT_EXECUTE:
-			let = PROXYSQL_COM_STMT_EXECUTE;
+			let = PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE;
 			break;
 		case PROCESSING_STMT_PREPARE:
-			let = PROXYSQL_COM_STMT_PREPARE;
+			let = PGSQL_LOG_EVENT_TYPE::STMT_PREPARE;
+			break;
+		case PROCESSING_STMT_DESCRIBE:
+			let = PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE;
 			break;
 		case WAITING_CLIENT_DATA:
-			{
-				unsigned char c=*((unsigned char *)sess->pkt.ptr+sizeof(mysql_hdr));
-				switch ((enum_mysql_command)c) {
-					case _MYSQL_COM_STMT_PREPARE:
-						// proxysql is responding to COM_STMT_PREPARE without
-						// preparing on any backend
-						let = PROXYSQL_COM_STMT_PREPARE;
-						break;
-					default:
-						break;
-				}
+		case PROCESSING_EXTENDED_QUERY_SYNC:
+		{
+			switch (sess->get_extended_query_phase() & EXTQ_PHASE_PROCESSING_MASK) {
+			case EXTQ_PHASE_PROCESSING_PARSE:
+				let = PGSQL_LOG_EVENT_TYPE::STMT_PREPARE;
+				break;
+			case EXTQ_PHASE_PROCESSING_DESCRIBE:
+				let = PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE;
+				break;
+			case EXTQ_PHASE_PROCESSING_EXECUTE:
+				let = PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE;
+				break;
+			default:
+				break;
 			}
+		}
 			break;
 		default:
 			break;
@@ -703,7 +714,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 
 	uint64_t query_digest = 0;
 
-	if (sess->status != PROCESSING_STMT_EXECUTE) {
+	if (let != PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE && let != PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE) {
 		query_digest = GloPgQPro->get_digest(&sess->CurrentQuery.QueryParserArgs);
 	} else {
 		query_digest = sess->CurrentQuery.extended_query_info.stmt_info->digest;
@@ -718,13 +729,14 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	);
 	char *c = NULL;
 	int ql = 0;
-	switch (sess->status) {
-		case PROCESSING_STMT_EXECUTE:
-			c = (char *)sess->CurrentQuery.extended_query_info.stmt_info->query;
+	switch (let) {
+		case PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE:
+		case PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE:
+			c = sess->CurrentQuery.extended_query_info.stmt_info->query;
 			ql = sess->CurrentQuery.extended_query_info.stmt_info->query_length;
 			me.set_client_stmt_name((char*)sess->CurrentQuery.extended_query_info.stmt_client_name);
 			break;
-		case PROCESSING_STMT_PREPARE:
+		case PGSQL_LOG_EVENT_TYPE::STMT_PREPARE:
 		default:
 			c = (char *)sess->CurrentQuery.QueryPointer;
 			ql = sess->CurrentQuery.QueryLength;
@@ -732,7 +744,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 			// 'WAITING_CLIENT_DATA'. This state is possible when the prepared statement is found in the
 			// global cache and due to that we immediately reply to the client and session doesn't reach
 			// 'PROCESSING_STMT_PREPARE' state. 'stmt_client_id' is expected to be '0' for anything that isn't
-			// a prepared statement, still, logging should rely 'log_event_type' instead of this value.
+			// a prepared statement, still, logging should rely 'PGSQL_LOG_EVENT_TYPE' instead of this value.
 			me.set_client_stmt_name((char*)sess->CurrentQuery.extended_query_info.stmt_client_name);
 			break;
 	}
@@ -790,7 +802,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 }
 
-void PgSQL_Logger::log_audit_entry(log_event_type _et, PgSQL_Session *sess, PgSQL_Data_Stream *myds, char *xi) {
+void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess, PgSQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
 	if (audit.logfile==NULL) return;
 
@@ -808,50 +820,50 @@ void PgSQL_Logger::log_audit_entry(log_event_type _et, PgSQL_Session *sess, PgSQ
 	if (sess) {
 		// to reduce complexing in the calling function, we do some changes here
 		switch (_et) {
-			case PROXYSQL_MYSQL_AUTH_OK:
+			case PGSQL_LOG_EVENT_TYPE::AUTH_OK:
 				switch (sess->session_type) {
 					case PROXYSQL_SESSION_ADMIN:
 					case PROXYSQL_SESSION_STATS:
-						_et = PROXYSQL_ADMIN_AUTH_OK;
+						_et = PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_OK;
 						break;
 					case PROXYSQL_SESSION_SQLITE:
-						_et = PROXYSQL_SQLITE_AUTH_OK;
+						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_OK;
 					default:
 						break;
 				}
 				break;
-			case PROXYSQL_MYSQL_AUTH_ERR:
+			case PGSQL_LOG_EVENT_TYPE::AUTH_ERR:
 				switch (sess->session_type) {
 					case PROXYSQL_SESSION_ADMIN:
 					case PROXYSQL_SESSION_STATS:
-						_et = PROXYSQL_ADMIN_AUTH_ERR;
+						_et = PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_ERR;
 						break;
 					case PROXYSQL_SESSION_SQLITE:
-						_et = PROXYSQL_SQLITE_AUTH_ERR;
+						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_ERR;
 					default:
 						break;
 				}
 				break;
-			case PROXYSQL_MYSQL_AUTH_QUIT:
+			case PGSQL_LOG_EVENT_TYPE::AUTH_QUIT:
 				switch (sess->session_type) {
 					case PROXYSQL_SESSION_ADMIN:
 					case PROXYSQL_SESSION_STATS:
-						_et = PROXYSQL_ADMIN_AUTH_QUIT;
+						_et = PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_QUIT;
 						break;
 					case PROXYSQL_SESSION_SQLITE:
-						_et = PROXYSQL_SQLITE_AUTH_QUIT;
+						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_QUIT;
 					default:
 						break;
 				}
 				break;
-			case PROXYSQL_MYSQL_AUTH_CLOSE:
+			case PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE:
 				switch (sess->session_type) {
 					case PROXYSQL_SESSION_ADMIN:
 					case PROXYSQL_SESSION_STATS:
-						_et = PROXYSQL_ADMIN_AUTH_CLOSE;
+						_et = PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_CLOSE;
 						break;
 					case PROXYSQL_SESSION_SQLITE:
-						_et = PROXYSQL_SQLITE_AUTH_CLOSE;
+						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_CLOSE;
 					default:
 						break;
 				}
