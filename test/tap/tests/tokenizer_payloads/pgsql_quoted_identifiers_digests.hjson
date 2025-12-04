@@ -1,0 +1,166 @@
+[
+	// PostgreSQL Quoted Identifier Digest Tests
+	// This file contains test cases specific to PostgreSQL quoted identifier handling in query digests.
+	// These tests ensure that quoted identifiers (e.g., "TableName", "ColumnName") are preserved
+	// in digests rather than being replaced with '?' placeholders.
+
+	// Test 1: Basic quoted identifiers - Issue #5231 reproduction
+	{
+		"description": "Basic quoted identifiers should be preserved in digests (Issue #5231)",
+		"q": [
+			"SELECT * FROM \"Attributes\" WHERE \"InventoryId\"=123 AND \"IsDeleted\"=false",
+			"SELECT * FROM \"Inventory\" WHERE \"TenantId\"=1 AND \"IsDeleted\"=false",
+			"SELECT * FROM \"Users\" WHERE \"UserId\"=44 AND \"Active\"=false",
+			"SELECT * FROM \"Orders\" WHERE \"OrderId\"=999 AND \"Deleted\"=false"
+		],
+		"expected_postgres": [
+			"select * from \"Attributes\" where \"InventoryId\"=? and \"IsDeleted\"=?",
+			"select * from \"Inventory\" where \"TenantId\"=? and \"IsDeleted\"=?",
+			"select * from \"Users\" where \"UserId\"=? and \"Active\"=?",
+			"select * from \"Orders\" where \"OrderId\"=? and \"Deleted\"=?"
+		],
+		"current_behavior_broken": [
+			"select * from ? where ?=? and ?=?",
+			"select * from ? where ?=? and ?=?",
+			"select * from ? where ?=? and ?=?",
+			"select * from ? where ?=? and ?=?"
+		],
+		"notes": "All queries should produce unique digests preserving quoted identifiers"
+	},
+
+	// Test 2: Mixed quoted and unquoted identifiers
+	{
+		"description": "Mixed quoted and unquoted identifiers in the same query",
+		"q": [
+			"SELECT id FROM users WHERE \"user_id\" = 123",
+			"SELECT id FROM \"users\" WHERE user_id = 123",
+			"SELECT id FROM \"users\" WHERE \"user_id\" = 123"
+		],
+		"expected_postgres": [
+			"select id from users where \"user_id\"=?",
+			"select id from \"users\" where user_id=?",
+			"select id from \"users\" where \"user_id\"=?"
+		],
+		"notes": "Should distinguish between quoted and unquoted identifiers"
+	},
+
+	// Test 3: Case sensitivity preservation
+	{
+		"description": "Case sensitivity in quoted identifiers should be preserved",
+		"q": [
+			"SELECT * FROM \"UserTable\" WHERE \"ID\" = 1",
+			"SELECT * FROM \"usertable\" WHERE \"id\" = 1",
+			"SELECT * FROM \"USER_TABLE\" WHERE \"ID\" = 1"
+		],
+		"expected_postgres": [
+			"select * from \"UserTable\" where \"ID\"=?",
+			"select * from \"usertable\" where \"id\"=?",
+			"select * from \"USER_TABLE\" where \"ID\"=?"
+		],
+		"notes": "Case differences should result in different digests"
+	},
+
+	// Test 4: Special characters in identifiers
+	{
+		"description": "Special characters in quoted identifiers",
+		"q": [
+			"SELECT * FROM \"user_table_123\" WHERE \"data-column\" = 'test'",
+			"SELECT * FROM \"table with spaces\" WHERE \"column-with-dashes\" = 1"
+		],
+		"expected_postgres": [
+			"select * from \"user_table_123\" where \"data-column\"=?",
+			"select * from \"table with spaces\" where \"column-with-dashes\"=?"
+		],
+		"notes": "Special characters (underscores, dashes, spaces) should be preserved"
+	},
+
+	// Test 5: Escaped quotes in identifiers
+	{
+		"description": "Escaped quotes within quoted identifiers",
+		"q": [
+			"SELECT * FROM \"table\\\"with\\\"quotes\" WHERE \"col\\\"umn\" = 1",
+			"SELECT * FROM \"table\\\\with\\\\backslashes\" WHERE \"col\\\\umn\" = 1"
+		],
+		"expected_postgres": [
+			"select * from \"table\\\"with\\\"quotes\" where \"col\\\"umn\"=?",
+			"select * from \"table\\\\with\\\\backslashes\" where \"col\\\\umn\"=?"
+		],
+		"notes": "Escaped quotes should be properly handled within identifiers"
+	},
+
+	// Test 6: Multi-table queries with quoted identifiers
+	{
+		"description": "Multi-table queries with quoted identifiers",
+		"q": [
+			"SELECT t1.\"col1\", t2.\"col2\" FROM \"TableOne\" t1 JOIN \"TableTwo\" t2 ON t1.\"id\" = t2.\"table1_id\"",
+			"SELECT t1.col1, t2.\"col2\" FROM \"TableOne\" t1 JOIN TableTwo t2 ON t1.\"id\" = t2.table1_id"
+		],
+		"expected_postgres": [
+			"select t1.\"col1\",t2.\"col2\" from \"TableOne\" t1 join \"TableTwo\" t2 on t1.\"id\"=t2.\"table1_id\"",
+			"select t1.col1,t2.\"col2\" from \"TableOne\" t1 join TableTwo t2 on t1.\"id\"=t2.table1_id"
+		],
+		"notes": "Both table and column quoted identifiers should be preserved"
+	},
+
+	// Test 7: Complex WHERE clauses with quoted identifiers
+	{
+		"description": "Complex WHERE clauses with quoted identifiers",
+		"q": [
+			"SELECT * FROM \"Users\" WHERE \"user_id\" = 123 AND \"is_active\" = true AND \"created_at\" > '2023-01-01'",
+			"SELECT * FROM \"Users\" WHERE \"user_id\" IN (1,2,3) AND \"status\" IN ('active', 'pending')"
+		],
+		"expected_postgres": [
+			"select * from \"Users\" where \"user_id\"=? and \"is_active\"=? and \"created_at\"=?",
+			"select * from \"Users\" where \"user_id\" in (?,?,?) and \"status\" in (?,?)"
+		],
+		"notes": "Multiple quoted identifiers in complex conditions should be preserved"
+	},
+
+	// Test 8: PostgreSQL-specific functions with quoted identifiers
+	{
+		"description": "PostgreSQL functions with quoted identifiers",
+		"q": [
+			"SELECT COUNT(*) FROM \"Orders\" WHERE \"customer_id\" = 123",
+			"SELECT SUM(\"amount\") FROM \"Transactions\" WHERE \"status\" = 'completed'",
+			"SELECT MAX(\"created_at\") FROM \"Posts\" WHERE \"author_id\" = 456"
+		],
+		"expected_postgres": [
+			"select count(*) from \"Orders\" where \"customer_id\"=?",
+			"select sum(\"amount\") from \"Transactions\" where \"status\"=?",
+			"select max(\"created_at\") from \"Posts\" where \"author_id\"=?"
+		],
+		"notes": "Aggregate functions with quoted column names should be preserved"
+	},
+
+	// Test 9: INSERT/UPDATE with quoted identifiers
+	{
+		"description": "INSERT and UPDATE statements with quoted identifiers",
+		"q": [
+			"INSERT INTO \"Users\" (\"user_id\", \"name\", \"email\") VALUES (123, 'John', 'john@example.com')",
+			"UPDATE \"Products\" SET \"price\" = 29.99, \"stock\" = 100 WHERE \"product_id\" = 456",
+			"DELETE FROM \"Logs\" WHERE \"log_level\" = 'ERROR' AND \"created_at\" < '2023-01-01'"
+		],
+		"expected_postgres": [
+			"insert into \"Users\" (\"user_id\",\"name\",\"email\") values (?,?,?)",
+			"update \"Products\" set \"price\"=?,\"stock\"=? where \"product_id\"=?",
+			"delete from \"Logs\" where \"log_level\"=? and \"created_at\"=?"
+		],
+		"notes": "DML statements should preserve quoted identifiers in table and column names"
+	},
+
+	// Test 10: Issue #5231 - Edge cases that currently fail
+	{
+		"description": "Edge cases from Issue #5231 that should be fixed",
+		"q": [
+			"SELECT * FROM \"SchemaName\".\"TableName\" WHERE \"Column1\" = 1",
+			"SELECT t1.\"col\" FROM \"TableOne\" t1, \"TableTwo\" t2 WHERE t1.\"id\" = t2.\"ref_id\"",
+			"SELECT * FROM (SELECT \"id\", \"name\" FROM \"Users\") AS \"subq\" WHERE \"active\" = true"
+		],
+		"expected_postgres": [
+			"select * from \"SchemaName\".\"TableName\" where \"Column1\"=?",
+			"select t1.\"col\" from \"TableOne\" t1,\"TableTwo\" t2 where t1.\"id\"=t2.\"ref_id\"",
+			"select * from (select \"id\",\"name\" from \"Users\") AS \"subq\" where \"active\"=?"
+		],
+		"notes": "Complex scenarios with schema-qualified tables and subqueries should work correctly"
+	}
+]
