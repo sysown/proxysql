@@ -327,16 +327,97 @@ bool PgSQL_ExplicitTxnStateMgr::handle_transaction(std::string_view input) {
 	return true;
 }
 
-
 TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input, bool in_transaction_mode) noexcept {
-    tokens.clear();
     TxnCmd cmd;
-    bool in_quote = false;
+
+    if (input.empty()) return cmd;
+
+    // Extract first word without full tokenization
     size_t start = 0;
+    size_t end = 0;
+
+    while (start < input.size() && fast_isspace(input[start])) {
+        start++;
+    }
+
+    if (start >= input.size()) return cmd;
+
+    // Find end of first word
+    end = start;
+    bool in_quote = false;
     char quote_char = 0;
 
-    // Tokenize with quote handling
-    for (size_t i = 0; i <= input.size(); ++i) {
+    while (end < input.size()) {
+        char c = input[end];
+
+        if (!in_quote && (c == '"' || c == '\'')) {
+            // If we hit a quote at the start, this isn't a transaction command
+            return cmd;
+        }
+
+        if (fast_isspace(c) || c == ';') {
+            break;
+        }
+
+        end++;
+    }
+
+    std::string_view first_word = input.substr(start, end - start);
+
+    // Check if this is a transaction command we care about
+	TxnCmd::Type cmd_type = TxnCmd::UNKNOWN;
+
+    if (in_transaction_mode) {
+        if (iequals(first_word, "begin")) {
+            cmd.type = TxnCmd::BEGIN;
+            return cmd;
+        }
+        
+        if (iequals(first_word, "start")) {
+			cmd_type = TxnCmd::BEGIN;
+		} else if (iequals(first_word, "savepoint")) {
+			cmd_type = TxnCmd::SAVEPOINT;
+		} else if (iequals(first_word, "release")) {
+			cmd_type = TxnCmd::RELEASE;
+		} else if (iequals(first_word, "rollback")) {
+			cmd_type = TxnCmd::ROLLBACK;
+		}
+    } else {
+
+        if (iequals(first_word, "commit") || iequals(first_word, "end")) {
+            cmd.type = TxnCmd::COMMIT;
+			return cmd;
+        }
+
+        if (iequals(first_word, "abort")) {
+            cmd.type = TxnCmd::ROLLBACK;
+			return cmd;
+        }
+
+        if (iequals(first_word, "rollback")) {
+            cmd_type = TxnCmd::ROLLBACK;
+        }
+    }
+
+    // If not a transaction command, return early
+    if (cmd_type == TxnCmd::UNKNOWN) {
+        return cmd;
+    }
+
+    // Continue tokenization from where we left off
+    tokens.clear();
+
+    // Continue tokenizing the rest of the input
+    in_quote = false;
+    quote_char = 0;
+    start = end; // Continue from after the first word
+
+    while (start < input.size() && fast_isspace(input[start])) {
+        start++;
+    }
+
+    // Tokenize the remaining input
+    for (size_t i = start; i <= input.size(); ++i) {
         const bool at_end = i == input.size();
         const char c = at_end ? 0 : input[i];
 
@@ -344,6 +425,7 @@ TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input, bool in_transaction_mod
             if (c == quote_char || at_end) {
                 tokens.emplace_back(input.substr(start + 1, i - start - 1));
                 in_quote = false;
+                start = i + 1;
             }
             continue;
         }
@@ -353,41 +435,50 @@ TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input, bool in_transaction_mod
             quote_char = c;
             start = i;
         }
-        else if (isspace(c) || c == ';' || at_end) {
+        else if (fast_isspace(c) || c == ';' || at_end) {
             if (start < i) tokens.emplace_back(input.substr(start, i - start));
             start = i + 1;
         }
     }
 
-    if (tokens.empty()) return cmd;
-
     size_t pos = 0;
-    const std::string first = to_lower(tokens[pos++]);
 
-    if (in_transaction_mode == true) {
-        if (first == "begin") cmd.type = TxnCmd::BEGIN;
-		else if (first == "start") cmd = parse_start(pos);
-        else if (first == "savepoint") cmd = parse_savepoint(pos);
-        else if (first == "release") cmd = parse_release(pos);
-        else if (first == "rollback") cmd = parse_rollback(pos);
+    if (in_transaction_mode) {
+
+		switch (cmd_type) {
+		case TxnCmd::BEGIN:
+			cmd = parse_start(pos);
+            break;
+		case TxnCmd::SAVEPOINT:
+            cmd = parse_savepoint(pos);
+			break;
+        case TxnCmd::RELEASE:
+			cmd = parse_release(pos);
+            break;
+		case TxnCmd::ROLLBACK:
+            cmd = parse_rollback(pos);
+			break;
+		default:
+			break;
+		}
     } else {
-        if (first == "commit" || first == "end") cmd.type = TxnCmd::COMMIT;
-		else if (first == "abort") cmd.type = TxnCmd::ROLLBACK;
-        else if (first == "rollback") cmd = parse_rollback(pos);
+        if (cmd_type == TxnCmd::ROLLBACK)
+            cmd = parse_rollback(pos);
     }
+
     return cmd;
 }
 
 TxnCmd PgSQL_TxnCmdParser::parse_rollback(size_t& pos) noexcept {
     TxnCmd cmd{ TxnCmd::ROLLBACK };
-    while (pos < tokens.size() && contains({ "work", "transaction" }, to_lower(tokens[pos]))) pos++;
+    while (pos < tokens.size() && contains({ "work", "transaction" }, tokens[pos])) pos++;
 
-    if (pos < tokens.size() && to_lower(tokens[pos]) == "to") {
+    if (pos < tokens.size() && iequals(tokens[pos], "to")) {
         cmd.type = TxnCmd::ROLLBACK_TO;
-        if (++pos < tokens.size() && to_lower(tokens[pos]) == "savepoint") pos++;
+        if (++pos < tokens.size() && iequals(tokens[pos], "savepoint")) pos++;
         if (pos < tokens.size()) cmd.savepoint = tokens[pos++];
-    } else if (pos < tokens.size() && to_lower(tokens[pos]) == "and") {
-        if (++pos < tokens.size() && to_lower(tokens[pos]) == "chain") {
+    } else if (pos < tokens.size() && iequals(tokens[pos], "and")) {
+        if (++pos < tokens.size() && iequals(tokens[pos], "chain")) {
             cmd.type = TxnCmd::ROLLBACK_AND_CHAIN;
 			pos++;
         }
@@ -403,14 +494,14 @@ TxnCmd PgSQL_TxnCmdParser::parse_savepoint(size_t& pos) noexcept {
 
 TxnCmd PgSQL_TxnCmdParser::parse_release(size_t& pos) noexcept {
     TxnCmd cmd{ TxnCmd::RELEASE };
-    if (pos < tokens.size() && to_lower(tokens[pos]) == "savepoint") pos++;
+    if (pos < tokens.size() && iequals(tokens[pos], "savepoint")) pos++;
     if (pos < tokens.size()) cmd.savepoint = tokens[pos++];
     return cmd;
 }
 
 TxnCmd PgSQL_TxnCmdParser::parse_start(size_t& pos) noexcept {
     TxnCmd cmd{ TxnCmd::UNKNOWN };
-    if (pos < tokens.size() && to_lower(tokens[pos]) == "transaction") {
+    if (pos < tokens.size() && iequals(tokens[pos], "transaction")) {
         cmd.type = TxnCmd::BEGIN;
 		pos++;
     }
