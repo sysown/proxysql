@@ -3436,15 +3436,25 @@ void MySQL_Thread::idle_thread_to_kill_idle_sessions() {
 		mysess_idx=0;
 	}
 	unsigned int i;
-	unsigned long long min_idle = 0;
-	if (curtime > (unsigned long long)mysql_thread___wait_timeout*1000) {
-		min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+	if (curtime < (unsigned long long)mysql_thread___wait_timeout*1000) {
+		return; // this should never happen
+		//min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
 	}
 	for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
 		uint32_t sess_pos=mysess_idx;
 		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
-		if (mysess->idle_since < min_idle || mysess->killed==true) {
+		unsigned long long effective_wait_timeout = std::min(
+			static_cast<unsigned long long>(mysql_thread___wait_timeout),
+			static_cast<unsigned long long>(mysess->wait_timeout)
+		);
+		unsigned long long min_idle = 0;
+		min_idle = curtime - (unsigned long long)effective_wait_timeout*1000;
+		if (mysess->idle_since < min_idle) {
+			unsigned long long sess_time = curtime - mysess->idle_since;
+			proxy_warning("Killing client connection %s:%d because inactive for %llums\n", mysess->client_myds->addr.addr, mysess->client_myds->addr.port, sess_time/1000);
 			mysess->killed=true;
+		}
+		if (mysess->killed==true) { // because idle or for any other reason
 			MySQL_Data_Stream *tmp_myds=mysess->client_myds;
 			int dsidx=tmp_myds->poll_fds_idx;
 			//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
@@ -4053,7 +4063,11 @@ void MySQL_Thread::process_all_sessions() {
 #ifdef IDLE_THREADS
 				else
 			{
-				if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+				unsigned long long effective_wait_timeout = std::min(
+					static_cast<unsigned long long>(mysql_thread___wait_timeout),
+					static_cast<unsigned long long>(sess->wait_timeout)
+				);
+				if ( (sess_time/1000 > effective_wait_timeout) ) {
 					sess->killed=true;
 					sess->to_process=1;
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time/1000);

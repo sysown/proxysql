@@ -72,7 +72,7 @@ int test_session_timeout(CommandLine *cl, MYSQL *admin) {
 	int rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc == 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
-	sleep(12);
+	sleep(25);
 
 	rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc != 0, (rc == 0 ? "Connection alive" : "Connection killed"));
@@ -99,7 +99,7 @@ int test_session_timeout_exceed_global_timeout(CommandLine *cl, MYSQL *admin) {
 	int rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc == 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
-	sleep(12);
+	sleep(15);
 
 	rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc != 0, (rc == 0 ? "Connection alive" : "Connection killed"));

@@ -6627,7 +6627,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 						// Warn if value was clamped due to ProxySQL limits
 						if (original_timeout != client_timeout) {
-							proxy_warning("Client [%s] (user: %s) requested wait_timeout = %llu ms, clamped to %llu ms (ProxySQL limits: 1s to 20 days)",
+							proxy_warning("Client [%s] (user: %s) requested wait_timeout = %llu ms, clamped to %llu ms (ProxySQL limits: 1s to 20 days)\n",
 											client_myds->myconn->connected_host_details.ip,
 											client_myds->myconn->userinfo->username,
 											original_timeout,
@@ -6636,7 +6636,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 						// Warn if client's value exceeds current global timeout (after clamping)
 						if (client_timeout > static_cast<unsigned long long>(mysql_thread___wait_timeout)) {
-							proxy_warning("Client [%s] (user: %s) requested wait_timeout = %llu ms, exceeds the global mysql-wait_timeout = %d ms. Global timeout will still be enforced.",
+							proxy_warning("Client [%s] (user: %s) requested wait_timeout = %llu ms, exceeds the global mysql-wait_timeout = %d ms. Global timeout will still be enforced.\n",
 											client_myds->myconn->connected_host_details.ip,
 											client_myds->myconn->userinfo->username,
 											client_timeout,
