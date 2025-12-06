@@ -4,13 +4,15 @@
  */
 
 #include <unistd.h>
-#include <json/json.h>
 
 #include "mysql.h"
 
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "json.hpp"
+
+using namespace nlohmann;
 
 MYSQL* init_mysql_conn(char* host, char* user, char* pass, int port) {
 	diag("Creating MySQL conn host=\"%s\" port=\"%d\" user=\"%s\"", host, port, user);
@@ -32,37 +34,24 @@ int run_q(MYSQL *mysql, const char *q) {
 	return 0;
 }
 
-// Helper function to parse JSON value from PROXYSQL INTERNAL SESSION result
-int extract_wait_timeout_from_json(MYSQL* mysql, unsigned long long &wait_timeout_value) {
-	MYSQL_RES* res = mysql_store_result(mysql);
-	if (!res) return 0;
-
-	MYSQL_ROW row = mysql_fetch_row(res);
-	if (!row) {
-		mysql_free_result(res);
-		return 0;
+// Helper function to extract wait_timeout from JSON
+int extract_wait_timeout_from_json(const json& j_session, unsigned long long &wait_timeout_value) {
+	try {
+		if (j_session.is_array() && !j_session.empty()) {
+			// If it's an array, get the first element
+			json session_data = j_session[0];
+			if (session_data.contains("wait_timeout") && session_data["wait_timeout"].is_number_unsigned()) {
+				wait_timeout_value = session_data["wait_timeout"].get<unsigned long long>();
+				return 1;
+			}
+		} else if (j_session.contains("wait_timeout") && j_session["wait_timeout"].is_number_unsigned()) {
+			// If it's a single object
+			wait_timeout_value = j_session["wait_timeout"].get<unsigned long long>();
+			return 1;
+		}
+	} catch (const std::exception& e) {
+		diag("Error accessing wait_timeout from JSON: %s", e.what());
 	}
-
-	Json::Value root;
-	Json::CharReaderBuilder builder;
-	Json::CharReader* reader = builder.newCharReader();
-
-	std::string errors;
-	bool parsingSuccessful = reader->parse(row[0], row[0] + strlen(row[0]), &root, &errors);
-	delete reader;
-
-	mysql_free_result(res);
-
-	if (!parsingSuccessful) {
-		diag("JSON parsing failed: %s", errors.c_str());
-		return 0;
-	}
-
-	if (root.isMember("wait_timeout") && root["wait_timeout"].isUInt64()) {
-		wait_timeout_value = root["wait_timeout"].asUInt64();
-		return 1;
-	}
-
 	return 0;
 }
 
@@ -80,12 +69,12 @@ int test_session_timeout(CommandLine *cl, MYSQL *admin) {
 
 	MYSQL_QUERY_T(proxy, "SET wait_timeout=10");
 
-	int rc = run_q(proxy, "DO 1");
+	int rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc == 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
 	sleep(12);
 
-	rc = run_q(proxy, "DO 1");
+	rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc != 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
 	mysql_close(proxy);
@@ -107,12 +96,12 @@ int test_session_timeout_exceed_global_timeout(CommandLine *cl, MYSQL *admin) {
 
 	MYSQL_QUERY_T(proxy, "SET wait_timeout=20");
 
-	int rc = run_q(proxy, "DO 1");
+	int rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc == 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
 	sleep(12);
 
-	rc = run_q(proxy, "DO 1");
+	rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc != 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
 	mysql_close(proxy);
@@ -156,15 +145,16 @@ int test_wait_timeout_json_values(CommandLine *cl, MYSQL *admin) {
 		// Set the wait_timeout value
 		MYSQL_QUERY_T(proxy, test_cases[i].set_query);
 
-		// Query PROXYSQL INTERNAL SESSION to get JSON
-		if (mysql_query(proxy, "PROXYSQL INTERNAL SESSION")) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+		// Query PROXYSQL INTERNAL SESSION using the utility function
+		json j_session = fetch_internal_session(proxy, false);
+		if (j_session.empty()) {
+			ok(false, "Failed to fetch PROXYSQL INTERNAL SESSION");
 			mysql_close(proxy);
 			return EXIT_FAILURE;
 		}
 
 		unsigned long long actual_wait_timeout;
-		int json_result = extract_wait_timeout_from_json(proxy, actual_wait_timeout);
+		int json_result = extract_wait_timeout_from_json(j_session, actual_wait_timeout);
 
 		if (json_result) {
 			ok(actual_wait_timeout == test_cases[i].expected_ms,
@@ -172,7 +162,7 @@ int test_wait_timeout_json_values(CommandLine *cl, MYSQL *admin) {
 			   actual_wait_timeout, test_cases[i].expected_ms);
 			diag("Expected: %llu ms, Got: %llu ms", test_cases[i].expected_ms, actual_wait_timeout);
 		} else {
-			fail("Failed to extract wait_timeout from JSON");
+			ok(false, "Failed to extract wait_timeout from JSON");
 		}
 
 		// Small delay between tests
