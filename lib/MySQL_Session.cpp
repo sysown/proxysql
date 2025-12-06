@@ -684,7 +684,7 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
-	wait_timeout = mysql_thread___wait_timeout;
+	this->wait_timeout = mysql_thread___wait_timeout;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;
 }
@@ -6622,8 +6622,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 											mysql_thread___wait_timeout);
 						}
 						
-						if (wait_timeout != client_timeout) {
-							wait_timeout = client_timeout;
+						if (this->wait_timeout != client_timeout) {
+							this->wait_timeout = client_timeout;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection wait_timeout to %llu ms\n", client_timeout);
 						}
 					} else if (var == "tx_isolation") {
