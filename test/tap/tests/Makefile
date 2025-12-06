@@ -122,6 +122,7 @@ tests: tests-cpp \
 	prepare_statement_err3024_libmysql-t \
 	prepare_statement_err3024_async-t \
 	fast_forward_grace_close_libmysql-t \
+	fast_forward_switch_replication_deprecate_eof_libmysql-t \
 	reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
 tests:
@@ -255,6 +256,9 @@ test_ssl_fast_forward-3_libmariadb-t: test_ssl_fast_forward-3.cpp $(TAP_LDIR)/li
 	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 test_ssl_fast_forward-3_libmysql-t: test_ssl_fast_forward-3.cpp $(TAP_LDIR)/libtap_mysql8.a
+	$(CXX) -DLIBMYSQL_HELPER8 -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL8_EDIR) -L$(TEST_MYSQL8_LDIR) -lmysqlclient -ltap_mysql8 -lresolv $(CUSTOMARGS) -o $@
+
+fast_forward_switch_replication_deprecate_eof_libmysql-t: fast_forward_switch_replication_deprecate_eof.cpp $(TAP_LDIR)/libtap_mysql8.a
 	$(CXX) -DLIBMYSQL_HELPER8 -DDISABLE_WARNING_COUNT_LOGGING $< -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL8_EDIR) -L$(TEST_MYSQL8_LDIR) -lmysqlclient -ltap_mysql8 -lresolv $(CUSTOMARGS) -o $@
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp $(TAP_LDIR)/libtap.so
