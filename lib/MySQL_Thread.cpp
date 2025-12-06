@@ -165,6 +165,8 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
+	{ st_var_set_wait_timeout_commands,    p_th_counter::mysql_set_wait_timeout_commands,  (char *)"mysql_set_wait_timeout_commands" },
+	{ st_var_timeout_terminated_connections, p_th_counter::mysql_timeout_terminated_connections, (char *)"mysql_timeout_terminated_connections" },
 };
 
 mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
@@ -806,6 +808,18 @@ th_metrics_map = std::make_tuple(
 			p_th_counter::client_host_error_killed_connections,
 			"proxysql_client_host_error_killed_connections",
 			"Killed client connections because address exceeded 'client_host_error_counts'.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_set_wait_timeout_commands,
+			"proxysql_mysql_set_wait_timeout_commands_total",
+			"Number of SET wait_timeout commands received from clients.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_timeout_terminated_connections,
+			"proxysql_mysql_timeout_terminated_connections_total",
+			"Number of client connections terminated due to wait_timeout.",
 			metric_tags {}
 		)
 	},
@@ -3431,20 +3445,32 @@ __run_skip_1:
  * initialized and are accessible within the MySQL Thread.
  */
 void MySQL_Thread::idle_thread_to_kill_idle_sessions() {
-#define	SESS_TO_SCAN	128
-	if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
+	if (mysess_idx + SESS_TO_SCAN_idle_thread > mysql_sessions->len) {
 		mysess_idx=0;
 	}
 	unsigned int i;
-	unsigned long long min_idle = 0;
-	if (curtime > (unsigned long long)mysql_thread___wait_timeout*1000) {
-		min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+	if (curtime < (unsigned long long)mysql_thread___wait_timeout*1000) {
+		return; // this should never happen
+		//min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
 	}
-	for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
+	for (i=0 ; i < SESS_TO_SCAN_idle_thread && mysess_idx < mysql_sessions->len; i++) {
 		uint32_t sess_pos=mysess_idx;
 		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
-		if (mysess->idle_since < min_idle || mysess->killed==true) {
+		unsigned long long effective_wait_timeout = std::min(
+			static_cast<unsigned long long>(mysql_thread___wait_timeout),
+			static_cast<unsigned long long>(mysess->wait_timeout)
+		);
+		unsigned long long min_idle = 0;
+		min_idle = curtime - (unsigned long long)effective_wait_timeout*1000;
+		if (mysess->idle_since < min_idle) {
+			unsigned long long sess_time = curtime - mysess->idle_since;
+			proxy_warning("Killing client connection %s:%d because inactive for %llums\n", mysess->client_myds->addr.addr, mysess->client_myds->addr.port, sess_time/1000);
 			mysess->killed=true;
+
+			// Increment counter for timeout-terminated connections
+			mysess->thread->status_variables.stvar[st_var_timeout_terminated_connections]++;
+		}
+		if (mysess->killed==true) { // because idle or for any other reason
 			MySQL_Data_Stream *tmp_myds=mysess->client_myds;
 			int dsidx=tmp_myds->poll_fds_idx;
 			//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
@@ -3841,7 +3867,12 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 	 * @param curtime The current time, in milliseconds.
 	 * @param sess The MySQL session to handle.
 	 */
-	if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_idle_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+	unsigned long long effective_wait_timeout = std::min(
+		static_cast<unsigned long long>(mysql_thread___wait_timeout),
+		static_cast<unsigned long long>(sess->wait_timeout)
+	);
+	if ((sess_time/1000 > static_cast<unsigned long long>(mysql_thread___max_transaction_idle_time)) ||
+	    (sess_time/1000 > effective_wait_timeout)) {
 		//numTrx = sess->NumActiveTransactions();
 		numTrx = sess->active_transactions;
 		if (numTrx) {
@@ -3854,11 +3885,14 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 			}
 		} else {
 			// the session is idle, kill it
-			if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) {
+			if (sess_time/1000 > effective_wait_timeout) {
 				sess->killed=true;
 				if (sess->client_myds) {
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
 				}
+
+				// Increment counter for timeout-terminated connections
+				sess->thread->status_variables.stvar[st_var_timeout_terminated_connections]++;
 			}
 		}
 	} else {
@@ -4048,10 +4082,17 @@ void MySQL_Thread::process_all_sessions() {
 #ifdef IDLE_THREADS
 				else
 			{
-				if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+				unsigned long long effective_wait_timeout = std::min(
+					static_cast<unsigned long long>(mysql_thread___wait_timeout),
+					static_cast<unsigned long long>(sess->wait_timeout)
+				);
+				if ( (sess_time/1000 > effective_wait_timeout) ) {
 					sess->killed=true;
 					sess->to_process=1;
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time/1000);
+
+					// Increment counter for timeout-terminated connections
+					sess->thread->status_variables.stvar[st_var_timeout_terminated_connections]++;
 				}
 			}
 #endif // IDLE_THREADS
@@ -5353,6 +5394,16 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 				q+=__sync_fetch_and_add(&thr->status_variables.stvar[v_idx],0);
 		}
 	}
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads)
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads_idles) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.stvar[v_idx],0);
+		}
+	}
+#endif // IDLE_THREADS
 	if (m_idx != p_th_counter::__size) {
 		const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
 		double final_val = 0;
@@ -5384,6 +5435,16 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 				q+=__sync_fetch_and_add(&thr->status_variables.stvar[v_idx],0);
 		}
 	}
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads)
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads_idles) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.stvar[v_idx],0);
+		}
+	}
+#endif // IDLE_THREADS
 	if (m_idx != p_th_gauge::__size) {
 		double final_val = 0;
 

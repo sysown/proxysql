@@ -77,6 +77,7 @@ class Base_Session {
 	int transaction_persistent_hostgroup;
 	int to_process;
 	enum proxysql_session_type session_type;
+	int wait_timeout; //in milliseconds
 
 	// bool
 	bool autocommit;
