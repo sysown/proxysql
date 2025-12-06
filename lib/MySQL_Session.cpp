@@ -6613,7 +6613,27 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							return true;
 						}
 
-						// Warn if client's value exceeds current global timeout
+						// Apply ProxySQL's safe limits: clamp between 1 second (1000ms) and 20 days (20*24*3600*1000ms)
+						const unsigned long long MIN_WAIT_TIMEOUT = 1000; // 1 second minimum
+						const unsigned long long MAX_WAIT_TIMEOUT = 20 * 24 * 3600 * 1000; // 20 days maximum
+
+						unsigned long long original_timeout = client_timeout;
+						if (client_timeout < MIN_WAIT_TIMEOUT) {
+							client_timeout = MIN_WAIT_TIMEOUT;
+						} else if (client_timeout > MAX_WAIT_TIMEOUT) {
+							client_timeout = MAX_WAIT_TIMEOUT;
+						}
+
+						// Warn if value was clamped due to ProxySQL limits
+						if (original_timeout != client_timeout) {
+							proxy_warning("Client [%s] (user: %s) requested wait_timeout = %llu ms, clamped to %llu ms (ProxySQL limits: 1s to 20 days)",
+											client_myds->myconn->connected_host_details.ip,
+											client_myds->myconn->userinfo->username,
+											original_timeout,
+											client_timeout);
+						}
+
+						// Warn if client's value exceeds current global timeout (after clamping)
 						if (client_timeout > static_cast<unsigned long long>(mysql_thread___wait_timeout)) {
 							proxy_warning("Client [%s] (user: %s) requested wait_timeout = %llu ms, exceeds the global mysql-wait_timeout = %d ms. Global timeout will still be enforced.",
 											client_myds->myconn->connected_host_details.ip,
@@ -6621,8 +6641,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 											client_timeout,
 											mysql_thread___wait_timeout);
 						}
-						
-						if (this->wait_timeout != client_timeout) {
+
+						if (static_cast<unsigned long long>(this->wait_timeout) != client_timeout) {
 							this->wait_timeout = client_timeout;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection wait_timeout to %llu ms\n", client_timeout);
 						}
