@@ -34,6 +34,8 @@
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
 #define MYSQL_DEFAULT_MAX_JOIN_SIZE	"18446744073709551615"
 
+#define SESS_TO_SCAN_idle_thread	256
+
 extern class MySQL_Variables mysql_variables;
 
 #ifdef IDLE_THREADS

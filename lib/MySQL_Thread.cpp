@@ -3431,8 +3431,7 @@ __run_skip_1:
  * initialized and are accessible within the MySQL Thread.
  */
 void MySQL_Thread::idle_thread_to_kill_idle_sessions() {
-#define	SESS_TO_SCAN	128
-	if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
+	if (mysess_idx + SESS_TO_SCAN_idle_thread > mysql_sessions->len) {
 		mysess_idx=0;
 	}
 	unsigned int i;
@@ -3440,7 +3439,7 @@ void MySQL_Thread::idle_thread_to_kill_idle_sessions() {
 		return; // this should never happen
 		//min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
 	}
-	for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
+	for (i=0 ; i < SESS_TO_SCAN_idle_thread && mysess_idx < mysql_sessions->len; i++) {
 		uint32_t sess_pos=mysess_idx;
 		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
 		unsigned long long effective_wait_timeout = std::min(

@@ -58,7 +58,10 @@ int extract_wait_timeout_from_json(const json& j_session, unsigned long long &wa
 int test_session_timeout(CommandLine *cl, MYSQL *admin) {
 	diag("Test: %s", __func__);
 
+	diag("Setting mysql-wait_timeout=50000");
 	MYSQL_QUERY_T(admin, "SET mysql-wait_timeout=50000");
+	diag("Setting mysql-poll_timeout=500 , required for more precise timeout");
+	MYSQL_QUERY_T(admin, "SET mysql-poll_timeout=500");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL* proxy = init_mysql_conn(cl->host, cl->username, cl->password, cl->port);
@@ -72,7 +75,7 @@ int test_session_timeout(CommandLine *cl, MYSQL *admin) {
 	int rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc == 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
-	sleep(25);
+	sleep(13);
 
 	rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc != 0, (rc == 0 ? "Connection alive" : "Connection killed"));
@@ -85,7 +88,10 @@ int test_session_timeout(CommandLine *cl, MYSQL *admin) {
 int test_session_timeout_exceed_global_timeout(CommandLine *cl, MYSQL *admin) {
 	diag("Test: %s", __func__);
 
+	diag("Setting mysql-wait_timeout=10000");
 	MYSQL_QUERY_T(admin, "SET mysql-wait_timeout=10000");
+	diag("Setting mysql-poll_timeout=500 , required for more precise timeout");
+	MYSQL_QUERY_T(admin, "SET mysql-poll_timeout=500");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL*proxy = init_mysql_conn(cl->host, cl->username, cl->password, cl->port);
@@ -99,7 +105,7 @@ int test_session_timeout_exceed_global_timeout(CommandLine *cl, MYSQL *admin) {
 	int rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc == 0, (rc == 0 ? "Connection alive" : "Connection killed"));
 
-	sleep(15);
+	sleep(13);
 
 	rc = run_q(proxy, "SET sql_mode=''");
 	ok(rc != 0, (rc == 0 ? "Connection alive" : "Connection killed"));
