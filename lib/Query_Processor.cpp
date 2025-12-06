@@ -228,7 +228,7 @@ Query_Processor<QP_DERIVED>::Query_Processor(int _query_rules_fast_routing_algor
 		rand_del[1] = '-';
 		rand_del[2] = '-';
 		for (int i = 3; i < 11; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[11] = '-';
 		rand_del[12] = '-';
@@ -1877,10 +1877,10 @@ template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uint64_t digest, char* digest_text, int hid, 
 	TypeConnInfo* ui, unsigned long long t, unsigned long long n, const char* client_addr, unsigned long long rows_affected,
 	unsigned long long rows_sent) {
-	pthread_rwlock_wrlock(&digest_rwlock);
-	QP_query_digest_stats *qds;
+	QP_query_digest_stats* qds;
+	std::unordered_map<uint64_t, void*>::iterator it;
 
-	std::unordered_map<uint64_t, void *>::iterator it;
+	pthread_rwlock_wrlock(&digest_rwlock);
 	it=digest_umap.find(digest_total);
 	if (it != digest_umap.end()) {
 		// found
