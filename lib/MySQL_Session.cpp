@@ -6600,6 +6600,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						std::string value = *values++;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Client requested SET wait_timeout = %s\n", value.c_str());
 
+					// Increment counter for SET wait_timeout commands
+					thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
+
 						unsigned long long client_timeout = 0;
 						try {
 							client_timeout = std::stoull(value) * 1000;

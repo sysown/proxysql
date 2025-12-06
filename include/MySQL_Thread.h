@@ -90,6 +90,8 @@ enum MySQL_Thread_status_variable {
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
+	st_var_set_wait_timeout_commands,
+	st_var_timeout_terminated_connections,
 	MY_st_var_END
 };
 
@@ -281,6 +283,8 @@ struct p_th_counter {
 		hostgroup_locked_set_cmds,
 		hostgroup_locked_queries,
 		mysql_unexpected_frontend_packets,
+		mysql_set_wait_timeout_commands,
+		mysql_timeout_terminated_connections,
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
 		mysql_whitelisted_sqli_fingerprint,
