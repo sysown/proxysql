@@ -1090,6 +1090,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["active_transactions"] = active_transactions;
 	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
 	j["warning_in_hg"] = warning_in_hg;
+	j["wait_timeout"] = this->wait_timeout;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	json& jqpo = j["qpo"];
