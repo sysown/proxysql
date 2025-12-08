@@ -23,6 +23,11 @@ tokenizer_t;
 
 enum { TOKENIZER_EMPTIES_OK, TOKENIZER_NO_EMPTIES };
 
+enum sql_dialect {
+	DIALECT_MYSQL,
+	DIALECT_PG
+};
+
 /**
  * @brief Struct for holding all the configuration options used for query digests generation.
  */
@@ -34,6 +39,7 @@ typedef struct _options {
 	int grouping_limit;
 	int groups_grouping_limit;
 	int max_query_length;
+	sql_dialect dialect;
 } options;
 
 

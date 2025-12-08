@@ -1815,6 +1815,7 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 		opts.groups_grouping_limit = GET_THREAD_VARIABLE(query_digests_groups_grouping_limit);
 		opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
 		opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
+		opts.dialect = (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) ? DIALECT_MYSQL : DIALECT_PG;
 
 		qp->digest_text=query_digest_and_first_comment_2(query, query_length, &qp->first_comment, 
 			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);

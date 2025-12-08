@@ -243,6 +243,7 @@ static inline void get_mysql_options(options* opts) {
 	opts->groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
 	opts->keep_comment = mysql_thread___query_digests_keep_comment;
 	opts->max_query_length = mysql_thread___query_digests_max_query_length;
+	opts->dialect = DIALECT_MYSQL;
 }
 
 /**
@@ -255,7 +256,8 @@ enum p_st {
 	st_cmnt_type_3 = 3,
 	st_literal_string = 4,
 	st_literal_number = 5,
-	st_replace_null = 6
+	st_replace_null = 6,
+	st_dollar_quote_string = 7
 };
 
 /**
@@ -334,6 +336,15 @@ typedef struct literal_digit_st {
 } literal_digit_st;
 
 /**
+ * State used for parsing 'literal strings' values, i.e: 'foo', "bar", etc..
+ * 
+ */
+typedef struct dollar_quote_string_st {
+	const char* tag_start;  // pointer to start of $tag$
+	size_t tag_len;       // length of tag (can be 0 for $$)
+} dollar_quote_string_st;
+
+/**
  * @brief Created for an alternative implementation of NULL parsing.
  *   Currently unused. TODO: Remove.
  */
@@ -348,6 +359,7 @@ typedef struct stage_1_st {
 	struct cmnt_type_1_st cmnt_type_1_st;
 	struct literal_string_st literal_str_st;
 	struct literal_digit_st literal_digit_st;
+	struct dollar_quote_string_st dollar_quote_str_st;
 	/* @brief Holds the previous iteration parsing ending position. */
 	char* pre_it_pos;
 	/**
@@ -452,27 +464,60 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 	) {
 		st = st_cmnt_type_1;
 	}
-	// cmnt type 2 - start with '#'
-	else if(*shared_st->q == '#') {
+	// cmnt type 2 - #  (only for MySQL/MariaDB)
+	else if (opts->dialect == DIALECT_MYSQL && *shared_st->q == '#') {
 		st = st_cmnt_type_2;
 	}
-	// cmnt type 3 - start with '--'
-	else if (
-		// shared_st->query isn't over, need to check next character
-		shared_st->q_cur_pos < (shared_st->q_len - 2) &&
-		// found starting pattern '-- ' (space is required)
-		*shared_st->q == '-' && *(shared_st->q+1) == '-' && is_space_char(*(shared_st->q+2))
-	) {
-		if (prev_char != '-') {
-			st = st_cmnt_type_3;
-		}
-		else if (shared_st->q_cur_pos == 0) {
-			st = st_cmnt_type_3;
+	// cmnt type 3 - -- ... (dialect-dependent)
+	else if (*shared_st->q == '-' && shared_st->q_cur_pos < (shared_st->q_len - 1) && 
+		*(shared_st->q + 1) == '-')
+	{
+		if (opts->dialect == DIALECT_PG) {
+			// PG: -- starts comment regardless of following space
+			if (prev_char != '-') { st = st_cmnt_type_3; }
+			else if (shared_st->q_cur_pos == 0) { st = st_cmnt_type_3; }
+		} else { // MySQL behavior: require a whitespace/control after --
+			if (shared_st->q_cur_pos < (shared_st->q_len - 2) &&
+				is_space_char(*(shared_st->q + 2)))
+			{
+				if (prev_char != '-') { st = st_cmnt_type_3; }
+				else if (shared_st->q_cur_pos == 0) { st = st_cmnt_type_3; }
+			}
 		}
 	}
-	// string - start with '
-	else if (*shared_st->q == '\'' || *shared_st->q == '"') {
+	// dollar-quoted string start (Postgres: $tag$ or $$)
+	else if (opts->dialect == DIALECT_PG && *shared_st->q == '$') {
+		// Check for a PostgreSQL dollar-quoted string.
+		// Format: $tag$ ... $tag$
+		//
+		// The tag may be empty or consist only of letters, digits, or underscores.
+		// Example valid tags: $$, $foo$, $TAG_123$
+		//
+		// Here we scan characters after the first '$' to verify that:
+		//   1. All tag characters are [A-Za-z0-9_], and
+		//   2. The tag is terminated by another '$'
+		//
+		// If so, we treat it as the start of a dollar-quoted string literal.
+		const char* p = shared_st->q + 1;
+		while (p < shared_st->q + (shared_st->q_len - shared_st->q_cur_pos) &&
+			((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_')) {
+			p++;
+		}
+		if (p < shared_st->q + (shared_st->q_len - shared_st->q_cur_pos) && *p == '$') {
+			st = st_dollar_quote_string; // add new enum state for dollar-quoted string
+		}
+	}
+	// string - single-quote is string in both; double-quote depends on dialect
+	else if (*shared_st->q == '\'') {
 		st = st_literal_string;
+	} else if (*shared_st->q == '"') {
+		if (opts->dialect == DIALECT_PG) {
+			// treat as identifier, not string
+		} else {
+			// MySQL: double quote may be string (unless ANSI_QUOTES enabled)
+			// FIXME: Add ANSI_QUOTES support
+			st = st_literal_string;
+		}
 	}
 	// may be digit - start with digit
 	else if (is_token_char(prev_char) && is_digit_char(*shared_st->q)) {
@@ -925,6 +970,118 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 }
 
 /**
+ * @brief Handles the processing state 'st_dollar_quote_string'.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param dq_st The dollar-quoted string parsing state, holds the information so far found about the state.
+ *
+ * @return The next processing state, it could be either:
+ *   - 'st_dollar_quote_string' if the dollar-quoted string hasn't yet completed to be parsed.
+ *   - 'st_no_mark_found' if the dollar-quoted string has completed to be parsed.
+ */
+static __attribute__((always_inline)) inline
+enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_st* dq_st)
+{
+	enum p_st next_state = st_dollar_quote_string;
+
+	// Number of bytes remaining in the input buffer
+	size_t remaining = shared_st->q_len - shared_st->q_cur_pos;
+
+	// ============================================================
+	// PHASE 1 — Detect and initialize the opening $tag$
+	// ============================================================
+	if (dq_st->tag_start == NULL) {
+
+		// At least "$$" is needed to form a valid opening delimiter
+		if (remaining < 2) {		
+			return st_no_mark_found;
+		}
+
+		// Start scanning after the first '$' to read the tag
+		const char* p = shared_st->q + 1; // skip first $
+
+		// Read tag characters until another '$' or buffer end
+		// Valid characters: [A-Za-z0-9_]
+		while ((size_t)(p - shared_st->q) < remaining && *p != '$') {
+			char c = *p;
+			if (!((c >= 'a' && c <= 'z') || 
+				  (c >= 'A' && c <= 'Z') || 
+				  (c >= '0' && c <= '9') ||
+				   c == '_'))
+			{
+				// Illegal tag character -> this is not a dollar-quote
+				return st_no_mark_found;
+			}
+			p++;
+		}
+
+		// If we reached end-of-buffer or didn't find a closing '$', it's not valid
+		if ((size_t)(p - shared_st->q) >= remaining || *p != '$') {
+			return st_no_mark_found;
+		}
+
+		// Store tag metadata:
+		// Example: $TAG$ -> tag_start points to 'T', tag_len = 3
+		dq_st->tag_start = shared_st->q + 1;                  // first char of tag
+		dq_st->tag_len = (int)(p - dq_st->tag_start);         // 0 for $$
+
+		// Check that skipping "$tag$" will not exceed buffer bounds
+		if (shared_st->q_cur_pos + dq_st->tag_len + 2 > shared_st->q_len)
+			return st_no_mark_found;
+
+		// Advance input pointers past the opening delimiter
+		shared_st->q += dq_st->tag_len + 2;
+		shared_st->q_cur_pos += dq_st->tag_len + 2;
+
+		return next_state; // Continue scanning inside the string
+	}
+
+	// ============================================================
+	// PHASE 2 — Inside the dollar-quoted string
+	// Look for the closing delimiter $tag$
+	// ============================================================
+	while (shared_st->q_cur_pos < shared_st->q_len) {
+		remaining = shared_st->q_len - shared_st->q_cur_pos;
+
+		// Check if enough bytes remain to match the closing delimiter
+		if (remaining >= (size_t)(dq_st->tag_len + 2)) {
+
+			// Validate: '$' + tag + '$'
+			if (*shared_st->q == '$' &&
+				memcmp(shared_st->q + 1, dq_st->tag_start, dq_st->tag_len) == 0 &&
+				*(shared_st->q + 1 + dq_st->tag_len) == '$')
+			{
+				// Found the closing delimiter
+
+				// Replace the entire dollar-quoted string with a single '?'
+				shared_st->res_cur_pos = shared_st->res_pre_pos;
+				*shared_st->res_cur_pos++ = '?';
+
+				// Skip past the closing delimiter
+				shared_st->q += dq_st->tag_len + 2;
+				shared_st->q_cur_pos += dq_st->tag_len + 2;
+
+				// Reset stored tag so the next string can be detected
+				dq_st->tag_start = NULL;
+				dq_st->tag_len = 0;
+
+				return st_no_mark_found;
+			}
+		} else {
+			// Not enough bytes left to form a closing delimiter -> safe exit
+			return st_no_mark_found;
+		}
+
+		// No delimiter found here -> consume one character and continue
+		shared_st->q++;
+		shared_st->q_cur_pos++;
+	}
+
+	// Reached end-of-buffer while still inside the string
+	return next_state;
+}
+
+/**
  * @brief Handles the processing state 'st_literal_digit'.
  *
  * @param shared_st Shared state used to continue the query processing.
@@ -1194,6 +1351,7 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
 	literal_string_st* const literal_str_st = &stage_1_st->literal_str_st;
 	literal_digit_st* const literal_digit_st = &stage_1_st->literal_digit_st;
+	dollar_quote_string_st* const dollar_quote_str_st = &stage_1_st->dollar_quote_str_st;
 
 	// starting state can belong to a previous iteration
 	enum p_st cur_st = shared_st->st;
@@ -1290,6 +1448,13 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 				// NOTE: Not required to copy since spaces are not going to be processed here
 				shared_st->copy_next_char = 0;
 				cur_st = process_literal_string(shared_st, literal_str_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st->copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_dollar_quote_string) {
+				shared_st->copy_next_char = 0;
+				cur_st = process_dollar_quote_string(shared_st, dollar_quote_str_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
