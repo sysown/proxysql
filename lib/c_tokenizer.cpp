@@ -336,6 +336,9 @@ typedef struct cmnt_type_1_st {
 	int fst_cmnt_end;
 	/* @brief Counter keeping track of the number of chars copied into 'first_comment' buffer. */
 	int fst_cmnt_len;
+
+	/* @brief Nesting level for nested comments. */
+	int nest_level;
 } cmnt_type_1_st;
 
 /**
@@ -675,6 +678,9 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			c_t_1_st->is_cmd = 1;
 		}
 
+		// Increment nesting level /*
+		c_t_1_st->nest_level++;
+
 		// copy the initial mark "/*" if comment preserving is enabled
 		if (opts->keep_comment) {
 			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q);
@@ -689,6 +695,7 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 
 		// v1_crashing_payload_04
 		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
+			c_t_1_st->nest_level = 0;
 			return st_no_mark_found;
 		}
 	}
@@ -710,7 +717,7 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	// first comment hasn't finished, we are yet copying it
 	if (c_t_1_st->fst_cmnt_end == 0) {
 		// copy the char into 'fst_cmnt' buffer
-		if (c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
+		if (c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
 			if (*fst_cmnt == NULL) {
 				// initialize the 'first_comment' and set a final NULL terminator for safety
 				*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
@@ -720,108 +727,105 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			*next_fst_cmnt_char = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
 			c_t_1_st->fst_cmnt_len++;
 		}
-
-		// detect comment end for first comment type
-		if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-			// remove last two chars from length if it's at least size '2'.
-			if (c_t_1_st->fst_cmnt_len >= 2) {
-				c_t_1_st->fst_cmnt_len -= 2;
-			}
-			// set 'zero' at the end of comment and set finish flag 'fst_cmnt_end'.
-			char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-			*c_end = 0;
-			c_t_1_st->fst_cmnt_end = 1;
-		}
 	}
 
-//	}
-
-	// comment type 1 - /* .. */
 	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-		if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len]=0;
+		// Decrement nesting level when we encounter */
+		c_t_1_st->nest_level--;
 
-			if (c_t_1_st->cur_cmd_cmnt_len >= 2) {
-				// we are not interested into copying the final '*/' for the comment
-				if (opts->keep_comment == false) {
-					c_t_1_st->cur_cmd_cmnt_len -= 2;
-				}
-
+		// Only end the comment when we're back at nest level 0
+		if (c_t_1_st->nest_level == 0) {
+			if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
 				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
-				// counter for the lenght of the cmd comment annotation, with format `/*!12345 ... */`.
-				int cmnt_annot_len = 0;
-				bool end = 0;
+				if (c_t_1_st->cur_cmd_cmnt_len >= 2) {
+					// we are not interested in copying the final '*/' for the comment
+					if (opts->keep_comment == false) {
+						c_t_1_st->cur_cmd_cmnt_len -= 2;
+					}
+					cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
 
-				// count the number of chars found before annotation ends
-				while (end == 0 && cmnt_annot_len < c_t_1_st->cur_cmd_cmnt_len) {
-					if (
-						cur_cmd_cmnt[cmnt_annot_len] == '/' ||
-						cur_cmd_cmnt[cmnt_annot_len] == '*' ||
-						cur_cmd_cmnt[cmnt_annot_len] == '!' ||
-						cur_cmd_cmnt[cmnt_annot_len] == ' ' ||
-						is_digit_char(cur_cmd_cmnt[cmnt_annot_len])
-					) {
-						cmnt_annot_len += 1;
-					} else {
-						end = 1;
+					int cmnt_annot_len = 0;
+					bool end = 0;
+					// count the number of chars found before annotation ends
+					while (end == 0 && cmnt_annot_len < c_t_1_st->cur_cmd_cmnt_len) {
+						if (cur_cmd_cmnt[cmnt_annot_len] == '/' ||
+							cur_cmd_cmnt[cmnt_annot_len] == '*' ||
+							cur_cmd_cmnt[cmnt_annot_len] == '!' ||
+							cur_cmd_cmnt[cmnt_annot_len] == ' ' ||
+							is_digit_char(cur_cmd_cmnt[cmnt_annot_len])) {
+							cmnt_annot_len += 1;
+						} else {
+							end = 1;
+						}
+					}
+
+					// copy the cmd comment minus the annotation and the marks
+					if (end) {
+						int res_free_space = res_final_pos - shared_st->res_cur_pos;
+						int comment_size = 0;
+						if (opts->keep_comment) {
+							comment_size = c_t_1_st->cur_cmd_cmnt_len;
+						} else {
+							comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
+						}
+						int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
+						if (opts->keep_comment) {
+							memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+						} else {
+							memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
+						}
+						shared_st->res_cur_pos += copy_length;
+
+						if (*(shared_st->res_cur_pos - 1) != ' ' && shared_st->res_cur_pos != res_final_pos) {
+							*shared_st->res_cur_pos++ = ' ';
+						}
 					}
 				}
 
-				// copy the cmd comment minus the annotation and the marks
-				if (end) {
-					// check if the comment to be copied is going to fit in the target buffer
-					int res_free_space = res_final_pos - shared_st->res_cur_pos;
-					int comment_size = 0;
-
-					if (opts->keep_comment) {
-						comment_size = c_t_1_st->cur_cmd_cmnt_len;
-					} else {
-						comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
-					}
-
-					int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
-
-					if (opts->keep_comment) {
-						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
-					} else {
-						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
-					}
-
-					shared_st->res_cur_pos += copy_length;
-
-					// The extra space is due to the removal of '*/', this is relevant because the
-					// comment can be in the middle of the query.
-					if (*(shared_st->res_cur_pos - 1 ) != ' ' && shared_st->res_cur_pos != res_final_pos) {
-						*shared_st->res_cur_pos++ = ' ';
-					}
-				}
+				// Re-initialize the comment state
+				c_t_1_st->is_cmd = 0;
+				c_t_1_st->cur_cmd_cmnt_len = 0;
 			}
 
-			// Re-initialize the comment state
-			c_t_1_st->is_cmd = 0;
-			c_t_1_st->cur_cmd_cmnt_len = 0;
-		}
-
-		if (
-			// not at the beginning or at the end of the query
-			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
+			if (shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
 			// if the prev copied char isn't a space comment wasn't space separated in the query:
 			// ```
 			// Q: `SELECT/*FOO*/1`
 			//          ^ no space char
 			// ```
 			// thus we impose an extra space in replace for the ommited comment
-			*(shared_st->res_cur_pos-1) != ' '
-		) {
-			*shared_st->res_cur_pos++ = ' ';
+			*(shared_st->res_cur_pos - 1) != ' '
+			) {
+				*shared_st->res_cur_pos++ = ' ';
+			}
+
+			// back to main shared_st->query parsing state
+			shared_st->prev_char = ' ';
+			next_st = st_no_mark_found;
+			c_t_1_st->is_cmd = 0;
+
+			// Finalize first comment if we were tracking it
+			if (c_t_1_st->fst_cmnt_end == 0) {
+				c_t_1_st->fst_cmnt_end = 1;
+				if (*fst_cmnt != NULL && c_t_1_st->fst_cmnt_len > 0) {
+					char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+					*c_end = 0;
+				}
+			}
+		}
+		else {
+			// Still in nested comment - don't exit comment state yet
+			next_st = st_cmnt_type_1;
+
+			// Still need to track the comment content if keeping comments
+			if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
+				if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
+					cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = '/';
+					c_t_1_st->cur_cmd_cmnt_len++;
+				}
+			}
 		}
 
-		// if there were no space we have imposed it
-		shared_st->prev_char = ' ';
-		// back to main shared_st->query parsing state
-		next_st = st_no_mark_found;
-		// reset the comment processing state (v1_crashing_payload_04)
-		c_t_1_st->is_cmd = 0;
 		// skip ending mark for comment for next iteration
 		shared_st->q_cur_pos += 1;
 		shared_st->q++;
@@ -1447,59 +1451,69 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 				copy_next_char(shared_st, opts);
 			}
 		} else {
-			if (cur_st == st_cmnt_type_1) {
-				// by default, we don't copy the next char for comments
-				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_1(opts, shared_st, cmnt_type_1_st, fst_cmnt);
-				if (cur_st == st_no_mark_found) {
+			switch (cur_st) {
+				case st_cmnt_type_1:
+					// by default, we don't copy the next char for comments
+					shared_st->copy_next_char = 0;
+					cur_st = process_cmnt_type_1(opts, shared_st, cmnt_type_1_st, fst_cmnt);
+					if (cur_st == st_no_mark_found) {
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				case st_cmnt_type_2:
+					shared_st->copy_next_char = 0;
+					cur_st = process_cmnt_type_2(shared_st);
+					if (cur_st == st_no_mark_found) {
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				case st_cmnt_type_3:
+					shared_st->copy_next_char = 0;
+					cur_st = process_cmnt_type_3(shared_st);
+					if (cur_st == st_no_mark_found) {
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				case st_literal_string:
+					// NOTE: Not required to copy since spaces are not going to be processed here
+					shared_st->copy_next_char = 0;
+					cur_st = process_literal_string(shared_st, literal_str_st);
+					if (cur_st == st_no_mark_found) {
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				case st_dollar_quote_string:
+					shared_st->copy_next_char = 0;
+					cur_st = process_dollar_quote_string(shared_st, dollar_quote_str_st);
+					if (cur_st == st_no_mark_found) {
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				case st_literal_number:
 					shared_st->copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_cmnt_type_2) {
-				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_2(shared_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st->copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_cmnt_type_3) {
-				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_3(shared_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st->copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_literal_string) {
-				// NOTE: Not required to copy since spaces are not going to be processed here
-				shared_st->copy_next_char = 0;
-				cur_st = process_literal_string(shared_st, literal_str_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st->copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_dollar_quote_string) {
-				shared_st->copy_next_char = 0;
-				cur_st = process_dollar_quote_string(shared_st, dollar_quote_str_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st->copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_literal_number) {
-				shared_st->copy_next_char = 1;
-				cur_st = process_literal_digit(shared_st, literal_digit_st, opts);
-				if (cur_st == st_no_mark_found) {
-					literal_digit_st->first_digit = 1;
-					shared_st->copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_replace_null) {
-				// shared_st->copy_next_char = 1;
-				cur_st = process_replace_null(shared_st, opts);
-				if (cur_st == st_no_mark_found) {
-					// literal_null_st.null_pos = 0;
-					shared_st->copy_next_char = 1;
-					continue;
-				}
+					cur_st = process_literal_digit(shared_st, literal_digit_st, opts);
+					if (cur_st == st_no_mark_found) {
+						literal_digit_st->first_digit = 1;
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				case st_replace_null:
+					// shared_st->copy_next_char = 1;
+					cur_st = process_replace_null(shared_st, opts);
+					if (cur_st == st_no_mark_found) {
+						// literal_null_st.null_pos = 0;
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				default:
+					break;
 			}
 
 			if (shared_st->copy_next_char) {
