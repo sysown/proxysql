@@ -12,6 +12,14 @@ extern __thread bool mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___query_digests_keep_comment;
 
+extern __thread int  pgsql_thread___query_digests_max_query_length;
+extern __thread bool pgsql_thread___query_digests_lowercase;
+extern __thread bool pgsql_thread___query_digests_replace_null;
+extern __thread bool pgsql_thread___query_digests_no_digits;
+extern __thread bool pgsql_thread___query_digests_grouping_limit;
+extern __thread bool pgsql_thread___query_digests_groups_grouping_limit;
+extern __thread bool pgsql_thread___query_digests_keep_comment;
+
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
 
@@ -244,6 +252,23 @@ static inline void get_mysql_options(options* opts) {
 	opts->keep_comment = mysql_thread___query_digests_keep_comment;
 	opts->max_query_length = mysql_thread___query_digests_max_query_length;
 	opts->dialect = DIALECT_MYSQL;
+}
+
+/**
+ * @brief Helper functiont that initializes the supplied 'options' struct with the configuration variables
+ *   values.
+ *
+ * @param opts The options struct to be initialized.
+ */
+static inline void get_pgsql_options(options* opts) {
+	opts->lowercase = pgsql_thread___query_digests_lowercase;
+	opts->replace_null = pgsql_thread___query_digests_replace_null;
+	opts->replace_number = pgsql_thread___query_digests_no_digits;
+	opts->grouping_limit = pgsql_thread___query_digests_grouping_limit;
+	opts->groups_grouping_limit = pgsql_thread___query_digests_groups_grouping_limit;
+	opts->keep_comment = pgsql_thread___query_digests_keep_comment;
+	opts->max_query_length = pgsql_thread___query_digests_max_query_length;
+	opts->dialect = DIALECT_PG;
 }
 
 /**
@@ -2807,3 +2832,287 @@ char *query_strip_comments(char *s, int _len, bool lowercase) {
 	return r;
 }
 
+
+char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
+	/* buffer to store first comment. */
+	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
+	char* res = get_result_buffer(d_max_len, buf);
+
+	// global options
+	options opts;
+	get_pgsql_options(&opts);
+
+	// state shared between all the parsing states
+	struct shared_st shared_st;
+	memset(&shared_st, 0, sizeof(struct shared_st));
+	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+
+	struct stage_1_st stage_1_st;
+	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
+	init_stage_1_st(&stage_1_st);
+
+	// perform just the first stage parsing
+	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
+
+	final_stage(&shared_st, &stage_1_st, &opts);
+
+	return res;
+}
+
+char* pgsql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
+	/* buffer to store first comment. */
+	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
+	char* res = get_result_buffer(d_max_len, buf);
+
+	// global options
+	options opts;
+	get_pgsql_options(&opts);
+
+	// state shared between all the parsing states
+	struct shared_st shared_st;
+	memset(&shared_st, 0, sizeof(struct shared_st));
+	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+
+	struct stage_1_st stage_1_st;
+	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
+	init_stage_1_st(&stage_1_st);
+	struct stage_2_st stage_2_st;
+	memset(&stage_2_st, 0, sizeof(struct stage_2_st));
+
+	// perform just the first stage parsing
+	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
+
+	// second stage parsing
+	stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, &opts);
+
+	final_stage(&shared_st, &stage_1_st, &opts);
+
+	return res;
+}
+
+char* pgsql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
+	// global options
+	options opts;
+	get_pgsql_options(&opts);
+	return query_digest_and_first_comment_2(q, q_len, fst_cmnt, buf, &opts);
+}
+
+char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst_cmnt, char* buf) {
+#ifdef DEBUG
+	if (buf != NULL) {
+		memset(buf, 0, 127);
+	}
+#endif
+
+	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
+	char* res = get_result_buffer(d_max_len, buf);
+
+	// global options
+	options opts;
+	get_pgsql_options(&opts);
+
+	// state shared between all the parsing states
+	struct shared_st shared_st;
+	memset(&shared_st, 0, sizeof(struct shared_st));
+	shared_st.q = q;
+	shared_st.q_len = q_len;
+	shared_st.d_max_len = d_max_len;
+	shared_st.res_init_pos = res;
+	shared_st.res_it_init_pos = res;
+	shared_st.res_cur_pos = res;
+	shared_st.res_pre_pos = res;
+
+	// state required between different iterations of special parsing states
+	struct cmnt_type_1_st c_t_1_st;
+	struct literal_string_st literal_str_st;
+	struct literal_digit_st literal_digit_st;
+	struct dollar_quote_string_st dollar_str_st;
+	memset(&c_t_1_st, 0, sizeof(struct cmnt_type_1_st));
+	memset(&literal_str_st, 0, sizeof(struct literal_string_st));
+	memset(&literal_digit_st, 0, sizeof(struct literal_digit_st));
+	memset(&dollar_str_st, 0, sizeof(struct dollar_quote_string_st));
+
+	enum p_st cur_st = st_no_mark_found;
+
+	// start char consumption
+	while (shared_st.q_cur_pos < d_max_len) {
+		if (cur_st == st_no_mark_found) {
+			// update the last position over the return buffer to be the current position
+			shared_st.res_pre_pos = shared_st.res_cur_pos;
+			cur_st = get_next_st(&opts, &shared_st);
+
+			// if next st isn't 'no_mark_found' transition to it without consuming current char
+			if (cur_st != st_no_mark_found) {
+				continue;
+			}
+			else {
+				// generic space removal operations
+				// ================================
+				// Removal of spaces that doesn't belong to any particular parsing state.
+
+				// ignore all the leading spaces
+				if (shared_st.res_cur_pos == shared_st.res_init_pos && is_space_char(*shared_st.q)) {
+					shared_st.q++;
+					shared_st.q_cur_pos++;
+					continue;
+				}
+
+				// suppress all the double spaces.
+				// ==============================
+				//
+				// The suppression is performed using the address of the second space found as the
+				// pivoting point for further space suppression in the result buffer:
+				//
+				// ```
+				// Q: `SELECT\s\s  1`
+				//              ^ address used to be replaced by next char
+				// ```
+				if (is_space_char(shared_st.prev_char) && is_space_char(*shared_st.q)) {
+					// if current position in result buffer is the first space found, we move to the next
+					// position, in order to respect the first space char.
+					if (!is_space_char(*(shared_st.res_cur_pos - 1))) {
+						shared_st.res_cur_pos++;
+					}
+
+					shared_st.prev_char = ' ';
+					*shared_st.res_cur_pos = ' ';
+
+					shared_st.q++;
+					shared_st.q_cur_pos++;
+					continue;
+				}
+
+				{
+					char* p = shared_st.res_cur_pos - 2;
+
+					// suppress spaces before arithmetic operators
+					if (p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) && is_arithmetic_op(*shared_st.q)) {
+						if (*p == '?') {
+							shared_st.prev_char = *shared_st.q;
+							--shared_st.res_cur_pos;
+							*shared_st.res_cur_pos++ = *shared_st.q;
+
+							shared_st.q++;
+							shared_st.q_cur_pos++;
+							continue;
+						}
+					}
+					// suppress spaces before and after commas
+					if (
+						p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) &&
+						((*shared_st.q == ',') || (*p == ','))
+						) {
+						if (*shared_st.q == ',') {
+							--shared_st.res_cur_pos;
+							*shared_st.res_cur_pos++ = *shared_st.q;
+
+							shared_st.prev_char = ',';
+							shared_st.q++;
+							shared_st.q_cur_pos++;
+						}
+						else {
+							shared_st.prev_char = ',';
+							--shared_st.res_cur_pos;
+						}
+						continue;
+					}
+					// suppress spaces before closing brackets when grouping or mark is present
+					if (
+						p >= shared_st.res_init_pos && (*p == '.' || *p == '?') &&
+						is_space_char(shared_st.prev_char) && (*shared_st.q == ')')
+						) {
+						shared_st.prev_char = *shared_st.q;
+						--shared_st.res_cur_pos;
+						*shared_st.res_cur_pos++ = *shared_st.q;
+
+						shared_st.q++;
+						shared_st.q_cur_pos++;
+						continue;
+					}
+				}
+
+				// copy the current char
+				copy_next_char(&shared_st, &opts);
+			}
+		} else {
+			if (cur_st == st_cmnt_type_1) {
+				// by default, we don't copy the next char for comments
+				shared_st.copy_next_char = 0;
+				cur_st = process_cmnt_type_1(&opts, &shared_st, &c_t_1_st, fst_cmnt);
+				if (cur_st == st_no_mark_found) {
+					shared_st.copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_cmnt_type_2) {
+				shared_st.copy_next_char = 0;
+				cur_st = process_cmnt_type_2(&shared_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st.copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_cmnt_type_3) {
+				shared_st.copy_next_char = 0;
+				cur_st = process_cmnt_type_3(&shared_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st.copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_literal_string) {
+				shared_st.copy_next_char = 1;
+				cur_st = process_literal_string_space_rm(&shared_st, &literal_str_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st.copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_literal_number) {
+				shared_st.copy_next_char = 1;
+				cur_st = process_literal_digit_space_rm(&shared_st, &literal_digit_st, &opts);
+				if (cur_st == st_no_mark_found) {
+					literal_digit_st.first_digit = 1;
+					shared_st.copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_dollar_quote_string) {
+				shared_st.copy_next_char = 1;
+				cur_st = process_dollar_quote_string(&shared_st, &dollar_str_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st.copy_next_char = 1;
+					continue;
+				}
+			}
+
+			if (shared_st.copy_next_char) {
+				copy_next_char(&shared_st, &opts);
+			}
+			else {
+				// if we do not copy we skip the next char, but copy it to `prev_char`
+				shared_st.prev_char = *shared_st.q++;
+				shared_st.q_cur_pos++;
+			}
+		}
+	}
+
+	// remove all trailing whitespaces
+	// ===============================
+	//
+	// Final spaces left by comments which are never collapsed, ex:
+	//
+	// ```
+	// Q: `select 1.1   -- final_comment  \n`
+	// D: `select ?  `
+	//              ^ never collapsed
+	// ```
+	if (shared_st.res_cur_pos > shared_st.res_it_init_pos) {
+		char* wspace = shared_st.res_cur_pos - 1;
+		while (*wspace == ' ') {
+			wspace--;
+		}
+		wspace++;
+		*wspace = '\0';
+	}
+
+	// place the final null terminator
+	*shared_st.res_cur_pos = 0;
+
+	return res;
+}

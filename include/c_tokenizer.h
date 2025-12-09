@@ -46,7 +46,6 @@ typedef struct _options {
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
-//tokenizer_t tokenizer( const char* s, const char* delimiters, int empties );
 void tokenizer( tokenizer_t *, const char* s, const char* delimiters, int empties );
 const char* free_tokenizer( tokenizer_t* tokenizer );
 const char* tokenize( tokenizer_t* tokenizer );
@@ -57,6 +56,11 @@ char * mysql_query_digest_and_first_comment_one_it(char *s , int len , char **fi
 void c_split_2(const char *in, const char *del, char **out1, char **out2);
 char * query_strip_comments(char* s, int len, bool lowercase);
 char * query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts);
+
+char * pgsql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
+char * pgsql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
+char * pgsql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
+char * pgsql_query_digest_and_first_comment_one_it(char* s, int len, char** first_comment, char* buf);
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
