@@ -449,6 +449,30 @@ void MySQL_Data_Stream::shut_hard() {
 	}
 }
 
+/**
+ * @brief Checks data flow conditions and handles exceptional cases
+ *
+ * This function performs critical checks on the data flow state of a MySQL data stream connection.
+ * It handles two main scenarios:
+ * 1. Data present in both input and output queues simultaneously (bidirectional data)
+ * 2. Backend connection establishment completion
+ *
+ * @note For permanent fast-forward sessions (SESSION_FORWARD_TYPE_PERMANENT), bidirectional data
+ *       generates a warning but continues operation. All other session types treat this as a fatal error.
+ *
+ * @warning In non-fast-forward sessions, bidirectional data will trigger:
+ *          - Error logging
+ *          - Soft shutdown of the connection
+ *          - Core dump generation for debugging
+ *
+ * For backend connections (MYDS_BACKEND) during establishment:
+ * - Checks socket error status after a POLLOUT event
+ * - On success: Associates socket fd with MySQL_Connection
+ * - On error: Performs soft shutdown and logs perror()
+ *
+ * @see generate_coredump()
+ * @see shut_soft()
+ */
 void MySQL_Data_Stream::check_data_flow() {
 	if ( (PSarrayIN->len || queue_data(queueIN) ) && ( PSarrayOUT->len || queue_data(queueOUT) ) ){
 		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
