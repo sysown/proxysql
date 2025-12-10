@@ -60,6 +60,33 @@ void ProxySQL_Config::addField(std::string& data, const char* name, const char* 
 	data += ss.str();
 }
 
+/**
+ * @brief Reads global variables from configuration file for a given module prefix.
+ *
+ * This function parses the configuration file section named `<prefix>_variables`
+ * (e.g., "mysql_variables", "pgsql_variables", "admin_variables") and inserts
+ * the variables into the global_variables table in the format "prefix-variable_name".
+ *
+ * The function automatically strips duplicate module prefixes from variable names.
+ * For example, if a user writes "mysql-log_unhealthy_connections" in the mysql_variables
+ * section, the prefix "mysql-" is automatically removed, and the variable is stored
+ * as "mysql-log_unhealthy_connections" (with a single prefix).
+ *
+ * @param prefix The module prefix: "mysql", "pgsql", or "admin".
+ * @return Number of variables processed (successfully read and stored).
+ * @retval 0 if the prefix_variables section does not exist in the config file.
+ *
+ * @note The function temporarily disables foreign keys for performance.
+ * @note Variable values are converted to strings: booleans become "true"/"false",
+ *       integers are converted via std::to_string, and strings are used as-is.
+ *
+ * @par Example:
+ * For prefix="mysql", the function reads the "mysql_variables" section from config.
+ * If the config contains "mysql-log_unhealthy_connections=false", it's stored as
+ * "mysql-log_unhealthy_connections" with value "false".
+ *
+ * @see ProxySQL_Config::Write_Global_Variables_to_configfile()
+ */
 int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
