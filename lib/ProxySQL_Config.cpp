@@ -78,10 +78,6 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	for (i=0; i< count; i++) {
 		const Setting &sett = group[i];
 		const char *n=sett.getName();
-		// Automatic prefix stripping: if variable already starts with "prefix-", remove it
-		if (strncmp(n, prefix, prefix_len) == 0 && n[prefix_len] == '-') {
-			n += prefix_len + 1; // Skip "prefix-"
-		}
 		bool value_bool;
 		int value_int;
 		std::string value_string="";
@@ -95,6 +91,10 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 			}
 		}
 		//fprintf(stderr,"%s = %s\n", n, value_string.c_str());
+		// Automatic prefix stripping: if variable already starts with "prefix-", remove it
+		if (strncmp(n, prefix, prefix_len) == 0 && n[prefix_len] == '-') {
+			n += prefix_len + 1; // Skip "prefix-"
+		}
 		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
 		sprintf(query,q, prefix, n, value_string.c_str());
 		//fprintf(stderr, "%s\n", query);
