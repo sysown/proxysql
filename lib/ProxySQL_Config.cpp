@@ -6,6 +6,7 @@
 #include <sstream>
 #include <set>
 #include <tuple>
+#include <cstring>
 
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
@@ -71,11 +72,16 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	int count = group.getLength();
 	//fprintf(stderr, "Found %d %s_variables\n",count, prefix);
 	int i;
+	size_t prefix_len = strlen(prefix);
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char *q=(char *)"INSERT OR REPLACE INTO global_variables VALUES (\"%s-%s\", \"%s\")";
 	for (i=0; i< count; i++) {
 		const Setting &sett = group[i];
 		const char *n=sett.getName();
+		// Automatic prefix stripping: if variable already starts with "prefix-", remove it
+		if (strncmp(n, prefix, prefix_len) == 0 && n[prefix_len] == '-') {
+			n += prefix_len + 1; // Skip "prefix-"
+		}
 		bool value_bool;
 		int value_int;
 		std::string value_string="";
