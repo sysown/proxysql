@@ -637,6 +637,13 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 		case PGRES_POLLING_OK:
 			pgconn.state = ASYNC_ST::ASYNC_CONNECT_END;
 
+			// connection successful, update SSL stats
+			if (PQsslInUse(pgconn.conn)) {
+				__sync_fetch_and_add(&GloPgMon->ssl_connections_OK, 1);
+			} else {
+				__sync_fetch_and_add(&GloPgMon->non_ssl_connections_OK, 1);
+			}
+
 			if (st.task.type == task_type_t::connect) {
 				st.task.end = monotonic_time();
 			} else if (st.task.type == task_type_t::ping) {
