@@ -369,8 +369,13 @@ struct th_metrics_map_idx {
  */
 struct session_track_variables {
 	enum mode {
-		DISABLED = 0,	///< Session variable tracking is disabled (default)
-		ENABLED			///< Session variable tracking is enabled
+		// Disabled; default mode
+		DISABLED = 0,
+		// Enable session tracking if backend supports it
+		OPTIONAL,
+		// Enforce session tracking; connection fails if backend does
+		// not support CLIENT_DEPRECATE_EOF and CLIENT_SESSION_TRACKING
+		ENFORCED
 	};
 };
 

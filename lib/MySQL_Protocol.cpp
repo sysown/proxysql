@@ -1111,9 +1111,13 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	// variable. This is the first step of ensuring that client connections doesn't
 	// enable 'CLIENT_DEPRECATE_EOF' unless explicitly stated by 'mysql-enable_client_deprecate_eof'.
 	// Second step occurs during client handshake response (process_pkt_handshake_response).
-	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
-		extended_capabilities |= CLIENT_DEPRECATE_EOF;
+	if (deprecate_eof_active) {
+		if (mysql_thread___enable_client_deprecate_eof
+			|| mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
+			extended_capabilities |= CLIENT_DEPRECATE_EOF;
+		}
 	}
+
 	// Copy the 'capability_flags_2'
 	uint16_t upper_word = static_cast<uint16_t>(extended_capabilities >> 16);
 	memcpy(_ptr+l, static_cast<void*>(&upper_word), sizeof(upper_word)); l += sizeof(upper_word);

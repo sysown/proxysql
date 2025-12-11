@@ -889,10 +889,15 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 		}
 	}
 
-	// set 'CLIENT_DEPRECATE_EOF' flag if explicitly stated by 'mysql-enable_server_deprecate_eof'.
-	// Capability is disabled by default in 'mariadb_client', so setting this option is not optional
-	// for having 'CLIENT_DEPRECATE_EOF' in the connection to be stablished.
+	// 'CLIENT_DEPRECATE_EOF' capability is disabled by default in mariadb_client.
+	// Based on the value of 'mysql-enable_server_deprecate_eof', enable this
+	// capability in a new connection.
 	if (mysql_thread___enable_server_deprecate_eof) {
+		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+	}
+
+	// override 'mysql-enable_server_deprecate_eof' behavior if 'session_track_variables' is set to 'ENFORCED'
+	if (mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
 		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
 	}
 

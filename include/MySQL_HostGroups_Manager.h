@@ -227,6 +227,15 @@ class MySrvC {	// MySQL Server Container
 	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
 	int32_t use_ssl;
 	char *comment;
+
+	// 'server_backoff_time' stores a timestamp that prevents the server from being
+	// considered for random selection ('MyHGC::get_random_MySrvC') until that time passes.
+	//
+	// This is primarily used when `session_track_variables::ENFORCED` mode is active.
+	// If a server lacks the required capabilities in this mode, it is temporarily
+	// excluded from selection for a specified duration.
+	unsigned long long server_backoff_time;
+
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
 	/**

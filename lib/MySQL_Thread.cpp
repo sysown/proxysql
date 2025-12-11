@@ -2361,7 +2361,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
-		VariablesPointers_int["session_track_variables"]   = make_tuple(&variables.session_track_variables,   0, 1, false);
+		VariablesPointers_int["session_track_variables"]   = make_tuple(&variables.session_track_variables,   0, 2, false);
 	}
 
 
@@ -5643,7 +5643,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
 	for (i=0; i<cached_connections->len; i++) {
-		c=(MySQL_Connection *)cached_connections->index(i);
+		c = (MySQL_Connection *) cached_connections->index(i);
+		// skip servers that are in backoff period
+		if (c->parent->server_backoff_time > curtime)
+			continue;
+
 		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used
