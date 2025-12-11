@@ -2,11 +2,14 @@
 #include "re2/re2.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "sqlite3db.h"
+#include "proxysql_debug.h"
 
 #include <sstream>
 #include <set>
 #include <tuple>
 #include <cstring>
+#include <memory>
 
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
@@ -101,7 +104,14 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	int i;
 	size_t prefix_len = strlen(prefix);
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO global_variables VALUES (\"%s-%s\", \"%s\")";
+	// Prepare statement once for all inserts
+	auto [rc, stmt] = admindb->prepare_v2("INSERT OR REPLACE INTO global_variables VALUES (?1, ?2)");
+	if (rc != SQLITE_OK) {
+		proxy_error("Failed to prepare statement for global_variables insert: %d\n", rc);
+		admindb->execute("PRAGMA foreign_keys = ON");
+		free(groupname);
+		return 0;
+	}
 	for (i=0; i< count; i++) {
 		const Setting &sett = group[i];
 		const char *n=sett.getName();
@@ -122,12 +132,19 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 		if (strncmp(n, prefix, prefix_len) == 0 && n[prefix_len] == '-') {
 			n += prefix_len + 1; // Skip "prefix-"
 		}
-		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
-		sprintf(query,q, prefix, n, value_string.c_str());
-		//fprintf(stderr, "%s\n", query);
-  		admindb->execute(query);
-		free(query);
+		// Construct full variable name
+		std::string full_var_name = std::string(prefix) + "-" + n;
+		rc = (*proxy_sqlite3_bind_text)(stmt.get(), 1, full_var_name.c_str(), -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = (*proxy_sqlite3_bind_text)(stmt.get(), 2, value_string.c_str(), -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, admindb);
+		SAFE_SQLITE3_STEP2(stmt.get());
+		rc = (*proxy_sqlite3_clear_bindings)(stmt.get());
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = (*proxy_sqlite3_reset)(stmt.get());
+		ASSERT_SQLITE_OK(rc, admindb);
 	}
+	// Statement automatically finalized when stmt goes out of scope
 	admindb->execute("PRAGMA foreign_keys = ON");
 	free(groupname);
 	return i;
