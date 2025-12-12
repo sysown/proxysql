@@ -12,14 +12,6 @@ extern __thread bool mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___query_digests_keep_comment;
 
-extern __thread int  pgsql_thread___query_digests_max_query_length;
-extern __thread bool pgsql_thread___query_digests_lowercase;
-extern __thread bool pgsql_thread___query_digests_replace_null;
-extern __thread bool pgsql_thread___query_digests_no_digits;
-extern __thread bool pgsql_thread___query_digests_grouping_limit;
-extern __thread bool pgsql_thread___query_digests_groups_grouping_limit;
-extern __thread bool pgsql_thread___query_digests_keep_comment;
-
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
 
@@ -251,24 +243,6 @@ static inline void get_mysql_options(options* opts) {
 	opts->groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
 	opts->keep_comment = mysql_thread___query_digests_keep_comment;
 	opts->max_query_length = mysql_thread___query_digests_max_query_length;
-	opts->dialect = DIALECT_MYSQL;
-}
-
-/**
- * @brief Helper functiont that initializes the supplied 'options' struct with the configuration variables
- *   values.
- *
- * @param opts The options struct to be initialized.
- */
-static inline void get_pgsql_options(options* opts) {
-	opts->lowercase = pgsql_thread___query_digests_lowercase;
-	opts->replace_null = pgsql_thread___query_digests_replace_null;
-	opts->replace_number = pgsql_thread___query_digests_no_digits;
-	opts->grouping_limit = pgsql_thread___query_digests_grouping_limit;
-	opts->groups_grouping_limit = pgsql_thread___query_digests_groups_grouping_limit;
-	opts->keep_comment = pgsql_thread___query_digests_keep_comment;
-	opts->max_query_length = pgsql_thread___query_digests_max_query_length;
-	opts->dialect = DIALECT_PG;
 }
 
 /**
@@ -281,8 +255,7 @@ enum p_st {
 	st_cmnt_type_3 = 3,
 	st_literal_string = 4,
 	st_literal_number = 5,
-	st_replace_null = 6,
-	st_dollar_quote_string = 7
+	st_replace_null = 6
 };
 
 /**
@@ -336,9 +309,6 @@ typedef struct cmnt_type_1_st {
 	int fst_cmnt_end;
 	/* @brief Counter keeping track of the number of chars copied into 'first_comment' buffer. */
 	int fst_cmnt_len;
-
-	/* @brief Nesting level for nested comments. */
-	int nest_level;
 } cmnt_type_1_st;
 
 /**
@@ -364,15 +334,6 @@ typedef struct literal_digit_st {
 } literal_digit_st;
 
 /**
- * State used for parsing 'literal strings' values, i.e: 'foo', "bar", etc..
- * 
- */
-typedef struct dollar_quote_string_st {
-	const char* tag_start;  // pointer to start of $tag$
-	size_t tag_len;       // length of tag (can be 0 for $$)
-} dollar_quote_string_st;
-
-/**
  * @brief Created for an alternative implementation of NULL parsing.
  *   Currently unused. TODO: Remove.
  */
@@ -387,7 +348,6 @@ typedef struct stage_1_st {
 	struct cmnt_type_1_st cmnt_type_1_st;
 	struct literal_string_st literal_str_st;
 	struct literal_digit_st literal_digit_st;
-	struct dollar_quote_string_st dollar_quote_str_st;
 	/* @brief Holds the previous iteration parsing ending position. */
 	char* pre_it_pos;
 	/**
@@ -492,60 +452,27 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 	) {
 		st = st_cmnt_type_1;
 	}
-	// cmnt type 2 - #  (only for MySQL/MariaDB)
-	else if (opts->dialect == DIALECT_MYSQL && *shared_st->q == '#') {
+	// cmnt type 2 - start with '#'
+	else if(*shared_st->q == '#') {
 		st = st_cmnt_type_2;
 	}
-	// cmnt type 3 - -- ... (dialect-dependent)
-	else if (*shared_st->q == '-' && shared_st->q_cur_pos < (shared_st->q_len - 1) && 
-		*(shared_st->q + 1) == '-')
-	{
-		if (opts->dialect == DIALECT_PG) {
-			// PG: -- starts comment regardless of following space
-			if (prev_char != '-') { st = st_cmnt_type_3; }
-			else if (shared_st->q_cur_pos == 0) { st = st_cmnt_type_3; }
-		} else { // MySQL behavior: require a whitespace/control after --
-			if (shared_st->q_cur_pos < (shared_st->q_len - 2) &&
-				is_space_char(*(shared_st->q + 2)))
-			{
-				if (prev_char != '-') { st = st_cmnt_type_3; }
-				else if (shared_st->q_cur_pos == 0) { st = st_cmnt_type_3; }
-			}
+	// cmnt type 3 - start with '--'
+	else if (
+		// shared_st->query isn't over, need to check next character
+		shared_st->q_cur_pos < (shared_st->q_len - 2) &&
+		// found starting pattern '-- ' (space is required)
+		*shared_st->q == '-' && *(shared_st->q+1) == '-' && is_space_char(*(shared_st->q+2))
+	) {
+		if (prev_char != '-') {
+			st = st_cmnt_type_3;
+		}
+		else if (shared_st->q_cur_pos == 0) {
+			st = st_cmnt_type_3;
 		}
 	}
-	// dollar-quoted string start (Postgres: $tag$ or $$)
-	else if (opts->dialect == DIALECT_PG && *shared_st->q == '$') {
-		// Check for a PostgreSQL dollar-quoted string.
-		// Format: $tag$ ... $tag$
-		//
-		// The tag may be empty or consist only of letters, digits, or underscores.
-		// Example valid tags: $$, $foo$, $TAG_123$
-		//
-		// Here we scan characters after the first '$' to verify that:
-		//   1. All tag characters are [A-Za-z0-9_], and
-		//   2. The tag is terminated by another '$'
-		//
-		// If so, we treat it as the start of a dollar-quoted string literal.
-		const char* p = shared_st->q + 1;
-		while (p < shared_st->q + (shared_st->q_len - shared_st->q_cur_pos) &&
-			((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_')) {
-			p++;
-		}
-		if (p < shared_st->q + (shared_st->q_len - shared_st->q_cur_pos) && *p == '$') {
-			st = st_dollar_quote_string; // add new enum state for dollar-quoted string
-		}
-	}
-	// string - single-quote is string in both; double-quote depends on dialect
-	else if (*shared_st->q == '\'') {
+	// string - start with '
+	else if (*shared_st->q == '\'' || *shared_st->q == '"') {
 		st = st_literal_string;
-	} else if (*shared_st->q == '"') {
-		if (opts->dialect == DIALECT_PG) {
-			// treat as identifier, not string
-		} else {
-			// MySQL: double quote may be string (unless ANSI_QUOTES enabled)
-			// FIXME: Add ANSI_QUOTES support
-			st = st_literal_string;
-		}
 	}
 	// may be digit - start with digit
 	else if (is_token_char(prev_char) && is_digit_char(*shared_st->q)) {
@@ -592,7 +519,7 @@ void copy_next_char(shared_st* shared_st, const options* opts) {
 	inc_proc_pos(shared_st);
 }
 
-char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
+static char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 
 /**
  * @brief Safer version of 'is_digit_string' performing boundary checks.
@@ -678,9 +605,6 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			c_t_1_st->is_cmd = 1;
 		}
 
-		// Increment nesting level /*
-		c_t_1_st->nest_level++;
-
 		// copy the initial mark "/*" if comment preserving is enabled
 		if (opts->keep_comment) {
 			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q);
@@ -695,7 +619,6 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 
 		// v1_crashing_payload_04
 		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
-			c_t_1_st->nest_level = 0;
 			return st_no_mark_found;
 		}
 	}
@@ -717,7 +640,7 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	// first comment hasn't finished, we are yet copying it
 	if (c_t_1_st->fst_cmnt_end == 0) {
 		// copy the char into 'fst_cmnt' buffer
-		if (c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
+		if (c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
 			if (*fst_cmnt == NULL) {
 				// initialize the 'first_comment' and set a final NULL terminator for safety
 				*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
@@ -727,105 +650,108 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			*next_fst_cmnt_char = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
 			c_t_1_st->fst_cmnt_len++;
 		}
+
+		// detect comment end for first comment type
+		if (shared_st->prev_char == '*' && *shared_st->q == '/') {
+			// remove last two chars from length if it's at least size '2'.
+			if (c_t_1_st->fst_cmnt_len >= 2) {
+				c_t_1_st->fst_cmnt_len -= 2;
+			}
+			// set 'zero' at the end of comment and set finish flag 'fst_cmnt_end'.
+			char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+			*c_end = 0;
+			c_t_1_st->fst_cmnt_end = 1;
+		}
 	}
 
+//	}
+
+	// comment type 1 - /* .. */
 	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-		// Decrement nesting level when we encounter */
-		c_t_1_st->nest_level--;
+		if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
+			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len]=0;
 
-		// Only end the comment when we're back at nest level 0
-		if (c_t_1_st->nest_level == 0) {
-			if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
+			if (c_t_1_st->cur_cmd_cmnt_len >= 2) {
+				// we are not interested into copying the final '*/' for the comment
+				if (opts->keep_comment == false) {
+					c_t_1_st->cur_cmd_cmnt_len -= 2;
+				}
+
 				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
-				if (c_t_1_st->cur_cmd_cmnt_len >= 2) {
-					// we are not interested in copying the final '*/' for the comment
-					if (opts->keep_comment == false) {
-						c_t_1_st->cur_cmd_cmnt_len -= 2;
-					}
-					cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
+				// counter for the lenght of the cmd comment annotation, with format `/*!12345 ... */`.
+				int cmnt_annot_len = 0;
+				bool end = 0;
 
-					int cmnt_annot_len = 0;
-					bool end = 0;
-					// count the number of chars found before annotation ends
-					while (end == 0 && cmnt_annot_len < c_t_1_st->cur_cmd_cmnt_len) {
-						if (cur_cmd_cmnt[cmnt_annot_len] == '/' ||
-							cur_cmd_cmnt[cmnt_annot_len] == '*' ||
-							cur_cmd_cmnt[cmnt_annot_len] == '!' ||
-							cur_cmd_cmnt[cmnt_annot_len] == ' ' ||
-							is_digit_char(cur_cmd_cmnt[cmnt_annot_len])) {
-							cmnt_annot_len += 1;
-						} else {
-							end = 1;
-						}
-					}
-
-					// copy the cmd comment minus the annotation and the marks
-					if (end) {
-						int res_free_space = res_final_pos - shared_st->res_cur_pos;
-						int comment_size = 0;
-						if (opts->keep_comment) {
-							comment_size = c_t_1_st->cur_cmd_cmnt_len;
-						} else {
-							comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
-						}
-						int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
-						if (opts->keep_comment) {
-							memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
-						} else {
-							memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
-						}
-						shared_st->res_cur_pos += copy_length;
-
-						if (*(shared_st->res_cur_pos - 1) != ' ' && shared_st->res_cur_pos != res_final_pos) {
-							*shared_st->res_cur_pos++ = ' ';
-						}
+				// count the number of chars found before annotation ends
+				while (end == 0 && cmnt_annot_len < c_t_1_st->cur_cmd_cmnt_len) {
+					if (
+						cur_cmd_cmnt[cmnt_annot_len] == '/' ||
+						cur_cmd_cmnt[cmnt_annot_len] == '*' ||
+						cur_cmd_cmnt[cmnt_annot_len] == '!' ||
+						cur_cmd_cmnt[cmnt_annot_len] == ' ' ||
+						is_digit_char(cur_cmd_cmnt[cmnt_annot_len])
+					) {
+						cmnt_annot_len += 1;
+					} else {
+						end = 1;
 					}
 				}
 
-				// Re-initialize the comment state
-				c_t_1_st->is_cmd = 0;
-				c_t_1_st->cur_cmd_cmnt_len = 0;
+				// copy the cmd comment minus the annotation and the marks
+				if (end) {
+					// check if the comment to be copied is going to fit in the target buffer
+					int res_free_space = res_final_pos - shared_st->res_cur_pos;
+					int comment_size = 0;
+
+					if (opts->keep_comment) {
+						comment_size = c_t_1_st->cur_cmd_cmnt_len;
+					} else {
+						comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
+					}
+
+					int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
+
+					if (opts->keep_comment) {
+						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+					} else {
+						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
+					}
+
+					shared_st->res_cur_pos += copy_length;
+
+					// The extra space is due to the removal of '*/', this is relevant because the
+					// comment can be in the middle of the query.
+					if (*(shared_st->res_cur_pos - 1 ) != ' ' && shared_st->res_cur_pos != res_final_pos) {
+						*shared_st->res_cur_pos++ = ' ';
+					}
+				}
 			}
 
-			if (shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
+			// Re-initialize the comment state
+			c_t_1_st->is_cmd = 0;
+			c_t_1_st->cur_cmd_cmnt_len = 0;
+		}
+
+		if (
+			// not at the beginning or at the end of the query
+			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
 			// if the prev copied char isn't a space comment wasn't space separated in the query:
 			// ```
 			// Q: `SELECT/*FOO*/1`
 			//          ^ no space char
 			// ```
 			// thus we impose an extra space in replace for the ommited comment
-			*(shared_st->res_cur_pos - 1) != ' '
-			) {
-				*shared_st->res_cur_pos++ = ' ';
-			}
-
-			// back to main shared_st->query parsing state
-			shared_st->prev_char = ' ';
-			next_st = st_no_mark_found;
-			c_t_1_st->is_cmd = 0;
-
-			// Finalize first comment if we were tracking it
-			if (c_t_1_st->fst_cmnt_end == 0) {
-				c_t_1_st->fst_cmnt_end = 1;
-				if (*fst_cmnt != NULL && c_t_1_st->fst_cmnt_len > 0) {
-					char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-					*c_end = 0;
-				}
-			}
-		}
-		else {
-			// Still in nested comment - don't exit comment state yet
-			next_st = st_cmnt_type_1;
-
-			// Still need to track the comment content if keeping comments
-			if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
-				if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
-					cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = '/';
-					c_t_1_st->cur_cmd_cmnt_len++;
-				}
-			}
+			*(shared_st->res_cur_pos-1) != ' '
+		) {
+			*shared_st->res_cur_pos++ = ' ';
 		}
 
+		// if there were no space we have imposed it
+		shared_st->prev_char = ' ';
+		// back to main shared_st->query parsing state
+		next_st = st_no_mark_found;
+		// reset the comment processing state (v1_crashing_payload_04)
+		c_t_1_st->is_cmd = 0;
 		// skip ending mark for comment for next iteration
 		shared_st->q_cur_pos += 1;
 		shared_st->q++;
@@ -995,118 +921,6 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 		next_state = st_no_mark_found;
 	}
 
-	return next_state;
-}
-
-/**
- * @brief Handles the processing state 'st_dollar_quote_string'.
- *
- * @param shared_st Shared state used to continue the query processing.
- * @param dq_st The dollar-quoted string parsing state, holds the information so far found about the state.
- *
- * @return The next processing state, it could be either:
- *   - 'st_dollar_quote_string' if the dollar-quoted string hasn't yet completed to be parsed.
- *   - 'st_no_mark_found' if the dollar-quoted string has completed to be parsed.
- */
-static __attribute__((always_inline)) inline
-enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_st* dq_st)
-{
-	enum p_st next_state = st_dollar_quote_string;
-
-	// Number of bytes remaining in the input buffer
-	size_t remaining = shared_st->q_len - shared_st->q_cur_pos;
-
-	// ============================================================
-	// PHASE 1 — Detect and initialize the opening $tag$
-	// ============================================================
-	if (dq_st->tag_start == NULL) {
-
-		// At least "$$" is needed to form a valid opening delimiter
-		if (remaining < 2) {		
-			return st_no_mark_found;
-		}
-
-		// Start scanning after the first '$' to read the tag
-		const char* p = shared_st->q + 1; // skip first $
-
-		// Read tag characters until another '$' or buffer end
-		// Valid characters: [A-Za-z0-9_]
-		while ((size_t)(p - shared_st->q) < remaining && *p != '$') {
-			char c = *p;
-			if (!((c >= 'a' && c <= 'z') || 
-				  (c >= 'A' && c <= 'Z') || 
-				  (c >= '0' && c <= '9') ||
-				   c == '_'))
-			{
-				// Illegal tag character -> this is not a dollar-quote
-				return st_no_mark_found;
-			}
-			p++;
-		}
-
-		// If we reached end-of-buffer or didn't find a closing '$', it's not valid
-		if ((size_t)(p - shared_st->q) >= remaining || *p != '$') {
-			return st_no_mark_found;
-		}
-
-		// Store tag metadata:
-		// Example: $TAG$ -> tag_start points to 'T', tag_len = 3
-		dq_st->tag_start = shared_st->q + 1;                  // first char of tag
-		dq_st->tag_len = (int)(p - dq_st->tag_start);         // 0 for $$
-
-		// Check that skipping "$tag$" will not exceed buffer bounds
-		if (shared_st->q_cur_pos + dq_st->tag_len + 2 > shared_st->q_len)
-			return st_no_mark_found;
-
-		// Advance input pointers past the opening delimiter
-		shared_st->q += dq_st->tag_len + 2;
-		shared_st->q_cur_pos += dq_st->tag_len + 2;
-
-		return next_state; // Continue scanning inside the string
-	}
-
-	// ============================================================
-	// PHASE 2 — Inside the dollar-quoted string
-	// Look for the closing delimiter $tag$
-	// ============================================================
-	while (shared_st->q_cur_pos < shared_st->q_len) {
-		remaining = shared_st->q_len - shared_st->q_cur_pos;
-
-		// Check if enough bytes remain to match the closing delimiter
-		if (remaining >= (size_t)(dq_st->tag_len + 2)) {
-
-			// Validate: '$' + tag + '$'
-			if (*shared_st->q == '$' &&
-				memcmp(shared_st->q + 1, dq_st->tag_start, dq_st->tag_len) == 0 &&
-				*(shared_st->q + 1 + dq_st->tag_len) == '$')
-			{
-				// Found the closing delimiter
-
-				// Replace the entire dollar-quoted string with a single '?'
-				shared_st->res_cur_pos = shared_st->res_pre_pos;
-				*shared_st->res_cur_pos++ = '?';
-
-				// Skip past the closing delimiter
-				shared_st->q += dq_st->tag_len + 2;
-				shared_st->q_cur_pos += dq_st->tag_len + 2;
-
-				// Reset stored tag so the next string can be detected
-				dq_st->tag_start = NULL;
-				dq_st->tag_len = 0;
-
-				return st_no_mark_found;
-			}
-		} else {
-			// Not enough bytes left to form a closing delimiter -> safe exit
-			return st_no_mark_found;
-		}
-
-		// No delimiter found here -> consume one character and continue
-		shared_st->q++;
-		shared_st->q_cur_pos++;
-	}
-
-	// Reached end-of-buffer while still inside the string
 	return next_state;
 }
 
@@ -1380,7 +1194,6 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
 	literal_string_st* const literal_str_st = &stage_1_st->literal_str_st;
 	literal_digit_st* const literal_digit_st = &stage_1_st->literal_digit_st;
-	dollar_quote_string_st* const dollar_quote_str_st = &stage_1_st->dollar_quote_str_st;
 
 	// starting state can belong to a previous iteration
 	enum p_st cur_st = shared_st->st;
@@ -1451,69 +1264,52 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 				copy_next_char(shared_st, opts);
 			}
 		} else {
-			switch (cur_st) {
-				case st_cmnt_type_1:
-					// by default, we don't copy the next char for comments
-					shared_st->copy_next_char = 0;
-					cur_st = process_cmnt_type_1(opts, shared_st, cmnt_type_1_st, fst_cmnt);
-					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
-						continue;
-					}
-					break;
-				case st_cmnt_type_2:
-					shared_st->copy_next_char = 0;
-					cur_st = process_cmnt_type_2(shared_st);
-					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
-						continue;
-					}
-					break;
-				case st_cmnt_type_3:
-					shared_st->copy_next_char = 0;
-					cur_st = process_cmnt_type_3(shared_st);
-					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
-						continue;
-					}
-					break;
-				case st_literal_string:
-					// NOTE: Not required to copy since spaces are not going to be processed here
-					shared_st->copy_next_char = 0;
-					cur_st = process_literal_string(shared_st, literal_str_st);
-					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
-						continue;
-					}
-					break;
-				case st_dollar_quote_string:
-					shared_st->copy_next_char = 0;
-					cur_st = process_dollar_quote_string(shared_st, dollar_quote_str_st);
-					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
-						continue;
-					}
-					break;
-				case st_literal_number:
+			if (cur_st == st_cmnt_type_1) {
+				// by default, we don't copy the next char for comments
+				shared_st->copy_next_char = 0;
+				cur_st = process_cmnt_type_1(opts, shared_st, cmnt_type_1_st, fst_cmnt);
+				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
-					cur_st = process_literal_digit(shared_st, literal_digit_st, opts);
-					if (cur_st == st_no_mark_found) {
-						literal_digit_st->first_digit = 1;
-						shared_st->copy_next_char = 1;
-						continue;
-					}
-					break;
-				case st_replace_null:
-					// shared_st->copy_next_char = 1;
-					cur_st = process_replace_null(shared_st, opts);
-					if (cur_st == st_no_mark_found) {
-						// literal_null_st.null_pos = 0;
-						shared_st->copy_next_char = 1;
-						continue;
-					}
-					break;
-				default:
-					break;
+					continue;
+				}
+			} else if (cur_st == st_cmnt_type_2) {
+				shared_st->copy_next_char = 0;
+				cur_st = process_cmnt_type_2(shared_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st->copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_cmnt_type_3) {
+				shared_st->copy_next_char = 0;
+				cur_st = process_cmnt_type_3(shared_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st->copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_literal_string) {
+				// NOTE: Not required to copy since spaces are not going to be processed here
+				shared_st->copy_next_char = 0;
+				cur_st = process_literal_string(shared_st, literal_str_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st->copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_literal_number) {
+				shared_st->copy_next_char = 1;
+				cur_st = process_literal_digit(shared_st, literal_digit_st, opts);
+				if (cur_st == st_no_mark_found) {
+					literal_digit_st->first_digit = 1;
+					shared_st->copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_replace_null) {
+				// shared_st->copy_next_char = 1;
+				cur_st = process_replace_null(shared_st, opts);
+				if (cur_st == st_no_mark_found) {
+					// literal_null_st.null_pos = 0;
+					shared_st->copy_next_char = 1;
+					continue;
+				}
 			}
 
 			if (shared_st->copy_next_char) {
@@ -2213,7 +2009,7 @@ char* mysql_query_digest_second_stage(const char* const q, int q_len, char** con
  *
  * @return A pointer to the start of the supplied buffer, or the allocated memory containing the digest.
  */
-char* query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts) {
+char* mysql_query_digest_and_first_comment(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts) {
 #ifdef DEBUG
 	if (buf != NULL) {
 		memset(buf, 0, 127);
@@ -2295,7 +2091,7 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 	// global options
 	options opts;
 	get_mysql_options(&opts);
-	return query_digest_and_first_comment_2(q, q_len, fst_cmnt, buf, &opts);
+	return mysql_query_digest_and_first_comment(q, q_len, fst_cmnt, buf, &opts);
 }
 
 static __attribute__((always_inline)) inline
@@ -2727,7 +2523,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	return res;
 }
 
-char *query_strip_comments(char *s, int _len, bool lowercase) {
+char* mysql_query_strip_comments(char *s, int _len, bool lowercase) {
 	int i = 0;
 	int len = _len;
 	char *r = (char *) malloc(len + SIZECHAR);
@@ -2846,287 +2642,3 @@ char *query_strip_comments(char *s, int _len, bool lowercase) {
 	return r;
 }
 
-
-char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
-	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
-	// global options
-	options opts;
-	get_pgsql_options(&opts);
-
-	// state shared between all the parsing states
-	struct shared_st shared_st;
-	memset(&shared_st, 0, sizeof(struct shared_st));
-	init_shared_st(&shared_st, q, q_len, d_max_len, res);
-
-	struct stage_1_st stage_1_st;
-	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
-	init_stage_1_st(&stage_1_st);
-
-	// perform just the first stage parsing
-	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
-
-	final_stage(&shared_st, &stage_1_st, &opts);
-
-	return res;
-}
-
-char* pgsql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
-	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
-	// global options
-	options opts;
-	get_pgsql_options(&opts);
-
-	// state shared between all the parsing states
-	struct shared_st shared_st;
-	memset(&shared_st, 0, sizeof(struct shared_st));
-	init_shared_st(&shared_st, q, q_len, d_max_len, res);
-
-	struct stage_1_st stage_1_st;
-	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
-	init_stage_1_st(&stage_1_st);
-	struct stage_2_st stage_2_st;
-	memset(&stage_2_st, 0, sizeof(struct stage_2_st));
-
-	// perform just the first stage parsing
-	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
-
-	// second stage parsing
-	stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, &opts);
-
-	final_stage(&shared_st, &stage_1_st, &opts);
-
-	return res;
-}
-
-char* pgsql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
-	// global options
-	options opts;
-	get_pgsql_options(&opts);
-	return query_digest_and_first_comment_2(q, q_len, fst_cmnt, buf, &opts);
-}
-
-char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst_cmnt, char* buf) {
-#ifdef DEBUG
-	if (buf != NULL) {
-		memset(buf, 0, 127);
-	}
-#endif
-
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
-	// global options
-	options opts;
-	get_pgsql_options(&opts);
-
-	// state shared between all the parsing states
-	struct shared_st shared_st;
-	memset(&shared_st, 0, sizeof(struct shared_st));
-	shared_st.q = q;
-	shared_st.q_len = q_len;
-	shared_st.d_max_len = d_max_len;
-	shared_st.res_init_pos = res;
-	shared_st.res_it_init_pos = res;
-	shared_st.res_cur_pos = res;
-	shared_st.res_pre_pos = res;
-
-	// state required between different iterations of special parsing states
-	struct cmnt_type_1_st c_t_1_st;
-	struct literal_string_st literal_str_st;
-	struct literal_digit_st literal_digit_st;
-	struct dollar_quote_string_st dollar_str_st;
-	memset(&c_t_1_st, 0, sizeof(struct cmnt_type_1_st));
-	memset(&literal_str_st, 0, sizeof(struct literal_string_st));
-	memset(&literal_digit_st, 0, sizeof(struct literal_digit_st));
-	memset(&dollar_str_st, 0, sizeof(struct dollar_quote_string_st));
-
-	enum p_st cur_st = st_no_mark_found;
-
-	// start char consumption
-	while (shared_st.q_cur_pos < d_max_len) {
-		if (cur_st == st_no_mark_found) {
-			// update the last position over the return buffer to be the current position
-			shared_st.res_pre_pos = shared_st.res_cur_pos;
-			cur_st = get_next_st(&opts, &shared_st);
-
-			// if next st isn't 'no_mark_found' transition to it without consuming current char
-			if (cur_st != st_no_mark_found) {
-				continue;
-			}
-			else {
-				// generic space removal operations
-				// ================================
-				// Removal of spaces that doesn't belong to any particular parsing state.
-
-				// ignore all the leading spaces
-				if (shared_st.res_cur_pos == shared_st.res_init_pos && is_space_char(*shared_st.q)) {
-					shared_st.q++;
-					shared_st.q_cur_pos++;
-					continue;
-				}
-
-				// suppress all the double spaces.
-				// ==============================
-				//
-				// The suppression is performed using the address of the second space found as the
-				// pivoting point for further space suppression in the result buffer:
-				//
-				// ```
-				// Q: `SELECT\s\s  1`
-				//              ^ address used to be replaced by next char
-				// ```
-				if (is_space_char(shared_st.prev_char) && is_space_char(*shared_st.q)) {
-					// if current position in result buffer is the first space found, we move to the next
-					// position, in order to respect the first space char.
-					if (!is_space_char(*(shared_st.res_cur_pos - 1))) {
-						shared_st.res_cur_pos++;
-					}
-
-					shared_st.prev_char = ' ';
-					*shared_st.res_cur_pos = ' ';
-
-					shared_st.q++;
-					shared_st.q_cur_pos++;
-					continue;
-				}
-
-				{
-					char* p = shared_st.res_cur_pos - 2;
-
-					// suppress spaces before arithmetic operators
-					if (p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) && is_arithmetic_op(*shared_st.q)) {
-						if (*p == '?') {
-							shared_st.prev_char = *shared_st.q;
-							--shared_st.res_cur_pos;
-							*shared_st.res_cur_pos++ = *shared_st.q;
-
-							shared_st.q++;
-							shared_st.q_cur_pos++;
-							continue;
-						}
-					}
-					// suppress spaces before and after commas
-					if (
-						p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) &&
-						((*shared_st.q == ',') || (*p == ','))
-						) {
-						if (*shared_st.q == ',') {
-							--shared_st.res_cur_pos;
-							*shared_st.res_cur_pos++ = *shared_st.q;
-
-							shared_st.prev_char = ',';
-							shared_st.q++;
-							shared_st.q_cur_pos++;
-						}
-						else {
-							shared_st.prev_char = ',';
-							--shared_st.res_cur_pos;
-						}
-						continue;
-					}
-					// suppress spaces before closing brackets when grouping or mark is present
-					if (
-						p >= shared_st.res_init_pos && (*p == '.' || *p == '?') &&
-						is_space_char(shared_st.prev_char) && (*shared_st.q == ')')
-						) {
-						shared_st.prev_char = *shared_st.q;
-						--shared_st.res_cur_pos;
-						*shared_st.res_cur_pos++ = *shared_st.q;
-
-						shared_st.q++;
-						shared_st.q_cur_pos++;
-						continue;
-					}
-				}
-
-				// copy the current char
-				copy_next_char(&shared_st, &opts);
-			}
-		} else {
-			if (cur_st == st_cmnt_type_1) {
-				// by default, we don't copy the next char for comments
-				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_1(&opts, &shared_st, &c_t_1_st, fst_cmnt);
-				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_cmnt_type_2) {
-				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_2(&shared_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_cmnt_type_3) {
-				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_3(&shared_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_literal_string) {
-				shared_st.copy_next_char = 1;
-				cur_st = process_literal_string_space_rm(&shared_st, &literal_str_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_literal_number) {
-				shared_st.copy_next_char = 1;
-				cur_st = process_literal_digit_space_rm(&shared_st, &literal_digit_st, &opts);
-				if (cur_st == st_no_mark_found) {
-					literal_digit_st.first_digit = 1;
-					shared_st.copy_next_char = 1;
-					continue;
-				}
-			} else if (cur_st == st_dollar_quote_string) {
-				shared_st.copy_next_char = 1;
-				cur_st = process_dollar_quote_string(&shared_st, &dollar_str_st);
-				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
-					continue;
-				}
-			}
-
-			if (shared_st.copy_next_char) {
-				copy_next_char(&shared_st, &opts);
-			}
-			else {
-				// if we do not copy we skip the next char, but copy it to `prev_char`
-				shared_st.prev_char = *shared_st.q++;
-				shared_st.q_cur_pos++;
-			}
-		}
-	}
-
-	// remove all trailing whitespaces
-	// ===============================
-	//
-	// Final spaces left by comments which are never collapsed, ex:
-	//
-	// ```
-	// Q: `select 1.1   -- final_comment  \n`
-	// D: `select ?  `
-	//              ^ never collapsed
-	// ```
-	if (shared_st.res_cur_pos > shared_st.res_it_init_pos) {
-		char* wspace = shared_st.res_cur_pos - 1;
-		while (*wspace == ' ') {
-			wspace--;
-		}
-		wspace++;
-		*wspace = '\0';
-	}
-
-	// place the final null terminator
-	*shared_st.res_cur_pos = 0;
-
-	return res;
-}
