@@ -4809,11 +4809,26 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
-					(/* check warnings count here*/ true || 
+					(/* check warnings count here*/ true ||
 						pgsql_thread___query_cache_handle_warnings == 1)) { // no errors
 
+					/**
+					 * @brief Check if the query result should be cached based on cache_empty_result setting
+					 *
+					 * The cache_empty_result field in query rule has three possible values:
+					 * - 1: Always cache the result, regardless of whether it's empty or not
+					 * - 0: Cache only non-empty results (num_rows > 0). Empty resultsets are not cached.
+					 * - -1: Use global setting (thread->variables.query_cache_stores_empty_result)
+					 *       OR cache if result is non-empty (num_rows > 0)
+					 *
+					 * Previously, when cache_empty_result was set to 0, nothing was cached at all.
+					 * This fix adds support for caching non-empty results when cache_empty_result=0.
+					 *
+					 * @see Issue #5248: Setting cache_empty_result to "0" on individual mysql_query_rules doesn't work
+					 */
 					if (
-						(qpo->cache_empty_result == 1) || 
+						(qpo->cache_empty_result == 1) ||
+						(qpo->cache_empty_result == 0 && num_rows) ||
 							(
 								(qpo->cache_empty_result == -1) &&
 								(thread->variables.query_cache_stores_empty_result || num_rows)
