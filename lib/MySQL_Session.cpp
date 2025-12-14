@@ -56,6 +56,11 @@ using json = nlohmann::json;
 #define SELECT_VARIABLE_IDENTITY_LEN 17
 #define SELECT_VARIABLE_IDENTITY_LIMIT1 "SELECT @@IDENTITY LIMIT 1"
 #define SELECT_VARIABLE_IDENTITY_LIMIT1_LEN 25
+#define SELECT_MYSQL_VERSION "SELECT @@version"
+#define SELECT_MYSQL_VERSION_LEN 16
+#define SELECT_MYSQL_VERSION_FUNC "SELECT VERSION()"
+#define SELECT_MYSQL_VERSION_FUNC_LEN 16
+
 #define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
 #define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
@@ -7050,6 +7055,51 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// as a precaution, we reset cache_ttl
 			qpo->cache_ttl = 0;
 		}
+	}
+
+	// handle case, about SELECT_MYSQL_VERSION or SELECT VERSION()
+	if ((pkt->size==SELECT_MYSQL_VERSION_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION,(char *)pkt->ptr+5,pkt->size-5)==0) ||
+		(pkt->size==SELECT_MYSQL_VERSION_FUNC_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION_FUNC,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+		char buf2[32];
+		int l0=0;
+		if (pkt->size == SELECT_MYSQL_VERSION_LEN+5)
+			l0 = strlen(SELECT_MYSQL_VERSION);
+		else
+			l0 = strlen(SELECT_MYSQL_VERSION_FUNC);
+		memcpy(buf2, (char *)pkt->ptr + 5, l0);
+		buf2[l0]=0;
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		MySQL_Data_Stream *myds=client_myds;
+		MySQL_Protocol *myprot=&client_myds->myprot;
+		myds->DSS=STATE_QUERY_SENT_DS;
+		int sid=1;
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",33,31,MYSQL_TYPE_VAR_STRING,0,0,false,0,NULL); sid++;
+		myds->DSS=STATE_COLUMN_DEFINITION;
+
+		bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
+		char **p=(char **)malloc(sizeof(char*)*1);
+		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+		l[0]= strlen(mysql_thread___server_version);
+		p[0]=mysql_thread___server_version;
+		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+		myds->DSS=STATE_ROW;
+		if (deprecate_eof_active) {
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,0,0,setStatus,0,NULL,true); sid++;
+		} else {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
+		myds->DSS=STATE_SLEEP;
+		RequestEnd(NULL);
+		l_free(pkt->size,pkt->ptr);
+		free(p);
+		free(l);
+		return true;
 	}
 
 	// handle command KILL #860
