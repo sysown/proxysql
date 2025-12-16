@@ -293,7 +293,7 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			int no_digits_backup = pgsql_thread___query_digests_no_digits;
 			pgsql_thread___query_digests_no_digits = replace_digits;
 			int lowercase_backup = pgsql_thread___query_digests_lowercase;
-			pgsql_thread___query_digests_lowercase = lowercase_backup;
+			pgsql_thread___query_digests_lowercase = lowercase;
 			int replace_null_backup = pgsql_thread___query_digests_replace_null;
 			pgsql_thread___query_digests_replace_null = replace_null;
 			int keep_comment_backup = pgsql_thread___query_digests_keep_comment;

@@ -277,7 +277,7 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			int no_digits_backup = mysql_thread___query_digests_no_digits;
 			mysql_thread___query_digests_no_digits = replace_digits;
 			int lowercase_backup = mysql_thread___query_digests_lowercase;
-			mysql_thread___query_digests_lowercase = lowercase_backup;
+			mysql_thread___query_digests_lowercase = lowercase;
 			int replace_null_backup = mysql_thread___query_digests_replace_null;
 			mysql_thread___query_digests_replace_null = replace_null;
 			int keep_comment_backup = mysql_thread___query_digests_keep_comment;
