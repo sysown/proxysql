@@ -28,13 +28,6 @@ static inline char is_normal_char(char c)
 	return 0;
 }
 
-static inline bool is_alpha_or_underscore(char c)
-{
-	return (c >= 'A' && c <= 'Z') ||
-		(c >= 'a' && c <= 'z') ||
-		c == '_';
-}
-
 // token char - not table name string
 static inline char is_token_char(char c)
 {
