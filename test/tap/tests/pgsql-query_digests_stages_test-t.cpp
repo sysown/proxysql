@@ -877,7 +877,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	bool exec_crashing_tests = false; // NOT IMPLEMENTED YET
+	bool exec_crashing_tests = true;
 	bool exec_grouping_tests = true;
 	bool exec_regular_tests = true;
 	std::string tests_filter_str{};

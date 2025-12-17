@@ -768,5 +768,31 @@
 				"digest": "CREATE TABLE test_table (id SERIAL PRIMARY KEY,data JSONB NOT NULL,tags TEXT[] DEFAULT ?,created_at TIMESTAMPTZ DEFAULT NOW(),updated_at TIMESTAMPTZ,status TEXT CHECK (status IN (?,?,?)),metadata HSTORE,geodata GEOGRAPHY(POINT,?),CONSTRAINT valid_data CHECK (data ? ?)) WITH (fillfactor=?) TABLESPACE pg_default"
 			}
 		]
+	},
+	// ========================
+	// SECTION 31: DOUBLE QUOTE
+	// ========================
+	{
+		"description": "PostgreSQL double-quote",
+		"q": [
+			"select \"ARRAY[1,2,3]\""
+		],
+		"s1": "select \"ARRAY[1,2,3]\"",
+		"s2": "select \"ARRAY[1,2,3]\"",
+		"s3": "select \"ARRAY[1,2,3]\"",
+		"s4": "select \"ARRAY[1,2,3]\""
+	},
+	// ========================
+	// SECTION 32: DOUBLE QUOTE 2
+	// ========================
+	{
+		"description": "PostgreSQL double-quote 2",
+		"q": [
+			"select \"user\"\"s\""
+		],
+		"s1": "select \"user\"\"s\"",
+		"s2": "select \"user\"\"s\"",
+		"s3": "select \"user\"\"s\"",
+		"s4": "select \"user\"\"s\""
 	}
 ]

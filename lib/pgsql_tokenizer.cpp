@@ -183,7 +183,8 @@ enum p_st {
 	st_pg_typecast = 7,
 	st_literal_prefix_type = 8,
 	st_replace_boolean = 9,
-	st_array_literal = 10
+	st_array_literal = 10,
+	st_quoted_identifier = 11
 };
 
 /**
@@ -243,7 +244,7 @@ typedef struct cmnt_type_1_st {
 } cmnt_type_1_st;
 
 /**
- * @brief State used for parsing 'literal strings' values, i.e: 'foo', "bar", etc..
+ * @brief State used for parsing 'literal strings' values, i.e: 'foo', etc..
  */
 typedef struct literal_string_st {
 	/**
@@ -256,6 +257,15 @@ typedef struct literal_string_st {
 	const char* q_start_pos;
 	bool is_unicode;  /* set only for U&'...' */
 } literal_string_st;
+
+/**
+ * @brief State used for parsing 'quoted identifier' values, i.e: "foo", etc..
+ */
+typedef struct quoted_identifier_st {
+	int delim_num;           // 0 = not started, 1 = in progress
+	char delim_char;         // Always '"' for PostgreSQL
+	const char* q_start_pos; // Start position in query
+} quoted_identifier_st;
 
 /**
  * @brief State used for parsing 'literal digit' values, e.g: 84, 0x100, 1E-10, etc...
@@ -306,6 +316,7 @@ typedef struct stage_1_st {
 	struct dollar_quote_string_st dollar_quote_str_st;
 	struct pg_typecast_st pg_tc_st;
 	struct array_literal_st array_st;
+	struct quoted_identifier_st quoted_iden_st;
 	/* @brief Holds the previous iteration parsing ending position. */
 	char* pre_it_pos;
 	/**
@@ -441,8 +452,12 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 		}
 	}
 	// string - single-quote is string in both
-	else if (*shared_st->q == '\'') {
+	else if (is_token_char(shared_st->prev_char) && *shared_st->q == '\'') {
 		st = st_literal_string;
+	}
+	// double-quoted identifier
+	else if (is_token_char(shared_st->prev_char) && *shared_st->q == '"') {
+		st = st_quoted_identifier;
 	}
 	// may be digit - start with digit
 	else if (is_token_char(prev_char) && is_digit_char(*shared_st->q)) {
@@ -681,7 +696,7 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	}
 
 	// first comment hasn't finished, we are yet copying it
-	if (c_t_1_st->fst_cmnt_end == 0) {
+	if (c_t_1_st->fst_cmnt_end == 0 && c_t_1_st->nest_level == 1) {
 		// copy the char into 'fst_cmnt' buffer
 		if (c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
 			if (*fst_cmnt == NULL) {
@@ -696,8 +711,8 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	}
 
 	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-		// Decrement nesting level when we encounter */
-		c_t_1_st->nest_level--;
+		// Decrement nesting level when we encounter 
+		if (c_t_1_st->nest_level > 0) c_t_1_st->nest_level--;
 
 		// Only end the comment when we're back at nest level 0
 		if (c_t_1_st->nest_level == 0) {
@@ -771,12 +786,13 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			c_t_1_st->is_cmd = 0;
 
 			// Finalize first comment if we were tracking it
-			if (c_t_1_st->fst_cmnt_end == 0) {
-				c_t_1_st->fst_cmnt_end = 1;
-				if (*fst_cmnt != NULL && c_t_1_st->fst_cmnt_len > 0) {
-					char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-					*c_end = 0;
+			if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
+				if (c_t_1_st->fst_cmnt_len >= 2) {
+					c_t_1_st->fst_cmnt_len -= 2;
 				}
+				char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+				*c_end = 0;
+				c_t_1_st->fst_cmnt_end = 1;
 			}
 		}
 		else {
@@ -795,6 +811,20 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 		// skip ending mark for comment for next iteration
 		shared_st->q_cur_pos += 1;
 		shared_st->q++;
+	}
+
+	// Check if we've reached the end of query
+	if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
+		// Finalize first comment if we were tracking it
+		if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
+			// ensure there is a terminator at logical end
+			char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+			*c_end = 0;
+			c_t_1_st->fst_cmnt_end = 1;
+		}
+		// reset nesting so parser isn't left in the middle of a comment
+		c_t_1_st->nest_level = 0;
+		return st_no_mark_found;
 	}
 
 	return next_st;
@@ -1590,7 +1620,7 @@ enum p_st process_array_literal(shared_st* shared_st, array_literal_st* array_st
 			while (shared_st->q_cur_pos < shared_st->q_len) {
 				// Check if we have enough characters for the closing delimiter
 				if (*shared_st->q == '$' &&
-					shared_st->q_cur_pos + tag_len + 1 < shared_st->q_len) {
+					shared_st->q_cur_pos + tag_len + 1 < (size_t)shared_st->q_len) {
 
 					// Check if this matches our opening tag
 					if (memcmp(shared_st->q + 1, tag_start, tag_len) == 0 &&
@@ -1682,6 +1712,46 @@ enum p_st process_literal_prefix_type(shared_st* s, literal_string_st* str_st) {
 
 	if (next_state == st_literal_prefix_type) {
 		next_state = process_literal_string(s, str_st);
+	}
+
+	return next_state;
+}
+
+/**
+ * @brief Handles the processing state 'st_quoted_identifier'.
+ * @details State 'st_quoted_identifier' copies the quoted identifier as-is to the result buffer.
+ *   In PostgreSQL, double quotes are used for quoted identifiers that can contain special characters,
+ *   preserve case, or use reserved words as identifiers.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param str_st The literal string parsing state, holds the information so far found about the state.
+ *
+ * @return The next processing state, it could be either:
+ *   - 'st_quoted_identifier' if the quoted identifier hasn't yet completed to be parsed.
+ *   - 'st_no_mark_found' if the quoted identifier has completed to be parsed.
+ */
+static __attribute__((always_inline)) inline
+enum p_st process_quoted_identifier(shared_st* shared_st, quoted_identifier_st* str_st) {
+	enum p_st next_state = st_quoted_identifier;
+
+	// process the first delimiter
+	if (str_st->delim_num == 0) {
+		// store found delimiter
+		str_st->q_start_pos = shared_st->q;
+		str_st->delim_char = *shared_st->q; // Should be '"'
+		str_st->delim_num = 1;
+		return next_state;
+	}
+
+	// Check for closing quote
+	if (*shared_st->q == '"') {
+		// Reset the quoted identifier state
+		str_st->delim_char = 0;
+		str_st->delim_num = 0;
+		str_st->q_start_pos = 0;
+
+		// Exit the quoted identifier parsing state
+		next_state = st_no_mark_found;
 	}
 
 	return next_state;
@@ -1816,7 +1886,7 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 	dollar_quote_string_st* const dollar_quote_str_st = &stage_1_st->dollar_quote_str_st;
 	pg_typecast_st* const pg_tc_st = &stage_1_st->pg_tc_st;
 	array_literal_st* const array_st = &stage_1_st->array_st;
-
+	quoted_identifier_st* const quoted_identifier_str_st = &stage_1_st->quoted_iden_st;
 
 	// starting state can belong to a previous iteration
 	enum p_st cur_st = shared_st->st;
@@ -1909,6 +1979,14 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 					// NOTE: Not required to copy since spaces are not going to be processed here
 					shared_st->copy_next_char = 0;
 					cur_st = process_literal_string(shared_st, literal_str_st);
+					if (cur_st == st_no_mark_found) {
+						shared_st->copy_next_char = 1;
+						continue;
+					}
+					break;
+				case st_quoted_identifier:
+					shared_st->copy_next_char = 1; // We copy characters in this state
+					cur_st = process_quoted_identifier(shared_st, quoted_identifier_str_st);
 					if (cur_st == st_no_mark_found) {
 						shared_st->copy_next_char = 1;
 						continue;
@@ -3087,12 +3165,14 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	struct dollar_quote_string_st dollar_str_st;
 	struct pg_typecast_st typecast_st;
 	struct array_literal_st array_st;
+	struct quoted_identifier_st quoted_iden_st;
 	memset(&c_t_1_st, 0, sizeof(struct cmnt_type_1_st));
 	memset(&literal_str_st, 0, sizeof(struct literal_string_st));
 	memset(&literal_digit_st, 0, sizeof(struct literal_digit_st));
 	memset(&dollar_str_st, 0, sizeof(struct dollar_quote_string_st));
 	memset(&typecast_st, 0, sizeof(struct pg_typecast_st));
 	memset(&array_st, 0, sizeof(struct array_literal_st));
+	memset(&quoted_iden_st, 0, sizeof(struct quoted_identifier_st));
 
 	enum p_st cur_st = st_no_mark_found;
 
