@@ -1559,6 +1559,10 @@ __internal_loop:
 		}
 		if (qr->cache_empty_result >= 0) {
 			// Note: negative value means this rule doesn't change
+			// cache_empty_result values:
+			// -1: Use global setting (query_cache_stores_empty_result)
+			//  0: Do NOT cache empty resultsets, but cache non-empty resultsets
+			//  1: Always cache resultsets (both empty and non-empty)
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
 			ret->cache_empty_result=qr->cache_empty_result;
 		}
