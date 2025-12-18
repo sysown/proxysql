@@ -153,6 +153,7 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_hostgroup_locked_set_cmds,   p_th_counter::hostgroup_locked_set_cmds,        (char *)"hostgroup_locked_set_cmds" },
 	{ st_var_hostgroup_locked_queries,    p_th_counter::hostgroup_locked_queries,         (char *)"hostgroup_locked_queries" },
 	{ st_var_unexpected_com_quit,         p_th_counter::mysql_unexpected_frontend_com_quit,(char *)"mysql_unexpected_frontend_com_quit" },
+	{ st_var_unexpected_com_ping,         p_th_counter::mysql_unexpected_frontend_com_ping,(char *)"mysql_unexpected_frontend_com_ping" },
 	{ st_var_unexpected_packet,           p_th_counter::mysql_unexpected_frontend_packets,(char *)"mysql_unexpected_frontend_packets" },
 	{ st_var_queries_with_max_lag_ms__total_wait_time_us , p_th_counter::queries_with_max_lag_ms__total_wait_time_us,  (char *)"queries_with_max_lag_ms__total_wait_time_us" },
 	{ st_var_queries_with_max_lag_ms__delayed , p_th_counter::queries_with_max_lag_ms__delayed,  (char *)"queries_with_max_lag_ms__delayed" },
@@ -748,6 +749,12 @@ th_metrics_map = std::make_tuple(
 			p_th_counter::queries_with_max_lag_ms__total_wait_time_us,
 			"proxysql_queries_with_max_lag__total_wait_time_total",
 			"Total waited time due to connection selection because of 'max_lag' annotation.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_unexpected_frontend_com_ping,
+			"proxysql_mysql_unexpected_frontend_com_ping_total",
+			"Unexpected 'COM_PING' received from the client.",
 			metric_tags {}
 		),
 		std::make_tuple (

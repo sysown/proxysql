@@ -7768,6 +7768,37 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 		}
 		myds->free_mysql_real_query();
 	}
+
+	// NOTE: Unexpected-Ping-Handling: Section 2-2
+	///////////////////////////////////////////////////////////////////////////////////////////////
+	// Implements part-2 of the temporary workaround for the handling of unexpected 'COM_PING' packets
+	// received during query processing, while a resultset is yet being streamed to the client. We send a
+	// number of OK packets matching the 'queued' pings. This should ALWAYS be done before the session status
+	// goes back to 'WAITING_CLIENT_DATA', otherwise the flow between client-server could be compromised. By
+	// always sending the OK packets before this transisiton we ensure that the client doesn't hang waiting
+	// for response.
+	//
+	// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
+	// it will make the 'unexp_com_pings' field obsolete.
+	///////////////////////////////////////////////////////////////////////////////////////////////
+	if (client_myds->unexp_com_pings) {
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+
+		while (client_myds->unexp_com_pings) {
+			proxy_warning("Sending OK packet for unexpected COM_PING packet\n");
+
+			client_myds->pkt_sid += 1;
+			uint16_t st = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
+			if (autocommit) { st |= SERVER_STATUS_AUTOCOMMIT; }
+
+			client_myds->myprot.generate_pkt_OK(true, NULL, NULL, client_myds->pkt_sid, 0, 0, st, 0, NULL);
+			client_myds->unexp_com_pings--;
+		}
+
+		client_myds->DSS = STATE_SLEEP;
+	}
+	///////////////////////////////////////////////////////////////////////////
+
 	if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 		// reset status of the session
 		status=WAITING_CLIENT_DATA;

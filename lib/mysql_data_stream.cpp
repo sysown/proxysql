@@ -475,6 +475,38 @@ void MySQL_Data_Stream::shut_hard() {
  */
 void MySQL_Data_Stream::check_data_flow() {
 	if ( (PSarrayIN->len || queue_data(queueIN) ) && ( PSarrayOUT->len || queue_data(queueOUT) ) ){
+		// NOTE: Unexpected-Ping-Handling: Section 1-2
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		// Implements part-1 of the temporary workaround for the handling of unexpected 'COM_PING' packets
+		// received during query processing, while a resultset is yet being streamed to the client. Received
+		// 'COM_PING' packets are queued in the form of a counter. This counter is later used to sent the
+		// corresponding number of 'OK' packets to the client. This should be ALWAYS done before
+		// 'MySQL_Session' transitions back to 'WAITING_CLIENT_DATA'.
+		//
+		// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
+		// it will make the 'unexp_com_pings' field obsolete.
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		if (PSarrayIN->len >= 1 && PSarrayIN->pdata[0].size == 5) {
+			const uint8_t c = *(static_cast<uint8_t*>(PSarrayIN->pdata[0].ptr) + sizeof(mysql_hdr));
+
+			if (c == _MYSQL_COM_PING && this->sess->status != WAITING_CLIENT_DATA) {
+				proxy_warning("Handling unexpected COM_PING packet\n");
+
+				// Queue the COM_PING for later handling at MySQL_Session level
+				this->unexp_com_pings += 1;
+				this->sess->thread->status_variables.stvar[st_var_unexpected_com_ping] += 1;
+
+				// Discard the packet before session attempts to handle it
+				PtrSize_t pkt {};
+				PSarrayIN->remove_index(0, &pkt);
+				l_free(pkt.size, pkt.ptr);
+
+				// Return without further checks
+				return;
+			}
+		}
+		///////////////////////////////////////////////////////////////////////////////////////////////
+
 		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
 			// Permanent fast-forward sessions: log warning but continue
 			proxy_warning("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, queue_data(queueIN), PSarrayIN->len, queue_data(queueOUT), PSarrayOUT->len);
