@@ -257,8 +257,8 @@ public:
 	void conn_register(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
-		MYSQL *my = mmsd->mysql;
 		pthread_mutex_lock(&m2);
+		MYSQL* my = mmsd->mysql;
 __conn_register_label:
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);

@@ -794,5 +794,52 @@
 		"s2": "select \"user\"\"s\"",
 		"s3": "select \"user\"\"s\"",
 		"s4": "select \"user\"\"s\""
+	},
+	// ========================
+	// SECTION 32: DOUBLE QUOTE 2
+	// ========================
+	{
+		"description": "PostgreSQL double-quote 2",
+		"q": [
+			"select \"user\"\"s\""
+		],
+		"s1": "select \"user\"\"s\"",
+		"s2": "select \"user\"\"s\"",
+		"s3": "select \"user\"\"s\"",
+		"s4": "select \"user\"\"s\""
+	},
+	// ========================
+	// SECTION 33: KEEP COMMENTS
+	// ========================
+	{
+		"description": "Keep Comments",
+		"q": "SELECT /*test*/ 1",
+		"mz": [
+			{
+				"digest_max_size": 512,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_null": false,
+				"keep_comment": true,
+				"digest": "SELECT /*test*/ ?"
+			}
+		]
+	},
+	// ========================
+	// SECTION 33: NESTED KEEP COMMENTS
+	// ========================
+	{
+		"description": "Nested Keep Comments",
+		"q": "SELECT /* outer /* inner */ outer */ 1",
+		"mz": [
+			{
+				"digest_max_size": 512,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_null": false,
+				"keep_comment": true,
+				"digest": "SELECT /* outer /* inner */ outer */ ?"
+			}
+		]
 	}
 ]

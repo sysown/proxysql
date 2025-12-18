@@ -429,5 +429,17 @@
 				"lowercase": 1
 			}
 		]
+	},
+	{
+		"q_path": "tokenizer_payloads/v1_crashing_payload_10.txt",
+		"mz": [
+			{
+				"digest_max_size": 100,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_digits": 1,
+				"lowercase": 1
+			}
+		]
 	}
 ]
