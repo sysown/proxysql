@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <assert.h>
 #include "c_tokenizer.h"
 
 extern __thread int  pgsql_thread___query_digests_max_query_length;
@@ -225,8 +226,6 @@ typedef struct shared_st {
  * @brief State used for parsing 'type_1' comments, i.e: /\* *\/.
  */
 typedef struct cmnt_type_1_st {
-	/* @brief Flag to announce if the found comment is a 'cmd' comment. */
-	bool is_cmd;
 	/* @brief Counter holding the length of the 'cmd' comment currently being processed. */
 	int cur_cmd_cmnt_len;
 	/**
@@ -573,7 +572,7 @@ void copy_next_char(shared_st* shared_st, const options* opts) {
 	inc_proc_pos(shared_st);
 }
 
-static char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
+static thread_local char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 
 /**
  * @brief Safer version of 'is_digit_string' performing boundary checks.
@@ -649,15 +648,12 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	enum p_st next_st = st_cmnt_type_1;
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
-	// initial mark "/*|/*!" detection
+	// initial mark "/*" detection
 	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
 	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
-		c_t_1_st->cur_cmd_cmnt_len = 0;
 
-		// check length before accessing beyond 'q_cur_pos + 1'
-		if (shared_st->q_cur_pos != (shared_st->q_len-2) && *(shared_st->q+2) == '!') {
-			c_t_1_st->is_cmd = 1;
-		}
+		if (c_t_1_st->nest_level == 0) 
+			c_t_1_st->cur_cmd_cmnt_len = 0;
 
 		// Increment nesting level /*
 		c_t_1_st->nest_level++;
@@ -670,12 +666,32 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			c_t_1_st->cur_cmd_cmnt_len++;
 		}
 
-		// discard processed "/*" or "/*!"
-		shared_st->q += 2 + c_t_1_st->is_cmd;
-		shared_st->q_cur_pos += 2 + c_t_1_st->is_cmd;
+		if (c_t_1_st->fst_cmnt_end == 0 && c_t_1_st->nest_level > 1 &&
+			c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 2) {
+			assert(*fst_cmnt);
+			char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+			*next_fst_cmnt_char = *(shared_st->q);
+			next_fst_cmnt_char++;
+			*next_fst_cmnt_char = *(shared_st->q + 1);
+			next_fst_cmnt_char++;
+			c_t_1_st->fst_cmnt_len += 2;
+		}
+
+		// discard processed "/*"
+		shared_st->q += 2;
+		shared_st->q_cur_pos += 2;
 
 		// v1_crashing_payload_04
 		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
+			if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
+				// ensure there is a terminator at logical end
+				char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+				*c_end = 0;
+				c_t_1_st->fst_cmnt_end = 1;
+			}
+			if (opts->keep_comment) {
+				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
+			}
 			c_t_1_st->nest_level = 0;
 			return st_no_mark_found;
 		}
@@ -686,8 +702,8 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 //  into the supplied 'fst_cmnt' memory? Or should they be considered for further processing?
 //  {
 
-	// we are parsing a "/*!" comment
-	if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
+	// we are parsing a "/*" comment
+	if (opts->keep_comment) {
 		// copy the char into 'cur_cmd_cmnt'
 		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
 			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *shared_st->q;
@@ -696,75 +712,38 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	}
 
 	// first comment hasn't finished, we are yet copying it
-	if (c_t_1_st->fst_cmnt_end == 0 && c_t_1_st->nest_level == 1) {
-		// copy the char into 'fst_cmnt' buffer
-		if (c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
-			if (*fst_cmnt == NULL) {
-				// initialize the 'first_comment' and set a final NULL terminator for safety
-				*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
-				*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
-			}
-			char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-			*next_fst_cmnt_char = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
-			c_t_1_st->fst_cmnt_len++;
+	if (c_t_1_st->fst_cmnt_end == 0 && 
+		c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
+		if (*fst_cmnt == NULL) {
+			// initialize the 'first_comment' and set a final NULL terminator for safety
+			*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
+			*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
 		}
+		char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+		*next_fst_cmnt_char = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
+		c_t_1_st->fst_cmnt_len++;
 	}
 
 	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
 		// Decrement nesting level when we encounter 
-		if (c_t_1_st->nest_level > 0) c_t_1_st->nest_level--;
+		if (c_t_1_st->nest_level > 0) 
+			c_t_1_st->nest_level--;
 
 		// Only end the comment when we're back at nest level 0
 		if (c_t_1_st->nest_level == 0) {
-			if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
+			if (opts->keep_comment) {
 				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
-				if (c_t_1_st->cur_cmd_cmnt_len >= 2) {
-					// we are not interested in copying the final '*/' for the comment
-					if (opts->keep_comment == false) {
-						c_t_1_st->cur_cmd_cmnt_len -= 2;
-					}
-					cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
+				int res_free_space = res_final_pos - shared_st->res_cur_pos;
+				int comment_size = c_t_1_st->cur_cmd_cmnt_len;
+				
+				int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
+				memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+				shared_st->res_cur_pos += copy_length;
 
-					int cmnt_annot_len = 0;
-					bool end = 0;
-					// count the number of chars found before annotation ends
-					while (end == 0 && cmnt_annot_len < c_t_1_st->cur_cmd_cmnt_len) {
-						if (cur_cmd_cmnt[cmnt_annot_len] == '/' ||
-							cur_cmd_cmnt[cmnt_annot_len] == '*' ||
-							cur_cmd_cmnt[cmnt_annot_len] == '!' ||
-							cur_cmd_cmnt[cmnt_annot_len] == ' ' ||
-							is_digit_char(cur_cmd_cmnt[cmnt_annot_len])) {
-							cmnt_annot_len += 1;
-						} else {
-							end = 1;
-						}
-					}
-
-					// copy the cmd comment minus the annotation and the marks
-					if (end) {
-						int res_free_space = res_final_pos - shared_st->res_cur_pos;
-						int comment_size = 0;
-						if (opts->keep_comment) {
-							comment_size = c_t_1_st->cur_cmd_cmnt_len;
-						} else {
-							comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
-						}
-						int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
-						if (opts->keep_comment) {
-							memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
-						} else {
-							memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
-						}
-						shared_st->res_cur_pos += copy_length;
-
-						if (*(shared_st->res_cur_pos - 1) != ' ' && shared_st->res_cur_pos != res_final_pos) {
-							*shared_st->res_cur_pos++ = ' ';
-						}
-					}
+				if (*(shared_st->res_cur_pos - 1) != ' ' && shared_st->res_cur_pos != res_final_pos) {
+					*shared_st->res_cur_pos++ = ' ';
 				}
-
 				// Re-initialize the comment state
-				c_t_1_st->is_cmd = 0;
 				c_t_1_st->cur_cmd_cmnt_len = 0;
 			}
 
@@ -783,7 +762,6 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			// back to main shared_st->query parsing state
 			shared_st->prev_char = ' ';
 			next_st = st_no_mark_found;
-			c_t_1_st->is_cmd = 0;
 
 			// Finalize first comment if we were tracking it
 			if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
@@ -794,23 +772,13 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 				*c_end = 0;
 				c_t_1_st->fst_cmnt_end = 1;
 			}
-		}
-		else {
+
+			shared_st->q_cur_pos += 1;
+			shared_st->q++;
+		} else {
 			// Still in nested comment - don't exit comment state yet
 			next_st = st_cmnt_type_1;
-
-			// Still need to track the comment content if keeping comments
-			if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
-				if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
-					cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = '/';
-					c_t_1_st->cur_cmd_cmnt_len++;
-				}
-			}
 		}
-
-		// skip ending mark for comment for next iteration
-		shared_st->q_cur_pos += 1;
-		shared_st->q++;
 	}
 
 	// Check if we've reached the end of query
@@ -821,6 +789,9 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
 			*c_end = 0;
 			c_t_1_st->fst_cmnt_end = 1;
+		}
+		if (opts->keep_comment) {
+			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
 		}
 		// reset nesting so parser isn't left in the middle of a comment
 		c_t_1_st->nest_level = 0;
