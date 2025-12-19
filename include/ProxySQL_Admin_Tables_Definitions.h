@@ -298,6 +298,19 @@
 #define STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS "CREATE TABLE stats_pgsql_free_connections (fd INT NOT NULL , hostgroup INT NOT NULL , srv_host VARCHAR NOT NULL , srv_port INT NOT NULL , user VARCHAR NOT NULL , database VARCHAR , init_connect VARCHAR , time_zone VARCHAR , sql_mode VARCHAR , idle_ms INT , statistics VARCHAR , pgsql_info VARCHAR)"
 #define STATS_SQLITE_TABLE_PGSQL_USERS "CREATE TABLE stats_pgsql_users (username VARCHAR PRIMARY KEY , frontend_connections INT NOT NULL , frontend_max_connections INT NOT NULL)"
 #define STATS_SQLITE_TABLE_PGSQL_PROCESSLIST "CREATE TABLE stats_pgsql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , database VARCHAR , cli_host VARCHAR , cli_port INT , hostgroup INT , l_srv_host VARCHAR , l_srv_port INT , srv_host VARCHAR , srv_port INT , backend_pid INT , backend_state VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR , status_flags INT , extended_info VARCHAR)"
+/**
+ * @brief PostgreSQL `pg_stat_activity`‑compatible view.
+ *
+ * This is a SQL VIEW, not a table. It provides a `pg_stat_activity`‑like
+ * interface to the data stored in `stats_pgsql_processlist`. Because it is a
+ * view, attempting to execute `DELETE` on it will fail with SQLite error:
+ * `"cannot modify stats_pgsql_stat_activity because it is a view"`.
+ *
+ * @note This view must be excluded from any bulk‑delete operations on
+ *       statistics tables (e.g., in `ProxySQL_Admin::vacuum_stats()`).
+ *       Deleting rows from the underlying `stats_pgsql_processlist` table
+ *       automatically clears the view's content.
+ */
 #define STATS_SQLITE_TABLE_PGSQL_STAT_ACTIVITY "CREATE VIEW stats_pgsql_stat_activity AS SELECT ThreadID AS thread_id, database AS datname, SessionID AS pid, user AS usename, cli_host AS client_addr, cli_port AS client_port, hostgroup, l_srv_host, l_srv_port, srv_host, srv_port, backend_pid, backend_state AS state, command, time_ms AS duration_ms, info as query, status_flags, extended_info FROM stats_pgsql_processlist"
 #define STATS_SQLITE_TABLE_PGSQL_ERRORS "CREATE TABLE stats_pgsql_errors (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , database VARCHAR NOT NULL , sqlstate VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, database, sqlstate) )"
 #define STATS_SQLITE_TABLE_PGSQL_ERRORS_RESET "CREATE TABLE stats_pgsql_errors_reset (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , database VARCHAR NOT NULL , sqlstate VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, database, sqlstate) )"
