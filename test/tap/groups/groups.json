@@ -109,6 +109,7 @@
   "reg_test__ssl_client_busy_wait-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "reg_test_stmt_resultset_err_no_rows_libmysql-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "reg_test_stmt_inv_param_offset-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],  
+  "reg_test_unexp_ping_pkt-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],  
   "reg_test_stmt_resultset_err_no_rows_php-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "reg_test_stmt_resultset_err_no_rows-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "savepoint-3749-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
