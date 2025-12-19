@@ -841,5 +841,22 @@
 				"digest": "SELECT /* outer /* inner */ outer */ ?"
 			}
 		]
+	},
+	// ========================
+	// SECTION 34: MULTIPLE COMMENTS [KEEP COMMENTS]
+	// ========================
+	{
+		"description": "Multiple Comments [Keep Comments]",
+		"q": "SELECT /* comment 1 */ '1', /*comment 2*/ '2', /*comment 3*/ '3'",
+		"mz": [
+			{
+				"digest_max_size": 512,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_null": false,
+				"keep_comment": true,
+				"digest": "SELECT /* comment 1 */ ?,/*comment 2*/?,/*comment 3*/ ?"
+			}
+		]
 	}
 ]
