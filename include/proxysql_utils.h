@@ -332,4 +332,14 @@ static inline void set_thread_name(const char(&name)[LEN], const bool en = true)
 #endif
 }
 
+/**
+ * @brief Gets the client address stored in 'client_addr' member as
+ *   an string if available. If member 'client_addr' is NULL, returns an
+ *   empty string.
+ *
+ * @return Either an string holding the string representation of internal
+ *   member 'client_addr', or empty string if this member is NULL.
+ */
+std::string get_client_addr(struct sockaddr* client_addr);
+
 #endif

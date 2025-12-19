@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #include <functional>
 #include <vector>
 
+#include "proxysql_utils.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "prometheus_helpers.h"
 #define MYSQL_THREAD_IMPLEMENTATION
@@ -2582,43 +2583,6 @@ void MySQL_Threads_Handler::stop_listeners() {
 		listener_del((char *)token);
 	}
 	free_tokenizer( &tok );
-}
-
-/**
- * @brief Gets the client address stored in 'client_addr' member as
- *   an string if available. If member 'client_addr' is NULL, returns an
- *   empty string.
- *
- * @return Either an string holding the string representation of internal
- *   member 'client_addr', or empty string if this member is NULL.
- */
-static std::string get_client_addr(struct sockaddr* client_addr) {
-	char buf[INET6_ADDRSTRLEN];
-	std::string str_client_addr {};
-
-	if (client_addr == NULL) {
-		return str_client_addr;
-	}
-
-	switch (client_addr->sa_family) {
-		case AF_INET: {
-			struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_addr;
-			inet_ntop(client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-			str_client_addr = std::string { buf };
-			break;
-		}
-		case AF_INET6: {
-			struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_addr;
-			inet_ntop(client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-			str_client_addr = std::string { buf };
-			break;
-		}
-		default:
-			str_client_addr = std::string { "localhost" };
-			break;
-	}
-
-	return str_client_addr;
 }
 
 MySQL_Client_Host_Cache_Entry MySQL_Threads_Handler::find_client_host_cache(struct sockaddr* client_sockaddr) {

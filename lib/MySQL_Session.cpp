@@ -7784,15 +7784,24 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 	if (client_myds->unexp_com_pings) {
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 
-		while (client_myds->unexp_com_pings) {
-			proxy_warning("Sending OK packet for unexpected COM_PING packet\n");
+		if (client_myds->unexp_com_pings) {
+			const string cli_addr { get_client_addr(this->client_myds->client_addr) };
 
-			client_myds->pkt_sid += 1;
-			uint16_t st = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
-			if (autocommit) { st |= SERVER_STATUS_AUTOCOMMIT; }
+			while (client_myds->unexp_com_pings) {
+				proxy_warning(
+					"Sending OK packet for unexpected COM_PING packet   client_addr=\"%s\"\n",
+					cli_addr.c_str()
+				);
 
-			client_myds->myprot.generate_pkt_OK(true, NULL, NULL, client_myds->pkt_sid, 0, 0, st, 0, NULL);
-			client_myds->unexp_com_pings--;
+				client_myds->pkt_sid += 1;
+				uint16_t st = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
+				if (autocommit) { st |= SERVER_STATUS_AUTOCOMMIT; }
+
+				client_myds->myprot.generate_pkt_OK(
+					true, NULL, NULL, client_myds->pkt_sid, 0, 0, st, 0, NULL
+				);
+				client_myds->unexp_com_pings--;
+			}
 		}
 
 		client_myds->DSS = STATE_SLEEP;

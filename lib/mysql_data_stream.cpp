@@ -490,7 +490,11 @@ void MySQL_Data_Stream::check_data_flow() {
 			const uint8_t c = *(static_cast<uint8_t*>(PSarrayIN->pdata[0].ptr) + sizeof(mysql_hdr));
 
 			if (c == _MYSQL_COM_PING && this->sess->status != WAITING_CLIENT_DATA) {
-				proxy_warning("Handling unexpected COM_PING packet\n");
+				const string cli_addr { get_client_addr(this->client_addr) };
+				proxy_warning(
+					"Handling unexpected COM_PING packet   client_addr=\"%s\" sess_status=%d myds_status=%d\n",
+					cli_addr.c_str(), this->sess->status, this->DSS
+				);
 
 				// Queue the COM_PING for later handling at MySQL_Session level
 				this->unexp_com_pings += 1;
