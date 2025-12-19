@@ -519,7 +519,7 @@ void copy_next_char(shared_st* shared_st, const options* opts) {
 	inc_proc_pos(shared_st);
 }
 
-static char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
+static thread_local char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 
 /**
  * @brief Safer version of 'is_digit_string' performing boundary checks.
