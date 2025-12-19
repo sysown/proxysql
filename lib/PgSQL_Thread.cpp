@@ -4425,6 +4425,18 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			pta[1] = buf;
 			result->add_row(pta);
 		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_ssl_connections_OK";
+			sprintf(buf, "%lu", GloPgMon->ssl_connections_OK);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_non_ssl_connections_OK";
+			sprintf(buf, "%lu", GloPgMon->non_ssl_connections_OK);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
 		/*
 		{
 			pta[0] = (char*)"MySQL_Monitor_replication_lag_check_OK";
