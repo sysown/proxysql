@@ -400,7 +400,7 @@ int set_admin_global_variable(MYSQL *mysql, const string& var_name, const string
 int get_server_version(MYSQL *mysql, string& version) {
 	char query[128];
 
-	if (mysql_query(mysql, "select @@version")) {
+	if (mysql_query(mysql, "select /* set_testing */ @@version")) {
 		fprintf(stderr, "Error %d, %s\n",
 				mysql_errno(mysql), mysql_error(mysql));
 		return exit_status();
