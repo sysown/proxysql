@@ -5191,7 +5191,7 @@ bool PgSQL_Session::handle_command_query_kill(PtrSize_t* pkt) {
 		if (mc->userinfo && mc->userinfo->username) {
 			if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_CANCEL_BACKEND || 
 				CurrentQuery.PgQueryCmd == PGSQL_QUERY_TERMINATE_BACKEND) {
-				char* qu = query_strip_comments((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength,
+				char* qu = pgsql_query_strip_comments((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength,
 					pgsql_thread___query_digests_lowercase);
 				string nq = string(qu, strlen(qu));
 				re2::RE2::Options* opt2 = new re2::RE2::Options(RE2::Quiet);
