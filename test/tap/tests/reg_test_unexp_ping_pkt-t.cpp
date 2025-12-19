@@ -549,13 +549,13 @@ int main(int argc, const char* argv[]) {
 		return EXIT_FAILURE;
 	}
 
-	diag("Prepare test data; create testing table");
+	diag("Prepare server defaults; increasing packet limits");
 	{
 		MYSQL* proxy = mysql_init(NULL);
 
 		if (
 			!mysql_real_connect(
-				proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0
+				proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.mysql_port, NULL, 0
 			)
 		) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
@@ -570,9 +570,30 @@ int main(int argc, const char* argv[]) {
 		MYSQL_QUERY_T(proxy,
 			 ("/* hostgroup=0 */ SET GLOBAL max_allowed_packet=" + std::to_string(recvbuf * 1000)).c_str()
 		);
+
+		mysql_close(proxy);
+	}
+
+	diag("Prepare test data; create testing table");
+	{
+		MYSQL* proxy = mysql_init(NULL);
+
+		if (
+			!mysql_real_connect(
+				proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.mysql_port, NULL, 0
+			)
+		) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			return EXIT_FAILURE;
+		}
+
+		int recvbuf { 0 };
+		socklen_t recvbuf_len { sizeof(recvbuf) } ;
+		getsockopt(proxy->net.fd, SOL_SOCKET, SO_RCVBUF, &recvbuf, &recvbuf_len);
+		diag("MySQL socket options   SO_RCVBUF=%d", recvbuf);
+
 		MYSQL_QUERY_T(proxy, "CREATE DATABASE IF NOT EXISTS test");
 		MYSQL_QUERY_T(proxy, "CREATE TABLE IF NOT EXISTS test.unexp_ping_rnd (string LONGTEXT)");
-
 		MYSQL_QUERY_T(proxy, "DELETE FROM test.unexp_ping_rnd");
 
 		// NOTE: Theoretically 'recvbuf * 4' should be enough to hold the read on client side, and being able
@@ -627,6 +648,24 @@ int main(int argc, const char* argv[]) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
+
+	diag("Cleanup 'connection_pool' to ensure reload of 'max_allowed_packet'");
+	MYSQL_QUERY_T(admin, "UPDATE mysql_servers SET max_connections=0 WHERE hostgroup_id IN (0, 1)");
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	// Wait for backend connection cleanup
+	const string check_conn_cleanup {
+		"SELECT IIF((SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool"
+			" WHERE hostgroup=0 OR hostgroup=1)=0, 'TRUE', 'FALSE')"
+	};
+	int w_res = wait_for_cond(admin, check_conn_cleanup, 10);
+	if (w_res != EXIT_SUCCESS) {
+		diag("Waiting for backend connections failed   res:'%d'", w_res);
+		return EXIT_FAILURE;
+	}
+
+	MYSQL_QUERY_T(admin, "UPDATE mysql_servers SET max_connections=500 WHERE hostgroup_id IN (0, 1)");
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	int rc { perfom_tests_with_cfgs(cl, admin, opts.second) };
 	ok(rc == EXIT_SUCCESS, "Unexpected COM_PING tests should succeed for all cfgs   rc=%d", rc);
