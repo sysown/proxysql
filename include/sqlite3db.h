@@ -44,6 +44,7 @@ extern void (*proxy_sqlite3_free)(void*);
 extern int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFlag);
 extern int (*proxy_sqlite3_status64)(int op, long long *pCurrent, long long *pHighwater, int resetFlag);
 extern int (*proxy_sqlite3_changes)(sqlite3*);
+extern long long (*proxy_sqlite3_total_changes64)(sqlite3*);
 extern int (*proxy_sqlite3_step)(sqlite3_stmt*);
 extern int (*proxy_sqlite3_config)(int, ...);
 extern int (*proxy_sqlite3_shutdown)(void);
@@ -93,6 +94,7 @@ int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFla
 int (*proxy_sqlite3_status64)(int op, long long *pCurrent, long long *pHighwater, int resetFlag);
 
 int (*proxy_sqlite3_changes)(sqlite3*);
+long long (*proxy_sqlite3_total_changes64)(sqlite3*);
 int (*proxy_sqlite3_step)(sqlite3_stmt*);
 int (*proxy_sqlite3_config)(int, ...);
 int (*proxy_sqlite3_shutdown)(void);

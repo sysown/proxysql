@@ -404,7 +404,7 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 			// Fallback method: using a basic pseudo-random generator
 			srand((unsigned int)time(NULL));  
 			for (size_t i = 0; i < sizeof((*myds)->tmp_login_salt); i++) {
-				(*myds)->tmp_login_salt[i] = rand() % 256;  
+				(*myds)->tmp_login_salt[i] = rand_fast() % 256;
 			}
 		}
 		pgpkt.write_generic(type, "ib", PG_PKT_AUTH_MD5, (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
@@ -741,7 +741,7 @@ std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(c
 
 	while (pos < input.size()) {
 		// Skip leading spaces
-		while (pos < input.size() && std::isspace(input[pos])) {
+		while (pos < input.size() && fast_isspace(input[pos])) {
 			++pos;
 		}
 
@@ -751,7 +751,7 @@ std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(c
 			pos += 2; // Skip "-c", "--"
 		}
 
-		while (pos < input.size() && std::isspace(input[pos])) {
+		while (pos < input.size() && fast_isspace(input[pos])) {
 			++pos;
 		}
 
@@ -772,7 +772,7 @@ std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(c
 		bool last_was_escape = false;
 		while (pos < input.size()) {
 			char c = input[pos];
-			if (std::isspace(c) && !last_was_escape) {
+			if (fast_isspace(c) && !last_was_escape) {
 				break;
 			}
 			if (c == '\\' && !last_was_escape) {
@@ -1612,8 +1612,10 @@ bool PgSQL_Protocol::generate_ready_for_query_packet(bool send, char trx_state, 
 	// to avoid memory leak
 	assert(send == true || _ptr);
 
-	PG_pkt pgpkt{};
-	pgpkt.write_ReadyForQuery(trx_state);
+	PG_pkt pgpkt(8);
+	pgpkt.put_char('Z');
+	pgpkt.put_uint32(5);
+	pgpkt.put_char(trx_state); // transaction state
 	auto buff = pgpkt.detach();
 	if (send == true) {
 		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
@@ -1624,87 +1626,17 @@ bool PgSQL_Protocol::generate_ready_for_query_packet(bool send, char trx_state, 
 	return true;
 }
 
-/* Not Used anymore. To be removed in next iteration
-bool PgSQL_Protocol::generate_describe_completion_packet(bool send, bool ready, const PgSQL_Describe_Prepared_Info* desc, uint8_t stmt_type, char trx_state, PtrSize_t* _ptr) {
-	// to avoid memory leak
-	assert(send == true || _ptr);
-	PG_pkt pgpkt{};
-
-	// ----------- Parameter Description ('t') -----------
-	if (stmt_type == 'S') {
-		uint32_t size = desc->parameter_types_count * sizeof(uint32_t) + sizeof(uint16_t) + 4; // size of the packet, including the type byte
-
-		pgpkt.put_char('t');
-		pgpkt.put_uint32(size); // size of the packet, including the type byte
-		// If there are no parameters, we still need to write a zero
-		pgpkt.put_uint16(desc->parameter_types_count); // number of parameters
-		for (size_t i = 0; i < desc->parameter_types_count; i++) {
-			pgpkt.put_uint32(desc->parameter_types[i]); // parameter type OID
-		}
-	}
-
-	// ----------- Row Description ('T') -----------
-	if (desc->columns_count > 0) {
-		uint32_t size = desc->columns_count * (sizeof(uint32_t) + // table OID
-			sizeof(uint16_t) + // column index
-			sizeof(uint32_t) + // type OID
-			sizeof(uint16_t) + // column length
-			sizeof(uint32_t) + // type modifier
-			sizeof(uint16_t)) + // format code
-			sizeof(uint16_t) + 4; // Field count + size of the packet
-
-		for (size_t i = 0; i < desc->columns_count; i++) {
-			// NOSONAR: strlen is safe here, as the column names are expected to be null-terminated strings
-			size += strlen(desc->columns[i].name) + 1; // NOSONAR : field name + null terminator
-		}
-		pgpkt.put_char('T');
-		// If there are no result fields, we still need to write a zero
-		pgpkt.put_uint32(size); // size of the packet, including the type byte
-		pgpkt.put_uint16(desc->columns_count); // number of result fields
-
-		for (size_t i = 0; i < desc->columns_count; i++) {
-			pgpkt.put_string(desc->columns[i].name); // field name
-			pgpkt.put_uint32(desc->columns[i].table_oid); // table OID
-			pgpkt.put_uint16(desc->columns[i].column_index); // column index
-			pgpkt.put_uint32(desc->columns[i].type_oid); // type OID
-			pgpkt.put_uint16(desc->columns[i].length); // column length
-			pgpkt.put_uint32(desc->columns[i].type_modifier); // type modifier
-			pgpkt.put_uint16(desc->columns[i].format); // format code
-		}
-	} else {
-		// return NoData packet if there are no result fields
-		pgpkt.put_char('n');
-		pgpkt.put_uint32(4); // size of the NoData packet (Fixed 4 bytes)
-	}
-	
-	if (ready == true) {
-		pgpkt.put_char('Z');
-		pgpkt.put_uint32(5); // size of the ReadyForQuery packet
-		pgpkt.put_char(trx_state); // transaction state
-	}
-	auto buff = pgpkt.detach();
-	if (send == true) {
-		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
-	} else {
-		_ptr->ptr = buff.first;
-		_ptr->size = buff.second;
-	}
-	return true;
-}*/
-
 //generate close statement completion packet
 bool PgSQL_Protocol::generate_close_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-	PG_pkt pgpkt{};
+	PG_pkt pgpkt(16);
+	pgpkt.put_char('3');
+	pgpkt.put_uint32(4);
 	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
-	}
-	// Close completion message
-	pgpkt.write_CloseCompletion();
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5); // size of the ReadyForQuery packet
+		pgpkt.put_char(trx_state); // transaction state
 	}
 	auto buff = pgpkt.detach();
 	if (send == true) {
@@ -1720,15 +1652,13 @@ bool PgSQL_Protocol::generate_close_completion_packet(bool send, bool ready, cha
 bool PgSQL_Protocol::generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-	PG_pkt pgpkt{};
+	PG_pkt pgpkt(16);
+	pgpkt.put_char('2');
+	pgpkt.put_uint32(4);
 	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
-	}
-	// Bind completion message
-	pgpkt.write_BindCompletion();
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5); // size of the ReadyForQuery packet
+		pgpkt.put_char(trx_state); // transaction state
 	}
 	auto buff = pgpkt.detach();
 	if (send == true) {
@@ -1743,7 +1673,7 @@ bool PgSQL_Protocol::generate_bind_completion_packet(bool send, bool ready, char
 bool PgSQL_Protocol::generate_no_data_packet(bool send, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-	PG_pkt pgpkt(5);
+	PG_pkt pgpkt(8);
 	pgpkt.put_char('n');
 	pgpkt.put_uint32(4); // size of the NoData packet (Fixed 4 bytes)
 	auto buff = pgpkt.detach();
@@ -1759,21 +1689,14 @@ bool PgSQL_Protocol::generate_no_data_packet(bool send, PtrSize_t* _ptr) {
 bool PgSQL_Protocol::generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
-
-	PG_pkt pgpkt{};
-
+	PG_pkt pgpkt(16);
+	pgpkt.put_char('1');
+	pgpkt.put_uint32(4);
 	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5); // size of the ReadyForQuery packet
+		pgpkt.put_char(trx_state); // transaction state
 	}
-
-	// Parse completion message
-	pgpkt.write_ParseCompletion();
-	
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
-	}
-
 	auto buff = pgpkt.detach();
 	if (send == true) {
 		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
@@ -2497,89 +2420,6 @@ unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool
 	pg_query_result->pkt_count++;
 	return total_size;
 }
-
-/* Not Used anymore. To be removed in next iteration
-PgSQL_Describe_Prepared_Info::PgSQL_Describe_Prepared_Info() {
-	parameter_types = NULL;
-	parameter_types_count = 0;
-	columns = NULL;
-	columns_count = 0;
-}
-
-PgSQL_Describe_Prepared_Info::~PgSQL_Describe_Prepared_Info() {
-	clear();
-}
-
-
-void PgSQL_Describe_Prepared_Info::populate(const PGresult* result) {
-	if (!result) return;
-	clear();
-	extract_parameters(result);
-	extract_columns(result);
-}
-
-void PgSQL_Describe_Prepared_Info::clear() {
-	// Free parameter types array
-	free(parameter_types);
-	parameter_types = NULL;
-	parameter_types_count = 0;
-
-	// Free column names and column array
-	for (size_t i = 0; i < columns_count; i++) {
-		free(columns[i].name);
-	}
-	free(columns);
-	columns = NULL;
-	columns_count = 0;
-}
-
-void PgSQL_Describe_Prepared_Info::extract_parameters(const PGresult* result) {
-	int param_count = PQnparams(result);
-	if (param_count <= 0) {
-		parameter_types = NULL;
-		parameter_types_count = 0;
-		return;
-	}
-
-	parameter_types = (uint32_t*)malloc(param_count * sizeof(uint32_t));
-	if (!parameter_types) {
-		parameter_types_count = 0;
-		return;
-	}
-
-	parameter_types_count = param_count;
-	for (int i = 0; i < param_count; i++) {
-		parameter_types[i] = PQparamtype(result, i);
-	}
-}
-
-void PgSQL_Describe_Prepared_Info::extract_columns(const PGresult* result) {
-	int column_count = PQnfields(result);
-	if (column_count <= 0) {
-		columns = NULL;
-		columns_count = 0;
-		return;
-	}
-
-	columns = (ColumnMetadata*)malloc(column_count * sizeof(ColumnMetadata));
-	if (!columns) {
-		columns_count = 0;
-		return;
-	}
-
-	columns_count = column_count;
-	for (int i = 0; i < column_count; i++) {
-		const char* name = PQfname(result, i);
-		columns[i].name = name ? strdup(name) : NULL;
-		columns[i].table_oid = PQftable(result, i);
-		columns[i].column_index = (uint16_t)PQftablecol(result, i);
-		columns[i].type_oid = PQftype(result, i);
-		columns[i].length = PQfsize(result, i);
-		columns[i].type_modifier = PQfmod(result, i);
-		columns[i].format = (uint16_t)PQfformat(result, i);
-	}
-}
-*/
 
 PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer = NULL;

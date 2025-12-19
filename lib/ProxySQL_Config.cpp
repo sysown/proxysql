@@ -2,10 +2,14 @@
 #include "re2/re2.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "sqlite3db.h"
+#include "proxysql_debug.h"
 
 #include <sstream>
 #include <set>
 #include <tuple>
+#include <cstring>
+#include <memory>
 
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
@@ -59,6 +63,33 @@ void ProxySQL_Config::addField(std::string& data, const char* name, const char* 
 	data += ss.str();
 }
 
+/**
+ * @brief Reads global variables from configuration file for a given module prefix.
+ *
+ * This function parses the configuration file section named `<prefix>_variables`
+ * (e.g., "mysql_variables", "pgsql_variables", "admin_variables") and inserts
+ * the variables into the global_variables table in the format "prefix-variable_name".
+ *
+ * The function automatically strips duplicate module prefixes from variable names.
+ * For example, if a user writes "mysql-log_unhealthy_connections" in the mysql_variables
+ * section, the prefix "mysql-" is automatically removed, and the variable is stored
+ * as "mysql-log_unhealthy_connections" (with a single prefix).
+ *
+ * @param prefix The module prefix: "mysql", "pgsql", or "admin".
+ * @return Number of variables processed (successfully read and stored).
+ * @retval 0 if the prefix_variables section does not exist in the config file.
+ *
+ * @note The function temporarily disables foreign keys for performance.
+ * @note Variable values are converted to strings: booleans become "true"/"false",
+ *       integers are converted via std::to_string, and strings are used as-is.
+ *
+ * @par Example:
+ * For prefix="mysql", the function reads the "mysql_variables" section from config.
+ * If the config contains "mysql-log_unhealthy_connections=false", it's stored as
+ * "mysql-log_unhealthy_connections" with value "false".
+ *
+ * @see ProxySQL_Config::Write_Global_Variables_to_configfile()
+ */
 int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
@@ -71,8 +102,16 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	int count = group.getLength();
 	//fprintf(stderr, "Found %d %s_variables\n",count, prefix);
 	int i;
+	size_t prefix_len = strlen(prefix);
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO global_variables VALUES (\"%s-%s\", \"%s\")";
+	// Prepare statement once for all inserts
+	auto [rc, stmt] = admindb->prepare_v2("INSERT OR REPLACE INTO global_variables VALUES (?1, ?2)");
+	if (rc != SQLITE_OK) {
+		proxy_error("Failed to prepare statement for global_variables insert: %d\n", rc);
+		admindb->execute("PRAGMA foreign_keys = ON");
+		free(groupname);
+		return 0;
+	}
 	for (i=0; i< count; i++) {
 		const Setting &sett = group[i];
 		const char *n=sett.getName();
@@ -89,12 +128,23 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 			}
 		}
 		//fprintf(stderr,"%s = %s\n", n, value_string.c_str());
-		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
-		sprintf(query,q, prefix, n, value_string.c_str());
-		//fprintf(stderr, "%s\n", query);
-  		admindb->execute(query);
-		free(query);
+		// Automatic prefix stripping: if variable already starts with "prefix-", remove it
+		if (strncmp(n, prefix, prefix_len) == 0 && n[prefix_len] == '-') {
+			n += prefix_len + 1; // Skip "prefix-"
+		}
+		// Construct full variable name
+		std::string full_var_name = std::string(prefix) + "-" + n;
+		rc = (*proxy_sqlite3_bind_text)(stmt.get(), 1, full_var_name.c_str(), -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = (*proxy_sqlite3_bind_text)(stmt.get(), 2, value_string.c_str(), -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, admindb);
+		SAFE_SQLITE3_STEP2(stmt.get());
+		rc = (*proxy_sqlite3_clear_bindings)(stmt.get());
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = (*proxy_sqlite3_reset)(stmt.get());
+		ASSERT_SQLITE_OK(rc, admindb);
 	}
+	// Statement automatically finalized when stmt goes out of scope
 	admindb->execute("PRAGMA foreign_keys = ON");
 	free(groupname);
 	return i;

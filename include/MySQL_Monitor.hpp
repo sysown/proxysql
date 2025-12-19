@@ -334,13 +334,19 @@ private:
 template<typename T>
 class WorkItem {
 	public:
-	T *data;
-	void *(*routine) (void *);
-	WorkItem(T*_data, void *(*start_routine) (void *)) {
-		data=_data;
-		routine=start_routine;
-		}
-	~WorkItem() {}
+	std::vector<T*> data;
+	using entry_point = void *(*)(const std::vector<T*>& data);
+	entry_point start_routine;
+	WorkItem(T*_data, entry_point _start_routine) {
+		data.push_back(_data);
+		start_routine = _start_routine;
+	}
+	WorkItem(std::vector<T*>&& _data, entry_point _start_routine)
+		: data(std::move(_data)), start_routine(_start_routine) {}
+	WorkItem(const std::vector<T*>& _data, entry_point _start_routine)
+		: data(_data), start_routine(_start_routine) {
+	}
+	~WorkItem() = default;
 };
 
 struct p_mon_counter {

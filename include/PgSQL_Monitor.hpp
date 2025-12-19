@@ -39,6 +39,8 @@ struct PgSQL_Monitor {
 	uint64_t ping_check_OK { 0 };
 	uint64_t readonly_check_ERR { 0 };
 	uint64_t readonly_check_OK { 0 };
+	uint64_t ssl_connections_OK { 0 };
+	uint64_t non_ssl_connections_OK { 0 };
 	///////////////////////////////////////////////////////////////////////////
 
 	std::vector<table_def_t> tables_defs_monitor {
