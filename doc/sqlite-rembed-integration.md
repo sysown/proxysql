@@ -169,9 +169,6 @@ cd deps && make sqlite3
 
 # Verify symbol exists
 nm deps/sqlite3/libsqlite_rembed.a | grep sqlite3_rembed_init
-
-# Test compilation (without ClickHouse)
-make PROXYSQLCLICKHOUSE=0
 ```
 
 ### Functional Testing
@@ -208,7 +205,6 @@ VALUES ('test', 'ollama', 'nomic-embed-text');
 1. **Missing clang**: Install `clang` and `libclang-dev`
 2. **Rust not found**: Install Rust toolchain via `rustup`
 3. **SQLite headers**: Ensure `sqlite-amalgamation` is extracted
-4. **ClickHouse errors**: Build with `PROXYSQLCLICKHOUSE=0`
 
 ### Runtime Issues
 1. **Client not found**: Verify `temp.rembed_clients` entry exists
