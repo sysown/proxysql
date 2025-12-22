@@ -15,6 +15,7 @@ The list of currently supported operating systems for native packaging is:
 
 - AMD64
   - AlmaLinux 8, 9, 10
+  - Amazon Linux 2
   - CentOS Stream 9, 10
   - Debian 12 (bookworm), 13 (trixie)
   - Fedora 40, 41, 42
@@ -22,6 +23,7 @@ The list of currently supported operating systems for native packaging is:
   - Ubuntu 22.04 (jammy), 24.04 (noble)
 - ARM64
   - AlmaLinux 8, 9, 10
+  - Amazon Linux 2
   - CentOS Stream 9, 10
   - Debian 12, 13
   - Fedora 40, 41, 42
@@ -50,7 +52,7 @@ wget -nv -O /etc/apt/trusted.gpg.d/proxysql-3.0.x-keyring.gpg 'https://repo.prox
 echo "deb https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/$(lsb_release -sc)/ ./" | tee /etc/apt/sources.list.d/proxysql.list
 ```
 
-#### Red Hat / CentOS / AlmaLinux:
+#### Red Hat / CentOS:
 ```bash
 cat > /etc/yum.repos.d/proxysql.repo << EOF
 [proxysql]
@@ -67,6 +69,17 @@ cat > /etc/yum.repos.d/proxysql.repo << EOF
 [proxysql]
 name=ProxySQL YUM repository
 baseurl=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/8
+gpgcheck=1
+gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key
+EOF
+```
+
+#### AlmaLinux:
+```bash
+cat > /etc/yum.repos.d/proxysql.repo << EOF
+[proxysql]
+name=ProxySQL YUM repository
+baseurl=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/almalinux/\$releasever
 gpgcheck=1
 gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key
 EOF
@@ -105,8 +118,11 @@ After configuring the repository, install ProxySQL with your package manager:
 apt-get update
 apt-get install proxysql
 
-# RHEL/CentOS/AlmaLinux/Fedora/Amazon Linux
+# RHEL/CentOS/AlmaLinux/Amazon Linux
 yum install proxysql
+
+# Fedora
+dnf install proxysql
 
 # OpenSUSE
 zypper install proxysql
