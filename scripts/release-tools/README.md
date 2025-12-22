@@ -124,28 +124,65 @@ python generate_structured_notes.py --input pr-data.json --output structured-not
 python categorize_commits.py --from-tag v3.0.3 --to-tag v3.0.4 --output-format markdown > commit-categories.md
 ```
 
-#### Step 4: Provide data to LLM with this prompt:
+#### Step 4: Provide data to LLM with this enhanced prompt:
 
 ```markdown
-Generate ProxySQL 3.0.4 release notes and changelogs using the provided data files.
+Generate comprehensive, human-readable release notes for ProxySQL 3.0.4 using the provided data files. Focus on creating descriptive content that explains what each feature/fix does and why it matters.
 
-Available files:
-1. pr-data.json - All PR details from GitHub
-2. structured-notes.md - Commit-level organized data
-3. commit-categories.md - Commits categorized by type
+## Available Data Files
+1. `pr-data.json` - All PR details from GitHub including titles, descriptions, labels
+2. `structured-notes.md` - Commit-level organized data with technical details
+3. `commit-categories.md` - Commits categorized by type (bug fix, feature, documentation, etc.)
 
-Requirements:
-1. Write DESCRIPTIVE release notes (not just PR titles)
-2. Group changes logically (PostgreSQL, MySQL, Monitoring, Bug Fixes, etc.)
-3. Use `backticks` around all technical terms
-4. Include commit hashes and PR numbers
-5. Remove any WIP/skip-ci tags
-6. Follow the format of ProxySQL v3.0.3 release notes
+## Requirements
 
-Output files:
-- ProxySQL-3.0.4-Release-Notes.md
-- CHANGELOG-3.0.4-detailed.md
-- CHANGELOG-3.0.4-commits.md (optional)
+### Structure
+- Start with a **concise introduction paragraph** summarizing the release's significance
+- Include a **"Highlights" section** with 4-6 bullet points summarizing key improvements
+- Organize changes under: New Features, Bug Fixes, Improvements, Documentation, Testing, Build/Packaging, Other Changes
+- Each major section should have a **brief introductory sentence** explaining its theme
+- End with the release commit hash in backticks
+
+### Writing Style
+- Write **descriptive paragraphs** for each feature/fix (2-4 sentences minimum)
+- Explain **what the change does** and **why it matters** to users/administrators
+- Use **complete sentences** with proper grammar and flow
+- Maintain a **professional yet accessible** tone
+
+### Technical Formatting
+- Wrap **all technical terms** in backticks:
+  - Function names: `Read_Global_Variables_from_configfile()`
+  - Variable names: `wait_timeout`, `cur_cmd_cmnt`
+  - SQL queries: `SELECT @@version`, `SELECT VERSION()`
+  - Protocol commands: `COM_PING`, `CLIENT_DEPRECATE_EOF`
+  - Configuration options: `cache_empty_result=0`
+  - Metrics: `PgSQL_Monitor_ssl_connections_OK`
+- Include **commit hashes (short form)** and **PR numbers** in parentheses after each item
+- Remove any `[WIP]`, `[skip-ci]`, or similar tags
+- Use **bold for feature/fix names** followed by commit/PR references
+
+### Section Guidelines
+- **Highlights**: Focus on user/administrator benefits
+- **New Features**: Group related features under subcategories (PostgreSQL Improvements, MySQL Protocol Enhancements, etc.)
+- **Bug Fixes**: Clearly state the problem, then explain the solution
+- **Improvements**: Focus on performance, stability, and efficiency enhancements
+- **Other sections**: Explain practical value (better maintainability, expanded platform support, etc.)
+
+### Example Format for Each Entry:
+```
+**Feature Name** (abc1234, #1234)
+Descriptive paragraph explaining what this feature does and why it matters.
+Include technical details like `technical terms` in backticks.
+Explain benefits to users/administrators.
+```
+
+### Output Files
+- `ProxySQL-3.0.4-Release-Notes-Enhanced.md` - Main enhanced release notes
+- `CHANGELOG-3.0.4-detailed.md` - Detailed changelog (optional)
+- `CHANGELOG-3.0.4-commits.md` - Complete commit list (optional)
+
+### Tone & Audience
+Write for database administrators, developers, system architects, and open source contributors. The notes should be informative for technical decision-making while remaining accessible to those with general database/proxy knowledge.
 ```
 
 ### Option 3: Quick Generation (Without LLM)
@@ -160,8 +197,18 @@ python generate_changelog.py --from-tag v3.0.3 --to-tag v3.0.4 --output changelo
 
 See the `examples/` directory for output generated for ProxySQL 3.0.4:
 - `ProxySQL-3.0.4-Release-Notes.md`: Final release notes
+- `ProxySQL-3.0.4-Release-Notes-Enhanced.md`: Enhanced release notes with descriptive paragraphs, highlights section, and improved readability (recommended)
 - `CHANGELOG-3.0.4-detailed.md`: Detailed changelog with PR summaries
 - `CHANGELOG-3.0.4-commits.md`: Complete list of commits
+
+The enhanced release notes (`ProxySQL-3.0.4-Release-Notes-Enhanced.md`) demonstrate the recommended format with:
+- Highlights section summarizing key improvements
+- Descriptive paragraphs explaining what each feature/fix does and why it matters
+- Section introductions providing context
+- Consistent backtick formatting for technical terms
+- Improved readability for human audiences
+
+A standalone enhanced prompt template is available as `examples/enhanced_prompt_template.md` for easy copying and customization.
 
 ## Generating Descriptive Release Notes
 
@@ -176,6 +223,13 @@ The scripts in this directory help collect data, but the LLM should:
 2. Write descriptive paragraphs explaining changes
 3. Group related changes logically
 4. Apply backtick formatting to technical terms
+
+For enhanced release notes with highlights sections, section introductions, and improved readability, use the enhanced prompt template provided in **Step 4 of the Complete Workflow section**. This template guides the LLM to create more user-friendly release notes with:
+- Highlights section summarizing key improvements
+- Descriptive paragraphs explaining what each feature/fix does and why it matters
+- Section introductions providing context
+- Consistent backtick formatting for all technical terms
+- Improved readability for human audiences
 
 ### Backtick Formatting for Technical Terms
 
