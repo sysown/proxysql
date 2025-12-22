@@ -17,10 +17,11 @@ This document describes the integration of the `sqlite-rembed` Rust SQLite exten
 The integration follows the same pattern as `sqlite-vec` (vector search extension):
 
 ### Static Linking Approach
-1. **Rust static library**: `libsqlite_rembed.a` built from Rust source
-2. **Build system integration**: Makefile targets for Rust compilation
-3. **Auto-registration**: `sqlite3_auto_extension()` in ProxySQL initialization
-4. **Single binary deployment**: No external dependencies at runtime
+1. **Source packaging**: `sqlite-rembed-0.0.1-alpha.9.tar.gz` included in git repository
+2. **Rust static library**: `libsqlite_rembed.a` built from extracted source
+3. **Build system integration**: Makefile targets for tar.gz extraction and Rust compilation
+4. **Auto-registration**: `sqlite3_auto_extension()` in ProxySQL initialization
+5. **Single binary deployment**: No external dependencies at runtime
 
 ### Technical Implementation
 
@@ -47,17 +48,25 @@ libclang-dev
 
 ### Build Process
 1. Rust toolchain detection in `deps/Makefile`
-2. Static library build with `cargo build --release --features=sqlite-loadable/static --lib`
-3. Linking into `libproxysql.a` via `lib/Makefile`
-4. Final binary linking via `src/Makefile`
+2. Extract `sqlite-rembed-0.0.1-alpha.9.tar.gz` from GitHub release
+3. Static library build with `cargo build --release --features=sqlite-loadable/static --lib`
+4. Linking into `libproxysql.a` via `lib/Makefile`
+5. Final binary linking via `src/Makefile`
+
+### Packaging
+Following ProxySQL's dependency packaging pattern, sqlite-rembed is distributed as a compressed tar.gz file:
+- `deps/sqlite3/sqlite-rembed-0.0.1-alpha.9.tar.gz` - Official GitHub release tarball
+- Extracted during build via `tar -zxf sqlite-rembed-0.0.1-alpha.9.tar.gz`
+- Clean targets remove extracted source directories
 
 ## Code Changes Summary
 
 ### 1. `deps/Makefile`
 - Added Rust toolchain detection (`rustc`, `cargo`)
 - SQLite environment variables for sqlite-rembed build
-- New target: `sqlite3/libsqlite_rembed.a`
+- New target: `sqlite3/libsqlite_rembed.a` that extracts from tar.gz and builds
 - Added dependency to `sqlite3` target
+- Clean targets remove `sqlite-rembed-*/` and `sqlite-rembed-source/` directories
 
 ### 2. `lib/Makefile`
 - Added `SQLITE_REMBED_LIB` variable pointing to static library
@@ -164,8 +173,12 @@ The extension provides SQLite error messages for:
 
 ### Build Verification
 ```bash
-# Verify Rust library builds
-cd deps && make sqlite3
+# Clean and rebuild with tar.gz extraction
+cd deps && make cleanpart && make sqlite3
+
+# Verify tar.gz extraction and Rust library build
+ls deps/sqlite3/sqlite-rembed-source/
+ls deps/sqlite3/libsqlite_rembed.a
 
 # Verify symbol exists
 nm deps/sqlite3/libsqlite_rembed.a | grep sqlite3_rembed_init
@@ -217,6 +230,10 @@ VALUES ('test', 'ollama', 'nomic-embed-text');
 - [sqlite-vec Documentation](../doc/SQLite3-Server.md)
 - [SQLite Loadable Extensions](https://www.sqlite.org/loadext.html)
 - [Rust C FFI](https://doc.rust-lang.org/nomicon/ffi.html)
+
+### Source Distribution
+- `deps/sqlite3/sqlite-rembed-0.0.1-alpha.9.tar.gz` - Official GitHub release tarball
+- Extracted to `deps/sqlite3/sqlite-rembed-source/` during build
 
 ## Maintainers
 
