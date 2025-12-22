@@ -1,0 +1,21 @@
+[package]
+name = "sqlite-rembed"
+license = "MIT OR Apache"
+homepage = "https://alexgarcia.xyz/sqlite-rembed"
+repo = "https://github.com/asg017/sqlite-rembed"
+description = "A SQLite extension for generating text embeddings from remote sources (OpenAI, Cohere, localhost, etc.)"
+authors = ["Alex Garcia"]
+git_tag_format = "v$VERSION"
+
+[targets]
+github_releases = {}
+sqlpkg = {}
+spm = {}
+
+pip = {}
+datasette = {}
+sqlite_utils = {}
+
+npm = {}
+
+gem = { module_name = "SqliteRembed" }
