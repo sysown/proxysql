@@ -67,6 +67,7 @@ using json = nlohmann::json;
 #include <sys/utsname.h>
 
 #include "platform.h"
+extern "C" int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 #include "microhttpd.h"
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
@@ -511,10 +512,11 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	admindb=new SQLite3DB();
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	admindb->execute("PRAGMA cache_size = -50000");
-	//sqlite3_enable_load_extension(admindb->get_db(),1);
-	//sqlite3_auto_extension( (void(*)(void))sqlite3_json_init);
+	sqlite3_enable_load_extension(admindb->get_db(),1);
+	sqlite3_auto_extension( (void(*)(void))sqlite3_vec_init);
 	statsdb=new SQLite3DB();
 	statsdb->open((char *)"file:mem_statsdb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sqlite3_enable_load_extension(statsdb->get_db(),1);
 
 	// check if file exists , see #617
 	bool admindb_file_exists=Proxy_file_exists(GloVars.admindb);
@@ -527,15 +529,18 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		}
 	}
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sqlite3_enable_load_extension(configdb->get_db(),1);
 	// Fully synchronous is not required. See to #1055
 	// https://sqlite.org/pragma.html#pragma_synchronous
 	configdb->execute("PRAGMA synchronous=0");
 
 	monitordb = new SQLite3DB();
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sqlite3_enable_load_extension(monitordb->get_db(),1);
 
 	statsdb_disk = new SQLite3DB();
 	statsdb_disk->open((char *)GloVars.statsdb_disk, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sqlite3_enable_load_extension(statsdb_disk->get_db(),1);
 //	char *dbname = (char *)malloc(strlen(GloVars.statsdb_disk)+50);
 //	sprintf(dbname,"%s?mode=memory&cache=shared",GloVars.statsdb_disk);
 //	statsdb_disk->open(dbname, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_FULLMUTEX);
