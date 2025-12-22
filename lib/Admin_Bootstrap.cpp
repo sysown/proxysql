@@ -67,6 +67,31 @@ using json = nlohmann::json;
 #include <sys/utsname.h>
 
 #include "platform.h"
+/**
+ * @brief SQLite-vec extension initialization function declaration
+ *
+ * This external function is the entry point for the sqlite-vec extension.
+ * It's called by SQLite to register the vector search virtual tables and functions.
+ * The function is part of the sqlite-vec static library that's linked into ProxySQL.
+ *
+ * @param db SQLite database connection pointer
+ * @param pzErrMsg Error message pointer (for returning error information)
+ * @param pApi SQLite API routines pointer
+ * @return int SQLite status code (SQLITE_OK on success)
+ *
+ * @details The sqlite-vec extension provides vector search capabilities to SQLite,
+ * enabling ProxySQL to perform vector similarity searches in its internal databases.
+ * This includes:
+ * - Vector storage and indexing via vec0 virtual tables
+ * - Distance calculations (cosine, Euclidean, etc.)
+ * - Approximate nearest neighbor search
+ * - Support for JSON-based vector representation
+ *
+ * @note This function is automatically called by SQLite's auto-extension mechanism
+ * when any database connection is established in ProxySQL.
+ *
+ * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
+ */
 extern "C" int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 #include "microhttpd.h"
 
@@ -509,13 +534,97 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
   pthread_attr_init(&attr);
   //pthread_attr_setstacksize (&attr, mystacksize);
 
+	/**
+	 * @section SQLite3_Database_Initialization
+	 * @brief Initialize all SQLite databases with sqlite-vec extension support
+	 *
+	 * This section initializes all ProxySQL SQLite databases and enables
+	 * the sqlite-vec extension for vector search capabilities. The extension
+	 * is statically linked into ProxySQL and automatically loaded when each
+	 * database connection is established.
+	 *
+	 * @subsection Integration_Details
+	 *
+	 * The sqlite-vec integration provides vector search capabilities to all
+	 * ProxySQL databases through SQLite's virtual table mechanism:
+	 *
+	 * - **Vector Storage**: Store high-dimensional vectors directly in SQLite tables
+	 * - **Similarity Search**: Find similar vectors using distance metrics
+	 * - **Virtual Tables**: Use vec0 virtual tables for efficient vector indexing
+	 * - **JSON Format**: Support for JSON-based vector representation
+	 *
+	 * @subsection_Databases
+	 *
+	 * The extension is enabled in all ProxySQL database instances:
+	 * - Admin: Configuration and runtime state
+	 * - Stats: Runtime statistics and metrics
+	 * - Config: Persistent configuration storage
+	 * - Monitor: Server monitoring data
+	 * - Stats Disk: Persistent statistics
+	 *
+	 * @subsection_Usage_Examples
+	 *
+	 * Once enabled, vector search can be used in any database:
+	 * @code
+	 * CREATE VIRTUAL TABLE vec_data USING vec0(vector float[128]);
+	 * INSERT INTO vec_data(rowid, vector) VALUES (1, json('[0.1, 0.2, ...]'));
+	 * SELECT rowid, distance FROM vec_data WHERE vector MATCH json('[0.1, 0.2, ...]');
+	 * @endcode
+	 *
+	 * @see sqlite3_vec_init() for extension initialization
+	 * @see deps/sqlite3/README.md for integration documentation
+	 * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
+	 */
 	admindb=new SQLite3DB();
+	/**
+	 * @brief Open the admin database with shared cache mode
+	 *
+	 * The admin database stores ProxySQL's configuration and runtime state.
+	 * Using memory with shared cache allows multiple connections to access the same data.
+	 */
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	admindb->execute("PRAGMA cache_size = -50000");
+
+	/**
+	 * @brief Enable SQLite extension loading for admin database
+	 *
+	 * Allows loading SQLite extensions at runtime. This is required for
+	 * sqlite-vec to be registered when the database is opened.
+	 */
 	sqlite3_enable_load_extension(admindb->get_db(),1);
+
+	/**
+	 * @brief Register sqlite-vec extension for auto-loading
+	 *
+	 * This function registers the sqlite-vec extension to be automatically
+	 * loaded whenever a new database connection is established.
+	 *
+	 * @details The sqlite-vec extension provides vector search capabilities
+	 * that are now available in the admin database for:
+	 * - Storing and searching vector embeddings in configuration data
+	 * - Performing similarity searches on admin metrics
+	 * - Enhanced analytics on admin operations
+	 *
+	 * @note The sqlite3_vec_init function is cast to a function pointer
+	 * for SQLite's auto-extension mechanism.
+	 */
 	sqlite3_auto_extension( (void(*)(void))sqlite3_vec_init);
+
+	/**
+	 * @brief Open the stats database with shared cache mode
+	 *
+	 * The stats database stores ProxySQL's runtime statistics and performance metrics.
+	 * This database is crucial for monitoring and analysis operations.
+	 */
 	statsdb=new SQLite3DB();
 	statsdb->open((char *)"file:mem_statsdb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+	/**
+	 * @brief Enable SQLite extension loading for stats database
+	 *
+	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
+	 * registered in the stats database for advanced analytics operations.
+	 */
 	sqlite3_enable_load_extension(statsdb->get_db(),1);
 
 	// check if file exists , see #617
@@ -528,18 +637,71 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			exit(EXIT_SUCCESS);
 		}
 	}
+	/**
+	 * @brief Open the config database (persistent storage)
+	 *
+	 * The config database stores ProxySQL's persistent configuration data.
+	 * Unlike memory databases, this is file-based and survives restarts.
+	 * It contains user accounts, server groups, query rules, etc.
+	 */
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+	/**
+	 * @brief Enable SQLite extension loading for config database
+	 *
+	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
+	 * registered in the config database for:
+	 * - Advanced query rule analysis using vector similarity
+	 * - Configuration optimization with vector-based recommendations
+	 * - Intelligent grouping of similar configurations
+	 */
 	sqlite3_enable_load_extension(configdb->get_db(),1);
 	// Fully synchronous is not required. See to #1055
 	// https://sqlite.org/pragma.html#pragma_synchronous
 	configdb->execute("PRAGMA synchronous=0");
 
 	monitordb = new SQLite3DB();
+	/**
+	 * @brief Open the monitor database with shared cache mode
+	 *
+	 * The monitor database stores monitoring data for backend servers.
+	 * It collects connection metrics, query performance, server health status,
+	 * and other monitoring information.
+	 */
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+	/**
+	 * @brief Enable SQLite extension loading for monitor database
+	 *
+	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
+	 * registered in the monitor database for:
+	 * - Advanced anomaly detection using vector similarity
+	 * - Pattern recognition in server behavior over time
+	 * - Clustering similar server performance metrics
+	 * - Predictive monitoring based on historical vector patterns
+	 */
 	sqlite3_enable_load_extension(monitordb->get_db(),1);
 
 	statsdb_disk = new SQLite3DB();
+	/**
+	 * @brief Open the stats disk database (persistent statistics)
+	 *
+	 * The stats disk database stores persistent statistics and historical data.
+	 * Unlike memory databases, this is file-based and survives restarts.
+	 * It contains query digest statistics, execution counters, etc.
+	 */
 	statsdb_disk->open((char *)GloVars.statsdb_disk, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+	/**
+	 * @brief Enable SQLite extension loading for stats disk database
+	 *
+	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
+	 * registered in the stats disk database for:
+	 * - Historical query pattern analysis using vector similarity
+	 * - Trend analysis of query performance metrics
+	 * - Clustering similar query digests for optimization insights
+	 * - Long-term performance monitoring with vector-based analytics
+	 */
 	sqlite3_enable_load_extension(statsdb_disk->get_db(),1);
 //	char *dbname = (char *)malloc(strlen(GloVars.statsdb_disk)+50);
 //	sprintf(dbname,"%s?mode=memory&cache=shared",GloVars.statsdb_disk);
