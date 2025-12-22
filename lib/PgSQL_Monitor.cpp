@@ -101,6 +101,11 @@ void check_and_build_standard_tables(SQLite3DB& db, const vector<table_def_t>& t
 }
 
 PgSQL_Monitor::PgSQL_Monitor() {
+	// Initialize Aurora mutex and members like MySQL does
+	pthread_mutex_init(&aws_aurora_mutex, NULL);
+	AWS_Aurora_Hosts_resultset = nullptr;
+	AWS_Aurora_Hosts_resultset_checksum = 0;
+
 	int rc = monitordb.open(
 		const_cast<char*>("file:mem_monitordb?mode=memory&cache=shared"),
 		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
@@ -125,6 +130,153 @@ PgSQL_Monitor::PgSQL_Monitor() {
 	monitordb.execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON pgsql_server_connect_log (time_start_us)");
 	monitordb.execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON pgsql_server_ping_log (time_start_us)");
 	monitordb.execute("CREATE INDEX IF NOT EXISTS idx_ping_2 ON pgsql_server_ping_log (hostname, port, time_start_us)");
+	// Aurora specific indexes
+	monitordb.execute("CREATE INDEX IF NOT EXISTS idx_aurora_log_time_start ON pgsql_server_aws_aurora_log (time_start_us)");
+}
+
+PgSQL_Monitor::~PgSQL_Monitor() {
+	if (AWS_Aurora_Hosts_resultset) {
+		delete AWS_Aurora_Hosts_resultset;
+		AWS_Aurora_Hosts_resultset = nullptr;
+	}
+	// Clean up Aurora hosts map
+	for (auto& it : AWS_Aurora_Hosts_Map) {
+		delete it.second;
+	}
+	AWS_Aurora_Hosts_Map.clear();
+}
+
+bool PgSQL_Monitor::server_responds_to_ping(const char* addr, int port) {
+	int max_fails = 3; // Could be made configurable
+	cfmt_t q_fmt { cstr_format(RESP_SERVERS_QUERY_T, addr, port, max_fails, max_fails) };
+
+	char* err { nullptr };
+	unique_ptr<SQLite3_result> result { monitordb.execute_statement(q_fmt.str.c_str(), &err) };
+
+	if (err || result == nullptr) {
+		free(err);
+		return false;
+	}
+	return !result->rows_count;
+}
+
+unsigned int PgSQL_Monitor::estimate_lag(char* server_id, PgSQL_AWS_Aurora_status_entry** aase, unsigned int idx,
+		unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+	// Safety checks - return 0 if invalid input
+	// Use N_L_ASE (16) for array bounds, not PGSQL_AWS_Aurora_Nentries (150)
+	if (!aase || !server_id) {
+		return 0;
+	}
+	if (idx >= N_L_ASE) {
+		return 0;
+	}
+
+	if (lag_num_checks > N_L_ASE) lag_num_checks = N_L_ASE;
+	if (lag_num_checks <= 0) lag_num_checks = 1;
+
+	unsigned int mlag = 0;
+	unsigned int lag = 0;
+
+	for (unsigned int i = 1; i <= lag_num_checks; i++) {
+		if (!aase[idx] || !aase[idx]->host_statuses)
+			break;
+		for (auto hse : *(aase[idx]->host_statuses)) {
+			// NULL check for hse->server_id
+			if (hse && hse->server_id && strcmp(server_id, hse->server_id) == 0 && (unsigned int)hse->replica_lag_ms != 0) {
+				unsigned int ms = std::max(((unsigned int)hse->replica_lag_ms + add_lag_ms), min_lag_ms);
+				if (ms > mlag) mlag = ms;
+				if (!lag) lag = ms;
+			}
+		}
+		if (idx == 0) idx = N_L_ASE;
+		idx--;
+	}
+
+	return mlag;
+}
+
+// AWS Aurora PostgreSQL class implementations
+
+PgSQL_AWS_Aurora_replica_host_status_entry::PgSQL_AWS_Aurora_replica_host_status_entry(
+	char* serid, char* sessid, char* lut, float rlm, bool is_master
+) {
+	server_id = serid ? strdup(serid) : nullptr;
+	session_id = sessid ? strdup(sessid) : nullptr;
+	last_update_timestamp = lut ? strdup(lut) : nullptr;
+	replica_lag_ms = rlm;
+	is_current_master = is_master;
+}
+
+PgSQL_AWS_Aurora_replica_host_status_entry::PgSQL_AWS_Aurora_replica_host_status_entry(
+	char* serid, char* sessid, char* lut, const char* rlm, bool is_master
+) {
+	server_id = serid ? strdup(serid) : nullptr;
+	session_id = sessid ? strdup(sessid) : nullptr;
+	last_update_timestamp = lut ? strdup(lut) : nullptr;
+	replica_lag_ms = rlm ? atof(rlm) : 0.0f;
+	is_current_master = is_master;
+}
+
+PgSQL_AWS_Aurora_replica_host_status_entry::~PgSQL_AWS_Aurora_replica_host_status_entry() {
+	if (server_id) free(server_id);
+	if (session_id) free(session_id);
+	if (last_update_timestamp) free(last_update_timestamp);
+}
+
+PgSQL_AWS_Aurora_status_entry::PgSQL_AWS_Aurora_status_entry(
+	unsigned long long st, unsigned long long ct, char* e
+) : start_time(st), check_time(ct), error(nullptr) {
+	if (e) error = strdup(e);
+	host_statuses = new std::vector<PgSQL_AWS_Aurora_replica_host_status_entry*>();
+}
+
+void PgSQL_AWS_Aurora_status_entry::add_host_status(PgSQL_AWS_Aurora_replica_host_status_entry* hs) {
+	host_statuses->push_back(hs);
+}
+
+PgSQL_AWS_Aurora_status_entry::~PgSQL_AWS_Aurora_status_entry() {
+	if (error) free(error);
+	for (auto hs : *host_statuses) {
+		delete hs;
+	}
+	delete host_statuses;
+}
+
+PgSQL_AWS_Aurora_monitor_node::PgSQL_AWS_Aurora_monitor_node(char* _a, int _p, int _whg) {
+	addr = strdup(_a);
+	port = _p;
+	writer_hostgroup = _whg;
+	idx_last_entry = -1;
+	num_checks_tot = 0;
+	num_checks_ok = 0;
+	last_checked_at = 0;
+	for (int i = 0; i < PGSQL_AWS_Aurora_Nentries; i++) {
+		last_entries[i] = nullptr;
+	}
+}
+
+PgSQL_AWS_Aurora_monitor_node::~PgSQL_AWS_Aurora_monitor_node() {
+	if (addr) free(addr);
+	for (int i = 0; i < PGSQL_AWS_Aurora_Nentries; i++) {
+		if (last_entries[i]) delete last_entries[i];
+	}
+}
+
+bool PgSQL_AWS_Aurora_monitor_node::add_entry(PgSQL_AWS_Aurora_status_entry* ase) {
+	num_checks_tot++;
+	if (ase->error == nullptr) {
+		num_checks_ok++;
+	}
+	last_checked_at = time(nullptr);
+	idx_last_entry++;
+	if (idx_last_entry >= PGSQL_AWS_Aurora_Nentries) {
+		idx_last_entry = 0;
+	}
+	if (last_entries[idx_last_entry]) {
+		delete last_entries[idx_last_entry];
+	}
+	last_entries[idx_last_entry] = ase;
+	return true;
 }
 
 /**
@@ -2088,6 +2240,18 @@ void* PgSQL_monitor_scheduler_thread() {
 		workers.emplace_back(worker_thread_t { std::move(th), std::move(worker_queue) });
 	}
 
+	// Start Aurora PostgreSQL monitoring thread
+	pthread_t pgsql_monitor_aws_aurora_thread;
+	pthread_attr_t aurora_attr;
+	pthread_attr_init(&aurora_attr);
+	pthread_attr_setstacksize(&aurora_attr, 2048 * 1024);
+	if (pthread_create(&pgsql_monitor_aws_aurora_thread, &aurora_attr, PgSQL_monitor_aws_aurora, NULL) != 0) {
+		proxy_error("Failed to create Aurora PostgreSQL monitor thread\n");
+	} else {
+		proxy_info("Started Aurora PostgreSQL monitor thread\n");
+	}
+	pthread_attr_destroy(&aurora_attr);
+
 	uint64_t cur_intv_start = 0;
 	tasks_intvs_t next_intvs {};
 	vector<task_batch_t> tasks_batches {};
@@ -2222,6 +2386,10 @@ void* PgSQL_monitor_scheduler_thread() {
 			pthread_join(worker.first, NULL);
 		}
 
+		// Wait for Aurora thread to exit
+		pthread_join(pgsql_monitor_aws_aurora_thread, NULL);
+		proxy_info("Aurora PostgreSQL monitor thread joined\n");
+
 		// Cleanup the global connection pool; no mutex, threads joined
 		for (auto& entry : mon_conn_pool.conn_map) {
 			for (auto& conn : entry.second) {
@@ -2231,5 +2399,527 @@ void* PgSQL_monitor_scheduler_thread() {
 		mon_conn_pool.conn_map.clear();
 	}
 
+	return nullptr;
+}
+
+// =========================================================================
+// AWS Aurora PostgreSQL Monitoring Implementation
+// =========================================================================
+
+extern PgSQL_HostGroups_Manager* PgHGM;
+
+// Number of last Aurora status entries to keep
+#define N_L_ASE 16
+
+// Structure to hold host definitions for Aurora monitoring
+struct pgsql_host_def_t {
+	char* host;
+	int port;
+	int use_ssl;
+};
+
+// Helper function to shuffle hosts array
+static void shuffle_pgsql_hosts(pgsql_host_def_t* arr, unsigned int n) {
+	if (n <= 1) return;
+	for (unsigned int i = n - 1; i > 0; i--) {
+		unsigned int j = rand() % (i + 1);
+		if (i != j) {
+			pgsql_host_def_t tmp;
+			size_t stride = sizeof(pgsql_host_def_t);
+			memcpy(&tmp, arr + i * stride / sizeof(pgsql_host_def_t), sizeof(pgsql_host_def_t));
+			memcpy(arr + i * stride / sizeof(pgsql_host_def_t), arr + j * stride / sizeof(pgsql_host_def_t), sizeof(pgsql_host_def_t));
+			memcpy(arr + j * stride / sizeof(pgsql_host_def_t), &tmp, sizeof(pgsql_host_def_t));
+		}
+	}
+}
+
+void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned int rHG,
+		PgSQL_AWS_Aurora_status_entry** lasts_ase, unsigned int ase_idx,
+		unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+
+	unsigned int prev_ase_idx = ase_idx;
+	if (prev_ase_idx == 0) prev_ase_idx = N_L_ASE;
+	prev_ase_idx--;
+
+	PgSQL_AWS_Aurora_status_entry* aase = lasts_ase[ase_idx];
+	PgSQL_AWS_Aurora_status_entry* prev_aase = lasts_ase[prev_ase_idx];
+
+	if (aase && aase->start_time) {
+		if (aase->host_statuses->size()) {
+			for (auto it3 = aase->host_statuses->begin(); it3 != aase->host_statuses->end(); ++it3) {
+				PgSQL_AWS_Aurora_replica_host_status_entry* hse = *it3;
+				if (!hse) continue;  // Skip NULL entries
+
+				bool run_action = true;
+				bool enable = true;
+				bool is_writer = false;
+				bool rla_rc = true;
+
+				// Skip if server_id is NULL
+				if (!hse->server_id) {
+					proxy_warning("Aurora PostgreSQL: Skipping entry with NULL server_id\n");
+					continue;
+				}
+
+				unsigned int current_lag_ms = estimate_lag(hse->server_id, lasts_ase, ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+				hse->estimated_lag_ms = current_lag_ms;
+
+				if (current_lag_ms > max_latency_ms) {
+					enable = false;
+				}
+
+				// PostgreSQL Aurora uses is_current_master instead of MASTER_SESSION_ID
+				if (hse->is_current_master) {
+					is_writer = true;
+				}
+
+				// Determine if a change needs to be made by comparing with previous check
+				if (prev_aase && prev_aase->start_time) {
+					if (prev_aase->host_statuses->size()) {
+						for (auto it4 = prev_aase->host_statuses->begin(); it4 != prev_aase->host_statuses->end(); ++it4) {
+							PgSQL_AWS_Aurora_replica_host_status_entry* prev_hse = *it4;
+							if (!prev_hse || !prev_hse->server_id) continue;  // Skip NULL entries
+							if (strcmp(prev_hse->server_id, hse->server_id) == 0) {
+								bool prev_enabled = true;
+								unsigned int prev_lag_ms = estimate_lag(hse->server_id, lasts_ase, prev_ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+								if (prev_lag_ms > max_latency_ms) {
+									prev_enabled = false;
+								}
+								if (prev_enabled == enable) {
+									// Previous status is the same, no action needed
+									run_action = false;
+								}
+							}
+						}
+					}
+				}
+
+				if (run_action) {
+					rla_rc = PgHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+				} else {
+					if (is_writer) {
+						// If the server is a writer we run it anyway for sanity check
+						rla_rc = PgHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+					}
+				}
+
+				if (rla_rc == false) {
+					if (is_writer) {
+						// The server should be a writer but is not configured as one
+						proxy_info("Aurora PostgreSQL: Calling update_aws_aurora_set_writer for %s\n", hse->server_id);
+						PgHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id);
+
+						// Log failover event
+						time_t __timer;
+						char lut[30];
+						struct tm __tm_info;
+						time(&__timer);
+						localtime_r(&__timer, &__tm_info);
+						strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+
+						char* q1 = (char*)"INSERT INTO pgsql_server_aws_aurora_failovers VALUES (%d, '%s', '%s')";
+						char* q2 = (char*)malloc(strlen(q1) + strlen(lut) + strlen(hse->server_id) + 32);
+						sprintf(q2, q1, wHG, hse->server_id, lut);
+						monitordb.execute(q2);
+						free(q2);
+					} else {
+						proxy_info("Aurora PostgreSQL: Calling update_aws_aurora_set_reader for %s\n", hse->server_id);
+						PgHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id);
+					}
+				}
+			}
+		}
+	}
+}
+
+/**
+ * @brief Aurora PostgreSQL monitoring thread for a specific hostgroup
+ * @details This thread periodically queries aurora_replica_status() to discover cluster topology
+ */
+void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
+	unsigned int wHG = *(unsigned int*)arg;
+	unsigned int rHG = 0;
+	unsigned int num_hosts = 0;
+	unsigned int cur_host_idx = 0;
+	unsigned int max_lag_ms = 0;
+	unsigned int check_interval_ms = 0;
+	unsigned int check_timeout_ms = 0;
+	unsigned int add_lag_ms = 0;
+	unsigned int min_lag_ms = 0;
+	unsigned int lag_num_checks = 1;
+
+	proxy_info("Started Aurora PostgreSQL Monitor thread for writer HG %u\n", wHG);
+
+	// Quick exit checks
+	if (!GloPTH) return nullptr;
+	if (!GloPgMon) return nullptr;
+
+	// Get monitor credentials from GloPTH
+	char* monitor_user = GloPTH->get_variable_string((char*)"monitor_username");
+	char* monitor_pass = GloPTH->get_variable_string((char*)"monitor_password");
+
+	uint64_t initial_raw_checksum = 0;
+
+	// Static array of the latest reads
+	unsigned int ase_idx = 0;
+	PgSQL_AWS_Aurora_status_entry* lasts_ase[N_L_ASE];
+	for (unsigned int i = 0; i < N_L_ASE; i++) {
+		lasts_ase[i] = nullptr;
+	}
+
+	// Initialize hpa to NULL for proper cleanup
+	pgsql_host_def_t* hpa = nullptr;
+
+	// Initial data load
+	pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+	initial_raw_checksum = GloPgMon->AWS_Aurora_Hosts_resultset_checksum;
+
+	// Count the number of hosts
+	for (auto it = GloPgMon->AWS_Aurora_Hosts_resultset->rows.begin();
+		 it != GloPgMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		if (atoi(r->fields[0]) == (int)wHG) {
+			num_hosts++;
+			if (max_lag_ms == 0) {
+				max_lag_ms = atoi(r->fields[5]);
+			}
+			if (check_interval_ms == 0) {
+				check_interval_ms = atoi(r->fields[6]);
+			}
+			if (check_timeout_ms == 0) {
+				check_timeout_ms = atoi(r->fields[7]);
+			}
+			if (rHG == 0) {
+				rHG = atoi(r->fields[1]);
+			}
+			add_lag_ms = atoi(r->fields[8]);
+			min_lag_ms = atoi(r->fields[9]);
+			lag_num_checks = atoi(r->fields[10]);
+		}
+	}
+
+	if (num_hosts == 0) {
+		pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+		proxy_warning("Aurora PostgreSQL Monitor: No hosts found for writer HG %u\n", wHG);
+		// Cleanup before early return
+		if (monitor_user) free(monitor_user);
+		if (monitor_pass) free(monitor_pass);
+		return nullptr;
+	}
+
+	hpa = (pgsql_host_def_t*)malloc(sizeof(pgsql_host_def_t) * num_hosts);
+	cur_host_idx = 0;
+	for (auto it = GloPgMon->AWS_Aurora_Hosts_resultset->rows.begin();
+		 it != GloPgMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		if (atoi(r->fields[0]) == (int)wHG) {
+			hpa[cur_host_idx].host = strdup(r->fields[2]);
+			hpa[cur_host_idx].port = atoi(r->fields[3]);
+			hpa[cur_host_idx].use_ssl = atoi(r->fields[4]);
+			cur_host_idx++;
+		}
+	}
+	// NOTE: 'cur_host_idx' should never be higher than 'num_hosts' otherwise later an invalid memory access
+	// can take place later when accessing 'hpa[cur_host_idx]'.
+	if (cur_host_idx >= num_hosts) {
+		cur_host_idx = num_hosts - 1;
+	}
+	pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+
+	bool exit_now = false;
+	unsigned long long t1 = 0;
+	unsigned long long next_loop_at = 0;
+
+	uint64_t current_raw_checksum = 0;
+	bool found_pingable_host = false;
+
+	t1 = monotonic_time();
+	unsigned long long start_time = t1;
+
+	while (GloPgMon->shutdown == false && exit_now == false) {
+		t1 = monotonic_time();
+
+		if (!GloPTH) {
+			goto __exit_pgsql_monitor_AWS_Aurora_thread_HG_now;
+		}
+
+		pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+		current_raw_checksum = GloPgMon->AWS_Aurora_Hosts_resultset_checksum;
+		pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+
+		if (current_raw_checksum != initial_raw_checksum) {
+			// Content has changed, exit
+			exit_now = true;
+			break;
+		}
+
+		if (t1 < next_loop_at) {
+			unsigned long long st = next_loop_at - t1;
+			if (st > 50000) {
+				st = 50000;
+			}
+			usleep(st);
+			continue;
+		}
+
+		found_pingable_host = false;
+
+		// Pick a random host
+		size_t rnd = (size_t)rand();
+		rnd %= num_hosts;
+		if (GloPgMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port)) {
+			found_pingable_host = true;
+			cur_host_idx = rnd;
+		} else {
+			// Try all hosts
+			shuffle_pgsql_hosts(hpa, num_hosts);
+			for (unsigned int i = 0; found_pingable_host == false && i < num_hosts; i++) {
+				if (GloPgMon->server_responds_to_ping(hpa[i].host, hpa[i].port)) {
+					found_pingable_host = true;
+					cur_host_idx = i;
+				}
+			}
+		}
+
+		if (found_pingable_host == false) {
+			proxy_error("No node is pingable for AWS Aurora PostgreSQL cluster with writer HG %u\n", wHG);
+			next_loop_at = t1 + check_interval_ms * 1000;
+			continue;
+		}
+
+		// Execute Aurora replica status query
+		start_time = t1;
+		char* error_msg = nullptr;
+
+		// Build connection string with monitor credentials
+		// Note: dbname=postgres is used because aurora_replica_status() is a system function
+		char conninfo[1024];
+		snprintf(conninfo, sizeof(conninfo), "host=%s port=%d dbname=postgres user=%s password=%s connect_timeout=%d",
+			hpa[cur_host_idx].host, hpa[cur_host_idx].port,
+			monitor_user ? monitor_user : "",
+			monitor_pass ? monitor_pass : "",
+			check_timeout_ms / 1000);
+
+		PGconn* conn = PQconnectdb(conninfo);
+
+		unsigned long long t2 = monotonic_time();
+		PgSQL_AWS_Aurora_status_entry* ase = nullptr;
+		PgSQL_AWS_Aurora_status_entry* ase_l = nullptr;
+
+		if (PQstatus(conn) != CONNECTION_OK) {
+			error_msg = strdup(PQerrorMessage(conn));
+			proxy_error("Aurora PostgreSQL: Connection failed for %s:%d - %s\n",
+				hpa[cur_host_idx].host, hpa[cur_host_idx].port, error_msg);
+			ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
+			ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
+			free(error_msg);
+		} else {
+			// Execute the aurora_replica_status() query
+			// Aurora PostgreSQL provides: server_id, session_id, replica_lag_in_msec
+			// Writer is identified by session_id = 'MASTER_SESSION_ID'
+			const char* query = "SELECT server_id, session_id, replica_lag_in_msec, "
+				"CASE WHEN session_id = 'MASTER_SESSION_ID' THEN true ELSE false END as is_writer "
+				"FROM aurora_replica_status()";
+
+			PGresult* res = PQexec(conn, query);
+			t2 = monotonic_time();
+
+			if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+				error_msg = strdup(PQerrorMessage(conn));
+				proxy_error("Aurora PostgreSQL: Query failed for %s:%d - %s\n",
+					hpa[cur_host_idx].host, hpa[cur_host_idx].port, error_msg);
+				ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
+				ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
+				free(error_msg);
+			} else {
+				unsigned long long time_now = realtime_time();
+				time_now = time_now - (t2 - start_time);
+				ase = new PgSQL_AWS_Aurora_status_entry(time_now, t2 - start_time, nullptr);
+				ase_l = new PgSQL_AWS_Aurora_status_entry(time_now, t2 - start_time, nullptr);
+
+				int nrows = PQntuples(res);
+				for (int i = 0; i < nrows; i++) {
+					char* server_id = PQgetvalue(res, i, 0);
+					char* session_id = PQgetvalue(res, i, 1);
+					char* replica_lag_str = PQgetvalue(res, i, 2);
+					char* is_writer_str = PQgetvalue(res, i, 3);
+
+					float replica_lag = replica_lag_str ? atof(replica_lag_str) : 0.0f;
+					bool is_writer = (is_writer_str && (strcmp(is_writer_str, "t") == 0 || strcmp(is_writer_str, "true") == 0 || strcmp(is_writer_str, "1") == 0));
+
+					// Use session_id as last_update placeholder (not available in aurora_replica_status())
+					PgSQL_AWS_Aurora_replica_host_status_entry* arhse =
+						new PgSQL_AWS_Aurora_replica_host_status_entry(server_id, session_id, session_id, replica_lag, is_writer);
+					ase->add_host_status(arhse);
+
+					PgSQL_AWS_Aurora_replica_host_status_entry* arhse_l =
+						new PgSQL_AWS_Aurora_replica_host_status_entry(server_id, session_id, session_id, replica_lag, is_writer);
+					ase_l->add_host_status(arhse_l);
+				}
+			}
+			PQclear(res);
+		}
+		PQfinish(conn);
+
+		// Process results
+		if (lasts_ase[ase_idx]) {
+			delete lasts_ase[ase_idx];
+		}
+		lasts_ase[ase_idx] = ase_l;
+
+		GloPgMon->evaluate_pgsql_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+
+		// Copy estimated_lag_ms from ase_l to ase
+		for (auto h : *(ase_l->host_statuses)) {
+			for (auto h2 : *(ase->host_statuses)) {
+				if (strcmp(h2->server_id, h->server_id) == 0) {
+					h2->estimated_lag_ms = h->estimated_lag_ms;
+				}
+			}
+		}
+
+		ase_idx++;
+		if (ase_idx == N_L_ASE) {
+			ase_idx = 0;
+		}
+
+		// Store in Aurora hosts map for monitoring statistics
+		if (GloPgMon && ase && hpa && cur_host_idx < num_hosts && hpa[cur_host_idx].host) {
+			std::string key = std::string(hpa[cur_host_idx].host) + ":" + std::to_string(hpa[cur_host_idx].port);
+
+			pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+			auto it2 = GloPgMon->AWS_Aurora_Hosts_Map.find(key);
+			PgSQL_AWS_Aurora_monitor_node* node = nullptr;
+			if (it2 != GloPgMon->AWS_Aurora_Hosts_Map.end()) {
+				node = it2->second;
+				node->add_entry(ase);
+			} else {
+				node = new PgSQL_AWS_Aurora_monitor_node(hpa[cur_host_idx].host, hpa[cur_host_idx].port, wHG);
+				node->add_entry(ase);
+				GloPgMon->AWS_Aurora_Hosts_Map.insert(std::make_pair(key, node));
+			}
+			pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+		} else if (ase) {
+			// If we can't store it, delete to prevent memory leak
+			delete ase;
+			ase = nullptr;
+		}
+
+		next_loop_at = t1 + (check_interval_ms * 1000);
+	}
+
+__exit_pgsql_monitor_AWS_Aurora_thread_HG_now:
+	// Cleanup
+	if (monitor_user) free(monitor_user);
+	if (monitor_pass) free(monitor_pass);
+
+	if (hpa) {
+		for (unsigned int i = 0; i < num_hosts; i++) {
+			if (hpa[i].host) {
+				free(hpa[i].host);
+			}
+		}
+		free(hpa);
+	}
+
+	for (unsigned int i = 0; i < N_L_ASE; i++) {
+		if (lasts_ase[i]) {
+			delete lasts_ase[i];
+		}
+	}
+
+	proxy_info("Stopping Aurora PostgreSQL Monitor thread for writer HG %u\n", wHG);
+	return nullptr;
+}
+
+/**
+ * @brief Main Aurora PostgreSQL monitoring function
+ * @details Spawns per-hostgroup monitoring threads when Aurora hostgroups are configured
+ */
+void* PgSQL_monitor_aws_aurora(void* arg) {
+	(void)arg;  // unused
+	if (!GloPgMon) return nullptr;
+
+	uint64_t last_raw_checksum = 0;
+	unsigned int* hgs_array = nullptr;
+	pthread_t* pthreads_array = nullptr;
+	unsigned int hgs_num = 0;
+
+	proxy_info("Started Aurora PostgreSQL Monitor main thread\n");
+
+	while (GloPgMon->shutdown == false) {
+		if (!GloPTH) return nullptr;
+
+		// Check if list of servers or HG or options has changed
+		pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+		uint64_t new_raw_checksum = 0;
+		if (GloPgMon->AWS_Aurora_Hosts_resultset) {
+			new_raw_checksum = GloPgMon->AWS_Aurora_Hosts_resultset->raw_checksum();
+		}
+		pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+
+		if (new_raw_checksum != last_raw_checksum) {
+			proxy_info("Aurora PostgreSQL: Detected new/changed definition for monitoring\n");
+			last_raw_checksum = new_raw_checksum;
+
+			if (pthreads_array) {
+				// Wait for all threads to terminate
+				for (unsigned int i = 0; i < hgs_num; i++) {
+					pthread_join(pthreads_array[i], nullptr);
+					proxy_info("Stopped Aurora PostgreSQL Monitor thread for writer HG %u\n", hgs_array[i]);
+				}
+				free(pthreads_array);
+				free(hgs_array);
+				pthreads_array = nullptr;
+				hgs_array = nullptr;
+				hgs_num = 0;
+			}
+
+			// Count unique writer hostgroups
+			pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+			if (GloPgMon->AWS_Aurora_Hosts_resultset && GloPgMon->AWS_Aurora_Hosts_resultset->rows_count) {
+				std::map<unsigned int, bool> unique_whgs;
+				for (auto it = GloPgMon->AWS_Aurora_Hosts_resultset->rows.begin();
+					 it != GloPgMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
+					SQLite3_row* r = *it;
+					unsigned int whg = atoi(r->fields[0]);
+					unique_whgs[whg] = true;
+				}
+				hgs_num = unique_whgs.size();
+				if (hgs_num) {
+					proxy_info("Activating Monitoring of %u AWS Aurora PostgreSQL clusters\n", hgs_num);
+					hgs_array = (unsigned int*)malloc(sizeof(unsigned int) * hgs_num);
+					pthreads_array = (pthread_t*)malloc(sizeof(pthread_t) * hgs_num);
+					unsigned int idx = 0;
+					for (auto& it : unique_whgs) {
+						hgs_array[idx] = it.first;
+						idx++;
+					}
+				}
+			}
+			pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+
+			// Start threads for each writer hostgroup
+			for (unsigned int i = 0; i < hgs_num; i++) {
+				proxy_info("Starting Monitor thread for AWS Aurora PostgreSQL writer HG %u\n", hgs_array[i]);
+				if (pthread_create(&pthreads_array[i], nullptr, PgSQL_monitor_AWS_Aurora_thread_HG, &hgs_array[i]) != 0) {
+					proxy_error("Thread creation failed for AWS Aurora PostgreSQL writer HG %u\n", hgs_array[i]);
+				}
+			}
+		}
+
+		usleep(500000); // 500ms
+	}
+
+	// Cleanup on shutdown
+	if (pthreads_array) {
+		for (unsigned int i = 0; i < hgs_num; i++) {
+			pthread_join(pthreads_array[i], nullptr);
+		}
+		free(pthreads_array);
+		free(hgs_array);
+	}
+
+	proxy_info("Stopping Aurora PostgreSQL Monitor main thread\n");
 	return nullptr;
 }

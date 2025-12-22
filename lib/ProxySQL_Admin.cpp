@@ -147,7 +147,7 @@ static const vector<string> pgsql_servers_tablenames = {
 	"pgsql_replication_hostgroups",
 //	"pgsql_group_replication_hostgroups",
 //	"pgsql_galera_hostgroups",
-//	"pgsql_aws_aurora_hostgroups",
+	"pgsql_aws_aurora_hostgroups",
 	"pgsql_hostgroup_attributes",
 };
 
@@ -872,11 +872,13 @@ incoming_pgsql_servers_t::incoming_pgsql_servers_t() {}
 incoming_pgsql_servers_t::incoming_pgsql_servers_t(
 	SQLite3_result* incoming_pgsql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
+	SQLite3_result* incoming_aurora_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
 	SQLite3_result* runtime_pgsql_servers
 ) :
 	incoming_pgsql_servers_v2(incoming_pgsql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
+	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
 	runtime_pgsql_servers(runtime_pgsql_servers)
 {}
@@ -7435,10 +7437,12 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	SQLite3_result* resultset = NULL;
 	SQLite3_result* resultset_servers = NULL;
 	SQLite3_result* resultset_replication = NULL;
+	SQLite3_result* resultset_aws_aurora = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
 
 	SQLite3_result* runtime_pgsql_servers = incoming_pgsql_servers.runtime_pgsql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
+	SQLite3_result* incoming_aurora_hostgroups = incoming_pgsql_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_pgsql_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_pgsql_servers_v2 = incoming_pgsql_servers.incoming_pgsql_servers_v2;
 
@@ -7500,6 +7504,39 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	//if (resultset) delete resultset;
 	//resultset=NULL;
 
+	// support for AWS Aurora PostgreSQL, table pgsql_aws_aurora_hostgroups
+
+	// look for invalid combinations
+	query = (char*)"SELECT a.* FROM pgsql_aws_aurora_hostgroups a JOIN pgsql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	}
+	else {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			proxy_error("Incompatible entry in pgsql_aws_aurora_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
+		}
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
+
+	query = (char*)"SELECT a.* FROM pgsql_aws_aurora_hostgroups a LEFT JOIN pgsql_aws_aurora_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_aurora_hostgroups == nullptr) {
+		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_aws_aurora);
+	}
+	else {
+		resultset_aws_aurora = incoming_aurora_hostgroups;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	}
+	else {
+		// Pass the resultset to PgHGM
+		PgHGM->save_incoming_pgsql_table(resultset_aws_aurora, "pgsql_aws_aurora_hostgroups");
+	}
 
 	// support for hostgroup attributes, table pgsql_hostgroup_attributes
 	query = (char*)"SELECT * FROM pgsql_hostgroup_attributes ORDER BY hostgroup_id";
@@ -7534,6 +7571,10 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (resultset_replication) {
 		delete resultset_replication;
 		resultset_replication = NULL;
+	}
+	if (resultset_aws_aurora) {
+		//delete resultset_aws_aurora; // do not delete, resultset is stored in PgHGM
+		resultset_aws_aurora = NULL;
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;

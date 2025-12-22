@@ -1786,6 +1786,62 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			rows++;
 		}
 	}
+	// AWS Aurora PostgreSQL
+	if (root.exists("pgsql_aws_aurora_hostgroups")==true) {
+		const Setting &pgsql_aws_aurora_hostgroups = root["pgsql_aws_aurora_hostgroups"];
+		int count = pgsql_aws_aurora_hostgroups.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO pgsql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment ) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
+		for (i=0; i< count; i++) {
+			const Setting &line = pgsql_aws_aurora_hostgroups[i];
+			int writer_hostgroup;
+			int reader_hostgroup;
+			int active=1; // default
+			int aurora_port;
+			int max_lag_ms;
+			int add_lag_ms;
+			int min_lag_ms;
+			int lag_num_checks;
+			int check_interval_ms;
+			int check_timeout_ms;
+			int writer_is_also_reader;
+			int new_reader_weight;
+			std::string comment="";
+			std::string domain_name="";
+			if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+				proxy_error("Admin: detected a pgsql_aws_aurora_hostgroups in config file without a mandatory writer_hostgroup\n");
+				continue;
+			}
+			if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+				proxy_error("Admin: detected a pgsql_aws_aurora_hostgroups in config file without a mandatory reader_hostgroup\n");
+				continue;
+			}
+			if (line.lookupValue("aurora_port", aurora_port)==false) aurora_port=5432;
+			if (line.lookupValue("max_lag_ms", max_lag_ms)==false) max_lag_ms=600000;
+			if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
+			if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=800;
+			if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
+			if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=1;
+			if (line.lookupValue("add_lag_ms", add_lag_ms)==false) add_lag_ms=30;
+			if (line.lookupValue("min_lag_ms", min_lag_ms)==false) min_lag_ms=30;
+			if (line.lookupValue("lag_num_checks", lag_num_checks)==false) lag_num_checks=1;
+			line.lookupValue("active", active);
+			line.lookupValue("comment", comment);
+			line.lookupValue("domain_name", domain_name);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			char *p1=strdup(domain_name.c_str());
+			char *p=escape_string_single_quotes(p1, false);
+			char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256);
+			sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, o);
+			admindb->execute(query);
+			if (o!=o1) free(o);
+			free(o1);
+			if (p!=p1) free(p);
+			free(p1);
+			free(query);
+			rows++;
+		}
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
