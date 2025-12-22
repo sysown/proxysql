@@ -50,10 +50,12 @@ def categorize_commit(message):
 
 def get_git_log(from_tag, to_tag):
     """Get git log between two tags/branches in a parsable format."""
-    cmd = f"git log {from_tag}..{to_tag} --no-merges --pretty=format:'%H|%s|%b'"
+    cmd = ["git", "log", f"{from_tag}..{to_tag}", "--no-merges", "--pretty=format:%H%x1f%s%x1f%b%x1e"]
     try:
-        output = subprocess.check_output(cmd, shell=True, text=True).strip()
-        return output.split('\n') if output else []
+        output = subprocess.check_output(cmd, text=True).strip()
+        # Split on record separator (0x1e), remove empty strings
+        commits = [c.strip() for c in output.split('\x1e') if c.strip()]
+        return commits
     except subprocess.CalledProcessError as e:
         print(f"Error running git log: {e}", file=sys.stderr)
         sys.exit(1)
@@ -62,27 +64,17 @@ def get_git_log(from_tag, to_tag):
 def read_commits_from_file(filename):
     """Read commits from a file with the same format as git log output."""
     with open(filename, 'r') as f:
-        lines = f.readlines()
-    return lines
+        content = f.read()
+    # Split on record separator (0x1e), remove empty strings
+    commits = [c.strip() for c in content.split('\x1e') if c.strip()]
+    return commits
 
 
-def parse_commits(lines):
-    """Parse commit lines in format 'hash|subject|body'."""
-    commits = []
-    current = []
-    for line in lines:
-        line = line.rstrip('\n')
-        if line and '|' in line and line.count('|') >= 2:
-            if current:
-                commits.append(''.join(current))
-                current = []
-        current.append(line + '\n')
-    if current:
-        commits.append(''.join(current))
-
+def parse_commits(commits):
+    """Parse commit strings in format 'hash<0x1f>subject<0x1f>body'."""
     parsed = []
     for commit in commits:
-        parts = commit.split('|', 2)
+        parts = commit.split('\x1f', 2)
         if len(parts) < 3:
             continue
         hash_, subject, body = parts[0], parts[1], parts[2]

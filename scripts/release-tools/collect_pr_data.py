@@ -14,14 +14,14 @@ import sys
 from datetime import datetime
 
 
-def run(cmd):
-    """Run shell command and return output."""
-    return subprocess.check_output(cmd, shell=True, text=True).strip()
+def run(cmd_list):
+    """Run command and return output."""
+    return subprocess.check_output(cmd_list, text=True).strip()
 
 
 def get_merge_commits(from_tag, to_tag):
     """Get merge commits between two tags."""
-    merge_log = run(f"git log {from_tag}..{to_tag} --merges --pretty=format:'%H|%s'")
+    merge_log = run(["git", "log", f"{from_tag}..{to_tag}", "--merges", "--pretty=format:%H|%s"])
     lines = merge_log.split('\n')
     prs = []
     for line in lines:
@@ -41,11 +41,11 @@ def fetch_pr_details(pr_numbers, verbose=False):
         if verbose:
             print(f"Fetching PR #{pr_num}...")
         try:
-            data = run(f'gh pr view {pr_num} --json title,body,number,url,labels,state,createdAt,mergedAt,author')
+            data = run(["gh", "pr", "view", str(pr_num), "--json", "title,body,number,url,labels,state,createdAt,mergedAt,author"])
             pr = json.loads(data)
             # Also get commits in PR if possible
             try:
-                commits_data = run(f'gh pr view {pr_num} --json commits')
+                commits_data = run(["gh", "pr", "view", str(pr_num), "--json", "commits"])
                 commits_json = json.loads(commits_data)
                 pr['commits'] = commits_json.get('commits', [])
             except subprocess.CalledProcessError:

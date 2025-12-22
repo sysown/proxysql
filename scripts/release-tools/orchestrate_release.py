@@ -21,19 +21,19 @@ import os
 from pathlib import Path
 
 
-def run_cmd(cmd, verbose=False):
+def run_cmd(cmd_list, verbose=False):
     """Run command and return output."""
     if verbose:
-        print(f"Running: {cmd}")
+        print(f"Running: {' '.join(cmd_list)}")
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Error running command: {cmd}", file=sys.stderr)
-            print(f"Error output: {result.stderr}", file=sys.stderr)
-            return None
+        result = subprocess.run(cmd_list, capture_output=True, text=True, check=True)
         return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        print(f"Error running command: {' '.join(cmd_list)}", file=sys.stderr)
+        print(f"Error output: {e.stderr}", file=sys.stderr)
+        return None
     except Exception as e:
-        print(f"Exception running command {cmd}: {e}", file=sys.stderr)
+        print(f"Exception running command {' '.join(cmd_list)}: {e}", file=sys.stderr)
         return None
 
 
@@ -174,11 +174,11 @@ Examples:
     pr_data_file = output_dir / f"pr-data-{args.to_tag}.json"
     pr_summary_file = output_dir / f"pr-summary-{args.to_tag}.md"
 
-    cmd = f"python {Path(__file__).parent}/collect_pr_data.py --from-tag {args.from_tag} --to-tag {args.to_tag} --output {pr_data_file} --verbose"
-    if not args.verbose:
-        cmd = cmd.replace(" --verbose", "")
+    cmd_list = ["python", str(Path(__file__).parent / "collect_pr_data.py"), "--from-tag", args.from_tag, "--to-tag", args.to_tag, "--output", str(pr_data_file)]
+    if args.verbose:
+        cmd_list.append("--verbose")
 
-    result = run_cmd(cmd, args.verbose)
+    result = run_cmd(cmd_list, args.verbose)
     if result is None:
         print("Failed to collect PR data", file=sys.stderr)
         sys.exit(1)
@@ -191,11 +191,11 @@ Examples:
         print("\n2. Generating structured notes...")
 
     structured_file = output_dir / f"structured-notes-{args.to_tag}.md"
-    cmd = f"python {Path(__file__).parent}/generate_structured_notes.py --input {pr_data_file} --output {structured_file}"
+    cmd_list = ["python", str(Path(__file__).parent / "generate_structured_notes.py"), "--input", str(pr_data_file), "--output", str(structured_file)]
     if args.verbose:
-        cmd += " --verbose"
+        cmd_list.append("--verbose")
 
-    result = run_cmd(cmd, args.verbose)
+    result = run_cmd(cmd_list, args.verbose)
     if result is None:
         print("Failed to generate structured notes", file=sys.stderr)
         sys.exit(1)
@@ -207,9 +207,11 @@ Examples:
         print("\n3. Categorizing commits...")
 
     commit_cat_file = output_dir / f"commit-categories-{args.to_tag}.md"
-    cmd = f"python {Path(__file__).parent}/categorize_commits.py --from-tag {args.from_tag} --to-tag {args.to_tag} --output-format markdown > {commit_cat_file}"
-
-    result = run_cmd(cmd, args.verbose)
+    cmd_list = ["python", str(Path(__file__).parent / "categorize_commits.py"), "--from-tag", args.from_tag, "--to-tag", args.to_tag, "--output-format", "markdown"]
+    result = run_cmd(cmd_list, args.verbose)
+    if result is not None:
+        with open(commit_cat_file, 'w') as f:
+            f.write(result)
     if result is None:
         print("Failed to categorize commits", file=sys.stderr)
 

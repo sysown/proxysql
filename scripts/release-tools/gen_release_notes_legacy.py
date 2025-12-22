@@ -3,11 +3,11 @@ import subprocess
 import re
 import json
 
-def run(cmd):
-    return subprocess.check_output(cmd, shell=True, text=True).strip()
+def run(cmd_list):
+    return subprocess.check_output(cmd_list, text=True).strip()
 
 # Get merge commits since v3.0.3
-merge_log = run("git log v3.0.3..v3.0 --merges --pretty=format:'%H %s'")
+merge_log = run(["git", "log", "v3.0.3..v3.0", "--merges", "--pretty=format:%H %s"])
 lines = merge_log.split('\n')
 pr_map = []
 for line in lines:
@@ -18,7 +18,7 @@ for line in lines:
             pr_num = match.group(1)
             # get second parent commit hash
             try:
-                second_parent = run(f"git rev-parse {hash_}^2")
+                second_parent = run(["git", "rev-parse", f"{hash_}^2"])
             except subprocess.CalledProcessError:
                 second_parent = hash_
             pr_map.append((pr_num, hash_, second_parent, subject))
@@ -29,7 +29,7 @@ print(f'Processed {len(pr_map)} PRs')
 pr_details = {}
 for pr_num, merge_hash, head_hash, subject in pr_map:
     try:
-        data = run(f'gh pr view {pr_num} --json title,body,number,url')
+        data = run(["gh", "pr", "view", str(pr_num), "--json", "title,body,number,url"])
         pr = json.loads(data)
         pr['merge_hash'] = merge_hash
         pr['head_hash'] = head_hash
@@ -207,7 +207,7 @@ detailed.append('This changelog includes all individual commits since ProxySQL 3
 detailed.append('\n')
 
 # Get all non-merge commits
-commits = run("git log v3.0.3..v3.0 --no-merges --pretty=format:'%H|%s|%b'").split('\n')
+commits = run(["git", "log", "v3.0.3..v3.0", "--no-merges", "--pretty=format:%H|%s|%b"]).split('\n')
 for line in commits:
     parts = line.split('|', 2)
     if len(parts) < 2:

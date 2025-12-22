@@ -20,14 +20,14 @@ import sys
 from pathlib import Path
 
 
-def run(cmd):
-    """Run shell command and return output."""
-    return subprocess.check_output(cmd, shell=True, text=True).strip()
+def run(cmd_list):
+    """Run command and return output."""
+    return subprocess.check_output(cmd_list, text=True).strip()
 
 
 def get_merge_commits(from_tag, to_tag):
     """Get merge commits between two tags and extract PR numbers."""
-    merge_log = run(f"git log {from_tag}..{to_tag} --merges --pretty=format:'%H %s'")
+    merge_log = run(["git", "log", f"{from_tag}..{to_tag}", "--merges", "--pretty=format:%H %s"])
     lines = merge_log.split('\n')
     pr_map = []
     for line in lines:
@@ -38,7 +38,7 @@ def get_merge_commits(from_tag, to_tag):
                 pr_num = match.group(1)
                 # get second parent commit hash (PR head)
                 try:
-                    second_parent = run(f"git rev-parse {hash_}^2")
+                    second_parent = run(["git", "rev-parse", f"{hash_}^2"])
                 except subprocess.CalledProcessError:
                     second_parent = hash_
                 pr_map.append((pr_num, hash_, second_parent, subject))
@@ -52,7 +52,7 @@ def fetch_pr_details(pr_numbers, verbose=False):
         if verbose:
             print(f"Fetching PR #{pr_num}...")
         try:
-            data = run(f'gh pr view {pr_num} --json title,body,number,url,labels,state,createdAt,mergedAt')
+            data = run(["gh", "pr", "view", str(pr_num), "--json", "title,body,number,url,labels,state,createdAt,mergedAt"])
             pr = json.loads(data)
             pr_details[pr_num] = pr
         except subprocess.CalledProcessError as e:

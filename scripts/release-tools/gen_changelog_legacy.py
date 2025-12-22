@@ -3,11 +3,11 @@ import subprocess
 import re
 import sys
 
-def run(cmd):
-    return subprocess.check_output(cmd, shell=True, text=True).strip()
+def run(cmd_list):
+    return subprocess.check_output(cmd_list, text=True).strip()
 
 # Get merge commits since v3.0.3
-merge_log = run("git log v3.0.3..v3.0 --merges --pretty=format:'%H %s'")
+merge_log = run(["git", "log", "v3.0.3..v3.0", "--merges", "--pretty=format:%H %s"])
 lines = merge_log.split('\n')
 prs = []
 for line in lines:
@@ -27,9 +27,8 @@ print(f'Found {len(prs)} PR merges')
 # For each PR, get commits in PR branch (second parent)
 pr_commits = {}
 for hash_, pr_num, subject in prs:
-    cmd = f"git log --oneline --no-merges {hash_}^2"
     try:
-        output = run(cmd)
+        output = run(["git", "log", "--oneline", "--no-merges", f"{hash_}^2"])
     except subprocess.CalledProcessError as e:
         # maybe merge commit has only one parent? skip
         continue

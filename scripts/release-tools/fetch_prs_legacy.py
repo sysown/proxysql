@@ -4,11 +4,11 @@ import json
 import re
 import sys
 
-def run(cmd):
-    return subprocess.check_output(cmd, shell=True, text=True).strip()
+def run(cmd_list):
+    return subprocess.check_output(cmd_list, text=True).strip()
 
 # Get merge commits since v3.0.3
-merge_log = run("git log v3.0.3..v3.0 --merges --pretty=format:'%H %s'")
+merge_log = run(["git", "log", "v3.0.3..v3.0", "--merges", "--pretty=format:%H %s"])
 lines = merge_log.split('\n')
 pr_numbers = []
 for line in lines:
@@ -22,7 +22,7 @@ print(f'Found {len(pr_numbers)} PRs')
 prs = []
 for num in pr_numbers:
     try:
-        data = run(f'gh pr view {num} --json title,body,number,url,labels')
+        data = run(["gh", "pr", "view", str(num), "--json", "title,body,number,url,labels"])
         pr = json.loads(data)
         prs.append(pr)
     except subprocess.CalledProcessError as e:

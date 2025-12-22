@@ -16,14 +16,14 @@ import argparse
 import sys
 
 
-def run(cmd):
-    """Run shell command and return output."""
-    return subprocess.check_output(cmd, shell=True, text=True).strip()
+def run(cmd_list):
+    """Run command and return output."""
+    return subprocess.check_output(cmd_list, text=True).strip()
 
 
 def get_merge_commits(from_tag, to_tag):
     """Get merge commits between two tags."""
-    merge_log = run(f"git log {from_tag}..{to_tag} --merges --pretty=format:'%H %s'")
+    merge_log = run(["git", "log", f"{from_tag}..{to_tag}", "--merges", "--pretty=format:%H %s"])
     lines = merge_log.split('\n')
     prs = []
     for line in lines:
@@ -42,9 +42,8 @@ def get_pr_commits(prs):
     """For each PR merge commit, get commits in the PR branch (second parent)."""
     pr_commits = {}
     for hash_, pr_num, subject in prs:
-        cmd = f"git log --oneline --no-merges {hash_}^2"
         try:
-            output = run(cmd)
+            output = run(["git", "log", "--oneline", "--no-merges", f"{hash_}^2"])
         except subprocess.CalledProcessError:
             # merge commit may have only one parent, skip
             continue
