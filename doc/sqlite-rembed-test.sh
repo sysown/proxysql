@@ -41,11 +41,11 @@ MYSQL_USER="root"
 MYSQL_PASS="root"
 
 # API Configuration - using synthetic OpenAI endpoint for testing
-# IMPORTANT: Replace YOUR_API_KEY with your actual API key
+# IMPORTANT: Set API_KEY environment variable or replace YOUR_API_KEY below
 API_CLIENT_NAME="test-client-$(date +%s)"
 API_FORMAT="openai"
 API_URL="https://api.synthetic.new/openai/v1/embeddings"
-API_KEY="YOUR_API_KEY"  # Replace with your actual API key
+API_KEY="${API_KEY:-YOUR_API_KEY}"  # Uses environment variable or placeholder
 API_MODEL="hf:nomic-ai/nomic-embed-text-v1.5"
 VECTOR_DIMENSIONS=768  # Based on model output
 

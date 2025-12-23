@@ -31,11 +31,11 @@ MYSQL_USER="root"
 MYSQL_PASS="root"
 
 # API Configuration - using synthetic OpenAI endpoint for demonstration
-# IMPORTANT: Replace YOUR_API_KEY with your actual API key
+# IMPORTANT: Set API_KEY environment variable or replace YOUR_API_KEY below
 API_CLIENT_NAME="demo-client-$(date +%s)"
 API_FORMAT="openai"
 API_URL="https://api.synthetic.new/openai/v1/embeddings"
-API_KEY="YOUR_API_KEY"  # Replace with your actual API key
+API_KEY="${API_KEY:-YOUR_API_KEY}"  # Uses environment variable or placeholder
 API_MODEL="hf:nomic-ai/nomic-embed-text-v1.5"
 VECTOR_DIMENSIONS=768  # Based on model output
 
@@ -87,6 +87,13 @@ create_demo_sql() {
 -- ProxySQL: ${PROXYSQL_HOST}:${PROXYSQL_PORT}
 -- API Endpoint: ${API_URL}
 --------------------------------------------------------------------
+-- Cleanup: Remove any existing demonstration tables
+DROP TABLE IF EXISTS demo_documents;
+DROP TABLE IF EXISTS demo_embeddings;
+DROP TABLE IF EXISTS demo_embeddings_info;
+DROP TABLE IF EXISTS demo_embeddings_chunks;
+DROP TABLE IF EXISTS demo_embeddings_rowids;
+DROP TABLE IF EXISTS demo_embeddings_vector_chunks00;
 
 --------------------------------------------------------------------
 -- Phase 1: Basic Connectivity and Function Verification
@@ -196,7 +203,8 @@ SELECT id, title, length(content) as content_length FROM demo_documents;
 SELECT 'Phase 5: Embedding Generation and Storage' as phase;
 
 -- Generate and store embeddings for all documents
-INSERT INTO demo_embeddings(rowid, embedding)
+-- Using INSERT OR REPLACE to handle existing rows (cleanup should have removed them)
+INSERT OR REPLACE INTO demo_embeddings(rowid, embedding)
 SELECT id, rembed('$API_CLIENT_NAME', content)
 FROM demo_documents;
 
@@ -217,28 +225,37 @@ SELECT 'Phase 6: Similarity Search' as phase;
 
 -- Exact self-match (should have distance 0.0)
 SELECT d.title, d.content, e.distance
-FROM demo_embeddings e
-JOIN demo_documents d ON e.rowid = d.id
-WHERE e.embedding MATCH rembed('$API_CLIENT_NAME',
-       'Machine learning algorithms improve with more training data and computational power.')
-LIMIT 3;
+FROM (
+  SELECT rowid, distance
+  FROM demo_embeddings
+  WHERE embedding MATCH rembed('$API_CLIENT_NAME',
+       'Machine learning algorithms improve with more training data and computational power.') 
+  LIMIT 3
+) e
+JOIN demo_documents d ON e.rowid = d.id;
+
 
 -- Similarity search with query text
 SELECT d.title, d.content, e.distance
-FROM demo_embeddings e
-JOIN demo_documents d ON e.rowid = d.id
-WHERE e.embedding MATCH rembed('$API_CLIENT_NAME',
+FROM (
+  SELECT rowid, distance
+  FROM demo_embeddings
+  WHERE embedding MATCH rembed('$API_CLIENT_NAME',
        'data science and algorithms')
-LIMIT 3;
+  LIMIT 3
+) e
+JOIN demo_documents d ON e.rowid = d.id;
 
 -- Ordered similarity search (closest matches first)
-SELECT d.title, e.distance
-FROM demo_embeddings e
-JOIN demo_documents d ON e.rowid = d.id
-WHERE e.embedding MATCH rembed('$API_CLIENT_NAME',
+SELECT d.title, d.content, e.distance
+FROM (
+  SELECT rowid, distance
+  FROM demo_embeddings
+  WHERE embedding MATCH rembed('$API_CLIENT_NAME',
        'artificial intelligence and neural networks')
-ORDER BY e.distance ASC
-LIMIT 3;
+  LIMIT 3
+) e
+JOIN demo_documents d ON e.rowid = d.id;
 
 --------------------------------------------------------------------
 -- Phase 7: Edge Cases and Error Handling
