@@ -130,6 +130,7 @@ ifeq ($(CENTOSVER),6)
 	MYLIBS += -lgcrypt
 endif
 
+SQLITE_REMBED_LIB := $(DEPS_PATH)/sqlite3/libsqlite_rembed.a
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(JEMALLOC_LDIR)/libjemalloc.a
@@ -145,7 +146,7 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
 	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
 endif
-LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
+LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a $(SQLITE_REMBED_LIB)
 
 ODIR := obj
 

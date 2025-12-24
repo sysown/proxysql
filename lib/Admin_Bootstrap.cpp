@@ -93,6 +93,7 @@ using json = nlohmann::json;
  * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
  */
 extern "C" int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+extern "C" int sqlite3_rembed_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 #include "microhttpd.h"
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
@@ -609,6 +610,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * for SQLite's auto-extension mechanism.
 	 */
 	sqlite3_auto_extension( (void(*)(void))sqlite3_vec_init);
+	sqlite3_auto_extension( (void(*)(void))sqlite3_rembed_init);
 
 	/**
 	 * @brief Open the stats database with shared cache mode
