@@ -34,8 +34,8 @@ Released packages can be found here: https://github.com/sysown/proxysql/releases
 
 Just download a package and use your systems package manager to install it:
 ```bash
-wget https://github.com/sysown/proxysql/releases/download/v2.4.2/proxysql_2.4.2-ubuntu20_amd64.deb
-dpkg -i proxysql_2.4.2-ubuntu20_amd64.deb
+wget https://github.com/sysown/proxysql/releases/download/v3.0.3/proxysql_3.0.3-ubuntu24_amd64.deb
+dpkg -i proxysql_3.0.3-ubuntu24_amd64.deb
 ```
 
 Alternatively you can also use the available repositories:
@@ -45,8 +45,8 @@ Alternatively you can also use the available repositories:
 Adding repository:
 ```bash
 apt-get update && apt-get install -y --no-install-recommends lsb-release wget apt-transport-https ca-certificates
-wget -nv -O /etc/apt/trusted.gpg.d/proxysql-2.4.x-keyring.gpg 'https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/repo_pub_key.gpg'
-echo "deb https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/$(lsb_release -sc)/ ./" | tee /etc/apt/sources.list.d/proxysql.list
+wget -nv -O /etc/apt/trusted.gpg.d/proxysql-3.0.x-keyring.gpg 'https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key.gpg'
+echo "deb https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/$(lsb_release -sc)/ ./" | tee /etc/apt/sources.list.d/proxysql.list
 ```
 
 Installing:
@@ -62,9 +62,9 @@ Adding repository:
 cat > /etc/yum.repos.d/proxysql.repo << EOF
 [proxysql]
 name=ProxySQL YUM repository
-baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/centos/\$releasever
+baseurl=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/\$releasever
 gpgcheck=1
-gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/repo_pub_key
+gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key
 EOF
 ```
 
@@ -80,9 +80,9 @@ Adding repository:
 cat > /etc/yum.repos.d/proxysql.repo << EOF
 [proxysql]
 name=ProxySQL YUM repository
-baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/centos/8
+baseurl=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/centos/8
 gpgcheck=1
-gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/repo_pub_key
+gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key
 EOF
 ```
 
@@ -98,9 +98,9 @@ Adding repository:
 cat > /etc/yum.repos.d/proxysql.repo << EOF
 [proxysql]
 name=ProxySQL YUM repository
-baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/almalinux/\$releasever
+baseurl=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/almalinux/\$releasever
 gpgcheck=1
-gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/repo_pub_key
+gpgkey=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/repo_pub_key
 EOF
 ```
 
@@ -118,13 +118,13 @@ cat > /etc/zypp/repos.d/proxysql.repo << EOF
 name=ProxySQL Zypper repository
 enabled=1
 autorefresh=0
-baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/opensuse/\$releasever_major
+baseurl=https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/opensuse/\$releasever_major
 gpgcheck=1
 EOF
 ```
 or
 ```bash
-zypper addrepo -g -n 'ProxySQL Zypper repository' 'https://repo.proxysql.com/ProxySQL/proxysql-2.4.x/opensuse/$releasever_major' proxysql
+zypper addrepo -g -n 'ProxySQL Zypper repository' 'https://repo.proxysql.com/ProxySQL/proxysql-3.0.x/opensuse/$releasever_major' proxysql
 ```
 
 Installing:
@@ -215,8 +215,8 @@ service proxysql-initial start
 ### Upgrades
 Just install the new package and restart ProxySQL:
 ```bash
-wget https://github.com/sysown/proxysql/releases/download/v2.1.0/proxysql_2.1.0-ubuntu16_amd64.deb
-dpkg -i proxysql_2.1.0-ubuntu16_amd64.deb
+wget https://github.com/sysown/proxysql/releases/download/v3.0.3/proxysql_3.0.3-ubuntu24_amd64.deb
+dpkg -i proxysql_3.0.3-ubuntu24_amd64.deb
 service proxysql restart
 ```
 
@@ -225,7 +225,7 @@ service proxysql restart
 $ proxysql --version
 ```
 ```bash
-ProxySQL version 2.1.0-544-g17a4b4a7, codename Truls
+ProxySQL version 3.0.3-291-gcce161b, codename Truls
 ```
 A debug version has `_DEBUG` in its version string.
 It is slower than non-debug version, but easier to debug in case of failures.
@@ -233,8 +233,7 @@ It is slower than non-debug version, but easier to debug in case of failures.
 $ proxysql --version
 ```
 ```bash
-Main init phase0 completed in 0.000146 secs.
-ProxySQL version 2.1.0-544-g17a4b4a7_DEBUG, codename Truls
+ProxySQL version 3.0.3-291-gcce161b_DEBUG, codename Truls
 ```
 
 ### Configuring ProxySQL via the `admin interface`
