@@ -14,7 +14,8 @@ Prerequisites:
 2. Posts_embeddings virtual table must exist:
    CREATE VIRTUAL TABLE Posts_embeddings USING vec0(embedding float[768]);
 
-Environment variable API_KEY must be set for API authentication.
+For remote API: Environment variable API_KEY must be set for API authentication.
+For local Ollama: Use --local-ollama flag (no API_KEY required).
 If Posts_embeddings table doesn't exist, the script will fail.
 """
 
@@ -52,11 +53,16 @@ def parse_args():
                        help='Batch size for embedding generation (default: 10)')
     parser.add_argument('--retry-delay', type=int, default=5,
                        help='Delay in seconds on error (default: 5)')
+    parser.add_argument('--local-ollama', action='store_true',
+                       help='Use local Ollama server instead of remote API (no API_KEY required)')
 
     return parser.parse_args()
 
-def check_env():
+def check_env(args):
     """Check required environment variables."""
+    if args.local_ollama:
+        # Local Ollama doesn't require API key
+        return None
     api_key = os.getenv('API_KEY')
     if not api_key:
         print("ERROR: API_KEY environment variable must be set")
@@ -85,18 +91,33 @@ def configure_client(conn, args, api_key):
     """Configure rembed API client."""
     cursor = conn.cursor()
 
-    insert_sql = f"""
-    INSERT INTO temp.rembed_clients(name, options) VALUES
-      (
-        '{args.client_name}',
-        rembed_client_options(
-          'format', '{args.api_format}',
-          'url', '{args.api_url}',
-          'key', '{api_key}',
-          'model', '{args.api_model}'
-        )
-      );
-    """
+    if args.local_ollama:
+        # Local Ollama configuration
+        insert_sql = f"""
+        INSERT INTO temp.rembed_clients(name, options) VALUES
+          (
+            '{args.client_name}',
+            rembed_client_options(
+              'format', 'ollama',
+              'url', 'http://localhost:11434/api/embeddings',
+              'model', 'nomic-embed-text-v1.5'
+            )
+          );
+        """
+    else:
+        # Remote API configuration
+        insert_sql = f"""
+        INSERT INTO temp.rembed_clients(name, options) VALUES
+          (
+            '{args.client_name}',
+            rembed_client_options(
+              'format', '{args.api_format}',
+              'url', '{args.api_url}',
+              'key', '{api_key}',
+              'model', '{args.api_model}'
+            )
+          );
+        """
 
     try:
         cursor.execute(insert_sql)
@@ -190,7 +211,7 @@ def process_batch(conn, args):
 def main():
     """Main processing loop."""
     args = parse_args()
-    api_key = check_env()
+    api_key = check_env(args)
 
     print("=" * 60)
     print("Posts Table Embeddings Processor")
@@ -199,8 +220,14 @@ def main():
     print(f"Database: {args.database}")
     print(f"API Client: {args.client_name}")
     print(f"Batch Size: {args.batch_size}")
-    print(f"API URL: {args.api_url}")
-    print(f"Model: {args.api_model}")
+    if args.local_ollama:
+        print(f"Mode: Local Ollama")
+        print(f"URL: http://localhost:11434/api/embeddings")
+        print(f"Model: nomic-embed-text-v1.5")
+    else:
+        print(f"Mode: Remote API")
+        print(f"API URL: {args.api_url}")
+        print(f"Model: {args.api_model}")
     print("=" * 60)
 
     # Connect to database
