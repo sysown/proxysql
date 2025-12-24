@@ -42,6 +42,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "PgSQL_Monitor.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -322,6 +323,7 @@ extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
+extern PgSQL_Monitor* GloPgMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
 extern void (*flush_logs_function)();
@@ -1207,6 +1209,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool monitor_mysql_server_aws_aurora_log=false;
 	bool monitor_mysql_server_aws_aurora_check_status=false;
 
+	bool monitor_pgsql_server_aws_aurora_log=false;
+	bool monitor_pgsql_server_aws_aurora_check_status=false;
+
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
 	bool stats_proxysql_message_metrics = false;
@@ -1384,6 +1389,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				||
 				strstr(query_no_space, "runtime_pgsql_replication_hostgroups")
 				||
+				strstr(query_no_space, "runtime_pgsql_aws_aurora_hostgroups")
+				||
 				strstr(query_no_space, "runtime_pgsql_hostgroup_attributes")
 				) {
 				runtime_pgsql_servers = true; refresh = true;
@@ -1466,6 +1473,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 	if (strstr(query_no_space,"mysql_server_aws_aurora_check_status")) {
 		monitor_mysql_server_aws_aurora_check_status=true; refresh=true;
+	}
+	if (strstr(query_no_space,"pgsql_server_aws_aurora_log")) {
+		monitor_pgsql_server_aws_aurora_log=true; refresh=true;
+	}
+	if (strstr(query_no_space,"pgsql_server_aws_aurora_check_status")) {
+		monitor_pgsql_server_aws_aurora_check_status=true; refresh=true;
 	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
@@ -1685,6 +1698,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (monitor_mysql_server_aws_aurora_check_status) {
 			if (GloMyMon) {
 				GloMyMon->populate_monitor_mysql_server_aws_aurora_check_status();
+			}
+		}
+		if (monitor_pgsql_server_aws_aurora_log) {
+			if (GloPgMon) {
+				GloPgMon->populate_monitor_pgsql_server_aws_aurora_log();
+			}
+		}
+		if (monitor_pgsql_server_aws_aurora_check_status) {
+			if (GloPgMon) {
+				GloPgMon->populate_monitor_pgsql_server_aws_aurora_check_status();
 			}
 		}
 		//pthread_mutex_unlock(&admin_mutex);
@@ -7158,6 +7181,56 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			rc = (*proxy_sqlite3_bind_text)(statement, 10, r->fields[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_settings
 			rc = (*proxy_sqlite3_bind_text)(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // servers_defaults
 			rc = (*proxy_sqlite3_bind_text)(statement, 12, r->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
+
+	// dump pgsql_aws_aurora_hostgroups
+
+	if (_runtime) {
+		query = (char*)"DELETE FROM main.runtime_pgsql_aws_aurora_hostgroups";
+	} else {
+		query = (char*)"DELETE FROM main.pgsql_aws_aurora_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset = PgHGM->dump_table_pgsql("pgsql_aws_aurora_hostgroups");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt* statement = NULL;
+
+		char* q = NULL;
+		if (_runtime) {
+			q = (char*)"INSERT INTO runtime_pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		} else {
+			q = (char*)"INSERT INTO pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		}
+
+		rc = admindb->prepare_v2(q, &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 11, atoi(r->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 12, atoi(r->fields[11])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 13, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);

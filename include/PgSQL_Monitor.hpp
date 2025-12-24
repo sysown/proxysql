@@ -108,6 +108,10 @@ struct PgSQL_Monitor {
 		PgSQL_AWS_Aurora_status_entry** lasts_ase, unsigned int ase_idx,
 		unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 	bool server_responds_to_ping(const char* addr, int port);
+
+	// Populate AWS Aurora monitoring tables
+	void populate_monitor_pgsql_server_aws_aurora_log();
+	void populate_monitor_pgsql_server_aws_aurora_check_status();
 };
 
 struct pgsql_conn_t {

@@ -2708,8 +2708,7 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 
 		if (PQstatus(conn) != CONNECTION_OK) {
 			error_msg = strdup(PQerrorMessage(conn));
-			proxy_error("Aurora PostgreSQL: Connection failed for %s:%d - %s\n",
-				hpa[cur_host_idx].host, hpa[cur_host_idx].port, error_msg);
+			// Note: Not logging here to match MySQL behavior - errors are stored in status entry
 			ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 			ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 			free(error_msg);
@@ -2726,8 +2725,7 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 
 			if (PQresultStatus(res) != PGRES_TUPLES_OK) {
 				error_msg = strdup(PQerrorMessage(conn));
-				proxy_error("Aurora PostgreSQL: Query failed for %s:%d - %s\n",
-					hpa[cur_host_idx].host, hpa[cur_host_idx].port, error_msg);
+				// Note: Not logging here to match MySQL behavior - errors are stored in status entry
 				ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 				ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 				free(error_msg);
@@ -2922,4 +2920,113 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 
 	proxy_info("Stopping Aurora PostgreSQL Monitor main thread\n");
 	return nullptr;
+}
+
+void PgSQL_Monitor::populate_monitor_pgsql_server_aws_aurora_log() {
+	SQLite3DB* db = &monitordb;
+	int rc;
+	char *query1 = nullptr;
+	query1 = (char *)"INSERT OR IGNORE INTO pgsql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+	sqlite3_stmt *statement1 = nullptr;
+	char *query2 = nullptr;
+	query2 = (char *)"INSERT OR IGNORE INTO pgsql_server_aws_aurora_log (hostname, port, time_start_us, success_time_us, error) VALUES (?1, ?2, ?3, ?4, ?5)";
+	sqlite3_stmt *statement2 = nullptr;
+	rc = db->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+	rc = db->prepare_v2(query2, &statement2);
+	ASSERT_SQLITE_OK(rc, db);
+	pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+	db->execute((char *)"DELETE FROM pgsql_server_aws_aurora_log");
+	std::map<std::string, PgSQL_AWS_Aurora_monitor_node *>::iterator it2;
+	PgSQL_AWS_Aurora_monitor_node *node = nullptr;
+	for (it2 = GloPgMon->AWS_Aurora_Hosts_Map.begin(); it2 != GloPgMon->AWS_Aurora_Hosts_Map.end(); ++it2) {
+		std::string s = it2->first;
+		node = it2->second;
+		std::size_t found = s.find_last_of(":");
+		std::string host = s.substr(0, found);
+		std::string port = s.substr(found + 1);
+		int i;
+		for (i = 0; i < PGSQL_AWS_Aurora_Nentries; i++) {
+			PgSQL_AWS_Aurora_status_entry *aase = node->last_entries[i];
+			if (aase && aase->start_time) {
+				if (aase->host_statuses->size()) {
+					for (std::vector<PgSQL_AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3 != aase->host_statuses->end(); ++it3) {
+						PgSQL_AWS_Aurora_replica_host_status_entry *hse = *it3;
+						if (hse) {
+							rc = (*proxy_sqlite3_bind_text)(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_int64)(statement1, 3, aase->start_time); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_int64)(statement1, 4, aase->check_time); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_text)(statement1, 5, aase->error, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_text)(statement1, 6, hse->server_id, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_text)(statement1, 7, hse->session_id, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_text)(statement1, 8, hse->last_update_timestamp, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_double)(statement1, 9, hse->replica_lag_ms); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_bind_int64)(statement1, 10, hse->estimated_lag_ms); ASSERT_SQLITE_OK(rc, db);
+							SAFE_SQLITE3_STEP2(statement1);
+							rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+							rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+						}
+					}
+				} else {
+					rc = (*proxy_sqlite3_bind_text)(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+					rc = (*proxy_sqlite3_bind_int64)(statement2, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, db);
+					rc = (*proxy_sqlite3_bind_int64)(statement2, 3, aase->start_time); ASSERT_SQLITE_OK(rc, db);
+					rc = (*proxy_sqlite3_bind_int64)(statement2, 4, aase->check_time); ASSERT_SQLITE_OK(rc, db);
+					rc = (*proxy_sqlite3_bind_text)(statement2, 5, aase->error, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+					SAFE_SQLITE3_STEP2(statement2);
+					rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
+					rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
+				}
+			}
+		}
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement2);
+	pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+}
+
+void PgSQL_Monitor::populate_monitor_pgsql_server_aws_aurora_check_status() {
+	SQLite3DB* db = &monitordb;
+	int rc;
+	char *query1 = nullptr;
+	query1 = (char *)"INSERT OR IGNORE INTO pgsql_server_aws_aurora_check_status VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+	sqlite3_stmt *statement1 = nullptr;
+	rc = db->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+	pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+	db->execute((char *)"DELETE FROM pgsql_server_aws_aurora_check_status");
+	std::map<std::string, PgSQL_AWS_Aurora_monitor_node *>::iterator it2;
+	PgSQL_AWS_Aurora_monitor_node *node = nullptr;
+	for (it2 = GloPgMon->AWS_Aurora_Hosts_Map.begin(); it2 != GloPgMon->AWS_Aurora_Hosts_Map.end(); ++it2) {
+		std::string s = it2->first;
+		node = it2->second;
+		std::size_t found = s.find_last_of(":");
+		std::string host = s.substr(0, found);
+		std::string port = s.substr(found + 1);
+		PgSQL_AWS_Aurora_status_entry *aase = node->last_entry();
+		char *error_msg = nullptr;
+		if (aase && aase->start_time) {
+			if (aase->error) {
+				error_msg = aase->error;
+			}
+		}
+		char lut[30];
+		struct tm __tm_info;
+		localtime_r(&node->last_checked_at, &__tm_info);
+		strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, node->writer_hostgroup); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 4, lut, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 5, node->num_checks_tot); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 6, node->num_checks_ok); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 7, error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
 }
