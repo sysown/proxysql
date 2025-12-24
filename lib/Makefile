@@ -89,8 +89,8 @@ HEADERS := ../include/*.h ../include/*.hpp
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
-	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o $(SQLITE3_LDIR)/vec.o
+	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o $(SQLITE3_LDIR)/vec.o
 
 $(ODIR):
 	mkdir $(ODIR)
