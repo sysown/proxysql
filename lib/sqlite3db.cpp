@@ -428,7 +428,7 @@ __exit_execute_statement:
 /**
  * @brief Executes a prepared SQL statement and returns the result set.
  *
- * @param str The SQL statement to execute.
+ * @param statement The prepared SQL statement to execute.
  * @param _error Pointer to a variable to store the error message.
  * @param _cols Pointer to a variable to store the number of columns.
  * @param _affected_rows Pointer to a variable to store the number of affected rows.
@@ -466,7 +466,6 @@ bool SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* col
 	int rc;
 	*error = NULL;
 	bool ret = false;
-	VALGRIND_DISABLE_ERROR_REPORTING;
 	*cols = (*proxy_sqlite3_column_count)(statement);
 	if (*cols == 0) { // not a SELECT
 		*resultset = NULL;
@@ -475,6 +474,10 @@ bool SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* col
 		do {
 			rc = (*proxy_sqlite3_step)(statement);
 			if (rc == SQLITE_LOCKED || rc == SQLITE_BUSY) { // the execution of the prepared statement failed because locked
+				if ((*proxy_sqlite3_get_autocommit)(db) == 0) {
+					*error = strdup((*proxy_sqlite3_errmsg)(db));
+					goto __exit_execute_prepared;
+				}
 				usleep(USLEEP_SQLITE_LOCKED);
 			}
 		} while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
