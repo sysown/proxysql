@@ -17,6 +17,30 @@ Prerequisites:
 For remote API: Environment variable API_KEY must be set for API authentication.
 For local Ollama: Use --local-ollama flag (no API_KEY required).
 If Posts_embeddings table doesn't exist, the script will fail.
+
+Usage Examples:
+
+1. Remote API (requires API_KEY environment variable):
+   export API_KEY='your-api-key'
+   python3 process_posts_embeddings.py \
+     --host 127.0.0.1 \
+     --port 6030 \
+     --user root \
+     --password root \
+     --database main \
+     --client-name posts-embed-client \
+     --batch-size 10
+
+2. Local Ollama server (no API_KEY required):
+   python3 process_posts_embeddings.py \
+     --local-ollama \
+     --host 127.0.0.1 \
+     --port 6030 \
+     --user root \
+     --password root \
+     --database main \
+     --client-name posts-embed-client \
+     --batch-size 10
 """
 
 import os
@@ -28,8 +52,22 @@ from mysql.connector import Error
 
 def parse_args():
     """Parse command line arguments."""
+    epilog = """
+Usage Examples:
+
+1. Remote API (requires API_KEY environment variable):
+   export API_KEY='your-api-key'
+   python3 process_posts_embeddings.py --host 127.0.0.1 --port 6030
+
+2. Local Ollama server (no API_KEY required):
+   python3 process_posts_embeddings.py --local-ollama --host 127.0.0.1 --port 6030
+
+See script docstring for full examples with all options.
+"""
     parser = argparse.ArgumentParser(
-        description='Process Posts table embeddings in ProxySQL SQLite3 server'
+        description='Process Posts table embeddings in ProxySQL SQLite3 server',
+        epilog=epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('--host', default='127.0.0.1',
                        help='ProxySQL SQLite3 server host (default: 127.0.0.1)')
