@@ -5,6 +5,10 @@ Process Posts table embeddings using sqlite-rembed in ProxySQL SQLite3 server.
 Connects to SQLite3 server via MySQL connector, configures API client,
 and processes unembedded Posts rows in batches of 10.
 
+Filters applied:
+- Only PostTypeId IN (1,2) (Questions and Answers)
+- Minimum text length > 30 characters (Title + Body)
+
 Prerequisites:
 1. Posts table must exist (copied from MySQL)
 2. Posts_embeddings virtual table must exist:
@@ -115,7 +119,9 @@ def get_remaining_count(conn):
     SELECT COUNT(*)
     FROM Posts
     LEFT JOIN Posts_embeddings ON Posts.rowid = Posts_embeddings.rowid
-    WHERE Posts_embeddings.rowid IS NULL;
+    WHERE Posts.PostTypeId IN (1,2)
+    AND LENGTH(COALESCE(Posts.Title || '', '') || Posts.Body) > 30
+    AND Posts_embeddings.rowid IS NULL;
     """
 
     try:
@@ -133,11 +139,16 @@ def get_remaining_count(conn):
         raise
 
 def get_total_posts(conn):
-    """Get total number of Posts."""
+    """Get total number of eligible Posts (PostTypeId 1,2 with text length > 30)."""
     cursor = conn.cursor()
 
     try:
-        cursor.execute("SELECT COUNT(*) FROM Posts;")
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM Posts
+            WHERE PostTypeId IN (1,2)
+            AND LENGTH(COALESCE(Posts.Title || '', '') || Posts.Body) > 30;
+        """)
         result = cursor.fetchone()
         if result and result[0] is not None:
             total = int(result[0])
@@ -160,7 +171,9 @@ def process_batch(conn, args):
            COALESCE(Posts.Title || ' ', '') || Posts.Body) as embedding
     FROM Posts
     LEFT JOIN Posts_embeddings ON Posts.rowid = Posts_embeddings.rowid
-    WHERE Posts_embeddings.rowid IS NULL
+    WHERE Posts.PostTypeId IN (1,2)
+    AND LENGTH(COALESCE(Posts.Title || '', '') || Posts.Body) > 30
+    AND Posts_embeddings.rowid IS NULL
     LIMIT {args.batch_size};
     """
 
