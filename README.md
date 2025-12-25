@@ -188,7 +188,7 @@ Type "help" for help.
 admin=# proxysql stop
 ```
 
-_(The examples above show the Admin interface workflow — the Admin SQL commands are the same for both MySQL and PostgreSQL modes.)__
+_(The examples above show the Admin interface workflow - the Admin SQL commands are the same for both MySQL and PostgreSQL modes.)_
 
 #### Restarting ProxySQL:
 ```bash
