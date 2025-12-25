@@ -406,7 +406,48 @@ After building, run the test executable directly:
 ./test/tap/tests/test_firewall-t
 ```
 
-## 7. Common Pitfalls
+## 7. Test Group Management (CI Run)
+
+All TAP tests must be registered in `test/tap/groups/groups.json` to be executed in CI. This requirement applies to both unit tests and integration tests.
+
+### 7.1 Understanding Test Groups
+
+The CI system uses `groups.json` to:
+- Track which tests exist and should be executed
+- Organize tests into logical groups for parallel execution
+- Enable selective test execution based on infrastructure requirements
+
+For example:
+
+- `default-g1`, `default-g2`, `default-g3`: Multiple instances running integration tests in parallel
+- `mysql84-g1`, `mysql90-g1`, `mysql-multiplexing=false-g1`: Infrastructures with different MySQL versions and ProxySQL configuration.
+- `unit-tests-g1`: Self-contained unit tests that don't require external infrastructure
+
+The `-g1`, `-g2`, `-g3` suffixes represent different parallel execution instances. They share the same base infrastructure configuration but run independently to speed up CI execution.
+
+**Important:** If you add a new test but don't register it in `groups.json`, **this will cause CI failure**.
+
+### 7.2 Adding a Test
+
+For unit tests that don't require external infrastructure:
+
+```json
+{
+  "unit-your_function_name-t": ["unit-tests-g1"]
+}
+```
+
+For integration tests that require a running ProxySQL instance and backend databases:
+
+```json
+{
+  "test_your_feature-t": ["default-g1"]
+}
+```
+
+If you are new to this project, you can assign tests to any of the default groups (`default-g1`, `default-g2`, `default-g3`, etc.). The distribution does not need to be perfectly balanced—the CI system will handle the workload. Additionally, ProxySQL maintainers periodically rearrange tests and improve group balance.
+
+## 8. Common Pitfalls
 
 1. **Forgetting to call `plan()`**: Always declare your test count. For table-driven tests, use `plan(num_tests)` where `num_tests` is the size of the test table
 2. **Mismatched test count**: Ensure `plan(N)` matches actual number of `ok()` calls
@@ -415,7 +456,7 @@ After building, run the test executable directly:
 5. **Missing diagnostic information**: Use `diag()` to add context when debugging test failures
 6. **Integration tests only**: Forgetting to clean up state, leaving ProxySQL in a modified configuration
 
-## 8. Unit vs Integration
+## 9. Unit vs Integration
 
 | Aspect | Unit Test | Integration Test |
 |--------|-----------|------------------|
