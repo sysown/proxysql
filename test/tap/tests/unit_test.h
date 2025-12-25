@@ -4,7 +4,7 @@
  */
 
 #define PROXYSQL_EXTERN
-#define EXCLUDE_TRACKING_VARAIABLES
+#define EXCLUDE_TRACKING_VARIABLES
 #define MAIN_PROXY_SQLITE3
 
 #include <memory>
