@@ -197,6 +197,54 @@ JOIN Posts p2 ON e.rowid = p2.rowid
 ORDER BY e.distance;
 ```
 
+### Example 3: Find Posts About "What is ProxySQL?" with Correct LIMIT Syntax
+
+When using `sqlite-vec`'s `MATCH` operator for similarity search, **you must include a `LIMIT` clause (or `k = ?` constraint) in the same query level as the `MATCH`**. This tells the extension how many nearest neighbors to return.
+
+**Common error**: `ERROR 1045 (28000): A LIMIT or 'k = ?' constraint is required on vec0 knn queries.`
+
+**Correct query**:
+
+```sql
+-- Find Posts about "What is ProxySQL?" using semantic similarity
+SELECT
+  p.Id,
+  p.Title,
+  SUBSTR(p.Body, 1, 200) AS Excerpt,
+  e.distance
+FROM (
+  -- LIMIT must be in the subquery that contains MATCH
+  SELECT rowid, distance
+  FROM Posts_embeddings
+  WHERE embedding MATCH rembed('posts-embed-client', 'What is ProxySQL?')
+  ORDER BY distance ASC
+  LIMIT 10          -- REQUIRED for vec0 KNN queries
+) e
+JOIN Posts p ON e.rowid = p.rowid
+ORDER BY e.distance ASC;
+```
+
+**Alternative using `k = ?` constraint** (instead of `LIMIT`):
+
+```sql
+SELECT p.Id, p.Title, e.distance
+FROM (
+  SELECT rowid, distance
+  FROM Posts_embeddings
+  WHERE embedding MATCH rembed('posts-embed-client', 'What is ProxySQL?')
+    AND k = 10      -- Alternative to LIMIT constraint
+  ORDER BY distance ASC
+) e
+JOIN Posts p ON e.rowid = p.rowid
+ORDER BY e.distance ASC;
+```
+
+**Key rules**:
+1. `LIMIT` or `k = ?` must be in the same query level as `MATCH`
+2. Cannot use both `LIMIT` and `k = ?` together – choose one
+3. When joining, put `MATCH` + `LIMIT` in a subquery
+4. The constraint tells `sqlite-vec` how many similar vectors to return
+
 ## Performance Considerations
 
 1. **API Rate Limiting**: The `rembed()` function makes HTTP requests to the API
