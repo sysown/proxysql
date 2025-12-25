@@ -9,6 +9,7 @@ Introduction
 ============	
 
 ProxySQL is a high performance, high availability, protocol aware proxy for MySQL and forks (like Percona Server and MariaDB).	
+It now also supports PostgreSQL (protocol-aware proxying for PostgreSQL), providing the same high-performance, HA and manageability features for Postgres workloads.
 All the while getting the unlimited freedom that comes with a GPL license.	
 
 Its development is driven by the lack of open source proxies that provide high performance.  	
@@ -34,8 +35,8 @@ Released packages can be found here: https://github.com/sysown/proxysql/releases
 
 Just download a package and use your systems package manager to install it:
 ```bash
-wget https://github.com/sysown/proxysql/releases/download/v3.0.3/proxysql_3.0.3-ubuntu24_amd64.deb
-dpkg -i proxysql_3.0.3-ubuntu24_amd64.deb
+wget https://github.com/sysown/proxysql/releases/download/v3.0.4/proxysql_3.0.4-ubuntu24_amd64.deb
+dpkg -i proxysql_3.0.4-ubuntu24_amd64.deb
 ```
 
 Alternatively you can also use the available repositories:
@@ -156,7 +157,7 @@ service proxysql start
 service proxysql stop
 ```
 
-Or alternatively via the Admin interface:
+Or alternatively via the Admin interface (MySQL admin example):
 ```
 $ mysql -u admin -padmin -h 127.0.0.1 -P6032 --prompt='Admin> '
 Warning: Using a password on the command line interface can be insecure.
@@ -175,12 +176,26 @@ Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
 Admin> proxysql stop
 ```
 
+For PostgreSQL admin interface the same Admin commands apply and the admin port defaults to 6132. 
+You can connect using the psql client as follows:
+```
+$ export PGPASSWORD=admin
+$ psql -U admin -h 127.0.0.1 -p6132
+psql (17.4 (Ubuntu 17.4-1.pgdg22.04+2), server 16.1)
+SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: none)
+Type "help" for help.
+
+admin=# proxysql stop
+```
+
+_(The examples above show the Admin interface workflow — the Admin SQL commands are the same for both MySQL and PostgreSQL modes.)__
+
 #### Restarting ProxySQL:
 ```bash
 service proxysql restart
 ```
 
-Or alternatively via the Admin interface:
+Or alternatively via the Admin interface (MySQL example):
 ```
 $ mysql -u admin -padmin -h 127.0.0.1 -P6032 --prompt='Admin> '
 Warning: Using a password on the command line interface can be insecure.
@@ -199,6 +214,17 @@ Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
 Admin> proxysql restart
 ```
 
+Or via the PostgreSQL admin port:
+```
+$ export PGPASSWORD=admin
+$ psql -U admin -h 127.0.0.1 -p6132
+psql (17.4 (Ubuntu 17.4-1.pgdg22.04+2), server 16.1)
+SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: none)
+Type "help" for help.
+
+admin=# proxysql restart
+```
+
 #### Reinitializing ProxySQL from the config file (after first startup the DB file is used instead of the config file):
 ```bash
 # If you are using the init script run:
@@ -215,8 +241,8 @@ service proxysql-initial start
 ### Upgrades
 Just install the new package and restart ProxySQL:
 ```bash
-wget https://github.com/sysown/proxysql/releases/download/v3.0.3/proxysql_3.0.3-ubuntu24_amd64.deb
-dpkg -i proxysql_3.0.3-ubuntu24_amd64.deb
+wget https://github.com/sysown/proxysql/releases/download/v3.0.4/proxysql_3.0.4-ubuntu24_amd64.deb
+dpkg -i proxysql_3.0.4-ubuntu24_amd64.deb
 service proxysql restart
 ```
 
@@ -225,7 +251,7 @@ service proxysql restart
 $ proxysql --version
 ```
 ```bash
-ProxySQL version 3.0.3-291-gcce161b, codename Truls
+ProxySQL version 3.0.4-162-gfaa64a5, codename Truls
 ```
 A debug version has `_DEBUG` in its version string.
 It is slower than non-debug version, but easier to debug in case of failures.
@@ -233,7 +259,7 @@ It is slower than non-debug version, but easier to debug in case of failures.
 $ proxysql --version
 ```
 ```bash
-ProxySQL version 3.0.3-291-gcce161b_DEBUG, codename Truls
+ProxySQL version 3.0.4-162-gfaa64a5_DEBUG, codename Truls
 ```
 
 ### Configuring ProxySQL via the `admin interface`
@@ -244,7 +270,7 @@ As a secondary way to configure it, we have the configuration file.
 
 #### Configuring ProxySQL through the admin interface
 
-To log into the admin interface (with the default credentials) use a mysql client and connect using the following `admin` credentials locally on port (6032):
+To log into the admin interface for MySQL (with the default credentials) use a mysql client and connect using the following `admin` credentials locally on port (6032):
 ```bash
 $ mysql -u admin -padmin -h 127.0.0.1 -P6032 --prompt='Admin> '
 Warning: Using a password on the command line interface can be insecure.
@@ -262,9 +288,18 @@ Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
 
 Admin>
 ```
-
 note: If your MySQL client version is version 8.04 or higher add `--default-auth=mysql_native_password` to the above command to connect to the admin interface.
 
+To log into the admin interface for PostgreSQL use the psql client and connect using admin on port 6132 (the Admin SQL commands are the same):
+```bash
+$ export PGPASSWORD=admin
+$ psql -U admin -h 127.0.0.1 -p6132
+psql (17.4 (Ubuntu 17.4-1.pgdg22.04+2), server 16.1)
+SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off, ALPN: none)
+Type "help" for help.
+
+admin=#
+```
 Once connected to the admin interface, you will have a list of databases and tables at your disposal that can be queried using the SQL language:
 ```mysql
 Admin> SHOW DATABASES;
@@ -308,12 +343,12 @@ Top-level sections:
 	mysql_users:
 	(
 		{
-			username = "root"
-			password = "root"
-			default_hostgroup = 0
+			username="root"
+			password="root"
+			default_hostgroup=0
 			max_connections=1000
 			default_schema="information_schema"
-			active = 1
+			active=1
 		}
 	)
 	```
@@ -321,6 +356,55 @@ Top-level sections:
 	
 	```bash
 	mysql_query_rules:
+	(
+		{
+			rule_id=1
+			active=1
+			match_pattern="^SELECT .* FOR UPDATE$"
+			destination_hostgroup=0
+			apply=1
+		},
+		{
+			rule_id=2
+			active=1
+			match_pattern="^SELECT"
+			destination_hostgroup=1
+			apply=1
+		}
+	)
+	```
+* `pgsql_variables`: contains global variables that control the functionality for handling the incoming PostgreSQL traffic.
+* `pgsql_servers`: contains rows for the `pgsql_servers` table from the admin interface. Basically, these define the backend servers towards which the incoming PostgreSQL traffic is routed. Rows are encoded as per the `.cfg` file format, here is an example:
+	
+	```bash
+	pgsql_servers =
+	(
+		{
+			address="127.0.0.1"
+			port=5432
+			hostgroup=0
+			max_connections=200
+		}
+	)
+	```
+* `pgsql_users`: contains rows for the `pgsql_users` table from the admin interface. Basically, these define the users which can connect to the proxy, and the users with which the proxy can connect to the backend servers. Rows are encoded as per the `.cfg` file format, here is an example:
+	
+	```bash
+	pgsql_users:
+	(
+		{
+			username="postgres"
+			password="postgres"
+			default_hostgroup=0
+			max_connections=1000
+			active=1
+		}
+	)
+	```
+* `pgsql_query_rules`: contains rows for the `pgsql_query_rules` table from the admin interface. Basically, these define the rules used to classify and route the incoming PostgreSQL traffic, according to various criteria (patterns matched, user used to run the query, etc.). Rows are encoded as per the `.cfg` file format, here is an example (Note: the example is a very generic query routing rule and it is recommended to create specific rules for queries rather than using a generic rule such as this):
+	
+	```bash
+	pgsql_query_rules:
 	(
 		{
 			rule_id=1
