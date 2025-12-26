@@ -5,16 +5,39 @@
 
 <a><img src="https://i0.wp.com/proxysql.com/wp-content/uploads/2020/04/ProxySQL-Colour-Logo.png?fit=800%2C278&ssl=1" alt="ProxySQL"></a>
 
-Introduction	
-============	
+Table of Contents
+=================
 
-ProxySQL is a high performance, high availability, protocol aware proxy for MySQL and forks (like Percona Server and MariaDB).	
-It now also supports PostgreSQL (protocol-aware proxying for PostgreSQL), providing the same high-performance, HA and manageability features for Postgres workloads.
-All the while getting the unlimited freedom that comes with a GPL license.	
+- [Introduction](#introduction)
+- [Useful links](#useful-links)
+- [Getting started](#getting-started)
+  - [Installation](#installation)
+    - [Ubuntu / Debian](#ubuntu--debian)
+    - [Red Hat / CentOS](#red-hat--centos)
+    - [Amazon Linux](#amazon-linux)
+    - [Almalinux](#almalinux)
+    - [OpenSUSE](#opensuse)
+    - [FreeBSD](#freebsd)
+  - [Service management](#service-management)
+    - [Starting ProxySQL](#starting-proxysql)
+    - [Stopping ProxySQL](#stopping-proxysql)
+    - [Restarting ProxySQL](#restarting-proxysql)
+    - [Reinitializing ProxySQL](#reinitializing-proxysql-from-the-config-file-after-first-startup-the-db-file-is-used-instead-of-the-config-file)
+  - [Upgrades](#upgrades)
+  - [How to check the ProxySQL version](#how-to-check-the-proxysql-version)
+  - [Configuring ProxySQL via the admin interface](#configuring-proxysql-via-the-admin-interface)
+    - [Configuring ProxySQL through the admin interface](#configuring-proxysql-through-the-admin-interface)
+    - [Configuring ProxySQL through the config file](#configuring-proxysql-through-the-config-file)
 
-Its development is driven by the lack of open source proxies that provide high performance.  	
+Introduction<a name="introduction"></a>
+============
 
-Useful links	
+ProxySQL is a high-performance, high-availability, protocol-aware proxy for MySQL and its forks (such as Percona Server and MariaDB), as well as PostgreSQL.
+All the while getting the unlimited freedom that comes with a GPL license.
+
+Its development is driven by the lack of open source proxies that provide high performance.
+
+Useful links<a name="useful-links"></a>	
 ===============	
 
 - [Official website](https://www.proxysql.com/)	
@@ -25,9 +48,9 @@ Useful links
 - [Forum](https://groups.google.com/forum/#!forum/proxysql/)
 - [Facebook](https://www.facebook.com/proxysql)	
 - [Linkedin](https://www.linkedin.com/groups/13581070/)	
-- [Twitter](https://twitter.com/proxysql)	
+- [Twitter](https://twitter.com/proxysql)
 
-Getting started
+Getting started<a name="getting-started"></a>
 ===============
 
 ### Installation
