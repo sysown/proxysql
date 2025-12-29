@@ -43,7 +43,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 3.0.1.f
+CURVER ?= 3.0.1.g
 #export DEBUG
 #export EXTRALINK
 export MAKE
