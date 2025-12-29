@@ -151,6 +151,7 @@ class MySQL_Data_Stream
 	unsigned int connect_tries;
 	int query_retries_on_failure;
 	int connect_retries_on_failure;
+	uint32_t unexp_com_pings { 0 };
 	enum mysql_data_stream_status DSS;
 	enum MySQL_DS_type myds_type;
 
@@ -176,6 +177,9 @@ class MySQL_Data_Stream
 	char kill_type;
 
 	bool encrypted;
+	// defer_close_due_to_fast_forward: Flag to prevent immediate closure of data stream
+	// during fast forward grace close, allowing buffers to drain.
+	bool defer_close_due_to_fast_forward;
 	bool net_failure;
 
 	uint8_t pkt_sid;

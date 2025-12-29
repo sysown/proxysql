@@ -6,7 +6,9 @@
 #undef min
 #undef max
 #include <cstdint>
+#include <memory>
 #include <vector>
+#include <utility>
 #define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 
 #ifndef SAFE_SQLITE3_STEP2
@@ -40,7 +42,9 @@ extern int (*proxy_sqlite3_close_v2)(sqlite3*);
 extern int (*proxy_sqlite3_get_autocommit)(sqlite3*);
 extern void (*proxy_sqlite3_free)(void*);
 extern int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFlag);
+extern int (*proxy_sqlite3_status64)(int op, long long *pCurrent, long long *pHighwater, int resetFlag);
 extern int (*proxy_sqlite3_changes)(sqlite3*);
+extern long long (*proxy_sqlite3_total_changes64)(sqlite3*);
 extern int (*proxy_sqlite3_step)(sqlite3_stmt*);
 extern int (*proxy_sqlite3_config)(int, ...);
 extern int (*proxy_sqlite3_shutdown)(void);
@@ -87,7 +91,10 @@ int (*proxy_sqlite3_close_v2)(sqlite3*);
 int (*proxy_sqlite3_get_autocommit)(sqlite3*);
 void (*proxy_sqlite3_free)(void*);
 int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFlag);
+int (*proxy_sqlite3_status64)(int op, long long *pCurrent, long long *pHighwater, int resetFlag);
+
 int (*proxy_sqlite3_changes)(sqlite3*);
+long long (*proxy_sqlite3_total_changes64)(sqlite3*);
 int (*proxy_sqlite3_step)(sqlite3_stmt*);
 int (*proxy_sqlite3_config)(int, ...);
 int (*proxy_sqlite3_shutdown)(void);
@@ -165,6 +172,18 @@ class SQLite3_result {
 	void dump_to_stderr();
 };
 
+/**
+ * @brief Helper type for finalizing 'sqlite3_stmt' managed by smart pointers.
+ */
+struct stmt_deleter_t {
+	void operator()(sqlite3_stmt* x) const;
+};
+
+/**
+ * @brief Safe type for automatically deallocation of 'sqlite3_stmt'.
+ */
+using stmt_unique_ptr = std::unique_ptr<sqlite3_stmt, stmt_deleter_t>;
+
 class SQLite3DB {
 	private:
 	char *url;
@@ -187,11 +206,20 @@ class SQLite3DB {
 	bool execute_statement(const char *, char **, int *, int *, SQLite3_result **);
 	SQLite3_result* execute_statement(const char *, char **_error=NULL, int *_cols=NULL, int *_affected_rows=NULL);
 	bool execute_statement_raw(const char *, char **, int *, int *, sqlite3_stmt **);
+	bool execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset);
+	SQLite3_result* execute_prepared(sqlite3_stmt* statement, char** _error, int* cols, int* affected_rows);
 	int return_one_int(const char *);
 	int check_table_structure(char *table_name, char *table_def);
 	bool build_table(char *table_name, char *table_def, bool dropit);
 	bool check_and_build_table(char *table_name, char *table_def);
+	[[deprecated("Use safer alternative 'prepare_v2(const char *)'")]]
 	int prepare_v2(const char *, sqlite3_stmt **);
+	/**
+	 * @brief Prepares a query as a statement in the SQLite3DB.
+	 * @param query The query to be prepared as an 'sqlite3_stmt'.
+	 * @return A pair of with shape { err_code, stmt_unique_ptr }.
+	 */
+	std::pair<int,stmt_unique_ptr> prepare_v2(const char* query);
 	static void LoadPlugin(const char *);
 };
 

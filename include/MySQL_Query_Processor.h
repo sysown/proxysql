@@ -6,7 +6,7 @@
 #include "query_processor.h"
 
 class Command_Counter;
-typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t { 
+typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t {
 	int gtid_from_hostgroup;
 } MySQL_Query_Processor_Rule_t;
 
@@ -54,8 +54,8 @@ public:
 	static MySQL_Query_Processor_Rule_t* new_query_rule(int rule_id, bool active, const char* username, const char* schemaname, int flagIN, const char* client_addr,
 		const char* proxy_addr, int proxy_port, const char* digest, const char* match_digest, const char* match_pattern, bool negate_match_pattern,
 		const char* re_modifiers, int flagOUT, const char* replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result,
-		int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_hostgroup,
-		int mirror_flagOUT, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log,
+		int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT,
+		int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log,
 		bool apply, const char* attributes, const char* comment);
 
 private:
@@ -75,14 +75,22 @@ private:
 	inline
 	void query_parser_first_comment_extended(const char* key, const char* value, MySQL_Query_Processor_Output* qpo) {
 		if (!strcasecmp(key, "min_gtid")) {
-			size_t l = strlen(value);
-			if (_is_valid_gtid((char*)value, l)) {
-				char* buf = (char*)malloc(l + 1);
-				strncpy(buf, value, l);
-				buf[l + 1] = '\0';
-				qpo->min_gtid = buf;
+			if (mysql_thread___ignore_min_gtid_annotations) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
 			} else {
-				proxy_warning("Invalid gtid value=%s\n", value);
+				size_t l = strlen(value);
+				if (_is_valid_gtid((char*)value, l)) {
+					char* buf = (char*)malloc(l + 1);
+					strncpy(buf, value, l);
+					buf[l] = '\0';
+
+					if (qpo->min_gtid) {
+						free(qpo->min_gtid);
+					}
+					qpo->min_gtid = buf;
+				} else {
+					proxy_warning("Invalid min_gtid value=%s\n", value);
+				}
 			}
 		}
 	}

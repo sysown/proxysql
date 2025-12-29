@@ -20,7 +20,8 @@ int main(int argc, char** argv) {
 	}
 
 	const std::string user = "root";
-	const std::string test_deps_path = getenv("TEST_DEPS");
+	const char * tdp = getenv("TEST_DEPS");
+	const std::string test_deps_path = ( tdp == nullptr ? "" : std::string(tdp) );
 
 	const int mysqlbinlog_res = system((test_deps_path + "/mysqlbinlog mysql1-bin.000001 "
 										"--read-from-remote-server --user " + user + " --password=" + user +

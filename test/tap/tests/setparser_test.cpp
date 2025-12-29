@@ -14,7 +14,7 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "util/test.h"
-#include "set_parser.h"
+#include "MySQL_Set_Stmt_Parser.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -123,7 +123,7 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
       data[it->var] = it->values;
     }
 
-    SetParser parser(tests[i].query);
+    MySQL_Set_Stmt_Parser parser(tests[i].query);
     std::map<std::string, std::vector<std::string>> result = parser.parse1();
 
     printMap("result", result);

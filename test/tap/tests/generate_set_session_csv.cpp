@@ -19,6 +19,11 @@ std::vector<int> int_values = {
 	10, 20, 100, 1010, 1234, 3456, 7890, 34564, 68100, 123456, 456123
 };
 
+std::vector<int> mariadb_compatible_tmp_table_size = {
+	32768, 49152, 65536, 81920, 98304, 114688, 131072, 131072, 147456, 163840, 180224,
+	196608, 212992, 229376, 245760, 262144, 491520, 507904, 524288, 540672, 557056
+};
+
 std::vector<int> int_values_small = {
 	13, 32, 110, 310, 434, 558, 789
 };
@@ -188,8 +193,20 @@ int main() {
 	vars["max_join_size"]->add("18446744073709551615");
 	vars["max_join_size"]->add("DEFAULT");
 	vars["tmp_table_size"] = std::make_unique<variable>("tmp_table_size", true, true, false);
-	vars["tmp_table_size"]->add(int_values, 10050);
-	vars["tmp_table_size"]->add("18446744000000051615");
+	// NOTE: Since recent MariaDB versions (known affected version 10.11.11), values which are not multiples
+	// of '16384' for 'tmp_table_size' generate truncate warnings:
+	//  - Warning for max value:
+	//    +---------+------+--------------------------------------------------------+
+	//    | Level   | Code | Message                                                |
+	//    +---------+------+--------------------------------------------------------+
+	//    | Warning | 1292 | Truncated incorrect tmp_table_size value: '4294967295' |
+	//    +---------+------+--------------------------------------------------------+
+	//  - https://github.com/MariaDB/server/blob/31adb3030ce531009457913cbf947456ad606646/sql/sys_vars.cc#L4486
+	// The value woule be set to the nearest valid block_size, this is also true for the maximum value.
+	// Warnings, in combination with 'sql_mode=TRADITIONAL' will trigger errors, preventing the test to run
+	// for recent MariaDB versions.
+	vars["tmp_table_size"]->add(mariadb_compatible_tmp_table_size, 16384);
+	vars["tmp_table_size"]->add("4294950912");
 	vars["max_heap_table_size"] = std::make_unique<variable>("max_heap_table_size", true, true, false);
 	vars["max_heap_table_size"]->add(int_values, 20031);
 	vars["max_heap_table_size"]->add("8446744073709547520");

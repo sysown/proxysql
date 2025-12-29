@@ -56,6 +56,12 @@ public:
 		pkt.ptr = NULL;
 		QueryPtr = NULL;
 	}
+	void reset() {
+		pkt.size = 0;
+		QuerySize = 0;
+		pkt.ptr = NULL;
+		QueryPtr = NULL;
+	}
 };
 
 enum pgsql_sslstatus { PGSQL_SSLSTATUS_OK, PGSQL_SSLSTATUS_WANT_IO, PGSQL_SSLSTATUS_FAIL };
@@ -86,10 +92,10 @@ public:
 	} CompPktOUT;
 
 	PgSQL_Protocol myprot;
-	PgSQL_MyDS_real_query mysql_real_query;
+	PgSQL_MyDS_real_query pgsql_real_query;
 	bytes_stats_t bytes_info; // bytes statistics
 
-	PtrSize_t multi_pkt;
+	//PtrSize_t multi_pkt;
 
 	unsigned long long pause_until;
 	unsigned long long wait_until;
@@ -142,7 +148,7 @@ public:
 	int query_retries_on_failure;
 	int connect_retries_on_failure;
 	enum mysql_data_stream_status DSS;
-	enum MySQL_DS_type myds_type;
+	PgSQL_DS_type myds_type;
 
 	socklen_t client_addrlen;
 
@@ -152,7 +158,6 @@ public:
 
 	int active_transaction; // 1 if there is an active transaction
 	int active; // data stream is active. If not, shutdown+close needs to be called
-	int status; // status . FIXME: make it a ORable variable
 
 	int switching_auth_stage;
 	int switching_auth_type;
@@ -164,8 +169,7 @@ public:
 
 	bool encrypted;
 	bool net_failure;
-
-	uint8_t pkt_sid;
+	bool cancel_query;
 
 	bool com_field_list;
 	char* com_field_wild;
@@ -174,7 +178,7 @@ public:
 	virtual ~PgSQL_Data_Stream();
 	int array2buffer_full();
 	void init();	// initialize the data stream
-	void init(enum MySQL_DS_type, PgSQL_Session*, int); // initialize with arguments
+	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
 	void shut_soft();
 	void shut_hard();
 	int read_from_net();
@@ -183,7 +187,6 @@ public:
 	bool available_data_out();
 	void remove_pollout();
 	void set_pollout();
-	void mysql_free();
 
 	void set_net_failure();
 	void setDSS_STATE_QUERY_SENT_NET();
@@ -193,12 +196,11 @@ public:
 	}
 
 	int read_pkts();
-	int write_pkts();
 
 	void unplug_backend();
 
 	void check_data_flow();
-	int assign_fd_from_mysql_conn();
+	int assign_fd_from_pgsql_conn();
 
 	static unsigned char* copy_array_to_buffer(PtrSizeArray* resultset, size_t resultset_length, bool del);
 	static void copy_buffer_to_resultset(PtrSizeArray* resultset, unsigned char* ptr, uint64_t size, 
@@ -259,7 +261,7 @@ public:
 	void return_MySQL_Connection_To_Pool();
 
 	void destroy_MySQL_Connection_From_Pool(bool sq);
-	void free_mysql_real_query();
+	void free_pgsql_real_query();
 	void reinit_queues();
 	void destroy_queues();
 

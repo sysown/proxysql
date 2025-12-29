@@ -14,7 +14,7 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
     }
 
 	cout << "Processing query: " << tests[i].query << endl;
-    SetParser parser(tests[i].query);
+    MySQL_Set_Stmt_Parser parser(tests[i].query);
     std::map<std::string, std::vector<std::string>> result = parser.parse1();
 
 	cout << endl;

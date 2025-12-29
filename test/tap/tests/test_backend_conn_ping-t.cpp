@@ -59,6 +59,8 @@
  *   parameters this number is very high, even with extremely low values for `wait_timeout`, like
  *   `num_threads=4,wait_timeout=60,batch_size=64`, a large number of connections(`15104`) would still be
  *   maintained without issues. This is what makes this issue an artificial one.
+ *
+ *   IMPORTANT: In case of failure see note below on 'wait_timeout' definition.
  */
 
 #include <string>
@@ -83,14 +85,8 @@ using srv_cfg = vector<pair<string,int>>;
 
 #define SESSIONS_FOR_CONNECTIONS_HANDLER 64
 
-// IMPORTANT: We **always** gives ourselves `1` second grace period. Depending on MySQL connection killing
-// policy for `wait_timeout`, connections could already be killed on the edge of the interval. Also, for extra
-// safety, we gave `1` extra second to avoid possible rounding errors on time computations within MySQL.
-uint32_t grace_period = 2;
-int wait_timeout = 10 + grace_period;
-
 int max_pinged_conns(uint32_t num_threads, uint32_t ping_interval_server_msec, uint32_t wait_timeout) {
-	uint32_t ping_proc_batches = floor((wait_timeout- (grace_period+1))/float(ping_interval_server_msec/1000.0));
+	uint32_t ping_proc_batches = floor(wait_timeout/float(ping_interval_server_msec/1000.0));
 
 	return (num_threads * SESSIONS_FOR_CONNECTIONS_HANDLER) * ping_proc_batches;
 }
@@ -508,7 +504,31 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	uint32_t max_conns = max_pinged_conns(ext_threads.val, 2000, wait_timeout);
+	// IMPORTANT: Previously, this test gave ProxySQL only '1s' margin in the computation of the 'max
+	// connections' that can be maintained for the selected 'wait_timeout' interval. While this computation
+	// was correct, this could lead to failures due to small network stalls or slowdowns. Meaning that
+	// ProxySQL acknowledges the ping for the connection **before** MySQL actual response to it, i.e, the last
+	// time the connection was used by ProxySQL can diverge slightly from the time in which MySQL acknowledges
+	// the keep-alive. With only '1s' margin, this could result in lost connections for these slowdown
+	// scenarios.
+	//
+	// There are two main reasons to relax this margin. First, this is an artificial scenario created for this
+	// test, with a way too low 'wait_timetout', i.e, the real number of connections that ProxySQL can be kept
+	// alive with the current pinging algorithm, using a default or sensible 'wait_timeout' for most loads, is
+	// too large to even be practical. Secondly, testing this maximum number of connections that can be kept
+	// alive isn't the goal of this test, but to ensure correctness in the selection of connections to ping
+	// from the connection pool, which can be done with much smaller and less error prone numbers.
+	//
+	// Due to this, we are going to give a full extra grace interval in the computation for the maximum number
+	// of connections that could be kept alive. This should result in creating `(max conns) - (conns pinged in
+	// one interval)` connections. This should give enough room for the test not to fail even in the
+	// previously described scenarios. If further failures are detected, this **should be investigated** as
+	// could mean that something is not working as expected, either in the setup or the pinging algorithm
+	// itself.
+	int wait_timeout = 10;
+	uint32_t grace_timeout = wait_timeout - (ext_ping_intv.val / 1000) - 1;
+
+	uint32_t max_conns = max_pinged_conns(ext_threads.val, ext_ping_intv.val, grace_timeout);
 	uint32_t server_max_conns = max_conns + 1000;
 	double its = floor((max_conns - b_0) / b);
 

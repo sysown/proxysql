@@ -66,7 +66,6 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	}
 }
 
-const uint32_t REPORT_INTV_SEC = 5;
 const double MAX_ALLOWED_CPU_USAGE = 70;
 
 const vector<string> tc_rules {
@@ -93,7 +92,7 @@ int main(int argc, char** argv) {
 
 	diag("Checking ProxySQL idle CPU usage");
 	double idle_cpu = 0;
-	int ret_i_cpu = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu);
+	int ret_i_cpu = get_proxysql_cpu_usage(cl, idle_cpu);
 	if (ret_i_cpu) {
 		diag("Getting initial CPU usage failed with error - %d", ret_i_cpu);
 		diag("Aborting further testing");
@@ -189,7 +188,7 @@ cleanup:
 	}
 
 	double final_cpu_usage = 0;
-	int ret_f_cpu = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, final_cpu_usage);
+	int ret_f_cpu = get_proxysql_cpu_usage(cl, final_cpu_usage);
 	diag("Getting the final CPU usage returned - %d", ret_f_cpu);
 
 	ok(

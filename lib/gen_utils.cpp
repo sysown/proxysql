@@ -308,3 +308,256 @@ char* escape_string_single_quotes_and_backslashes(char* input, bool free_it) {
 	}
 	return output;
 }
+
+/**
+ * Escapes spaces in the input string by prepending "\\".
+ * If no spaces are present, the original input is returned.
+ * If spaces are escaped, a new string is returned, and the caller
+ * is responsible for freeing it.
+ *
+ * @param input The input string to process.
+ * @return A new string with spaces escaped, or the original input string if no escaping is needed.
+ */
+const char* escape_string_backslash_spaces(const char* input) {
+	const char* c;
+	int input_len = 0;
+	int escape_count = 0;
+
+	for (c = input; *c != '\0'; c++) {
+		if ((*c == ' ')) {
+			escape_count += 3;
+		} else if ((*c == '\\')) {
+			escape_count += 2;
+		}
+		input_len++;
+	}
+
+	if (escape_count == 0)
+		return input;
+
+	char* output = (char*)malloc(input_len + escape_count + 1);
+	char* p = output;
+
+	for (c = input; *c != '\0'; c++) {
+		if ((*c == ' ')) {
+			memcpy(p, "\\\\", 2);
+			p += 2;
+		} else if (*c == '\\') {
+			*(p++) = '\\';
+		}
+		*(p++) = *c;
+	}
+	*(p++) = '\0';
+	return output;
+}
+
+/**
+ * Strip schema prefix from the query
+ *
+ * @param query The input query
+ * @param schema The schema name to strip (e.g., "stats")
+ * @param tables List of table names to process (empty = process all tables)
+ * @param ansi_quotes If true, double quotes are identifiers (ANSI SQL mode)
+ *						   If false, double quotes are string literals (default MySQL mode)
+ * @return Result string with prefix stripped
+ */
+std::string strip_schema_from_query(const char* query, const char* schema,
+                                    const std::vector<std::string>& tables, bool ansi_quotes) {
+	if (!query || strlen(query) == 0) {
+		return "";
+	}
+
+	int query_len = strlen(query);
+
+	int schema_len = strlen(schema);
+	if (schema_len == 0) {
+		return std::string(query, query_len);
+	}
+
+	if (!strcasestr(query, schema)) {
+		return std::string(query, query_len);
+	}
+
+	// find string literal positions
+
+	std::vector<bool> is_string_char(query_len, false);
+	bool in_string = false;
+	char string_delimiter = '\0';
+
+	for (int i = 0; i < query_len; i++) {
+		if (!in_string) {
+			if (query[i] == '\'' || (!ansi_quotes && query[i] == '"')) {
+				in_string = true;
+				string_delimiter = query[i];
+				is_string_char[i] = true;
+			}
+		} else {
+			is_string_char[i] = true;
+			if (query[i] == string_delimiter) {
+				if (i + 1 < query_len && query[i + 1] == string_delimiter) {
+					i++; // Skip escaped quote
+					is_string_char[i] = true;
+				} else {
+					in_string = false;
+				}
+			}
+		}
+	}
+
+	// scan query string and look for the pattern <schema>.<table>
+
+	struct SchemaTablePos {
+		int schema_start;
+		int schema_end;
+		int table_start;
+		int table_end;
+	};
+	std::vector<SchemaTablePos> matches;
+
+	const char* search = query;
+	const char* found = nullptr;
+
+	while ((found = strcasestr(search, schema)) != nullptr) {
+		int schema_pos = found - query;
+
+		if (is_string_char[schema_pos]) {
+			// schema name is part of string literal; skip this match
+			search = found + schema_len;
+			continue;
+		}
+
+		if (schema_pos > 0) {
+			char prev = query[schema_pos - 1];
+			if (std::isalnum(prev) || prev == '_') {
+				// schema name is a substring; skip this match
+				search = found + schema_len;
+				continue;
+			}
+		}
+
+		int start = schema_pos;
+		int pos = schema_pos + schema_len;
+		char schema_quote = '\0';
+
+		// check if schema is quoted
+		if (schema_pos > 0 && (query[schema_pos - 1] == '`' ||
+								(ansi_quotes && query[schema_pos - 1] == '"'))) {
+			schema_quote = query[schema_pos - 1];
+			start--;
+
+			// check for closing quote
+			if (pos < query_len && query[pos] == schema_quote) {
+				pos++;
+			} else {
+				// no closing quote; skip this match
+				search = query + pos;
+				continue;
+			}
+		}
+
+		// match dot character
+
+		// skip the whitespaces before dot character
+		while (pos < query_len && std::isspace(query[pos])) {
+			pos++;
+		}
+		if (pos >= query_len || query[pos] != '.') {
+			// dot character not found followed by schema name; skip this match
+			search = query + pos;
+			continue;
+		}
+
+		pos++;
+
+		// skip the whitespaces after dot character
+		while (pos < query_len && std::isspace(query[pos])) {
+			pos++;
+		}
+		if (pos >= query_len) {
+			// table name not found followed by dot character; skip this match
+			search = query + pos;
+			continue;
+		}
+
+		// extract table name
+
+		int table_start = pos;
+		char table_quote = '\0';
+		bool table_quoted = false;
+
+		if (query[pos] == '`' || (ansi_quotes && query[pos] == '"')) {
+			table_quoted = true;
+			table_quote = query[pos];
+			pos++;
+			table_start = pos;
+		}
+
+		int table_end = pos;
+		if (table_quoted) {
+			while (table_end < query_len && query[table_end] != table_quote) {
+				table_end++;
+			}
+			if (table_end >= query_len) {
+				// no closing quote for table name; skip this match
+				search = query + pos;
+				continue;
+			}
+			pos = table_end + 1;
+		} else {
+			while (table_end < query_len &&
+					(std::isalnum(query[table_end]) || query[table_end] == '_')) {
+				table_end++;
+			}
+			pos = table_end;
+		}
+
+		// try matching table name if table_list not empty
+		if (!tables.empty()) {
+			int table_name_len = table_end - table_start;
+			bool table_found = false;
+			for (auto& target_table : tables) {
+				if (target_table.length() == (size_t) table_name_len &&
+					strncasecmp(query + table_start, target_table.c_str(), table_name_len) == 0) {
+					table_found = true;
+					break;
+				}
+			}
+
+			if (!table_found) {
+				search = query + pos;
+				continue;
+			}
+		}
+
+		// add start/end pos to match set
+		table_start = table_quoted ? table_start - 1 : table_start;
+		table_end = table_quoted ? table_end + 1 : table_end;
+		matches.push_back({start, pos, table_start, table_end});
+
+		search = query + table_end;
+	}
+
+	if (matches.empty()) {
+		return std::string(query, query_len);
+	}
+
+	// strip matched schema name and build final result
+
+	std::string result;
+	result.reserve(query_len);
+	int last_pos = 0;
+
+	for (const auto& m : matches) {
+		// append text before this match
+		result.append(query + last_pos, m.schema_start - last_pos);
+		// append just the table name, skip schema name and dot character
+		result.append(query + m.table_start, m.table_end - m.table_start);
+		last_pos = m.schema_end;
+	}
+	// append remaining query
+	if (last_pos < query_len) {
+		result.append(query + last_pos, query_len - last_pos);
+	}
+
+	return result;
+}

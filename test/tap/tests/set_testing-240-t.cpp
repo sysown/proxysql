@@ -541,6 +541,7 @@ int main(int argc, char *argv[]) {
 			diag("Cannot detect MySQL version");
 			return exit_status();
 		}
+		diag("Starting testing for MySQL version   is_mariadb:%d", is_mariadb);
 
 		if (strcmp(host,"localhost")==0) {
 			local = 1;

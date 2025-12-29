@@ -237,13 +237,13 @@ std::vector<std::string> sqlite_intf_queries {
 
 int check_errorlog_for_addrinuse(MYSQL* admin, fstream& logfile) {
 	const string command_regex { ".*\\[INFO\\] Received LOAD SQLITESERVER VARIABLES (FROM DISK|TO RUNTIME) command" };
-	std::vector<line_match_t> cmd_lines { get_matching_lines(logfile, command_regex) };
+	const auto& [__1, cmd_lines] { get_matching_lines(logfile, command_regex) };
 
 	// NOTE: Delay for poll_timeout for SQLite3_Server - harcoded 500ms
 	usleep(1000 * 1000);
 
 	const string bind_err_regex { ".*\\[ERROR\\] bind\\(\\): Address already in use" };
-	std::vector<line_match_t> err_lines { get_matching_lines(logfile, bind_err_regex) };
+	const auto& [__2, err_lines ] { get_matching_lines(logfile, bind_err_regex) };
 
 	if (cmd_lines.empty()) {
 		diag("ERROR: Commands 'LOAD SQLITESERVER' not logged as expected");

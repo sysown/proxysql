@@ -79,21 +79,18 @@ static TEST_DATA g_test = { NO_PLAN, 0, 0, "" };
   @param us True for enabling microseconds in log output.
   @param len Buffer len.
  */
-size_t get_fmt_time(char* tm_buf, size_t len, bool us=false) {
-  time_t __timer;
-  time(&__timer);
+size_t get_fmt_time(char* tm_buf, size_t len, bool us) {
+  struct timeval tv {};
+  gettimeofday(&tv, NULL);
+
   struct tm __tm_info {};
-  localtime_r(&__timer, &__tm_info);
+  localtime_r(&tv.tv_sec, &__tm_info);
+
   size_t rc = strftime(tm_buf, len, "%Y-%m-%d %H:%M:%S", &__tm_info);
 
   if (rc == 0) {
     return rc;
   } else if (us) {
-    struct timeval tv;
-    struct tm *tm_info;
-
-    gettimeofday(&tv, NULL);
-    tm_info = localtime(&tv.tv_sec);
     rc = snprintf(tm_buf + rc, len - rc, ".%06ld", tv.tv_usec);
   }
 

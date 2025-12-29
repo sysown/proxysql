@@ -362,7 +362,14 @@ void testMultistatementWithCopy(PGconn* admin_conn, PGconn* conn) {
     if (PQsendQuery(conn, "SELECT * FROM copy_test; COPY copy_test TO STDOUT") == 0) {
         fprintf(stderr, "Error sending query: %s", PQerrorMessage(conn));
         PQfinish(conn);
+        return;
     }
+    
+    PQconsumeInput(conn);
+    while (PQisBusy(conn)) {
+        PQconsumeInput(conn);
+    }
+
     // Check first result (SELECT statement)
     PGresult* res = PQgetResult(conn);
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {

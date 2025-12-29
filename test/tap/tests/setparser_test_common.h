@@ -11,7 +11,7 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "util/test.h"
-#include "set_parser.h"
+#include "MySQL_Set_Stmt_Parser.h"
 #include <string>
 #include <vector>
 #include <map>

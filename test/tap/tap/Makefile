@@ -1,77 +1,22 @@
 #!/bin/make -f
 
 
-GIT_VERSION ?= $(shell git describe --long --abbrev=7)
-ifndef GIT_VERSION
-    $(error GIT_VERSION is not set)
-endif
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
+
+include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
-PROXYSQL_PATH := ../../..
-PROXYSQL_IDIR := $(PROXYSQL_PATH)/include
-PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
+IDIRS :=	-I$(PROXYSQL_IDIR) \
+			-I$(JSON_IDIR) \
+			-I${CURL_IDIR} \
+			-I${SQLITE3_IDIR} \
+			-I$(DOTENV_IDIR) \
+			-I$(RE2_IDIR)
 
-DEPS_PATH := $(PROXYSQL_PATH)/deps
-
-JSON_PATH := $(DEPS_PATH)/json
-JSON_IDIR := $(JSON_PATH)
-
-MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
-MARIADB_IDIR := $(MARIADB_PATH)/include
-MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
-
-TEST_DEPS_PATH := $(PROXYSQL_PATH)/test/deps
-
-TEST_MYSQL_PATH := $(TEST_DEPS_PATH)/mysql-connector-c/mysql-connector-c
-TEST_MYSQL_IDIR := $(TEST_MYSQL_PATH)/include
-TEST_MYSQL_EDIR := $(TEST_MYSQL_PATH)/libbinlogevents/export/
-TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
-
-TEST_MYSQL8_PATH := $(TEST_DEPS_PATH)/mysql-connector-c-8.4.0/mysql-connector-c
-TEST_MYSQL8_IDIR := $(TEST_MYSQL8_PATH)/include
-TEST_MYSQL8_EDIR := $(TEST_MYSQL8_PATH)/libbinlogevents/export/
-TEST_MYSQL8_LDIR := $(TEST_MYSQL8_PATH)/libmysql
-
-CURL_PATH := $(DEPS_PATH)/curl/curl
-CURL_IDIR := $(CURL_PATH)/include
-CURL_LDIR := $(CURL_PATH)/lib/.libs
-
-SQLITE3_PATH := $(DEPS_PATH)/sqlite3/sqlite3
-SQLITE3_IDIR := $(SQLITE3_PATH)
-SQLITE3_LDIR := $(SQLITE3_PATH)
-
-DOTENV_PATH := ./cpp-dotenv/static/cpp-dotenv
-DOTENV_IDIR := $(DOTENV_PATH)/include
-DOTENV_LDIR := $(DOTENV_PATH)
-
-RE2_PATH := $(DEPS_PATH)/re2/re2
-RE2_IDIR := $(RE2_PATH)
-RE2_LDIR := $(RE2_PATH)/obj
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR) -I$(RE2_IDIR)
-
-### detect compiler support for c++11/17
-CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201703L)
-	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | egrep -o '[0-9]{6}L')
-ifneq ($(CPLUSPLUS),201103L)
-    $(error Compiler must support at least c++11)
-endif
-endif
-STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
-
-WASAN :=
-ifeq ($(WITHASAN),1)
-	WASAN := -fsanitize=address
-	# Force the disable of JEMALLOC, since ASAN isn't compatible.
-	export NOJEMALLOC=1
-	# workaroud ASAN limitation ASLR > 28bits
-	# https://github.com/google/sanitizers/issues/1716
-	# sudo sysctl vm.mmap_rnd_bits=28
-    $(warning ASAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
-endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 

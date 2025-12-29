@@ -1,5 +1,6 @@
 name: CI-trigger
-run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+#run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+run-name: ${{ github.head_ref || github.ref_name }} ${{ github.workflow }} ${{ github.event.after || github.sha }}
 
 on:
   pull_request:

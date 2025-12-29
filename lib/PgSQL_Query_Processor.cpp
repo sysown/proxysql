@@ -8,6 +8,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include "Command_Counter.h"
+#include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Query_Processor.h"
 
 extern PgSQL_Threads_Handler* GloPTH;
@@ -102,6 +103,7 @@ static char* commands_counters_desc[PGSQL_QUERY___NONE] = {
 	[PGSQL_QUERY_BEGIN] = (char*)"BEGIN",
 	[PGSQL_QUERY_COMMIT] = (char*)"COMMIT",
 	[PGSQL_QUERY_ROLLBACK] = (char*)"ROLLBACK",
+	[PGSQL_QUERY_ABORT] = (char*)"ABORT",
 	[PGSQL_QUERY_DECLARE_CURSOR] = (char*)"DECLARE_CURSOR",
 	[PGSQL_QUERY_CLOSE_CURSOR] = (char*)"CLOSE_CURSOR",
 	[PGSQL_QUERY_DISCARD] = (char*)"DISCARD",
@@ -165,6 +167,8 @@ static char* commands_counters_desc[PGSQL_QUERY___NONE] = {
 	[PGSQL_QUERY_DROP_TABLESPACE] = (char*)"DROP_TABLESPACE",
 	[PGSQL_QUERY_CLUSTER] = (char*)"PGSQL_QUERY_CLUSTER",
 	[PGSQL_QUERY_START_REPLICATION] = (char*)"START_REPLICATION",
+	[PGSQL_QUERY_CANCEL_BACKEND] = (char*)"CANCEL_BACKEND",
+	[PGSQL_QUERY_TERMINATE_BACKEND] = (char*)"TERMINATE_BACKEND",
 	[PGSQL_QUERY_UNKNOWN] = (char*)"UNKNOWN",
 };
 
@@ -270,34 +274,33 @@ PgSQL_Query_Processor_Output* PgSQL_Query_Processor::process_query(PgSQL_Session
 	SQP_par_t stmt_exec_qp;
 	SQP_par_t* qp = NULL;
 	if (qi) {
-		// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
+		// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE or STMT_DESCRIBE
 		if (ptr) {
-			qp = (SQP_par_t*)&qi->QueryParserArgs;
+			qp = &qi->QueryParserArgs;
 		} else {
 			qp = &stmt_exec_qp;
-			//qp->digest = qi->stmt_info->digest;
-			//qp->digest_text = qi->stmt_info->digest_text;
-			//qp->first_comment = qi->stmt_info->first_comment;
+			qp->digest = qi->extended_query_info.stmt_info->digest;
+			qp->digest_text = qi->extended_query_info.stmt_info->digest_text;
+			qp->first_comment = qi->extended_query_info.stmt_info->first_comment;
 		}
 	}
 #define stackbuffer_size 128
 	char stackbuffer[stackbuffer_size];
-	unsigned int len = 0;
+	unsigned int len = size;
 	char* query = NULL;
 	// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
 	if (ptr) {
-		len = size - sizeof(mysql_hdr) - 1;
+		//len = size - sizeof(mysql_hdr) - 1;
 		if (len < stackbuffer_size) {
 			query = stackbuffer;
 		} else {
-			query = (char*)l_alloc(len + 1);
+			query = (char*)l_alloc(len);
 		}
-		memcpy(query, (char*)ptr + sizeof(mysql_hdr) + 1, len);
-		query[len] = 0;
-	}
-	else {
-		//query = qi->stmt_info->query;
-		//len = qi->stmt_info->query_length;
+		memcpy(query, ptr, len);
+		query[len-1] = 0;
+	} else {
+		query = qi->extended_query_info.stmt_info->query;
+		len = qi->extended_query_info.stmt_info->query_length;
 	}
 
 	Query_Processor::process_query(sess, ptr == NULL, query, len, ret, qp);
@@ -307,7 +310,7 @@ PgSQL_Query_Processor_Output* PgSQL_Query_Processor::process_query(PgSQL_Session
 		// query is in the stack
 	} else {
 		if (ptr) {
-			l_free(len + 1, query);
+			l_free(len, query);
 		}
 	}
 
@@ -317,8 +320,8 @@ PgSQL_Query_Processor_Output* PgSQL_Query_Processor::process_query(PgSQL_Session
 PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id, bool active, const char* username, const char* schemaname, int flagIN, const char* client_addr,
 	const char* proxy_addr, int proxy_port, const char* digest, const char* match_digest, const char* match_pattern, bool negate_match_pattern,
 	const char* re_modifiers, int flagOUT, const char* replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result,
-	int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_hostgroup,
-	int mirror_flagOUT, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int log,
+	int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT,
+	int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int log,
 	bool apply, const char* attributes, const char* comment) {
 
 	PgSQL_Query_Processor_Rule_t* newQR = (PgSQL_Query_Processor_Rule_t*)malloc(sizeof(PgSQL_Query_Processor_Rule_t));
@@ -576,7 +579,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 
 SQLite3_result* PgSQL_Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result* result = new SQLite3_result(34);
+	SQLite3_result* result = new SQLite3_result(35);
 	PgSQL_Query_Processor_Rule_t* qr1;
 	rdlock();
 	result->add_column_definition(SQLITE_TEXT, "rule_id");
@@ -664,7 +667,7 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	char c1;
 
 	tokenizer_t tok;
-	tokenizer(&tok, text, " ", TOKENIZER_NO_EMPTIES);
+	tokenizer(&tok, text, " ;", TOKENIZER_NO_EMPTIES);
 	char* token = NULL;
 __get_token:
 	token = (char*)tokenize(&tok);
@@ -759,6 +762,10 @@ __remove_parenthesis:
 		}
 		if (!strcasecmp("ANALYZE", token)) {
 			ret = PGSQL_QUERY_ANALYZE;
+			break;
+		}
+		if (!strcasecmp("ABORT", token)) {
+			ret = PGSQL_QUERY_ROLLBACK;
 			break;
 		}
 		break;
@@ -1089,7 +1096,11 @@ __remove_parenthesis:
 			break;
 		}
 		if (!strcasecmp("SELECT", token)) {
-			ret = PGSQL_QUERY_SELECT;
+			token = (char*)tokenize(&tok);
+			if (token == NULL) break;
+			if (!strncasecmp("pg_cancel_backend", token, sizeof("pg_cancel_backend") - 1)) ret = PGSQL_QUERY_CANCEL_BACKEND;
+			else if (!strncasecmp("pg_terminate_backend", token, sizeof("pg_terminate_backend") - 1)) ret = PGSQL_QUERY_TERMINATE_BACKEND;
+			else ret = PGSQL_QUERY_SELECT;
 			break;
 		}
 		if (!strcasecmp("SET", token)) {

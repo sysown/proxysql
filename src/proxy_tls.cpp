@@ -215,7 +215,7 @@ X509 * proxy_read_x509(const char *filen, bool bootstrap, std::string& msg) {
 }
 
 // return 0 un success
-int ssl_mkit(X509 **x509ca, X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, bool bootstrap, std::string& msg) {
+int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, bool bootstrap, std::string& msg) {
 	X509 *x1;
 	X509 *x2;
 	EVP_PKEY *pk;
@@ -332,23 +332,18 @@ int ssl_mkit(X509 **x509ca, X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial
 			// during bootstrap we just call the reads
 			// if the read fails during bootstrap, proxysql immediately exists
 			pk = proxy_key_read(ssl_key_fp, bootstrap, msg);
-			x1 = proxy_read_x509(ssl_ca_fp, bootstrap, msg);
 			x2 = proxy_read_x509(ssl_cert_fp, bootstrap, msg);
 		} else {
 			pk = proxy_key_read(ssl_key_fp, bootstrap, msg);
 			if (pk) {
-				x1 = proxy_read_x509(ssl_ca_fp, bootstrap, msg);
-				if (x1) {
-					x2 = proxy_read_x509(ssl_cert_fp, bootstrap, msg);
-				}
+				x2 = proxy_read_x509(ssl_cert_fp, bootstrap, msg);
 			}
 			// note that this is only relevant during PROXYSQL RELOAD TLS
-			if (pk == NULL || x1 == NULL || x2 == NULL) {
+			if (pk == NULL || x2 == NULL) {
 				return 1;
 			}
 		}
 	}
-	*x509ca = x1;
 	*x509p = x2;
 	*pkeyp = pk;
 
@@ -377,7 +372,6 @@ int ssl_mkit(X509 **x509ca, X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial
 int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 	BIO *bio_err;
 	X509 *x509 = NULL;
-	X509 *x509ca = NULL;
 	EVP_PKEY *pkey = NULL;
 
 	int ret = 0;
@@ -386,7 +380,7 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 
 	if (bootstrap == true) {
 		// this is legacy code, when keys are loaded only during bootstrap
-		if (ssl_mkit(&x509ca, &x509, &pkey, 2048, 0, 730, true, msg) != 0) {
+		if (ssl_mkit(&x509, &pkey, 2048, 0, 730, true, msg) != 0) {
 			proxy_error("Unable to initialize SSL. Shutting down...\n");
 			exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 		}
@@ -394,11 +388,6 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		if ( SSL_CTX_use_certificate(GloVars.global.ssl_ctx, x509) <= 0 ) {
 			ERR_print_errors_fp(stderr);
 			proxy_error("Unable to use SSL certificate. Shutting down...\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
-		}
-		if ( SSL_CTX_add_extra_chain_cert(GloVars.global.ssl_ctx, x509ca) <= 0 ) {
-			ERR_print_errors_fp(stderr);
-			proxy_error("Unable to use SSL CA chain. Shutting down...\n");
 			exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 		}
 		if ( SSL_CTX_use_PrivateKey(GloVars.global.ssl_ctx, pkey) <= 0 ) {
@@ -415,7 +404,7 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 
 		// We set the locations for the certificates to be used for
 		// verifications purposes.
-		if (!SSL_CTX_load_verify_locations(GloVars.global.ssl_ctx, ssl_ca_fp, ssl_ca_fp)) {
+		if (!SSL_CTX_load_verify_locations(GloVars.global.ssl_ctx, ssl_ca_fp, GloVars.datadir)) {
 			proxy_error("Unable to load CA certificates location for verification. Shutting down\n");
 		}
 
@@ -429,12 +418,11 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 	} else {
 		// here we use global.tmp_ssl_ctx instead of global.ssl_ctx
 		// because we will try to swap at the end
-		if (ssl_mkit(&x509ca, &x509, &pkey, 2048, 0, 730, false, msg) == 0) { // 0 on success
+		if (ssl_mkit(&x509, &pkey, 2048, 0, 730, false, msg) == 0) { // 0 on success
 			if (SSL_CTX_use_certificate(GloVars.global.tmp_ssl_ctx, x509) == 1) { // 1 on success
-				if (SSL_CTX_add_extra_chain_cert(GloVars.global.tmp_ssl_ctx, x509ca) == 1) { // 1 on success
 					if (SSL_CTX_use_PrivateKey(GloVars.global.tmp_ssl_ctx, pkey) == 1) { // 1 on success
 						if (SSL_CTX_check_private_key(GloVars.global.tmp_ssl_ctx) == 1) { // 1 on success
-							if (SSL_CTX_load_verify_locations(GloVars.global.tmp_ssl_ctx, ssl_ca_fp, ssl_ca_fp) == 1) { // 1 on success
+							if (SSL_CTX_load_verify_locations(GloVars.global.tmp_ssl_ctx, ssl_ca_fp, GloVars.datadir) == 1) { // 1 on success
 
 							// take the mutex
 							std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
@@ -463,12 +451,6 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 						msg = "Unable to use SSL key";
 						ret = 1;
 					}
-				} else {
-					ERR_print_errors_fp(stderr);
-					proxy_error("Unable to use SSL CA chain\n");
-					msg = "Unable to use SSL CA chain";
-					ret = 1;
-				}
 			} else {
 				ERR_print_errors_fp(stderr);
 				proxy_error("Unable to use SSL certificate\n");

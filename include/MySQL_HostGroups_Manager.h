@@ -1068,12 +1068,13 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
-	void read_only_action(char *hostname, int port, int read_only);
+//	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
+	void set_Readyset_status(char *hostname, int port, enum MySerStatus status);
 	unsigned long long Get_Memory_Stats();
 
 	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);

@@ -20,7 +20,7 @@
 #ifndef TAP_H
 #define TAP_H
 
-//#include "my_global.h"
+#include <unistd.h>
 
 /*
   @defgroup MyTAP MySQL support for performing unit tests according to
@@ -90,6 +90,15 @@ extern volatile int tap_log_us;
 
   @{
 */
+
+/**
+  @brief Writes current time ("%Y-%m-%d %H:%M:%S") in the supplied buffer.
+
+  @param tm_buf Buffer to be written.
+  @param us True for enabling microseconds in log output.
+  @param len Buffer len.
+ */
+size_t get_fmt_time(char* tm_buf, size_t len, bool us=false);
 
 /**
    Set number of tests that is planned to execute.

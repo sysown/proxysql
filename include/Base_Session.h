@@ -1,5 +1,3 @@
-template<typename S, typename DSi, typename B, typename T> class Base_Session;
-
 //// avoid loading definition of MySQL_Session and PgSQL_Session
 //#define __CLASS_MYSQL_SESSION_H
 //#define __CLASS_PGSQL_SESSION_H
@@ -21,11 +19,11 @@ class MySQL_Session;
 class PgSQL_Session;
 
 enum SESSION_FORWARD_TYPE : uint8_t {
-	SESSION_FORWARD_TYPE_NONE			   = 0x00,
-	SESSION_FORWARD_TYPE_PERMANENT		   = 0x01,
-	SESSION_FORWARD_TYPE_TEMPORARY		   = 0x02,
-	SESSION_FORWARD_TYPE_COPY_STDIN		   = 0x04 | SESSION_FORWARD_TYPE_TEMPORARY,
-	SESSION_FORWARD_TYPE_START_REPLICATION = 0x08 | SESSION_FORWARD_TYPE_TEMPORARY,
+	SESSION_FORWARD_TYPE_NONE					= 0x00,
+	SESSION_FORWARD_TYPE_PERMANENT				= 0x01,
+	SESSION_FORWARD_TYPE_TEMPORARY				= 0x02,
+	SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT	= 0x04 | SESSION_FORWARD_TYPE_TEMPORARY,
+	SESSION_FORWARD_TYPE_START_REPLICATION		= 0x08 | SESSION_FORWARD_TYPE_TEMPORARY,
 };
 
 template<typename S, typename DS, typename B, typename T>
@@ -76,12 +74,10 @@ class Base_Session {
 	int mirror_hostgroup;
 	int mirror_flagOUT;
 	unsigned int active_transactions;
-	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
 	int to_process;
-	int pending_connect;
 	enum proxysql_session_type session_type;
-	int warning_in_hg;
+	int wait_timeout; //in milliseconds
 
 	// bool
 	bool autocommit;
@@ -100,8 +96,8 @@ class Base_Session {
 	SESSION_FORWARD_TYPE session_fast_forward;
 	//bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
-	MySQL_STMTs_meta *sess_STMTs_meta;
-	StmtLongDataHandler *SLDH;
+	//MySQL_STMTs_meta *sess_STMTs_meta;
+	//StmtLongDataHandler *SLDH;
 
 
 
@@ -115,7 +111,7 @@ class Base_Session {
 	void writeout();
 	void return_proxysql_internal(PtrSize_t* pkt);
 	virtual void generate_proxysql_internal_session_json(nlohmann::json &) = 0;
-	virtual void RequestEnd(DS *) = 0;
+	//virtual void RequestEnd(DS *, const unsigned int, const char *) = 0;
 	virtual void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) = 0;
 	bool has_any_backend();
 	void reset_all_backends();

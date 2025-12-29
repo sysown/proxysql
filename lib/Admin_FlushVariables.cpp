@@ -434,7 +434,15 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		assert(previous_default_charset);
 		assert(previous_default_collation_connection);
 		flush_GENERIC_variables__process__database_to_runtime("mysql", db, resultset, false, replace, {}, {"session_debug"}, {"forward_autocommit"},
-			{"default_collation_connection", "default_charset", "show_processlist_extended"},
+			{
+				"default_collation_connection",
+				"default_charset",
+				"show_processlist_extended",
+#ifdef IDLE_THREADS
+				"session_idle_show_processlist",
+#endif // IDLE_THREADS
+				"processlist_max_query_length"
+			},
 			[](const std::string& varname, const char *varvalue, SQLite3DB* db) {
 				if (varname == "default_collation_connection" || varname == "default_charset") {
 					char *val=GloMTH->get_variable((char *)varname.c_str());
@@ -448,10 +456,16 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						free(val);
 					}
 				} else if (varname == "show_processlist_extended") {
-					GloAdmin->variables.mysql_show_processlist_extended = atoi(varvalue);
+					GloAdmin->variables.mysql_processlist.show_extended = atoi(varvalue);
+#ifdef IDLE_THREADS
+				} else if (varname == "session_idle_show_processlist") {
+					GloAdmin->variables.mysql_processlist.show_idle_session = atoi(varvalue);
+#endif // IDLE_THREADS
+				} else if (varname == "processlist_max_query_length") {
+					GloAdmin->variables.mysql_processlist.max_query_length = atoi(varvalue);
 				}
 			}
-			);
+		);
 		char q[1000];
 		char * default_charset = GloMTH->get_variable_string((char *)"default_charset");
 		char * default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
@@ -534,6 +548,36 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.
+		 *
+		 * This safety check warns users when mysql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @recommendation Always set mysql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int mysql_use_tcp_keepalive = GloMTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (mysql_use_tcp_keepalive == 0) {
+			proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
 		}
 	}
 	if (resultset) delete resultset;
@@ -737,11 +781,7 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 		return;
 	}
 	else {
-		GloPTH->wrlock();
-		char* previous_default_charset = GloPTH->get_variable_string((char*)"default_charset");
-		char* previous_default_collation_connection = GloPTH->get_variable_string((char*)"default_collation_connection");
-		assert(previous_default_charset);
-		assert(previous_default_collation_connection);
+		GloPTH->wrlock();	
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 			const char* value = r->fields[1];
@@ -799,88 +839,36 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0], value);
 				if (strcmp(r->fields[0], (char*)"show_processlist_extended") == 0) {
-					variables.pgsql_show_processlist_extended = atoi(value);
+					variables.pgsql_processlist.show_extended = atoi(value);
+#ifdef IDLE_THREADS
+				} else if (strcmp(r->fields[0], (char*)"session_idle_show_processlist") == 0) {
+					variables.pgsql_processlist.show_idle_session = atoi(value);
+#endif // IDLE_THREADS
+				} else if (strcmp(r->fields[0], (char*)"processlist_max_query_length") == 0) {
+					variables.pgsql_processlist.max_query_length = atoi(value);
 				}
 			}
 			//			}
 		}
-
+		
 		char q[1000];
-		char* default_charset = GloPTH->get_variable_string((char*)"default_charset");
-		char* default_collation_connection = GloPTH->get_variable_string((char*)"default_collation_connection");
-		assert(default_charset);
-		assert(default_collation_connection);
-		MARIADB_CHARSET_INFO* ci = NULL;
-		ci = proxysql_find_charset_name(default_charset);
-		if (ci == NULL) {
-			// invalid charset
-			proxy_error("Found an incorrect value for pgsql-default_charset: %s\n", default_charset);
-			// let's try to get a charset from collation connection
-			ci = proxysql_find_charset_collate(default_collation_connection);
-			if (ci == NULL) {
-				proxy_error("Found an incorrect value for pgsql-default_collation_connection: %s\n", default_collation_connection);
-				const char* p = mysql_tracked_variables[SQL_CHARACTER_SET].default_value;
-				ci = proxysql_find_charset_name(p);
-				assert(ci);
-				proxy_info("Resetting pgsql-default_charset to hardcoded default value: %s\n", ci->csname);
-				sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_charset\",\"%s\")", ci->csname);
-				db->execute(q);
-				GloPTH->set_variable((char*)"default_charset", ci->csname);
-				proxy_info("Resetting pgsql-default_collation_connection to hardcoded default value: %s\n", ci->name);
-				sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_collation_connection\",\"%s\")", ci->name);
-				db->execute(q);
-				GloPTH->set_variable((char*)"default_collation_connection", ci->name);
-			}
-			else {
-				proxy_info("Changing pgsql-default_charset to %s using configured pgsql-default_collation_connection %s\n", ci->csname, ci->name);
-				sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_charset\",\"%s\")", ci->csname);
-				db->execute(q);
-				GloPTH->set_variable((char*)"default_charset", ci->csname);
-			}
+		char* default_client_encoding = GloPTH->get_variable_string((char*)"default_client_encoding");
+		assert(default_client_encoding);
+
+		int charset_encoding = PgSQL_Connection::char_to_encoding(default_client_encoding);
+
+		if (charset_encoding == -1) {
+			// invalid charset_encoding
+			proxy_error("Found an incorrect value for pgsql-default_client_encoding: %s\n", default_client_encoding);
+			const char* p = pgsql_tracked_variables[PGSQL_CLIENT_ENCODING].default_value;
+			charset_encoding = PgSQL_Connection::char_to_encoding(p);
+			assert(charset_encoding != -1);
+			proxy_info("Resetting pgsql-default_client_encoding to hardcoded default value: %s\n", p);
+			sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_client_encoding\",\"%s\")", p);
+			db->execute(q);
+			GloPTH->set_variable((char*)"default_client_encoding", p);
 		}
-		else {
-			MARIADB_CHARSET_INFO* cic = NULL;
-			cic = proxysql_find_charset_collate(default_collation_connection);
-			if (cic == NULL) {
-				proxy_error("Found an incorrect value for pgsql-default_collation_connection: %s\n", default_collation_connection);
-				proxy_info("Changing pgsql-default_collation_connection to %s using configured pgsql-default_charset: %s\n", ci->name, ci->csname);
-				sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_collation_connection\",\"%s\")", ci->name);
-				db->execute(q);
-				GloPTH->set_variable((char*)"default_collation_connection", ci->name);
-			}
-			else {
-				if (strcmp(cic->csname, ci->csname) == 0) {
-					// pgsql-default_collation_connection and pgsql-default_charset are compatible
-				}
-				else {
-					proxy_error("Found incompatible values for pgsql-default_charset (%s) and pgsql-default_collation_connection (%s)\n", default_charset, default_collation_connection);
-					bool use_collation = true;
-					if (strcmp(default_charset, previous_default_charset)) { // charset changed
-						if (strcmp(default_collation_connection, previous_default_collation_connection) == 0) { // collation didn't change
-							// the user has changed the charset but not the collation
-							// we use charset as source of truth
-							use_collation = false;
-						}
-					}
-					if (use_collation) {
-						proxy_info("Changing pgsql-default_charset to %s using configured pgsql-default_collation_connection %s\n", cic->csname, cic->name);
-						sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_charset\",\"%s\")", cic->csname);
-						db->execute(q);
-						GloPTH->set_variable((char*)"default_charset", cic->csname);
-					}
-					else {
-						proxy_info("Changing pgsql-default_collation_connection to %s using configured pgsql-default_charset: %s\n", ci->name, ci->csname);
-						sprintf(q, "INSERT OR REPLACE INTO global_variables VALUES(\"pgsql-default_collation_connection\",\"%s\")", ci->name);
-						db->execute(q);
-						GloPTH->set_variable((char*)"default_collation_connection", ci->name);
-					}
-				}
-			}
-		}
-		free(default_charset);
-		free(default_collation_connection);
-		free(previous_default_charset);
-		free(previous_default_collation_connection);
+		free(default_client_encoding);
 		GloPTH->commit();
 		GloPTH->wrunlock();
 
@@ -927,6 +915,40 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
 		);
 		*/
+	
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for PostgreSQL connections.
+		 *
+		 * This safety check warns users when pgsql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled for PostgreSQL:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - PostgreSQL connections may appear "stale" to the database server
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @note PostgreSQL connections are often long-lived and benefit greatly from
+		 * TCP keepalive, especially in connection-pooled environments.
+		 *
+		 * @recommendation Always set pgsql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int pgsql_use_tcp_keepalive = GloPTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (pgsql_use_tcp_keepalive == 0) {
+			proxy_warning("pgsql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
+		}
 	}
 	if (resultset) delete resultset;
 }

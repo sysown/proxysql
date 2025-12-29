@@ -86,7 +86,7 @@ void check_matching_logline(fstream& f_log, string regex) {
 	// Minimal wait for the error log to be written
 	usleep(500 * 1000);
 
-	std::vector<line_match_t> matching_lines { get_matching_lines(f_log, regex) };
+	const auto& [__1, matching_lines ] { get_matching_lines(f_log, regex) };
 	for (const line_match_t& line_match : matching_lines) {
 		diag(
 			"Found matching logline - pos: %ld, line: `%s`",

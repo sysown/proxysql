@@ -167,6 +167,7 @@ void test_transaction_commit(PGconn* conn) {
     PGresult* res = PQEXEC(conn, "BEGIN");
     ok(PQtransactionStatus(conn) == PQTRANS_INTRANS, "Connection in Transaction state");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "BEGIN transaction");
+    PQclear(res);
 
     res = PQEXEC(conn, "INSERT INTO test_table (value) VALUES ('transaction commit')");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "INSERT in transaction");
@@ -194,6 +195,7 @@ void test_transaction_rollback(PGconn* conn) {
     PGresult* res = PQEXEC(conn, "BEGIN");
     ok(PQtransactionStatus(conn) == PQTRANS_INTRANS, "Connection in Transaction state");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "BEGIN transaction");
+    PQclear(res);
 
     res = PQEXEC(conn, "INSERT INTO test_table (value) VALUES ('transaction rollback')");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "INSERT in transaction");
@@ -219,6 +221,7 @@ void test_transaction_error(PGconn* conn) {
     PGresult* res = PQEXEC(conn, "BEGIN");
     ok(PQtransactionStatus(conn) == PQTRANS_INTRANS, "Connection in Transaction state");
     ok(PQresultStatus(res) == PGRES_COMMAND_OK, "BEGIN transaction");
+    PQclear(res);
 
     res = PQEXEC(conn, "SELECT 1/0");
     ok(PQresultStatus(res) == PGRES_FATAL_ERROR, "Error result returned");

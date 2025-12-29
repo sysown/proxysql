@@ -6,7 +6,7 @@
 
 #include "setparser_test_common.h"
 
-SetParser *parser = NULL;
+MySQL_Set_Stmt_Parser *parser = NULL;
 
 void TestParse(const Test* tests, int ntests, const std::string& title) {
   for (int i = 0; i < ntests; i++) {
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
 	p += arraysize(syntax_errors);
 	p *= 2;
 	plan(p);
-	parser = new SetParser("", 1);
+	parser = new MySQL_Set_Stmt_Parser("", 1);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
 	TestParse(time_zone, arraysize(time_zone), "time_zone");
 	TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");

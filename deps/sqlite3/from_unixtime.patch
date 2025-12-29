@@ -1,6 +1,6 @@
---- sqlite-amalgamation-3400100/sqlite3.c	2022-12-28 14:26:39.000000000 +0000
-+++ sqlite-amalgamation.patch/sqlite3.c	2023-01-10 16:48:54.793689411 +0000
-@@ -24926,6 +24926,44 @@
+--- sqlite3.c.O	2025-05-29 14:35:06.000000000 +0000
++++ sqlite3.c	2025-05-30 14:53:11.510407512 +0000
+@@ -25954,6 +25954,44 @@
  }
  
  /*
@@ -45,11 +45,11 @@
  **    time( TIMESTRING, MOD, MOD, ...)
  **
  ** Return HH:MM:SS
-@@ -25344,6 +25344,7 @@
-     PURE_DATE(datetime,         -1, 0, 0, datetimeFunc  ),
-     PURE_DATE(strftime,         -1, 0, 0, strftimeFunc  ),
-     PURE_DATE(timediff,          2, 0, 0, timediffFunc  ),
-+    DFUNCTION(from_unixtime,    -1, 0, 0, from_unixtimeFunc  ),
+@@ -26520,6 +26558,7 @@
+ #ifdef SQLITE_DEBUG
+     PURE_DATE(datedebug,        -1, 0, 0, datedebugFunc ),
+ #endif
++    DFUNCTION(from_unixtime,    -1, 0, 0, from_unixtimeFunc ),
      DFUNCTION(current_time,      0, 0, 0, ctimeFunc     ),
      DFUNCTION(current_timestamp, 0, 0, 0, ctimestampFunc),
      DFUNCTION(current_date,      0, 0, 0, cdateFunc     ),

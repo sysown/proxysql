@@ -199,10 +199,7 @@ int prepare_stmt_queries(const CommandLine& cl, const vector<query_t>& p_queries
 		);
 	}
 
-	diag(
-		"%s: PREPARING multiplexing disabling queries - `%s`", tap_curtime().c_str(),
-		json(str_queries).dump().c_str()
-	);
+	diag("PREPARING multiplexing disabling queries - `%s`", json(str_queries).dump().c_str());
 	for (const query_t& query_def : queries) {
 		const string& query = std::get<QUERY::QUERY_STR>(query_def);
 		const rep_check_t& rep_check = std::get<QUERY::REP_CHECK>(query_def);

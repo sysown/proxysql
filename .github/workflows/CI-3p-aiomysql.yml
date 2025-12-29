@@ -1,0 +1,36 @@
+name: CI-3p-aiomysql
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      testtree:
+        description: 'proxysql_3p_testing treeish/branch/tag/hash'
+        default: main
+        type: string
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  run-mysql:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    uses: sysown/proxysql/.github/workflows/ci-3p-aiomysql.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}
+      infradb: ${{ vars.MATRIX_3P_AIOMYSQL_infradb_mysql }}
+      connector: ${{ vars.MATRIX_3P_AIOMYSQL_connector_mysql }}
+
+  run-mariadb:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    uses: sysown/proxysql/.github/workflows/ci-3p-aiomysql.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}
+      infradb: ${{ vars.MATRIX_3P_AIOMYSQL_infradb_mariadb }}
+      connector: ${{ vars.MATRIX_3P_AIOMYSQL_connector_mariadb }}

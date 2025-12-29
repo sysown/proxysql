@@ -6,6 +6,8 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "proxysql_admin.h"
+
 #include "MySQL_Variables.h"
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
@@ -14,7 +16,7 @@
 
 #include "prometheus_helpers.h"
 
-#include "set_parser.h"
+#include "MySQL_Set_Stmt_Parser.h"
 
 /*
 #define MIN_POLL_LEN 8
@@ -31,6 +33,8 @@
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
 #define MYSQL_DEFAULT_MAX_JOIN_SIZE	"18446744073709551615"
+
+#define SESS_TO_SCAN_idle_thread	256
 
 extern class MySQL_Variables mysql_variables;
 
@@ -76,6 +80,7 @@ enum MySQL_Thread_status_variable {
 	st_var_backend_lagging_during_query,
 	st_var_backend_offline_during_query,
 	st_var_unexpected_com_quit,
+	st_var_unexpected_com_ping,
 	st_var_unexpected_packet,
 	st_var_killed_connections,
 	st_var_killed_queries,
@@ -86,6 +91,8 @@ enum MySQL_Thread_status_variable {
 	st_var_automatic_detected_sqli,
 	st_var_mysql_whitelisted_sqli_fingerprint,
 	st_var_client_host_error_killed_connections,
+	st_var_set_wait_timeout_commands,
+	st_var_timeout_terminated_connections,
 	MY_st_var_END
 };
 
@@ -192,7 +199,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	pthread_mutex_t thread_mutex;
 
 	// if set_parser_algorithm == 2 , a single thr_SetParser is used
-	SetParser *thr_SetParser;
+	MySQL_Set_Stmt_Parser* thr_SetParser;
 
 	MySQL_Thread();
 	~MySQL_Thread();
@@ -274,9 +281,12 @@ struct p_th_counter {
 		queries_with_max_lag_ms__delayed,
 		queries_with_max_lag_ms__total_wait_time_us,
 		mysql_unexpected_frontend_com_quit,
+		mysql_unexpected_frontend_com_ping,
 		hostgroup_locked_set_cmds,
 		hostgroup_locked_queries,
 		mysql_unexpected_frontend_packets,
+		mysql_set_wait_timeout_commands,
+		mysql_timeout_terminated_connections,
 		aws_aurora_replicas_skipped_during_query,
 		automatic_detected_sql_injection,
 		mysql_whitelisted_sqli_fingerprint,
@@ -314,8 +324,10 @@ struct p_th_gauge {
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
 		__size
+
 	};
 };
+
 
 struct th_metrics_map_idx {
 	enum index {
@@ -426,6 +438,7 @@ class MySQL_Threads_Handler
 		char * monitor_replication_lag_use_percona_heartbeat;
 		int ping_interval_server_msec;
 		int ping_timeout_server;
+		int fast_forward_grace_close_ms;
 		int shun_on_failures;
 		int shun_recovery_time_sec;
 		int unshun_algorithm;
@@ -441,10 +454,8 @@ class MySQL_Threads_Handler
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
-		int show_processlist_extended;
 #ifdef IDLE_THREADS
 		int session_idle_ms;
-		bool session_idle_show_processlist;
 #endif // IDLE_THREADS
 		bool sessions_sort;
 		char *default_schema;
@@ -528,8 +539,12 @@ class MySQL_Threads_Handler
 		int connpoll_reset_queue_length;
 		char *eventslog_filename;
 		int eventslog_filesize;
+		int eventslog_buffer_history_size;
+		int eventslog_table_memory_size;
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
+		int eventslog_stmt_parameters;
 		char *auditlog_filename;
 		int auditlog_filesize;
 		// SSL related, proxy to server
@@ -557,6 +572,24 @@ class MySQL_Threads_Handler
 		int data_packets_history_size;
 		int handle_warnings;
 		int evaluate_replication_lag_on_servers_load;
+		/**
+		 *   The processlist variables are logically group under "mysql-" variables
+		 *   and they are kept under MySQL_Threads_Handler.
+		 *
+		 *   Other than configuration load/save or sync activities, these variables
+		 *   are not utilized by MTH or MySQL_Thread for any other purpose and hence
+		 *   they are not associated with thread-local variables.
+		 *
+		 *   At runtime, ProxySQL_Admin keeps a copy of these variables and uses them
+		 *   when collecting stats for stats_mysql_processlist.
+		 */
+#ifdef IDLE_THREADS
+		bool session_idle_show_processlist;
+#endif
+		int show_processlist_extended;
+		int processlist_max_query_length;
+
+		bool ignore_min_gtid_annotations;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -674,7 +707,7 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
-	SQLite3_result * SQL3_Processlist();
+	SQLite3_result * SQL3_Processlist(processlist_config_t args);
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();

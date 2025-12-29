@@ -23,7 +23,63 @@ static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
 static unsigned int debug_output = 1;
 
+
+
+
 #define DEBUG_MSG_MAXSIZE	1024
+
+
+struct DebugLogEntry {
+	unsigned long long time;
+	unsigned long long lapse;
+	int thr;
+	std::string file;
+	int line;
+	std::string funct;
+	int module;
+	std::string modname;
+	int verbosity;
+	std::string message;
+	std::string backtrace;
+};
+
+static const size_t limitSize = 100;
+static std::vector<DebugLogEntry> log_buffer = {};
+
+
+/**
+ * @brief Synchronizes the log buffer to the SQLite database.
+ *
+ * This function writes the contents of the shared log buffer to the SQLite database
+ * in a single transaction. It assumes that the log buffer is protected by a mutex
+ * and that the prepared statement `statement1` has already been prepared.
+ * This happens in proxy_debug_func()
+ *
+ * @param db A pointer to the SQLite3DB object.
+ */
+void sync_log_buffer_to_disk(SQLite3DB *db) {
+	int rc;
+	db->execute("BEGIN TRANSACTION");
+	for (const auto& entry : log_buffer) {
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, entry.time); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, entry.lapse);ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, entry.thr); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 4, entry.file.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 5, entry.line); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 6, entry.funct.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 7, entry.module); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 8, entry.modname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 9, entry.verbosity); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 10, entry.message.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 11, entry.backtrace.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+		// Note: no assert() in proxy_debug_func() after sqlite3_reset() because it is possible that we are in shutdown
+		rc=(*proxy_sqlite3_reset)(statement1); // ASSERT_SQLITE_OK(rc, db);
+	}
+	db->execute("COMMIT");
+	log_buffer.clear();
+}
 
 /**
  * @brief Contains all filters related to debug.
@@ -210,21 +266,32 @@ void proxy_debug_func(
 			}
 		}
 		if (write_to_disk == true) {
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 1, curtime); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 2, curtime-pretime); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 3, thr); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_text)(statement1,  4, __file, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 5, __line); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_text)(statement1,  6, __func, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, module); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_text)(statement1,  8, GloVars.global.gdbg_lvl[module].name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, verbosity); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 10, origdebugbuff, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 11, longdebugbuff2, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			SAFE_SQLITE3_STEP2(statement1);
-			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
-			// Note: no assert() in proxy_debug_func() after sqlite3_reset() because it is possible that we are in shutdown
-			rc=(*proxy_sqlite3_reset)(statement1); // ASSERT_SQLITE_OK(rc, db);
+			// Create a DebugLogEntry
+			DebugLogEntry entry;
+			entry.time = curtime;
+			entry.lapse = curtime - pretime;
+			entry.thr = thr;
+			entry.file = __file;
+			entry.line = __line;
+			entry.funct = __func;
+			entry.module = module;
+			entry.modname = GloVars.global.gdbg_lvl[module].name;
+			entry.verbosity = verbosity;
+			entry.message = origdebugbuff;
+			entry.backtrace = longdebugbuff2;
+			log_buffer.push_back(entry);
+			// we now batch writes
+			// note1: in case of crash, the database will have some missing entries,
+			// but the entries can be read in `log_buffer` in the core dump
+			// note2: also in case of shutdown , `log_buffer` will have entries that won't be saved.
+			// if we really want *all* entries, we could just call sync_log_buffer_to_disk() on shutdown
+			if (
+				(log_buffer.size() >= limitSize)
+				||
+				(entry.file == "ProxySQL_Admin.cpp" && entry.funct == "flush_logs")
+			) {
+				sync_log_buffer_to_disk(db);
+			}
 		}
 	}
 	pthread_mutex_unlock(&debug_mutex);

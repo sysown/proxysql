@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
 
 	diag("Checking ProxySQL idle CPU usage");
 	double idle_cpu = 0;
-	int ret_i_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, idle_cpu);
+	int ret_i_cpu = get_proxysql_cpu_usage(cl, idle_cpu, SAMPLE_INTV_SECS);
 	if (ret_i_cpu) {
 		diag("Getting initial CPU usage failed with error - %d", ret_i_cpu);
 		diag("Aborting further testing");
@@ -298,7 +298,7 @@ int main(int argc, char** argv) {
 
 	diag("Checking ProxySQL final CPU usage for 'BUSY_LOOP'");
 	double final_cpu_usage = 0;
-	int ret_f_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, final_cpu_usage);
+	int ret_f_cpu = get_proxysql_cpu_usage(cl, final_cpu_usage, SAMPLE_INTV_SECS);
 
 	ok(
 		final_cpu_usage < MAX_BUSY_CPU,
@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
 	sleep(BUSY_WAIT_CLEANUP);
 
 	diag("Checking ProxySQL idle CPU usage");
-	ret_i_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, idle_cpu);
+	ret_i_cpu = get_proxysql_cpu_usage(cl, idle_cpu, SAMPLE_INTV_SECS);
 	if (ret_i_cpu) {
 		diag("Getting initial CPU usage failed with error - %d", ret_i_cpu);
 		diag("Aborting further testing");
@@ -330,7 +330,7 @@ int main(int argc, char** argv) {
 
 	diag("Checking ProxySQL final CPU usage for 'BUSY_LOOP'");
 	final_cpu_usage = 0;
-	ret_f_cpu = get_proxysql_cpu_usage(cl, SAMPLE_INTV_SECS, final_cpu_usage);
+	ret_f_cpu = get_proxysql_cpu_usage(cl, final_cpu_usage, SAMPLE_INTV_SECS);
 
 	ok(
 		final_cpu_usage < MAX_BUSY_CPU,

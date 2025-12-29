@@ -5,17 +5,21 @@
 
 #include <functional>
 #include <vector>
-
+#include <variant>
 #include "proxysql.h"
 #include "Base_Session.h"
 #include "cpp.h"
+#include "PgSQL_Error_Helper.h"
 #include "PgSQL_Variables.h"
-#include "Base_Session.h"
-
+#include "PgSQL_Variables_Validator.h"
 
 class PgSQL_Query_Result;
-//#include "../deps/json/json.hpp"
-//using json = nlohmann::json;
+class PgSQL_ExplicitTxnStateMgr;
+class PgSQL_Parse_Message;
+class PgSQL_Describe_Message;
+class PgSQL_Close_Message;
+class PgSQL_Bind_Message;
+class PgSQL_Execute_Message;
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -24,72 +28,155 @@ class PgSQL_Query_Result;
 
 extern class PgSQL_Variables pgsql_variables;
 
-/*
-enum proxysql_session_type {
-	PROXYSQL_SESSION_MYSQL,
-	PROXYSQL_SESSION_ADMIN,
-	PROXYSQL_SESSION_STATS,
-	PROXYSQL_SESSION_SQLITE,
-	PROXYSQL_SESSION_CLICKHOUSE,
-	PROXYSQL_SESSION_MYSQL_EMU,
-
-	PROXYSQL_SESSION_NONE
-};
-*/
-
-enum PgSQL_ps_type : uint8_t {
-	PgSQL_ps_type_not_set = 0x0,
-	PgSQL_ps_type_prepare_stmt = 0x1,
-	PgSQL_ps_type_execute_stmt = 0x2
+enum PgSQL_Extended_Query_Type : uint8_t {
+	PGSQL_EXTENDED_QUERY_TYPE_NOT_SET			 = 0x00,
+	PGSQL_EXTENDED_QUERY_TYPE_PARSE				 = 0x01,
+	PGSQL_EXTENDED_QUERY_TYPE_DESCRIBE			 = 0x02,
+	PGSQL_EXTENDED_QUERY_TYPE_EXECUTE			 = 0x04,
+	PGSQL_EXTENDED_QUERY_TYPE_BIND				 = 0x08,
+	PGSQL_EXTENDED_QUERY_TYPE_CLOSE				 = 0x10,
 };
 
+/* Enumerated types for output format and date order */
+typedef enum {
+	DATESTYLE_FORMAT_NONE = 0,
+	DATESTYLE_FORMAT_ISO,
+	DATESTYLE_FORMAT_SQL,
+	DATESTYLE_FORMAT_POSTGRES,
+	DATESTYLE_FORMAT_GERMAN
+} PgSQL_DateStyleFormat_t;
 
+typedef enum {
+	DATESTYLE_ORDER_NONE = 0,
+	DATESTYLE_ORDER_MDY,
+	DATESTYLE_ORDER_DMY,
+	DATESTYLE_ORDER_YMD
+} PgSQL_DateStyleOrder_t;
 
-//std::string proxysql_session_type_str(enum proxysql_session_type session_type);
+/* Structure to hold the parsed DateStyle */
+typedef struct {
+	PgSQL_DateStyleFormat_t format;
+	PgSQL_DateStyleOrder_t order;
+} PgSQL_DateStyle_t;
 
-// these structs will be used for various regex hardcoded
-// their initial use will be for sql_log_bin , sql_mode and time_zone
-// issues #509 , #815 and #816
-class PgSQL_Session_Regex {
+// Utility class for handling PostgreSQL DateStyle
+class PgSQL_DateStyle_Util {
 private:
-	void* opt;
-	void* re;
-	char* s;
+	/**
+	  * @brief Splits DateStyle string into tokens
+	  *
+	  * This function takes a DateStyle string as input and splits it into tokens.
+	  * It trims leading and trailing whitespace from each token and returns a vector containing the tokens.
+	  * If the input string contains more than one comma, an error is logged, and an empty vector is returned.
+	  *
+	  * @param input A string_view representing the DateStyle input to be split.
+	  * @return A vector of strings containing the split tokens. If the input is invalid, an empty vector is returned.
+	  *
+	  */
+	static std::vector<std::string> split_datestyle(std::string_view input);
+
 public:
-	PgSQL_Session_Regex(char* p);
-	~PgSQL_Session_Regex();
-	bool match(char* m);
+	/**
+	  * @brief Parses the given DateStyle string and returns the corresponding DateStyle format and order.
+	  *
+	  * This function splits the input string into tokens and processes
+	  * each token to identify the DateStyle format and order. If conflicting styles or orders are found, the
+	  * function returns a default DateStyle with none format and order.
+	  *
+	  * @param input A string_view representing the DateStyle input to be parsed.
+	  * @return A PgSQL_DateStyle_t structure containing the parsed DateStyle format and order.
+	  *
+	  */
+	static PgSQL_DateStyle_t parse_datestyle(std::string_view input);
+
+	/**
+	  * @brief Converts a PgSQL_DateStyle_t structure to a string representation.
+	  *
+	  * This function takes PgSQL_DateStyle_t structure and converts it to a string representation.
+	  * If the format or order in the provided datestyle is not set (DATESTYLE_FORMAT_NONE or DATESTYLE_ORDER_NONE),
+	  * it uses the corresponding values from the default_datestyle.
+	  *
+	  * @param datestyle The PgSQL_DateStyle_t structure to be converted to a string.
+	  * @param default_datestyle The default PgSQL_DateStyle_t structure to use if the provided datestyle is incomplete.
+	  * @return A string representation of the PgSQL_DateStyle_t structure.
+	  *
+	  */
+	static std::string datestyle_to_string(PgSQL_DateStyle_t datestyle, const PgSQL_DateStyle_t& default_datestyle);
+
+	/**
+	  * @brief Converts a DateStyle string to its string representation using a default DateStyle.
+	  *
+	  * This function takes a DateStyle string as input, parses it, and converts it to a string representation.
+	  * If the input DateStyle string is incomplete, the function uses the provided default DateStyle
+	  * to fill in the missing parts.
+	  *
+	  * @param input A string_view representing the DateStyle input to be converted.
+	  * @param default_datestyle A PgSQL_DateStyle_t structure representing the default DateStyle to use if the input is incomplete.
+	  * @return A string representation of DateStyle.
+	  *
+	  */
+	static std::string datestyle_to_string(std::string_view input, const PgSQL_DateStyle_t& default_datestyle);
 };
 
+class PgSQL_STMT_Global_info;
+using Parse_Param_Types = std::vector<uint32_t>; // Vector of parameter types for prepared statements
+
+enum PgSQL_Extended_Query_Flags : uint8_t {
+	PGSQL_EXTENDED_QUERY_FLAG_NONE				= 0x00,
+	PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL	= 0x01,
+	PGSQL_EXTENDED_QUERY_FLAG_SYNC				= 0x02,
+	PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE  = 0x04,
+};
+
+enum ExtendedQueryPhase : uint8_t {
+	EXTQ_PHASE_IDLE						= 0x00,	// No extended query activity
+	EXTQ_PHASE_BUILDING					= 0x01,	// Collecting extended query messages (Parse/Bind/etc.)
+	EXTQ_PHASE_EXECUTING_SYNC_CLIENT	= 0x02,	// Executing after client-initiated Sync
+	EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT	= 0x04,	// Executing after implicit Sync (injected)
+	EXTQ_PHASE_PROCESSING_PARSE			= 0x08,	// Processing Parse message after Sync
+	EXTQ_PHASE_PROCESSING_DESCRIBE		= 0x10,	// Processing Describe message after Sync
+	EXTQ_PHASE_PROCESSING_CLOSE			= 0x20,	// Processing Close message after Sync
+	EXTQ_PHASE_PROCESSING_BIND			= 0x40,	// Processing Bind message after Sync
+	EXTQ_PHASE_PROCESSING_EXECUTE		= 0x80	// Processing Execute message after Sync
+};
+
+#define EXTQ_PHASE_PROCESSING_MASK \
+    (EXTQ_PHASE_PROCESSING_PARSE | EXTQ_PHASE_PROCESSING_DESCRIBE | \
+     EXTQ_PHASE_PROCESSING_CLOSE | EXTQ_PHASE_PROCESSING_BIND | \
+     EXTQ_PHASE_PROCESSING_EXECUTE)
+
+struct PgSQL_Extended_Query_Info {
+	const char* stmt_client_name;
+	const char* stmt_client_portal_name;
+	const PgSQL_Bind_Message* bind_msg;
+	const PgSQL_STMT_Global_info* stmt_info;
+	uint64_t stmt_global_id;
+	uint32_t stmt_backend_id;
+	uint8_t stmt_type;
+	uint8_t flags;
+	Parse_Param_Types parse_param_types;
+};
 
 class PgSQL_Query_Info {
 public:
-	SQP_par_t QueryParserArgs;
-	PgSQL_Session* sess;
-	unsigned char* QueryPointer;
 	unsigned long long start_time;
 	unsigned long long end_time;
-
-	MYSQL_STMT* mysql_stmt;
-	stmt_execute_metadata_t* stmt_meta;
-	uint64_t stmt_global_id;
-	uint64_t stmt_client_id;
-	MySQL_STMT_Global_info* stmt_info;
-
-	int QueryLength;
-	enum PGSQL_QUERY_command PgQueryCmd;
-	bool bool_is_select_NOT_for_update;
-	bool bool_is_select_NOT_for_update_computed;
-	bool have_affected_rows; // if affected rows is set, last_insert_id is set too
 	uint64_t affected_rows;
-	uint64_t last_insert_id;
 	uint64_t rows_sent;
 	uint64_t waiting_since;
-	std::string show_warnings_prev_query_digest;
+
+	PgSQL_Extended_Query_Info extended_query_info;
+	PgSQL_Session* sess;
+	unsigned char* QueryPointer;
+	SQP_par_t QueryParserArgs;
+	int QueryLength;
+	enum PGSQL_QUERY_command PgQueryCmd;
+
+	bool have_affected_rows;
 
 	PgSQL_Query_Info();
 	~PgSQL_Query_Info();
-	void init(unsigned char* _p, int len, bool header = false);
+	
 	void query_parser_init();
 	enum PGSQL_QUERY_command query_parser_command_type();
 	void query_parser_free();
@@ -97,16 +184,52 @@ public:
 	void begin(unsigned char* _p, int len, bool header = false);
 	void end();
 	char* get_digest_text();
-	bool is_select_NOT_for_update();
+	void set_end_time(unsigned long long time);
+
+private:
+	void reset_extended_query_info();
+	void init(unsigned char* _p, int len, bool header = false);
 };
+
+/**
+ * @brief Assigns query end time.
+ * @details In addition to being a setter for end_time member variable, this
+ * method ensures that end_time is always greater than or equal to start_time.
+ * Refer https://github.com/sysown/proxysql/issues/4950 for more details.
+ * @param time query end time
+ */
+inline void PgSQL_Query_Info::set_end_time(unsigned long long time) {
+	end_time = time;
+
+#ifndef CLOCK_MONOTONIC_RAW
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is greater than end_time, assign current monotonic time
+	end_time = monotonic_time();
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is still greater than end_time, set the difference to 0
+	end_time = start_time;
+#endif // CLOCK_MONOTONIC_RAW
+}
 
 class PgSQL_Session : public Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread> {
 private:
+	using PktType = std::variant<std::unique_ptr<PgSQL_Parse_Message>,std::unique_ptr<PgSQL_Describe_Message>,
+		std::unique_ptr<PgSQL_Close_Message>, std::unique_ptr<PgSQL_Bind_Message>, std::unique_ptr<PgSQL_Execute_Message>>;
+
+	bool extended_query_exec_qp { false };
+	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
+	std::queue<PktType> extended_query_frame;
+	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
+
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
 
 	//	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
-
+#if 0
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t*);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t*);
 	/**
@@ -139,15 +262,45 @@ private:
 	 *   4. Respond to client with 'OK' packet.
 	 */
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t* pkt);
+
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t*);
+
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t*);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t*);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t*, bool* lock_hostgroup, PgSQL_ps_type prepare_stmt_type = PgSQL_ps_type_not_set);
+#endif
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
+	bool is_multi_statement_command(const char* cmd);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(PtrSize_t*, bool* lock_hostgroup, 
+		PgSQL_Extended_Query_Type stmt_type = PGSQL_EXTENDED_QUERY_TYPE_NOT_SET);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_PARSE(PtrSize_t& pkt);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_DESCRIBE(PtrSize_t& pkt);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_CLOSE(PtrSize_t& pkt);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_BIND(PtrSize_t& pkt);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_EXECUTE(PtrSize_t& pkt);
+	int handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC();
+	bool handler___rc0_PROCESSING_STMT_PREPARE(enum session_status& st, PgSQL_Data_Stream* myds);
+	// FIXME: unused. Remove in next iteration
+	//void handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_Stream* myds);
+	int handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
+	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
+	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
+	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);
+	int handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg);
+	int handle_post_sync_execute_message(PgSQL_Execute_Message* execute_msg);
+	void handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal);
+	void handle_post_sync_locked_on_hostgroup_error(const char* query, int query_len);
+	void reset_extended_query_frame();
+
+
 	//void return_proxysql_internal(PtrSize_t*);
-	bool handler_special_queries(PtrSize_t*);
+	bool handler_special_queries(PtrSize_t*, bool* lock_hostgroup);
 	//bool handler_special_queries_STATUS(PtrSize_t*);
 	/**
 	 * @brief Handles 'COMMIT|ROLLBACK' commands.
@@ -160,7 +313,6 @@ private:
 	 * @return 'true' if the packet is intercepted and never forwarded to the client, 'false' otherwise.
 	 */
 	bool handler_CommitRollback(PtrSize_t*);
-	//bool handler_SetAutocommit(PtrSize_t*);
 	/**
 	 * @brief Should execute most of the commands executed when a request is finalized.
 	 * @details Cleanup of current session state, and required operations to the supplied 'PgSQL_Data_Stream'
@@ -178,13 +330,22 @@ private:
 	 * @param myds If not null, should point to a PgSQL_Data_Stream (backend connection) which connection status
 	 *   should be updated, and previous query resources cleanup.
 	 */
-	void RequestEnd(PgSQL_Data_Stream*) override;
+	void RequestEnd(PgSQL_Data_Stream*, bool called_on_failure);
 	void LogQuery(PgSQL_Data_Stream*);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
-	void handler_again___new_thread_to_kill_connection();
+	int handler_again___status_RESYNCHRONIZING_CONNECTION();
+
+	/**
+	 * @brief Initiates a new thread to kill current running query.
+	 *
+	 * The handler_again___new_thread_to_cancel_query() method creates a new thread to initiate 
+	 * the cancellation of the current running query.
+	 *
+	 */
+	void handler_again___new_thread_to_cancel_query();
 
 	bool handler_again___verify_init_connect();
 #if 0
@@ -199,9 +360,6 @@ private:
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int*);
 	bool handler_again___status_SETTING_SQL_MODE(int*);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int*);
-#endif // 0
-	bool handler_again___status_CHANGING_CHARSET(int* _rc);
-#if 0
 	bool handler_again___status_CHANGING_SCHEMA(int*);
 #endif // 0
 	bool handler_again___status_CONNECTING_SERVER(int*);
@@ -222,19 +380,9 @@ private:
 	void housekeeping_before_pkts();
 #endif // 0
 	int get_pkts_from_client(bool&, PtrSize_t&);
-#if 0
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
-#endif // 0
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
-
 	// these functions have code that used to be inline, and split into functions for readibility
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(PgSQL_Data_Stream* myds);
 	void SetQueryTimeout();
-	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, PgSQL_Data_Stream* myds, bool& prepared_stmt_with_no_params);
-	void handler_rc0_PROCESSING_STMT_EXECUTE(PgSQL_Data_Stream* myds);
 	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds);
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
@@ -242,12 +390,13 @@ private:
 	void handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds);
 	int RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA();
-	void handler_rc0_Process_GTID(PgSQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
+#if 0
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
+#endif
 	void handler___status_WAITING_CLIENT_DATA___default();
 	void handler___status_NONE_or_default(PtrSize_t& pkt);
 
@@ -280,6 +429,19 @@ private:
 	void switch_fast_forward_to_normal_mode();
 
 public:
+	inline bool is_extended_query_frame_empty() const {
+		return extended_query_frame.empty();
+	}
+
+	inline uint8_t get_extended_query_phase() const {
+		return extended_query_phase;
+	}
+
+	inline bool is_extended_query_ready_for_query() const {
+		return extended_query_frame.empty() &&
+			((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0);
+	}
+
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
 #if 0
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
@@ -287,8 +449,14 @@ public:
 	std::stack<enum session_status> previous_status;
 
 	PgSQL_Query_Info CurrentQuery;
-	PtrSize_t mirrorPkt;
 	PtrSize_t pkt;
+	std::string untracked_option_parameters;
+	PgSQL_DateStyle_t current_datestyle = {};
+	uint32_t cancel_secret_key;
+
+#ifdef DEBUG
+	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;
+#endif
 
 #if 0
 	// uint64_t
@@ -309,6 +477,7 @@ public:
 	PgSQL_Data_Stream* client_myds;
 #endif // 0
 	PgSQL_Data_Stream* server_myds;
+	PgSQL_ExplicitTxnStateMgr* transaction_state_manager;
 #if 0
 	/*
 	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
@@ -331,23 +500,15 @@ public:
 	int current_hostgroup;
 	int default_hostgroup;
 	int previous_hostgroup;
-	/**
-	 * @brief Charset directly specified by the client. Supplied and updated via 'HandshakeResponse'
-	 *   and 'COM_CHANGE_USER' packets.
-	 * @details Used when session needs to be restored via 'COM_RESET_CONNECTION'.
-	 */
-	int default_charset;
 	int locked_on_hostgroup;
 	int next_query_flagIN;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
 	unsigned int active_transactions;
-	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
 	int to_process;
-	int pending_connect;
 	enum proxysql_session_type session_type;
-	int warning_in_hg;
+	
 
 	// bool
 	bool autocommit;
@@ -388,7 +549,7 @@ public:
 	bool use_ldap_auth;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
-	enum mysql_variable_name changing_variable_idx;
+	enum pgsql_variable_name changing_variable_idx;
 
 	PgSQL_Session();
 	~PgSQL_Session();
@@ -405,7 +566,7 @@ public:
 
 	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) override;
 	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = NULL);
-	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT* stmt, PgSQL_Connection* myconn);
+	
 	//unsigned int NumActiveTransactions(bool check_savpoint = false);
 	//bool HasOfflineBackends();
 	//bool SetEventInOfflineBackends();
@@ -442,42 +603,25 @@ public:
 	 * @param prepared_stmt_with_no_params specifies if the processed query was a prepared statement with no
 	 *   params.
 	 */
-	void finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool);
+	void finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool sticky_backend_connection);
 	void generate_proxysql_internal_session_json(nlohmann::json&) override;
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool*);
 	//bool has_any_backend();
 	void detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, bool verbose = false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
-	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute = true);
+	char* get_current_query(int max_length = -1);
+
+#if defined(__clang__)
+	template<typename SESS, typename DS, typename BE, typename THD>
+	friend class Base_Session;
+#else
+	friend class Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>;
+#endif
 };
 
-#define PgSQL_KILL_QUERY       1
-#define PgSQL_KILL_CONNECTION  2
 
-class PgSQL_KillArgs {
-public:
-	PgSQL_Thread* mt;
-	char* username;
-	char* password;
-	char* hostname;
-	unsigned int port;
-	unsigned long id;
-	int kill_type;
-	unsigned int hid;
-	int use_ssl;
-
-	PgSQL_KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, PgSQL_Thread* _mt);
-	PgSQL_KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, PgSQL_Thread* _mt, char* ip);
-	~PgSQL_KillArgs();
-	const char* get_host_address() const;
-
-private:
-	char* ip_addr;
-};
-
-void* PgSQL_kill_query_thread(void* arg);
 
 #endif /* __CLASS_PGSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H

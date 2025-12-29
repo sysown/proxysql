@@ -59,14 +59,13 @@ int create_connections(const conn_opts_t& conn_opts, uint32_t cons_num, std::vec
 
 const uint32_t ADMIN_CONN_NUM = 100;
 const uint32_t MYSQL_CONN_NUM = 100;
-const uint32_t REPORT_INTV_SEC = 5;
 
 double MAX_IDLE_CPU_USAGE = (double) get_env_int("MAX_IDLE_CPU_USAGE", 10);
 double MAX_INCREASE_CPU_USAGE = (double) get_env_int("TAP_MAX_INCREASE_CPU_USAGE", 2);
 
 int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& no_conns_cpu, double& idle_conns_cpu) {
 	// get ProxySQL idle cpu usage
-	int idle_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, no_conns_cpu);
+	int idle_err = get_proxysql_cpu_usage(cl, no_conns_cpu);
 	if (idle_err) {
 	    diag("Unable to get 'no_conns_cpu' usage.");
 		return idle_err;
@@ -90,7 +89,7 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& no_conns_cp
 		return EXIT_FAILURE;
 	}
 
-	int final_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_conns_cpu);
+	int final_err = get_proxysql_cpu_usage(cl, idle_conns_cpu);
 	if (final_err) {
 	    diag("Unable to get 'idle_conns_cpu' usage.");
 		return idle_err;

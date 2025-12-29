@@ -772,7 +772,7 @@ int check_module_checksums_sync(
 			const string diff_check_regex {
 				"Cluster: detected a peer .* with " + module + " version \\d+, epoch \\d+, diff_check \\d+."
 			};
-			vector<line_match_t> new_matching_lines { get_matching_lines(logfile_fs, diff_check_regex) };
+			const auto& [_, new_matching_lines] { get_matching_lines(logfile_fs, diff_check_regex) };
 			diag("regex used in `%s` to find loglines: `%s`", basename(logfile_path.c_str()), diff_check_regex.c_str());
 
 			for (const line_match_t& line_match : new_matching_lines) {
@@ -801,7 +801,7 @@ int check_module_checksums_sync(
 					" Not syncing due to '" + module_sync.sync_variable + "=0'"
 			};
 
-			vector<line_match_t> new_matching_lines { get_matching_lines(logfile_fs, no_syncing_regex) };
+			const auto& [_, new_matching_lines] { get_matching_lines(logfile_fs, no_syncing_regex) };
 			diag("regex used in `%s` to find loglines: `%s`", basename(logfile_path.c_str()), no_syncing_regex.c_str());
 
 			for (const line_match_t& line_match : new_matching_lines) {
