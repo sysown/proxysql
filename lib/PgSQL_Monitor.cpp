@@ -100,11 +100,145 @@ void check_and_build_standard_tables(SQLite3DB& db, const vector<table_def_t>& t
 	db.execute("PRAGMA foreign_keys = ON");
 }
 
+/**
+ * @brief Server container for PostgreSQL Monitor connection pool
+ * @details Holds connections per server (hostname:port) for reuse
+ *          Equivalent to MySQL's MonMySrvC class
+ */
+class MonPgSrvC {
+public:
+	char* address;
+	uint16_t port;
+	std::unique_ptr<PtrArray> conns;
+	MonPgSrvC(char* a, uint16_t p) {
+		address = strdup(a);
+		port = p;
+		conns = std::unique_ptr<PtrArray>(new PtrArray());
+	};
+	~MonPgSrvC() {
+		free(address);
+		if (conns) {
+			while (conns->len) {
+				PGconn* pg = static_cast<PGconn*>(conns->index(0));
+				if (pg) {
+					PQfinish(pg);
+					pg = nullptr;
+				}
+				conns->remove_index_fast(0);
+			}
+		}
+	}
+};
+
+/**
+ * @brief Connection pool for PostgreSQL Aurora monitoring
+ * @details Equivalent to MySQL_Monitor_Connection_Pool
+ *          Pools connections for Aurora health checks to reduce connection overhead
+ */
+class PgSQL_Monitor_Connection_Pool {
+private:
+	std::mutex mutex;
+	std::unique_ptr<PtrArray> servers;
+public:
+	PGconn* get_connection(char* hostname, int port);
+	void put_connection(char* hostname, int port, PGconn* pg);
+	void purge_some_connections();
+	void purge_all_connections();
+	PgSQL_Monitor_Connection_Pool() {
+		servers = std::unique_ptr<PtrArray>(new PtrArray());
+	};
+	~PgSQL_Monitor_Connection_Pool() {
+		purge_all_connections();
+	}
+};
+
+PGconn* PgSQL_Monitor_Connection_Pool::get_connection(char* hostname, int port) {
+	std::lock_guard<std::mutex> lock(mutex);
+	PGconn* pg = nullptr;
+
+	for (unsigned int i = 0; i < servers->len; i++) {
+		MonPgSrvC* srv = (MonPgSrvC*)servers->index(i);
+		if (srv->port == port && strcmp(hostname, srv->address) == 0) {
+			if (srv->conns->len) {
+				while (srv->conns->len) {
+					unsigned int idx = rand() % srv->conns->len;
+					PGconn* pgconn = (PGconn*)srv->conns->remove_index_fast(idx);
+
+					if (!pgconn) continue;
+
+					// Check if connection is still alive
+					if (PQstatus(pgconn) != CONNECTION_OK) {
+						PQfinish(pgconn);
+						continue;
+					}
+
+					pg = pgconn;
+					break;
+				}
+			}
+			return pg;
+		}
+	}
+	return pg;
+}
+
+void PgSQL_Monitor_Connection_Pool::put_connection(char* hostname, int port, PGconn* pg) {
+	std::lock_guard<std::mutex> lock(mutex);
+	for (unsigned int i = 0; i < servers->len; i++) {
+		MonPgSrvC* srv = (MonPgSrvC*)servers->index(i);
+		if (srv->port == port && strcmp(hostname, srv->address) == 0) {
+			srv->conns->add(pg);
+			return;
+		}
+	}
+	// if no server was found
+	MonPgSrvC* srv = new MonPgSrvC(hostname, port);
+	srv->conns->add(pg);
+	servers->add(srv);
+}
+
+void PgSQL_Monitor_Connection_Pool::purge_some_connections() {
+	std::lock_guard<std::mutex> lock(mutex);
+	for (unsigned int i = 0; i < servers->len; i++) {
+		MonPgSrvC* srv = (MonPgSrvC*)servers->index(i);
+		// Keep at most 4 connections per server (same as MySQL)
+		while (srv->conns->len > 4) {
+			PGconn* pg = (PGconn*)srv->conns->remove_index_fast(0);
+			if (pg) {
+				PQfinish(pg);
+			}
+		}
+		// Also check connection status and close dead connections
+		for (unsigned int j = 0; j < srv->conns->len; j++) {
+			PGconn* pg = (PGconn*)srv->conns->index(j);
+			if (pg && PQstatus(pg) != CONNECTION_OK) {
+				srv->conns->remove_index_fast(j);
+				PQfinish(pg);
+				j--; // Recheck this index
+			}
+		}
+	}
+}
+
+void PgSQL_Monitor_Connection_Pool::purge_all_connections() {
+	std::lock_guard<std::mutex> lock(mutex);
+	if (servers) {
+		while (servers->len) {
+			MonPgSrvC* srv = static_cast<MonPgSrvC*>(servers->index(0));
+			if (srv) {
+				delete srv;
+			}
+			servers->remove_index_fast(0);
+		}
+	}
+}
+
 PgSQL_Monitor::PgSQL_Monitor() {
 	// Initialize Aurora mutex and members like MySQL does
 	pthread_mutex_init(&aws_aurora_mutex, NULL);
 	AWS_Aurora_Hosts_resultset = nullptr;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
+	My_Conn_Pool = new PgSQL_Monitor_Connection_Pool();
 
 	int rc = monitordb.open(
 		const_cast<char*>("file:mem_monitordb?mode=memory&cache=shared"),
@@ -144,6 +278,11 @@ PgSQL_Monitor::~PgSQL_Monitor() {
 		delete it.second;
 	}
 	AWS_Aurora_Hosts_Map.clear();
+	// Clean up connection pool
+	if (My_Conn_Pool) {
+		delete My_Conn_Pool;
+		My_Conn_Pool = nullptr;
+	}
 }
 
 bool PgSQL_Monitor::server_responds_to_ping(const char* addr, int port) {
@@ -2433,10 +2572,45 @@ static void shuffle_pgsql_hosts(pgsql_host_def_t* arr, unsigned int n) {
 	}
 }
 
+#ifdef TEST_AURORA
+static void print_pgsql_aws_aurora_status_entry(PgSQL_AWS_Aurora_status_entry* aase) {
+	if (aase && aase->start_time) {
+		if (aase->host_statuses->size()) {
+			for (PgSQL_AWS_Aurora_replica_host_status_entry* hse : *aase->host_statuses) {
+				if (hse) {
+					fprintf(stderr, "%s %s %s %f %u\n", hse->server_id, hse->session_id,
+						hse->last_update_timestamp, hse->replica_lag_ms, hse->estimated_lag_ms);
+				}
+			}
+		}
+	}
+}
+#endif // TEST_AURORA
+
 void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned int rHG,
 		PgSQL_AWS_Aurora_status_entry** lasts_ase, unsigned int ase_idx,
 		unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
-
+#ifdef TEST_AURORA
+	unsigned int i = 0;
+	bool verbose = false;
+	unsigned int action_yes = 0;
+	unsigned int action_no = 0;
+	unsigned int enabling = 0;
+	unsigned int disabling = 0;
+	if (rand() % 500 == 0) {
+		verbose = true;
+		bool ev = false;
+		if (rand() % 1000 == 0) {
+			ev = true;
+		}
+		for (i = 0; i < N_L_ASE; i++) {
+			PgSQL_AWS_Aurora_status_entry* aase_tmp = lasts_ase[i];
+			if (ev == true || i == ase_idx) {
+				print_pgsql_aws_aurora_status_entry(aase_tmp);
+			}
+		}
+	}
+#endif // TEST_AURORA
 	unsigned int prev_ase_idx = ase_idx;
 	if (prev_ase_idx == 0) prev_ase_idx = N_L_ASE;
 	prev_ase_idx--;
@@ -2495,8 +2669,17 @@ void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned
 				}
 
 				if (run_action) {
+#ifdef TEST_AURORA
+					action_yes++;
+					(enable ? enabling++ : disabling++);
+					rla_rc = PgHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer, verbose);
+#else
 					rla_rc = PgHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+#endif // TEST_AURORA
 				} else {
+#ifdef TEST_AURORA
+					action_no++;
+#endif // TEST_AURORA
 					if (is_writer) {
 						// If the server is a writer we run it anyway for sanity check
 						rla_rc = PgHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
@@ -2506,7 +2689,9 @@ void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned
 				if (rla_rc == false) {
 					if (is_writer) {
 						// The server should be a writer but is not configured as one
+#ifdef TEST_AURORA
 						proxy_info("Aurora PostgreSQL: Calling update_aws_aurora_set_writer for %s\n", hse->server_id);
+#endif // TEST_AURORA
 						PgHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id);
 
 						// Log failover event
@@ -2523,13 +2708,20 @@ void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned
 						monitordb.execute(q2);
 						free(q2);
 					} else {
+#ifdef TEST_AURORA
 						proxy_info("Aurora PostgreSQL: Calling update_aws_aurora_set_reader for %s\n", hse->server_id);
+#endif // TEST_AURORA
 						PgHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id);
 					}
 				}
 			}
 		}
 	}
+#ifdef TEST_AURORA
+	if (verbose) {
+		proxy_info("Aurora PostgreSQL replication_lag_actions: YES=%u , NO=%u , enabling=%u , disabling=%u\n", action_yes, action_no, enabling, disabling);
+	}
+#endif // TEST_AURORA
 }
 
 /**
@@ -2691,16 +2883,22 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 		start_time = t1;
 		char* error_msg = nullptr;
 
-		// Build connection string with monitor credentials
-		// Note: dbname=postgres is used because aurora_replica_status() is a system function
-		char conninfo[1024];
-		snprintf(conninfo, sizeof(conninfo), "host=%s port=%d dbname=postgres user=%s password=%s connect_timeout=%d",
-			hpa[cur_host_idx].host, hpa[cur_host_idx].port,
-			monitor_user ? monitor_user : "",
-			monitor_pass ? monitor_pass : "",
-			check_timeout_ms / 1000);
-
-		PGconn* conn = PQconnectdb(conninfo);
+		// Try to get connection from pool first (crc=false means from pool, crc=true means new connection)
+		// Note: crc is kept for MySQL parity and potential future use (e.g., connection timeout tracking)
+		bool crc __attribute__((unused)) = false;
+		PGconn* conn = GloPgMon->My_Conn_Pool->get_connection(hpa[cur_host_idx].host, hpa[cur_host_idx].port);
+		if (!conn) {
+			// Build connection string with monitor credentials
+			// Note: dbname=postgres is used because aurora_replica_status() is a system function
+			char conninfo[1024];
+			snprintf(conninfo, sizeof(conninfo), "host=%s port=%d dbname=postgres user=%s password=%s connect_timeout=%d",
+				hpa[cur_host_idx].host, hpa[cur_host_idx].port,
+				monitor_user ? monitor_user : "",
+				monitor_pass ? monitor_pass : "",
+				check_timeout_ms / 1000);
+			conn = PQconnectdb(conninfo);
+			crc = true;  // Mark as new connection
+		}
 
 		unsigned long long t2 = monotonic_time();
 		PgSQL_AWS_Aurora_status_entry* ase = nullptr;
@@ -2754,10 +2952,21 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 						new PgSQL_AWS_Aurora_replica_host_status_entry(server_id, session_id, session_id, replica_lag, is_writer);
 					ase_l->add_host_status(arhse_l);
 				}
+				// Query succeeded, return connection to pool
+				// Note: MySQL distinguishes between pool connections (crc=false) and new connections (crc=true)
+				// with set_wait_timeout() for new connections. PostgreSQL doesn't have this, so we always
+				// return the connection to pool on success regardless of crc flag.
+				GloPgMon->My_Conn_Pool->put_connection(hpa[cur_host_idx].host, hpa[cur_host_idx].port, conn);
+				conn = nullptr;  // Mark as handled
 			}
 			PQclear(res);
 		}
-		PQfinish(conn);
+		// If connection wasn't returned to pool (error case), close it
+		// This matches MySQL's behavior: on error, connection is closed (not returned to pool)
+		if (conn) {
+			PQfinish(conn);
+			conn = nullptr;
+		}
 
 		// Process results
 		if (lasts_ase[ase_idx]) {

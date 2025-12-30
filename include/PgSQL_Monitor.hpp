@@ -34,6 +34,7 @@
 // Forward declarations
 class PgSQL_AWS_Aurora_monitor_node;
 class PgSQL_AWS_Aurora_status_entry;
+class PgSQL_Monitor_Connection_Pool;
 
 struct PgSQL_Monitor {
 	// @brief Flags if monitoring threads should be shutdown.
@@ -96,6 +97,7 @@ struct PgSQL_Monitor {
 	SQLite3_result* AWS_Aurora_Hosts_resultset;
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
 	std::map<std::string, PgSQL_AWS_Aurora_monitor_node*> AWS_Aurora_Hosts_Map;
+	PgSQL_Monitor_Connection_Pool* My_Conn_Pool;  // Connection pool for Aurora monitoring
 	///////////////////////////////////////////////////////////////////////////
 
 	PgSQL_Monitor();
