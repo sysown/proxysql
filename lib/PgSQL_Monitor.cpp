@@ -1187,7 +1187,7 @@ pgsql_conn_t create_new_conn(task_st_t& task_st) {
 
 		if (pgconn.conn) {
 			auto error { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
-			proxy_error(
+			proxy_debug(PROXY_DEBUG_MONITOR, 5,
 				"Monitor connect failed   addr='%s:%d' error='%s'\n",
 				srv.addr.c_str(), srv.port, error.get()
 			);
@@ -1196,7 +1196,7 @@ pgsql_conn_t create_new_conn(task_st_t& task_st) {
 			task_st.end = monotonic_time();
 		} else {
 			mf_unique_ptr<char> error { strdup("Out of memory") };
-			proxy_error(
+			proxy_debug(PROXY_DEBUG_MONITOR, 5,
 				"Monitor connect failed   addr='%s:%d' error='%s'\n",
 				srv.addr.c_str(), srv.port, "Out of memory"
 			);
