@@ -4974,6 +4974,10 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			mydb->execute(query);
 			generate_pgsql_servers_table(&_whid);
 			generate_pgsql_servers_table(&_rhid);
+
+			// Because 'commit' is called, we are required to update 'pgsql_servers_for_monitor'.
+			update_table_pgsql_servers_for_monitor(false);
+
 			wrunlock();
 			GloAdmin->pgsql_servers_wrunlock();
 		} else {
@@ -5013,6 +5017,9 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				generate_pgsql_servers_table(&_whid);
 				generate_pgsql_servers_table(&_rhid);
 
+				// Because 'commit' isn't called, we are required to update 'pgsql_servers_for_monitor'.
+				update_table_pgsql_servers_for_monitor(false);
+				// Update AWS Aurora resultset used for monitoring
 				update_aws_aurora_hosts_monitor_resultset(true);
 			}
 
@@ -5096,6 +5103,9 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			generate_pgsql_servers_table(&_whid);
 			generate_pgsql_servers_table(&_rhid);
 
+			// Because 'commit' is called, we are required to update 'pgsql_servers_for_monitor'.
+			update_table_pgsql_servers_for_monitor(false);
+
 			wrunlock();
 			GloAdmin->pgsql_servers_wrunlock();
 			free(query);
@@ -5123,6 +5133,8 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				generate_pgsql_servers_table(&_whid);
 				generate_pgsql_servers_table(&_rhid);
 
+				// Because 'commit' isn't called, we are required to update 'pgsql_servers_for_monitor'.
+				update_table_pgsql_servers_for_monitor(false);
 				// Update AWS Aurora resultset used for monitoring
 				update_aws_aurora_hosts_monitor_resultset(true);
 			}
