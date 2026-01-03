@@ -1,207 +1,402 @@
 #!/usr/bin/env python3
 """
-Script to retrieve StackExchange posts from MySQL and store them as JSON in a target database.
-Supports separate source and target database connections with duplicate checking.
-Retrieves parent posts (PostTypeId=1) and their replies (PostTypeId=2),
-collecting all unique tags.
+Comprehensive StackExchange Posts Processing Script
+
+Creates target table, extracts data from source, and processes for search.
+- Retrieves parent posts (PostTypeId=1) and their replies (PostTypeId=2)
+- Combines posts and tags into structured JSON
+- Creates search-ready columns with full-text indexes
+- Supports batch processing and duplicate checking
+- Handles large datasets efficiently
 """
 
 import mysql.connector
-from mysql.connector import Error
+from mysql.connector import Error, OperationalError
 import json
 import re
-from typing import List, Dict, Any, Set
+import html
+from typing import List, Dict, Any, Set, Tuple
 import argparse
+import time
+import sys
 
-def parse_tags(tags_string: str) -> Set[str]:
-    """
-    Parse HTML-like tags string and extract unique tag values.
-    Example: '<mysql><innodb><myisam>' -> {'mysql', 'innodb', 'myisam'}
-    """
-    if not tags_string:
-        return set()
+class StackExchangeProcessor:
+    def __init__(self, source_config: Dict[str, Any], target_config: Dict[str, Any]):
+        self.source_config = source_config
+        self.target_config = target_config
+        self.stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+            'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those',
+            'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your', 'his', 'its', 'our', 'their'
+        }
 
-    # Extract content between < and > tags
-    tags = re.findall(r'<([^<>]+)>', tags_string)
-    return set(tag.strip().lower() for tag in tags if tag.strip())
+    def clean_text(self, text: str) -> str:
+        """Clean and normalize text for search indexing."""
+        if not text:
+            return ""
 
-def get_parent_posts(conn, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
-    """Retrieve parent posts (PostTypeId=1) with specified fields, supports pagination."""
-    cursor = conn.cursor(dictionary=True)
-    query = """
-    SELECT Id, Title, CreationDate, Body
-    FROM Posts
-    WHERE PostTypeId = 1
-    ORDER BY Id
-    LIMIT %s OFFSET %s
-    """
+        # Decode HTML entities
+        text = html.unescape(text)
 
-    try:
-        cursor.execute(query, (limit, offset))
-        posts = cursor.fetchall()
-        print(f"Retrieved {len(posts)} parent posts (offset: {offset})")
-        return posts
-    except Error as e:
-        print(f"Error retrieving parent posts: {e}")
-        return []
-    finally:
-        cursor.close()
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', ' ', text)
 
-def get_child_posts(conn, parent_ids: List[int], chunk_size: int = 1000) -> Dict[int, List[str]]:
-    """Retrieve child posts (PostTypeId=2) for given parent IDs, sorted by their ID, with chunking."""
-    if not parent_ids:
-        return {}
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
 
-    parent_to_children = {}
+        # Convert to lowercase
+        return text.lower()
 
-    # Process parent IDs in chunks to avoid IN clause limitations
-    for i in range(0, len(parent_ids), chunk_size):
-        chunk = parent_ids[i:i + chunk_size]
+    def parse_tags(self, tags_string: str) -> Set[str]:
+        """Parse HTML-like tags string and extract unique tag values."""
+        if not tags_string:
+            return set()
 
-        cursor = conn.cursor(dictionary=True)
-        query = """
-        SELECT ParentId, Body, Id as ReplyId
-        FROM Posts
-        WHERE PostTypeId = 2 AND ParentId IN (%s)
-        ORDER BY ParentId, ReplyId
-        """ % (','.join(['%s'] * len(chunk)))
+        # Extract content between < and > tags
+        tags = re.findall(r'<([^<>]+)>', tags_string)
+        return set(tag.strip().lower() for tag in tags if tag.strip())
+
+    def create_target_table(self, conn) -> bool:
+        """Create the target table with all necessary columns."""
+        cursor = conn.cursor()
+
+        # SQL to create table with all search columns
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS `processed_posts` (
+          `PostId` BIGINT NOT NULL,
+          `JsonData` JSON NOT NULL,
+          `Embeddings` BLOB NULL,
+          `SearchText` LONGTEXT NULL COMMENT 'Combined text content for full-text search',
+          `TitleText` VARCHAR(1000) NULL COMMENT 'Processed title text',
+          `BodyText` LONGTEXT NULL COMMENT 'Processed body text',
+          `RepliesText` LONGTEXT NULL COMMENT 'Combined replies text',
+          `Tags` JSON NULL COMMENT 'Extracted tags',
+          `CreatedAt` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          `UpdatedAt` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (`PostId`),
+          KEY `idx_created_at` (`CreatedAt`),
+          -- KEY `idx_tags` ((CAST(Tags AS CHAR(1000) CHARSET utf8mb4))),  -- Commented out for compatibility
+          FULLTEXT INDEX `ft_search` (`SearchText`, `TitleText`, `BodyText`, `RepliesText`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        COMMENT='Structured StackExchange posts data with search capabilities'
+        """
 
         try:
-            cursor.execute(query, chunk)
-            child_posts = cursor.fetchall()
-
-            # Group child bodies by ParentId
-            for child in child_posts:
-                parent_id = child['ParentId']
-                if parent_id not in parent_to_children:
-                    parent_to_children[parent_id] = []
-                parent_to_children[parent_id].append(child['Body'])
-
-            print(f"Retrieved {len(child_posts)} child posts in chunk {i//chunk_size + 1}")
+            cursor.execute(create_table_sql)
+            conn.commit()
+            print("✅ Target table created successfully with all search columns")
+            return True
         except Error as e:
-            print(f"Error retrieving child posts (chunk {i//chunk_size + 1}): {e}")
+            print(f"❌ Error creating target table: {e}")
+            return False
         finally:
             cursor.close()
 
-    print(f"Total retrieved: {len(child_posts)} child posts for {len(parent_to_children)} parents")
-    return parent_to_children
-
-def get_all_tags(conn, post_ids: List[int], chunk_size: int = 1000) -> Dict[int, Set[str]]:
-    """Retrieve and parse all unique tags for given post IDs, with chunking."""
-    if not post_ids:
-        return {}
-
-    post_tags = {}
-
-    # Process post IDs in chunks to avoid IN clause limitations
-    for i in range(0, len(post_ids), chunk_size):
-        chunk = post_ids[i:i + chunk_size]
-
+    def get_parent_posts(self, conn, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+        """Retrieve parent posts (PostTypeId=1) with pagination."""
         cursor = conn.cursor(dictionary=True)
         query = """
-        SELECT Id, Tags
+        SELECT Id, Title, CreationDate, Body, Tags
         FROM Posts
-        WHERE Id IN (%s) AND Tags IS NOT NULL
-        """ % (','.join(['%s'] * len(chunk)))
+        WHERE PostTypeId = 1
+        ORDER BY Id
+        LIMIT %s OFFSET %s
+        """
 
         try:
-            cursor.execute(query, chunk)
-            tag_rows = cursor.fetchall()
-
-            # Parse tags for each post
-            for row in tag_rows:
-                post_id = row['Id']
-                tags_string = row['Tags']
-                post_tags[post_id] = parse_tags(tags_string)
-
-            print(f"Processed {len(tag_rows)} tag entries in chunk {i//chunk_size + 1}")
+            cursor.execute(query, (limit, offset))
+            posts = cursor.fetchall()
+            return posts
         except Error as e:
-            print(f"Error retrieving tags (chunk {i//chunk_size + 1}): {e}")
+            print(f"Error retrieving parent posts: {e}")
+            return []
         finally:
             cursor.close()
 
-    print(f"Total tags processed for {len(post_tags)} posts")
-    return post_tags
+    def get_child_posts(self, conn, parent_ids: List[int], chunk_size: int = 1000) -> Dict[int, List[str]]:
+        """Retrieve child posts for given parent IDs with chunking."""
+        if not parent_ids:
+            return {}
 
-def get_existing_posts(conn, post_ids: List[int]) -> Set[int]:
-    """Check which post IDs already exist in the target table."""
-    if not post_ids:
-        return set()
+        parent_to_children = {}
 
-    cursor = conn.cursor()
-    # Use safer parameterized query to avoid SQL injection
-    placeholders = ','.join(['%s'] * len(post_ids))
-    query = f"SELECT PostId FROM processed_posts WHERE PostId IN ({placeholders})"
+        # Process parent IDs in chunks
+        for i in range(0, len(parent_ids), chunk_size):
+            chunk = parent_ids[i:i + chunk_size]
 
-    try:
-        cursor.execute(query, post_ids)
-        existing_ids = {row[0] for row in cursor.fetchall()}
-        print(f"Found {len(existing_ids)} existing posts in target table")
-        return existing_ids
-    except Error as e:
-        print(f"Error checking existing posts: {e}")
-        return set()
-    finally:
-        cursor.close()
+            cursor = conn.cursor(dictionary=True)
+            query = """
+            SELECT ParentId, Body, Id as ReplyId
+            FROM Posts
+            WHERE PostTypeId = 2 AND ParentId IN (%s)
+            ORDER BY ParentId, ReplyId
+            """ % (','.join(['%s'] * len(chunk)))
 
-def create_target_table(conn) -> bool:
-    """Create the target table if it doesn't exist."""
-    cursor = conn.cursor()
+            try:
+                cursor.execute(query, chunk)
+                child_posts = cursor.fetchall()
 
-    # SQL to create the table if it doesn't exist
-    create_table_sql = """
-    CREATE TABLE IF NOT EXISTS `processed_posts` (
-      `PostId` BIGINT NOT NULL,
-      `JsonData` JSON NOT NULL,
-      `Embeddings` BLOB NULL,
-      `CreatedAt` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      `UpdatedAt` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (`PostId`),
-      KEY `idx_created_at` (`CreatedAt`)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    COMMENT='Structured StackExchange posts data in JSON format with embeddings field'
-    """
+                for child in child_posts:
+                    parent_id = child['ParentId']
+                    if parent_id not in parent_to_children:
+                        parent_to_children[parent_id] = []
+                    parent_to_children[parent_id].append(child['Body'])
 
-    try:
-        cursor.execute(create_table_sql)
-        conn.commit()
-        print("Target table created or already exists")
-        return True
-    except Error as e:
-        print(f"Error creating target table: {e}")
-        return False
-    finally:
-        cursor.close()
+            except Error as e:
+                print(f"Error retrieving child posts (chunk {i//chunk_size + 1}): {e}")
+            finally:
+                cursor.close()
 
-def insert_posts_batch(conn, posts_data: List[tuple]) -> int:
-    """Insert multiple posts in a batch for better performance."""
-    if not posts_data:
-        return 0
+        return parent_to_children
 
-    cursor = conn.cursor()
-    query = """
-    INSERT INTO processed_posts (PostId, JsonData)
-    VALUES (%s, %s)
-    ON DUPLICATE KEY UPDATE
-        JsonData = VALUES(JsonData),
-        UpdatedAt = CURRENT_TIMESTAMP
-    """
+    def get_existing_posts(self, conn, post_ids: List[int]) -> Set[int]:
+        """Check which post IDs already exist in the target table."""
+        if not post_ids:
+            return set()
 
-    try:
-        cursor.executemany(query, posts_data)
-        conn.commit()
-        inserted = cursor.rowcount
-        print(f"Batch inserted {inserted} posts")
-        return inserted
-    except Error as e:
-        print(f"Error in batch insert: {e}")
-        conn.rollback()
-        return 0
-    finally:
-        cursor.close()
+        cursor = conn.cursor()
+        placeholders = ','.join(['%s'] * len(post_ids))
+        query = f"SELECT PostId FROM processed_posts WHERE PostId IN ({placeholders})"
+
+        try:
+            cursor.execute(query, post_ids)
+            existing_ids = {row[0] for row in cursor.fetchall()}
+            return existing_ids
+        except Error as e:
+            print(f"Error checking existing posts: {e}")
+            return set()
+        finally:
+            cursor.close()
+
+    def process_post_for_search(self, post_data: Dict[str, Any], replies: List[str], tags: Set[str]) -> Dict[str, str]:
+        """Process a post and extract search-ready text."""
+        # Extract title
+        title = self.clean_text(post_data.get('Title', ''))
+
+        # Extract body
+        body = self.clean_text(post_data.get('Body', ''))
+
+        # Process replies
+        replies_text = ' '.join([self.clean_text(reply) for reply in replies if reply])
+
+        # Combine all text for search
+        combined_text = f"{title} {body} {replies_text}"
+
+        # Add tags to search text
+        if tags:
+            combined_text += ' ' + ' '.join(tags)
+
+        return {
+            'title_text': title,
+            'body_text': body,
+            'replies_text': replies_text,
+            'search_text': combined_text,
+            'tags': list(tags) if tags else []
+        }
+
+    def insert_posts_batch(self, conn, posts_data: List[tuple]) -> int:
+        """Insert multiple posts in a batch."""
+        if not posts_data:
+            return 0
+
+        cursor = conn.cursor()
+        query = """
+        INSERT INTO processed_posts (PostId, JsonData, SearchText, TitleText, BodyText, RepliesText, Tags)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            JsonData = VALUES(JsonData),
+            SearchText = VALUES(SearchText),
+            TitleText = VALUES(TitleText),
+            BodyText = VALUES(BodyText),
+            RepliesText = VALUES(RepliesText),
+            Tags = VALUES(Tags),
+            UpdatedAt = CURRENT_TIMESTAMP
+        """
+
+        try:
+            cursor.executemany(query, posts_data)
+            conn.commit()
+            inserted = cursor.rowcount
+            print(f"  📊 Batch inserted {inserted} posts")
+            return inserted
+        except Error as e:
+            print(f"  ❌ Error in batch insert: {e}")
+            conn.rollback()
+            return 0
+        finally:
+            cursor.close()
+
+    def process_posts(self, limit: int = 10, batch_size: int = 100, skip_duplicates: bool = True) -> Dict[str, int]:
+        """Main processing method."""
+        source_conn = None
+        target_conn = None
+
+        stats = {
+            'total_batches': 0,
+            'total_processed': 0,
+            'total_inserted': 0,
+            'total_skipped': 0,
+            'start_time': time.time()
+        }
+
+        try:
+            # Connect to databases
+            source_conn = mysql.connector.connect(**self.source_config)
+            target_conn = mysql.connector.connect(**self.target_config)
+
+            print("✅ Connected to source and target databases")
+
+            # Create target table
+            if not self.create_target_table(target_conn):
+                print("❌ Failed to create target table")
+                return stats
+
+            offset = 0
+            # Handle limit=0 (process all posts)
+            total_limit = float('inf') if limit == 0 else limit
+
+            while offset < total_limit:
+                # Calculate current batch size
+                if limit == 0:
+                    current_batch_size = batch_size
+                else:
+                    current_batch_size = min(batch_size, limit - offset)
+
+                # Get parent posts
+                parent_posts = self.get_parent_posts(source_conn, current_batch_size, offset)
+                if not parent_posts:
+                    print("📄 No more parent posts to process")
+                    # Special handling for limit=0 - break when no more posts
+                    if limit == 0:
+                        break
+                    # For finite limits, break when we've processed all posts
+                    if offset >= limit:
+                        break
+
+                stats['total_batches'] += 1
+                print(f"\n🔄 Processing batch {stats['total_batches']} - posts {offset + 1} to {offset + len(parent_posts)}")
+
+                # Get parent IDs
+                parent_ids = [post['Id'] for post in parent_posts]
+
+                # Check for duplicates
+                if skip_duplicates:
+                    existing_posts = self.get_existing_posts(target_conn, parent_ids)
+                    parent_posts = [p for p in parent_posts if p['Id'] not in existing_posts]
+
+                    duplicates_count = len(parent_ids) - len(parent_posts)
+                    if duplicates_count > 0:
+                        print(f"  ⏭️  Skipping {duplicates_count} duplicate posts")
+
+                    if not parent_posts:
+                        stats['total_skipped'] += len(parent_ids)
+                        offset += current_batch_size
+                        print(f"  ✅ All posts skipped (already exist)")
+                        continue
+
+                # Get child posts and tags
+                child_posts_map = self.get_child_posts(source_conn, parent_ids)
+
+                # Extract tags from parent posts
+                all_tags = {}
+                for post in parent_posts:
+                    tags_from_source = self.parse_tags(post.get('Tags', ''))
+                    all_tags[post['Id']] = tags_from_source
+
+                # Process posts
+                batch_data = []
+                processed_count = 0
+
+                for parent in parent_posts:
+                    post_id = parent['Id']
+                    replies = child_posts_map.get(post_id, [])
+                    tags = all_tags.get(post_id, set())
+
+                    # Get creation date
+                    creation_date = parent.get('CreationDate')
+                    if creation_date:
+                        creation_date_str = creation_date.isoformat()
+                    else:
+                        creation_date_str = None
+
+                    # Create JSON structure
+                    post_json = {
+                        "Id": post_id,
+                        "Title": parent['Title'],
+                        "CreationDate": creation_date_str,
+                        "Body": parent['Body'],
+                        "Replies": replies,
+                        "Tags": sorted(list(tags))
+                    }
+
+                    # Process for search
+                    search_data = self.process_post_for_search(parent, replies, tags)
+
+                    # Add to batch
+                    batch_data.append((
+                        post_id,
+                        json.dumps(post_json, ensure_ascii=False),
+                        search_data['search_text'],
+                        search_data['title_text'],
+                        search_data['body_text'],
+                        search_data['replies_text'],
+                        json.dumps(search_data['tags'], ensure_ascii=False)
+                    ))
+
+                    processed_count += 1
+
+                # Insert batch
+                if batch_data:
+                    print(f"  📝 Processing {len(batch_data)} posts...")
+                    inserted = self.insert_posts_batch(target_conn, batch_data)
+                    stats['total_inserted'] += inserted
+                    stats['total_processed'] += processed_count
+
+                # Advance offset
+                offset += current_batch_size
+
+                # Show progress
+                elapsed = time.time() - stats['start_time']
+                if limit == 0:
+                    print(f"  ⏱️  Progress: {offset} posts processed")
+                else:
+                    print(f"  ⏱️  Progress: {offset}/{limit} posts ({offset/limit*100:.1f}%)")
+                print(f"  📈 Total processed: {stats['total_processed']}, "
+                      f"Inserted: {stats['total_inserted']}, "
+                      f"Skipped: {stats['total_skipped']}")
+                if elapsed > 0:
+                    print(f"  ⚡ Rate: {stats['total_processed']/elapsed:.1f} posts/sec")
+
+            stats['end_time'] = time.time()
+            total_time = stats['end_time'] - stats['start_time']
+
+            print(f"\n🎉 Processing complete!")
+            print(f"   📊 Total batches: {stats['total_batches']}")
+            print(f"   📝 Total processed: {stats['total_processed']}")
+            print(f"   ✅ Total inserted: {stats['total_inserted']}")
+            print(f"   ⏭️  Total skipped: {stats['total_skipped']}")
+            print(f"   ⏱️  Total time: {total_time:.1f} seconds")
+            if total_time > 0:
+                print(f"   🚀 Average rate: {stats['total_processed']/total_time:.1f} posts/sec")
+
+            return stats
+
+        except Error as e:
+            print(f"❌ Database error: {e}")
+            return stats
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            return stats
+        finally:
+            if source_conn and source_conn.is_connected():
+                source_conn.close()
+            if target_conn and target_conn.is_connected():
+                target_conn.close()
+            print("\n🔌 Database connections closed")
 
 def main():
-    # Source database configuration (where StackExchange data is)
+    # Default configurations
     source_config = {
         "host": "127.0.0.1",
         "port": 3306,
@@ -212,8 +407,6 @@ def main():
         "ssl_disabled": True
     }
 
-    # Target database configuration (where to store JSON data)
-    # Use different credentials/server for production
     target_config = {
         "host": "127.0.0.1",
         "port": 3306,
@@ -224,144 +417,74 @@ def main():
         "ssl_disabled": True
     }
 
-    parser = argparse.ArgumentParser(description="Retrieve StackExchange posts from MySQL and store as JSON")
+    parser = argparse.ArgumentParser(description="Comprehensive StackExchange Posts Processing")
+    parser.add_argument("--source-host", default=source_config['host'], help="Source database host")
+    parser.add_argument("--source-port", type=int, default=source_config['port'], help="Source database port")
+    parser.add_argument("--source-user", default=source_config['user'], help="Source database user")
+    parser.add_argument("--source-password", default=source_config['password'], help="Source database password")
+    parser.add_argument("--source-db", default=source_config['database'], help="Source database name")
+
+    parser.add_argument("--target-host", default=target_config['host'], help="Target database host")
+    parser.add_argument("--target-port", type=int, default=target_config['port'], help="Target database port")
+    parser.add_argument("--target-user", default=target_config['user'], help="Target database user")
+    parser.add_argument("--target-password", default=target_config['password'], help="Target database password")
+    parser.add_argument("--target-db", default=target_config['database'], help="Target database name")
+
     parser.add_argument("--limit", type=int, default=10, help="Number of parent posts to process")
-    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for JSON generation")
-    parser.add_argument("--skip-duplicates", action="store_true", default=True, help="Skip posts that already exist in target")
+    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing")
+    parser.add_argument("--warning-large-batches", action="store_true", help="Show warnings for batch sizes > 1000")
+    parser.add_argument("--skip-duplicates", action="store_true", default=True, help="Skip posts that already exist")
+    parser.add_argument("--no-skip-duplicates", action="store_true", help="Disable duplicate skipping")
+
+    parser.add_argument("--verbose", action="store_true", help="Show detailed progress")
+
     args = parser.parse_args()
 
-    source_conn = None
-    target_conn = None
+    # Override configurations with command line arguments
+    source_config.update({
+        "host": args.source_host,
+        "port": args.source_port,
+        "user": args.source_user,
+        "password": args.source_password,
+        "database": args.source_db
+    })
 
-    try:
-        # Connect to source database
-        source_conn = mysql.connector.connect(**source_config)
-        print("Connected to source database")
+    target_config.update({
+        "host": args.target_host,
+        "port": args.target_port,
+        "user": args.target_user,
+        "password": args.target_password,
+        "database": args.target_db
+    })
 
-        # Connect to target database
-        target_conn = mysql.connector.connect(**target_config)
-        print("Connected to target database")
+    skip_duplicates = args.skip_duplicates and not args.no_skip_duplicates
 
-        # Create target table if it doesn't exist
-        if not create_target_table(target_conn):
-            print("Failed to create target table. Exiting.")
-            return
+    # Check for large batch size
+    if args.warning_large_batches and args.batch_size > 1000:
+        print(f"⚠️  WARNING: Large batch size ({args.batch_size}) may cause connection issues")
+        print("   Consider using smaller batches (1000-5000) for better stability")
 
-        # Process posts in batches
-        batch_count = 0
-        processed_ids = set()  # Track all successfully processed IDs
-        offset = 0
+    print("🚀 StackExchange Posts Processor")
+    print("=" * 50)
+    print(f"Source: {source_config['host']}:{source_config['port']}/{source_config['database']}")
+    print(f"Target: {target_config['host']}:{target_config['port']}/{target_config['database']}")
+    print(f"Limit: {'All posts' if args.limit == 0 else args.limit} posts")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Skip duplicates: {skip_duplicates}")
+    print("=" * 50)
 
-        while offset < args.limit:
-            # Calculate batch size (but don't exceed remaining posts)
-            current_batch_size = min(args.batch_size, args.limit - offset)
+    # Create processor and run
+    processor = StackExchangeProcessor(source_config, target_config)
+    stats = processor.process_posts(
+        limit=args.limit,
+        batch_size=args.batch_size,
+        skip_duplicates=skip_duplicates
+    )
 
-            # Get next batch of parent posts
-            parent_posts = get_parent_posts(source_conn, current_batch_size, offset)
-            if not parent_posts:
-                break
-
-            batch_count += 1
-            print(f"\n=== Processing batch {batch_count} - posts {offset + 1} to {offset + len(parent_posts)} ===")
-
-            # Get parent IDs for this batch
-            parent_ids = [post['Id'] for post in parent_posts]
-
-            # Check for duplicates in this batch
-            if args.skip_duplicates:
-                existing_posts = get_existing_posts(target_conn, parent_ids)
-                parent_posts = [p for p in parent_posts if p['Id'] not in existing_posts]
-                print(f"  New posts in this batch: {len(parent_posts)}")
-
-                if not parent_posts:
-                    print(f"  Skipping batch {batch_count} - all posts already exist")
-                    offset += current_batch_size  # Advance offset
-                    continue
-
-            # Get child posts and tags ONLY for non-duplicate posts
-            new_parent_ids = [post['Id'] for post in parent_posts]  # Only non-duplicate posts
-
-            if new_parent_ids:  # Only if there are new posts to process
-                child_posts_map = get_child_posts(source_conn, new_parent_ids)
-                tags_map = get_all_tags(source_conn, new_parent_ids)
-            else:
-                child_posts_map = {}
-                tags_map = {}
-
-            # Process this batch immediately
-            batch_data = []
-            for parent in parent_posts:
-                post_id = parent['Id']
-
-                # Combine tags from parent posts
-                all_tags = set()
-                if post_id in tags_map:
-                    all_tags.update(tags_map[post_id])
-
-                # Create JSON structure
-                post_json = {
-                    "Id": post_id,
-                    "Title": parent['Title'],
-                    "CreationDate": parent['CreationDate'].isoformat() if parent['CreationDate'] else None,
-                    "Body": parent['Body'],
-                    "Replies": child_posts_map.get(post_id, []),
-                    "Tags": sorted(list(all_tags))
-                }
-
-                # Serialize JSON to string for MySQL
-                batch_data.append((post_id, json.dumps(post_json, ensure_ascii=False)))
-
-            # Insert this batch
-            if batch_data:
-                print(f"  Inserting {len(batch_data)} posts...")
-                insert_count = insert_posts_batch(target_conn, batch_data)
-
-                # Track which IDs were actually processed
-                processed_ids.update([item[0] for item in batch_data])
-
-            # ALWAYS advance offset by batch size, regardless of how many were actually processed
-            offset += current_batch_size
-            print(f"  ✅ Batch {batch_count} completed. Offset advanced to: {offset}/{args.limit}")
-            print(f"  📊 Total unique IDs in target table: {len(processed_ids)}")
-
-        print(f"\n🎉 Processing complete!")
-        print(f"   Total batches processed: {batch_count}")
-        print(f"   Final offset: {offset}/{args.limit}")
-        print(f"   Unique IDs in target table: {len(processed_ids)}")
-
-        # Verify actual count in database
-        cursor = target_conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM processed_posts")
-        db_count = cursor.fetchone()[0]
-
-        print(f"\n📊 Verification:")
-        print(f"  Total unique IDs in database: {db_count}")
-
-        if processed_ids:
-            inserted_in_this_run = len(processed_ids)
-            if db_count >= inserted_in_this_run:
-                existing_posts = db_count - inserted_in_this_run
-                print(f"  Existing posts before this run: {existing_posts}")
-                print(f"  Posts inserted in this run: {inserted_in_this_run}")
-                print(f"  ✅ Verification successful")
-            else:
-                print(f"  ⚠️  Database count is less than expected - possible error")
-        else:
-            print(f"  No new posts were inserted in this run")
-
-        cursor.close()
-
-    except Error as e:
-        print(f"Database error: {e}")
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        if source_conn and source_conn.is_connected():
-            source_conn.close()
-            print("\nSource database connection closed")
-        if target_conn and target_conn.is_connected():
-            target_conn.close()
-            print("Target database connection closed")
+    if stats['total_processed'] > 0:
+        print(f"\n✅ Processing completed successfully!")
+    else:
+        print(f"\n❌ No posts were processed!")
 
 if __name__ == "__main__":
     main()
