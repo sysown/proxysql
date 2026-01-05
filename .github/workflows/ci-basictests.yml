@@ -51,8 +51,11 @@ jobs:
         
         sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 467B942D3A79BD29
         sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys A8D3785C
-        wget https://repo.mysql.com/mysql-apt-config_0.8.29-1_all.deb
-        sudo dpkg -i mysql-apt-config_0.8.29-1_all.deb
+        #wget https://repo.mysql.com/mysql-apt-config_0.8.29-1_all.deb
+        #sudo dpkg -i mysql-apt-config_0.8.29-1_all.deb
+        DEBFILE=$(curl -s https://repo.mysql.com/ | grep -Po '"mysql-apt-config_.*deb"' | tr -d '"' | sort -V |tail -1)
+        wget https://repo.mysql.com/${DEBFILE}
+        sudo dpkg -i ${DEBFILE}
         sudo apt-get update -y
         sudo apt-cache policy mysql-shell
         sudo apt-get install -y mysql-shell
