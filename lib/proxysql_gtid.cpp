@@ -121,3 +121,7 @@ const bool Gtid_Interval::operator<(const Gtid_Interval& other) {
 const bool Gtid_Interval::operator==(const Gtid_Interval& other) {
 	return cmp(other) == 0;
 }
+
+const bool Gtid_Interval::operator!=(const Gtid_Interval& other) {
+	return cmp(other) != 0;
+}

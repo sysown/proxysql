@@ -29,6 +29,7 @@ class Gtid_Interval {
 		const int cmp(const Gtid_Interval& other);
 		const bool operator<(const Gtid_Interval& other);
 		const bool operator==(const Gtid_Interval& other);
+		const bool operator!=(const Gtid_Interval& other);
 };
 typedef Gtid_Interval gtid_interval_t;
 
