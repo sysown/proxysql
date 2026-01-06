@@ -927,13 +927,9 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 			break;
 		case PGRES_POLLING_FAILED: {
 			// During connection phase use `PQerrorMessage`
-			const mon_srv_t& srv { st.task.op_st.srv_info };
+			// Note: Error is recorded in pgsql_server_connect_log table; logging here would be noisy
+			// as this fires on every connection failure. The shunning logic will log when max_failures is reached.
 			auto err { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
-
-			proxy_error(
-				"Monitor connect failed   addr='%s:%d' error='%s'\n",
-				srv.addr.c_str(), srv.port, err.get()
-			);
 			set_failed_st(st, ASYNC_CONNECT_FAILED, std::move(err));
 			break;
 		}
@@ -2928,7 +2924,8 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 
 		if (PQstatus(conn) != CONNECTION_OK) {
 			error_msg = strdup(PQerrorMessage(conn));
-			// Note: Not logging here to match MySQL behavior - errors are stored in status entry
+			proxy_error("Error on AWS Aurora PostgreSQL check for %s:%d after %llums. Unable to create a connection. Error: %s\n",
+				hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, error_msg);
 			ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 			ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 			free(error_msg);
@@ -2945,7 +2942,8 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 
 			if (PQresultStatus(res) != PGRES_TUPLES_OK) {
 				error_msg = strdup(PQerrorMessage(conn));
-				// Note: Not logging here to match MySQL behavior - errors are stored in status entry
+				proxy_error("Error on AWS Aurora PostgreSQL check for %s:%d after %llums. Query failed. Error: %s\n",
+					hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, error_msg);
 				ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 				ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
 				free(error_msg);
