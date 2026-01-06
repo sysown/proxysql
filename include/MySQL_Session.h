@@ -473,6 +473,18 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute=true);
 	char* get_current_query(int max_length = -1);
+	/**
+	 * @brief Attempts to get the server version string from a backend connection in the specified hostgroup.
+	 * @details This function iterates through servers in the hostgroup and checks for any available
+	 *   free connections to extract the server version string. It does NOT remove the connection
+	 *   from the pool - it only peeks at the version information.
+	 *
+	 * @param hostgroup_id The hostgroup ID to search for backend connections.
+	 * @return Pointer to the server version string if found, NULL otherwise.
+	 *         Note: The returned pointer points to the connection's internal data and should
+	 *         not be freed or modified. The pointer is only valid while the connection exists.
+	 */
+	char * get_backend_version_for_hostgroup(int hostgroup_id);
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
 
