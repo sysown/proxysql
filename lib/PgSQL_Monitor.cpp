@@ -2742,9 +2742,22 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 
 	proxy_info("Started Aurora PostgreSQL Monitor thread for writer HG %u\n", wHG);
 
+	// Initialize thread-local variables (matching MySQL pattern)
+	unsigned int PgSQL_Monitor__thread_PgSQL_Thread_Variables_version;
+	PgSQL_Thread* pgsql_thr = new PgSQL_Thread();
+	pgsql_thr->curtime = monotonic_time();
+	PgSQL_Monitor__thread_PgSQL_Thread_Variables_version = GloPTH->get_global_version();
+	pgsql_thr->refresh_variables();
+
 	// Quick exit checks
-	if (!GloPTH) return nullptr;
-	if (!GloPgMon) return nullptr;
+	if (!GloPTH) {
+		delete pgsql_thr;
+		return nullptr;
+	}
+	if (!GloPgMon) {
+		delete pgsql_thr;
+		return nullptr;
+	}
 
 	// Get monitor credentials from GloPTH
 	char* monitor_user = GloPTH->get_variable_string((char*)"monitor_username");
@@ -2828,11 +2841,20 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 	t1 = monotonic_time();
 	unsigned long long start_time = t1;
 
-	while (GloPgMon->shutdown == false && exit_now == false) {
+	while (GloPgMon->shutdown == false && pgsql_thread___monitor_enabled == true && exit_now == false) {
+		unsigned int glover;
 		t1 = monotonic_time();
 
 		if (!GloPTH) {
 			goto __exit_pgsql_monitor_AWS_Aurora_thread_HG_now;
+		}
+
+		// if variables has changed, triggers new checks
+		glover = GloPTH->get_global_version();
+		if (PgSQL_Monitor__thread_PgSQL_Thread_Variables_version < glover) {
+			PgSQL_Monitor__thread_PgSQL_Thread_Variables_version = glover;
+			pgsql_thr->refresh_variables();
+			next_loop_at = 0;
 		}
 
 		pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
@@ -3035,6 +3057,11 @@ __exit_pgsql_monitor_AWS_Aurora_thread_HG_now:
 		}
 	}
 
+	// Cleanup thread object
+	if (pgsql_thr) {
+		delete pgsql_thr;
+	}
+
 	proxy_info("Stopping Aurora PostgreSQL Monitor thread for writer HG %u\n", wHG);
 	return nullptr;
 }
@@ -3047,6 +3074,14 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 	(void)arg;  // unused
 	if (!GloPgMon) return nullptr;
 
+	// Initialize the PgSQL Thread (note: this is not a real thread, just the structures associated with it)
+	unsigned int PgSQL_Monitor__thread_PgSQL_Thread_Variables_version;
+	PgSQL_Thread* pgsql_thr = new PgSQL_Thread();
+	pgsql_thr->curtime = monotonic_time();
+	PgSQL_Monitor__thread_PgSQL_Thread_Variables_version = GloPTH->get_global_version();
+	pgsql_thr->refresh_variables();
+	if (!GloPTH) return nullptr;  // quick exit during shutdown/restart
+
 	uint64_t last_raw_checksum = 0;
 	unsigned int* hgs_array = nullptr;
 	pthread_t* pthreads_array = nullptr;
@@ -3054,8 +3089,19 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 
 	proxy_info("Started Aurora PostgreSQL Monitor main thread\n");
 
-	while (GloPgMon->shutdown == false) {
-		if (!GloPTH) return nullptr;
+	while (GloPgMon->shutdown == false && pgsql_thread___monitor_enabled == true) {
+		unsigned int glover;
+
+		if (!GloPTH) {
+			goto __exit_pgsql_monitor_aws_aurora;
+		}
+
+		// if variables has changed, triggers new checks
+		glover = GloPTH->get_global_version();
+		if (PgSQL_Monitor__thread_PgSQL_Thread_Variables_version < glover) {
+			PgSQL_Monitor__thread_PgSQL_Thread_Variables_version = glover;
+			pgsql_thr->refresh_variables();
+		}
 
 		// Check if list of servers or HG or options has changed
 		pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
@@ -3116,6 +3162,13 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 		}
 
 		usleep(500000); // 500ms
+	}
+
+__exit_pgsql_monitor_aws_aurora:
+	// Cleanup thread object
+	if (pgsql_thr) {
+		delete pgsql_thr;
+		pgsql_thr = nullptr;
 	}
 
 	// Cleanup on shutdown

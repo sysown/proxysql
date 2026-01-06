@@ -4963,22 +4963,67 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				mydb->execute(query);
 			}
 
-			proxy_warning("Aurora PostgreSQL: setting host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
-			q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id NOT IN (%d, %d)";
-			sprintf(query, q, _rhid, _whid);
-			mydb->execute(query);
-			commit();
-			wrlock();
-			q = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
-			sprintf(query, q, _whid, _rhid);
-			mydb->execute(query);
-			generate_pgsql_servers_table(&_whid);
-			generate_pgsql_servers_table(&_rhid);
+			// Calculate checksums to check if update is actually needed
+			uint64_t checksum_current = 0;
+			uint64_t checksum_incoming = 0;
+			{
+				int chk_cols = 0;
+				int chk_affected_rows = 0;
+				SQLite3_result *resultset_servers = nullptr;
+				char *chk_query = nullptr;
+				char *chk_error = nullptr;
+				const char *q1 = "SELECT DISTINCT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers.comment FROM pgsql_servers JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				const char *q2 = "SELECT DISTINCT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers_incoming.comment FROM pgsql_servers_incoming JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				chk_query = (char *)malloc(strlen(q2) + 128);
+				sprintf(chk_query, q1, _writer_hostgroup);
+				mydb->execute_statement(chk_query, &chk_error, &chk_cols, &chk_affected_rows, &resultset_servers);
+				if (chk_error == nullptr) {
+					if (resultset_servers) {
+						checksum_current = resultset_servers->raw_checksum();
+					}
+				}
+				if (chk_error) { free(chk_error); chk_error = nullptr; }
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = nullptr;
+				}
+				sprintf(chk_query, q2, _writer_hostgroup);
+				mydb->execute_statement(chk_query, &chk_error, &chk_cols, &chk_affected_rows, &resultset_servers);
+				if (chk_error == nullptr) {
+					if (resultset_servers) {
+						checksum_incoming = resultset_servers->raw_checksum();
+					}
+				}
+				if (chk_error) { free(chk_error); chk_error = nullptr; }
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = nullptr;
+				}
+				free(chk_query);
+			}
 
-			// Because 'commit' is called, we are required to update 'pgsql_servers_for_monitor'.
-			update_table_pgsql_servers_for_monitor(false);
+			if (checksum_incoming != checksum_current) {
+				proxy_warning("Aurora PostgreSQL: setting host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
+				q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id NOT IN (%d, %d)";
+				sprintf(query, q, _rhid, _whid);
+				mydb->execute(query);
+				commit();
+				wrlock();
+				q = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
+				sprintf(query, q, _whid, _rhid);
+				mydb->execute(query);
+				generate_pgsql_servers_table(&_whid);
+				generate_pgsql_servers_table(&_rhid);
 
-			wrunlock();
+				// Because 'commit' is called, we are required to update 'pgsql_servers_for_monitor'.
+				update_table_pgsql_servers_for_monitor(false);
+
+				wrunlock();
+			} else {
+				if (GloPTH->variables.hostgroup_manager_verbose > 1) {
+					proxy_warning("Aurora PostgreSQL: skipping setting node %s%s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _server_id, domain_name, aurora_port, _writer_hostgroup);
+				}
+			}
 			GloAdmin->pgsql_servers_wrunlock();
 		} else {
 			// Auto-discovery: server not found, create new entry (matching MySQL approach)
@@ -5016,6 +5061,18 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 
 				generate_pgsql_servers_table(&_whid);
 				generate_pgsql_servers_table(&_rhid);
+
+				// Update the global checksums after 'pgsql_servers' regeneration
+				{
+					unique_ptr<SQLite3_result> resultset { get_admin_runtime_pgsql_servers(mydb) };
+					string pgsrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
+					save_runtime_pgsql_servers(resultset.release());
+					proxy_info("Checksum for table %s is %s\n", "pgsql_servers", pgsrvs_checksum.c_str());
+
+					pthread_mutex_lock(&GloVars.checksum_mutex);
+					update_glovars_pgsql_servers_checksum(pgsrvs_checksum);
+					pthread_mutex_unlock(&GloVars.checksum_mutex);
+				}
 
 				// Because 'commit' isn't called, we are required to update 'pgsql_servers_for_monitor'.
 				update_table_pgsql_servers_for_monitor(false);
@@ -5132,6 +5189,18 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 
 				generate_pgsql_servers_table(&_whid);
 				generate_pgsql_servers_table(&_rhid);
+
+				// Update the global checksums after 'pgsql_servers' regeneration
+				{
+					unique_ptr<SQLite3_result> resultset { get_admin_runtime_pgsql_servers(mydb) };
+					string pgsrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
+					save_runtime_pgsql_servers(resultset.release());
+					proxy_info("Checksum for table %s is %s\n", "pgsql_servers", pgsrvs_checksum.c_str());
+
+					pthread_mutex_lock(&GloVars.checksum_mutex);
+					update_glovars_pgsql_servers_checksum(pgsrvs_checksum);
+					pthread_mutex_unlock(&GloVars.checksum_mutex);
+				}
 
 				// Because 'commit' isn't called, we are required to update 'pgsql_servers_for_monitor'.
 				update_table_pgsql_servers_for_monitor(false);
