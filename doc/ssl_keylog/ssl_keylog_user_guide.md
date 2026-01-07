@@ -188,9 +188,9 @@ PROXYSQL FLUSH LOGS;
 
 This command:
 1. Closes the current key log file
-2. Reopens the file (truncating it if it exists)
+2. Reopens the file for appending
 
-**Note:** This is different from typical log rotation. The old file contents are **not preserved**. If you want to archive old key log files, rename/move them manually before running `FLUSH LOGS`.
+**Note:** The file is reopened in append mode, so existing contents will be preserved. If you want to start with a fresh file, rename/move the old file manually before running `FLUSH LOGS`.
 
 ### Manual Log Rotation Example
 
@@ -227,7 +227,7 @@ On the ProxySQL server, capture network traffic to a pcap file:
 sudo tcpdump -i eth0 -w /tmp/proxysql_debug.pcap port 6033
 
 # Or capture traffic between specific hosts
-sudo tcpdump -i eth0 -w /tmp/proxysql_debug.pcap host client_ip and host proxyql_ip
+sudo tcpdump -i eth0 -w /tmp/proxysql_debug.pcap host client_ip and host proxysql_ip
 
 # Run for a specific duration
 sudo timeout 60 tcpdump -i eth0 -w /tmp/proxysql_debug.pcap port 6033

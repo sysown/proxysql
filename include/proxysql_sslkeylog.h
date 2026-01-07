@@ -100,7 +100,6 @@ void proxysql_keylog_attach_callback(SSL_CTX* ssl_ctx);
  *
  * @note Line length is validated (max 254 bytes)
  * @note Lines are newline-terminated if not already present
- * @see https://developer.mozilla.org/en-US/docs/Web/HTTP/HPKP
  */
 void proxysql_keylog_write_line_callback(const SSL* ssl, const char* line);
 

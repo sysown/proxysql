@@ -203,8 +203,8 @@ void proxysql_keylog_attach_callback(SSL_CTX* ssl_ctx);
 - Uses `SSL_CTX_set_keylog_callback()` (OpenSSL 1.1.1+)
 
 **Called from:**
-- `MySQL_Session::handler()` for MySQL admin connections
-- `PgSQL_Session::handler()` for PostgreSQL admin connections
+- `MySQL_Session::handler()` for frontend MySQL connections
+- `PgSQL_Session::handler()` for frontend PostgreSQL connections
 
 ---
 
@@ -342,9 +342,7 @@ The keylog file contains **cryptographic secrets** that can decrypt ALL TLS traf
    - Enough to decrypt past, present, and future connections
 
 2. **Attack scenarios if compromised:**
-   - Passive eavesdropping on all TLS traffic
-   - Decryption of captured packets
-   - Man-in-the-middle attacks with captured packets
+   - Decryption of captured network traffic, exposing all plaintext data, including credentials, queries, and results.
 
 3. **Recommended safeguards:**
    - **File permissions:** `0600` (owner read/write only)

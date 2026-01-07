@@ -25,7 +25,7 @@
 #include "proxysql_sslkeylog.h"
 
 // NSS Key Log Format reference:
-// http://udn.realityripple.com/docs/Mozilla/Projects/NSS/Key_Log_Format
+// https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
 
 #define KEYLOG_LABEL_MAXLEN (sizeof("CLIENT_HANDSHAKE_TRAFFIC_SECRET") - 1)
 
@@ -176,7 +176,10 @@ void proxysql_keylog_write_line_callback(const SSL *ssl, const char *line)
     // The check is repeated after acquiring the lock for correctness
     if (!keylog_file_fp) return;
 
-    /* The current maximum valid keylog line length including LF and NUL is 195. */
+    /* The line is written to a 256-byte buffer. The maximum line length
+     * from OpenSSL is validated to not exceed 254 bytes to allow for a
+     * newline and null terminator.
+     */
     size_t linelen;
     char buf[256];
 
@@ -197,7 +200,7 @@ void proxysql_keylog_write_line_callback(const SSL *ssl, const char *line)
     }
     buf[linelen] = '\0';
 
-    /* fputs is used because we're using rwlock (multiple readers allowed) */
+    /* The read lock allows multiple threads to write to the file concurrently. */
     fputs(buf, keylog_file_fp);
 
 __exit:
