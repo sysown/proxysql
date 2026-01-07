@@ -49,6 +49,22 @@ enum ps_type : uint8_t {
 	ps_type_execute_stmt = 0x2
 };
 
+/**
+ * @enum SelectVersionForwardingMode
+ * @brief Defines modes for handling SELECT VERSION() queries in ProxySQL.
+ *
+ * These modes control how ProxySQL responds to SELECT VERSION() queries:
+ * - NEVER: Always return ProxySQL's own version
+ * - ALWAYS: Always proxy the query to a backend server
+ * - SMART_FALLBACK_INTERNAL: Try to get version from backend connection, fallback to ProxySQL version
+ * - SMART_FALLBACK_PROXY: Try to get version from backend connection, fallback to proxying the query
+ */
+enum SelectVersionForwardingMode : uint8_t {
+	SELECT_VERSION_NEVER = 0,
+	SELECT_VERSION_ALWAYS = 1,
+	SELECT_VERSION_SMART_FALLBACK_INTERNAL = 2,
+	SELECT_VERSION_SMART_FALLBACK_PROXY = 3
+};
 
 
 //std::string proxysql_session_type_str(enum proxysql_session_type session_type);

@@ -7061,14 +7061,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if ((pkt->size==SELECT_MYSQL_VERSION_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION,(char *)pkt->ptr+5,pkt->size-5)==0) ||
 		(pkt->size==SELECT_MYSQL_VERSION_FUNC_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION_FUNC,(char *)pkt->ptr+5,pkt->size-5)==0)) {
 		char *version_to_return = NULL;
-		int mode = mysql_thread___select_version_forwarding;  // 0=never, 1=always, 2=smart(fallback to 0), 3=smart(fallback to 1)
+		int mode = mysql_thread___select_version_forwarding;  // SelectVersionForwardingMode enum values
 
-		if (mode == 1) {
+		if (mode == SELECT_VERSION_ALWAYS) {
 			// always: proxy to backend, don't handle here
 			return false;
 		}
-		else if (mode == 2) {
-			// smart (fallback to 0): try to get version from backend connection, else use ProxySQL version
+		else if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL || mode == SELECT_VERSION_SMART_FALLBACK_PROXY) {
+			// smart modes: try to get version from backend connection, then fallback based on mode
 			int target_hg = (current_hostgroup >= 0) ? current_hostgroup : default_hostgroup;
 
 			if (target_hg >= 0) {
@@ -7080,31 +7080,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 
-			// Fallback to ProxySQL version if no backend version found
+			// Fallback behavior depends on mode
 			if (!version_to_return) {
-				version_to_return = mysql_thread___server_version;
-			}
-		}
-		else if (mode == 3) {
-			// smart (fallback to 1): try to get version from backend connection, else proxy to backend
-			int target_hg = (current_hostgroup >= 0) ? current_hostgroup : default_hostgroup;
-
-			if (target_hg >= 0) {
-				version_to_return = get_backend_version_for_hostgroup(target_hg);
-
-				// Check if backend is ProxySQL (to avoid recursion)
-				if (version_to_return && strstr(version_to_return, "ProxySQL")) {
-					version_to_return = NULL;
+				if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL) {
+					// fallback to internal (ProxySQL) version
+					version_to_return = mysql_thread___server_version;
+				} else {
+					// SELECT_VERSION_SMART_FALLBACK_PROXY: fallback to proxying the query
+					return false;
 				}
-			}
-
-			// Fallback: if no backend version found, proxy to backend (mode 1 behavior)
-			if (!version_to_return) {
-				return false;
 			}
 		}
 		else {
-			// mode 0 (never): use ProxySQL's version
+			// SELECT_VERSION_NEVER (mode 0): use ProxySQL's version
 			version_to_return = mysql_thread___server_version;
 		}
 
