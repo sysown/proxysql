@@ -192,12 +192,44 @@ pip install mysql-connector-python
 
 The `scripts/` directory also contains other utility scripts:
 
+- `nlp_search_demo.py` - Demonstrate various search techniques on processed posts:
+  - Full-text search with MySQL
+  - Boolean search with operators
+  - Tag-based JSON queries
+  - Combined search approaches
+  - Statistics and search analytics
+  - Data preparation for future semantic search
+
 - `add_mysql_user.sh` - Add/replace MySQL users in ProxySQL
 - `change_host_status.sh` - Change host status in ProxySQL
 - `flush_query_cache.sh` - Flush ProxySQL query cache
 - `kill_idle_backend_conns.py` - Kill idle backend connections
 - `proxysql_config.sh` - Configure ProxySQL settings
 - `stats_scrapper.py` - Scrape statistics from ProxySQL
+
+## Search Examples
+
+### Using the NLP Search Demo
+
+```bash
+# Show search statistics
+python3 nlp_search_demo.py --mode stats
+
+# Full-text search
+python3 nlp_search_demo.py --mode full-text --query "mysql performance optimization"
+
+# Boolean search with operators
+python3 nlp_search_demo.py --mode boolean --query "+database -oracle"
+
+# Search by tags
+python3 nlp_search_demo.py --mode tags --tags mysql performance --operator AND
+
+# Combined search with text and tags
+python3 nlp_search_demo.py --mode combined --query "python optimization" --tags python
+
+# Prepare data for semantic search
+python3 nlp_search_demo.py --mode similarity --query "machine learning"
+```
 
 ## License
 
