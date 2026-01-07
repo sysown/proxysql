@@ -156,7 +156,7 @@ static Test time_zone[] = {
   // Timezone names with hyphens (additional fix)
   { "SET time_zone = 'America/Port-au-Prince'", { Expected("time_zone",  {"America/Port-au-Prince"}) } },
   { "SET time_zone = 'America/Blanc-Sablon'", { Expected("time_zone",  {"America/Blanc-Sablon"}) } },
-  { "SET time_zone = \"Atlantic/Canary\"", { Expected("time_zone",  {"Atlantic/Canary"}) } },
+  { "SET time_zone = \"US/East-Indiana\"", { Expected("time_zone",  {"US/East-Indiana"}) } },
   // Various numeric offsets
   { "SET time_zone = '+08:00'", { Expected("time_zone",  {"+08:00"}) } },
   { "SET time_zone = '-05:30'", { Expected("time_zone",  {"-05:30"}) } },
