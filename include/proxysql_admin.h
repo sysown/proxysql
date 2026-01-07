@@ -472,6 +472,10 @@ class ProxySQL_Admin {
 	void flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 	//
 
+	// GenAI
+	void flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
+	void flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+
 	void flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
 	
@@ -754,6 +758,12 @@ class ProxySQL_Admin {
 	void init_pgsql_variables();
 	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
+
+	//GenAI
+	void init_genai_variables();
+	void load_genai_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_genai_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void save_genai_variables_from_runtime() { flush_genai_variables___runtime_to_database(admindb, true, true, false); }
+
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
