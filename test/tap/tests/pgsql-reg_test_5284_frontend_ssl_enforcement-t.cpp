@@ -68,28 +68,6 @@ bool is_connection_using_ssl(PGconn* conn) {
     return PQsslInUse(conn) == 1;
 }
 
-/**
- * @brief Executes a list of queries on the given connection.
- *
- * @param conn The connection to execute queries on
- * @param queries List of queries to execute
- * @return true if all queries succeeded, false otherwise
- */
-bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
-    for (const auto& query : queries) {
-        PGresult* res = PQexec(conn, query.c_str());
-        bool success = (PQresultStatus(res) == PGRES_COMMAND_OK) ||
-                       (PQresultStatus(res) == PGRES_TUPLES_OK);
-        if (!success) {
-            fprintf(stderr, "Query failed: %s\nError: %s\n",
-                    query.c_str(), PQresultErrorMessage(res));
-        }
-        PQclear(res);
-        if (!success) return false;
-    }
-    return true;
-}
-
 int main(int argc, char** argv) {
 
     // We have 6 test cases:
