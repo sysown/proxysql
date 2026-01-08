@@ -19,6 +19,7 @@ from typing import List, Dict, Any, Set, Tuple
 import argparse
 import time
 import sys
+import os
 
 class StackExchangeProcessor:
     def __init__(self, source_config: Dict[str, Any], target_config: Dict[str, Any]):
@@ -396,23 +397,23 @@ class StackExchangeProcessor:
             print("\n🔌 Database connections closed")
 
 def main():
-    # Default configurations
+    # Default configurations (can be overridden by environment variables)
     source_config = {
-        "host": "127.0.0.1",
-        "port": 3306,
-        "user": "stackexchange",
-        "password": "my-password",
-        "database": "stackexchange",
+        "host": os.getenv("SOURCE_DB_HOST", "127.0.0.1"),
+        "port": int(os.getenv("SOURCE_DB_PORT", "3306")),
+        "user": os.getenv("SOURCE_DB_USER", "stackexchange"),
+        "password": os.getenv("SOURCE_DB_PASSWORD", "my-password"),
+        "database": os.getenv("SOURCE_DB_NAME", "stackexchange"),
         "use_pure": True,
         "ssl_disabled": True
     }
 
     target_config = {
-        "host": "127.0.0.1",
-        "port": 3306,
-        "user": "stackexchange",
-        "password": "my-password",
-        "database": "stackexchange_post",
+        "host": os.getenv("TARGET_DB_HOST", "127.0.0.1"),
+        "port": int(os.getenv("TARGET_DB_PORT", "3306")),
+        "user": os.getenv("TARGET_DB_USER", "stackexchange"),
+        "password": os.getenv("TARGET_DB_PASSWORD", "my-password"),
+        "database": os.getenv("TARGET_DB_NAME", "stackexchange_post"),
         "use_pure": True,
         "ssl_disabled": True
     }

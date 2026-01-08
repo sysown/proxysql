@@ -20,6 +20,7 @@ from typing import List, Dict, Any, Set, Tuple
 import argparse
 import time
 import sys
+import os
 
 
 class NLPSearchDemo:
@@ -80,7 +81,10 @@ class NLPSearchDemo:
 
             print(f"\n📊 Table Statistics:")
             print(f"   Total posts: {total_posts:,}")
-            print(f"   Posts with tags: {posts_with_tags:,} ({posts_with_tags/total_posts*100:.1f}%)")
+            if total_posts > 0:
+                print(f"   Posts with tags: {posts_with_tags:,} ({posts_with_tags/total_posts*100:.1f}%)")
+            else:
+                print(f"   Posts with tags: {posts_with_tags:,}")
             print(f"   Date range: {date_range['earliest'][:10]} to {date_range['latest'][:10]}")
             print(f"   Unique tags: {len(all_tags):,}")
 
@@ -253,17 +257,37 @@ class NLPSearchDemo:
             # Build WHERE clause
             where_clause = " AND ".join(conditions) if conditions else "1=1"
 
+            # Build SELECT clause dynamically - only include relevance if search_term is provided
+            if search_term:
+                select_clause = """
+                SELECT
+                    PostId,
+                    TitleText,
+                    JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.CreationDate')) as CreationDate,
+                    JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.Tags')) as TagsJson,
+                    MATCH(SearchText) AGAINST(%s IN NATURAL LANGUAGE MODE) as relevance,
+                    CreatedAt
+                """
+                order_clause = "ORDER BY relevance DESC, CreatedAt DESC"
+                # Add search_term again for the SELECT clause's MATCH
+                fulltext_params = [search_term] + params + [limit]
+            else:
+                select_clause = """
+                SELECT
+                    PostId,
+                    TitleText,
+                    JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.CreationDate')) as CreationDate,
+                    JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.Tags')) as TagsJson,
+                    CreatedAt
+                """
+                order_clause = "ORDER BY CreatedAt DESC"
+                fulltext_params = params + [limit]
+
             sql = f"""
-            SELECT
-                PostId,
-                TitleText,
-                JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.CreationDate')) as CreationDate,
-                JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.Tags')) as TagsJson,
-                MATCH(SearchText) AGAINST(%s IN NATURAL LANGUAGE MODE) as relevance,
-                CreatedAt
+            {select_clause}
             FROM processed_posts
             WHERE {where_clause}
-            ORDER BY relevance DESC, CreatedAt DESC
+            {order_clause}
             LIMIT %s
             """
 
@@ -271,7 +295,7 @@ class NLPSearchDemo:
 
             try:
                 # First try full-text search
-                cursor.execute(sql, params)
+                cursor.execute(sql, fulltext_params)
                 results = cursor.fetchall()
                 search_method = "combined"
             except Error:
@@ -384,7 +408,8 @@ class NLPSearchDemo:
                     all_text.append(combined)
 
             print(f"   Total text length: {sum(len(text) for text in all_text):,} characters")
-            print(f"   Average text length: {sum(len(text) for text in all_text) / len(all_text):,.0f} characters")
+            if all_text:
+                print(f"   Average text length: {sum(len(text) for text in all_text) / len(all_text):,.0f} characters")
 
             return results
 
@@ -417,7 +442,7 @@ class NLPSearchDemo:
                 limit = kwargs.get('limit', 10)
                 self.tag_search(conn, tags, operator, limit)
             elif mode == "combined":
-                search_term = kwargs.get('search_term', None)
+                search_term = kwargs.get('query', None)
                 tags = kwargs.get('tags', None)
                 date_from = kwargs.get('date_from', None)
                 date_to = kwargs.get('date_to', None)
@@ -436,13 +461,13 @@ class NLPSearchDemo:
 
 
 def main():
-    # Default configuration
+    # Default configuration (can be overridden by environment variables)
     config = {
-        "host": "127.0.0.1",
-        "port": 3306,
-        "user": "stackexchange",
-        "password": "my-password",
-        "database": "stackexchange_post",
+        "host": os.getenv("DB_HOST", "127.0.0.1"),
+        "port": int(os.getenv("DB_PORT", "3306")),
+        "user": os.getenv("DB_USER", "stackexchange"),
+        "password": os.getenv("DB_PASSWORD", "my-password"),
+        "database": os.getenv("DB_NAME", "stackexchange_post"),
         "use_pure": True,
         "ssl_disabled": True
     }

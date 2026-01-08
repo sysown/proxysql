@@ -107,10 +107,10 @@ WHERE JSON_CONTAINS(Tags, '"mysql"') AND JSON_CONTAINS(Tags, '"performance"');
 
 ```sql
 -- Search within date range
-SELECT PostId, Title, CreationDate
+SELECT PostId, Title, JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.CreationDate')) as CreationDate
 FROM processed_posts
 WHERE MATCH(SearchText) AGAINST('python' IN BOOLEAN MODE)
-AND CreationDate BETWEEN '2023-01-01' AND '2023-12-31';
+AND JSON_UNQUOTE(JSON_EXTRACT(JsonData, '$.CreationDate')) BETWEEN '2023-01-01' AND '2023-12-31';
 ```
 
 ## Performance Tips
