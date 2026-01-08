@@ -269,7 +269,6 @@ PgSQL_Session::PgSQL_Session() {
 	active_transactions = 0;
 
 	use_ssl = false;
-	change_user_auth_switch = false;
 
 	match_regexes = NULL;
 	copy_cmd_matcher = NULL;
@@ -3475,20 +3474,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 				free(addr);
 				free(client_addr);
-			}
-			else {
-				uint8_t _pid = 2;
-				if (client_myds->switching_auth_stage) _pid += 2;
-				if (is_encrypted) _pid++;
-				// If this condition is met, it means that the
-				// 'STATE_SERVER_HANDSHAKE' being performed isn't from the start of a
-				// connection, but as a consequence of a 'COM_USER_CHANGE' which
-				// requires an 'Auth Switch'. Thus, we impose a 'pid' of '3' for the
-				// response 'OK' packet. See #3504 for more context.
-				if (change_user_auth_switch) {
-					_pid = 3;
-					change_user_auth_switch = 0;
-				}
+			} else {
 				if (use_ssl == true && is_encrypted == false) {
 					*wrong_pass = true;
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL);
@@ -3503,8 +3489,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					__sync_add_and_fetch(&PgHGM->status.client_connections_aborted, 1);
 					free(_s);
 					__sync_fetch_and_add(&PgHGM->status.access_denied_wrong_password, 1);
-				}
-				else {
+				} else {
 					// we are good!
 					//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
