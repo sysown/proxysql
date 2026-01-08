@@ -5,38 +5,55 @@ CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g
 LDFLAGS = -lpthread
 
-# Target executable
-TARGET = genai_demo
+# Target executables
+TARGET_THREAD = genai_demo
+TARGET_EVENT = genai_demo_event
+TARGETS = $(TARGET_THREAD) $(TARGET_EVENT)
 
 # Source files
-SOURCES = genai_demo.cpp
+SOURCES_THREAD = genai_demo.cpp
+SOURCES_EVENT = genai_demo_event.cpp
 
 # Object files
-OBJECTS = $(SOURCES:.cpp=.o)
+OBJECTS_THREAD = $(SOURCES_THREAD:.cpp=.o)
+OBJECTS_EVENT = $(SOURCES_EVENT:.cpp=.o)
 
-# Default target
-all: $(TARGET)
+# Default target (build both demos)
+all: $(TARGETS)
 
-# Link the executable
-$(TARGET): $(OBJECTS)
-	@echo "Linking $(TARGET)..."
-	$(CXX) $(OBJECTS) $(LDFLAGS) -o $(TARGET)
-	@echo "Build complete: $(TARGET)"
+# Individual demo targets
+genai_demo: genai_demo.o
+	@echo "Linking genai_demo..."
+	$(CXX) genai_demo.o $(LDFLAGS) -o genai_demo
+	@echo "Build complete: genai_demo"
+
+genai_demo_event: genai_demo_event.o
+	@echo "Linking genai_demo_event..."
+	$(CXX) genai_demo_event.o $(LDFLAGS) -o genai_demo_event
+	@echo "Build complete: genai_demo_event"
 
 # Compile source files
-%.o: %.cpp
+genai_demo.o: genai_demo.cpp
 	@echo "Compiling $<..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Run the demo
-run: $(TARGET)
-	@echo "Running GenAI demo..."
-	./$(TARGET)
+genai_demo_event.o: genai_demo_event.cpp
+	@echo "Compiling $<..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Run the demos
+run: $(TARGET_THREAD)
+	@echo "Running thread-based GenAI demo..."
+	./$(TARGET_THREAD)
+
+run-event: $(TARGET_EVENT)
+	@echo "Running event-based GenAI demo..."
+	./$(TARGET_EVENT)
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS_THREAD) $(OBJECTS_EVENT) $(TARGETS)
 	@echo "Clean complete"
 
 # Rebuild
@@ -51,11 +68,14 @@ help:
 	@echo "GenAI Prototype Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all       - Build the demo (default)"
-	@echo "  run       - Build and run the demo"
-	@echo "  clean     - Remove build artifacts"
-	@echo "  rebuild   - Clean and build"
-	@echo "  debug     - Build with debug flags and extra warnings"
-	@echo "  help      - Show this help message"
+	@echo "  all          - Build both demos (default)"
+	@echo "  genai_demo   - Build thread-based demo"
+	@echo "  genai_demo_event - Build event-based demo"
+	@echo "  run          - Build and run thread-based demo"
+	@echo "  run-event    - Build and run event-based demo"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  rebuild      - Clean and build all"
+	@echo "  debug        - Build with debug flags and extra warnings"
+	@echo "  help         - Show this help message"
 
-.PHONY: all run clean rebuild debug help
+.PHONY: all run run-event clean rebuild debug help
