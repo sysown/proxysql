@@ -1,0 +1,25 @@
+# Build artifacts
+genai_demo
+*.o
+*.oo
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Editor files
+*~
+.*.swp
+.vscode/
+.idea/
+
+# Core dumps
+core
+core.*
+
+# Temporary files
+*.tmp
+*.temp
+*.log
