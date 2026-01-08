@@ -382,9 +382,9 @@ struct Config {
     int max_clients = 15;
     int run_duration_seconds = 20;
     double client_add_probability = 0.15;   // 15% chance per iteration
-    double request_send_probability = 0.25;  // 25% chance per idle client
-    int min_requests_per_client = 2;
-    int max_requests_per_client = 8;
+    double request_send_probability = 0.08;  // 8% chance per idle client (more spread out)
+    int min_requests_per_client = 5;
+    int max_requests_per_client = 15;
     int stats_print_interval_ms = 500;
 };
 
@@ -495,13 +495,15 @@ public:
             return;
         }
 
+        // Client uses fds[0] for both reading and writing
+        // GenAI uses fds[1] for both reading and writing
         read_fd_ = fds[0];
-        genai_fd_ = fds[1];
+        genai_fd_ = fds[1];  // Only used for registration
 
         int flags = fcntl(read_fd_, F_GETFL, 0);
         fcntl(read_fd_, F_SETFL, flags | O_NONBLOCK);
 
-        genai.register_client(genai_fd_);
+        genai.register_client(genai_fd_);  // GenAI gets the other end
 
         state_ = IDLE;  // Ready to send requests
 
@@ -537,8 +539,8 @@ public:
         req.input_size = input.size();
         req.flags = 0;
 
-        write(genai_fd_, &req, sizeof(req));
-        write(genai_fd_, input.data(), input.size());
+        write(read_fd_, &req, sizeof(req));
+        write(read_fd_, input.data(), input.size());
 
         pending_requests_[request_id] = std::chrono::steady_clock::now();
         requests_sent_++;
@@ -754,7 +756,17 @@ int main() {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
             now - start_time).count();
 
-        // Check termination condition
+        // Check termination conditions
+        bool all_work_done = (total_clients_created >= config.max_clients) &&
+                             (clients.empty()) &&
+                             (total_clients_completed >= config.max_clients);
+
+        if (all_work_done) {
+            std::cout << "\n=== All work completed, shutting down early ===\n";
+            running = false;
+            break;
+        }
+
         if (elapsed >= config.run_duration_seconds) {
             std::cout << "\n=== Time elapsed, shutting down ===\n";
             running = false;
