@@ -1656,7 +1656,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)))) {
 
 			const bool is_pgsql = (query_no_space[5] == 'P' || query_no_space[5] == 'p') ? true : false;
-			const bool is_genai = (query_no_space[5] == 'A' || query_no_space[5] == 'a') ? true : false;
+			const bool is_genai = (query_no_space[5] == 'G' || query_no_space[5] == 'g') ? true : false;
 			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : "mysql_variables");
 
 			tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
@@ -1731,7 +1731,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql global variables from CONFIG\n");
-					} else if (query_no_space[5] == 'A' || query_no_space[5] == 'a') {
+					} else if (query_no_space[5] == 'G' || query_no_space[5] == 'g') {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("genai");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai global variables from CONFIG\n");
 					} else {
