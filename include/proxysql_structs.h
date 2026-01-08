@@ -1208,6 +1208,7 @@ __thread int pgsql_thread___max_stmts_cache;
 
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
+__thread int mysql_thread___select_version_forwarding;
 __thread char *mysql_thread___keep_multiplexing_variables;
 __thread char *mysql_thread___default_authentication_plugin;
 __thread char *mysql_thread___proxy_protocol_networks;
@@ -1511,6 +1512,7 @@ extern __thread int pgsql_thread___max_stmts_cache;
 
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
+extern __thread int mysql_thread___select_version_forwarding;
 extern __thread char *mysql_thread___keep_multiplexing_variables;
 extern __thread char *mysql_thread___default_authentication_plugin;
 extern __thread char *mysql_thread___proxy_protocol_networks;
