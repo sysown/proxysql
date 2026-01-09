@@ -107,7 +107,7 @@ struct RequestHeader {
 
 /**
  * @struct EmbeddingResult
- * @brief Embedding vector allocated by GenAI, read by client
+ * @brief Single embedding vector allocated by GenAI, read by client
  *
  * GenAI allocates this and passes the pointer to client.
  * Client reads the embedding and then frees it.
@@ -146,6 +146,56 @@ struct EmbeddingResult {
     // Disable copy
     EmbeddingResult(const EmbeddingResult&) = delete;
     EmbeddingResult& operator=(const EmbeddingResult&) = delete;
+};
+
+/**
+ * @struct BatchEmbeddingResult
+ * @brief Multiple embedding vectors allocated by GenAI, read by client
+ *
+ * For batch requests, GenAI allocates an array of embeddings.
+ * The embeddings are stored contiguously: [emb1 floats, emb2 floats, ...]
+ * Each embedding has the same size.
+ */
+struct BatchEmbeddingResult {
+    float* data;           ///< Pointer to contiguous embedding array (owned by GenAI initially)
+    size_t embedding_size; ///< Number of floats per embedding
+    size_t count;          ///< Number of embeddings
+
+    BatchEmbeddingResult() : data(nullptr), embedding_size(0), count(0) {}
+
+    ~BatchEmbeddingResult() {
+        if (data) {
+            delete[] data;
+            data = nullptr;
+        }
+    }
+
+    // Move constructor and assignment
+    BatchEmbeddingResult(BatchEmbeddingResult&& other) noexcept
+        : data(other.data), embedding_size(other.embedding_size), count(other.count) {
+        other.data = nullptr;
+        other.embedding_size = 0;
+        other.count = 0;
+    }
+
+    BatchEmbeddingResult& operator=(BatchEmbeddingResult&& other) noexcept {
+        if (this != &other) {
+            if (data) delete[] data;
+            data = other.data;
+            embedding_size = other.embedding_size;
+            count = other.count;
+            other.data = nullptr;
+            other.embedding_size = 0;
+            other.count = 0;
+        }
+        return *this;
+    }
+
+    // Disable copy
+    BatchEmbeddingResult(const BatchEmbeddingResult&) = delete;
+    BatchEmbeddingResult& operator=(const BatchEmbeddingResult&) = delete;
+
+    size_t total_floats() const { return embedding_size * count; }
 };
 
 /**
@@ -491,6 +541,160 @@ private:
     }
 
     /**
+     * @brief Call llama-server batch embedding API via libcurl
+     *
+     * @param texts Vector of document texts to embed
+     * @return BatchEmbeddingResult containing multiple embedding vectors
+     */
+    BatchEmbeddingResult call_llama_batch_embedding(const std::vector<std::string>& texts) {
+        BatchEmbeddingResult result;
+        CURL* curl = curl_easy_init();
+
+        if (!curl) {
+            std::cerr << "[Worker] Failed to initialize curl\n";
+            return result;
+        }
+
+        // Build JSON request with array of inputs
+        std::stringstream json;
+        json << "{\"input\":[";
+
+        for (size_t i = 0; i < texts.size(); i++) {
+            if (i > 0) json << ",";
+            json << "\"";
+
+            // Escape JSON special characters
+            for (char c : texts[i]) {
+                switch (c) {
+                    case '"':  json << "\\\""; break;
+                    case '\\': json << "\\\\"; break;
+                    case '\n': json << "\\n"; break;
+                    case '\r': json << "\\r"; break;
+                    case '\t': json << "\\t"; break;
+                    default:   json << c; break;
+                }
+            }
+
+            json << "\"";
+        }
+
+        json << "]}";
+
+        std::string json_str = json.str();
+
+        // Configure curl
+        curl_easy_setopt(curl, CURLOPT_URL, "http://127.0.0.1:8013/embedding");
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+
+        std::string response_data;
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
+
+        // Add content-type header
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        // Perform request
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK) {
+            std::cerr << "[Worker] curl_easy_perform() failed: "
+                     << curl_easy_strerror(res) << "\n";
+        } else {
+            // Parse JSON response to extract embeddings
+            // Response format: [{"index":0,"embedding":[[float1,float2,...]]}, {"index":1,...}]
+            std::vector<std::vector<float>> all_embeddings;
+
+            // Find all result objects by looking for "embedding":
+            size_t pos = 0;
+            while ((pos = response_data.find("\"embedding\":", pos)) != std::string::npos) {
+                // Find the array start (expecting nested [[...]])
+                size_t array_start = response_data.find("[", pos);
+                if (array_start == std::string::npos) break;
+
+                // Skip the first [ to find the inner array
+                size_t inner_start = array_start + 1;
+                if (inner_start >= response_data.size() || response_data[inner_start] != '[') {
+                    // Not a nested array, use first bracket
+                    inner_start = array_start;
+                }
+
+                // Find matching bracket for the inner array
+                size_t array_end = inner_start;
+                int bracket_count = 0;
+                bool in_array = false;
+
+                for (size_t i = inner_start; i < response_data.size(); i++) {
+                    if (response_data[i] == '[') {
+                        bracket_count++;
+                        in_array = true;
+                    } else if (response_data[i] == ']') {
+                        bracket_count--;
+                        if (bracket_count == 0 && in_array) {
+                            array_end = i;
+                            break;
+                        }
+                    }
+                }
+
+                // Parse the array of floats
+                std::string array_str = response_data.substr(inner_start + 1, array_end - inner_start - 1);
+                std::vector<float> embedding;
+                std::stringstream ss(array_str);
+                std::string token;
+
+                while (std::getline(ss, token, ',')) {
+                    // Remove whitespace and "null" values
+                    token.erase(0, token.find_first_not_of(" \t\n\r"));
+                    token.erase(token.find_last_not_of(" \t\n\r") + 1);
+
+                    if (token == "null" || token.empty()) {
+                        continue;
+                    }
+
+                    try {
+                        float val = std::stof(token);
+                        embedding.push_back(val);
+                    } catch (...) {
+                        // Skip invalid values
+                    }
+                }
+
+                if (!embedding.empty()) {
+                    all_embeddings.push_back(std::move(embedding));
+                }
+
+                // Move past this result
+                pos = array_end + 1;
+            }
+
+            // Convert to contiguous array
+            if (!all_embeddings.empty()) {
+                result.count = all_embeddings.size();
+                result.embedding_size = all_embeddings[0].size();
+
+                // Allocate contiguous array
+                size_t total_floats = result.embedding_size * result.count;
+                result.data = new float[total_floats];
+
+                // Copy embeddings
+                for (size_t i = 0; i < all_embeddings.size(); i++) {
+                    size_t offset = i * result.embedding_size;
+                    const auto& emb = all_embeddings[i];
+                    std::copy(emb.begin(), emb.end(), result.data + offset);
+                }
+            }
+        }
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+
+        return result;
+    }
+
+    /**
      * @brief Worker loop - processes requests from queue
      */
     void worker_loop(int worker_id) {
@@ -515,16 +719,22 @@ private:
 
             // Process based on operation type
             if (req.operation == OP_EMBEDDING) {
-                // For multiple documents, we'll process the first one for this POC
-                // TODO: Support batch embedding for multiple documents
                 if (!req.documents.empty()) {
-                    const Document& doc = req.documents[0];
-                    std::string text(doc.text, doc.text_size);
+                    // Prepare texts for batch embedding
+                    std::vector<std::string> texts;
+                    texts.reserve(req.documents.size());
+                    size_t total_bytes = 0;
 
-                    std::cout << "[Worker " << worker_id << "] Processing embedding for document ("
-                             << doc.text_size << " bytes)\n";
+                    for (const auto& doc : req.documents) {
+                        texts.emplace_back(doc.text, doc.text_size);
+                        total_bytes += doc.text_size;
+                    }
 
-                    EmbeddingResult embedding = call_llama_embedding(text);
+                    std::cout << "[Worker " << worker_id << "] Processing batch embedding for "
+                             << req.documents.size() << " document(s) (" << total_bytes << " bytes)\n";
+
+                    // Use batch embedding for all documents
+                    BatchEmbeddingResult batch_embedding = call_llama_batch_embedding(texts);
 
                     auto end_time = std::chrono::steady_clock::now();
                     int processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -533,18 +743,18 @@ private:
                     // Prepare response
                     ResponseHeader resp;
                     resp.request_id = req.request_id;
-                    resp.status_code = (embedding.data != nullptr) ? 0 : 1;
-                    resp.embedding_size = embedding.size;
+                    resp.status_code = (batch_embedding.data != nullptr) ? 0 : 1;
+                    resp.embedding_size = batch_embedding.embedding_size;
                     resp.processing_time_ms = processing_time_ms;
-                    resp.embedding_ptr = reinterpret_cast<uint64_t>(embedding.data);
-                    resp.result_count = req.documents.size();
+                    resp.embedding_ptr = reinterpret_cast<uint64_t>(batch_embedding.data);
+                    resp.result_count = batch_embedding.count;
 
                     // Send response header
                     write(req.client_fd, &resp, sizeof(resp));
 
-                    // The embedding data stays in shared memory (allocated by GenAI)
+                    // The batch embedding data stays in shared memory (allocated by GenAI)
                     // Client will read it and then take ownership (client must free it)
-                    embedding.data = nullptr;  // Transfer ownership to client
+                    batch_embedding.data = nullptr;  // Transfer ownership to client
                 } else {
                     // No documents
                     auto end_time = std::chrono::steady_clock::now();
@@ -602,14 +812,14 @@ private:
  * @brief Configuration for the GenAI event-driven demo
  */
 struct Config {
-    int genai_workers = 4;
-    int max_clients = 5;  // Reduced for real API calls
-    int run_duration_seconds = 30;
-    double client_add_probability = 0.10;
-    double request_send_probability = 0.15;
+    int genai_workers = 8;
+    int max_clients = 20;
+    int run_duration_seconds = 60;
+    double client_add_probability = 0.15;
+    double request_send_probability = 0.20;
     int min_documents_per_request = 1;
-    int max_documents_per_request = 3;
-    int stats_print_interval_ms = 1000;
+    int max_documents_per_request = 10;
+    int stats_print_interval_ms = 2000;
 };
 
 // ============================================================================
@@ -627,7 +837,24 @@ const std::vector<std::string> SAMPLE_DOCUMENTS = {
     "Vector databases store embeddings for efficient similarity search and retrieval.",
     "Transformers have become the dominant architecture for modern natural language processing tasks.",
     "Large language models demonstrate remarkable capabilities in text generation and comprehension.",
-    "Semantic search uses embeddings to find content based on meaning rather than keyword matching."
+    "Semantic search uses embeddings to find content based on meaning rather than keyword matching.",
+    "Neural networks learn complex patterns through interconnected layers of artificial neurons.",
+    "Convolutional neural networks excel at image recognition and computer vision tasks.",
+    "Recurrent neural networks can process sequential data like text and time series.",
+    "Attention mechanisms allow models to focus on relevant parts of the input.",
+    "Transfer learning enables models trained on one task to be applied to related tasks.",
+    "Gradient descent is the fundamental optimization algorithm for training neural networks.",
+    "Backpropagation efficiently computes gradients by propagating errors backward through the network.",
+    "Regularization techniques like dropout prevent overfitting in deep learning models.",
+    "Batch normalization stabilizes training by normalizing layer inputs.",
+    "Learning rate schedules adjust the step size during optimization for better convergence.",
+    "Tokenization breaks text into smaller units for processing by language models.",
+    "Word embeddings like Word2Vec capture semantic relationships between words.",
+    "Contextual embeddings like BERT generate representations based on surrounding context.",
+    "Sequence-to-sequence models are used for translation and text summarization.",
+    "Beam search improves output quality in text generation by considering multiple candidates.",
+    "Temperature controls randomness in probabilistic sampling for language model outputs.",
+    "Fine-tuning adapts pre-trained models to specific tasks with limited data."
 };
 
 // ============================================================================
@@ -716,7 +943,10 @@ public:
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_int_distribution<> doc_dist(0, SAMPLE_DOCUMENTS.size() - 1);
-        std::uniform_int_distribution<> count_dist(1, 3);
+        std::uniform_int_distribution<> count_dist(
+            config_.min_documents_per_request,
+            config_.max_documents_per_request
+        );
 
         int num_docs = count_dist(gen);
         for (int i = 0; i < num_docs; i++) {
@@ -772,18 +1002,20 @@ public:
                 end_time - start_time).count();
 
             if (resp.status_code == 0 && resp.embedding_size > 0) {
-                // Get embedding pointer from shared memory
-                float* embedding_ptr = reinterpret_cast<float*>(resp.embedding_ptr);
+                // Get batch embedding pointer from shared memory
+                float* batch_embedding_ptr = reinterpret_cast<float*>(resp.embedding_ptr);
 
                 std::cout << "[" << id_ << "] Received response " << resp.request_id
                          << " (rtt=" << duration << "ms, proc=" << resp.processing_time_ms
-                         << "ms, embedding_size=" << resp.embedding_size << " floats)\n";
+                         << "ms, embeddings=" << resp.result_count
+                         << " x " << resp.embedding_size << " floats = "
+                         << (resp.result_count * resp.embedding_size) << " total floats)\n";
 
-                // Take ownership of the embedding
+                // Take ownership of the batch embedding
                 if (owned_embedding_) {
                     delete[] owned_embedding_;
                 }
-                owned_embedding_ = embedding_ptr;
+                owned_embedding_ = batch_embedding_ptr;
             } else {
                 std::cout << "[" << id_ << "] Received response " << resp.request_id
                          << " (rtt=" << duration << "ms, status=ERROR)\n";
