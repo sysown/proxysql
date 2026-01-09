@@ -3610,62 +3610,54 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	return false;
 }
 
-// Handler for EMBED: queries - experimental GenAI integration
-// Query format: EMBED: ["document1", "document2", ...]
-// Returns: Resultset with 1 row per document, 1 column with CSV embeddings
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai_embedding(const char* query, size_t query_len, PtrSize_t* pkt) {
-	// Skip leading space after "EMBED:"
+// Handler for GENAI: queries - experimental GenAI integration
+// Query formats:
+//   GENAI: {"type": "embed", "documents": ["doc1", "doc2", ...]}
+//   GENAI: {"type": "rerank", "query": "...", "documents": [...], "top_n": 5, "columns": 3}
+// Returns: Resultset with embeddings or reranked documents
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(const char* query, size_t query_len, PtrSize_t* pkt) {
+	// Skip leading space after "GENAI:"
 	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
 		query++;
 		query_len--;
 	}
 
 	if (query_len == 0) {
-		// Empty query after EMBED:
+		// Empty query after GENAI:
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1234, (char*)"HY000", "Empty EMBED: query", true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1234, (char*)"HY000", "Empty GENAI: query", true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 		return;
 	}
 
-	// Parse JSON array of documents
+	// Parse JSON to determine operation type
 	try {
 		json j = json::parse(std::string(query, query_len));
 
-		if (!j.is_array()) {
+		if (!j.is_object()) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1235, (char*)"HY000", "EMBED: query requires a JSON array of documents", true);
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1235, (char*)"HY000", "GENAI: query requires a JSON object with 'type' field", true);
 			l_free(pkt->size, pkt->ptr);
 			client_myds->DSS = STATE_SLEEP;
 			status = WAITING_CLIENT_DATA;
 			return;
 		}
 
-		// Extract documents from JSON array
-		std::vector<std::string> documents;
-		for (const auto& doc : j) {
-			if (doc.is_string()) {
-				documents.push_back(doc.get<std::string>());
-			} else {
-				// Convert to string if not already
-				documents.push_back(doc.dump());
-			}
-		}
-
-		if (documents.empty()) {
+		// Extract operation type
+		if (!j.contains("type") || !j["type"].is_string()) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1236, (char*)"HY000", "EMBED: query requires at least one document", true);
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1236, (char*)"HY000", "GENAI: query requires a 'type' string field ('embed' or 'rerank')", true);
 			l_free(pkt->size, pkt->ptr);
 			client_myds->DSS = STATE_SLEEP;
 			status = WAITING_CLIENT_DATA;
 			return;
 		}
 
-		// Call GenAI module to generate embeddings
-		// Note: This is a synchronous call for the experimental implementation
-		// TODO: Make this asynchronous using socketpair
+		std::string op_type = j["type"].get<std::string>();
+
+		// Check GenAI module is initialized
 		if (!GloGATH) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1237, (char*)"HY000", "GenAI module is not initialized", true);
@@ -3675,227 +3667,239 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return;
 		}
 
-		GenAI_EmbeddingResult result = GloGATH->embed_documents(documents);
-
-		if (!result.data || result.count == 0) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1238, (char*)"HY000", "Failed to generate embeddings", true);
-			l_free(pkt->size, pkt->ptr);
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			return;
-		}
-
-		// Build resultset: 1 row per document, 1 column with CSV embeddings
-		std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
-		resultset->add_column_definition(SQLITE_TEXT, "embedding");
-
-		for (size_t i = 0; i < result.count; i++) {
-			// Convert embedding vector to CSV string
-			float* embedding = result.data + (i * result.embedding_size);
-			std::ostringstream oss;
-			for (size_t j = 0; j < result.embedding_size; j++) {
-				if (j > 0) oss << ",";
-				oss << embedding[j];
+		// Handle embed operation
+		if (op_type == "embed") {
+			// Extract documents array
+			if (!j.contains("documents") || !j["documents"].is_array()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1238, (char*)"HY000", "GENAI embed operation requires a 'documents' array", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
 			}
-			std::string csv_str = oss.str();
 
-			// Add row to resultset
-			char* row_data[1];
-			char* csv_copy = strdup(csv_str.c_str());
-			row_data[0] = csv_copy;
-			resultset->add_row(row_data);
-			free(csv_copy);
-		}
+			std::vector<std::string> documents;
+			for (const auto& doc : j["documents"]) {
+				if (doc.is_string()) {
+					documents.push_back(doc.get<std::string>());
+				} else {
+					documents.push_back(doc.dump());
+				}
+			}
 
-		// Send resultset to client
-		SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
-		                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+			if (documents.empty()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1239, (char*)"HY000", "GENAI embed operation requires at least one document", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
+			}
 
-		// Clean up
-		l_free(pkt->size, pkt->ptr);
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
+			// Call GenAI module to generate embeddings
+			GenAI_EmbeddingResult result = GloGATH->embed_documents(documents);
 
-	} catch (const json::parse_error& e) {
-		std::string err_msg = "JSON parse error in EMBED: query: ";
-		err_msg += e.what();
-		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1239, (char*)"HY000", err_msg.c_str(), true);
-		l_free(pkt->size, pkt->ptr);
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
-	} catch (const std::exception& e) {
-		std::string err_msg = "Error processing EMBED: query: ";
-		err_msg += e.what();
-		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1240, (char*)"HY000", err_msg.c_str(), true);
-		l_free(pkt->size, pkt->ptr);
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
-	}
-}
+			if (!result.data || result.count == 0) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1240, (char*)"HY000", "Failed to generate embeddings", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
+			}
 
-// Handler for RERANK: queries - experimental GenAI integration
-// Query format: RERANK: {"query": "search query", "documents": ["doc1", "doc2", ...], "top_n": 5}
-// Returns: Resultset with reranked documents (index, score, document)
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai_rerank(const char* query, size_t query_len, PtrSize_t* pkt) {
-	// Skip leading space after "RERANK:"
-	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
-		query++;
-		query_len--;
-	}
+			// Build resultset: 1 row per document, 1 column with CSV embeddings
+			std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
+			resultset->add_column_definition(SQLITE_TEXT, "embedding");
 
-	if (query_len == 0) {
-		// Empty query after RERANK:
-		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2234, (char*)"HY000", "Empty RERANK: query", true);
-		l_free(pkt->size, pkt->ptr);
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
-		return;
-	}
+			for (size_t i = 0; i < result.count; i++) {
+				float* embedding = result.data + (i * result.embedding_size);
+				std::ostringstream oss;
+				for (size_t j = 0; j < result.embedding_size; j++) {
+					if (j > 0) oss << ",";
+					oss << embedding[j];
+				}
+				std::string csv_str = oss.str();
 
-	// Parse JSON object with query, documents, and optional top_n
-	try {
-		json j = json::parse(std::string(query, query_len));
+				char* row_data[1];
+				char* csv_copy = strdup(csv_str.c_str());
+				row_data[0] = csv_copy;
+				resultset->add_row(row_data);
+				free(csv_copy);
+			}
 
-		if (!j.is_object()) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2235, (char*)"HY000", "RERANK: query requires a JSON object with 'query' and 'documents' fields", true);
+			// Send resultset to client
+			SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+			                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+
 			l_free(pkt->size, pkt->ptr);
 			client_myds->DSS = STATE_SLEEP;
 			status = WAITING_CLIENT_DATA;
 			return;
 		}
 
-		// Extract query
-		if (!j.contains("query") || !j["query"].is_string()) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2236, (char*)"HY000", "RERANK: query requires a 'query' string field", true);
-			l_free(pkt->size, pkt->ptr);
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			return;
-		}
-		std::string query_str = j["query"].get<std::string>();
+		// Handle rerank operation
+		if (op_type == "rerank") {
+			// Extract query
+			if (!j.contains("query") || !j["query"].is_string()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2241, (char*)"HY000", "GENAI rerank operation requires a 'query' string", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
+			}
+			std::string query_str = j["query"].get<std::string>();
 
-		if (query_str.empty()) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2237, (char*)"HY000", "RERANK: query field cannot be empty", true);
-			l_free(pkt->size, pkt->ptr);
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			return;
-		}
+			if (query_str.empty()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2242, (char*)"HY000", "GENAI rerank operation requires a non-empty query", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
+			}
 
-		// Extract documents
-		if (!j.contains("documents") || !j["documents"].is_array()) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2238, (char*)"HY000", "RERANK: query requires a 'documents' array field", true);
-			l_free(pkt->size, pkt->ptr);
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			return;
-		}
+			// Extract documents
+			if (!j.contains("documents") || !j["documents"].is_array()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2243, (char*)"HY000", "GENAI rerank operation requires a 'documents' array", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
+			}
 
-		std::vector<std::string> documents;
-		for (const auto& doc : j["documents"]) {
-			if (doc.is_string()) {
-				documents.push_back(doc.get<std::string>());
+			std::vector<std::string> documents;
+			for (const auto& doc : j["documents"]) {
+				if (doc.is_string()) {
+					documents.push_back(doc.get<std::string>());
+				} else {
+					documents.push_back(doc.dump());
+				}
+			}
+
+			if (documents.empty()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2244, (char*)"HY000", "GENAI rerank operation requires at least one document", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
+			}
+
+			// Extract optional top_n (default 0 = return all)
+			uint32_t top_n = 0;
+			if (j.contains("top_n") && j["top_n"].is_number()) {
+				top_n = j["top_n"].get<uint32_t>();
+			}
+
+			// Extract optional columns (default 3 = index, score, document)
+			uint32_t columns = 3;  // default
+			if (j.contains("columns") && j["columns"].is_number()) {
+				columns = j["columns"].get<uint32_t>();
+				if (columns != 2 && columns != 3) {
+					client_myds->DSS = STATE_QUERY_SENT_NET;
+					client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2245, (char*)"HY000", "GENAI rerank operation 'columns' must be 2 or 3", true);
+					l_free(pkt->size, pkt->ptr);
+					client_myds->DSS = STATE_SLEEP;
+					status = WAITING_CLIENT_DATA;
+					return;
+				}
+			}
+
+			// Call GenAI module to rerank documents
+			GenAI_RerankResultArray result = GloGATH->rerank_documents(query_str, documents, top_n);
+
+			if (!result.data || result.count == 0) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2246, (char*)"HY000", "Failed to rerank documents", true);
+				l_free(pkt->size, pkt->ptr);
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				return;
+			}
+
+			// Build resultset based on columns parameter
+			std::unique_ptr<SQLite3_result> resultset;
+			if (columns == 2) {
+				// 2 columns: index and score only
+				resultset.reset(new SQLite3_result(2));
+				resultset->add_column_definition(SQLITE_TEXT, "index");
+				resultset->add_column_definition(SQLITE_TEXT, "score");
+
+				for (size_t i = 0; i < result.count; i++) {
+					const GenAI_RerankResult& r = result.data[i];
+					std::string index_str = std::to_string(r.index);
+					std::string score_str = std::to_string(r.score);
+
+					char* row_data[2];
+					char* index_copy = strdup(index_str.c_str());
+					char* score_copy = strdup(score_str.c_str());
+					row_data[0] = index_copy;
+					row_data[1] = score_copy;
+					resultset->add_row(row_data);
+					free(index_copy);
+					free(score_copy);
+				}
 			} else {
-				documents.push_back(doc.dump());
+				// 3 columns: index, score, and document (default)
+				resultset.reset(new SQLite3_result(3));
+				resultset->add_column_definition(SQLITE_TEXT, "index");
+				resultset->add_column_definition(SQLITE_TEXT, "score");
+				resultset->add_column_definition(SQLITE_TEXT, "document");
+
+				for (size_t i = 0; i < result.count; i++) {
+					const GenAI_RerankResult& r = result.data[i];
+					std::string index_str = std::to_string(r.index);
+					std::string score_str = std::to_string(r.score);
+					const std::string& doc_str = documents[r.index];
+
+					char* row_data[3];
+					char* index_copy = strdup(index_str.c_str());
+					char* score_copy = strdup(score_str.c_str());
+					char* doc_copy = strdup(doc_str.c_str());
+					row_data[0] = index_copy;
+					row_data[1] = score_copy;
+					row_data[2] = doc_copy;
+					resultset->add_row(row_data);
+					free(index_copy);
+					free(score_copy);
+					free(doc_copy);
+				}
 			}
-		}
 
-		if (documents.empty()) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2239, (char*)"HY000", "RERANK: documents array cannot be empty", true);
+			// Send resultset to client
+			SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+			                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+
 			l_free(pkt->size, pkt->ptr);
 			client_myds->DSS = STATE_SLEEP;
 			status = WAITING_CLIENT_DATA;
 			return;
 		}
 
-		// Extract optional top_n
-		uint32_t top_n = 0; // 0 means return all
-		if (j.contains("top_n") && j["top_n"].is_number()) {
-			top_n = j["top_n"].get<uint32_t>();
-		}
-
-		// Call GenAI module to rerank documents
-		// Note: This is a synchronous call for the experimental implementation
-		// TODO: Make this asynchronous using socketpair
-		if (!GloGATH) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2240, (char*)"HY000", "GenAI module is not initialized", true);
-			l_free(pkt->size, pkt->ptr);
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			return;
-		}
-
-		GenAI_RerankResultArray result = GloGATH->rerank_documents(query_str, documents, top_n);
-
-		if (!result.data || result.count == 0) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2241, (char*)"HY000", "Failed to rerank documents", true);
-			l_free(pkt->size, pkt->ptr);
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			return;
-		}
-
-		// Build resultset: 1 row per result, 3 columns (index, score, document)
-		std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(3));
-		resultset->add_column_definition(SQLITE_TEXT, "index");
-		resultset->add_column_definition(SQLITE_TEXT, "score");
-		resultset->add_column_definition(SQLITE_TEXT, "document");
-
-		for (size_t i = 0; i < result.count; i++) {
-			const GenAI_RerankResult& r = result.data[i];
-
-			// Convert values to strings
-			std::string index_str = std::to_string(r.index);
-			std::string score_str = std::to_string(r.score);
-			const std::string& doc_str = documents[r.index];
-
-			// Add row to resultset
-			char* row_data[3];
-			char* index_copy = strdup(index_str.c_str());
-			char* score_copy = strdup(score_str.c_str());
-			char* doc_copy = strdup(doc_str.c_str());
-			row_data[0] = index_copy;
-			row_data[1] = score_copy;
-			row_data[2] = doc_copy;
-			resultset->add_row(row_data);
-			free(index_copy);
-			free(score_copy);
-			free(doc_copy);
-		}
-
-		// Send resultset to client
-		SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
-		                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
-
-		// Clean up
+		// Unknown operation type
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2247, (char*)"HY000", "GENAI: unknown operation type. Use 'embed' or 'rerank'", true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 
 	} catch (const json::parse_error& e) {
-		std::string err_msg = "JSON parse error in RERANK: query: ";
+		std::string err_msg = "JSON parse error in GENAI: query: ";
 		err_msg += e.what();
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2242, (char*)"HY000", err_msg.c_str(), true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2248, (char*)"HY000", err_msg.c_str(), true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 	} catch (const std::exception& e) {
-		std::string err_msg = "Error processing RERANK: query: ";
+		std::string err_msg = "Error processing GENAI: query: ";
 		err_msg += e.what();
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2243, (char*)"HY000", err_msg.c_str(), true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 2249, (char*)"HY000", err_msg.c_str(), true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -6361,20 +6365,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	bool exit_after_SetParse = true;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 
-	// Check for EMBED: queries - experimental GenAI integration
-	if (pkt->size > sizeof(mysql_hdr) + 7) { // Need at least "EMBED: " (7 chars after header)
+	// Check for GENAI: queries - experimental GenAI integration
+	if (pkt->size > sizeof(mysql_hdr) + 7) { // Need at least "GENAI: " (7 chars after header)
 		const char* query_ptr = (const char*)pkt->ptr + sizeof(mysql_hdr) + 1;
 		size_t query_len = pkt->size - sizeof(mysql_hdr) - 1;
 
-		if (query_len >= 7 && strncasecmp(query_ptr, "EMBED:", 6) == 0) {
-			// This is an EMBED: query - handle with GenAI module
-			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai_embedding(query_ptr + 6, query_len - 6, pkt);
-			return true;
-		}
-
-		if (query_len >= 8 && strncasecmp(query_ptr, "RERANK:", 7) == 0) {
-			// This is a RERANK: query - handle with GenAI module
-			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai_rerank(query_ptr + 7, query_len - 7, pkt);
+		if (query_len >= 7 && strncasecmp(query_ptr, "GENAI:", 6) == 0) {
+			// This is a GENAI: query - handle with GenAI module
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(query_ptr + 6, query_len - 6, pkt);
 			return true;
 		}
 	}
