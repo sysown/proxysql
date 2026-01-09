@@ -179,6 +179,7 @@ enum MySQL_DS_type {
 //	MYDS_BACKEND_PAUSE_CONNECT,
 //	MYDS_BACKEND_FAILED_CONNECT,
 	MYDS_FRONTEND,
+	MYDS_INTERNAL_GENAI,  // Internal GenAI module connection
 };
 
 using PgSQL_DS_type = MySQL_DS_type;

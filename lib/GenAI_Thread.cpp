@@ -102,9 +102,7 @@ GenAI_Threads_Handler::GenAI_Threads_Handler() {
 	epoll_fd_ = -1;
 	event_fd_ = -1;
 
-#ifdef HAVE_LIBCURL
 	curl_global_init(CURL_GLOBAL_ALL);
-#endif
 
 	// Initialize variables with default values
 	variables.genai_threads = 4;
@@ -130,10 +128,6 @@ GenAI_Threads_Handler::~GenAI_Threads_Handler() {
 		free(variables.genai_rerank_uri);
 
 	pthread_rwlock_destroy(&rwlock);
-
-#ifdef HAVE_LIBCURL
-	curl_global_cleanup();
-#endif
 }
 
 void GenAI_Threads_Handler::init(unsigned int num, size_t stack) {
@@ -410,8 +404,6 @@ size_t GenAI_Threads_Handler::get_queue_size() {
 // ============================================================================
 // Public API methods
 // ============================================================================
-
-#ifdef HAVE_LIBCURL
 
 size_t GenAI_Threads_Handler::WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 	size_t totalSize = size * nmemb;
@@ -745,14 +737,11 @@ GenAI_RerankResultArray GenAI_Threads_Handler::call_llama_rerank(const std::stri
 	return result;
 }
 
-#endif // HAVE_LIBCURL
-
 // ============================================================================
 // Public API methods
 // ============================================================================
 
 GenAI_EmbeddingResult GenAI_Threads_Handler::embed_documents(const std::vector<std::string>& documents) {
-#ifdef HAVE_LIBCURL
 	if (documents.empty()) {
 		proxy_error("embed_documents called with empty documents list\n");
 		status_variables.failed_requests++;
@@ -770,17 +759,11 @@ GenAI_EmbeddingResult GenAI_Threads_Handler::embed_documents(const std::vector<s
 
 	status_variables.active_requests--;
 	return result;
-#else
-	proxy_error("GenAI module compiled without libcurl support\n");
-	status_variables.failed_requests++;
-	return GenAI_EmbeddingResult();
-#endif
 }
 
 GenAI_RerankResultArray GenAI_Threads_Handler::rerank_documents(const std::string& query,
 																const std::vector<std::string>& documents,
 																uint32_t top_n) {
-#ifdef HAVE_LIBCURL
 	if (documents.empty()) {
 		proxy_error("rerank_documents called with empty documents list\n");
 		status_variables.failed_requests++;
@@ -799,11 +782,6 @@ GenAI_RerankResultArray GenAI_Threads_Handler::rerank_documents(const std::strin
 
 	status_variables.active_requests--;
 	return result;
-#else
-	proxy_error("GenAI module compiled without libcurl support\n");
-	status_variables.failed_requests++;
-	return GenAI_RerankResultArray();
-#endif
 }
 
 // ============================================================================

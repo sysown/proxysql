@@ -14,6 +14,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
+#include "GenAI_Thread.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
 #include "MySQL_Authentication.hpp"
@@ -3609,6 +3610,132 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	return false;
 }
 
+// Handler for EMBED: queries - experimental GenAI integration
+// Query format: EMBED: ["document1", "document2", ...]
+// Returns: Resultset with 1 row per document, 1 column with CSV embeddings
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai_embedding(const char* query, size_t query_len, PtrSize_t* pkt) {
+	// Skip leading space after "EMBED:"
+	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
+		query++;
+		query_len--;
+	}
+
+	if (query_len == 0) {
+		// Empty query after EMBED:
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1234, (char*)"HY000", "Empty EMBED: query", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Parse JSON array of documents
+	try {
+		json j = json::parse(std::string(query, query_len));
+
+		if (!j.is_array()) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1235, (char*)"HY000", "EMBED: query requires a JSON array of documents", true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		// Extract documents from JSON array
+		std::vector<std::string> documents;
+		for (const auto& doc : j) {
+			if (doc.is_string()) {
+				documents.push_back(doc.get<std::string>());
+			} else {
+				// Convert to string if not already
+				documents.push_back(doc.dump());
+			}
+		}
+
+		if (documents.empty()) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1236, (char*)"HY000", "EMBED: query requires at least one document", true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		// Call GenAI module to generate embeddings
+		// Note: This is a synchronous call for the experimental implementation
+		// TODO: Make this asynchronous using socketpair
+		if (!GloGATH) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1237, (char*)"HY000", "GenAI module is not initialized", true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		GenAI_EmbeddingResult result = GloGATH->embed_documents(documents);
+
+		if (!result.data || result.count == 0) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1238, (char*)"HY000", "Failed to generate embeddings", true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		// Build resultset: 1 row per document, 1 column with CSV embeddings
+		std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
+		resultset->add_column_definition(SQLITE_TEXT, "embedding");
+
+		for (size_t i = 0; i < result.count; i++) {
+			// Convert embedding vector to CSV string
+			float* embedding = result.data + (i * result.embedding_size);
+			std::ostringstream oss;
+			for (size_t j = 0; j < result.embedding_size; j++) {
+				if (j > 0) oss << ",";
+				oss << embedding[j];
+			}
+			std::string csv_str = oss.str();
+
+			// Add row to resultset
+			char* row_data[1];
+			char* csv_copy = strdup(csv_str.c_str());
+			row_data[0] = csv_copy;
+			resultset->add_row(row_data);
+			free(csv_copy);
+		}
+
+		// Send resultset to client
+		SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+		                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+
+		// Clean up
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+
+	} catch (const json::parse_error& e) {
+		std::string err_msg = "JSON parse error in EMBED: query: ";
+		err_msg += e.what();
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1239, (char*)"HY000", err_msg.c_str(), true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+	} catch (const std::exception& e) {
+		std::string err_msg = "Error processing EMBED: query: ";
+		err_msg += e.what();
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1240, (char*)"HY000", err_msg.c_str(), true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+	}
+}
+
 // this function was inline inside MySQL_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
@@ -6067,6 +6194,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 */
 	bool exit_after_SetParse = true;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
+
+	// Check for EMBED: queries - experimental GenAI integration
+	if (pkt->size > sizeof(mysql_hdr) + 7) { // Need at least "EMBED: " (7 chars after header)
+		const char* query_ptr = (const char*)pkt->ptr + sizeof(mysql_hdr) + 1;
+		size_t query_len = pkt->size - sizeof(mysql_hdr) - 1;
+
+		if (query_len >= 7 && strncasecmp(query_ptr, "EMBED:", 6) == 0) {
+			// This is an EMBED: query - handle with GenAI module
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai_embedding(query_ptr + 6, query_len - 6, pkt);
+			return true;
+		}
+	}
+
 	if (qpo->new_query) {
 		handler_WCD_SS_MCQ_qpo_QueryRewrite(pkt);
 	}

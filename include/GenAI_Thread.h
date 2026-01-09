@@ -15,9 +15,7 @@
 #include <sys/epoll.h>
 #endif
 
-#ifdef HAVE_LIBCURL
-#include <curl/curl.h>
-#endif
+#include "curl/curl.h"
 
 #define GENAI_THREAD_VERSION "0.1.0"
 
@@ -128,7 +126,6 @@ private:
 	void worker_loop(int worker_id);
 	void listener_loop();
 
-#ifdef HAVE_LIBCURL
 	// HTTP client methods
 	GenAI_EmbeddingResult call_llama_embedding(const std::string& text);
 	GenAI_EmbeddingResult call_llama_batch_embedding(const std::vector<std::string>& texts);
@@ -136,7 +133,6 @@ private:
 												const std::vector<std::string>& texts,
 												uint32_t top_n);
 	static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp);
-#endif
 
 public:
 	/**
