@@ -814,8 +814,73 @@ void GenAI_Threads_Handler::listener_loop() {
 				continue;
 			}
 
-			// Handle client events here
-			// This will be implemented when integrating with MySQL/PgSQL threads
+			int client_fd = events[i].data.fd;
+
+			// Read request header
+			GenAI_RequestHeader header;
+			ssize_t n = read(client_fd, &header, sizeof(header));
+
+			if (n <= 0) {
+				// Client disconnected or error
+				if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+					proxy_error("GenAI: Error reading from client fd %d: %s\n",
+								client_fd, strerror(errno));
+				}
+				// Remove from epoll
+				epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, client_fd, nullptr);
+				close(client_fd);
+				{
+					std::lock_guard<std::mutex> lock(clients_mutex_);
+					client_fds_.erase(client_fd);
+				}
+				continue;
+			}
+
+			if (n != sizeof(header)) {
+				proxy_error("GenAI: Incomplete header read from fd %d: got %zd, expected %zu\n",
+							client_fd, n, sizeof(header));
+				continue;
+			}
+
+			// Read JSON query if present
+			std::string json_query;
+			if (header.query_len > 0) {
+				json_query.resize(header.query_len);
+				size_t total_read = 0;
+				while (total_read < header.query_len) {
+					ssize_t r = read(client_fd, &json_query[total_read],
+									 header.query_len - total_read);
+					if (r <= 0) {
+						if (errno == EAGAIN || errno == EWOULDBLOCK) {
+							usleep(1000);  // Wait 1ms and retry
+							continue;
+						}
+						proxy_error("GenAI: Error reading JSON query from fd %d: %s\n",
+									client_fd, strerror(errno));
+						break;
+					}
+					total_read += r;
+				}
+			}
+
+			// Build request and queue it
+			GenAI_Request req;
+			req.client_fd = client_fd;
+			req.request_id = header.request_id;
+			req.operation = header.operation;
+			req.top_n = header.top_n;
+			req.json_query = json_query;
+
+			{
+				std::lock_guard<std::mutex> lock(queue_mutex_);
+				request_queue_.push(std::move(req));
+			}
+
+			queue_cv_.notify_one();
+
+			proxy_debug(PROXY_DEBUG_GENAI, 3,
+						"GenAI: Queued request %lu from fd %d (op=%u, query_len=%u)\n",
+						header.request_id, client_fd, header.operation, header.query_len);
 		}
 	}
 #else
@@ -889,8 +954,69 @@ void GenAI_Threads_Handler::worker_loop(int worker_id) {
 		lock.release();
 
 		// Process request
-		// This will be implemented when integrating with MySQL/PgSQL threads
-		proxy_debug(PROXY_DEBUG_GENAI, 3, "Worker %d processing request %lu\n", worker_id, req.request_id);
+		auto start_time = std::chrono::steady_clock::now();
+
+		proxy_debug(PROXY_DEBUG_GENAI, 3,
+					"Worker %d processing request %lu (op=%u)\n",
+					worker_id, req.request_id, req.operation);
+
+		// Process the JSON query
+		std::string json_result = process_json_query(req.json_query);
+
+		auto end_time = std::chrono::steady_clock::now();
+		int processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+			end_time - start_time).count();
+
+		// Prepare response header
+		GenAI_ResponseHeader resp;
+		resp.request_id = req.request_id;
+		resp.status_code = json_result.empty() ? 1 : 0;
+		resp.result_len = json_result.length();
+		resp.processing_time_ms = processing_time_ms;
+		resp.result_ptr = 0;  // Not using shared memory
+		resp.result_count = 0;
+		resp.reserved = 0;
+
+		// Send response header
+		ssize_t written = write(req.client_fd, &resp, sizeof(resp));
+		if (written != sizeof(resp)) {
+			proxy_error("GenAI: Failed to write response header to fd %d: %s\n",
+						req.client_fd, strerror(errno));
+			status_variables.failed_requests++;
+			close(req.client_fd);
+			{
+				std::lock_guard<std::mutex> lock(clients_mutex_);
+				client_fds_.erase(req.client_fd);
+			}
+			continue;
+		}
+
+		// Send JSON result
+		if (resp.result_len > 0) {
+			size_t total_written = 0;
+			while (total_written < json_result.length()) {
+				ssize_t w = write(req.client_fd,
+								  json_result.data() + total_written,
+								  json_result.length() - total_written);
+				if (w <= 0) {
+					if (errno == EAGAIN || errno == EWOULDBLOCK) {
+						usleep(1000);  // Wait 1ms and retry
+						continue;
+					}
+					proxy_error("GenAI: Failed to write JSON result to fd %d: %s\n",
+								req.client_fd, strerror(errno));
+					status_variables.failed_requests++;
+					break;
+				}
+				total_written += w;
+			}
+		}
+
+		status_variables.completed_requests++;
+
+		proxy_debug(PROXY_DEBUG_GENAI, 3,
+					"Worker %d completed request %lu (status=%u, result_len=%u, time=%dms)\n",
+					worker_id, req.request_id, resp.status_code, resp.result_len, processing_time_ms);
 	}
 
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI worker thread %d stopped\n", worker_id);

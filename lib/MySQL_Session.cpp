@@ -3642,6 +3642,21 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return;
 	}
 
+#ifdef epoll_create1
+	// Use async path with socketpair for non-blocking operation
+	if (!handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(query, query_len, pkt)) {
+		// Async send failed - error already sent to client
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Request sent asynchronously - don't free pkt, will be freed in response handler
+	// Return immediately, session is now free to handle other queries
+	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI: Query sent asynchronously, session continuing\n");
+#else
+	// Fallback to synchronous blocking path for systems without epoll
 	// Pass JSON query to GenAI module for autonomous processing
 	std::string json_query(query, query_len);
 	std::string result_json = GloGATH->process_json_query(json_query);
@@ -3771,7 +3786,318 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 	}
+#endif  // epoll_create1 - fallback blocking path
 }
+
+#ifdef epoll_create1
+/**
+ * @brief Send GenAI request asynchronously via socketpair
+ *
+ * Creates socketpair, sends request to GenAI module, and returns immediately.
+ * The response will be handled by handle_genai_response when ready.
+ */
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(
+		const char* query, size_t query_len, PtrSize_t* pkt) {
+
+	// Create socketpair for async communication
+	int fds[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
+		proxy_error("GenAI: socketpair failed: %s\n", strerror(errno));
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1260, (char*)"HY000",
+			"Failed to create GenAI communication channel", true);
+		return false;
+	}
+
+	// Set MySQL side to non-blocking
+	int flags = fcntl(fds[0], F_GETFL, 0);
+	fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+
+	// Register GenAI side with GenAI module
+	if (!GloGATH->register_client(fds[1])) {
+		proxy_error("GenAI: Failed to register client fd %d with GenAI module\n", fds[1]);
+		close(fds[0]);
+		close(fds[1]);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1261, (char*)"HY000",
+			"Failed to register with GenAI module", true);
+		return false;
+	}
+
+	// Prepare request header
+	GenAI_RequestHeader hdr;
+	hdr.request_id = next_genai_request_id_++;
+	hdr.operation = GENAI_OP_JSON;
+	hdr.query_len = query_len;
+	hdr.flags = 0;
+	hdr.top_n = 0;
+
+	// Store request in pending map
+	GenAI_PendingRequest pending;
+	pending.request_id = hdr.request_id;
+	pending.client_fd = fds[0];
+	pending.json_query = std::string(query, query_len);
+	pending.start_time = std::chrono::steady_clock::now();
+
+	// Copy the original packet for later response
+	pending.original_pkt = (PtrSize_t*)malloc(sizeof(PtrSize_t));
+	if (!pending.original_pkt) {
+		proxy_error("GenAI: Failed to allocate memory for packet copy\n");
+		close(fds[0]);
+		close(fds[1]);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1262, (char*)"HY000",
+			"Memory allocation failed", true);
+		return false;
+	}
+	pending.original_pkt->ptr = pkt->ptr;
+	pending.original_pkt->size = pkt->size;
+
+	pending_genai_requests_[hdr.request_id] = pending;
+
+	// Send request header
+	ssize_t written = write(fds[0], &hdr, sizeof(hdr));
+	if (written != sizeof(hdr)) {
+		proxy_error("GenAI: Failed to write request header to fd %d: %s\n",
+					fds[0], strerror(errno));
+		genai_cleanup_request(hdr.request_id);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1263, (char*)"HY000",
+			"Failed to send request to GenAI module", true);
+		return false;
+	}
+
+	// Send JSON query
+	size_t total_written = 0;
+	while (total_written < query_len) {
+		ssize_t w = write(fds[0], query + total_written, query_len - total_written);
+		if (w <= 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				usleep(1000);
+				continue;
+			}
+			proxy_error("GenAI: Failed to write JSON query to fd %d: %s\n",
+						fds[0], strerror(errno));
+			genai_cleanup_request(hdr.request_id);
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1264, (char*)"HY000",
+				"Failed to send query to GenAI module", true);
+			return false;
+		}
+		total_written += w;
+	}
+
+	// Add to epoll for response notification
+	struct epoll_event ev;
+	ev.events = EPOLLIN;
+	ev.data.fd = fds[0];
+
+	if (epoll_ctl(genai_epoll_fd_, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+		proxy_error("GenAI: Failed to add fd %d to epoll: %s\n", fds[0], strerror(errno));
+		// Request is sent, but we won't be notified of response
+		// This is not fatal - we'll timeout eventually
+	}
+
+	proxy_debug(PROXY_DEBUG_GENAI, 3,
+				"GenAI: Sent async request %lu via fd %d (query_len=%zu)\n",
+				hdr.request_id, fds[0], query_len);
+
+	return true;  // Success - request sent asynchronously
+}
+
+/**
+ * @brief Handle GenAI response from socketpair
+ *
+ * Called when epoll notifies that data is available on GenAI response fd.
+ */
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(int fd) {
+	// Read response header
+	GenAI_ResponseHeader resp;
+	ssize_t n = read(fd, &resp, sizeof(resp));
+
+	if (n <= 0) {
+		// Connection closed or error
+		if (n < 0) {
+			proxy_error("GenAI: Error reading response header from fd %d: %s\n",
+						fd, strerror(errno));
+		}
+		// Find and cleanup the pending request
+		for (auto& pair : pending_genai_requests_) {
+			if (pair.second.client_fd == fd) {
+				genai_cleanup_request(pair.first);
+				break;
+			}
+		}
+		return;
+	}
+
+	if (n != sizeof(resp)) {
+		proxy_error("GenAI: Incomplete response header from fd %d: got %zd, expected %zu\n",
+					fd, n, sizeof(resp));
+		return;
+	}
+
+	// Find the pending request
+	auto it = pending_genai_requests_.find(resp.request_id);
+	if (it == pending_genai_requests_.end()) {
+		proxy_error("GenAI: Received response for unknown request %lu\n", resp.request_id);
+		close(fd);
+		return;
+	}
+
+	GenAI_PendingRequest& pending = it->second;
+
+	// Read JSON result
+	std::string json_result;
+	if (resp.result_len > 0) {
+		json_result.resize(resp.result_len);
+		size_t total_read = 0;
+		while (total_read < resp.result_len) {
+			ssize_t r = read(fd, &json_result[total_read],
+							   resp.result_len - total_read);
+			if (r <= 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK) {
+					usleep(1000);
+					continue;
+				}
+				proxy_error("GenAI: Error reading JSON result from fd %d: %s\n",
+							fd, strerror(errno));
+				json_result.clear();
+				break;
+			}
+			total_read += r;
+		}
+	}
+
+	// Process the result
+	auto end_time = std::chrono::steady_clock::now();
+	int rtt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+		end_time - pending.start_time).count();
+
+	proxy_debug(PROXY_DEBUG_GENAI, 3,
+				"GenAI: Received response %lu (status=%u, result_len=%u, rtt=%dms, proc=%dms)\n",
+				resp.request_id, resp.status_code, resp.result_len, rtt_ms, resp.processing_time_ms);
+
+	// Check for errors
+	if (resp.status_code != 0 || json_result.empty()) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1265, (char*)"HY000",
+			"GenAI query processing failed", true);
+	} else {
+		// Parse JSON result and send resultset
+		try {
+			json result = json::parse(json_result);
+
+			if (!result.is_object()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1266, (char*)"HY000",
+					"GenAI returned invalid result format", true);
+			} else if (result.contains("error") && result["error"].is_string()) {
+				std::string error_msg = result["error"].get<std::string>();
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1267, (char*)"HY000",
+					(char*)error_msg.c_str(), true);
+			} else if (!result.contains("columns") || !result.contains("rows")) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1268, (char*)"HY000",
+					"GenAI result missing required fields", true);
+			} else {
+				// Build and send resultset
+				auto columns = result["columns"];
+				auto rows = result["rows"];
+
+				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(columns.size()));
+
+				// Add column definitions
+				for (size_t i = 0; i < columns.size(); i++) {
+					if (columns[i].is_string()) {
+						std::string col_name = columns[i].get<std::string>();
+						resultset->add_column_definition(SQLITE_TEXT, (char*)col_name.c_str());
+					}
+				}
+
+				// Add rows
+				for (const auto& row : rows) {
+					if (!row.is_array()) continue;
+
+					size_t num_cols = row.size();
+					if (num_cols > columns.size()) num_cols = columns.size();
+
+					char** row_data = (char**)malloc(num_cols * sizeof(char*));
+					size_t valid_cols = 0;
+
+					for (size_t i = 0; i < num_cols; i++) {
+						if (!row[i].is_null()) {
+							std::string val;
+							if (row[i].is_string()) {
+								val = row[i].get<std::string>();
+							} else {
+								val = row[i].dump();
+							}
+							row_data[valid_cols++] = strdup(val.c_str());
+						}
+					}
+
+					resultset->add_row(row_data);
+
+					for (size_t i = 0; i < valid_cols; i++) {
+						if (row_data[i]) free(row_data[i]);
+					}
+					free(row_data);
+				}
+
+				// Send resultset to client
+				SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+				                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+			}
+		} catch (const json::parse_error& e) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			std::string err_msg = "Failed to parse GenAI result: ";
+			err_msg += e.what();
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1269, (char*)"HY000",
+				(char*)err_msg.c_str(), true);
+		} catch (const std::exception& e) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			std::string err_msg = "Error processing GenAI result: ";
+			err_msg += e.what();
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1270, (char*)"HY000",
+				(char*)err_msg.c_str(), true);
+		}
+	}
+
+	// Cleanup the request
+	genai_cleanup_request(resp.request_id);
+
+	// Return to waiting state
+	client_myds->DSS = STATE_SLEEP;
+	status = WAITING_CLIENT_DATA;
+}
+
+/**
+ * @brief Cleanup a GenAI pending request
+ *
+ * Closes socketpair fd and removes from pending map.
+ */
+void MySQL_Session::genai_cleanup_request(uint64_t request_id) {
+	auto it = pending_genai_requests_.find(request_id);
+	if (it == pending_genai_requests_.end()) {
+		return;
+	}
+
+	GenAI_PendingRequest& pending = it->second;
+
+	// Remove from epoll
+	epoll_ctl(genai_epoll_fd_, EPOLL_CTL_DEL, pending.client_fd, nullptr);
+
+	// Close socketpair fds
+	close(pending.client_fd);
+
+	// Free the original packet
+	if (pending.original_pkt) {
+		l_free(pending.original_pkt->size, pending.original_pkt->ptr);
+		free(pending.original_pkt);
+	}
+
+	pending_genai_requests_.erase(it);
+
+	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI: Cleaned up request %lu\n", request_id);
+}
+#endif
 
 // this function was inline inside MySQL_Session::get_pkts_from_client
 // where:

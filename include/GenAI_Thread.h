@@ -100,6 +100,34 @@ struct GenAI_Request {
 };
 
 /**
+ * @brief Request header for socketpair communication
+ *
+ * Sent from MySQL_Session to GenAI listener via socketpair
+ */
+struct GenAI_RequestHeader {
+	uint64_t request_id;      ///< Client's correlation ID
+	uint32_t operation;       ///< Operation type (GENAI_OP_*)
+	uint32_t query_len;       ///< Length of JSON query (0 for none)
+	uint32_t flags;           ///< Reserved for future use
+	uint32_t top_n;           ///< For rerank: number of top results
+};
+
+/**
+ * @brief Response header for socketpair communication
+ *
+ * Sent from GenAI worker back to MySQL_Session via socketpair
+ */
+struct GenAI_ResponseHeader {
+	uint64_t request_id;        ///< Echo client's request ID
+	uint32_t status_code;       ///< 0=success, >0=error
+	uint32_t result_len;        ///< Length of JSON result
+	uint32_t processing_time_ms;///< Time taken to process
+	uint64_t result_ptr;        ///< Pointer to result data (for shared memory, unused=0)
+	uint32_t result_count;      ///< Number of results
+	uint32_t reserved;          ///< Reserved for future use
+};
+
+/**
  * @brief GenAI Threads Handler class for managing GenAI module
  *
  * This class handles the GenAI module's configuration variables, lifecycle,
