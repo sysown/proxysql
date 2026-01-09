@@ -25,6 +25,7 @@
 enum GenAI_Operation : uint32_t {
 	GENAI_OP_EMBEDDING = 0,  ///< Generate embeddings for documents
 	GENAI_OP_RERANK = 1,     ///< Rerank documents by relevance to query
+	GENAI_OP_JSON = 2,       ///< Autonomous JSON query processing (handles embed/rerank/document_from_sql)
 };
 
 /**
@@ -95,6 +96,7 @@ struct GenAI_Request {
 	std::string query;           ///< Query for rerank (empty for embedding)
 	uint32_t top_n;              ///< Top N results for rerank
 	std::vector<GenAI_Document> documents;  ///< Documents to process
+	std::string json_query;      ///< Raw JSON query from client (for autonomous processing)
 };
 
 /**
@@ -270,6 +272,14 @@ public:
 	GenAI_RerankResultArray rerank_documents(const std::string& query,
 											 const std::vector<std::string>& documents,
 											 uint32_t top_n = 0);
+
+	/**
+	 * @brief Process JSON query autonomously (handles embed/rerank/document_from_sql)
+	 *
+	 * @param json_query JSON query string from client
+	 * @return JSON string result with columns and rows
+	 */
+	std::string process_json_query(const std::string& json_query);
 };
 
 // Global instance of the GenAI Threads Handler

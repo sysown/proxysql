@@ -10,6 +10,9 @@
 #include <random>
 #include <thread>
 #include <poll.h>
+#include "json.hpp"
+
+using json = nlohmann::json;
 
 // Platform compatibility
 #ifndef EFD_CLOEXEC
@@ -890,4 +893,210 @@ void GenAI_Threads_Handler::worker_loop(int worker_id) {
 	}
 
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI worker thread %d stopped\n", worker_id);
+}
+
+// Helper function to execute SQL query and return documents
+// Returns pair of (success, vector of documents) or (success, error message)
+static std::pair<bool, std::vector<std::string>> execute_sql_for_documents(const std::string& sql_query) {
+	std::vector<std::string> documents;
+
+	// TODO: Implement MySQL connection handling
+	// For now, return error indicating this needs MySQL connectivity
+	return {false, {}};
+}
+
+// Process JSON query autonomously
+std::string GenAI_Threads_Handler::process_json_query(const std::string& json_query) {
+	json result;
+
+	try {
+		// Parse JSON query
+		json query_json = json::parse(json_query);
+
+		if (!query_json.is_object()) {
+			result["error"] = "Query must be a JSON object";
+			return result.dump();
+		}
+
+		// Extract operation type
+		if (!query_json.contains("type") || !query_json["type"].is_string()) {
+			result["error"] = "Query must contain a 'type' field (embed or rerank)";
+			return result.dump();
+		}
+
+		std::string op_type = query_json["type"].get<std::string>();
+
+		// Handle embed operation
+		if (op_type == "embed") {
+			// Extract documents array
+			if (!query_json.contains("documents") || !query_json["documents"].is_array()) {
+				result["error"] = "Embed operation requires a 'documents' array";
+				return result.dump();
+			}
+
+			std::vector<std::string> documents;
+			for (const auto& doc : query_json["documents"]) {
+				if (doc.is_string()) {
+					documents.push_back(doc.get<std::string>());
+				} else {
+					documents.push_back(doc.dump());
+				}
+			}
+
+			if (documents.empty()) {
+				result["error"] = "Embed operation requires at least one document";
+				return result.dump();
+			}
+
+			// Call embedding service
+			GenAI_EmbeddingResult embeddings = embed_documents(documents);
+
+			if (!embeddings.data || embeddings.count == 0) {
+				result["error"] = "Failed to generate embeddings";
+				return result.dump();
+			}
+
+			// Build result
+			result["columns"] = json::array({"embedding"});
+			json rows = json::array();
+
+			for (size_t i = 0; i < embeddings.count; i++) {
+				float* embedding = embeddings.data + (i * embeddings.embedding_size);
+				std::ostringstream oss;
+				for (size_t k = 0; k < embeddings.embedding_size; k++) {
+					if (k > 0) oss << ",";
+					oss << embedding[k];
+				}
+				rows.push_back(json::array({oss.str()}));
+			}
+
+			result["rows"] = rows;
+			return result.dump();
+		}
+
+		// Handle rerank operation
+		if (op_type == "rerank") {
+			// Extract query
+			if (!query_json.contains("query") || !query_json["query"].is_string()) {
+				result["error"] = "Rerank operation requires a 'query' string";
+				return result.dump();
+			}
+			std::string query_str = query_json["query"].get<std::string>();
+
+			if (query_str.empty()) {
+				result["error"] = "Rerank query cannot be empty";
+				return result.dump();
+			}
+
+			// Check for document_from_sql or documents array
+			std::vector<std::string> documents;
+			bool use_sql_documents = query_json.contains("document_from_sql") && query_json["document_from_sql"].is_object();
+
+			if (use_sql_documents) {
+				// document_from_sql mode - execute SQL to get documents
+				if (!query_json["document_from_sql"].contains("query") || !query_json["document_from_sql"]["query"].is_string()) {
+					result["error"] = "document_from_sql requires a 'query' string";
+					return result.dump();
+				}
+
+				std::string sql_query = query_json["document_from_sql"]["query"].get<std::string>();
+				if (sql_query.empty()) {
+					result["error"] = "document_from_sql query cannot be empty";
+					return result.dump();
+				}
+
+				// Execute SQL query to get documents
+				auto [success, docs] = execute_sql_for_documents(sql_query);
+				if (!success) {
+					result["error"] = "document_from_sql feature not yet implemented - MySQL connection handling required";
+					return result.dump();
+				}
+				documents = docs;
+			} else {
+				// Direct documents array mode
+				if (!query_json.contains("documents") || !query_json["documents"].is_array()) {
+					result["error"] = "Rerank operation requires 'documents' array or 'document_from_sql' object";
+					return result.dump();
+				}
+
+				for (const auto& doc : query_json["documents"]) {
+					if (doc.is_string()) {
+						documents.push_back(doc.get<std::string>());
+					} else {
+						documents.push_back(doc.dump());
+					}
+				}
+			}
+
+			if (documents.empty()) {
+				result["error"] = "Rerank operation requires at least one document";
+				return result.dump();
+			}
+
+			// Extract optional top_n (default 0 = return all)
+			uint32_t opt_top_n = 0;
+			if (query_json.contains("top_n") && query_json["top_n"].is_number()) {
+				opt_top_n = query_json["top_n"].get<uint32_t>();
+			}
+
+			// Extract optional columns (default 3 = index, score, document)
+			uint32_t opt_columns = 3;
+			if (query_json.contains("columns") && query_json["columns"].is_number()) {
+				opt_columns = query_json["columns"].get<uint32_t>();
+				if (opt_columns != 2 && opt_columns != 3) {
+					result["error"] = "Rerank 'columns' must be 2 or 3";
+					return result.dump();
+				}
+			}
+
+			// Call rerank service
+			GenAI_RerankResultArray rerank_result = rerank_documents(query_str, documents, opt_top_n);
+
+			if (!rerank_result.data || rerank_result.count == 0) {
+				result["error"] = "Failed to rerank documents";
+				return result.dump();
+			}
+
+			// Build result
+			json rows = json::array();
+
+			if (opt_columns == 2) {
+				result["columns"] = json::array({"index", "score"});
+
+				for (size_t i = 0; i < rerank_result.count; i++) {
+					const GenAI_RerankResult& r = rerank_result.data[i];
+					std::string index_str = std::to_string(r.index);
+					std::string score_str = std::to_string(r.score);
+					rows.push_back(json::array({index_str, score_str}));
+				}
+			} else {
+				result["columns"] = json::array({"index", "score", "document"});
+
+				for (size_t i = 0; i < rerank_result.count; i++) {
+					const GenAI_RerankResult& r = rerank_result.data[i];
+					if (r.index >= documents.size()) {
+						continue;  // Skip invalid index
+					}
+					std::string index_str = std::to_string(r.index);
+					std::string score_str = std::to_string(r.score);
+					const std::string& doc = documents[r.index];
+					rows.push_back(json::array({index_str, score_str, doc}));
+				}
+			}
+
+			result["rows"] = rows;
+			return result.dump();
+		}
+
+		// Unknown operation type
+		result["error"] = "Unknown operation type: " + op_type + ". Use 'embed' or 'rerank'";
+		return result.dump();
+
+	} catch (const json::parse_error& e) {
+		result["error"] = std::string("JSON parse error: ") + e.what();
+		return result.dump();
+	} catch (const std::exception& e) {
+		result["error"] = std::string("Error: ") + e.what();
+		return result.dump();
+	}
 }
