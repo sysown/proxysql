@@ -30,12 +30,13 @@ using json = nlohmann::json;
 #endif
 
 // Define the array of variable names for the GenAI module
+// Note: These do NOT include the "genai_" prefix - it's added by the flush functions
 static const char* genai_thread_variables_names[] = {
-	"genai_threads",
-	"genai_embedding_uri",
-	"genai_rerank_uri",
-	"genai_embedding_timeout_ms",
-	"genai_rerank_timeout_ms",
+	"threads",
+	"embedding_uri",
+	"rerank_uri",
+	"embedding_timeout_ms",
+	"rerank_timeout_ms",
 	NULL
 };
 
@@ -267,23 +268,23 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	if (!name)
 		return NULL;
 
-	if (!strcmp(name, "genai_threads")) {
+	if (!strcmp(name, "threads")) {
 		char buf[64];
 		sprintf(buf, "%d", variables.genai_threads);
 		return strdup(buf);
 	}
-	if (!strcmp(name, "genai_embedding_uri")) {
+	if (!strcmp(name, "embedding_uri")) {
 		return strdup(variables.genai_embedding_uri ? variables.genai_embedding_uri : "");
 	}
-	if (!strcmp(name, "genai_rerank_uri")) {
+	if (!strcmp(name, "rerank_uri")) {
 		return strdup(variables.genai_rerank_uri ? variables.genai_rerank_uri : "");
 	}
-	if (!strcmp(name, "genai_embedding_timeout_ms")) {
+	if (!strcmp(name, "embedding_timeout_ms")) {
 		char buf[64];
 		sprintf(buf, "%d", variables.genai_embedding_timeout_ms);
 		return strdup(buf);
 	}
-	if (!strcmp(name, "genai_rerank_timeout_ms")) {
+	if (!strcmp(name, "rerank_timeout_ms")) {
 		char buf[64];
 		sprintf(buf, "%d", variables.genai_rerank_timeout_ms);
 		return strdup(buf);
@@ -296,7 +297,7 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 	if (!name || !value)
 		return false;
 
-	if (!strcmp(name, "genai_threads")) {
+	if (!strcmp(name, "threads")) {
 		int val = atoi(value);
 		if (val < 1 || val > 256) {
 			proxy_error("Invalid value for genai_threads: %d (must be 1-256)\n", val);
@@ -305,19 +306,19 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 		variables.genai_threads = val;
 		return true;
 	}
-	if (!strcmp(name, "genai_embedding_uri")) {
+	if (!strcmp(name, "embedding_uri")) {
 		if (variables.genai_embedding_uri)
 			free(variables.genai_embedding_uri);
 		variables.genai_embedding_uri = strdup(value);
 		return true;
 	}
-	if (!strcmp(name, "genai_rerank_uri")) {
+	if (!strcmp(name, "rerank_uri")) {
 		if (variables.genai_rerank_uri)
 			free(variables.genai_rerank_uri);
 		variables.genai_rerank_uri = strdup(value);
 		return true;
 	}
-	if (!strcmp(name, "genai_embedding_timeout_ms")) {
+	if (!strcmp(name, "embedding_timeout_ms")) {
 		int val = atoi(value);
 		if (val < 100 || val > 300000) {
 			proxy_error("Invalid value for genai_embedding_timeout_ms: %d (must be 100-300000)\n", val);
@@ -326,7 +327,7 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 		variables.genai_embedding_timeout_ms = val;
 		return true;
 	}
-	if (!strcmp(name, "genai_rerank_timeout_ms")) {
+	if (!strcmp(name, "rerank_timeout_ms")) {
 		int val = atoi(value);
 		if (val < 100 || val > 300000) {
 			proxy_error("Invalid value for genai_rerank_timeout_ms: %d (must be 100-300000)\n", val);
