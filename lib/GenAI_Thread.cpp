@@ -9,6 +9,7 @@
 #include <chrono>
 #include <random>
 #include <thread>
+#include <poll.h>
 
 // Platform compatibility
 #ifndef EFD_CLOEXEC
@@ -16,6 +17,13 @@
 #endif
 #ifndef EFD_NONBLOCK
 #define EFD_NONBLOCK 04000
+#endif
+
+// epoll compatibility - detect epoll availability at compile time
+#ifdef epoll_create1
+	#define EPOLL_CREATE epoll_create1(0)
+#else
+	#define EPOLL_CREATE epoll_create(1)
 #endif
 
 // Define the array of variable names for the GenAI module
@@ -139,8 +147,9 @@ void GenAI_Threads_Handler::init(unsigned int num, size_t stack) {
 	num_threads = num;
 	shutdown_ = 0;
 
-	// Create epoll for async I/O
-	epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
+#ifdef epoll_create1
+	// Use epoll for async I/O
+	epoll_fd_ = EPOLL_CREATE;
 	if (epoll_fd_ < 0) {
 		proxy_error("Failed to create epoll: %s\n", strerror(errno));
 		return;
@@ -166,6 +175,21 @@ void GenAI_Threads_Handler::init(unsigned int num, size_t stack) {
 		epoll_fd_ = -1;
 		return;
 	}
+#else
+	// Use pipe for wakeup on systems without epoll
+	int pipefds[2];
+	if (pipe(pipefds) < 0) {
+		proxy_error("Failed to create pipe: %s\n", strerror(errno));
+		return;
+	}
+
+	// Set both ends to non-blocking
+	fcntl(pipefds[0], F_SETFL, O_NONBLOCK);
+	fcntl(pipefds[1], F_SETFL, O_NONBLOCK);
+
+	event_fd_ = pipefds[1];  // Use write end for wakeup
+	epoll_fd_ = pipefds[0];  // Use read end for polling (repurposed)
+#endif
 
 	// Start listener thread
 	listener_thread_ = std::thread(&GenAI_Threads_Handler::listener_loop, this);
@@ -349,6 +373,7 @@ bool GenAI_Threads_Handler::register_client(int client_fd) {
 	int flags = fcntl(client_fd, F_GETFL, 0);
 	fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
 
+#ifdef epoll_create1
 	struct epoll_event ev;
 	ev.events = EPOLLIN;
 	ev.data.fd = client_fd;
@@ -356,6 +381,7 @@ bool GenAI_Threads_Handler::register_client(int client_fd) {
 		proxy_error("Failed to add client fd %d to epoll: %s\n", client_fd, strerror(errno));
 		return false;
 	}
+#endif
 
 	client_fds_.insert(client_fd);
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "Registered GenAI client fd %d\n", client_fd);
@@ -365,9 +391,11 @@ bool GenAI_Threads_Handler::register_client(int client_fd) {
 void GenAI_Threads_Handler::unregister_client(int client_fd) {
 	std::lock_guard<std::mutex> lock(clients_mutex_);
 
+#ifdef epoll_create1
 	if (epoll_fd_ >= 0) {
 		epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, client_fd, NULL);
 	}
+#endif
 
 	client_fds_.erase(client_fd);
 	close(client_fd);
@@ -785,6 +813,7 @@ GenAI_RerankResultArray GenAI_Threads_Handler::rerank_documents(const std::strin
 void GenAI_Threads_Handler::listener_loop() {
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI listener thread started\n");
 
+#ifdef epoll_create1
 	const int MAX_EVENTS = 64;
 	struct epoll_event events[MAX_EVENTS];
 
@@ -807,6 +836,55 @@ void GenAI_Threads_Handler::listener_loop() {
 			// This will be implemented when integrating with MySQL/PgSQL threads
 		}
 	}
+#else
+	// Use poll() for systems without epoll support
+	while (!shutdown_) {
+		// Build pollfd array
+		std::vector<struct pollfd> pollfds;
+		pollfds.reserve(client_fds_.size() + 1);
+
+		// Add wakeup pipe read end
+		struct pollfd wakeup_pfd;
+		wakeup_pfd.fd = epoll_fd_;  // Reused as pipe read end
+		wakeup_pfd.events = POLLIN;
+		wakeup_pfd.revents = 0;
+		pollfds.push_back(wakeup_pfd);
+
+		// Add all client fds
+		{
+			std::lock_guard<std::mutex> lock(clients_mutex_);
+			for (int fd : client_fds_) {
+				struct pollfd pfd;
+				pfd.fd = fd;
+				pfd.events = POLLIN;
+				pfd.revents = 0;
+				pollfds.push_back(pfd);
+			}
+		}
+
+		int nfds = poll(pollfds.data(), pollfds.size(), 100);
+
+		if (nfds < 0 && errno != EINTR) {
+			proxy_error("poll failed: %s\n", strerror(errno));
+			continue;
+		}
+
+		// Check for wakeup event
+		if (pollfds.size() > 0 && (pollfds[0].revents & POLLIN)) {
+			uint64_t value;
+			read(pollfds[0].fd, &value, sizeof(value));  // Clear the pipe
+			continue;
+		}
+
+		// Handle client events
+		for (size_t i = 1; i < pollfds.size(); i++) {
+			if (pollfds[i].revents & POLLIN) {
+				// Handle client events here
+				// This will be implemented when integrating with MySQL/PgSQL threads
+			}
+		}
+	}
+#endif
 
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI listener thread stopped\n");
 }

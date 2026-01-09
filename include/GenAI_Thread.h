@@ -9,8 +9,11 @@
 #include <atomic>
 #include <unordered_set>
 #include <thread>
-#include <sys/epoll.h>
 #include <sys/socket.h>
+
+#ifdef epoll_create1
+#include <sys/epoll.h>
+#endif
 
 #ifdef HAVE_LIBCURL
 #include <curl/curl.h>
