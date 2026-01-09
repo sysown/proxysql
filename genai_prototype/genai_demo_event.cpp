@@ -5,15 +5,16 @@
  * This POC demonstrates the GenAI module architecture with:
  * - Shared memory communication (passing pointers, not copying data)
  * - Real embedding generation via llama-server HTTP API
+ * - Real reranking via llama-server HTTP API
  * - Support for single or multiple documents per request
- * - libcurl-based HTTP client for embedding API calls
+ * - libcurl-based HTTP client for API calls
  *
  * @par Architecture
  *
  * Client and GenAI module share the same process memory space.
- * Documents and embeddings are passed by pointer to avoid copying.
+ * Documents and results are passed by pointer to avoid copying.
  *
- * @par Request Flow
+ * @par Embedding Request Flow
  *
  * 1. Client allocates document(s) in its own memory
  * 2. Client sends request with document pointers to GenAI
@@ -21,11 +22,19 @@
  * 4. GenAI calls llama-server via HTTP to get embeddings
  * 5. GenAI allocates embedding result and passes pointer back to client
  * 6. Client reads embedding from shared memory and displays length
- * 7. Client waits for response before sending next request (ensures memory validity)
+ *
+ * @par Rerank Request Flow
+ *
+ * 1. Client allocates query and document(s) in its own memory
+ * 2. Client sends request with query pointer and document pointers to GenAI
+ * 3. GenAI reads pointers and accesses shared memory
+ * 4. GenAI calls llama-server via HTTP to get rerank results
+ * 5. GenAI allocates rerank result array and passes pointer back to client
+ * 6. Client reads results (index, score) from shared memory
  *
  * @author ProxySQL Team
  * @date 2025-01-09
- * @version 3.0 - POC with real embeddings
+ * @version 3.1 - POC with embeddings and reranking
  */
 
 #include <iostream>
@@ -72,7 +81,7 @@
 enum Operation : uint32_t {
     OP_EMBEDDING = 0,  ///< Generate embeddings for documents
     OP_COMPLETION = 1, ///< Text completion (future)
-    OP_RAG = 2,        ///< RAG query (future)
+    OP_RERANK = 2,     ///< Rerank documents by relevance to query
 };
 
 /**
@@ -95,14 +104,15 @@ struct Document {
  * @struct RequestHeader
  * @brief Header for GenAI requests
  *
- * After this header, the client sends document_count pointers
- * to Document structures (as uint64_t).
+ * For embedding requests: client sends document_count pointers to Document structures (as uint64_t).
+ * For rerank requests: client sends query (as null-terminated string), then document_count pointers.
  */
 struct RequestHeader {
     uint64_t request_id;      ///< Client's correlation ID
-    uint32_t operation;       ///< Operation type (OP_EMBEDDING, etc.)
+    uint32_t operation;       ///< Operation type (OP_EMBEDDING, OP_RERANK, etc.)
     uint32_t document_count;  ///< Number of documents (1 or more)
     uint32_t flags;           ///< Reserved for future use
+    uint32_t top_n;           ///< For rerank: number of top results to return
 };
 
 /**
@@ -199,18 +209,75 @@ struct BatchEmbeddingResult {
 };
 
 /**
+ * @struct RerankResult
+ * @brief Single rerank result with index and relevance score
+ *
+ * Represents one document's rerank result.
+ * Allocated by GenAI, passed to client via shared memory.
+ */
+struct RerankResult {
+    uint32_t index;  ///< Original document index
+    float score;     ///< Relevance score (higher is better)
+};
+
+/**
+ * @struct RerankResultArray
+ * @brief Array of rerank results allocated by GenAI
+ *
+ * For rerank requests, GenAI allocates an array of RerankResult.
+ * Client takes ownership and must free the array.
+ */
+struct RerankResultArray {
+    RerankResult* data;  ///< Pointer to result array (owned by GenAI initially)
+    size_t count;         ///< Number of results
+
+    RerankResultArray() : data(nullptr), count(0) {}
+
+    ~RerankResultArray() {
+        if (data) {
+            delete[] data;
+            data = nullptr;
+        }
+    }
+
+    // Move constructor and assignment
+    RerankResultArray(RerankResultArray&& other) noexcept
+        : data(other.data), count(other.count) {
+        other.data = nullptr;
+        other.count = 0;
+    }
+
+    RerankResultArray& operator=(RerankResultArray&& other) noexcept {
+        if (this != &other) {
+            if (data) delete[] data;
+            data = other.data;
+            count = other.count;
+            other.data = nullptr;
+            other.count = 0;
+        }
+        return *this;
+    }
+
+    // Disable copy
+    RerankResultArray(const RerankResultArray&) = delete;
+    RerankResultArray& operator=(const RerankResultArray&) = delete;
+};
+
+/**
  * @struct ResponseHeader
  * @brief Header for GenAI responses
  *
- * For embeddings: passes pointer to EmbeddingResult as uint64_t.
+ * For embeddings: passes pointer to BatchEmbeddingResult as uint64_t.
+ * For rerank: passes pointer to RerankResultArray as uint64_t.
  */
 struct ResponseHeader {
     uint64_t request_id;        ///< Echo client's request ID
     uint32_t status_code;       ///< 0=success, >0=error
-    uint32_t embedding_size;    ///< Number of floats in embedding
+    uint32_t embedding_size;    ///< For embeddings: floats per embedding
     uint32_t processing_time_ms;///< Time taken to process
-    uint64_t embedding_ptr;     ///< Pointer to embedding data (as uint64_t)
-    uint32_t result_count;      ///< Number of results (for multiple documents)
+    uint64_t result_ptr;        ///< Pointer to result data (as uint64_t)
+    uint32_t result_count;      ///< Number of results (embeddings or rerank results)
+    uint32_t data_size;         ///< Additional data size (for future use)
 };
 
 // ============================================================================
@@ -234,7 +301,9 @@ public:
         int client_fd;
         uint64_t request_id;
         uint32_t operation;
-        std::vector<Document> documents;  ///< Document pointers from shared memory
+        std::string query;                 ///< Query text (for rerank)
+        uint32_t top_n;                    ///< Number of top results (for rerank)
+        std::vector<Document> documents;   ///< Document pointers from shared memory
     };
 
     GenAIModule(int num_workers = 4)
@@ -285,6 +354,7 @@ public:
 
         std::cout << "[GenAI] Module started with " << num_workers_ << " workers\n";
         std::cout << "[GenAI] Embedding endpoint: http://127.0.0.1:8013/embedding\n";
+        std::cout << "[GenAI] Rerank endpoint: http://127.0.0.1:8012/rerank\n";
     }
 
     /**
@@ -376,6 +446,19 @@ private:
                     continue;
                 }
 
+                // For rerank operations, read the query first
+                std::string query;
+                if (header.operation == OP_RERANK) {
+                    // Read query as null-terminated string
+                    char ch;
+                    while (true) {
+                        ssize_t r = read(client_fd, &ch, 1);
+                        if (r <= 0) break;
+                        if (ch == '\0') break;  // Null terminator
+                        query += ch;
+                    }
+                }
+
                 // Read document pointers (passed as uint64_t)
                 std::vector<uint64_t> doc_ptrs(header.document_count);
                 size_t total_read = 0;
@@ -392,6 +475,8 @@ private:
                 req.client_fd = client_fd;
                 req.request_id = header.request_id;
                 req.operation = header.operation;
+                req.query = query;
+                req.top_n = header.top_n;
                 req.documents.reserve(header.document_count);
 
                 for (uint32_t i = 0; i < header.document_count; i++) {
@@ -695,6 +780,194 @@ private:
     }
 
     /**
+     * @brief Call llama-server rerank API via libcurl
+     *
+     * @param query Query string to rerank against
+     * @param texts Vector of document texts to rerank
+     * @param top_n Maximum number of results to return
+     * @return RerankResultArray containing top N results with index and score
+     */
+    RerankResultArray call_llama_rerank(const std::string& query,
+                                        const std::vector<std::string>& texts,
+                                        uint32_t top_n) {
+        RerankResultArray result;
+        CURL* curl = curl_easy_init();
+
+        if (!curl) {
+            std::cerr << "[Worker] Failed to initialize curl\n";
+            return result;
+        }
+
+        // Build JSON request
+        std::stringstream json;
+        json << "{\"query\":\"";
+
+        // Escape query JSON special characters
+        for (char c : query) {
+            switch (c) {
+                case '"':  json << "\\\""; break;
+                case '\\': json << "\\\\"; break;
+                case '\n': json << "\\n"; break;
+                case '\r': json << "\\r"; break;
+                case '\t': json << "\\t"; break;
+                default:   json << c; break;
+            }
+        }
+
+        json << "\",\"documents\":[";
+
+        // Add documents
+        for (size_t i = 0; i < texts.size(); i++) {
+            if (i > 0) json << ",";
+            json << "\"";
+
+            // Escape document JSON special characters
+            for (char c : texts[i]) {
+                switch (c) {
+                    case '"':  json << "\\\""; break;
+                    case '\\': json << "\\\\"; break;
+                    case '\n': json << "\\n"; break;
+                    case '\r': json << "\\r"; break;
+                    case '\t': json << "\\t"; break;
+                    default:   json << c; break;
+                }
+            }
+
+            json << "\"";
+        }
+
+        json << "]}";
+
+        std::string json_str = json.str();
+
+        // Configure curl
+        curl_easy_setopt(curl, CURLOPT_URL, "http://127.0.0.1:8012/rerank");
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+
+        std::string response_data;
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
+
+        // Add content-type header
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        // Perform request
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK) {
+            std::cerr << "[Worker] curl_easy_perform() failed: "
+                     << curl_easy_strerror(res) << "\n";
+        } else {
+            // Parse JSON response to extract rerank results
+            // Response format: {"results": [{"index": 0, "relevance_score": 0.95}, ...]}
+            size_t results_pos = response_data.find("\"results\":");
+            if (results_pos != std::string::npos) {
+                // Find the array start
+                size_t array_start = response_data.find("[", results_pos);
+                if (array_start != std::string::npos) {
+                    // Find matching bracket
+                    size_t array_end = array_start;
+                    int bracket_count = 0;
+                    bool in_array = false;
+
+                    for (size_t i = array_start; i < response_data.size(); i++) {
+                        if (response_data[i] == '[') {
+                            bracket_count++;
+                            in_array = true;
+                        } else if (response_data[i] == ']') {
+                            bracket_count--;
+                            if (bracket_count == 0 && in_array) {
+                                array_end = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Parse each result object
+                    std::string array_str = response_data.substr(array_start + 1, array_end - array_start - 1);
+                    std::vector<RerankResult> results;
+
+                    // Simple parsing - look for "index" and "relevance_score" patterns
+                    size_t pos = 0;
+                    while (pos < array_str.size()) {
+                        size_t index_pos = array_str.find("\"index\":", pos);
+                        if (index_pos == std::string::npos) break;
+
+                        // Skip to the number
+                        size_t num_start = index_pos + 8;  // Skip "\"index\":"
+                        while (num_start < array_str.size() &&
+                               (array_str[num_start] == ' ' || array_str[num_start] == '\t')) {
+                            num_start++;
+                        }
+
+                        // Find the end of the number
+                        size_t num_end = num_start;
+                        while (num_end < array_str.size() &&
+                               (isdigit(array_str[num_end]) || array_str[num_end] == '-')) {
+                            num_end++;
+                        }
+
+                        uint32_t index = 0;
+                        if (num_start < num_end) {
+                            try {
+                                index = std::stoul(array_str.substr(num_start, num_end - num_start));
+                            } catch (...) {}
+                        }
+
+                        // Find relevance_score
+                        size_t score_pos = array_str.find("\"relevance_score\":", index_pos);
+                        if (score_pos == std::string::npos) break;
+
+                        // Skip to the number
+                        size_t score_start = score_pos + 18;  // Skip "\"relevance_score\":"
+                        while (score_start < array_str.size() &&
+                               (array_str[score_start] == ' ' || array_str[score_start] == '\t')) {
+                            score_start++;
+                        }
+
+                        // Find the end of the number (including decimal point and negative sign)
+                        size_t score_end = score_start;
+                        while (score_end < array_str.size() &&
+                               (isdigit(array_str[score_end]) ||
+                                array_str[score_end] == '.' ||
+                                array_str[score_end] == '-' ||
+                                array_str[score_end] == 'e' ||
+                                array_str[score_end] == 'E')) {
+                            score_end++;
+                        }
+
+                        float score = 0.0f;
+                        if (score_start < score_end) {
+                            try {
+                                score = std::stof(array_str.substr(score_start, score_end - score_start));
+                            } catch (...) {}
+                        }
+
+                        results.push_back({index, score});
+                        pos = score_end + 1;
+                    }
+
+                    // Limit to top_n results
+                    if (!results.empty() && top_n > 0) {
+                        size_t count = std::min(static_cast<size_t>(top_n), results.size());
+                        result.count = count;
+                        result.data = new RerankResult[count];
+                        std::copy(results.begin(), results.begin() + count, result.data);
+                    }
+                }
+            }
+        }
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+
+        return result;
+    }
+
+    /**
      * @brief Worker loop - processes requests from queue
      */
     void worker_loop(int worker_id) {
@@ -746,8 +1019,9 @@ private:
                     resp.status_code = (batch_embedding.data != nullptr) ? 0 : 1;
                     resp.embedding_size = batch_embedding.embedding_size;
                     resp.processing_time_ms = processing_time_ms;
-                    resp.embedding_ptr = reinterpret_cast<uint64_t>(batch_embedding.data);
+                    resp.result_ptr = reinterpret_cast<uint64_t>(batch_embedding.data);
                     resp.result_count = batch_embedding.count;
+                    resp.data_size = 0;
 
                     // Send response header
                     write(req.client_fd, &resp, sizeof(resp));
@@ -766,8 +1040,67 @@ private:
                     resp.status_code = 1;  // Error
                     resp.embedding_size = 0;
                     resp.processing_time_ms = processing_time_ms;
-                    resp.embedding_ptr = 0;
+                    resp.result_ptr = 0;
                     resp.result_count = 0;
+                    resp.data_size = 0;
+
+                    write(req.client_fd, &resp, sizeof(resp));
+                }
+            } else if (req.operation == OP_RERANK) {
+                if (!req.documents.empty() && !req.query.empty()) {
+                    // Prepare texts for reranking
+                    std::vector<std::string> texts;
+                    texts.reserve(req.documents.size());
+                    size_t total_bytes = 0;
+
+                    for (const auto& doc : req.documents) {
+                        texts.emplace_back(doc.text, doc.text_size);
+                        total_bytes += doc.text_size;
+                    }
+
+                    std::cout << "[Worker " << worker_id << "] Processing rerank for "
+                             << req.documents.size() << " document(s), query=\""
+                             << req.query.substr(0, 50)
+                             << (req.query.size() > 50 ? "..." : "")
+                             << "\" (" << total_bytes << " bytes)\n";
+
+                    // Call rerank API
+                    RerankResultArray rerank_results = call_llama_rerank(req.query, texts, req.top_n);
+
+                    auto end_time = std::chrono::steady_clock::now();
+                    int processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        end_time - start_time).count();
+
+                    // Prepare response
+                    ResponseHeader resp;
+                    resp.request_id = req.request_id;
+                    resp.status_code = (rerank_results.data != nullptr) ? 0 : 1;
+                    resp.embedding_size = 0;  // Not used for rerank
+                    resp.processing_time_ms = processing_time_ms;
+                    resp.result_ptr = reinterpret_cast<uint64_t>(rerank_results.data);
+                    resp.result_count = rerank_results.count;
+                    resp.data_size = 0;
+
+                    // Send response header
+                    write(req.client_fd, &resp, sizeof(resp));
+
+                    // The rerank results stay in shared memory (allocated by GenAI)
+                    // Client will read them and then take ownership (client must free it)
+                    rerank_results.data = nullptr;  // Transfer ownership to client
+                } else {
+                    // No documents or query
+                    auto end_time = std::chrono::steady_clock::now();
+                    int processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        end_time - start_time).count();
+
+                    ResponseHeader resp;
+                    resp.request_id = req.request_id;
+                    resp.status_code = 1;  // Error
+                    resp.embedding_size = 0;
+                    resp.processing_time_ms = processing_time_ms;
+                    resp.result_ptr = 0;
+                    resp.result_count = 0;
+                    resp.data_size = 0;
 
                     write(req.client_fd, &resp, sizeof(resp));
                 }
@@ -782,8 +1115,9 @@ private:
                 resp.status_code = 1;  // Error
                 resp.embedding_size = 0;
                 resp.processing_time_ms = processing_time_ms;
-                resp.embedding_ptr = 0;
+                resp.result_ptr = 0;
                 resp.result_count = 0;
+                resp.data_size = 0;
 
                 write(req.client_fd, &resp, sizeof(resp));
             }
@@ -857,13 +1191,22 @@ const std::vector<std::string> SAMPLE_DOCUMENTS = {
     "Fine-tuning adapts pre-trained models to specific tasks with limited data."
 };
 
-// ============================================================================
-// Client
-// ============================================================================
+/**
+ * @brief Sample queries for testing reranking
+ */
+const std::vector<std::string> SAMPLE_QUERIES = {
+    "What is machine learning?",
+    "How do neural networks work?",
+    "Explain embeddings and vectors",
+    "What is transformers architecture?",
+    "How does attention mechanism work?",
+    "What is backpropagation?",
+    "Explain natural language processing"
+};
 
 /**
  * @class Client
- * @brief Client that sends embedding requests to GenAI module
+ * @brief Client that sends embedding and rerank requests to GenAI module
  *
  * The client allocates documents and passes pointers to GenAI (shared memory).
  * Client waits for response before sending next request (ensures memory validity).
@@ -888,7 +1231,8 @@ public:
           requests_sent_(0),
           total_requests_(0),
           responses_received_(0),
-          owned_embedding_(nullptr) {
+          owned_embedding_(nullptr),
+          owned_rerank_results_(nullptr) {
 
         std::random_device rd;
         std::mt19937 gen(rd());
@@ -904,6 +1248,10 @@ public:
         // Clean up any owned embedding
         if (owned_embedding_) {
             delete[] owned_embedding_;
+        }
+        // Clean up any owned rerank results
+        if (owned_rerank_results_) {
+            delete[] owned_rerank_results_;
         }
     }
 
@@ -937,11 +1285,16 @@ public:
     void send_request() {
         if (state_ != IDLE) return;
 
+        std::random_device rd;
+        std::mt19937 gen(rd());
+
+        // Randomly choose between embedding and rerank (30% chance of rerank)
+        std::uniform_real_distribution<> op_dist(0.0, 1.0);
+        bool use_rerank = op_dist(gen) < 0.3;
+
         // Allocate documents for this request (owned by client until response)
         current_documents_.clear();
 
-        std::random_device rd;
-        std::mt19937 gen(rd());
         std::uniform_int_distribution<> doc_dist(0, SAMPLE_DOCUMENTS.size() - 1);
         std::uniform_int_distribution<> count_dist(
             config_.min_documents_per_request,
@@ -956,14 +1309,90 @@ public:
 
         uint64_t request_id = next_request_id_++;
 
+        if (use_rerank && !SAMPLE_QUERIES.empty()) {
+            // Send rerank request
+            std::uniform_int_distribution<> query_dist(0, SAMPLE_QUERIES.size() - 1);
+            const std::string& query = SAMPLE_QUERIES[query_dist(gen)];
+            uint32_t top_n = 3 + (gen() % 3);  // 3-5 results
+
+            RequestHeader req;
+            req.request_id = request_id;
+            req.operation = OP_RERANK;
+            req.document_count = current_documents_.size();
+            req.flags = 0;
+            req.top_n = top_n;
+
+            // Send request header
+            write(read_fd_, &req, sizeof(req));
+
+            // Send query as null-terminated string
+            write(read_fd_, query.c_str(), query.size() + 1);  // +1 for null terminator
+
+            // Send document pointers (as uint64_t)
+            std::vector<uint64_t> doc_ptrs;
+            doc_ptrs.reserve(current_documents_.size());
+            for (const auto& doc : current_documents_) {
+                doc_ptrs.push_back(reinterpret_cast<uint64_t>(&doc));
+            }
+            write(read_fd_, doc_ptrs.data(), doc_ptrs.size() * sizeof(uint64_t));
+
+            pending_requests_[request_id] = std::chrono::steady_clock::now();
+            requests_sent_++;
+            state_ = WAITING_FOR_RESPONSE;
+
+            std::cout << "[" << id_ << "] Sent RERANK request " << request_id
+                     << " with " << current_documents_.size() << " document(s), top_n=" << top_n
+                     << " (" << requests_sent_ << "/" << total_requests_ << ")\n";
+        } else {
+            // Send embedding request
+            RequestHeader req;
+            req.request_id = request_id;
+            req.operation = OP_EMBEDDING;
+            req.document_count = current_documents_.size();
+            req.flags = 0;
+            req.top_n = 0;  // Not used for embedding
+
+            // Send request header
+            write(read_fd_, &req, sizeof(req));
+
+            // Send document pointers (as uint64_t)
+            std::vector<uint64_t> doc_ptrs;
+            doc_ptrs.reserve(current_documents_.size());
+            for (const auto& doc : current_documents_) {
+                doc_ptrs.push_back(reinterpret_cast<uint64_t>(&doc));
+            }
+            write(read_fd_, doc_ptrs.data(), doc_ptrs.size() * sizeof(uint64_t));
+
+            pending_requests_[request_id] = std::chrono::steady_clock::now();
+            requests_sent_++;
+            state_ = WAITING_FOR_RESPONSE;
+
+            std::cout << "[" << id_ << "] Sent EMBEDDING request " << request_id
+                     << " with " << current_documents_.size() << " document(s) ("
+                     << requests_sent_ << "/" << total_requests_ << ")\n";
+        }
+    }
+
+    void send_rerank_request(const std::string& query, const std::vector<Document>& documents, uint32_t top_n = 5) {
+        if (state_ != IDLE) return;
+
+        // Store documents for this request (owned by client until response)
+        current_documents_ = documents;
+
+        uint64_t request_id = next_request_id_++;
+
         RequestHeader req;
         req.request_id = request_id;
-        req.operation = OP_EMBEDDING;
+        req.operation = OP_RERANK;
         req.document_count = current_documents_.size();
         req.flags = 0;
+        req.top_n = top_n;
 
         // Send request header
         write(read_fd_, &req, sizeof(req));
+
+        // Send query as null-terminated string
+        write(read_fd_, query.c_str(), query.size() + 1);  // +1 for null terminator
 
         // Send document pointers (as uint64_t)
         std::vector<uint64_t> doc_ptrs;
@@ -977,9 +1406,9 @@ public:
         requests_sent_++;
         state_ = WAITING_FOR_RESPONSE;
 
-        std::cout << "[" << id_ << "] Sent request " << request_id
-                 << " with " << current_documents_.size() << " document(s) ("
-                 << requests_sent_ << "/" << total_requests_ << ")\n";
+        std::cout << "[" << id_ << "] Sent rerank request " << request_id
+                 << " with " << current_documents_.size() << " document(s), top_n=" << top_n
+                 << " (" << requests_sent_ << "/" << total_requests_ << ")\n";
     }
 
     bool has_response() {
@@ -1001,21 +1430,42 @@ public:
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 end_time - start_time).count();
 
-            if (resp.status_code == 0 && resp.embedding_size > 0) {
-                // Get batch embedding pointer from shared memory
-                float* batch_embedding_ptr = reinterpret_cast<float*>(resp.embedding_ptr);
+            if (resp.status_code == 0) {
+                if (resp.embedding_size > 0) {
+                    // Batch embedding response
+                    float* batch_embedding_ptr = reinterpret_cast<float*>(resp.result_ptr);
 
-                std::cout << "[" << id_ << "] Received response " << resp.request_id
-                         << " (rtt=" << duration << "ms, proc=" << resp.processing_time_ms
-                         << "ms, embeddings=" << resp.result_count
-                         << " x " << resp.embedding_size << " floats = "
-                         << (resp.result_count * resp.embedding_size) << " total floats)\n";
+                    std::cout << "[" << id_ << "] Received embedding response " << resp.request_id
+                             << " (rtt=" << duration << "ms, proc=" << resp.processing_time_ms
+                             << "ms, embeddings=" << resp.result_count
+                             << " x " << resp.embedding_size << " floats = "
+                             << (resp.result_count * resp.embedding_size) << " total floats)\n";
 
-                // Take ownership of the batch embedding
-                if (owned_embedding_) {
-                    delete[] owned_embedding_;
+                    // Take ownership of the batch embedding
+                    if (owned_embedding_) {
+                        delete[] owned_embedding_;
+                    }
+                    owned_embedding_ = batch_embedding_ptr;
+                } else if (resp.result_count > 0) {
+                    // Rerank response
+                    RerankResult* rerank_ptr = reinterpret_cast<RerankResult*>(resp.result_ptr);
+
+                    std::cout << "[" << id_ << "] Received rerank response " << resp.request_id
+                             << " (rtt=" << duration << "ms, proc=" << resp.processing_time_ms
+                             << "ms, results=" << resp.result_count << ")\n";
+
+                    // Print top results
+                    for (uint32_t i = 0; i < std::min(resp.result_count, 5u); i++) {
+                        std::cout << "  [" << i << "] index=" << rerank_ptr[i].index
+                                 << ", score=" << rerank_ptr[i].score << "\n";
+                    }
+
+                    // Take ownership of the rerank results
+                    if (owned_rerank_results_) {
+                        delete[] owned_rerank_results_;
+                    }
+                    owned_rerank_results_ = rerank_ptr;
                 }
-                owned_embedding_ = batch_embedding_ptr;
             } else {
                 std::cout << "[" << id_ << "] Received response " << resp.request_id
                          << " (rtt=" << duration << "ms, status=ERROR)\n";
@@ -1084,6 +1534,7 @@ private:
 
     std::vector<Document> current_documents_;  ///< Documents for current request
     float* owned_embedding_;  ///< Embedding received from GenAI (owned by client)
+    RerankResult* owned_rerank_results_;  ///< Rerank results from GenAI (owned by client)
 
     std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> pending_requests_;
 };
@@ -1094,7 +1545,7 @@ private:
 
 int main() {
     std::cout << "=== GenAI Module Event-Driven POC ===\n";
-    std::cout << "Real embedding generation via llama-server\n\n";
+    std::cout << "Real embedding generation and reranking via llama-server\n\n";
 
     Config config;
     std::cout << "Configuration:\n";
