@@ -3,7 +3,9 @@
 
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g
-LDFLAGS = -lpthread
+LDFLAGS = -lpthread -lcurl
+CURL_CFLAGS = $(shell curl-config --cflags)
+CURL_LDFLAGS = $(shell curl-config --libs)
 
 # Target executables
 TARGET_THREAD = genai_demo
@@ -29,7 +31,7 @@ genai_demo: genai_demo.o
 
 genai_demo_event: genai_demo_event.o
 	@echo "Linking genai_demo_event..."
-	$(CXX) genai_demo_event.o $(LDFLAGS) -o genai_demo_event
+	$(CXX) genai_demo_event.o $(CURL_LDFLAGS) $(LDFLAGS) -o genai_demo_event
 	@echo "Build complete: genai_demo_event"
 
 # Compile source files
@@ -39,7 +41,7 @@ genai_demo.o: genai_demo.cpp
 
 genai_demo_event.o: genai_demo_event.cpp
 	@echo "Compiling $<..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(CURL_CFLAGS) -c $< -o $@
 
 # Run the demos
 run: $(TARGET_THREAD)
