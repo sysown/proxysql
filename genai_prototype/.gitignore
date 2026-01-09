@@ -1,5 +1,6 @@
 # Build artifacts
 genai_demo
+genai_demo_event
 *.o
 *.oo
 
