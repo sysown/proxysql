@@ -374,7 +374,6 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
-	cd test/deps && ${MAKE} clean
 	rm -f pkgroot || true
 
 .PHONY: cleandeps
