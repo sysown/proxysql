@@ -3972,21 +3972,31 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	GenAI_ResponseHeader resp;
 	ssize_t n = read(fd, &resp, sizeof(resp));
 
-	if (n <= 0) {
-		// Connection closed or error
-		if (n < 0) {
-			proxy_error("GenAI: Error reading response header from fd %d: %s\n",
-						fd, strerror(errno));
+	if (n < 0) {
+		// Check for non-blocking read - not an error, just no data yet
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			return;
 		}
-		// Find and cleanup the pending request
-		for (auto& pair : pending_genai_requests_) {
-			if (pair.second.client_fd == fd) {
-				genai_cleanup_request(pair.first);
-				break;
-			}
-		}
-		return;
+		// Real error - log and cleanup
+		proxy_error("GenAI: Error reading response header from fd %d: %s\n",
+					fd, strerror(errno));
+	} else if (n == 0) {
+		// Connection closed (EOF) - cleanup
+	} else {
+		// Successfully read header, continue processing
+		goto process_response;
 	}
+
+	// Cleanup path for error or EOF
+	for (auto& pair : pending_genai_requests_) {
+		if (pair.second.client_fd == fd) {
+			genai_cleanup_request(pair.first);
+			break;
+		}
+	}
+	return;
+
+process_response:
 
 	if (n != sizeof(resp)) {
 		proxy_error("GenAI: Incomplete response header from fd %d: got %zd, expected %zu\n",
