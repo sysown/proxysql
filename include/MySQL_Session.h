@@ -288,6 +288,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(int fd);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(const char* query, size_t query_len, PtrSize_t* pkt);
 	void genai_cleanup_request(uint64_t request_id);
+	bool check_genai_events();
 #endif
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);

@@ -4097,6 +4097,45 @@ void MySQL_Session::genai_cleanup_request(uint64_t request_id) {
 
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI: Cleaned up request %lu\n", request_id);
 }
+
+/**
+ * @brief Check for pending GenAI responses
+ *
+ * Called from the main event loop to check if any GenAI responses are ready.
+ * Returns true if a response was processed, false otherwise.
+ */
+bool MySQL_Session::check_genai_events() {
+#ifdef epoll_create1
+	if (pending_genai_requests_.empty()) {
+		return false;
+	}
+
+	const int MAX_EVENTS = 16;
+	struct epoll_event events[MAX_EVENTS];
+
+	int nfds = epoll_wait(genai_epoll_fd_, events, MAX_EVENTS, 0);  // Non-blocking check
+
+	if (nfds <= 0) {
+		return false;
+	}
+
+	for (int i = 0; i < nfds; i++) {
+		int fd = events[i].data.fd;
+
+		// Find the pending request for this fd
+		for (auto it = pending_genai_requests_.begin(); it != pending_genai_requests_.end(); ++it) {
+			if (it->second.client_fd == fd) {
+				handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(fd);
+				return true;  // Processed one response
+			}
+		}
+	}
+
+	return false;
+#else
+	return false;
+#endif
+}
 #endif
 
 // this function was inline inside MySQL_Session::get_pkts_from_client
@@ -5494,6 +5533,13 @@ handler_again:
 		case WAITING_CLIENT_DATA:
 			// housekeeping
 			handler___status_WAITING_CLIENT_DATA();
+#ifdef epoll_create1
+			// Check for GenAI responses before processing new client data
+			if (check_genai_events()) {
+				// GenAI response was processed, check for more
+				goto handler_again;
+			}
+#endif
 			break;
 		case FAST_FORWARD:
 			if (mybe->server_myds->mypolls==NULL) {
