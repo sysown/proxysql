@@ -3793,8 +3793,39 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 /**
  * @brief Send GenAI request asynchronously via socketpair
  *
- * Creates socketpair, sends request to GenAI module, and returns immediately.
- * The response will be handled by handle_genai_response when ready.
+ * This function implements the non-blocking async GenAI request path. It creates
+ * a socketpair for bidirectional communication with the GenAI module and sends
+ * the request immediately without waiting for the response.
+ *
+ * Async flow:
+ * 1. Create socketpair(fds) for bidirectional communication
+ * 2. Register fds[1] (GenAI side) with GenAI module via register_client()
+ * 3. Store request in pending_genai_requests_ map for later response matching
+ * 4. Send GenAI_RequestHeader + JSON query via fds[0]
+ * 5. Add fds[0] to session's genai_epoll_fd_ for response notification
+ * 6. Return immediately (MySQL thread is now free to process other queries)
+ *
+ * The response will be delivered asynchronously and handled by
+ * handle_genai_response() when the GenAI worker completes processing.
+ *
+ * Error handling:
+ * - On socketpair failure: Send ERR packet to client, return false
+ * - On register_client failure: Cleanup fds, send ERR packet, return false
+ * - On write failure: Cleanup request via genai_cleanup_request(), send ERR packet
+ * - On epoll add failure: Log warning but continue (request was sent successfully)
+ *
+ * Memory management:
+ * - Original packet is copied to pending.original_pkt for response generation
+ * - Memory is freed in genai_cleanup_request() when response is processed
+ *
+ * @param query JSON query string to send to GenAI module
+ * @param query_len Length of the query string
+ * @param pkt Original MySQL packet (for command number and later response)
+ * @return true if request was sent successfully, false on error
+ *
+ * @note This function is non-blocking and returns immediately after sending.
+ *       The actual GenAI processing happens in worker threads, not MySQL threads.
+ * @see handle_genai_response(), genai_cleanup_request(), check_genai_events()
  */
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(
 		const char* query, size_t query_len, PtrSize_t* pkt) {
@@ -3903,7 +3934,38 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_s
 /**
  * @brief Handle GenAI response from socketpair
  *
- * Called when epoll notifies that data is available on GenAI response fd.
+ * This function is called when epoll notifies that data is available on a
+ * GenAI response file descriptor. It reads the response from the GenAI worker
+ * thread, processes the result, and sends the MySQL result packet to the client.
+ *
+ * Response handling flow:
+ * 1. Read GenAI_ResponseHeader from socketpair
+ * 2. Find matching pending request via request_id in pending_genai_requests_
+ * 3. Read JSON result payload (if result_len > 0)
+ * 4. Parse JSON and convert to MySQL resultset format
+ * 5. Send result packet (or ERR packet on error) to client
+ * 6. Cleanup resources via genai_cleanup_request()
+ *
+ * Response format (from GenAI worker):
+ * - GenAI_ResponseHeader (request_id, status_code, result_len, processing_time_ms)
+ * - JSON result payload (if result_len > 0)
+ *
+ * Error handling:
+ * - On read error: Find and cleanup pending request, return
+ * - On incomplete header: Log error, return
+ * - On unknown request_id: Log error, close fd, return
+ * - On status_code != 0: Send ERR packet to client with error details
+ * - On JSON parse error: Send ERR packet to client
+ *
+ * RTT (Round-Trip Time) tracking:
+ * - Calculates RTT from request start to response receipt
+ * - Logs RTT along with GenAI processing time for monitoring
+ *
+ * @param fd The MySQL side file descriptor from socketpair (fds[0])
+ *
+ * @note This function is called from check_genai_events() which is invoked
+ *       from the main handler() loop. It runs in the MySQL thread context.
+ * @see genai_send_async(), genai_cleanup_request(), check_genai_events()
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(int fd) {
 	// Read response header
@@ -4071,7 +4133,35 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 /**
  * @brief Cleanup a GenAI pending request
  *
- * Closes socketpair fd and removes from pending map.
+ * This function cleans up all resources associated with a GenAI pending request.
+ * It is called after a response has been processed or when an error occurs.
+ *
+ * Cleanup operations:
+ * 1. Remove request from pending_genai_requests_ map
+ * 2. Close the socketpair file descriptor (client_fd)
+ * 3. Remove fd from genai_epoll_fd_ monitoring
+ * 4. Free the original packet memory (original_pkt)
+ *
+ * Resource cleanup details:
+ * - client_fd: The MySQL side of the socketpair (fds[0]) is closed
+ * - epoll: The fd is removed from genai_epoll_fd_ to stop monitoring
+ * - original_pkt: The copied packet memory is freed (ptr and size)
+ * - pending map: The request entry is removed from the map
+ *
+ * This function must be called exactly once per request to avoid:
+ * - File descriptor leaks (unclosed sockets)
+ * - Memory leaks (unfreed packets)
+ * - Epoll monitoring stale fds (removed from map but still in epoll)
+ *
+ * @param request_id The request ID to cleanup (must exist in pending_genai_requests_)
+ *
+ * @note This function is idempotent - if the request_id is not found, it safely
+ *       returns without error (useful for error paths where cleanup might be
+ *       called multiple times).
+ * @note If the request is not found in the map, this function silently returns
+ *       without error (this is intentional to avoid crashes on double cleanup).
+ *
+ * @see genai_send_async(), handle_genai_response()
  */
 void MySQL_Session::genai_cleanup_request(uint64_t request_id) {
 	auto it = pending_genai_requests_.find(request_id);
@@ -4101,8 +4191,53 @@ void MySQL_Session::genai_cleanup_request(uint64_t request_id) {
 /**
  * @brief Check for pending GenAI responses
  *
- * Called from the main event loop to check if any GenAI responses are ready.
- * Returns true if a response was processed, false otherwise.
+ * This function performs a non-blocking epoll_wait on the session's GenAI epoll
+ * file descriptor to check if any responses from GenAI workers are ready to be
+ * processed. It is called from the main handler() loop in the WAITING_CLIENT_DATA
+ * state to interleave GenAI response processing with normal client query handling.
+ *
+ * Event checking flow:
+ * 1. Early return if no pending requests (empty pending_genai_requests_)
+ * 2. Non-blocking epoll_wait with timeout=0 on genai_epoll_fd_
+ * 3. For each ready fd, find matching pending request
+ * 4. Call handle_genai_response() to process the response
+ * 5. Return true after processing one response (to re-check for more)
+ *
+ * Integration with main loop:
+ * ```cpp
+ * handler_again:
+ *     switch (status) {
+ *         case WAITING_CLIENT_DATA:
+ *             handler___status_WAITING_CLIENT_DATA();
+ * #ifdef epoll_create1
+ *             // Check for GenAI responses before processing new client data
+ *             if (check_genai_events()) {
+ *                 // GenAI response was processed, check for more
+ *                 goto handler_again;
+ *             }
+ * #endif
+ *             break;
+ *     }
+ * ```
+ *
+ * Non-blocking behavior:
+ * - epoll_wait timeout is 0 (immediate return)
+ * - Returns true only if a response was actually processed
+ * - Allows main loop to continue processing client queries between responses
+ *
+ * Return value:
+ * - true: A GenAI response was processed (caller should re-check for more)
+ * - false: No responses ready (caller can proceed to normal client handling)
+ *
+ * @return true if a GenAI response was processed, false otherwise
+ *
+ * @note This function is called from the main handler() loop on every iteration
+ *       when in WAITING_CLIENT_DATA state. It must return quickly to avoid
+ *       delaying normal client query processing.
+ * @note Only processes one response per call to avoid starving client handling.
+ *       The main loop will call again to process additional responses.
+ *
+ * @see handle_genai_response(), genai_send_async()
  */
 bool MySQL_Session::check_genai_events() {
 #ifdef epoll_create1

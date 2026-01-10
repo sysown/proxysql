@@ -365,6 +365,29 @@ void GenAI_Threads_Handler::print_version() {
 	fprintf(stderr, "GenAI Threads Handler rev. %s -- %s -- %s\n", GENAI_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 }
 
+/**
+ * @brief Register a client file descriptor for async GenAI communication
+ *
+ * This function is called by MySQL_Session to register the GenAI side of a
+ * socketpair for receiving async GenAI requests. The fd is added to the
+ * GenAI module's epoll instance so the listener thread can monitor it for
+ * incoming requests.
+ *
+ * Registration flow:
+ * 1. MySQL_Session creates socketpair(fds)
+ * 2. MySQL_Session keeps fds[0] for reading responses
+ * 3. MySQL_Session calls this function with fds[1] (GenAI side)
+ * 4. This function adds fds[1] to client_fds_ set and to epoll_fd_
+ * 5. GenAI listener can now receive requests via fds[1]
+ *
+ * The fd is set to non-blocking mode to prevent the listener from blocking
+ * on a slow client.
+ *
+ * @param client_fd The GenAI side file descriptor from socketpair (typically fds[1])
+ * @return true if successfully registered and added to epoll, false on error
+ *
+ * @see unregister_client(), listener_loop()
+ */
 bool GenAI_Threads_Handler::register_client(int client_fd) {
 	std::lock_guard<std::mutex> lock(clients_mutex_);
 
@@ -386,6 +409,27 @@ bool GenAI_Threads_Handler::register_client(int client_fd) {
 	return true;
 }
 
+/**
+ * @brief Unregister a client file descriptor from GenAI module
+ *
+ * This function is called when a MySQL session ends or an error occurs
+ * to clean up the socketpair connection. It removes the fd from the
+ * GenAI module's epoll instance and closes the connection.
+ *
+ * Cleanup flow:
+ * 1. Remove fd from epoll_fd_ monitoring
+ * 2. Remove fd from client_fds_ set
+ * 3. Close the file descriptor
+ *
+ * This is typically called when:
+ * - MySQL session ends (client disconnect)
+ * - Socketpair communication error occurs
+ * - Session cleanup during shutdown
+ *
+ * @param client_fd The GenAI side file descriptor to remove (typically fds[1])
+ *
+ * @see register_client(), listener_loop()
+ */
 void GenAI_Threads_Handler::unregister_client(int client_fd) {
 	std::lock_guard<std::mutex> lock(clients_mutex_);
 
@@ -422,6 +466,51 @@ GenAI_EmbeddingResult GenAI_Threads_Handler::call_llama_embedding(const std::str
 	return call_llama_batch_embedding(texts);
 }
 
+/**
+ * @brief Generate embeddings for multiple documents via HTTP to llama-server
+ *
+ * This function sends a batch embedding request to the configured embedding service
+ * (genai_embedding_uri) via libcurl. The request is sent as JSON with an "input" array
+ * containing all documents to embed.
+ *
+ * Request format:
+ * ```json
+ * {
+ *   "input": ["document 1", "document 2", ...]
+ * }
+ * ```
+ *
+ * Response format (parsed):
+ * ```json
+ * {
+ *   "results": [
+ *     {"embedding": [0.1, 0.2, ...]},
+ *     {"embedding": [0.3, 0.4, ...]}
+ *   ]
+ * }
+ * ```
+ *
+ * The function handles:
+ * - JSON escaping for special characters (quotes, backslashes, newlines, tabs)
+ * - HTTP POST request with Content-Type: application/json
+ * - Timeout enforcement via genai_embedding_timeout_ms
+ * - JSON response parsing to extract embedding arrays
+ * - Contiguous memory allocation for result embeddings
+ *
+ * Error handling:
+ * - On curl error: returns empty result, increments failed_requests
+ * - On parse error: returns empty result, increments failed_requests
+ * - On success: increments completed_requests
+ *
+ * @param texts Vector of document texts to embed (each can be up to several KB)
+ * @return GenAI_EmbeddingResult containing all embeddings with metadata.
+ *         The caller takes ownership of the returned data and must free it.
+ *         Returns empty result (data==nullptr || count==0) on error.
+ *
+ * @note This is a BLOCKING call (curl_easy_perform blocks). Should only be called
+ *       from worker threads, not MySQL threads. Use embed_documents() wrapper instead.
+ * @see embed_documents(), call_llama_rerank()
+ */
 GenAI_EmbeddingResult GenAI_Threads_Handler::call_llama_batch_embedding(const std::vector<std::string>& texts) {
 	GenAI_EmbeddingResult result;
 	CURL* curl = curl_easy_init();
@@ -566,6 +655,56 @@ GenAI_EmbeddingResult GenAI_Threads_Handler::call_llama_batch_embedding(const st
 	return result;
 }
 
+/**
+ * @brief Rerank documents based on query relevance via HTTP to llama-server
+ *
+ * This function sends a reranking request to the configured reranking service
+ * (genai_rerank_uri) via libcurl. The request is sent as JSON with a query
+ * and documents array. The service returns documents sorted by relevance to the query.
+ *
+ * Request format:
+ * ```json
+ * {
+ *   "query": "search query here",
+ *   "documents": ["doc 1", "doc 2", ...]
+ * }
+ * ```
+ *
+ * Response format (parsed):
+ * ```json
+ * {
+ *   "results": [
+ *     {"index": 3, "relevance_score": 0.95},
+ *     {"index": 0, "relevance_score": 0.82},
+ *     ...
+ *   ]
+ * }
+ * ```
+ *
+ * The function handles:
+ * - JSON escaping for special characters in query and documents
+ * - HTTP POST request with Content-Type: application/json
+ * - Timeout enforcement via genai_rerank_timeout_ms
+ * - JSON response parsing to extract results array
+ * - Optional top_n limiting of results
+ *
+ * Error handling:
+ * - On curl error: returns empty result, increments failed_requests
+ * - On parse error: returns empty result, increments failed_requests
+ * - On success: increments completed_requests
+ *
+ * @param query Query string to rerank against (e.g., search query, user question)
+ * @param texts Vector of document texts to rerank (typically search results)
+ * @param top_n Maximum number of top results to return (0 = return all sorted results)
+ * @return GenAI_RerankResultArray containing results sorted by relevance.
+ *         Each result includes the original document index and a relevance score.
+ *         The caller takes ownership of the returned data and must free it.
+ *         Returns empty result (data==nullptr || count==0) on error.
+ *
+ * @note This is a BLOCKING call (curl_easy_perform blocks). Should only be called
+ *       from worker threads, not MySQL threads. Use rerank_documents() wrapper instead.
+ * @see rerank_documents(), call_llama_batch_embedding()
+ */
 GenAI_RerankResultArray GenAI_Threads_Handler::call_llama_rerank(const std::string& query,
 																  const std::vector<std::string>& texts,
 																  uint32_t top_n) {
@@ -789,9 +928,35 @@ GenAI_RerankResultArray GenAI_Threads_Handler::rerank_documents(const std::strin
 }
 
 // ============================================================================
-// Worker and listener loops (for future socket pair integration)
+// Worker and listener loops (for async socket pair integration)
 // ============================================================================
 
+/**
+ * @brief GenAI listener thread main loop
+ *
+ * This function runs in a dedicated thread and monitors registered client file
+ * descriptors via epoll for incoming GenAI requests from MySQL sessions.
+ *
+ * Workflow:
+ * 1. Wait for events on epoll_fd_ (100ms timeout for shutdown check)
+ * 2. When event occurs on client fd:
+ *    - Read GenAI_RequestHeader
+ *    - Read JSON query (if query_len > 0)
+ *    - Build GenAI_Request and queue to request_queue_
+ *    - Notify worker thread via condition variable
+ * 3. Handle client disconnection and errors
+ *
+ * Communication protocol:
+ * - Client sends: GenAI_RequestHeader (fixed size) + JSON query (variable size)
+ * - Header includes: request_id, operation, query_len, flags, top_n
+ *
+ * This thread ensures that MySQL sessions never block - they send requests
+ * via socketpair and immediately return to handling other queries. The actual
+ * blocking HTTP calls to llama-server happen in worker threads.
+ *
+ * @note Runs in dedicated listener_thread_ created during init()
+ * @see worker_loop(), register_client(), process_json_query()
+ */
 void GenAI_Threads_Handler::listener_loop() {
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI listener thread started\n");
 
@@ -936,6 +1101,38 @@ void GenAI_Threads_Handler::listener_loop() {
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI listener thread stopped\n");
 }
 
+/**
+ * @brief GenAI worker thread main loop
+ *
+ * This function runs in worker thread pool and processes GenAI requests
+ * from the request queue. Each worker handles:
+ * - JSON query parsing
+ * - HTTP requests to embedding/reranking services (via libcurl)
+ * - Response formatting and sending back via socketpair
+ *
+ * Workflow:
+ * 1. Wait on request_queue_ with condition variable (shutdown-safe)
+ * 2. Dequeue GenAI_Request
+ * 3. Process the JSON query via process_json_query()
+ *    - This may involve HTTP calls to llama-server (blocking in worker thread)
+ * 4. Format response as GenAI_ResponseHeader + JSON result
+ * 5. Write response back to client via socketpair
+ * 6. Update status variables (completed_requests, failed_requests)
+ *
+ * The blocking HTTP calls (curl_easy_perform) happen in this worker thread,
+ * NOT in the MySQL thread. This is the key to non-blocking behavior - MySQL
+ * sessions can continue processing other queries while workers wait for HTTP responses.
+ *
+ * Error handling:
+ * - On write error: cleanup request and mark as failed
+ * - On process_json_query error: send error response
+ * - Client fd cleanup on any error
+ *
+ * @param worker_id Worker thread identifier (0-based index for logging)
+ *
+ * @note Runs in worker_threads_[worker_id] created during init()
+ * @see listener_loop(), process_json_query(), GenAI_Request
+ */
 void GenAI_Threads_Handler::worker_loop(int worker_id) {
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI worker thread %d started\n", worker_id);
 
@@ -1022,8 +1219,28 @@ void GenAI_Threads_Handler::worker_loop(int worker_id) {
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI worker thread %d stopped\n", worker_id);
 }
 
-// Helper function to execute SQL query and return documents
-// Returns pair of (success, vector of documents) or (success, error message)
+/**
+ * @brief Execute SQL query to retrieve documents for reranking
+ *
+ * This helper function is used by the document_from_sql feature to execute
+ * a SQL query and retrieve documents from a database for reranking.
+ *
+ * The SQL query should return a single column containing document text.
+ * For example:
+ * ```sql
+ * SELECT content FROM posts WHERE category = 'tech'
+ * ```
+ *
+ * Note: This function is currently a stub and needs MySQL connection handling
+ * to be implemented. The document_from_sql feature cannot be used until this
+ * is implemented.
+ *
+ * @param sql_query SQL query string to execute (should select document text)
+ * @return Pair of (success, vector of documents). On success, returns (true, documents).
+ *         On failure, returns (false, empty vector).
+ *
+ * @todo Implement MySQL connection handling for document_from_sql feature
+ */
 static std::pair<bool, std::vector<std::string>> execute_sql_for_documents(const std::string& sql_query) {
 	std::vector<std::string> documents;
 
@@ -1032,7 +1249,63 @@ static std::pair<bool, std::vector<std::string>> execute_sql_for_documents(const
 	return {false, {}};
 }
 
-// Process JSON query autonomously
+/**
+ * @brief Process JSON query autonomously (handles embed/rerank/document_from_sql)
+ *
+ * This method is the main entry point for processing GenAI JSON queries from
+ * MySQL sessions. It parses the JSON, determines the operation type, and routes
+ * to the appropriate handler (embedding or reranking).
+ *
+ * Supported query formats:
+ *
+ * 1. Embed operation:
+ * ```json
+ * {
+ *   "type": "embed",
+ *   "documents": ["doc1 text", "doc2 text", ...]
+ * }
+ * ```
+ * Response: `{"columns": ["embedding"], "rows": [["0.1,0.2,..."], ...]}`
+ *
+ * 2. Rerank with direct documents:
+ * ```json
+ * {
+ *   "type": "rerank",
+ *   "query": "search query",
+ *   "documents": ["doc1", "doc2", ...],
+ *   "top_n": 5,
+ *   "columns": 3
+ * }
+ * ```
+ * Response: `{"columns": ["index", "score", "document"], "rows": [[0, 0.95, "doc1"], ...]}`
+ *
+ * 3. Rerank with SQL documents (not yet implemented):
+ * ```json
+ * {
+ *   "type": "rerank",
+ *   "query": "search query",
+ *   "document_from_sql": {"query": "SELECT content FROM posts WHERE ..."},
+ *   "top_n": 5
+ * }
+ * ```
+ *
+ * Response format:
+ * - Success: `{"columns": [...], "rows": [[...], ...]}`
+ * - Error: `{"error": "error message"}`
+ *
+ * The response format matches MySQL resultset format for easy conversion to
+ * MySQL result packets in MySQL_Session.
+ *
+ * @param json_query JSON query string from client (must be valid JSON)
+ * @return JSON string result with columns and rows formatted for MySQL resultset.
+ *         Returns error JSON string on failure.
+ *
+ * @note This method is called from worker threads as part of async request processing.
+ *       The blocking HTTP calls (embed_documents, rerank_documents) occur in the
+ *       worker thread, not the MySQL thread.
+ *
+ * @see embed_documents(), rerank_documents(), worker_loop()
+ */
 std::string GenAI_Threads_Handler::process_json_query(const std::string& json_query) {
 	json result;
 
