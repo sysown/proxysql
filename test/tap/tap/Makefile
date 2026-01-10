@@ -118,6 +118,6 @@ clean:
 	find . -name '*.o' -delete || true
 	find . -name '*.so' -delete || true
 	find . -name '*.so.*' -delete || true
-	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
-	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
+	# NOTE: cpp-dotenv source directories NOT cleaned here to preserve 213MB
+	# Build targets force full rebuild anyway if libs are missing
 
