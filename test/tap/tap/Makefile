@@ -114,10 +114,16 @@ clean_utils:
 .SILENT: clean
 .PHONY: clean
 clean:
-	find . -name '*.a' -delete || true
-	find . -name '*.o' -delete || true
-	find . -name '*.so' -delete || true
-	find . -name '*.so.*' -delete || true
-	# NOTE: cpp-dotenv source directories NOT cleaned here to preserve 213MB
-	# Build targets force full rebuild anyway if libs are missing
+	# Clean build artifacts but exclude cpp-dotenv directories (preserve 213MB extracted source)
+	find . -path ./cpp-dotenv -prune -o -name '*.a' -delete || true
+	find . -path ./cpp-dotenv -prune -o -name '*.o' -delete || true
+	find . -path ./cpp-dotenv -prune -o -name '*.so' -delete || true
+	find . -path ./cpp-dotenv -prune -o -name '*.so.*' -delete || true
+
+.SILENT: cleanall
+.PHONY: cleanall
+cleanall: clean
+	# Remove cpp-dotenv source directories (213MB)
+	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
+	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
 
