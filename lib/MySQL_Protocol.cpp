@@ -2546,7 +2546,7 @@ __do_auth:
 
 			// Use auth plugin path for connection tracking
 			// This ensures the frontend username is tracked separately from backend username
-			(*myds)->sess->use_ldap_auth = true;
+			(*myds)->sess->use_auth_plugin = true;
 
 			// Handle backend username mapping if provided
 			if (auth_result.backend_username) {
