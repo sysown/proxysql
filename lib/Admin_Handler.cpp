@@ -941,7 +941,15 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			free(buff);
 			run_query = false;
 		} else {
-			const char *update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			// Check if the value is a boolean literal that needs to be quoted as a string
+			// to prevent SQLite from interpreting it as a boolean keyword (storing 1 or 0)
+			bool is_boolean = (strcasecmp(var_value, "true") == 0 || strcasecmp(var_value, "false") == 0);
+			const char *update_format;
+			if (is_boolean) {
+				update_format = (char *)"UPDATE global_variables SET variable_value='%s' WHERE variable_name='%s'";
+			} else {
+				update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			}
 			// Computed length is more than needed since it also counts the format modifiers (%s).
 			size_t query_len = strlen(update_format) + strlen(var_name) + strlen(var_value) + 1;
 			char *query = (char *)l_alloc(query_len);
