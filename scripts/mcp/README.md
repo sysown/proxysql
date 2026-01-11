@@ -12,12 +12,14 @@ This directory contains scripts to test the ProxySQL MCP (Model Context Protocol
 
 ## Quick Start
 
+### Using Real MySQL (Native Mode)
+
 ```bash
-# 1. Start a test MySQL server (Docker)
-./setup_test_db.sh start
+# 1. Setup test database on your MySQL server
+./setup_test_db.sh --mode native start
 
 # 2. Configure ProxySQL MCP module
-./configure_mcp.sh
+./configure_mcp.sh --host 127.0.0.1 --port 3306 --user root --enable
 
 # 3. Run all MCP tool tests
 ./test_mcp_tools.sh
@@ -25,19 +27,101 @@ This directory contains scripts to test the ProxySQL MCP (Model Context Protocol
 # 4. Run stress test (optional)
 ./stress_test.sh
 
-# 5. Stop test MySQL server (Docker)
-./setup_test_db.sh stop
+# 5. Clean up (drop test database)
+./setup_test_db.sh --mode native reset
+```
+
+### Using Docker
+
+```bash
+# 1. Start test MySQL container
+./setup_test_db.sh --mode docker start
+
+# 2. Configure ProxySQL MCP module
+./configure_mcp.sh --host 127.0.0.1 --port 3307 --enable
+
+# 3. Run all MCP tool tests
+./test_mcp_tools.sh
+
+# 4. Run stress test (optional)
+./stress_test.sh
+
+# 5. Stop test MySQL container
+./setup_test_db.sh --mode docker stop
+```
+
+### Auto-Detect Mode
+
+The `setup_test_db.sh` script can auto-detect which mode to use:
+
+```bash
+# Will try Docker first, then fall back to native MySQL
+./setup_test_db.sh start
 ```
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `setup_test_db.sh` | Create/start a test MySQL database with sample data |
+| `setup_test_db.sh` | Setup test database (Docker or native MySQL) |
 | `configure_mcp.sh` | Configure ProxySQL MCP module variables |
 | `test_mcp_tools.sh` | Test all MCP tools via HTTPS/JSON-RPC |
 | `stress_test.sh` | Concurrent connection stress test |
 | `test_catalog.sh` | Test catalog (LLM memory) functionality |
+
+### setup_test_db.sh - Test Database Setup
+
+Supports both **Docker** and **native MySQL** modes:
+
+**Commands:**
+- `start` - Setup/create test database
+- `stop` - Stop Docker container (Docker only)
+- `status` - Check database status
+- `connect` - Connect to MySQL shell
+- `reset` - Drop/recreate test database
+
+**Options:**
+```bash
+--mode MODE         # docker, native, or auto (default: auto)
+--host HOST         # MySQL host for native mode (default: 127.0.0.1)
+--port PORT         # MySQL port (default: 3306 native, 3307 docker)
+--user USER         # MySQL user (default: root)
+--password PASS     # MySQL password
+--database DB       # Database name (default: testdb)
+```
+
+**Examples:**
+
+```bash
+# Auto-detect (tries Docker first, then native)
+./setup_test_db.sh start
+
+# Use native MySQL with specific credentials
+./setup_test_db.sh --mode native --host localhost --port 3306 --user root start
+
+# Use Docker explicitly
+./setup_test_db.sh --mode docker start
+
+# Check status
+./setup_test_db.sh --mode native status
+
+# Connect to test database
+./setup_test_db.sh --mode native connect
+
+# Drop and recreate test database
+./setup_test_db.sh --mode native reset
+```
+
+**Environment Variables:**
+```bash
+export MYSQL_HOST=localhost
+export MYSQL_PORT=3306
+export MYSQL_USER=root
+export MYSQL_PASSWORD=your_password
+export TEST_DB_NAME=testdb
+
+./setup_test_db.sh --mode native start
+```
 
 ## Manual Testing
 

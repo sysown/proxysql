@@ -1,28 +1,56 @@
 #!/bin/bash
 #
-# setup_test_db.sh - Create/start a test MySQL database with sample data
+# setup_test_db.sh - Create/setup a test MySQL database with sample data
 #
 # Usage:
-#   ./setup_test_db.sh start    # Start test MySQL container
-#   ./setup_test_db.sh stop     # Stop and remove test MySQL container
-#   ./setup_test_db.sh status   # Check status of test MySQL
-#   ./setup_test_db.sh connect  # Connect to test MySQL
+#   ./setup_test_db.sh start [options]     # Start/setup test database
+#   ./setup_test_db.sh stop [options]      # Stop test database (Docker only)
+#   ./setup_test_db.sh status [options]    # Check status
+#   ./setup_test_db.sh connect [options]   # Connect to test database
+#   ./setup_test_db.sh reset [options]     # Reset/drop test database
+#
+# Options:
+#   --mode MODE           Mode: docker or native (default: auto-detect)
+#   --host HOST           MySQL host (native mode, default: 127.0.0.1)
+#   --port PORT           MySQL port (native mode, default: 3306)
+#   --user USER           MySQL user (native mode, default: root)
+#   --password PASS       MySQL password (native mode, will prompt if empty)
+#   --database DB         Database name (default: testdb)
+#   --docker-port PORT    Port for Docker container (default: 3307)
+#
+# Environment Variables:
+#   MYSQL_HOST            MySQL host (native mode)
+#   MYSQL_PORT            MySQL port (native mode)
+#   MYSQL_USER            MySQL user
+#   MYSQL_PASSWORD        MySQL password
+#   TEST_DB_NAME          Test database name
 #
 
 set -e
 
-# Configuration
+# Default Docker configuration
 CONTAINER_NAME="proxysql_mcp_test_mysql"
-MYSQL_PORT="3307"
-MYSQL_ROOT_PASSWORD="test123"
-MYSQL_DATABASE="testdb"
-MYSQL_VERSION="8.4"
+DOCKER_PORT="3307"
+DOCKER_ROOT_PASSWORD="test123"
+DOCKER_DATABASE="testdb"
+DOCKER_VERSION="8.4"
+
+# Default native MySQL configuration
+NATIVE_HOST="127.0.0.1"
+NATIVE_PORT="3306"
+NATIVE_USER="root"
+NATIVE_PASSWORD=""
+DATABASE_NAME="testdb"
+
+# Mode: auto, docker, or native
+MODE="auto"
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -36,57 +64,57 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if Docker is available
-check_docker() {
-    if ! command -v docker &> /dev/null; then
-        log_error "Docker is not installed or not in PATH"
-        log_info "Please install Docker or use an existing MySQL server"
-        exit 1
-    fi
+log_step() {
+    echo -e "${BLUE}[STEP]${NC} $1"
 }
 
-# Start test MySQL container
-start_mysql() {
-    log_info "Starting test MySQL container..."
+# Detect which mode to use
+detect_mode() {
+    if [ "${MODE}" != "auto" ]; then
+        echo "${MODE}"
+        return 0
+    fi
 
-    # Check if container already exists
-    if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        log_warn "Container '${CONTAINER_NAME}' already exists"
-        read -p "Remove and recreate? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1 || true
-        else
-            log_info "Starting existing container..."
-            docker start "${CONTAINER_NAME}"
+    # Check if Docker is available
+    if command -v docker &> /dev/null; then
+        # Check if user can run docker
+        if docker info &> /dev/null; then
+            echo "docker"
             return 0
         fi
     fi
 
-    # Create and start container
-    docker run -d \
-        --name "${CONTAINER_NAME}" \
-        -p "${MYSQL_PORT}:3306" \
-        -e MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD}" \
-        -e MYSQL_DATABASE="${MYSQL_DATABASE}" \
-        -v "${SCRIPT_DIR}/init_testdb.sql:/docker-entrypoint-initdb.d/01-init.sql:ro" \
-        mysql:${MYSQL_VERSION} \
-        --default-authentication-plugin=mysql_native_password
-
-    log_info "Waiting for MySQL to be ready..."
-    for i in {1..30}; do
-        if docker exec "${CONTAINER_NAME}" mysqladmin ping -h localhost --silent 2>/dev/null; then
-            log_info "MySQL is ready!"
-            break
+    # Check if mysql client can connect locally
+    if command -v mysql &> /dev/null; then
+        # Try to connect with default credentials
+        if MYSQL_PWD="" mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" -e "SELECT 1" &> /dev/null; then
+            echo "native"
+            return 0
         fi
-        sleep 1
-    done
+    fi
 
-    # Run initialization script if not via volume
-    if [ ! -f "${SCRIPT_DIR}/init_testdb.sql" ]; then
-        log_info "Creating test schema and data..."
-        sleep 5  # Give MySQL extra time to fully start
-        docker exec -i "${CONTAINER_NAME}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" "${MYSQL_DATABASE}" <<'EOSQL'
+    # Fall back to Docker
+    echo "docker"
+    return 0
+}
+
+# Execute MySQL command (native mode)
+exec_mysql_native() {
+    local sql="$1"
+    local db="${2:-mysql}"
+
+    if [ -z "${NATIVE_PASSWORD}" ]; then
+        mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" "${db}" -e "${sql}"
+    else
+        MYSQL_PWD="${NATIVE_PASSWORD}" mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" "${db}" -e "${sql}"
+    fi
+}
+
+# Create init SQL file
+create_init_sql() {
+    cat > "${SCRIPT_DIR}/init_testdb.sql" <<'EOSQL'
+-- Test Database Schema for MCP Testing
+
 CREATE DATABASE IF NOT EXISTS testdb;
 USE testdb;
 
@@ -191,19 +219,64 @@ BEGIN
 END //
 DELIMITER ;
 EOSQL
-    fi
 
-    log_info "Test MySQL database is ready!"
-    log_info "  Host: 127.0.0.1"
-    log_info "  Port: ${MYSQL_PORT}"
-    log_info "  User: root"
-    log_info "  Password: ${MYSQL_ROOT_PASSWORD}"
-    log_info "  Database: ${MYSQL_DATABASE}"
+    log_info "Created ${SCRIPT_DIR}/init_testdb.sql"
 }
 
-# Stop and remove test MySQL container
-stop_mysql() {
-    log_info "Stopping test MySQL container..."
+# ========== Docker Mode Functions ==========
+
+start_docker() {
+    log_step "Starting Docker MySQL container..."
+
+    if ! command -v docker &> /dev/null; then
+        log_error "Docker is not installed"
+        exit 1
+    fi
+
+    # Check if container already exists
+    if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        log_warn "Container '${CONTAINER_NAME}' already exists"
+        read -p "Remove and recreate? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1 || true
+        else
+            log_info "Starting existing container..."
+            docker start "${CONTAINER_NAME}"
+            return 0
+        fi
+    fi
+
+    # Create init SQL if needed
+    if [ ! -f "${SCRIPT_DIR}/init_testdb.sql" ]; then
+        create_init_sql
+    fi
+
+    # Create and start container
+    docker run -d \
+        --name "${CONTAINER_NAME}" \
+        -p "${DOCKER_PORT}:3306" \
+        -e MYSQL_ROOT_PASSWORD="${DOCKER_ROOT_PASSWORD}" \
+        -e MYSQL_DATABASE="${DOCKER_DATABASE}" \
+        -v "${SCRIPT_DIR}/init_testdb.sql:/docker-entrypoint-initdb.d/01-init.sql:ro" \
+        mysql:${DOCKER_VERSION} \
+        --default-authentication-plugin=mysql_native_password
+
+    log_info "Waiting for MySQL to be ready..."
+    for i in {1..30}; do
+        if docker exec "${CONTAINER_NAME}" mysqladmin ping -h localhost --silent 2>/dev/null; then
+            log_info "MySQL is ready!"
+            break
+        fi
+        sleep 1
+    done
+
+    show_docker_info
+}
+
+stop_docker() {
+    log_step "Stopping Docker MySQL container..."
+
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         docker stop "${CONTAINER_NAME}"
         log_info "Container stopped"
@@ -221,181 +294,364 @@ stop_mysql() {
     fi
 }
 
-# Check status of test MySQL
-status_mysql() {
-    log_info "Checking test MySQL status..."
-
+status_docker() {
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo -e "${GREEN}●${NC} Container '${CONTAINER_NAME}' is ${GREEN}running${NC}"
-
-        # Show connection details
-        echo ""
-        echo "Connection Details:"
-        echo "  Host: 127.0.0.1"
-        echo "  Port: ${MYSQL_PORT}"
-        echo "  User: root"
-        echo "  Password: ${MYSQL_ROOT_PASSWORD}"
-        echo "  Database: ${MYSQL_DATABASE}"
-
-        # Test connection
-        if docker exec "${CONTAINER_NAME}" mysqladmin ping -h localhost --silent 2>/dev/null; then
-            echo -e "  Status: ${GREEN}Accepting connections${NC}"
-        else
-            echo -e "  Status: ${RED}Not responding${NC}"
-        fi
-
-        # Show database info
-        echo ""
-        echo "Database Info:"
-        docker exec "${CONTAINER_NAME}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" -e "
-            SELECT
-                table_name AS 'Table',
-                table_rows AS 'Rows',
-                ROUND((data_length + index_length) / 1024, 2) AS 'Size (KB)'
-            FROM information_schema.tables
-            WHERE table_schema = '${MYSQL_DATABASE}'
-            ORDER BY table_name;
-        " 2>/dev/null | column -t
+        echo -e "${GREEN}●${NC} Docker container '${CONTAINER_NAME}' is ${GREEN}running${NC}"
+        show_docker_info
+        show_docker_tables
     elif docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo -e "${YELLOW}○${NC} Container '${CONTAINER_NAME}' exists but is ${YELLOW}stopped${NC}"
-        echo "Start with: $0 start"
+        echo -e "${YELLOW}○${NC} Docker container '${CONTAINER_NAME}' exists but is ${YELLOW}stopped${NC}"
+        echo "Start with: $0 --mode docker start"
     else
-        echo -e "${RED}✗${NC} Container '${CONTAINER_NAME}' does not exist"
-        echo "Create with: $0 start"
+        echo -e "${RED}✗${NC} Docker container '${CONTAINER_NAME}' does not exist"
+        echo "Create with: $0 --mode docker start"
     fi
 }
 
-# Connect to test MySQL
-connect_mysql() {
-    log_info "Connecting to test MySQL..."
+connect_docker() {
+    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        log_error "Container '${CONTAINER_NAME}' is not running"
+        exit 1
+    fi
+    docker exec -it "${CONTAINER_NAME}" mysql -uroot -p"${DOCKER_ROOT_PASSWORD}" "${DOCKER_DATABASE}"
+}
+
+reset_docker() {
+    log_step "Resetting Docker MySQL database..."
     if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         log_error "Container '${CONTAINER_NAME}' is not running"
         exit 1
     fi
 
-    docker exec -it "${CONTAINER_NAME}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" "${MYSQL_DATABASE}"
-}
-
-# Create initialization SQL file
-create_init_sql() {
-    cat > "${SCRIPT_DIR}/init_testdb.sql" <<'EOSQL'
--- Test Database Schema for MCP Testing
-
-CREATE DATABASE IF NOT EXISTS testdb;
-USE testdb;
-
-CREATE TABLE IF NOT EXISTS customers (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  name VARCHAR(100),
-  email VARCHAR(100),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_email (email)
-);
-
-CREATE TABLE IF NOT EXISTS orders (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  customer_id INT NOT NULL,
-  order_date DATE,
-  total DECIMAL(10,2),
-  status VARCHAR(20),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (customer_id) REFERENCES customers(id),
-  INDEX idx_customer (customer_id),
-  INDEX idx_status (status)
-);
-
-CREATE TABLE IF NOT EXISTS products (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  name VARCHAR(200),
-  category VARCHAR(50),
-  price DECIMAL(10,2),
-  stock INT DEFAULT 0,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_category (category)
-);
-
-CREATE TABLE IF NOT EXISTS order_items (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  order_id INT NOT NULL,
-  product_id INT NOT NULL,
-  quantity INT DEFAULT 1,
-  price DECIMAL(10,2),
-  FOREIGN KEY (order_id) REFERENCES orders(id),
-  FOREIGN KEY (product_id) REFERENCES products(id)
-);
-
--- Insert sample customers
-INSERT INTO customers (name, email) VALUES
-  ('Alice Johnson', 'alice@example.com'),
-  ('Bob Smith', 'bob@example.com'),
-  ('Charlie Brown', 'charlie@example.com'),
-  ('Diana Prince', 'diana@example.com'),
-  ('Eve Davis', 'eve@example.com');
-
--- Insert sample products
-INSERT INTO products (name, category, price, stock) VALUES
-  ('Laptop', 'Electronics', 999.99, 50),
-  ('Mouse', 'Electronics', 29.99, 200),
-  ('Keyboard', 'Electronics', 79.99, 150),
-  ('Desk Chair', 'Furniture', 199.99, 75),
-  ('Coffee Mug', 'Kitchen', 12.99, 500);
-
--- Insert sample orders
-INSERT INTO orders (customer_id, order_date, total, status) VALUES
-  (1, '2024-01-15', 1029.98, 'completed'),
-  (2, '2024-01-16', 79.99, 'shipped'),
-  (1, '2024-01-17', 212.98, 'pending'),
-  (3, '2024-01-18', 199.99, 'completed'),
-  (4, '2024-01-19', 1099.98, 'shipped');
-
--- Insert sample order items
-INSERT INTO order_items (order_id, product_id, quantity, price) VALUES
-  (1, 1, 1, 999.99),
-  (1, 2, 1, 29.99),
-  (2, 3, 1, 79.99),
-  (3, 1, 1, 999.99),
-  (3, 3, 1, 79.99),
-  (3, 5, 3, 38.97),
-  (4, 4, 1, 199.99),
-  (5, 1, 1, 999.99),
-  (5, 4, 1, 199.99);
+    docker exec -i "${CONTAINER_NAME}" mysql -uroot -p"${DOCKER_ROOT_PASSWORD}" <<'EOSQL'
+DROP DATABASE IF EXISTS testdb;
+CREATE DATABASE testdb;
 EOSQL
 
-    log_info "Created ${SCRIPT_DIR}/init_testdb.sql"
+    # Re-run init script
+    if [ -f "${SCRIPT_DIR}/init_testdb.sql" ]; then
+        docker exec -i "${CONTAINER_NAME}" mysql -uroot -p"${DOCKER_ROOT_PASSWORD}" "${DOCKER_DATABASE}" < "${SCRIPT_DIR}/init_testdb.sql"
+    fi
+
+    log_info "Database reset complete"
+}
+
+show_docker_info() {
+    echo ""
+    echo "Connection Details:"
+    echo "  Host: 127.0.0.1"
+    echo "  Port: ${DOCKER_PORT}"
+    echo "  User: root"
+    echo "  Password: ${DOCKER_ROOT_PASSWORD}"
+    echo "  Database: ${DOCKER_DATABASE}"
+    echo ""
+    echo "To configure ProxySQL MCP:"
+    echo "  ./configure_mcp.sh --host 127.0.0.1 --port ${DOCKER_PORT}"
+}
+
+show_docker_tables() {
+    echo "Database Info:"
+    docker exec "${CONTAINER_NAME}" mysql -uroot -p"${DOCKER_ROOT_PASSWORD}" -e "
+        SELECT
+            table_name AS 'Table',
+            table_rows AS 'Rows',
+            ROUND((data_length + index_length) / 1024, 2) AS 'Size (KB)'
+        FROM information_schema.tables
+        WHERE table_schema = '${DOCKER_DATABASE}'
+        ORDER BY table_name;
+    " 2>/dev/null | column -t
+}
+
+# ========== Native Mode Functions ==========
+
+start_native() {
+    log_step "Setting up native MySQL database..."
+
+    if ! command -v mysql &> /dev/null; then
+        log_error "mysql client is not installed"
+        exit 1
+    fi
+
+    # Test connection
+    if ! test_native_connection; then
+        log_error "Cannot connect to MySQL server"
+        log_error "Please ensure MySQL is running and credentials are correct"
+        exit 1
+    fi
+
+    # Create init SQL and run it
+    create_init_sql
+
+    log_info "Creating database and tables..."
+    if [ -z "${NATIVE_PASSWORD}" ]; then
+        mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" < "${SCRIPT_DIR}/init_testdb.sql"
+    else
+        MYSQL_PWD="${NATIVE_PASSWORD}" mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" < "${SCRIPT_DIR}/init_testdb.sql"
+    fi
+
+    show_native_info
+}
+
+stop_native() {
+    log_warn "Native mode: Database is not stopped (it's managed by MySQL server)"
+    log_info "To remove the test database, use: $0 --mode native reset"
+}
+
+status_native() {
+    if test_native_connection; then
+        echo -e "${GREEN}●${NC} Native MySQL connection ${GREEN}successful${NC}"
+        show_native_info
+        show_native_tables
+    else
+        echo -e "${RED}✗${NC} Cannot connect to MySQL at ${NATIVE_HOST}:${NATIVE_PORT}"
+        echo "  Host: ${NATIVE_HOST}"
+        echo "  Port: ${NATIVE_PORT}"
+        echo "  User: ${NATIVE_USER}"
+    fi
+}
+
+connect_native() {
+    local db="${DATABASE_NAME}"
+
+    if [ -z "${NATIVE_PASSWORD}" ]; then
+        mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" "${db}"
+    else
+        MYSQL_PWD="${NATIVE_PASSWORD}" mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" "${db}"
+    fi
+}
+
+reset_native() {
+    log_step "Resetting native MySQL database..."
+
+    if ! test_native_connection; then
+        log_error "Cannot connect to MySQL server"
+        exit 1
+    fi
+
+    read -p "Drop database '${DATABASE_NAME}'? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_info "Aborted"
+        return 0
+    fi
+
+    exec_mysql_native "DROP DATABASE IF EXISTS ${DATABASE_NAME};"
+
+    log_info "Database dropped. Recreate with: $0 --mode native start"
+}
+
+test_native_connection() {
+    if [ -z "${NATIVE_PASSWORD}" ]; then
+        MYSQL_PWD="" mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" -e "SELECT 1" &> /dev/null
+    else
+        MYSQL_PWD="${NATIVE_PASSWORD}" mysql -h "${NATIVE_HOST}" -P "${NATIVE_PORT}" -u "${NATIVE_USER}" -e "SELECT 1" &> /dev/null
+    fi
+}
+
+show_native_info() {
+    echo ""
+    echo "Connection Details:"
+    echo "  Host: ${NATIVE_HOST}"
+    echo "  Port: ${NATIVE_PORT}"
+    echo "  User: ${NATIVE_USER}"
+    echo "  Password: ${NATIVE_PASSWORD:-<empty>}"
+    echo "  Database: ${DATABASE_NAME}"
+    echo ""
+    echo "To configure ProxySQL MCP:"
+    echo "  ./configure_mcp.sh --host ${NATIVE_HOST} --port ${NATIVE_PORT}"
+}
+
+show_native_tables() {
+    echo "Database Info:"
+    exec_mysql_native "
+        SELECT
+            table_name AS 'Table',
+            table_rows AS 'Rows',
+            ROUND((data_length + index_length) / 1024, 2) AS 'Size (KB)'
+        FROM information_schema.tables
+        WHERE table_schema = '${DATABASE_NAME}'
+        ORDER BY table_name;
+    " 2>/dev/null | column -t
+}
+
+# ========== Main Functions ==========
+
+parse_args() {
+    local command="$1"
+    shift
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --mode)
+                MODE="$2"
+                shift 2
+                ;;
+            --host)
+                NATIVE_HOST="$2"
+                shift 2
+                ;;
+            --port)
+                if [ "$2" = "3307" ] || [ "$2" = "3306" ]; then
+                    NATIVE_PORT="$2"
+                else
+                    # Could be docker port
+                    if [ "${MODE}" = "docker" ]; then
+                        DOCKER_PORT="$2"
+                    else
+                        NATIVE_PORT="$2"
+                    fi
+                fi
+                shift 2
+                ;;
+            --docker-port)
+                DOCKER_PORT="$2"
+                shift 2
+                ;;
+            --user)
+                NATIVE_USER="$2"
+                shift 2
+                ;;
+            --password)
+                NATIVE_PASSWORD="$2"
+                shift 2
+                ;;
+            --database)
+                DATABASE_NAME="$2"
+                DOCKER_DATABASE="$2"
+                shift 2
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                echo "Use $0 <command> --help for usage"
+                exit 1
+                ;;
+        esac
+    done
+}
+
+show_usage() {
+    cat <<EOF
+Usage: $0 <command> [options]
+
+Commands:
+  start               Setup/start test database
+  stop                Stop test database (Docker only)
+  status              Check status
+  connect             Connect to test database shell
+  reset               Drop/recreate test database
+  create-sql          Create init_testdb.sql file
+
+Options:
+  --mode MODE         Mode: docker, native, or auto (default: auto)
+  --host HOST         MySQL host for native mode (default: 127.0.0.1)
+  --port PORT         MySQL port (default: 3306 native, 3307 docker)
+  --docker-port PORT  Docker container port (default: 3307)
+  --user USER         MySQL user (default: root)
+  --password PASS     MySQL password
+  --database DB       Database name (default: testdb)
+
+Environment Variables:
+  MYSQL_HOST          MySQL host (native mode)
+  MYSQL_PORT          MySQL port (native mode)
+  MYSQL_USER          MySQL user
+  MYSQL_PASSWORD      MySQL password
+  TEST_DB_NAME        Test database name
+
+Examples:
+  # Auto-detect mode and setup
+  $0 start
+
+  # Use native MySQL with custom credentials
+  $0 --mode native --host localhost --port 3306 --user root start
+
+  # Use Docker mode explicitly
+  $0 --mode docker start
+
+  # Check status
+  $0 status
+
+  # Connect to test database
+  $0 connect
+
+  # Drop and recreate test database
+  $0 reset
+EOF
 }
 
 # Main script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-case "${1:-start}" in
+# Load environment variables if set
+[ -n "${MYSQL_HOST}" ] && NATIVE_HOST="${MYSQL_HOST}"
+[ -n "${MYSQL_PORT}" ] && NATIVE_PORT="${MYSQL_PORT}"
+[ -n "${MYSQL_USER}" ] && NATIVE_USER="${MYSQL_USER}"
+[ -n "${MYSQL_PASSWORD}" ] && NATIVE_PASSWORD="${MYSQL_PASSWORD}"
+[ -n "${TEST_DB_NAME}" ] && DATABASE_NAME="${TEST_DB_NAME}"
+
+# Check if no arguments
+if [ $# -eq 0 ]; then
+    show_usage
+    exit 1
+fi
+
+COMMAND="$1"
+shift
+
+# Parse remaining arguments
+parse_args "$@"
+
+# Detect mode if auto
+DETECTED_MODE=$(detect_mode)
+if [ "${MODE}" = "auto" ]; then
+    MODE="${DETECTED_MODE}"
+fi
+
+# Execute command based on mode
+case "${COMMAND}" in
     start)
-        check_docker
-        start_mysql
+        if [ "${MODE}" = "docker" ]; then
+            start_docker
+        else
+            start_native
+        fi
         ;;
     stop)
-        check_docker
-        stop_mysql
+        if [ "${MODE}" = "docker" ]; then
+            stop_docker
+        else
+            stop_native
+        fi
         ;;
     status)
-        check_docker
-        status_mysql
+        if [ "${MODE}" = "docker" ]; then
+            status_docker
+        else
+            status_native
+        fi
         ;;
     connect)
-        check_docker
-        connect_mysql
+        if [ "${MODE}" = "docker" ]; then
+            connect_docker
+        else
+            connect_native
+        fi
+        ;;
+    reset)
+        if [ "${MODE}" = "docker" ]; then
+            reset_docker
+        else
+            reset_native
+        fi
         ;;
     create-sql)
         create_init_sql
         ;;
+    --help|-h)
+        show_usage
+        ;;
     *)
-        echo "Usage: $0 {start|stop|status|connect|create-sql}"
-        echo ""
-        echo "Commands:"
-        echo "  start      - Start test MySQL container"
-        echo "  stop       - Stop test MySQL container"
-        echo "  status     - Check status of test MySQL"
-        echo "  connect    - Connect to test MySQL shell"
-        echo "  create-sql - Create init_testdb.sql file"
+        log_error "Unknown command: ${COMMAND}"
+        show_usage
         exit 1
         ;;
 esac
