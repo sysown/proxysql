@@ -26,6 +26,7 @@ using json = nlohmann::json;
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
 #include "MCP_Thread.h"
+#include "ProxySQL_MCP_Server.hpp"
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -1235,6 +1236,43 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 			wrlock();  // Re-acquire outer lock
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
+
+		// Handle server start/stop based on mcp_enabled
+		bool enabled = GloMCPH->variables.mcp_enabled;
+		proxy_info("MCP: mcp_enabled=%d after loading variables\n", enabled);
+
+		if (enabled) {
+			// Start the server if not already running
+			if (GloMCPH->mcp_server == NULL) {
+				// Check if SSL certificates are available
+				if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+					proxy_error("MCP: Cannot start server - SSL certificates not loaded. Please configure ssl_key_fp and ssl_cert_fp.\n");
+				} else {
+					int port = GloMCPH->variables.mcp_port;
+					proxy_info("MCP: Starting HTTPS server on port %d\n", port);
+					GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+					if (GloMCPH->mcp_server) {
+						GloMCPH->mcp_server->start();
+						proxy_info("MCP: Server started successfully\n");
+					} else {
+						proxy_error("MCP: Failed to create server instance\n");
+					}
+				}
+			} else {
+				proxy_info("MCP: Server already running, updating configuration...\n");
+				// Server is already running - we could update port/restart if needed
+				// For now, just log that it's running
+			}
+		} else {
+			// Stop the server if running
+			if (GloMCPH->mcp_server != NULL) {
+				proxy_info("MCP: Stopping HTTPS server\n");
+				delete GloMCPH->mcp_server;
+				GloMCPH->mcp_server = NULL;
+				proxy_info("MCP: Server stopped successfully\n");
+			}
+		}
+
 		if (lock) wrunlock();
 		delete resultset;
 	}
@@ -1329,6 +1367,43 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		free(qualified_name);
 	}
 	proxy_info("MCP: Finished processing %d variables\n", var_count);
+	// Handle server start/stop based on mcp_enabled when runtime=true
+	// This ensures the server state matches the enabled flag after loading to runtime
+	if (runtime) {
+		bool enabled = GloMCPH->variables.mcp_enabled;
+		proxy_info("MCP: mcp_enabled=%d, managing server state\n", enabled);
+
+		if (enabled) {
+			// Start the server if not already running
+			if (GloMCPH->mcp_server == NULL) {
+				// Check if SSL certificates are available
+				if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+					proxy_error("MCP: Cannot start server - SSL certificates not loaded. Please configure ssl_key_fp and ssl_cert_fp.\n");
+				} else {
+					int port = GloMCPH->variables.mcp_port;
+					proxy_info("MCP: Starting HTTPS server on port %d\n", port);
+					GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+					if (GloMCPH->mcp_server) {
+						GloMCPH->mcp_server->start();
+						proxy_info("MCP: Server started successfully\n");
+					} else {
+						proxy_error("MCP: Failed to create server instance\n");
+					}
+				}
+			} else {
+				proxy_info("MCP: Server already running\n");
+			}
+		} else {
+			// Stop the server if running
+			if (GloMCPH->mcp_server != NULL) {
+				proxy_info("MCP: Stopping HTTPS server\n");
+				delete GloMCPH->mcp_server;
+				GloMCPH->mcp_server = NULL;
+				proxy_info("MCP: Server stopped successfully\n");
+			}
+		}
+	}
+
 	if (use_lock) {
 		proxy_info("MCP: Releasing lock\n");
 		GloMCPH->wrunlock();

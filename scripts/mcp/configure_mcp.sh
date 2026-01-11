@@ -19,13 +19,13 @@
 
 set -e
 
-# Default configuration
-MYSQL_HOST="127.0.0.1"
-MYSQL_PORT="3307"
-MYSQL_USER="root"
-MYSQL_PASSWORD="test123"
-MYSQL_DATABASE="testdb"
-MCP_PORT="6071"
+# Default configuration (can be overridden by environment variables)
+MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
+MYSQL_PORT="${MYSQL_PORT:-3307}"
+MYSQL_USER="${MYSQL_USER:-root}"
+MYSQL_PASSWORD="${MYSQL_PASSWORD:-test123}"
+MYSQL_DATABASE="${TEST_DB_NAME:-testdb}"
+MCP_PORT="${MCP_PORT:-6071}"
 MCP_ENABLED="false"
 
 # ProxySQL admin configuration
@@ -227,6 +227,12 @@ Options:
   --status              Show current MCP configuration
 
 Environment Variables:
+  MYSQL_HOST            MySQL host (default: 127.0.0.1)
+  MYSQL_PORT            MySQL port (default: 3307)
+  MYSQL_USER            MySQL user (default: root)
+  MYSQL_PASSWORD        MySQL password (default: test123)
+  TEST_DB_NAME          MySQL database (default: testdb)
+  MCP_PORT              MCP server port (default: 6071)
   PROXYSQL_ADMIN_HOST   ProxySQL admin host (default: 127.0.0.1)
   PROXYSQL_ADMIN_PORT   ProxySQL admin port (default: 6032)
   PROXYSQL_ADMIN_USER   ProxySQL admin user (default: admin)
@@ -241,6 +247,14 @@ Examples:
 
   # Show current configuration
   $0 --status
+
+  # Use environment variables instead of command line options
+  export MYSQL_HOST=192.168.1.10
+  export MYSQL_PORT=3306
+  export MYSQL_USER=myuser
+  export MYSQL_PASSWORD=mypass
+  export TEST_DB_NAME=production
+  $0 --enable
 EOF
 }
 
