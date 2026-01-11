@@ -52,7 +52,7 @@ source ~/.bashrc
 
 ```bash
 # 1. Setup test database on your MySQL server
-./setup_test_db.sh --mode native start
+./setup_test_db.sh start --mode native
 
 # 2. Configure ProxySQL MCP module
 ./configure_mcp.sh --host 127.0.0.1 --port 3306 --user root --enable
@@ -64,14 +64,14 @@ source ~/.bashrc
 ./stress_test.sh
 
 # 5. Clean up (drop test database)
-./setup_test_db.sh --mode native reset
+./setup_test_db.sh reset --mode native
 ```
 
 ### Using Docker
 
 ```bash
 # 1. Start test MySQL container
-./setup_test_db.sh --mode docker start
+./setup_test_db.sh start --mode docker
 
 # 2. Configure ProxySQL MCP module
 ./configure_mcp.sh --host 127.0.0.1 --port 3307 --enable
@@ -83,7 +83,7 @@ source ~/.bashrc
 ./stress_test.sh
 
 # 5. Stop test MySQL container
-./setup_test_db.sh --mode docker stop
+./setup_test_db.sh stop --mode docker
 ```
 
 ### Auto-Detect Mode
@@ -133,19 +133,19 @@ Supports both **Docker** and **native MySQL** modes:
 ./setup_test_db.sh start
 
 # Use native MySQL with specific credentials
-./setup_test_db.sh --mode native --host localhost --port 3306 --user root start
+./setup_test_db.sh start --mode native --host localhost --port 3306
 
 # Use Docker explicitly
-./setup_test_db.sh --mode docker start
+./setup_test_db.sh start --mode docker
 
 # Check status
-./setup_test_db.sh --mode native status
+./setup_test_db.sh status --mode native
 
 # Connect to test database
-./setup_test_db.sh --mode native connect
+./setup_test_db.sh connect --mode native
 
 # Drop and recreate test database
-./setup_test_db.sh --mode native reset
+./setup_test_db.sh reset --mode native
 ```
 
 **Environment Variables:**
@@ -156,7 +156,8 @@ export MYSQL_USER=root
 export MYSQL_PASSWORD=your_password
 export TEST_DB_NAME=testdb
 
-./setup_test_db.sh --mode native start
+# Options can be specified on command line or via environment
+./setup_test_db.sh start --mode native
 ```
 
 ## Manual Testing

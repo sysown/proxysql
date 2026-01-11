@@ -3,27 +3,24 @@
 # setup_test_db.sh - Create/setup a test MySQL database with sample data
 #
 # Usage:
-#   ./setup_test_db.sh start [options]     # Start/setup test database
-#   ./setup_test_db.sh stop [options]      # Stop test database (Docker only)
-#   ./setup_test_db.sh status [options]    # Check status
-#   ./setup_test_db.sh connect [options]   # Connect to test database
-#   ./setup_test_db.sh reset [options]     # Reset/drop test database
+#   ./setup_test_db.sh [options] <command>
+#   ./setup_test_db.sh <command> [options]
+#
+# Commands:
+#   start               Setup/start test database
+#   stop                Stop test database (Docker only)
+#   status              Check status
+#   connect             Connect to test database shell
+#   reset               Drop/recreate test database
 #
 # Options:
-#   --mode MODE           Mode: docker or native (default: auto-detect)
-#   --host HOST           MySQL host (native mode, default: 127.0.0.1)
-#   --port PORT           MySQL port (native mode, default: 3306)
-#   --user USER           MySQL user (native mode, default: root)
-#   --password PASS       MySQL password (native mode, will prompt if empty)
-#   --database DB         Database name (default: testdb)
-#   --docker-port PORT    Port for Docker container (default: 3307)
-#
-# Environment Variables:
-#   MYSQL_HOST            MySQL host (native mode)
-#   MYSQL_PORT            MySQL port (native mode)
-#   MYSQL_USER            MySQL user
-#   MYSQL_PASSWORD        MySQL password
-#   TEST_DB_NAME          Test database name
+#   --mode MODE         Mode: docker or native (default: auto-detect)
+#   --host HOST         MySQL host (native mode, default: 127.0.0.1)
+#   --port PORT         MySQL port (native mode, default: 3306)
+#   --user USER         MySQL user (native mode, default: root)
+#   --password PASS     MySQL password
+#   --database DB       Database name (default: testdb)
+#   -h, --help          Show help
 #
 
 set -e
@@ -301,10 +298,10 @@ status_docker() {
         show_docker_tables
     elif docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo -e "${YELLOW}○${NC} Docker container '${CONTAINER_NAME}' exists but is ${YELLOW}stopped${NC}"
-        echo "Start with: $0 --mode docker start"
+        echo "Start with: $0 start --mode docker"
     else
         echo -e "${RED}✗${NC} Docker container '${CONTAINER_NAME}' does not exist"
-        echo "Create with: $0 --mode docker start"
+        echo "Create with: $0 start --mode docker"
     fi
 }
 
@@ -376,6 +373,9 @@ start_native() {
     if ! test_native_connection; then
         log_error "Cannot connect to MySQL server"
         log_error "Please ensure MySQL is running and credentials are correct"
+        log_error "  Host: ${NATIVE_HOST}"
+        log_error "  Port: ${NATIVE_PORT}"
+        log_error "  User: ${NATIVE_USER}"
         exit 1
     fi
 
@@ -394,7 +394,7 @@ start_native() {
 
 stop_native() {
     log_warn "Native mode: Database is not stopped (it's managed by MySQL server)"
-    log_info "To remove the test database, use: $0 --mode native reset"
+    log_info "To remove the test database, use: $0 reset --mode native"
 }
 
 status_native() {
@@ -437,7 +437,7 @@ reset_native() {
 
     exec_mysql_native "DROP DATABASE IF EXISTS ${DATABASE_NAME};"
 
-    log_info "Database dropped. Recreate with: $0 --mode native start"
+    log_info "Database dropped. Recreate with: $0 start --mode native"
 }
 
 test_native_connection() {
@@ -476,62 +476,9 @@ show_native_tables() {
 
 # ========== Main Functions ==========
 
-parse_args() {
-    local command="$1"
-    shift
-
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --mode)
-                MODE="$2"
-                shift 2
-                ;;
-            --host)
-                NATIVE_HOST="$2"
-                shift 2
-                ;;
-            --port)
-                if [ "$2" = "3307" ] || [ "$2" = "3306" ]; then
-                    NATIVE_PORT="$2"
-                else
-                    # Could be docker port
-                    if [ "${MODE}" = "docker" ]; then
-                        DOCKER_PORT="$2"
-                    else
-                        NATIVE_PORT="$2"
-                    fi
-                fi
-                shift 2
-                ;;
-            --docker-port)
-                DOCKER_PORT="$2"
-                shift 2
-                ;;
-            --user)
-                NATIVE_USER="$2"
-                shift 2
-                ;;
-            --password)
-                NATIVE_PASSWORD="$2"
-                shift 2
-                ;;
-            --database)
-                DATABASE_NAME="$2"
-                DOCKER_DATABASE="$2"
-                shift 2
-                ;;
-            *)
-                log_error "Unknown option: $1"
-                echo "Use $0 <command> --help for usage"
-                exit 1
-                ;;
-        esac
-    done
-}
-
 show_usage() {
     cat <<EOF
-Usage: $0 <command> [options]
+Usage: $0 [options] <command>
 
 Commands:
   start               Setup/start test database
@@ -544,11 +491,11 @@ Commands:
 Options:
   --mode MODE         Mode: docker, native, or auto (default: auto)
   --host HOST         MySQL host for native mode (default: 127.0.0.1)
-  --port PORT         MySQL port (default: 3306 native, 3307 docker)
-  --docker-port PORT  Docker container port (default: 3307)
+  --port PORT         MySQL port (default: 3306)
   --user USER         MySQL user (default: root)
   --password PASS     MySQL password
   --database DB       Database name (default: testdb)
+  -h, --help          Show this help
 
 Environment Variables:
   MYSQL_HOST          MySQL host (native mode)
@@ -561,11 +508,9 @@ Examples:
   # Auto-detect mode and setup
   $0 start
 
-  # Use native MySQL with custom credentials
-  $0 --mode native --host localhost --port 3306 --user root start
-
-  # Use Docker mode explicitly
-  $0 --mode docker start
+  # Use native MySQL explicitly
+  $0 start --mode native
+  $0 start --mode native --host localhost --port 3306
 
   # Check status
   $0 status
@@ -575,6 +520,9 @@ Examples:
 
   # Drop and recreate test database
   $0 reset
+
+  # Stop Docker container
+  $0 stop --mode docker
 EOF
 }
 
@@ -588,17 +536,100 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -n "${MYSQL_PASSWORD}" ] && NATIVE_PASSWORD="${MYSQL_PASSWORD}"
 [ -n "${TEST_DB_NAME}" ] && DATABASE_NAME="${TEST_DB_NAME}"
 
-# Check if no arguments
-if [ $# -eq 0 ]; then
+# Parse arguments
+COMMAND=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        --mode)
+            MODE="$2"
+            shift 2
+            ;;
+        --host)
+            NATIVE_HOST="$2"
+            shift 2
+            ;;
+        --port)
+            if [ "$2" = "3307" ]; then
+                DOCKER_PORT="$2"
+            else
+                NATIVE_PORT="$2"
+            fi
+            shift 2
+            ;;
+        --user)
+            NATIVE_USER="$2"
+            shift 2
+            ;;
+        --password)
+            NATIVE_PASSWORD="$2"
+            shift 2
+            ;;
+        --database)
+            DATABASE_NAME="$2"
+            DOCKER_DATABASE="$2"
+            shift 2
+            ;;
+        start|stop|status|connect|reset|create-sql)
+            COMMAND="$1"
+            shift
+            # Continue parsing options after command
+            while [[ $# -gt 0 ]]; do
+                case $1 in
+                    --mode)
+                        MODE="$2"
+                        shift 2
+                        ;;
+                    --host)
+                        NATIVE_HOST="$2"
+                        shift 2
+                        ;;
+                    --port)
+                        if [ "$2" = "3307" ]; then
+                            DOCKER_PORT="$2"
+                        else
+                            NATIVE_PORT="$2"
+                        fi
+                        shift 2
+                        ;;
+                    --user)
+                        NATIVE_USER="$2"
+                        shift 2
+                        ;;
+                    --password)
+                        NATIVE_PASSWORD="$2"
+                        shift 2
+                        ;;
+                    --database)
+                        DATABASE_NAME="$2"
+                        DOCKER_DATABASE="$2"
+                        shift 2
+                        ;;
+                    *)
+                        log_error "Unknown option: $1"
+                        show_usage
+                        exit 1
+                        ;;
+                esac
+            done
+            break
+            ;;
+        *)
+            log_error "Unknown option or command: $1"
+            show_usage
+            exit 1
+            ;;
+    esac
+done
+
+# Check if command was provided
+if [ -z "${COMMAND}" ]; then
     show_usage
     exit 1
 fi
-
-COMMAND="$1"
-shift
-
-# Parse remaining arguments
-parse_args "$@"
 
 # Detect mode if auto
 DETECTED_MODE=$(detect_mode)
@@ -645,13 +676,5 @@ case "${COMMAND}" in
         ;;
     create-sql)
         create_init_sql
-        ;;
-    --help|-h)
-        show_usage
-        ;;
-    *)
-        log_error "Unknown command: ${COMMAND}"
-        show_usage
-        exit 1
         ;;
 esac
