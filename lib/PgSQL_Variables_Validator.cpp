@@ -639,3 +639,32 @@ const pgsql_variable_validator pgsql_variable_validator_search_path = {
 	.validate = &pgsql_variable_validate_search_path,
 	.params = {}
 };
+
+/**
+ * @brief Validates an integer variable for PostgreSQL.
+ *
+ * This function checks if the provided value is a valid integer representation
+ * and falls within the specified range. The range is defined by the params
+ * parameter.
+ *
+ * @param value The value to validate.
+ * @param params The parameter structure containing the integer range.
+ * @param session Unused parameter.
+ * @param transformed_value If not null, will be set to null.
+ * @return true if the value is a valid integer representation within the specified range, false otherwise.
+ */
+bool pgsql_variable_validate_integer(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
+   (void)session;
+   if (transformed_value) *transformed_value = nullptr;
+   char* end = nullptr;
+   long num = strtol(value, &end, 10);
+   if (end == value || *end != '\0') return false;
+   if (num < params->int_range.min || num > params->int_range.max) return false;
+   return true;
+}
+
+const pgsql_variable_validator pgsql_variable_validator_integer = {
+	.type = VARIABLE_TYPE_INT,
+	.validate = &pgsql_variable_validate_integer,
+	.params = {}
+};

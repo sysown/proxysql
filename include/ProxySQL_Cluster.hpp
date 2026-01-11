@@ -205,6 +205,8 @@
  */
 #define CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING "PROXY_SELECT username, database, flagIN, destination_hostgroup, comment FROM runtime_pgsql_query_rules_fast_routing ORDER BY username, database, flagIN"
 
+#define CLUSTER_QUERY_PGSQL_VARIABLES "PROXY_SELECT variable_name, variable_value FROM runtime_pgsql_variables ORDER BY variable_name"
+
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
 	time_t last_updated;
