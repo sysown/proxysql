@@ -2612,6 +2612,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("pgsql_users",		  "PGSQL USERS");
 	generate_load_save_disk_commands("pgsql_servers",	  "PGSQL SERVERS");
 	generate_load_save_disk_commands("pgsql_variables",   "PGSQL VARIABLES");
+	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");

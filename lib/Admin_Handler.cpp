@@ -886,6 +886,8 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
+	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4) && GloMCPH && GloMCPH->has_variable(var_name + 4)) {
+		return true;
 	} else {
 		return false;
 	}
@@ -3698,6 +3700,23 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			(strlen(query_no_space)==strlen("CHECKSUM MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))){
 			char *q=(char *)"SELECT * FROM mysql_servers_ssl_params ORDER BY hostname, port, username";
 			tablename=(char *)"MYSQL HOSTGROUP ATTRIBUTES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		// MCP (Model Context Protocol) VARIABLES CHECKSUM
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MCP VARIABLES") && !strncasecmp("CHECKSUM DISK MCP VARIABLES", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MCP VARIABLES") && !strncasecmp("CHECKSUM MEMORY MCP VARIABLES", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MCP VARIABLES") && !strncasecmp("CHECKSUM MEM MCP VARIABLES", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MCP VARIABLES") && !strncasecmp("CHECKSUM MCP VARIABLES", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 

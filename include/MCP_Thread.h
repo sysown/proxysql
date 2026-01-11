@@ -127,6 +127,14 @@ public:
 	int set_variable(const char* name, const char* value);
 
 	/**
+	 * @brief Check if a variable exists
+	 *
+	 * @param name The name of the variable (without 'mcp-' prefix)
+	 * @return true if the variable exists, false otherwise
+	 */
+	bool has_variable(const char* name);
+
+	/**
 	 * @brief Get a list of all variable names
 	 *
 	 * @return Dynamically allocated array of strings, terminated by NULL

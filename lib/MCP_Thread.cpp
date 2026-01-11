@@ -196,6 +196,18 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 	return -1;
 }
 
+bool MCP_Threads_Handler::has_variable(const char* name) {
+	if (!name)
+		return false;
+
+	for (int i = 0; mcp_thread_variables_names[i]; i++) {
+		if (!strcmp(name, mcp_thread_variables_names[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 char** MCP_Threads_Handler::get_variables_list() {
 	// Count variables
 	int count = 0;
