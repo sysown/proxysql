@@ -770,8 +770,14 @@ MySQL_Session::~MySQL_Session() {
 							client_myds->myconn->userinfo->username,
 							client_myds->myconn->userinfo->passtype
 						);
-					} else {
+					} else if (GloMyLdapAuth) {
 						GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
+					} else {
+						// Per-user auth plugin path: use GloMyAuth with fe_username
+						GloMyAuth->decrease_frontend_user_connections(
+							client_myds->myconn->userinfo->fe_username,
+							PASSWORD_TYPE::PRIMARY
+						);
 					}
 					break;
 			}
@@ -5650,8 +5656,16 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 								client_myds->myconn->userinfo->passtype,
 								&used_users
 							);
-						} else {
+						} else if (GloMyLdapAuth) {
 							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->fe_username, &used_users);
+						} else {
+							// Per-user auth plugin path: use GloMyAuth with fe_username
+							// fe_username contains the frontend user that was authenticated via plugin
+							free_users = GloMyAuth->increase_frontend_user_connections(
+								client_myds->myconn->userinfo->fe_username,
+								PASSWORD_TYPE::PRIMARY,
+								&used_users
+							);
 						}
 						break;
 #ifdef PROXYSQLCLICKHOUSE
@@ -7277,8 +7291,14 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					client_myds->myconn->userinfo->username,
 					client_myds->myconn->userinfo->passtype
 				);
-			} else {
+			} else if (GloMyLdapAuth) {
 				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
+			} else {
+				// Per-user auth plugin path: use GloMyAuth with fe_username
+				GloMyAuth->decrease_frontend_user_connections(
+					client_myds->myconn->userinfo->fe_username,
+					PASSWORD_TYPE::PRIMARY
+				);
 			}
 		}
 		client_authenticated=false;
