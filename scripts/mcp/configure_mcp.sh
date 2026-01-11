@@ -21,9 +21,9 @@ set -e
 
 # Default configuration (can be overridden by environment variables)
 MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
-MYSQL_PORT="${MYSQL_PORT:-3306}"
+MYSQL_PORT="${MYSQL_PORT:-3307}"
 MYSQL_USER="${MYSQL_USER:-root}"
-MYSQL_PASSWORD="${MYSQL_PASSWORD:-}"
+MYSQL_PASSWORD="${MYSQL_PASSWORD:-test123}"
 MYSQL_DATABASE="${TEST_DB_NAME:-testdb}"
 MCP_PORT="${MCP_PORT:-6071}"
 MCP_ENABLED="false"
@@ -229,9 +229,9 @@ Usage: $0 [options]
 
 Options:
   -h, --host HOST       MySQL host (default: 127.0.0.1)
-  -P, --port PORT       MySQL port (default: 3306)
+  -P, --port PORT       MySQL port (default: 3307)
   -u, --user USER       MySQL user (default: root)
-  -p, --password PASS   MySQL password (default: empty)
+  -p, --password PASS   MySQL password (default: test123)
   -d, --database DB     MySQL database (default: testdb)
   --mcp-port PORT       MCP server port (default: 6071)
   --enable              Enable MCP server
@@ -240,9 +240,9 @@ Options:
 
 Environment Variables:
   MYSQL_HOST            MySQL host (default: 127.0.0.1)
-  MYSQL_PORT            MySQL port (default: 3306)
+  MYSQL_PORT            MySQL port (default: 3307)
   MYSQL_USER            MySQL user (default: root)
-  MYSQL_PASSWORD        MySQL password (default: empty)
+  MYSQL_PASSWORD        MySQL password (default: test123)
   TEST_DB_NAME          MySQL database (default: testdb)
   MCP_PORT              MCP server port (default: 6071)
   PROXYSQL_ADMIN_HOST   ProxySQL admin host (default: 127.0.0.1)
@@ -251,8 +251,8 @@ Environment Variables:
   PROXYSQL_ADMIN_PASSWORD ProxySQL admin password (default: admin)
 
 Examples:
-  # Configure with default settings and enable MCP
-  $0 --enable
+  # Configure with test MySQL on port 3307 and enable MCP
+  $0 --host 127.0.0.1 --port 3307 --enable
 
   # Disable MCP server
   $0 --disable
