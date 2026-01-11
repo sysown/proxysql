@@ -155,7 +155,7 @@ int test_variable_access(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-mysql_user=''");
 	MYSQL_QUERY(admin, "SET mcp-mysql_password=''");
 	MYSQL_QUERY(admin, "SET mcp-mysql_schema=''");
-	MYSQL_QUERY(admin, "SET mcp-catalog_path='/var/lib/proxysql/mcp_catalog.db'");
+	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	ok(1, "Restored default values for MCP variables");
 
 	return test_num;
@@ -240,7 +240,7 @@ int test_variable_persistence(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-mysql_user=''");
 	MYSQL_QUERY(admin, "SET mcp-mysql_password=''");
 	MYSQL_QUERY(admin, "SET mcp-mysql_schema=''");
-	MYSQL_QUERY(admin, "SET mcp-catalog_path='/var/lib/proxysql/mcp_catalog.db'");
+	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	MYSQL_QUERY(admin, "SAVE MCP VARIABLES TO DISK");
 	ok(1, "Restored default values and saved to disk");
 
