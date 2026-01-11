@@ -1589,6 +1589,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true);
+				flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, false);
 				pthread_mutex_unlock(&GloVars.checksum_mutex);
 			}
 			if (runtime_mysql_servers) {

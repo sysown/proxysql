@@ -1763,7 +1763,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 
-	// MCP (Model Context Protocol) VARIABLES
+	// MCP (Model Context Protocol) VARIABLES - DISK commands
 	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
 		const std::string modname = "mcp_variables";
 		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
@@ -1779,20 +1779,22 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			*ql = strlen(*q) + 1;
 			return true;
 		}
-		if (is_admin_command_or_alias(LOAD_MCP_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
-			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-			SPA->load_mcp_variables_to_runtime();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp variables to RUNTIME\n");
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
-		if (is_admin_command_or_alias(SAVE_MCP_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
-			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-			SPA->save_mcp_variables_from_runtime();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp variables from RUNTIME\n");
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-			return false;
-		}
+	}
+
+	// MCP (Model Context Protocol) LOAD/SAVE handlers
+	if (is_admin_command_or_alias(LOAD_MCP_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		SPA->load_mcp_variables_to_runtime();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp variables to RUNTIME\n");
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+	if (is_admin_command_or_alias(SAVE_MCP_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		SPA->save_mcp_variables_from_runtime();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp variables from RUNTIME\n");
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
 	}
 
 	if ((query_no_space_length == 31) && (!strncasecmp("LOAD MCP VARIABLES FROM CONFIG", query_no_space, query_no_space_length))) {
