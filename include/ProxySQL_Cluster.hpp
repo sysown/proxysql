@@ -129,7 +129,7 @@
  * @see pgsql_servers_v2
  * @see pull_pgsql_servers_v2_from_peer()
  */
-#define CLUSTER_QUERY_PGSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, CASE WHEN status=\"SHUNNED\" THEN \"ONLINE\" ELSE status END AS status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+#define CLUSTER_QUERY_PGSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, CASE WHEN status='SHUNNED' THEN 'ONLINE' ELSE status END AS status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
 /**
  * @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_users'.

@@ -81,8 +81,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<7>(values),  // max_replication_lag
 			std::get<8>(values),  // use_ssl
 			std::get<9>(values),  // max_latency_ms
-			std::get<10>(values), // comment
-			std::get<11>(values).c_str()
+			std::get<10>(values).c_str()  // comment
 		);
 		insert_pgsql_servers_queries.push_back(insert_pgsql_servers_query);
 	}
@@ -124,8 +123,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<7>(values),
 			std::get<8>(values),
 			std::get<9>(values),
-			std::get<10>(values),
-			std::get<11>(values).c_str()
+			std::get<10>(values).c_str()
 		);
 
 		// Check on replica
@@ -176,8 +174,6 @@ int check_pgsql_checksums_in_runtime_table(MYSQL* admin) {
 			diag("PostgreSQL checksum '%s' not found in runtime_checksums_values", checksum_name);
 			return EXIT_FAILURE;
 		}
-
-		ok(count == 1, "PostgreSQL checksum '%s' found in runtime_checksums_values", checksum_name);
 	}
 
 	return EXIT_SUCCESS;
@@ -191,7 +187,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-plan(6);
+plan(10);
 
 	// Connect to admin interfaces
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -208,8 +204,32 @@ plan(6);
 	// For this test, we'll just verify that PostgreSQL checksums are present
 	// In a full cluster test, we would connect to a replica and verify sync
 
+	// Check each PostgreSQL checksum individually
+	const char* pgsql_checksums[] = {
+		"pgsql_query_rules",
+		"pgsql_servers",
+		"pgsql_servers_v2",
+		"pgsql_users",
+		"pgsql_variables"
+	};
+
+	for (const char* checksum_name : pgsql_checksums) {
+		const char* t_check_checksum =
+			"SELECT COUNT(*) FROM runtime_checksums_values WHERE name='%s'";
+
+		char query[256];
+		snprintf(query, sizeof(query), t_check_checksum, checksum_name);
+
+		MYSQL_QUERY(proxysql_admin, query);
+		MYSQL_RES* result = mysql_store_result(proxysql_admin);
+		int count = atoi(mysql_fetch_row(result)[0]);
+		mysql_free_result(result);
+
+		ok(count == 1, "PostgreSQL checksum '%s' found in runtime_checksums_values", checksum_name);
+	}
+
 	int res = check_pgsql_checksums_in_runtime_table(proxysql_admin);
-	ok(res == EXIT_SUCCESS, "PostgreSQL checksums are present in runtime_checksums_values");
+	ok(res == EXIT_SUCCESS, "PostgreSQL checksum validation passed");
 
 	// Test basic PostgreSQL configuration is supported
 	MYSQL_QUERY(proxysql_admin, "SELECT 1 FROM pgsql_servers LIMIT 1");

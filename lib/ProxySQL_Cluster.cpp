@@ -3968,6 +3968,10 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16
 	get_peer_to_sync_variables_module("ldap_variables", host, port, ip_address);
 }
 
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_variables(char **host, uint16_t *port, char** ip_address) {
+	get_peer_to_sync_variables_module("pgsql_variables", host, port, ip_address);
+}
+
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
@@ -5296,6 +5300,13 @@ ProxySQL_Cluster::ProxySQL_Cluster() : proxysql_servers_to_monitor(NULL) {
 	cluster_mysql_servers_diffs_before_sync = 3;
 	cluster_mysql_users_diffs_before_sync = 3;
 	cluster_proxysql_servers_diffs_before_sync = 3;
+	cluster_mysql_variables_diffs_before_sync = 3;
+	cluster_ldap_variables_diffs_before_sync = 3;
+	cluster_admin_variables_diffs_before_sync = 3;
+	cluster_pgsql_query_rules_diffs_before_sync = 3;
+	cluster_pgsql_servers_diffs_before_sync = 3;
+	cluster_pgsql_users_diffs_before_sync = 3;
+	cluster_pgsql_variables_diffs_before_sync = 3;
 	cluster_mysql_query_rules_save_to_disk = true;
 	cluster_mysql_servers_save_to_disk = true;
 	cluster_mysql_users_save_to_disk = true;
