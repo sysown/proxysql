@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include "ProxySQL_MCP_Server.hpp"
 #include "MCP_Endpoint.h"
 #include "MCP_Thread.h"
+#include "MySQL_Tool_Handler.h"
 #include "proxysql_utils.h"
 
 using namespace httpserver;
@@ -31,8 +32,13 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 {
 	proxy_info("Creating ProxySQL MCP Server on port %d\n", port);
 
+	// Get SSL certificates from ProxySQL
+	char* ssl_key = NULL;
+	char* ssl_cert = NULL;
+	GloVars.get_SSL_pem_mem(&ssl_key, &ssl_cert);
+
 	// Check if SSL certificates are available
-	if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+	if (!ssl_key || !ssl_cert) {
 		proxy_error("Cannot start MCP server: SSL certificates not loaded. Please configure ssl_key_fp and ssl_cert_fp.\n");
 		return;
 	}
@@ -42,8 +48,8 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	ws = std::unique_ptr<httpserver::webserver>(new webserver(
 		create_webserver(port)
 			.use_ssl()
-			.raw_https_mem_key(std::string(GloVars.global.ssl_key_pem_mem))
-			.raw_https_mem_cert(std::string(GloVars.global.ssl_cert_pem_mem))
+			.raw_https_mem_key(std::string(ssl_key))
+			.raw_https_mem_cert(std::string(ssl_cert))
 			.no_post_process()
 	));
 
@@ -75,10 +81,39 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	_endpoints.push_back({"/mcp/cache", std::move(cache_resource)});
 
 	proxy_info("Registered 5 MCP endpoints: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache\n");
+
+	// Initialize MySQL Tool Handler with the configuration from MCP variables
+	if (!handler->mysql_tool_handler) {
+		proxy_info("Initializing MySQL Tool Handler...\n");
+		handler->mysql_tool_handler = new MySQL_Tool_Handler(
+			handler->variables.mcp_mysql_hosts ? handler->variables.mcp_mysql_hosts : "",
+			handler->variables.mcp_mysql_ports ? handler->variables.mcp_mysql_ports : "",
+			handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
+			handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
+			handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
+			handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : ""
+		);
+
+		// Initialize the tool handler
+		if (handler->mysql_tool_handler->init() != 0) {
+			proxy_error("Failed to initialize MySQL Tool Handler\n");
+			delete handler->mysql_tool_handler;
+			handler->mysql_tool_handler = NULL;
+		} else {
+			proxy_info("MySQL Tool Handler initialized successfully\n");
+		}
+	}
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 	stop();
+
+	// Clean up MySQL Tool Handler
+	if (handler && handler->mysql_tool_handler) {
+		proxy_info("Cleaning up MySQL Tool Handler...\n");
+		delete handler->mysql_tool_handler;
+		handler->mysql_tool_handler = NULL;
+	}
 }
 
 void ProxySQL_MCP_Server::start() {
