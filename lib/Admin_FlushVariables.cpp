@@ -1228,6 +1228,14 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 		GloMCPH->wrunlock();
 		delete resultset;
 	}
+
+	// Also populate runtime_global_variables (same pattern as admin variables)
+	{
+		pthread_mutex_lock(&GloVars.checksum_mutex);
+		flush_mcp_variables___runtime_to_database(admindb, false, false, false, true);
+		flush_GENERIC_variables__checksum__database_to_runtime("mcp", checksum, epoch);
+		pthread_mutex_unlock(&GloVars.checksum_mutex);
+	}
 }
 
 void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
