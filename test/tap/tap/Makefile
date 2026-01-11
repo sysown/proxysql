@@ -115,10 +115,7 @@ clean_utils:
 .PHONY: clean
 clean:
 	# Clean build artifacts but exclude cpp-dotenv directories (preserve 213MB extracted source)
-	find . -path ./cpp-dotenv -prune -o -name '*.a' -delete || true
-	find . -path ./cpp-dotenv -prune -o -name '*.o' -delete || true
-	find . -path ./cpp-dotenv -prune -o -name '*.so' -delete || true
-	find . -path ./cpp-dotenv -prune -o -name '*.so.*' -delete || true
+	find . -path ./cpp-dotenv -prune -o \( -name '*.a' -o -name '*.o' -o -name '*.so' -o -name '*.so.*' \) -delete || true
 
 .SILENT: cleanall
 .PHONY: cleanall
