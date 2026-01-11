@@ -3521,177 +3521,6 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	return ret;
 }
 
-/**
-* @brief Processes the discovered servers to eventually add them to 'runtime_mysql_servers'.
-* @details This method takes a vector of discovered servers, compares them against the existing servers, and adds the new servers to 'runtime_mysql_servers'.
-* @param originating_server_hostname A string which denotes the hostname of the originating server, from which the discovered servers were queried and found.
-* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
-* @param reader_hostgroup Reader hostgroup to which we will add the discovered servers.
-*/
-void MySQL_Monitor::process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, const MySQL_Monitor_State_Data* mmsd, int num_fields) {
-	// Check if the query needs to be changed because it matches a blue/green deployment: exactly 3 entries for Multi-AZ DB Clusters, even number for blue/green deployment
-	if (rds_topology_check_type == AWS_RDS_TOPOLOGY_CHECK && discovered_servers.size() % 2 == 0) {
-		// With the AWS_RDS_TOPOLOGY_CHECK, we didn't get the role and status data, so we retry with the correct query on the next read_only check
-		rds_topology_check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
-		topology_loop = mysql_thread___monitor_aws_rds_topology_discovery_interval;
-		return;
-	} else if ((rds_topology_check_type == AWS_RDS_TOPOLOGY_CHECK && discovered_servers.size() != 3) 
-			|| (rds_topology_check_type == AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK && discovered_servers.size() % 2 != 0)) {
-		// Query result matches neither a Multi_AZ DB Cluster nor a Blue/Green deployment
-		// TODO: Account for topology metadata towards the end of a blue/green deployment switchover (possibly odd number of entries)
-		rds_topology_check_type = AWS_RDS_TOPOLOGY_CHECK; // Set back to default rds_topology check
-		// TODO: This needs to be notified to the user; potential cluster misconfiguration.
-		proxy_debug(PROXY_DEBUG_MONITOR, 7, "Got a query result for the rds_topology metadata table but it matches neither Multi-AZ DB Clusters, nor a blue/green deployment. Number of records: %d\n", discovered_servers.size());
-		return;
-	}
-
-
-	if (num_fields < 4) {
-		// TODO: This error message should be more specific about the source of the error. An invalid
-		// resultset may implied a misconfigured cluster, or invalid config. This should be more explicit.
-		proxy_error("Received row with too few fields. num_field = %d\n", num_fields);
-		return;
-	}
-
-	uint32_t reader_hostgroup = (uint32_t)(mmsd->reader_hostgroup);
-
-	// Add the queried server or update its entry in the topology server map with the current timestamp
-	if (AWS_RDS_Topology_Server_Map.count(originating_server_hostname) == 0) {
-		auto queried_server = make_shared<AWS_RDS_topology_server>(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
-
-		AWS_RDS_Topology_Server_Map.insert({ originating_server_hostname, queried_server });
-	}
-
-	vector<tuple<string, uint16_t, uint32_t, int64_t, int32_t>> new_servers;
-
-	// Loop through discovered servers and process the ones we haven't saved yet
-	for (MYSQL_ROW row : discovered_servers) {
-		if ( !row ) {
-			proxy_warning("Received empty RDS topology record from %s.\n", originating_server_hostname.c_str());
-			continue;
-		}
-		int current_discovered_read_only = 1;
-VALGRIND_DISABLE_ERROR_REPORTING;
-		if (row[0]) {
-			if (!strcmp(row[0], "0") || !strcasecmp(row[0], "OFF"))
-			current_discovered_read_only = 0;
-		}
-VALGRIND_ENABLE_ERROR_REPORTING;
-		string current_discovered_hostname = row[2];
-		string current_discovered_port_string = row[3];
-		uint16_t current_discovered_port;
-		try {
-			current_discovered_port = (uint16_t)stoi(current_discovered_port_string);
-		} catch (...) {
-			proxy_error(
-				"Unable to parse port value coming from '%s' during topology discovery ('%s':%s). Terminating discovery early.\n",
-				originating_server_hostname.c_str(), current_discovered_hostname.c_str(), current_discovered_port_string.c_str()
-			);
-			return;
-		}
-		string current_discovered_role, current_discovered_status, current_discovered_version;
-		if (rds_topology_check_type == AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK && num_fields >= 7) {
-			current_discovered_role = row[4];
-			current_discovered_status = row[5];
-			current_discovered_version = row[6];
-		}
-		if (!current_discovered_version.empty() && !is_aws_rds_topology_version_supported(current_discovered_version)) {
-			proxy_warning("Discovered topology version (%s) is not compatible with supported version (%s)\n",
-				current_discovered_version.c_str(), SUPPORTED_AWS_RDS_TOPOLOGY_VERSION);
-			return;
-		}
-
-		int64_t current_determined_weight = (int64_t)(-1L); // TODO: Add logic for selecting a different weight based on discovered role and status
-		int32_t use_ssl = 0;
-		if (mmsd->use_ssl) {
-			use_ssl = 1;
-		}
-
-		tuple<string, uint16_t, uint32_t, int64_t, int32_t> discovered_server(current_discovered_hostname, current_discovered_port, reader_hostgroup, current_determined_weight, use_ssl);
-		if (!AWS_RDS_Topology_Server_Map.count(current_discovered_hostname)) { // TODO: update to also check for updated fields
-			// Server isn't in either hostgroup yet, adding as reader
-			proxy_info("%d: Adding new host '%s' to new server list in hostgroup [%ld].\n", __LINE__, std::get<0>(discovered_server).c_str(), std::get<2>(discovered_server));
-			new_servers.push_back(discovered_server);
-			auto new_rds_topology_server = make_shared<AWS_RDS_topology_server>(current_discovered_hostname, current_discovered_port, reader_hostgroup);
-			AWS_RDS_Topology_Server_Map.insert({ current_discovered_hostname, new_rds_topology_server });
-		}
-		AWS_RDS_Topology_Server_Map[originating_server_hostname]->hosts_in_topology.insert(current_discovered_hostname);
-		// TODO: Add logic to remove hosts if they disappear from metadata
-	}
-
-	// Add the new servers if any. The AWS_RDS_TOPOLOGY_CHECK is currently meant to only be used with RDS Multi-AZ DB clusters
-	if (!new_servers.empty() && (rds_topology_check_type != AWS_RDS_TOPOLOGY_CHECK || is_aws_rds_multi_az_db_cluster_topology(originating_server_hostname, new_servers))) {
-		MyHGM->add_discovered_servers_to_mysql_servers_and_replication_hostgroups(new_servers);
-	}
-}
-
-/**
-* @brief Check if a list of servers is matching the description of an AWS RDS Multi-AZ DB Cluster.
-* @details This method takes a vector of discovered servers and checks that there are exactly three which are named "instance-[1|2|3]" respectively, as expected on an AWS RDS Multi-AZ DB Cluster.
-* @param discovered_servers A vector of servers discovered when querying the cluster's topology.
-* @return Returns 'true' if all conditions are met and 'false' otherwise.
-*/
-bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const string& originating_servername, const std::vector<tuple<string, uint16_t, uint32_t, int64_t, int32_t>>& discovered_servers) {
-	if (discovered_servers.size() != 2) {
-		return false;
-	}
-
-	vector<string> hostnames(1, originating_servername);
-	for (tuple<string, uint16_t, uint32_t, int64_t, int32_t> server : discovered_servers) {
-		string hostname = std::get<0>(server);
-		if (hostname.empty()) {
-			continue;
-		}
-		hostnames.push_back(hostname);
-	}
-
-	const unordered_set<string> expected_instance_names = {"-instance-1", "-instance-2", "-instance-3"};
-	unordered_set<string> discovered_instance_names;
-	for( string hostname : hostnames) {
-		size_t domain_start = hostname.find('.');
-		if (domain_start != string::npos && domain_start > 11) {
-			string prospect_instance_suffix = hostname.substr(domain_start - 11, 11);
-			discovered_instance_names.insert(prospect_instance_suffix);
-		}
-	}
-	return (expected_instance_names == discovered_instance_names);
-}
-
-bool MySQL_Monitor::is_aws_rds_topology_query_task(const MySQL_Monitor_State_Data_Task_Type &task_type) {
-	return task_type == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
-		|| task_type == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
-		|| task_type == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
-		|| task_type == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
-}
-
-bool MySQL_Monitor::mysql_row_matches_query_task(const unordered_set<string> &field_names, const MySQL_Monitor_State_Data_Task_Type &task_type)
-{
-	if (task_type == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY || task_type == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
-		return field_names == unordered_set<string>({ "read_only", "id", "endpoint", "port"});
-	}
-	return field_names == unordered_set<string>({"read_only", "id", "endpoint", "port", "role", "status", "version"});
-}
-
-void MySQL_Monitor::add_topology_query_to_task(MySQL_Monitor_State_Data_Task_Type &task_type)
-{
-	switch (rds_topology_check_type) {
-		case AWS_RDS_TOPOLOGY_CHECK:
-			if (task_type == MON_READ_ONLY)
-				task_type = MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY;
-			else if (task_type == MON_INNODB_READ_ONLY)
-				task_type = MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY;
-			break;
-		case AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK:
-			if (task_type == MON_READ_ONLY)
-				task_type = MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
-			else if (task_type == MON_INNODB_READ_ONLY)
-				task_type = MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
-			break;
-		default:
-			proxy_warning("Attempting to add rds_topology query to unsupported read_only check.");
-	}
-}
-
 void * MySQL_Monitor::monitor_read_only() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3707,7 +3536,6 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long next_loop_at=0;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
-		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
 		unsigned int glover;
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
@@ -3737,19 +3565,6 @@ void * MySQL_Monitor::monitor_read_only() {
 		
 		if (resultset->rows_count == 0) {
 			goto __end_monitor_read_only_loop;
-		}
-
-		if (topology_loop_max > 0) { // if the discovery interval is set to zero, do not query for the topology
-			if (topology_loop >= topology_loop_max) {
-				if (rds_topology_check_type == NONE) {
-					proxy_info("Setting topology check to aws_rds_topology_check\n");
-					rds_topology_check_type = AWS_RDS_TOPOLOGY_CHECK;
-				}
-				topology_loop = 0;
-			} 
-			topology_loop += 1;
-		} else {
-			rds_topology_check_type = NONE;
 		}
 
 		// resultset must be initialized before calling monitor_read_only_async
@@ -6194,8 +6009,6 @@ bool AWS_Aurora_monitor_node::add_entry(AWS_Aurora_status_entry *ase) {
 	return ret; // for now ignored
 }
 
-AWS_RDS_topology_server::AWS_RDS_topology_server(const string &_str_a, int _p, int _whg) : addr(_str_a), port(_p), writer_hostgroup(_whg) {}
-
 typedef struct _host_def_t {
 	char *host;
 	int port;
@@ -7753,23 +7566,6 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				}
 
 				rc = (*proxy_sqlite3_bind_int64)(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				if (is_aws_rds_topology_query_task(mmsd->get_task_type()) && mysql_row_matches_query_task(field_names, mmsd->get_task_type())) {
-					// Process the read_only field as above and store the first server
-					vector<MYSQL_ROW> discovered_servers;
-					discovered_servers.push_back(row);
-
-					// Store the remaining servers
-					int num_rows = mysql_num_rows(mmsd->result);
-					for (int i = 1; i < num_rows; i++) {
-						row = mysql_fetch_row(mmsd->result);
-						discovered_servers.push_back(row);
-					}
-
-					// Process the discovered servers and add them to 'runtime_mysql_servers'
-					if (!discovered_servers.empty()) {
-						process_discovered_topology(originating_server_hostname, discovered_servers, mmsd, num_fields);
-					}
-				}
 			} else {
 				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
 				rc = (*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -7852,12 +7648,6 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
 					task_type = MON_READ_ONLY__AND__INNODB_READ_ONLY;
 				} else if (strcasecmp(r->fields[3], (char*)"read_only|innodb_read_only") == 0) {
 					task_type = MON_READ_ONLY__OR__INNODB_READ_ONLY;
-				}
-
-				// Change task type if it's time to do discovery check. Only for aws rds endpoints
-				string hostname = r->fields[0];
-				if (hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos && rds_topology_check_type != NONE) {
-					add_topology_query_to_task(task_type);
 				}
 			}
 
@@ -8666,8 +8456,3 @@ void MySQL_Monitor::monitor_galera_async() {
 
 template class WorkItem<MySQL_Monitor_State_Data>;
 template class WorkItem<DNS_Resolve_Data>;
-
-bool MySQL_Monitor::is_aws_rds_topology_version_supported(const string& version) {
-	// TODO: implement better check that considers minor and major versions
-	return version == SUPPORTED_AWS_RDS_TOPOLOGY_VERSION;
-}

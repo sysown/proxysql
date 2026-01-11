@@ -144,16 +144,6 @@ class AWS_Aurora_monitor_node {
 	}
 };
 
-class AWS_RDS_topology_server {
-	public:
-	string addr;
-	int port;
-	unsigned int writer_hostgroup;
-	unordered_set<string> hosts_in_topology;
-
-	AWS_RDS_topology_server(const string &_str_a, int _p, int _whg);
-};
-
 typedef struct _Galera_status_entry_t {
 	unsigned long long start_time;
 	unsigned long long check_time;
@@ -485,13 +475,6 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
-	void process_discovered_topology(const std::string& originating_server_hostname, const vector<MYSQL_ROW>& discovered_servers, const MySQL_Monitor_State_Data* mmsd, int num_fields);
-	bool is_aws_rds_multi_az_db_cluster_topology(const string& originating_server_hostname, const vector<tuple<string, uint16_t, uint32_t, int64_t, int32_t>>& discovered_servers);
-	bool is_aws_rds_topology_query_task(const MySQL_Monitor_State_Data_Task_Type& task_type);
-	bool mysql_row_matches_query_task(const unordered_set<string> &field_names, const MySQL_Monitor_State_Data_Task_Type &task_type);
-	void add_topology_query_to_task(MySQL_Monitor_State_Data_Task_Type &task_type);
-	bool is_aws_rds_topology_version_supported(const string& version);
-
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
 	std::vector<table_def_t *> *tables_defs_monitor_internal;
@@ -513,7 +496,6 @@ class MySQL_Monitor {
 	SQLite3_result *Galera_Hosts_resultset;
 	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
-	std::map<std::string, shared_ptr<AWS_RDS_topology_server>> AWS_RDS_Topology_Server_Map; 
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
 	unsigned int num_threads;
 	unsigned int aux_threads;
@@ -541,8 +523,6 @@ class MySQL_Monitor {
 	bool shutdown;
 	pthread_mutex_t mon_en_mutex;
 	bool monitor_enabled;
-	MySQL_Monitor_Aws_Metadata_Check rds_topology_check_type = MySQL_Monitor_Aws_Metadata_Check::AWS_RDS_TOPOLOGY_CHECK;
-	int topology_loop = 0;
 	SQLite3DB *admindb;	// internal database
 	SQLite3DB *monitordb;	// internal database
 	SQLite3DB *monitor_internal_db;	// internal database
