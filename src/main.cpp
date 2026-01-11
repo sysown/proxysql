@@ -480,7 +480,7 @@ MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
-PgSQL_STMT_Manager_v14 *GloPgStmt;
+PgSQL_STMT_Manager *GloPgStmt;
 
 MySQL_Monitor *GloMyMon;
 PgSQL_Monitor *GloPgMon;
@@ -925,7 +925,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloPgSQL_Logger = new PgSQL_Logger();
 	GloPgSQL_Logger->print_version();
 	GloMyStmt=new MySQL_STMT_Manager_v14();
-	GloPgStmt=new PgSQL_STMT_Manager_v14();
+	GloPgStmt=new PgSQL_STMT_Manager();
 	PgHGM = new PgSQL_HostGroups_Manager();
 	PgHGM->init();
 	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;

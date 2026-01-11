@@ -1888,6 +1888,35 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 template<typename S>
 void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);
 
+/**
+ * @brief Delete all rows from statistics tables and vacuum the database.
+ *
+ * This function is called when `TRUNCATE` commands are executed on statistics
+ * tables via the Admin interface. It performs two operations:
+ * 1. Deletes all rows from a predefined list of statistics tables (and their
+ *    `*_reset` counterparts).
+ * 2. Executes `VACUUM` on the statistics database to reclaim space.
+ *
+ * The function respects the `variables.vacuum_stats` setting: if `false`,
+ * the function returns immediately without performing any operation.
+ *
+ * @param is_admin If `true`, operate on the `stats` schema within the admin
+ *                 database (`stats.*` tables). If `false`, operate on the
+ *                 standalone statistics database.
+ *
+ * @note The list of tables includes both MySQL and PostgreSQL statistics
+ *       tables, even when the trigger is a MySQL-specific `TRUNCATE`. This
+ *       ensures statistics are fully cleared regardless of the protocol that
+ *       initiated the operation.
+ *
+ * @warning The table `stats_pgsql_stat_activity` is explicitly excluded from
+ *          the deletion list because it is defined as a SQL VIEW (see
+ *          `STATS_SQLITE_TABLE_PGSQL_STAT_ACTIVITY`). Attempting to `DELETE`
+ *          from a view would cause a SQLite error:
+ *          `"cannot modify stats_pgsql_stat_activity because it is a view"`.
+ *          The view is based on `stats_pgsql_processlist`; clearing the
+ *          underlying table automatically clears the view's content.
+ */
 void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 	if (variables.vacuum_stats==false) {
 		return;
@@ -1905,7 +1934,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_pgsql_prepared_statements_info",
 		"stats_mysql_processlist",
 		"stats_pgsql_processlist",
-		"stats_pgsql_stat_activity",
+		//"stats_pgsql_stat_activity",  // VIEW, not a table; DELETE would fail
 		"stats_mysql_query_digest",
 		"stats_mysql_query_digest_reset",
 		"stats_pgsql_query_digest",

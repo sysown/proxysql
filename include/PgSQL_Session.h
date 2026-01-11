@@ -118,22 +118,6 @@ public:
 	static std::string datestyle_to_string(std::string_view input, const PgSQL_DateStyle_t& default_datestyle);
 };
 
-//std::string proxysql_session_type_str(enum proxysql_session_type session_type);
-
-// these structs will be used for various regex hardcoded
-// their initial use will be for sql_log_bin , sql_mode and time_zone
-// issues #509 , #815 and #816
-class PgSQL_Session_Regex {
-private:
-	void* opt;
-	void* re;
-	char* s;
-public:
-	PgSQL_Session_Regex(char* p);
-	~PgSQL_Session_Regex();
-	bool match(char* m);
-};
-
 class PgSQL_STMT_Global_info;
 using Parse_Param_Types = std::vector<uint32_t>; // Vector of parameter types for prepared statements
 
@@ -165,7 +149,7 @@ struct PgSQL_Extended_Query_Info {
 	const char* stmt_client_name;
 	const char* stmt_client_portal_name;
 	const PgSQL_Bind_Message* bind_msg;
-	PgSQL_STMT_Global_info* stmt_info;
+	const PgSQL_STMT_Global_info* stmt_info;
 	uint64_t stmt_global_id;
 	uint32_t stmt_backend_id;
 	uint8_t stmt_type;

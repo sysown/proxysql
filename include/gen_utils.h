@@ -24,6 +24,111 @@ inline int fastrand() {
 #define def_fastrand
 #endif
 
+/**
+ * @brief Thread-local state for the xoshiro128++ PRNG.
+ *
+ * s[0..3] hold the internal 128-bit state. Keeping it thread_local guarantees
+ * that each thread uses an independent sequence without synchronization.
+ */
+static thread_local uint32_t s[4];
+
+/**
+ * @brief Thread-local flag indicating whether the PRNG state has been seeded.
+ *
+ * Lazy initialization is used to seed the state on the first use per thread.
+ */
+static thread_local uint8_t seeded = 0;
+
+/**
+ * @brief Initialize the thread-local PRNG state.
+ *
+ * Seeds the 128-bit xoshiro state using a mix of the monotonic clock and the
+ * calling thread identifier. A splitmix-like mixing function is applied to
+ * produce well-dispersed bits. Ensures the state is not all zeros.
+ *
+ * Important:
+ * - Uses CLOCK_MONOTONIC to reduce susceptibility to wall-clock changes.
+ * - Not cryptographically secure. Do not use for security-sensitive code.
+ */
+static void init_seed(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	uint64_t t = ((uint64_t)ts.tv_nsec) ^ ((uint64_t)ts.tv_sec << 32);
+	uint64_t tid = (uintptr_t)pthread_self();
+
+	// Simple mixing: XOR, shifts, multiplies
+	uint64_t x = t ^ tid;
+	x ^= x >> 33;
+	x *= 0xff51afd7ed558ccdULL;
+	x ^= x >> 33;
+	x *= 0xc4ceb9fe1a85ec53ULL;
+	x ^= x >> 33;
+
+	// Split into four 32-bit words
+	s[0] = (uint32_t)x;
+	s[1] = (uint32_t)(x >> 32);
+	s[2] = ~s[0];  // invert for extra diversity
+	s[3] = ~s[1];
+
+	// avoid all-zero state
+	if (!s[0] && !s[1] && !s[2] && !s[3])
+		s[0] = 1;
+
+	seeded = 1;
+}
+
+/**
+ * @brief Rotate left utility.
+ *
+ * @param x Value to rotate.
+ * @param k Rotation amount in bits (0..31).
+ * @return x rotated left by k bits.
+ */
+static inline uint32_t rotl(uint32_t x, int k) {
+	return (x << k) | (x >> (32 - k));
+}
+
+/**
+ * @brief xoshiro128++ PRNG round function.
+ *
+ * This is the "++" variant: result = rotl(s0 + s3, 7) + s0.
+ * It updates the internal state using xorshift operations and a rotation.
+ * The algorithm is designed for speed and statistical quality.
+ *
+ * Thread safety:
+ * - Uses thread-local state; no locks required.
+ *
+ * @return A 32-bit pseudo-random number.
+ */
+static uint32_t xoshiro128_plus_plus(void) {
+	if (!seeded) init_seed();
+
+	const uint32_t result = rotl(s[0] + s[3], 7) + s[0];
+	const uint32_t t = s[1] << 9;
+
+	s[2] ^= s[0];
+	s[3] ^= s[1];
+	s[1] ^= s[2];
+	s[0] ^= s[3];
+	s[2] ^= t;
+	s[3] = rotl(s[3], 11);
+
+	return result;
+}
+
+/**
+ * @brief Fast, non-cryptographic random number generator.
+ *
+ * Convenience wrapper over xoshiro128_plus_plus(). Returns a 32-bit
+ * pseudo-random value. On first call per thread, the generator is seeded.
+ *
+ * @return A 32-bit pseudo-random number.
+ */
+static inline uint32_t rand_fast() {
+	return xoshiro128_plus_plus();
+}
+
 class PtrArray {
 	private:
 	void expand(unsigned int more) {
@@ -393,5 +498,34 @@ std::string strip_schema_from_query(const char* query, const char* schema,
 std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);
 
 std::vector<std::string> split_string(const std::string& str, char delimiter);
+
+inline constexpr bool fast_isspace(unsigned char c) noexcept
+{
+	// Matches: '\t' (0x09) through '\r' (0x0D), and ' ' (0x20)
+	// That is: '\t', '\n', '\v', '\f', '\r', ' '
+	//
+	// (c - '\t') < 5   -> true for 0x09-0x0D inclusive
+	// (c == ' ')       -> true for space
+	//
+	// Use bitwise OR `|` (not logical `||`) to keep it branchless.
+	return (c == ' ') | (static_cast<unsigned char>(c - '\t') < 5);
+}
+
+inline constexpr char* fast_uint32toa(uint32_t value, char* out) noexcept {
+	char* p = out;
+	do {
+		*p++ = '0' + (value % 10);
+		value /= 10;
+	} while (value);
+	*p = '\0';
+	char* start = out;
+	char* end = p - 1;
+	while (start < end) {
+		char t = *start;
+		*start++ = *end;
+		*end-- = t;
+	}
+	return p;
+}
 
 #endif /* __GEN_FUNCTIONS */

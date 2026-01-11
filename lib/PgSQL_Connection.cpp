@@ -179,7 +179,7 @@ PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	options.init_connect = NULL;
 	options.init_connect_sent = false;
 	userinfo = new PgSQL_Connection_userinfo();
-	local_stmts = new PgSQL_STMTs_local_v14(false); // false by default, it is a backend
+	local_stmts = new PgSQL_STMT_Local(false); // false by default, it is a backend
 
 	//for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
 	//	variables[i].value = NULL;
@@ -1663,8 +1663,7 @@ void PgSQL_Connection::stmt_prepare_start() {
 			return;
 		}
 	} else {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -1730,8 +1729,7 @@ void PgSQL_Connection::stmt_describe_start() {
 			return;
 		}
 	} else {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -1755,8 +1753,7 @@ void PgSQL_Connection::resync_start() {
 
 	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
-	// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-	if (PQpipelineSync(pgsql_conn) == 0) {
+	if (PQsendPipelineSync(pgsql_conn) == 0) {
 		proxy_error("Failed to send pipeline sync.\n");
 		resync_failed = true;
 		return;
@@ -1878,8 +1875,7 @@ void PgSQL_Connection::stmt_execute_start() {
 			return;
 		}
 	} else {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -1905,8 +1901,7 @@ void PgSQL_Connection::reset_session_start() {
 
 	reset_session_in_pipeline = is_pipeline_active();
 	if (reset_session_in_pipeline) {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -2504,7 +2499,7 @@ void PgSQL_Connection::reset() {
 	reusable = true;
 	creation_time = monotonic_time();
 	delete local_stmts;
-	local_stmts = new PgSQL_STMTs_local_v14(false);
+	local_stmts = new PgSQL_STMT_Local(false);
 
 	// reset all variables
 	for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {

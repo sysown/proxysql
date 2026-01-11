@@ -31,17 +31,22 @@ private:
 	}
 
 	const std::shared_ptr<http_response> find_script(const http_request& req, std::string& script, int &interval_ms) {
-		char *error=NULL;
 		const string req_uri { req.get_path_piece(1) };
 		const string req_path { req.get_path() };
-		const string select_query {
-			"SELECT * FROM runtime_restapi_routes WHERE uri='" + req_uri + "' and"
-				" method='" + req.get_method() + "' and active=1"
-		};
+		const string select_query { "SELECT * FROM runtime_restapi_routes WHERE uri=?1 AND method=?2 AND active=1" };
 
-		std::unique_ptr<SQLite3_result> resultset {
-			std::unique_ptr<SQLite3_result>(GloAdmin->admindb->execute_statement(select_query.c_str(), &error))
-		};
+		std::unique_ptr<SQLite3_result> resultset = nullptr;
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+
+		auto [rc, statement1] = GloAdmin->admindb->prepare_v2(select_query.c_str());
+		ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1.get(), 1, req_uri.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1.get(), 2, req.get_method().c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		resultset = std::unique_ptr<SQLite3_result>(GloAdmin->admindb->execute_prepared(statement1.get(), &error, &cols, &affected_rows));
+		rc = (*proxy_sqlite3_clear_bindings)(statement1.get()); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_reset)(statement1.get()); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 
 		if (!resultset) {
 			proxy_error(

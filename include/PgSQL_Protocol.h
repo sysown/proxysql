@@ -296,27 +296,6 @@ struct ColumnMetadata {
 	uint16_t format;        // 0 = text, 1 = binary
 };
 
-/* Not Used anymore. To be removed in next iteration
-class PgSQL_Describe_Prepared_Info {
-public:
-	uint32_t* parameter_types;	   // Array of parameter type OIDs
-	size_t parameter_types_count;  // Number of parameters
-	ColumnMetadata* columns;       // Array of column metadata
-	size_t columns_count;          // Number of columns
-
-	PgSQL_Describe_Prepared_Info();
-	~PgSQL_Describe_Prepared_Info();
-
-	// Populate metadata from PGresult
-	void populate(const PGresult* result);
-	void clear();
-
-private:
-	void extract_parameters(const PGresult* result);
-	void extract_columns(const PGresult* result);
-};
-*/
-
 #define PGSQL_QUERY_RESULT_NO_DATA	0x00
 #define PGSQL_QUERY_RESULT_TUPLE	0x01
 #define PGSQL_QUERY_RESULT_COMMAND	0x02
@@ -832,8 +811,6 @@ public:
 
 	bool generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_ready_for_query_packet(bool send, char trx_state, PtrSize_t* _ptr = NULL);
-	// Not Used anymore. To be removed in next iteration
-	//bool generate_describe_completion_packet(bool send, bool ready, const PgSQL_Describe_Prepared_Info* desc, uint8_t stmt_type, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_close_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_no_data_packet(bool send, PtrSize_t* _ptr = NULL);

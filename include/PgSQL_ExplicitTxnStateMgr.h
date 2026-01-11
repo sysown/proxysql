@@ -56,6 +56,9 @@ struct TxnCmd {
  */
 class PgSQL_TxnCmdParser {
 public:
+    PgSQL_TxnCmdParser() noexcept { tokens.reserve(16); }
+    ~PgSQL_TxnCmdParser() noexcept = default;
+
     TxnCmd parse(std::string_view input, bool in_transaction_mode) noexcept;
 
 private:
@@ -67,14 +70,20 @@ private:
     TxnCmd parse_start(size_t& pos) noexcept;
 
     // Helpers
-    static std::string to_lower(std::string_view s) noexcept {
-		std::string s_copy(s);
-        std::transform(s_copy.begin(), s_copy.end(), s_copy.begin(), ::tolower);
-        return s_copy;
+    inline static bool iequals(std::string_view a, std::string_view b) noexcept {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            char ca = a[i];
+            char cb = b[i];
+            if (ca >= 'A' && ca <= 'Z') ca += 32;
+            if (cb >= 'A' && cb <= 'Z') cb += 32;
+            if (ca != cb) return false;
+        }
+        return true;
     }
 
     inline static bool contains(std::vector<std::string_view>&& list, std::string_view value) noexcept {
-        for (const auto& item : list) if (item == value) return true;
+        for (const auto& item : list) if (iequals(item, value)) return true;
         return false;
     }
 };

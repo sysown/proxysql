@@ -268,7 +268,7 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3/sqlite3 && patch -p0 < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../throw.patch
-	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
+	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1 -DSQLITE_ENABLE_MATH_FUNCTIONS
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
@@ -331,6 +331,7 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a:
 	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch
 	cd postgresql/postgresql && patch -p0 < ../fmt_err_msg.patch
 	cd postgresql/postgresql && patch -p0 < ../bind_fmt_text.patch
+	cd postgresql/postgresql && patch -p0 < ../pqsendpipelinesync.patch
 	#cd postgresql/postgresql && LD_LIBRARY_PATH="$(shell pwd)/libssl/openssl" ./configure --with-ssl=openssl --with-includes="$(shell pwd)/libssl/openssl/include/" --with-libraries="$(shell pwd)/libssl/openssl/" --without-readline --enable-debug  CFLAGS="-ggdb -O0 -fno-omit-frame-pointer" CPPFLAGS="-g -O0"
 	cd postgresql/postgresql && LD_LIBRARY_PATH="$(SSL_LDIR)" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0

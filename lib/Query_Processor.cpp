@@ -228,7 +228,7 @@ Query_Processor<QP_DERIVED>::Query_Processor(int _query_rules_fast_routing_algor
 		rand_del[1] = '-';
 		rand_del[2] = '-';
 		for (int i = 3; i < 11; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[11] = '-';
 		rand_del[12] = '-';
@@ -1559,6 +1559,10 @@ __internal_loop:
 		}
 		if (qr->cache_empty_result >= 0) {
 			// Note: negative value means this rule doesn't change
+			// cache_empty_result values:
+			// -1: Use global setting (query_cache_stores_empty_result)
+			//  0: Do NOT cache empty resultsets, but cache non-empty resultsets
+			//  1: Always cache resultsets (both empty and non-empty)
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
 			ret->cache_empty_result=qr->cache_empty_result;
 		}
@@ -1816,8 +1820,13 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 		opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
 		opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
 
-		qp->digest_text=query_digest_and_first_comment_2(query, query_length, &qp->first_comment, 
-			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+		if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
+			qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+				((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+		} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+			qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+				((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+		}
 		// the hash is computed only up to query_digests_max_digest_length bytes
 		const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
 		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
@@ -1877,10 +1886,10 @@ template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uint64_t digest, char* digest_text, int hid, 
 	TypeConnInfo* ui, unsigned long long t, unsigned long long n, const char* client_addr, unsigned long long rows_affected,
 	unsigned long long rows_sent) {
-	pthread_rwlock_wrlock(&digest_rwlock);
-	QP_query_digest_stats *qds;
+	QP_query_digest_stats* qds;
+	std::unordered_map<uint64_t, void*>::iterator it;
 
-	std::unordered_map<uint64_t, void *>::iterator it;
+	pthread_rwlock_wrlock(&digest_rwlock);
 	it=digest_umap.find(digest_total);
 	if (it != digest_umap.end()) {
 		// found

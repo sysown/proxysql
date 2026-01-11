@@ -473,7 +473,7 @@ int detect_version(CommandLine& cl, bool& is_mariadb, bool& is_cluster) {
 		return 1;
 	}
 
-	MYSQL_QUERY(mysql, "select @@version");
+	MYSQL_QUERY(mysql, "select /* set_testing */ @@version");
 	MYSQL_RES *result = mysql_store_result(mysql);
 	MYSQL_ROW row;
 	while ((row = mysql_fetch_row(result)))

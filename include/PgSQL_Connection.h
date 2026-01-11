@@ -12,7 +12,7 @@
 
 class PgSQL_SrvC;
 class PgSQL_Query_Result;
-class PgSQL_STMTs_local_v14;
+class PgSQL_STMT_Local;
 //class PgSQL_Describe_Prepared_Info;
 class PgSQL_Bind_Info;
 //#define STATUS_PGSQL_CONNECTION_SEQUENCE			 0x00000001
@@ -639,7 +639,7 @@ public:
 	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
 	bool resync_failed; // true if the last resync attempt failed
 
-	PgSQL_STMTs_local_v14* local_stmts;
+	PgSQL_STMT_Local* local_stmts;
 	PgSQL_SrvC *parent;
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Data_Stream* myds;
