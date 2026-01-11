@@ -2384,6 +2384,8 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 						s_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
 					} else if (var_type == "mysql") {
 						s_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+					} else if (var_type == "pgsql") {
+						s_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
 					}
 				}
 				s_query += " ORDER BY variable_name";
@@ -2412,6 +2414,8 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 							d_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
 						} else if (var_type == "mysql") {
 							d_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+						} else if (var_type == "pgsql") {
+							d_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
 						}
 					}
 					GloAdmin->admindb->execute(d_query.c_str());
@@ -2894,7 +2898,7 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 					if (GloProxyCluster->cluster_pgsql_query_rules_save_to_disk == true) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
-						// TODO: Add flush_pgsql_query_rules__from_memory_to_disk() when implemented
+						GloAdmin->flush_GENERIC__from_to("pgsql_query_rules", "memory_to_disk");
 					} else {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
@@ -3049,7 +3053,7 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				if (computed_checksum == tmp_expected_checksum) {
 					proxy_info("%s\n", f_query.msgs[1].c_str());
 					// TODO: Call load_pgsql_servers_to_runtime when integrated with cluster sync
-					// GloAdmin->load_pgsql_servers_to_runtime(result, {}, computed_checksum, peer_runtime_pgsql_server.epoch);
+					GloAdmin->load_pgsql_servers_to_runtime({}, {computed_checksum, peer_runtime_pgsql_server.epoch}, {});
 					metrics.p_counter_array[f_query.success_counter]->Increment();
 				} else {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum mismatch while syncing Runtime PostgreSQL Servers. Expected: %s, Computed: %s\n",
@@ -3187,7 +3191,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 				if (computed_checksum == tmp_expected_checksum) {
 					proxy_info("%s\n", f_query.msgs[1].c_str());
 					// TODO: Call load_pgsql_servers_to_runtime when integrated with cluster sync
-					// GloAdmin->load_pgsql_servers_to_runtime(result, {}, computed_checksum, peer_pgsql_server_v2.epoch);
+					GloAdmin->load_pgsql_servers_to_runtime({}, {}, {computed_checksum, peer_pgsql_server_v2.epoch});
 					metrics.p_counter_array[f_query.success_counter]->Increment();
 				} else {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum mismatch while syncing PostgreSQL Servers v2. Expected: %s, Computed: %s\n",

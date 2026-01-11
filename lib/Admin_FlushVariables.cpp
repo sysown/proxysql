@@ -384,6 +384,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		if (GloVars.cluster_sync_interfaces == false) {
 			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
 		}
+	} else if (modname == "pgsql") {
+		if (GloVars.cluster_sync_interfaces == false) {
+			q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
+		}
 	}
 	q += " ORDER BY variable_name";
 	admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
@@ -399,6 +403,8 @@ void ProxySQL_Admin::flush_GENERIC_variables__checksum__database_to_runtime(cons
 		checkvar = &GloVars.checksums_values.mysql_variables;
 	} else if (modname == "ldap") {
 		checkvar = &GloVars.checksums_values.ldap_variables;
+	} else if (modname == "pgsql") {
+		checkvar = &GloVars.checksums_values.pgsql_variables;
 	}
 	assert(checkvar != NULL);
 	checkvar->set_checksum(buf);
@@ -857,6 +863,13 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 			q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN ('mysql-threads')";
 			if (GloVars.cluster_sync_interfaces == false) {
 				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+			}
+			q += " ORDER BY variable_name";
+
+			// PostgreSQL variables filtering
+			q += ";\nSELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-\%' AND variable_name NOT IN ('pgsql-interfaces')";
+			if (GloVars.cluster_sync_interfaces == false) {
+				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
 			}
 			q += " ORDER BY variable_name";
 			admindb->execute_statement(q.c_str(), &error, &cols, &affected_rows, &resultset);
