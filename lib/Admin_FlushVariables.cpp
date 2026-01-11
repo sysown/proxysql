@@ -26,6 +26,7 @@ using json = nlohmann::json;
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
 #include "MCP_Thread.h"
+#include "MySQL_Tool_Handler.h"
 #include "ProxySQL_MCP_Server.hpp"
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
@@ -1391,7 +1392,33 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 					}
 				}
 			} else {
-				proxy_info("MCP: Server already running\n");
+				// Server is already running - check if MySQL configuration changed
+				// and reinitialize the tool handler if needed
+				proxy_info("MCP: Server already running, checking MySQL tool handler reinitialization\n");
+				if (GloMCPH->mysql_tool_handler) {
+					// Delete old handler
+					delete GloMCPH->mysql_tool_handler;
+					GloMCPH->mysql_tool_handler = NULL;
+				}
+
+				// Create new tool handler with current configuration
+				proxy_info("MCP: Reinitializing MySQL Tool Handler with current configuration\n");
+				GloMCPH->mysql_tool_handler = new MySQL_Tool_Handler(
+					GloMCPH->variables.mcp_mysql_hosts ? GloMCPH->variables.mcp_mysql_hosts : "",
+					GloMCPH->variables.mcp_mysql_ports ? GloMCPH->variables.mcp_mysql_ports : "",
+					GloMCPH->variables.mcp_mysql_user ? GloMCPH->variables.mcp_mysql_user : "",
+					GloMCPH->variables.mcp_mysql_password ? GloMCPH->variables.mcp_mysql_password : "",
+					GloMCPH->variables.mcp_mysql_schema ? GloMCPH->variables.mcp_mysql_schema : "",
+					GloMCPH->variables.mcp_catalog_path ? GloMCPH->variables.mcp_catalog_path : ""
+				);
+
+				if (GloMCPH->mysql_tool_handler->init() != 0) {
+					proxy_error("MCP: Failed to reinitialize MySQL Tool Handler\n");
+					delete GloMCPH->mysql_tool_handler;
+					GloMCPH->mysql_tool_handler = NULL;
+				} else {
+					proxy_info("MCP: MySQL Tool Handler reinitialized successfully\n");
+				}
 			}
 		} else {
 			// Stop the server if running
