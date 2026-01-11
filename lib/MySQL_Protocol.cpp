@@ -105,7 +105,7 @@ void debug_spiffe_id(const unsigned char *user, const char *attributes, int __li
 
 // Helper function to get auth plugin from user attributes
 static ProxySQL_Auth_Plugin* get_user_auth_plugin(const char* attributes, const char* username) {
-	if (!attributes || strlen(attributes) == 0) {
+	if (!attributes || attributes[0] == '\0') {
 		return nullptr;
 	}
 
@@ -2568,8 +2568,9 @@ __do_auth:
 					} else if (backend_acct.password[0] != '*') {
 						// Password is clear-text, compute SHA1 and convert to hex
 						char sha1_binary[SHA_DIGEST_LENGTH];
+						size_t pass_len = strlen(backend_acct.password); // safe: password checked non-null at line 2554
 						SHA1((const unsigned char*)backend_acct.password,
-							strlen(backend_acct.password),
+							pass_len,
 							(unsigned char*)sha1_binary);
 						userinfo->sha1_pass = sha1_pass_hex(sha1_binary);
 						// Cache the computed SHA1 for future use (in binary format for set_SHA1)

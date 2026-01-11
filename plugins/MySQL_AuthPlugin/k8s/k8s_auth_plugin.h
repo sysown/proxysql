@@ -64,7 +64,7 @@ public:
             return result;
         }
 
-        if (strlen(credential) == 0) {
+        if (credential[0] == '\0') {
             result.error_msg = strdup("empty token");
             return result;
         }
