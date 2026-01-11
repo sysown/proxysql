@@ -5,10 +5,46 @@ This directory contains scripts to test the ProxySQL MCP (Model Context Protocol
 ## Prerequisites
 
 - ProxySQL must be installed and built with MCP support
-- MySQL server (either running or Docker capability)
+- MySQL server (either running locally or Docker capability)
 - `mysql` client installed
 - `curl` installed for HTTP testing
 - `jq` installed for JSON parsing (optional but recommended)
+
+### Required Environment Variables
+
+Configure these environment variables based on your setup before running the test scripts:
+
+```bash
+# ProxySQL Admin Configuration (required by configure_mcp.sh)
+export PROXYSQL_ADMIN_HOST=${PROXYSQL_ADMIN_HOST:-127.0.0.1}
+export PROXYSQL_ADMIN_PORT=${PROXYSQL_ADMIN_PORT:-6032}
+export PROXYSQL_ADMIN_USER=${PROXYSQL_ADMIN_USER:-admin}
+export PROXYSQL_ADMIN_PASSWORD=${PROXYSQL_ADMIN_PASSWORD:-admin}
+
+# MySQL Configuration for MCP Tools (required for native MySQL mode)
+export MYSQL_HOST=${MYSQL_HOST:-127.0.0.1}
+export MYSQL_PORT=${MYSQL_PORT:-3306}
+export MYSQL_USER=${MYSQL_USER:-root}
+export MYSQL_PASSWORD=${MYSQL_PASSWORD:-}  # Set your MySQL password
+export TEST_DB_NAME=${TEST_DB_NAME:-testdb}
+
+# MCP Server Configuration (optional, defaults shown)
+export MCP_HOST=${MCP_HOST:-127.0.0.1}
+export MCP_PORT=${MCP_PORT:-6071}
+```
+
+**Quick Setup - Add to your shell profile:**
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+cat >> ~/.bashrc <<'EOF'
+
+# ProxySQL MCP Testing Environment Variables
+export PROXYSQL_ADMIN_PASSWORD=admin        # Your ProxySQL admin password
+export MYSQL_PASSWORD=your_mysql_password   # Your MySQL root password
+EOF
+
+source ~/.bashrc
+```
 
 ## Quick Start
 
