@@ -5527,6 +5527,14 @@ void ProxySQL_Admin::flush_ldap_variables__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+void ProxySQL_Admin::flush_pgsql_variables__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'pgsql-%'");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
 void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
 	const char *a="ATTACH DATABASE '%s' AS %s";
 	int l=strlen(a)+strlen(db2->get_url())+strlen(alias)+5;

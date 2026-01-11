@@ -1006,40 +1006,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		}
 	}
 
-	// PostgreSQL Variables Sync
-	if (diff_mv_pgsql) {
-		v = &checksums_values.pgsql_variables;
-		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_variables.version,0);
-		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_variables.epoch,0);
-		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_variables.checksum,0);
-		const std::string v_exp_checksum { v->checksum };
-
-		if (v->version > 1) {
-			if (
-				(own_version == 1) // we just booted
-				||
-				(v->epoch > own_epoch) // epoch is newer
-			) {
-				if (v->diff_check >= diff_mv_pgsql) {
-					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					proxy_info("Cluster: detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					//GloProxyCluster->pull_pgsql_variables_from_peer(v_exp_checksum, v->epoch);
-					//metrics.p_counter_array[pulled_pgsql_variables_success]->Increment();
-				}
-			}
-			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mv_pgsql*10)) == 0)) {
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mv_pgsql * 10));
-				proxy_warning("Cluster: detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mv_pgsql*10));
-			}
-		} else {
-			if (v->diff_check && (v->diff_check % (diff_mv_pgsql*10)) == 0) {
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mv_pgsql * 10));
-				proxy_warning("Cluster: detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mv_pgsql*10));
-			}
-		}
-	}
-}
-
 /**
  * @brief Computes the checksum from a MySQL resultset in the same we already do in 'SQLite3_result::raw_checksum'.
  * @details For each received column computing the field length via 'strlen' is required, this is because we
@@ -2357,6 +2323,10 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 		vars_type_str = const_cast<char*>("LDAP");
 		success_metric = p_cluster_counter::pulled_ldap_variables_success;
 		failure_metric = p_cluster_counter::pulled_ldap_variables_failure;
+	} else if (var_type == "pgsql") {
+		vars_type_str = const_cast<char*>("PostgreSQL");
+		success_metric = p_cluster_counter::pulled_pgsql_variables_success;
+		failure_metric = p_cluster_counter::pulled_pgsql_variables_failure;
 	} else {
 		proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s\n", var_type.c_str());
 		assert(0);
@@ -2370,6 +2340,8 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 		nodes.get_peer_to_sync_admin_variables(&hostname, &port, &ip_address);
 	} else if (var_type == "ldap"){
 		nodes.get_peer_to_sync_ldap_variables(&hostname, &port, &ip_address);
+	} else if (var_type == "pgsql") {
+		nodes.get_peer_to_sync_pgsql_variables(&hostname, &port, &ip_address);
 	} else {
 		proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s\n", var_type.c_str());
 		assert(0);
@@ -2487,6 +2459,14 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk LDAP Variables from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: Saving to disk LDAP Variables from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_ldap_variables__from_memory_to_disk();
+						}
+					} else if (var_type == "pgsql") {
+						GloAdmin->load_pgsql_variables_to_runtime(expected_checksum, epoch);
+
+						if (GloProxyCluster->cluster_pgsql_variables_save_to_disk == true) {
+							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Variables from peer %s:%d\n", hostname, port);
+							proxy_info("Cluster: Saving to disk PostgreSQL Variables from peer %s:%d\n", hostname, port);
+							GloAdmin->flush_pgsql_variables__from_memory_to_disk();
 						}
 					} else {
 						proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s\n", var_type.c_str());
