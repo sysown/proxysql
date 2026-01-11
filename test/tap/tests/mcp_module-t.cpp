@@ -141,8 +141,8 @@ int test_variable_access(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SHOW VARIABLES LIKE 'mcp-%'");
 	MYSQL_RES* res = mysql_store_result(admin);
 	int num_rows = mysql_num_rows(res);
-	ok(num_rows == 8,
-	   "SHOW VARIABLES LIKE 'mcp-%%' returns 8 rows, got %d", num_rows);
+	ok(num_rows == 14,
+	   "SHOW VARIABLES LIKE 'mcp-%%' returns 14 rows, got %d", num_rows);
 	mysql_free_result(res);
 
 	// Test 8: Restore default values
@@ -150,6 +150,12 @@ int test_variable_access(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-port=6071");
 	MYSQL_QUERY(admin, "SET mcp-config_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
+	MYSQL_QUERY(admin, "SET mcp-mysql_hosts='127.0.0.1'");
+	MYSQL_QUERY(admin, "SET mcp-mysql_ports='3306'");
+	MYSQL_QUERY(admin, "SET mcp-mysql_user=''");
+	MYSQL_QUERY(admin, "SET mcp-mysql_password=''");
+	MYSQL_QUERY(admin, "SET mcp-mysql_schema=''");
+	MYSQL_QUERY(admin, "SET mcp-catalog_path='/var/lib/proxysql/mcp_catalog.db'");
 	ok(1, "Restored default values for MCP variables");
 
 	return test_num;
@@ -215,6 +221,12 @@ int test_variable_persistence(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-admin_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-cache_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
+	MYSQL_QUERY(admin, "SET mcp-mysql_hosts='127.0.0.1'");
+	MYSQL_QUERY(admin, "SET mcp-mysql_ports='3306'");
+	MYSQL_QUERY(admin, "SET mcp-mysql_user=''");
+	MYSQL_QUERY(admin, "SET mcp-mysql_password=''");
+	MYSQL_QUERY(admin, "SET mcp-mysql_schema=''");
+	MYSQL_QUERY(admin, "SET mcp-catalog_path='/var/lib/proxysql/mcp_catalog.db'");
 	MYSQL_QUERY(admin, "SAVE MCP VARIABLES TO DISK");
 	ok(1, "Restored default values and saved to disk");
 

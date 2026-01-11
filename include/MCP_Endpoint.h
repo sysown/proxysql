@@ -78,6 +78,35 @@ private:
 		const std::string& id = ""
 	);
 
+	/**
+	 * @brief Handle tools/list method
+	 *
+	 * Returns a list of available MySQL exploration tools.
+	 *
+	 * @return JSON with tools array
+	 */
+	json handle_tools_list();
+
+	/**
+	 * @brief Handle tools/describe method
+	 *
+	 * Returns detailed information about a specific tool.
+	 *
+	 * @param req_json The JSON-RPC request
+	 * @return JSON with tool description
+	 */
+	json handle_tools_describe(const json& req_json);
+
+	/**
+	 * @brief Handle tools/call method
+	 *
+	 * Executes a tool with the provided arguments.
+	 *
+	 * @param req_json The JSON-RPC request
+	 * @return JSON with tool execution result
+	 */
+	json handle_tools_call(const json& req_json);
+
 public:
 	/**
 	 * @brief Constructor for MCP_JSONRPC_Resource

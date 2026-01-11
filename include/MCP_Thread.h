@@ -9,6 +9,7 @@
 
 // Forward declarations
 class ProxySQL_MCP_Server;
+class MySQL_Tool_Handler;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -41,6 +42,13 @@ public:
 		char* mcp_admin_endpoint_auth;          ///< Authentication for /mcp/admin endpoint
 		char* mcp_cache_endpoint_auth;          ///< Authentication for /mcp/cache endpoint
 		int mcp_timeout_ms;                     ///< Request timeout in milliseconds (default: 30000)
+		// MySQL Tool Handler configuration
+		char* mcp_mysql_hosts;                  ///< Comma-separated list of MySQL hosts
+		char* mcp_mysql_ports;                  ///< Comma-separated list of MySQL ports
+		char* mcp_mysql_user;                   ///< MySQL username for tool connections
+		char* mcp_mysql_password;               ///< MySQL password for tool connections
+		char* mcp_mysql_schema;                 ///< Default schema/database
+		char* mcp_catalog_path;                 ///< Path to catalog SQLite database
 	} variables;
 
 	/**
@@ -59,6 +67,15 @@ public:
 	 * endpoints for MCP protocol communication.
 	 */
 	ProxySQL_MCP_Server* mcp_server;
+
+	/**
+	 * @brief Pointer to the MySQL Tool Handler instance
+	 *
+	 * This provides tools for LLM-based MySQL database exploration,
+	 * including inventory, structure, profiling, sampling, query,
+	 * relationship inference, and catalog operations.
+	 */
+	MySQL_Tool_Handler* mysql_tool_handler;
 
 
 	/**

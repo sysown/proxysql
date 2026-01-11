@@ -1,4 +1,5 @@
 #include "MCP_Thread.h"
+#include "MySQL_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "ProxySQL_MCP_Server.hpp"
 
@@ -17,6 +18,13 @@ static const char* mcp_thread_variables_names[] = {
 	"admin_endpoint_auth",
 	"cache_endpoint_auth",
 	"timeout_ms",
+	// MySQL Tool Handler configuration
+	"mysql_hosts",
+	"mysql_ports",
+	"mysql_user",
+	"mysql_password",
+	"mysql_schema",
+	"catalog_path",
 	NULL
 };
 
@@ -35,12 +43,20 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_admin_endpoint_auth = strdup("");
 	variables.mcp_cache_endpoint_auth = strdup("");
 	variables.mcp_timeout_ms = 30000;
+	// MySQL Tool Handler default values
+	variables.mcp_mysql_hosts = strdup("127.0.0.1");
+	variables.mcp_mysql_ports = strdup("3306");
+	variables.mcp_mysql_user = strdup("");
+	variables.mcp_mysql_password = strdup("");
+	variables.mcp_mysql_schema = strdup("");
+	variables.mcp_catalog_path = strdup("/var/lib/proxysql/mcp_catalog.db");
 
 	status_variables.total_requests = 0;
 	status_variables.failed_requests = 0;
 	status_variables.active_connections = 0;
 
 	mcp_server = NULL;
+	mysql_tool_handler = NULL;
 }
 
 MCP_Threads_Handler::~MCP_Threads_Handler() {
@@ -54,10 +70,28 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		free(variables.mcp_admin_endpoint_auth);
 	if (variables.mcp_cache_endpoint_auth)
 		free(variables.mcp_cache_endpoint_auth);
+	// Free MySQL Tool Handler variables
+	if (variables.mcp_mysql_hosts)
+		free(variables.mcp_mysql_hosts);
+	if (variables.mcp_mysql_ports)
+		free(variables.mcp_mysql_ports);
+	if (variables.mcp_mysql_user)
+		free(variables.mcp_mysql_user);
+	if (variables.mcp_mysql_password)
+		free(variables.mcp_mysql_password);
+	if (variables.mcp_mysql_schema)
+		free(variables.mcp_mysql_schema);
+	if (variables.mcp_catalog_path)
+		free(variables.mcp_catalog_path);
 
 	if (mcp_server) {
 		delete mcp_server;
 		mcp_server = NULL;
+	}
+
+	if (mysql_tool_handler) {
+		delete mysql_tool_handler;
+		mysql_tool_handler = NULL;
 	}
 
 	// Destroy the rwlock
@@ -127,6 +161,31 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%d", variables.mcp_timeout_ms);
 		return 0;
 	}
+	// MySQL Tool Handler configuration
+	if (!strcmp(name, "mysql_hosts")) {
+		sprintf(val, "%s", variables.mcp_mysql_hosts ? variables.mcp_mysql_hosts : "");
+		return 0;
+	}
+	if (!strcmp(name, "mysql_ports")) {
+		sprintf(val, "%s", variables.mcp_mysql_ports ? variables.mcp_mysql_ports : "");
+		return 0;
+	}
+	if (!strcmp(name, "mysql_user")) {
+		sprintf(val, "%s", variables.mcp_mysql_user ? variables.mcp_mysql_user : "");
+		return 0;
+	}
+	if (!strcmp(name, "mysql_password")) {
+		sprintf(val, "%s", variables.mcp_mysql_password ? variables.mcp_mysql_password : "");
+		return 0;
+	}
+	if (!strcmp(name, "mysql_schema")) {
+		sprintf(val, "%s", variables.mcp_mysql_schema ? variables.mcp_mysql_schema : "");
+		return 0;
+	}
+	if (!strcmp(name, "catalog_path")) {
+		sprintf(val, "%s", variables.mcp_catalog_path ? variables.mcp_catalog_path : "");
+		return 0;
+	}
 
 	return -1;
 }
@@ -191,6 +250,43 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 			return 0;
 		}
 		return -1;
+	}
+	// MySQL Tool Handler configuration
+	if (!strcmp(name, "mysql_hosts")) {
+		if (variables.mcp_mysql_hosts)
+			free(variables.mcp_mysql_hosts);
+		variables.mcp_mysql_hosts = strdup(value);
+		return 0;
+	}
+	if (!strcmp(name, "mysql_ports")) {
+		if (variables.mcp_mysql_ports)
+			free(variables.mcp_mysql_ports);
+		variables.mcp_mysql_ports = strdup(value);
+		return 0;
+	}
+	if (!strcmp(name, "mysql_user")) {
+		if (variables.mcp_mysql_user)
+			free(variables.mcp_mysql_user);
+		variables.mcp_mysql_user = strdup(value);
+		return 0;
+	}
+	if (!strcmp(name, "mysql_password")) {
+		if (variables.mcp_mysql_password)
+			free(variables.mcp_mysql_password);
+		variables.mcp_mysql_password = strdup(value);
+		return 0;
+	}
+	if (!strcmp(name, "mysql_schema")) {
+		if (variables.mcp_mysql_schema)
+			free(variables.mcp_mysql_schema);
+		variables.mcp_mysql_schema = strdup(value);
+		return 0;
+	}
+	if (!strcmp(name, "catalog_path")) {
+		if (variables.mcp_catalog_path)
+			free(variables.mcp_catalog_path);
+		variables.mcp_catalog_path = strdup(value);
+		return 0;
 	}
 
 	return -1;
