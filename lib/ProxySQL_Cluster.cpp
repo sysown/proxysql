@@ -2433,7 +2433,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 					// remember that we read from runtime_global_variables but write into global_variables
 					string_format("DELETE FROM global_variables WHERE variable_name LIKE '%s-%%'", d_query, var_type.c_str());
 					if (var_type == "mysql") {
-						s_query += " AND variable_name NOT IN ('mysql-threads')";
+						d_query += " AND variable_name NOT IN ('mysql-threads')";
 					}
 					if (GloVars.cluster_sync_interfaces == false) {
 						if (var_type == "admin") {
