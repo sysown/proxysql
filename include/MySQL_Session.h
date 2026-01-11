@@ -49,6 +49,22 @@ enum ps_type : uint8_t {
 	ps_type_execute_stmt = 0x2
 };
 
+/**
+ * @enum SelectVersionForwardingMode
+ * @brief Defines modes for handling SELECT VERSION() queries in ProxySQL.
+ *
+ * These modes control how ProxySQL responds to SELECT VERSION() queries:
+ * - NEVER: Always return ProxySQL's own version
+ * - ALWAYS: Always proxy the query to a backend server
+ * - SMART_FALLBACK_INTERNAL: Try to get version from backend connection, fallback to ProxySQL version
+ * - SMART_FALLBACK_PROXY: Try to get version from backend connection, fallback to proxying the query
+ */
+enum SelectVersionForwardingMode : uint8_t {
+	SELECT_VERSION_NEVER = 0,
+	SELECT_VERSION_ALWAYS = 1,
+	SELECT_VERSION_SMART_FALLBACK_INTERNAL = 2,
+	SELECT_VERSION_SMART_FALLBACK_PROXY = 3
+};
 
 
 //std::string proxysql_session_type_str(enum proxysql_session_type session_type);
@@ -555,6 +571,18 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void set_previous_status_mode3(bool allow_execute=true);
 	char* get_current_query(int max_length = -1);
 	bool handle_session_track_capabilities();
+	/**
+	 * @brief Attempts to get the server version string from a backend connection in the specified hostgroup.
+	 * @details This function iterates through servers in the hostgroup and checks for any available
+	 *   free connections to extract the server version string. It does NOT remove the connection
+	 *   from the pool - it only peeks at the version information.
+	 *
+	 * @param hostgroup_id The hostgroup ID to search for backend connections.
+	 * @return Pointer to the server version string if found, NULL otherwise.
+	 *         Note: The returned pointer points to the connection's internal data and should
+	 *         not be freed or modified. The pointer is only valid while the connection exists.
+	 */
+	char * get_backend_version_for_hostgroup(int hostgroup_id);
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
 

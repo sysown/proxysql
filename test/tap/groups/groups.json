@@ -247,4 +247,5 @@
   "mysql-session_track_variables_enforced-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4", "mysql56-single-g4" ],
   "mysql-session_track_variables_ff_optional-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4", "mysql56-single-g4" ],
   "mysql-session_track_variables_ff_enforced-t" : [ "default-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4", "mysql56-single-g4" ]
+  "unit-strip_schema_from_query-t": [ "unit-tests-g1" ]
 }

@@ -206,6 +206,8 @@ class SQLite3DB {
 	bool execute_statement(const char *, char **, int *, int *, SQLite3_result **);
 	SQLite3_result* execute_statement(const char *, char **_error=NULL, int *_cols=NULL, int *_affected_rows=NULL);
 	bool execute_statement_raw(const char *, char **, int *, int *, sqlite3_stmt **);
+	bool execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset);
+	SQLite3_result* execute_prepared(sqlite3_stmt* statement, char** _error, int* cols, int* affected_rows);
 	int return_one_int(const char *);
 	int check_table_structure(char *table_name, char *table_def);
 	bool build_table(char *table_name, char *table_def, bool dropit);
