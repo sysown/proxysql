@@ -42,6 +42,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "MCP_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -151,6 +152,7 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern MCP_Threads_Handler* GloMCPH;
 
 extern void (*flush_logs_function)();
 
@@ -269,6 +271,18 @@ const std::vector<std::string> SAVE_PGSQL_VARIABLES_TO_MEMORY = {
 	"SAVE PGSQL VARIABLES TO MEM" ,
 	"SAVE PGSQL VARIABLES FROM RUNTIME" ,
 	"SAVE PGSQL VARIABLES FROM RUN" };
+
+const std::vector<std::string> LOAD_MCP_VARIABLES_FROM_MEMORY = {
+	"LOAD MCP VARIABLES FROM MEMORY" ,
+	"LOAD MCP VARIABLES FROM MEM" ,
+	"LOAD MCP VARIABLES TO RUNTIME" ,
+	"LOAD MCP VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_MCP_VARIABLES_TO_MEMORY = {
+	"SAVE MCP VARIABLES TO MEMORY" ,
+	"SAVE MCP VARIABLES TO MEM" ,
+	"SAVE MCP VARIABLES FROM RUNTIME" ,
+	"SAVE MCP VARIABLES FROM RUN" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -1737,6 +1751,64 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				return false;
 			}
 		}
+	}
+
+	// MCP (Model Context Protocol) VARIABLES
+	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
+		const std::string modname = "mcp_variables";
+		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+		if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+		if (is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+		if (is_admin_command_or_alias(LOAD_MCP_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			SPA->load_mcp_variables_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp variables to RUNTIME\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+		if (is_admin_command_or_alias(SAVE_MCP_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			SPA->save_mcp_variables_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp variables from RUNTIME\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+	}
+
+	if ((query_no_space_length == 31) && (!strncasecmp("LOAD MCP VARIABLES FROM CONFIG", query_no_space, query_no_space_length))) {
+		proxy_info("Received %s command\n", query_no_space);
+		if (GloVars.configfile_open) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+			if (GloVars.confFile->OpenFile(NULL)==true) {
+				int rows=0;
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("mcp");
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp global variables from CONFIG\n");
+				SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+				GloVars.confFile->CloseFile();
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+				char *s=(char *)"Unable to open or parse config file %s";
+				char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+				sprintf(m,s,GloVars.config_file);
+				SPA->send_error_msg_to_client(sess, m);
+				free(m);
+			}
+		} else {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+			SPA->send_error_msg_to_client(sess, (char *)"Config file unknown");
+		}
+		return false;
 	}
 
 	if ((query_no_space_length > 14) && (!strncasecmp("LOAD COREDUMP ", query_no_space, 14))) {

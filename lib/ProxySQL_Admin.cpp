@@ -42,6 +42,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "MCP_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -323,6 +324,7 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern MCP_Threads_Handler* GloMCPH;
 
 extern void (*flush_logs_function)();
 
@@ -2836,6 +2838,14 @@ void ProxySQL_Admin::init_pgsql_variables() {
 	flush_pgsql_variables___runtime_to_database(configdb, false, false, false);
 	flush_pgsql_variables___runtime_to_database(admindb, false, true, false);
 	flush_pgsql_variables___database_to_runtime(admindb, true);
+}
+
+void ProxySQL_Admin::init_mcp_variables() {
+	if (GloMCPH) {
+		flush_mcp_variables___runtime_to_database(configdb, false, false, false, false, false);
+		flush_mcp_variables___runtime_to_database(admindb, false, true, false, false, false);
+		flush_mcp_variables___database_to_runtime(admindb, true, "", 0);
+	}
 }
 
 void ProxySQL_Admin::admin_shutdown() {

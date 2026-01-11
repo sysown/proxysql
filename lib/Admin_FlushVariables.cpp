@@ -25,6 +25,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
+#include "MCP_Thread.h"
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -138,6 +139,7 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern MCP_Threads_Handler* GloMCPH;
 
 extern void (*flush_logs_function)();
 
@@ -1194,5 +1196,126 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 		free(varnames[i]);
 	}
 	free(varnames);
+}
 
+// MCP (Model Context Protocol) VARIABLES
+void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d\n", replace);
+	if (GloMCPH == NULL) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
+		return;
+	}
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	}
+	if (resultset) {
+		GloMCPH->wrlock();
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			char* name = r->fields[0];
+			char* val = r->fields[1];
+			// Skip the 'mcp-' prefix
+			char* var_name = name + 4;
+			GloMCPH->set_variable(var_name, val);
+		}
+		GloMCPH->wrunlock();
+		delete resultset;
+	}
+}
+
+void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (GloMCPH == NULL) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
+		return;
+	}
+	if (onlyifempty) {
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		int matching_rows = 0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		}
+		else {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
+				matching_rows += atoi(r->fields[0]);
+			}
+		}
+		if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has MCP variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MCP variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mcp-%'");
+	}
+	static char* a;
+	static char* b;
+	if (replace) {
+		a = (char*)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	else {
+		a = (char*)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	int rc;
+	sqlite3_stmt* statement1 = NULL;
+	sqlite3_stmt* statement2 = NULL;
+	rc = db->prepare_v2(a, &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
+		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+		rc = db->prepare_v2(b, &statement2);
+		ASSERT_SQLITE_OK(rc, db);
+	}
+	if (use_lock) {
+		GloMCPH->wrlock();
+		db->execute("BEGIN");
+	}
+	char** varnames = GloMCPH->get_variables_list();
+	for (int i = 0; varnames[i]; i++) {
+		char val[256];
+		GloMCPH->get_variable(varnames[i], val);
+		char* qualified_name = (char*)malloc(strlen(varnames[i]) + 8);
+		sprintf(qualified_name, "mcp-%s", varnames[i]);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+		if (runtime) {
+			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			SAFE_SQLITE3_STEP2(statement2);
+			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
+		}
+		free(qualified_name);
+	}
+	if (use_lock) {
+		db->execute("COMMIT");
+		GloMCPH->wrunlock();
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	if (runtime)
+		(*proxy_sqlite3_finalize)(statement2);
+	for (int i = 0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
 }

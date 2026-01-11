@@ -479,6 +479,10 @@ class ProxySQL_Admin {
 	void flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
+	// MCP (Model Context Protocol)
+	void flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
+	void flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+
 	public:
 	/**
 	 * @brief Mutex taken by 'ProxySQL_Admin::admin_session_handler'. It's used prevent multiple
@@ -762,6 +766,11 @@ class ProxySQL_Admin {
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
 		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
+
+	// MCP (Model Context Protocol)
+	void init_mcp_variables();
+	void load_mcp_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mcp_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void save_mcp_variables_from_runtime() { flush_mcp_variables___runtime_to_database(admindb, true, true, false); }
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);

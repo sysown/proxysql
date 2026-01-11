@@ -1,0 +1,149 @@
+#ifndef __CLASS_MCP_THREAD_H
+#define __CLASS_MCP_THREAD_H
+
+#include "proxysql.h"
+
+#define MCP_THREAD_VERSION "0.1.0"
+
+// Forward declarations
+class ProxySQL_MCP_Server;
+
+/**
+ * @brief MCP Threads Handler class for managing MCP module configuration
+ *
+ * This class handles the MCP (Model Context Protocol) module's configuration
+ * variables and lifecycle. It provides methods for initializing, shutting down,
+ * and managing module variables that are accessible via the admin interface.
+ */
+class MCP_Threads_Handler
+{
+private:
+	int shutdown_;
+	pthread_rwlock_t rwlock;
+
+public:
+	/**
+	 * @brief Structure holding MCP module configuration variables
+	 *
+	 * These variables are stored in the global_variables table with the
+	 * 'mcp-' prefix and can be modified at runtime.
+	 */
+	struct {
+		bool mcp_enabled;                      ///< Enable/disable MCP server
+		int mcp_port;                           ///< HTTPS port for MCP server (default: 6071)
+		char* mcp_config_endpoint_auth;         ///< Authentication for /mcp/config endpoint
+		char* mcp_observe_endpoint_auth;        ///< Authentication for /mcp/observe endpoint
+		char* mcp_query_endpoint_auth;          ///< Authentication for /mcp/query endpoint
+		char* mcp_admin_endpoint_auth;          ///< Authentication for /mcp/admin endpoint
+		char* mcp_cache_endpoint_auth;          ///< Authentication for /mcp/cache endpoint
+		int mcp_timeout_ms;                     ///< Request timeout in milliseconds (default: 30000)
+	} variables;
+
+	/**
+	 * @brief Structure holding MCP module status variables (read-only counters)
+	 */
+	struct {
+		unsigned long long total_requests;      ///< Total number of requests received
+		unsigned long long failed_requests;     ///< Total number of failed requests
+		unsigned long long active_connections;  ///< Current number of active connections
+	} status_variables;
+
+	/**
+	 * @brief Pointer to the HTTPS server instance
+	 *
+	 * This is managed by the MCP_Thread module and provides HTTPS
+	 * endpoints for MCP protocol communication.
+	 */
+	ProxySQL_MCP_Server* mcp_server;
+
+	unsigned int num_threads;
+
+	/**
+	 * @brief Default constructor for MCP_Threads_Handler
+	 *
+	 * Initializes member variables to default values and sets up
+	 * synchronization primitives.
+	 */
+	MCP_Threads_Handler();
+
+	/**
+	 * @brief Destructor for MCP_Threads_Handler
+	 *
+	 * Cleans up allocated resources including strings and server instance.
+	 */
+	~MCP_Threads_Handler();
+
+	/**
+	 * @brief Initialize the MCP module
+	 *
+	 * Sets up the module with default configuration values and starts
+	 * the HTTPS server if enabled. Must be called before using any
+	 * other methods.
+	 *
+	 * @param num Number of threads (currently unused, for future expansion)
+	 * @param stack Stack size for threads (currently unused, for future expansion)
+	 */
+	void init(unsigned int num = 0, size_t stack = 0);
+
+	/**
+	 * @brief Shutdown the MCP module
+	 *
+	 * Stops the HTTPS server and performs cleanup. Called during
+	 * ProxySQL shutdown.
+	 */
+	void shutdown();
+
+	/**
+	 * @brief Acquire write lock on variables
+	 *
+	 * Locks the module for write access to prevent race conditions
+	 * when modifying variables.
+	 */
+	void wrlock();
+
+	/**
+	 * @brief Release write lock on variables
+	 *
+	 * Unlocks the module after write operations are complete.
+	 */
+	void wrunlock();
+
+	/**
+	 * @brief Get the value of a variable as a string
+	 *
+	 * @param name The name of the variable (without 'mcp-' prefix)
+	 * @param val Output buffer to store the value
+	 * @return 0 on success, -1 if variable not found
+	 */
+	int get_variable(const char* name, char* val);
+
+	/**
+	 * @brief Set the value of a variable
+	 *
+	 * @param name The name of the variable (without 'mcp-' prefix)
+	 * @param value The new value to set
+	 * @return 0 on success, -1 if variable not found or value invalid
+	 */
+	int set_variable(const char* name, const char* value);
+
+	/**
+	 * @brief Get a list of all variable names
+	 *
+	 * @return Dynamically allocated array of strings, terminated by NULL
+	 *
+	 * @note The caller is responsible for freeing the array and its elements.
+	 */
+	char** get_variables_list();
+
+	/**
+	 * @brief Print the version information
+	 *
+	 * Outputs the MCP module version to stderr.
+	 */
+	void print_version();
+};
+
+// Global instance of the MCP Threads Handler
+extern MCP_Threads_Handler *GloMCPH;
+
+#endif // __CLASS_MCP_THREAD_H
