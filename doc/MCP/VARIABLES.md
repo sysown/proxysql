@@ -1,0 +1,279 @@
+# MCP Variables
+
+This document describes all configuration variables for the MCP (Model Context Protocol) module in ProxySQL.
+
+## Overview
+
+The MCP module provides JSON-RPC 2.0 over HTTPS for LLM integration with ProxySQL. It includes endpoints for configuration, observation, querying, administration, caching, and a MySQL Tool Handler for database exploration.
+
+All variables are stored in the `global_variables` table with the `mcp-` prefix and can be modified at runtime through the admin interface.
+
+## Variable Reference
+
+### Server Configuration
+
+#### `mcp-enabled`
+- **Type:** Boolean
+- **Default:** `false`
+- **Description:** Enable or disable the MCP HTTPS server
+- **Runtime:** Yes (requires restart of MCP server to take effect)
+- **Example:**
+  ```sql
+  SET mcp-enabled=true;
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-port`
+- **Type:** Integer
+- **Default:** `6071`
+- **Description:** HTTPS port for the MCP server
+- **Range:** 1024-65535
+- **Runtime:** Yes (requires restart of MCP server to take effect)
+- **Example:**
+  ```sql
+  SET mcp-port=7071;
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-timeout_ms`
+- **Type:** Integer
+- **Default:** `30000` (30 seconds)
+- **Description:** Request timeout in milliseconds for all MCP endpoints
+- **Range:** 1000-300000 (1 second to 5 minutes)
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-timeout_ms=60000;
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+### Endpoint Authentication
+
+The following variables control authentication (Bearer tokens) for specific MCP endpoints. If left empty, no authentication is required for that endpoint.
+
+#### `mcp-config_endpoint_auth`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** Bearer token for `/mcp/config` endpoint
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-config_endpoint_auth='my-secret-token';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-observe_endpoint_auth`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** Bearer token for `/mcp/observe` endpoint
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-observe_endpoint_auth='observe-token';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-query_endpoint_auth`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** Bearer token for `/mcp/query` endpoint
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-query_endpoint_auth='query-token';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-admin_endpoint_auth`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** Bearer token for `/mcp/admin` endpoint
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-admin_endpoint_auth='admin-token';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-cache_endpoint_auth`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** Bearer token for `/mcp/cache` endpoint
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-cache_endpoint_auth='cache-token';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+### MySQL Tool Handler Configuration
+
+The MySQL Tool Handler provides LLM-based tools for MySQL database exploration, including:
+- **inventory** - List databases and tables
+- **structure** - Get table schema
+- **profiling** - Analyze query performance
+- **sampling** - Sample table data
+- **query** - Execute SQL queries
+- **relationships** - Infer table relationships
+- **catalog** - Catalog operations
+
+#### `mcp-mysql_hosts`
+- **Type:** String (comma-separated)
+- **Default:** `"127.0.0.1"`
+- **Description:** Comma-separated list of MySQL host addresses
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-mysql_hosts='192.168.1.10,192.168.1.11,192.168.1.12';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-mysql_ports`
+- **Type:** String (comma-separated)
+- **Default:** `"3306"`
+- **Description:** Comma-separated list of MySQL ports (corresponds to `mcp-mysql_hosts`)
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-mysql_ports='3306,3307,3308';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-mysql_user`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** MySQL username for tool handler connections
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-mysql_user='mcp_user';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-mysql_password`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** MySQL password for tool handler connections
+- **Runtime:** Yes
+- **Note:** Password is stored in plaintext in `global_variables`. Use restrictive MySQL user permissions.
+- **Example:**
+  ```sql
+  SET mcp-mysql_password='secure-password';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+#### `mcp-mysql_schema`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** Default database/schema to use for tool operations
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-mysql_schema='mydb';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+### Catalog Configuration
+
+#### `mcp-catalog_path`
+- **Type:** String (file path)
+- **Default:** `"mcp_catalog.db"`
+- **Description:** Path to the SQLite catalog database (relative to ProxySQL datadir)
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-catalog_path='/path/to/mcp_catalog.db';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
+
+## Management Commands
+
+### View Variables
+
+```sql
+-- View all MCP variables
+SHOW MCP VARIABLES;
+
+-- View specific variable
+SELECT variable_name, variable_value
+FROM global_variables
+WHERE variable_name LIKE 'mcp-%';
+```
+
+### Modify Variables
+
+```sql
+-- Set a variable
+SET mcp-enabled=true;
+
+-- Load to runtime
+LOAD MCP VARIABLES TO RUNTIME;
+
+-- Save to disk
+SAVE MCP VARIABLES TO DISK;
+```
+
+### Checksum Commands
+
+```sql
+-- Checksum of disk variables
+CHECKSUM DISK MCP VARIABLES;
+
+-- Checksum of memory variables
+CHECKSUM MEM MCP VARIABLES;
+
+-- Checksum of runtime variables
+CHECKSUM MEMORY MCP VARIABLES;
+```
+
+## Variable Persistence
+
+Variables can be persisted across three layers:
+
+1. **Disk** (`disk.global_variables`) - Persistent storage
+2. **Memory** (`main.global_variables`) - Active configuration
+3. **Runtime** (`runtime_global_variables`) - Currently active values
+
+```
+LOAD MCP VARIABLES FROM DISK    → Disk to Memory
+LOAD MCP VARIABLES TO RUNTIME   → Memory to Runtime
+SAVE MCP VARIABLES TO DISK      → Memory to Disk
+SAVE MCP VARIABLES FROM RUNTIME → Runtime to Memory
+```
+
+## Status Variables
+
+The following read-only status variables are available:
+
+| Variable | Description |
+|----------|-------------|
+| `mcp_total_requests` | Total number of MCP requests received |
+| `mcp_failed_requests` | Total number of failed MCP requests |
+| `mcp_active_connections` | Current number of active MCP connections |
+
+To view status variables:
+
+```sql
+SELECT * FROM stats_mysql_global WHERE variable_name LIKE 'mcp_%';
+```
+
+## Security Considerations
+
+1. **Authentication:** Always set authentication tokens for production environments
+2. **HTTPS:** The MCP server uses HTTPS with SSL certificates from the ProxySQL datadir
+3. **MySQL Permissions:** Create a dedicated MySQL user with limited permissions for the tool handler:
+   - `SELECT` permissions for inventory/structure tools
+   - `PROCESS` permission for profiling
+   - Limited `SELECT` on specific tables for sampling/query tools
+4. **Network Access:** Consider firewall rules to restrict access to `mcp-port`
+
+## Version
+
+- **MCP Thread Version:** 0.1.0
+- **Protocol:** JSON-RPC 2.0 over HTTPS
+
+## Related Documentation
+
+- [MCP Module README](README.md) - Module overview and setup
+- [MCP Endpoints](ENDPOINTS.md) - API endpoint documentation
+- [MySQL Tool Handler](TOOL_HANDLER.md) - Tool-specific documentation
