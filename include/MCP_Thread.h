@@ -1,9 +1,11 @@
 #ifndef __CLASS_MCP_THREAD_H
 #define __CLASS_MCP_THREAD_H
 
-#include "proxysql.h"
-
 #define MCP_THREAD_VERSION "0.1.0"
+
+#include <pthread.h>
+#include <cstring>
+#include <cstdlib>
 
 // Forward declarations
 class ProxySQL_MCP_Server;
@@ -14,12 +16,14 @@ class ProxySQL_MCP_Server;
  * This class handles the MCP (Model Context Protocol) module's configuration
  * variables and lifecycle. It provides methods for initializing, shutting down,
  * and managing module variables that are accessible via the admin interface.
+ *
+ * This is a standalone class independent from MySQL/PostgreSQL thread handlers.
  */
 class MCP_Threads_Handler
 {
 private:
 	int shutdown_;
-	pthread_rwlock_t rwlock;
+	pthread_rwlock_t rwlock;  ///< Read-write lock for thread-safe access
 
 public:
 	/**
@@ -56,7 +60,6 @@ public:
 	 */
 	ProxySQL_MCP_Server* mcp_server;
 
-	unsigned int num_threads;
 
 	/**
 	 * @brief Default constructor for MCP_Threads_Handler
@@ -74,26 +77,6 @@ public:
 	~MCP_Threads_Handler();
 
 	/**
-	 * @brief Initialize the MCP module
-	 *
-	 * Sets up the module with default configuration values and starts
-	 * the HTTPS server if enabled. Must be called before using any
-	 * other methods.
-	 *
-	 * @param num Number of threads (currently unused, for future expansion)
-	 * @param stack Stack size for threads (currently unused, for future expansion)
-	 */
-	void init(unsigned int num = 0, size_t stack = 0);
-
-	/**
-	 * @brief Shutdown the MCP module
-	 *
-	 * Stops the HTTPS server and performs cleanup. Called during
-	 * ProxySQL shutdown.
-	 */
-	void shutdown();
-
-	/**
 	 * @brief Acquire write lock on variables
 	 *
 	 * Locks the module for write access to prevent race conditions
@@ -107,6 +90,23 @@ public:
 	 * Unlocks the module after write operations are complete.
 	 */
 	void wrunlock();
+
+	/**
+	 * @brief Initialize the MCP module
+	 *
+	 * Sets up the module with default configuration values and starts
+	 * the HTTPS server if enabled. Must be called before using any
+	 * other methods.
+	 */
+	void init();
+
+	/**
+	 * @brief Shutdown the MCP module
+	 *
+	 * Stops the HTTPS server and performs cleanup. Called during
+	 * ProxySQL shutdown.
+	 */
+	void shutdown();
 
 	/**
 	 * @brief Get the value of a variable as a string

@@ -1441,6 +1441,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
+	ProxySQL_Main_init_MCP_module();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 

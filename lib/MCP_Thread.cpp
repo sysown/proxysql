@@ -1,5 +1,11 @@
 #include "MCP_Thread.h"
 #include "proxysql_debug.h"
+#include "ProxySQL_MCP_Server.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <pthread.h>
 
 // Define the array of variable names for the MCP module
 static const char* mcp_thread_variables_names[] = {
@@ -16,7 +22,8 @@ static const char* mcp_thread_variables_names[] = {
 
 MCP_Threads_Handler::MCP_Threads_Handler() {
 	shutdown_ = 0;
-	num_threads = 0;
+
+	// Initialize the rwlock
 	pthread_rwlock_init(&rwlock, NULL);
 
 	// Initialize variables with default values
@@ -53,15 +60,15 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		mcp_server = NULL;
 	}
 
+	// Destroy the rwlock
 	pthread_rwlock_destroy(&rwlock);
 }
 
-void MCP_Threads_Handler::init(unsigned int num, size_t stack) {
+void MCP_Threads_Handler::init() {
 	proxy_info("Initializing MCP Threads Handler\n");
 	// For now, this is a simple initialization
 	// The HTTPS server will be started when mcp_enabled is set to true
 	// and will be managed through ProxySQL_Admin
-	num_threads = num;
 	print_version();
 }
 
