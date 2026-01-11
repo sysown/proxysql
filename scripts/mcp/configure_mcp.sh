@@ -23,7 +23,7 @@ set -e
 MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
 MYSQL_PORT="${MYSQL_PORT:-3307}"
 MYSQL_USER="${MYSQL_USER:-root}"
-MYSQL_PASSWORD="${MYSQL_PASSWORD:-test123}"
+MYSQL_PASSWORD="${MYSQL_PASSWORD=test123}"  # Use = instead of :- to allow empty passwords
 MYSQL_DATABASE="${TEST_DB_NAME:-testdb}"
 MCP_PORT="${MCP_PORT:-6071}"
 MCP_ENABLED="false"
