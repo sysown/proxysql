@@ -105,7 +105,7 @@ SET mcp-mysql_ports='${MYSQL_PORT}';
 SET mcp-mysql_user='${MYSQL_USER}';
 SET mcp-mysql_password='${MYSQL_PASSWORD}';
 SET mcp-mysql_schema='${MYSQL_DATABASE}';
-SET mcp-catalog_path='/var/lib/proxysql/mcp_catalog.db';
+SET mcp-catalog_path='mcp_catalog.db';
 SET mcp-port='${MCP_PORT}';
 SET mcp-enabled='${enable}';
 EOF
@@ -116,7 +116,7 @@ EOF
     echo "  mcp-mysql_user      = ${MYSQL_USER}"
     echo "  mcp-mysql_password  = ${MYSQL_PASSWORD}"
     echo "  mcp-mysql_schema    = ${MYSQL_DATABASE}"
-    echo "  mcp-catalog_path    = /var/lib/proxysql/mcp_catalog.db"
+    echo "  mcp-catalog_path    = mcp_catalog.db (relative to datadir)"
     echo "  mcp-port            = ${MCP_PORT}"
     echo "  mcp-enabled         = ${enable}"
 }

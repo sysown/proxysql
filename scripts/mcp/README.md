@@ -106,7 +106,7 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 | `mcp-mysql_user` | (empty) | MySQL username for connections |
 | `mcp-mysql_password` | (empty) | MySQL password |
 | `mcp-mysql_schema` | (empty) | Default schema for queries |
-| `mcp-catalog_path` | /var/lib/proxysql/mcp_catalog.db | SQLite catalog database path |
+| `mcp-catalog_path` | mcp_catalog.db | SQLite catalog database path (relative to datadir) |
 
 **Endpoints:**
 - `POST https://localhost:6071/config` - Initialize, ping, tools/list
@@ -545,7 +545,7 @@ MySQL Tool Handler initialized for schema 'testdb'
 | `mcp-mysql_user` | (empty) | MySQL username |
 | `mcp-mysql_password` | (empty) | MySQL password |
 | `mcp-mysql_schema` | (empty) | Default schema |
-| `mcp-catalog_path` | /var/lib/proxysql/mcp_catalog.db | Catalog database path |
+| `mcp-catalog_path` | mcp_catalog.db | Catalog database path (relative to datadir) |
 
 ---
 

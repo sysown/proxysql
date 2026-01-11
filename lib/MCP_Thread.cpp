@@ -49,7 +49,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_mysql_user = strdup("");
 	variables.mcp_mysql_password = strdup("");
 	variables.mcp_mysql_schema = strdup("");
-	variables.mcp_catalog_path = strdup("/var/lib/proxysql/mcp_catalog.db");
+	variables.mcp_catalog_path = strdup("mcp_catalog.db");
 
 	status_variables.total_requests = 0;
 	status_variables.failed_requests = 0;
