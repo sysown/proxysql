@@ -7,6 +7,10 @@
 #include <memory>
 #include <vector>
 #include <map>
+#include <pthread.h>
+
+// Forward declaration for MYSQL (mysql.h is included via proxysql.h/cpp.h)
+typedef struct st_mysql MYSQL;
 
 /**
  * @brief MySQL Tool Handler for LLM Database Exploration
@@ -21,12 +25,23 @@
  */
 class MySQL_Tool_Handler {
 private:
-	// Connection pool to backend MySQL servers
+	// Connection configuration
 	std::vector<std::string> mysql_hosts;
 	std::vector<int> mysql_ports;
 	std::string mysql_user;
 	std::string mysql_password;
 	std::string mysql_schema;
+
+	// Connection pool
+	struct MySQLConnection {
+		MYSQL* mysql;
+		std::string host;
+		int port;
+		bool in_use;
+	};
+	std::vector<MySQLConnection> connection_pool;
+	pthread_mutex_t pool_lock;
+	int pool_size;
 
 	// Catalog for LLM memory
 	MySQL_Catalog* catalog;
@@ -41,6 +56,25 @@ private:
 	 * @return 0 on success, -1 on error
 	 */
 	int init_connection_pool();
+
+	/**
+	 * @brief Get a connection from the pool
+	 * @return Pointer to MYSQL connection, or NULL if none available
+	 */
+	MYSQL* get_connection();
+
+	/**
+	 * @brief Return a connection to the pool
+	 * @param mysql The MYSQL connection to return
+	 */
+	void return_connection(MYSQL* mysql);
+
+	/**
+	 * @brief Execute a query and return results as JSON
+	 * @param query SQL query to execute
+	 * @return JSON with results or error
+	 */
+	std::string execute_query(const std::string& query);
 
 	/**
 	 * @brief Validate SQL is read-only

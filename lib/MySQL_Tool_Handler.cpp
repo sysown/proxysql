@@ -6,6 +6,9 @@
 #include <regex>
 #include <cstring>
 
+// MySQL client library
+#include <mysql.h>
+
 // JSON library
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -22,8 +25,12 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 	: catalog(NULL),
 	  max_rows(200),
 	  timeout_ms(2000),
-	  allow_select_star(false)
+	  allow_select_star(false),
+	  pool_size(0)
 {
+	// Initialize the pool mutex
+	pthread_mutex_init(&pool_lock, NULL);
+
 	// Parse hosts
 	std::istringstream h(hosts);
 	std::string host;
@@ -47,6 +54,11 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 		}
 	}
 
+	// Ensure ports array matches hosts array size
+	while (mysql_ports.size() < mysql_hosts.size()) {
+		mysql_ports.push_back(3306); // Default MySQL port
+	}
+
 	mysql_user = user;
 	mysql_password = password;
 	mysql_schema = schema;
@@ -60,6 +72,8 @@ MySQL_Tool_Handler::~MySQL_Tool_Handler() {
 	if (catalog) {
 		delete catalog;
 	}
+	// Destroy the pool mutex
+	pthread_mutex_destroy(&pool_lock);
 }
 
 int MySQL_Tool_Handler::init() {
@@ -78,14 +92,176 @@ int MySQL_Tool_Handler::init() {
 }
 
 void MySQL_Tool_Handler::close() {
-	// Connection pool cleanup would go here
+	// Close all connections in the pool
+	pthread_mutex_lock(&pool_lock);
+	for (auto& conn : connection_pool) {
+		if (conn.mysql) {
+			mysql_close(conn.mysql);
+			conn.mysql = NULL;
+		}
+	}
+	connection_pool.clear();
+	pool_size = 0;
+	pthread_mutex_unlock(&pool_lock);
 }
 
 int MySQL_Tool_Handler::init_connection_pool() {
-	// For now, we'll use a simple direct connection approach
-	// In production, this would create a pool of MySQL_Connection objects
-	proxy_info("MySQL Tool Handler connection pool initialized\n");
+	// Create one connection per host/port pair
+	size_t num_connections = std::min(mysql_hosts.size(), mysql_ports.size());
+
+	if (num_connections == 0) {
+		proxy_error("MySQL_Tool_Handler: No hosts configured\n");
+		return -1;
+	}
+
+	pthread_mutex_lock(&pool_lock);
+
+	for (size_t i = 0; i < num_connections; i++) {
+		MySQLConnection conn;
+		conn.host = mysql_hosts[i];
+		conn.port = mysql_ports[i];
+		conn.in_use = false;
+
+		// Initialize MySQL connection
+		conn.mysql = mysql_init(NULL);
+		if (!conn.mysql) {
+			proxy_error("MySQL_Tool_Handler: mysql_init failed for %s:%d\n",
+				conn.host.c_str(), conn.port);
+			pthread_mutex_unlock(&pool_lock);
+			return -1;
+		}
+
+		// Set connection timeout
+		unsigned int timeout = 5;
+		mysql_options(conn.mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+		mysql_options(conn.mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
+		mysql_options(conn.mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+
+		// Connect to MySQL server
+		if (!mysql_real_connect(
+			conn.mysql,
+			conn.host.c_str(),
+			mysql_user.c_str(),
+			mysql_password.c_str(),
+			mysql_schema.empty() ? NULL : mysql_schema.c_str(),
+			conn.port,
+			NULL,
+			CLIENT_MULTI_STATEMENTS
+		)) {
+			proxy_error("MySQL_Tool_Handler: mysql_real_connect failed for %s:%d: %s\n",
+				conn.host.c_str(), conn.port, mysql_error(conn.mysql));
+			mysql_close(conn.mysql);
+			pthread_mutex_unlock(&pool_lock);
+			return -1;
+		}
+
+		connection_pool.push_back(conn);
+		pool_size++;
+
+		proxy_info("MySQL_Tool_Handler: Connected to %s:%d\n",
+			conn.host.c_str(), conn.port);
+	}
+
+	pthread_mutex_unlock(&pool_lock);
+
+	proxy_info("MySQL_Tool_Handler: Connection pool initialized with %d connection(s)\n", pool_size);
 	return 0;
+}
+
+MYSQL* MySQL_Tool_Handler::get_connection() {
+	MYSQL* conn = NULL;
+
+	pthread_mutex_lock(&pool_lock);
+
+	// Find an available connection
+	for (auto& c : connection_pool) {
+		if (!c.in_use) {
+			c.in_use = true;
+			conn = c.mysql;
+			break;
+		}
+	}
+
+	pthread_mutex_unlock(&pool_lock);
+
+	if (!conn) {
+		proxy_error("MySQL_Tool_Handler: No available connection in pool\n");
+	}
+
+	return conn;
+}
+
+void MySQL_Tool_Handler::return_connection(MYSQL* mysql) {
+	pthread_mutex_lock(&pool_lock);
+
+	// Find the connection and mark as available
+	for (auto& c : connection_pool) {
+		if (c.mysql == mysql) {
+			c.in_use = false;
+			break;
+		}
+	}
+
+	pthread_mutex_unlock(&pool_lock);
+}
+
+std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
+	json result;
+	result["success"] = false;
+
+	MYSQL* mysql = get_connection();
+	if (!mysql) {
+		result["error"] = "No available database connection";
+		return result.dump();
+	}
+
+	// Execute query
+	if (mysql_query(mysql, query.c_str()) != 0) {
+		result["error"] = mysql_error(mysql);
+		result["sql_error"] = mysql_errno(mysql);
+		return_connection(mysql);
+		return result.dump();
+	}
+
+	// Store result
+	MYSQL_RES* res = mysql_store_result(mysql);
+	if (!res) {
+		// No result set (e.g., INSERT, UPDATE, etc.)
+		result["success"] = true;
+		result["rows_affected"] = (int)mysql_affected_rows(mysql);
+		return_connection(mysql);
+		return result.dump();
+	}
+
+	// Get column names
+	json columns = json::array();
+	MYSQL_FIELD* field;
+	while ((field = mysql_fetch_field(res))) {
+		columns.push_back(field->name);
+	}
+
+	// Get rows
+	json rows = json::array();
+	MYSQL_ROW row;
+	unsigned int num_fields = mysql_num_fields(res);
+	while ((row = mysql_fetch_row(res))) {
+		json json_row = json::object();
+		for (unsigned int i = 0; i < num_fields; i++) {
+			const char* col_name = columns[i].get<std::string>().c_str();
+			json_row[col_name] = row[i] ? row[i] : nullptr;
+		}
+		rows.push_back(json_row);
+	}
+
+	mysql_free_result(res);
+	return_connection(mysql);
+
+	result["success"] = true;
+	result["columns"] = columns;
+	result["rows"] = rows;
+	result["row_count"] = (int)rows.size();
+
+	return result.dump();
 }
 
 std::string MySQL_Tool_Handler::sanitize_query(const std::string& query) {
@@ -164,13 +340,27 @@ std::string MySQL_Tool_Handler::list_schemas(const std::string& page_token, int 
 		"ORDER BY schema_name "
 		"LIMIT " + std::to_string(page_size);
 
-	// For now, return a static result
-	// In production, this would execute the query via execute_query()
-	json result = json::array();
-	result.push_back({
-		{"name", "mysql"},
-		{"table_count", 0}
-	});
+	// Execute the query
+	std::string response = execute_query(query);
+
+	// Parse the response and format it for the tool
+	json result;
+	try {
+		json query_result = json::parse(response);
+		if (query_result["success"] == true) {
+			result = json::array();
+			for (const auto& row : query_result["rows"]) {
+				json schema_entry;
+				schema_entry["name"] = row["schema_name"];
+				schema_entry["table_count"] = row["table_count"];
+				result.push_back(schema_entry);
+			}
+		} else {
+			result["error"] = query_result["error"];
+		}
+	} catch (const std::exception& e) {
+		result["error"] = std::string("Failed to parse query result: ") + e.what();
+	}
 
 	return result.dump();
 }
@@ -201,27 +391,129 @@ std::string MySQL_Tool_Handler::list_tables(
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "list_tables query: %s\n", sql.c_str());
 
-	// For now, return static result for testing
-	// In production, execute the query
-	json result = json::array();
+	// Execute the query
+	std::string response = execute_query(sql);
+
+	// Parse and format the response
+	json result;
+	try {
+		json query_result = json::parse(response);
+		if (query_result["success"] == true) {
+			result = json::array();
+			for (const auto& row : query_result["rows"]) {
+				json table_entry;
+				table_entry["name"] = row["table_name"];
+				table_entry["type"] = row["table_type"];
+				table_entry["row_count"] = row["row_count"];
+				table_entry["total_size"] = row["total_size"];
+				table_entry["create_time"] = row["create_time"];
+				table_entry["update_time"] = row["update_time"];
+				result.push_back(table_entry);
+			}
+		} else {
+			result["error"] = query_result["error"];
+		}
+	} catch (const std::exception& e) {
+		result["error"] = std::string("Failed to parse query result: ") + e.what();
+	}
 
 	return result.dump();
 }
 
 std::string MySQL_Tool_Handler::describe_table(const std::string& schema, const std::string& table) {
-	// This would execute queries to get:
-	// - Columns (name, type, nullability, default, collation)
-	// - Primary key
-	// - Indexes
-	// - Constraints
-
 	json result;
 	result["schema"] = schema;
 	result["table"] = table;
+
+	// Query to get columns
+	std::string columns_query =
+		"SELECT "
+		"  column_name, "
+		"  data_type, "
+		"  column_type, "
+		"  is_nullable, "
+		"  column_default, "
+		"  column_comment, "
+		"  character_set_name, "
+		"  collation_name "
+		"FROM information_schema.columns "
+		"WHERE table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' "
+		"AND table_name = '" + table + "' "
+		"ORDER BY ordinal_position";
+
+	std::string columns_response = execute_query(columns_query);
+	json columns_result = json::parse(columns_response);
+
 	result["columns"] = json::array();
+	if (columns_result["success"] == true) {
+		for (const auto& row : columns_result["rows"]) {
+			json col;
+			col["name"] = row["column_name"];
+			col["data_type"] = row["data_type"];
+			col["column_type"] = row["column_type"];
+			col["nullable"] = (row["is_nullable"] == "YES");
+			col["default"] = row["column_default"];
+			col["comment"] = row["column_comment"];
+			col["charset"] = row["character_set_name"];
+			col["collation"] = row["collation_name"];
+			result["columns"].push_back(col);
+		}
+	}
+
+	// Query to get primary key
+	std::string pk_query =
+		"SELECT k.column_name "
+		"FROM information_schema.table_constraints t "
+		"JOIN information_schema.key_column_usage k "
+		"  ON t.constraint_name = k.constraint_name "
+		"  AND t.table_schema = k.table_schema "
+		"WHERE t.table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' "
+		"AND t.table_name = '" + table + "' "
+		"AND t.constraint_type = 'PRIMARY KEY' "
+		"ORDER BY k.ordinal_position";
+
+	std::string pk_response = execute_query(pk_query);
+	json pk_result = json::parse(pk_response);
+
 	result["primary_key"] = json::array();
+	if (pk_result["success"] == true) {
+		for (const auto& row : pk_result["rows"]) {
+			result["primary_key"].push_back(row["column_name"]);
+		}
+	}
+
+	// Query to get indexes
+	std::string indexes_query =
+		"SELECT "
+		"  index_name, "
+		"  column_name, "
+		"  seq_in_index, "
+		"  index_type, "
+		"  non_unique, "
+		"  nullable "
+		"FROM information_schema.statistics "
+		"WHERE table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' "
+		"AND table_name = '" + table + "' "
+		"ORDER BY index_name, seq_in_index";
+
+	std::string indexes_response = execute_query(indexes_query);
+	json indexes_result = json::parse(indexes_response);
+
 	result["indexes"] = json::array();
-	result["constraints"] = json::array();
+	if (indexes_result["success"] == true) {
+		for (const auto& row : indexes_result["rows"]) {
+			json idx;
+			idx["name"] = row["index_name"];
+			idx["column"] = row["column_name"];
+			idx["seq_in_index"] = row["seq_in_index"];
+			idx["type"] = row["index_type"];
+			idx["unique"] = (row["non_unique"] == "0");
+			idx["nullable"] = (row["nullable"] == "YES");
+			result["indexes"].push_back(idx);
+		}
+	}
+
+	result["constraints"] = json::array(); // Placeholder for constraints
 
 	return result.dump();
 }
@@ -301,7 +593,6 @@ std::string MySQL_Tool_Handler::sample_rows(
 	int limit
 ) {
 	// Build and execute sampling query with hard cap
-	// Enforce limit parameter to prevent excessive data retrieval
 	int actual_limit = std::min(limit, 20); // Hard cap at 20 rows
 
 	std::string sql = "SELECT ";
@@ -320,7 +611,22 @@ std::string MySQL_Tool_Handler::sample_rows(
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "sample_rows query: %s\n", sql.c_str());
 
-	json result = json::array();
+	// Execute the query
+	std::string response = execute_query(sql);
+
+	// Parse and return the results
+	json result;
+	try {
+		json query_result = json::parse(response);
+		if (query_result["success"] == true) {
+			result = query_result["rows"];
+		} else {
+			result["error"] = query_result["error"];
+		}
+	} catch (const std::exception& e) {
+		result["error"] = std::string("Failed to parse query result: ") + e.what();
+	}
+
 	return result.dump();
 }
 
@@ -345,7 +651,22 @@ std::string MySQL_Tool_Handler::sample_distinct(
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "sample_distinct query: %s\n", sql.c_str());
 
-	json result = json::array();
+	// Execute the query
+	std::string response = execute_query(sql);
+
+	// Parse and return the results
+	json result;
+	try {
+		json query_result = json::parse(response);
+		if (query_result["success"] == true) {
+			result = query_result["rows"];
+		} else {
+			result["error"] = query_result["error"];
+		}
+	} catch (const std::exception& e) {
+		result["error"] = std::string("Failed to parse query result: ") + e.what();
+	}
+
 	return result.dump();
 }
 
@@ -371,18 +692,33 @@ std::string MySQL_Tool_Handler::run_sql_readonly(
 	bool has_limit = upper.find("LIMIT ") != std::string::npos;
 	bool is_aggregate = upper.find("GROUP BY") != std::string::npos ||
 	                     upper.find("COUNT(") != std::string::npos ||
-                     upper.find("SUM(") != std::string::npos ||
-                     upper.find("AVG(") != std::string::npos;
+                         upper.find("SUM(") != std::string::npos ||
+                         upper.find("AVG(") != std::string::npos;
 
 	if (!has_limit && !is_aggregate && !allow_select_star) {
 		query += " LIMIT " + std::to_string(std::min(max_rows, 200));
 	}
 
-	// In production, execute the query with timeout
-	result["success"] = true;
-	result["rows"] = json::array();
-	result["row_count"] = 0;
-	result["query"] = query;
+	// Execute the query
+	std::string response = execute_query(query);
+
+	// Parse and return the results
+	try {
+		json query_result = json::parse(response);
+		if (query_result["success"] == true) {
+			result["success"] = true;
+			result["rows"] = query_result["rows"];
+			result["row_count"] = query_result["row_count"];
+			result["columns"] = query_result["columns"];
+		} else {
+			result["error"] = query_result["error"];
+			if (query_result.contains("sql_error")) {
+				result["sql_error"] = query_result["sql_error"];
+			}
+		}
+	} catch (const std::exception& e) {
+		result["error"] = std::string("Failed to parse query result: ") + e.what();
+	}
 
 	return result.dump();
 }
@@ -391,8 +727,21 @@ std::string MySQL_Tool_Handler::explain_sql(const std::string& sql) {
 	// Run EXPLAIN on the query
 	std::string query = "EXPLAIN " + sql;
 
-	json result = json::array();
-	// In production, execute EXPLAIN and return results
+	// Execute the query
+	std::string response = execute_query(query);
+
+	// Parse and return the results
+	json result;
+	try {
+		json query_result = json::parse(response);
+		if (query_result["success"] == true) {
+			result = query_result["rows"];
+		} else {
+			result["error"] = query_result["error"];
+		}
+	} catch (const std::exception& e) {
+		result["error"] = std::string("Failed to parse query result: ") + e.what();
+	}
 
 	return result.dump();
 }
