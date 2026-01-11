@@ -1226,14 +1226,11 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 			GloMCPH->set_variable(var_name, val);
 		}
 
-		// Checksums are always generated - same pattern as admin variables
-		{
-			// generate checksum for cluster
-			pthread_mutex_lock(&GloVars.checksum_mutex);
-			flush_mcp_variables___runtime_to_database(admindb, false, false, false, true);
-			flush_GENERIC_variables__checksum__database_to_runtime("mcp", checksum, epoch);
-			pthread_mutex_unlock(&GloVars.checksum_mutex);
-		}
+		// Populate runtime_global_variables
+		// Note: Checksum generation is skipped for MCP until the feature is complete
+		pthread_mutex_lock(&GloVars.checksum_mutex);
+		flush_mcp_variables___runtime_to_database(admindb, false, false, false, true);
+		pthread_mutex_unlock(&GloVars.checksum_mutex);
 		if (lock) wrunlock();
 		delete resultset;
 	}
