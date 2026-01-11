@@ -507,6 +507,14 @@ run_all_tests() {
     echo "MCP Server: ${MCP_CONFIG_URL}"
     echo ""
 
+    # Print environment variables if set
+    if [ -n "${MCP_HOST}" ] || [ -n "${MCP_PORT}" ]; then
+        log_info "Environment Variables:"
+        [ -n "${MCP_HOST}" ] && echo "  MCP_HOST=${MCP_HOST}"
+        [ -n "${MCP_PORT}" ] && echo "  MCP_PORT=${MCP_PORT}"
+        echo ""
+    fi
+
     # Check MCP server
     if ! check_mcp_server; then
         log_error "MCP server is not accessible. Please run:"

@@ -284,6 +284,18 @@ main() {
     echo "======================================"
     echo ""
 
+    # Print environment variables if set
+    if [ -n "${MYSQL_HOST}" ] || [ -n "${MYSQL_PORT}" ] || [ -n "${MYSQL_USER}" ] || [ -n "${MYSQL_PASSWORD}" ] || [ -n "${TEST_DB_NAME}" ] || [ -n "${MCP_PORT}" ]; then
+        log_info "Environment Variables:"
+        [ -n "${MYSQL_HOST}" ] && echo "  MYSQL_HOST=${MYSQL_HOST}"
+        [ -n "${MYSQL_PORT}" ] && echo "  MYSQL_PORT=${MYSQL_PORT}"
+        [ -n "${MYSQL_USER}" ] && echo "  MYSQL_USER=${MYSQL_USER}"
+        [ -n "${MYSQL_PASSWORD}" ] && echo "  MYSQL_PASSWORD=${MYSQL_PASSWORD}"
+        [ -n "${TEST_DB_NAME}" ] && echo "  TEST_DB_NAME=${TEST_DB_NAME}"
+        [ -n "${MCP_PORT}" ] && echo "  MCP_PORT=${MCP_PORT}"
+        echo ""
+    fi
+
     # Check ProxySQL admin connection
     if ! check_proxysql_admin; then
         exit 1

@@ -536,6 +536,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -n "${MYSQL_PASSWORD}" ] && NATIVE_PASSWORD="${MYSQL_PASSWORD}"
 [ -n "${TEST_DB_NAME}" ] && DATABASE_NAME="${TEST_DB_NAME}"
 
+# Print environment variables
+log_info "Environment Variables:"
+echo "  MYSQL_HOST=${MYSQL_HOST:-<not set>}"
+echo "  MYSQL_PORT=${MYSQL_PORT:-<not set>}"
+echo "  MYSQL_USER=${MYSQL_USER:-<not set>}"
+echo "  MYSQL_PASSWORD=${MYSQL_PASSWORD:-<not set>}"
+echo "  TEST_DB_NAME=${TEST_DB_NAME:-<not set>}"
+echo ""
+
 # Parse arguments
 COMMAND=""
 while [[ $# -gt 0 ]]; do
