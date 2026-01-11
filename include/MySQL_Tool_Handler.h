@@ -26,30 +26,35 @@ typedef struct st_mysql MYSQL;
 class MySQL_Tool_Handler {
 private:
 	// Connection configuration
-	std::vector<std::string> mysql_hosts;
-	std::vector<int> mysql_ports;
-	std::string mysql_user;
-	std::string mysql_password;
-	std::string mysql_schema;
+	std::vector<std::string> mysql_hosts;     ///< List of MySQL host addresses
+	std::vector<int> mysql_ports;             ///< List of MySQL port numbers
+	std::string mysql_user;                   ///< MySQL username for authentication
+	std::string mysql_password;               ///< MySQL password for authentication
+	std::string mysql_schema;                 ///< Default schema/database name
 
 	// Connection pool
+	/**
+	 * @brief Represents a single MySQL connection in the pool
+	 *
+	 * Contains the MYSQL handle, connection details, and availability status.
+	 */
 	struct MySQLConnection {
-		MYSQL* mysql;
-		std::string host;
-		int port;
-		bool in_use;
+		MYSQL* mysql;           ///< MySQL connection handle (NULL if not connected)
+		std::string host;       ///< Host address for this connection
+		int port;               ///< Port number for this connection
+		bool in_use;            ///< True if connection is currently checked out
 	};
-	std::vector<MySQLConnection> connection_pool;
-	pthread_mutex_t pool_lock;
-	int pool_size;
+	std::vector<MySQLConnection> connection_pool; ///< Pool of MySQL connections
+	pthread_mutex_t pool_lock;                   ///< Mutex protecting connection pool access
+	int pool_size;                               ///< Number of connections in the pool
 
 	// Catalog for LLM memory
-	MySQL_Catalog* catalog;
+	MySQL_Catalog* catalog;                     ///< SQLite catalog for LLM discoveries
 
 	// Query guardrails
-	int max_rows;
-	int timeout_ms;
-	bool allow_select_star;
+	int max_rows;                               ///< Maximum rows to return (default 200)
+	int timeout_ms;                             ///< Query timeout in milliseconds (default 2000)
+	bool allow_select_star;                     ///< Allow SELECT * without LIMIT (default false)
 
 	/**
 	 * @brief Initialize connection pool to backend MySQL servers

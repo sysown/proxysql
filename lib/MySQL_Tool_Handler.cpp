@@ -91,6 +91,12 @@ int MySQL_Tool_Handler::init() {
 	return 0;
 }
 
+/**
+ * @brief Close all MySQL connections and cleanup resources
+ *
+ * Thread-safe method that closes all connections in the pool,
+ * clears the connection vector, and resets the pool size.
+ */
 void MySQL_Tool_Handler::close() {
 	// Close all connections in the pool
 	pthread_mutex_lock(&pool_lock);
@@ -105,6 +111,16 @@ void MySQL_Tool_Handler::close() {
 	pthread_mutex_unlock(&pool_lock);
 }
 
+/**
+ * @brief Initialize the MySQL connection pool
+ *
+ * Creates one MySQL connection per configured host:port pair.
+ * Uses mysql_init() and mysql_real_connect() to establish connections.
+ * Sets 5-second timeouts for connect, read, and write operations.
+ * Thread-safe: acquires pool_lock during initialization.
+ *
+ * @return 0 on success, -1 on error (logs specific error via proxy_error)
+ */
 int MySQL_Tool_Handler::init_connection_pool() {
 	// Create one connection per host/port pair
 	size_t num_connections = std::min(mysql_hosts.size(), mysql_ports.size());
@@ -168,6 +184,15 @@ int MySQL_Tool_Handler::init_connection_pool() {
 	return 0;
 }
 
+/**
+ * @brief Get an available connection from the pool
+ *
+ * Thread-safe method that searches for a connection not currently in use.
+ * Marks the connection as in_use before returning.
+ *
+ * @return Pointer to MYSQL connection, or NULL if no available connection
+ *         (logs error via proxy_error if pool exhausted)
+ */
 MYSQL* MySQL_Tool_Handler::get_connection() {
 	MYSQL* conn = NULL;
 
@@ -191,6 +216,14 @@ MYSQL* MySQL_Tool_Handler::get_connection() {
 	return conn;
 }
 
+/**
+ * @brief Return a connection to the pool for reuse
+ *
+ * Thread-safe method that marks a previously obtained connection
+ * as available for other operations. Does not close the connection.
+ *
+ * @param mysql The MYSQL connection to return to the pool
+ */
 void MySQL_Tool_Handler::return_connection(MYSQL* mysql) {
 	pthread_mutex_lock(&pool_lock);
 
@@ -205,6 +238,21 @@ void MySQL_Tool_Handler::return_connection(MYSQL* mysql) {
 	pthread_mutex_unlock(&pool_lock);
 }
 
+/**
+ * @brief Execute a SQL query and return results as JSON
+ *
+ * Thread-safe method that:
+ * 1. Gets a connection from the pool
+ * 2. Executes the query via mysql_query()
+ * 3. Fetches results via mysql_store_result()
+ * 4. Converts rows/columns to JSON format
+ * 5. Returns the connection to the pool
+ *
+ * @param query SQL query to execute
+ * @return JSON string with format:
+ *         - Success: {"success":true, "columns":[...], "rows":[...], "row_count":N}
+ *         - Failure: {"success":false, "error":"...", "sql_error":code}
+ */
 std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 	json result;
 	result["success"] = false;
