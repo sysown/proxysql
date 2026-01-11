@@ -61,13 +61,20 @@ log_step() {
 exec_admin() {
     mysql -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
           -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
+          -e "$1" 2>&1
+}
+
+# Execute MySQL command via ProxySQL admin (silent mode)
+exec_admin_silent() {
+    mysql -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
+          -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
           -e "$1" 2>/dev/null
 }
 
 # Check if ProxySQL admin is accessible
 check_proxysql_admin() {
     log_step "Checking ProxySQL admin connection..."
-    if exec_admin "SELECT 1" >/dev/null 2>&1; then
+    if exec_admin_silent "SELECT 1" >/dev/null 2>&1; then
         log_info "Connected to ProxySQL admin at ${PROXYSQL_ADMIN_HOST}:${PROXYSQL_ADMIN_PORT}"
         return 0
     else
@@ -98,17 +105,22 @@ configure_mcp() {
 
     log_step "Configuring MCP variables..."
 
-    # Set MySQL connection configuration
-    cat <<EOF | exec_admin
-SET mcp-mysql_hosts='${MYSQL_HOST}';
-SET mcp-mysql_ports='${MYSQL_PORT}';
-SET mcp-mysql_user='${MYSQL_USER}';
-SET mcp-mysql_password='${MYSQL_PASSWORD}';
-SET mcp-mysql_schema='${MYSQL_DATABASE}';
-SET mcp-catalog_path='mcp_catalog.db';
-SET mcp-port='${MCP_PORT}';
-SET mcp-enabled='${enable}';
-EOF
+    local errors=0
+
+    # Set each variable individually to catch errors
+    exec_admin_silent "SET mcp-mysql_hosts='${MYSQL_HOST}';" || { log_error "Failed to set mcp-mysql_hosts"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-mysql_ports='${MYSQL_PORT}';" || { log_error "Failed to set mcp-mysql_ports"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-mysql_user='${MYSQL_USER}';" || { log_error "Failed to set mcp-mysql_user"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-mysql_password='${MYSQL_PASSWORD}';" || { log_error "Failed to set mcp-mysql_password"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-mysql_schema='${MYSQL_DATABASE}';" || { log_error "Failed to set mcp-mysql_schema"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-catalog_path='mcp_catalog.db';" || { log_error "Failed to set mcp-catalog_path"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-port='${MCP_PORT}';" || { log_error "Failed to set mcp-port"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-enabled='${enable}';" || { log_error "Failed to set mcp-enabled"; errors=$((errors + 1)); }
+
+    if [ $errors -gt 0 ]; then
+        log_error "Failed to configure $errors MCP variable(s)"
+        return 1
+    fi
 
     log_info "MCP variables configured:"
     echo "  mcp-mysql_hosts     = ${MYSQL_HOST}"
@@ -124,7 +136,7 @@ EOF
 # Load MCP variables to runtime
 load_to_runtime() {
     log_step "Loading MCP variables to RUNTIME..."
-    if exec_admin "LOAD MCP VARIABLES TO RUNTIME;" >/dev/null 2>&1; then
+    if exec_admin_silent "LOAD MCP VARIABLES TO RUNTIME;" >/dev/null 2>&1; then
         log_info "MCP variables loaded to RUNTIME"
     else
         log_error "Failed to load MCP variables to RUNTIME"
@@ -136,7 +148,7 @@ load_to_runtime() {
 show_status() {
     log_step "Current MCP configuration:"
     echo ""
-    exec_admin "SHOW VARIABLES LIKE 'mcp-%';" | column -t
+    exec_admin_silent "SHOW VARIABLES LIKE 'mcp-%';" | column -t
     echo ""
 }
 
@@ -149,7 +161,7 @@ test_mcp_server() {
 
     # Test ping endpoint
     local response
-    response=$(curl -k -s -X POST "https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/config" \
+    response=$(curl -k -s -X POST "https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/config" \
         -H "Content-Type: application/json" \
         -d '{"jsonrpc":"2.0","method":"ping","id":1}' 2>/dev/null || echo "")
 
@@ -285,10 +297,16 @@ main() {
     fi
 
     # Configure MCP
-    configure_mcp "${MCP_ENABLED}"
+    if ! configure_mcp "${MCP_ENABLED}"; then
+        log_error "Failed to configure MCP variables"
+        exit 1
+    fi
 
     # Load to runtime
-    load_to_runtime
+    if ! load_to_runtime; then
+        log_error "Failed to load MCP variables to runtime"
+        exit 1
+    fi
 
     # Show status
     echo ""
@@ -305,8 +323,11 @@ main() {
     if [ "${MCP_ENABLED}" = "true" ]; then
         echo ""
         echo "MCP server is now enabled and accessible at:"
-        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/config  (config endpoint)"
-        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/query  (query endpoint)"
+        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/config  (config endpoint)"
+        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/observe (observe endpoint)"
+        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/query  (query endpoint)"
+        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/admin  (admin endpoint)"
+        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/cache  (cache endpoint)"
         echo ""
         echo "Run './test_mcp_tools.sh' to test MCP tools"
     fi
