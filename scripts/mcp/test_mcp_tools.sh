@@ -18,8 +18,8 @@ set -e
 # Configuration
 MCP_HOST="${MCP_HOST:-127.0.0.1}"
 MCP_PORT="${MCP_PORT:-6071}"
-MCP_CONFIG_URL="https://${MCP_HOST}:${MCP_PORT}/config"
-MCP_QUERY_URL="https://${MCP_HOST}:${MCP_PORT}/query"
+MCP_CONFIG_URL="https://${MCP_HOST}:${MCP_PORT}/mcp/config"
+MCP_QUERY_URL="https://${MCP_HOST}:${MCP_PORT}/mcp/query"
 
 # Test options
 VERBOSE=false
