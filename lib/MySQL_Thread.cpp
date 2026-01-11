@@ -902,7 +902,7 @@ th_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_aws_rds_topology_discovery_interval,
 			"proxysql_mysql_monitor_aws_rds_topology_discovery_interval",
-			"How frequently a topology discovery is performed, e.g. a value of 500 means one topology discovery every 500 read-only checks ",
+			"TODO-CONSOLIDATE: How frequently a topology discovery is performed, in milliseconds.",
 			metric_tags {}
 		),
 		std::make_tuple (

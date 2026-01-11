@@ -255,6 +255,7 @@ public:
 #endif // DEBUG
 	}
 	void conn_register(MySQL_Monitor_State_Data *mmsd) {
+		// TODO: Requires PROXY_DEBUG
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
 		MYSQL *my = mmsd->mysql;
@@ -300,6 +301,7 @@ __conn_register_label:
 	 * @param mmsd The 'mmsd' which conn should be unregistered.
 	 */
 	void conn_unregister(MySQL_Monitor_State_Data *mmsd) {
+		// TODO: Requires PROXY_DEBUG
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
 		pthread_mutex_lock(&m2);
@@ -666,6 +668,9 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
+	// NOTE: Reusing 'MySQL_Monitor_State_Data::read_only_handler' is intentional. For now there
+	// aren't enough differences in the fetching logic to justify a custom handler.
+	///////////////////////////////////////////////////////////////////////////
 	case MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY:
 		query_ = QUERY_READ_ONLY_AND_AWS_RDS_TOPOLOGY_DISCOVERY;
 		async_state_machine_ = ASYNC_QUERY_START;
@@ -690,6 +695,7 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
+	///////////////////////////////////////////////////////////////////////////
 #else // TEST_READONLY
 	case MON_READ_ONLY:
 	case MON_INNODB_READ_ONLY:
@@ -1117,6 +1123,9 @@ MySQL_Monitor::MySQL_Monitor() {
 	pthread_mutex_init(&proxysql_servers_mutex, NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
+	pthread_mutex_init(&aws_rds_mutex,NULL);
+	AWS_RDS_Hosts_resultset=NULL;
+	AWS_RDS_Hosts_resultset_checksum = 0;
 	shutdown=false;
 	monitor_enabled=true;	// default
 	// create new SQLite datatabase
@@ -1146,6 +1155,9 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_check_status", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_CHECK_STATUS);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_failovers", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_FAILOVERS);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_rds_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_RDS_LOG);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_rds_check_status", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_RDS_CHECK_STATUS);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_rds_failovers", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_RDS_FAILOVERS);
 	insert_into_tables_defs(tables_defs_monitor_internal,"mysql_servers", MONITOR_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_monitor_internal, "proxysql_servers", MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS);
 	// create monitoring tables
@@ -1224,6 +1236,12 @@ MySQL_Monitor::~MySQL_Monitor() {
 		delete node;
 	}
 	AWS_Aurora_Hosts_Map.clear();
+	if (AWS_RDS_Hosts_resultset) {
+		delete AWS_RDS_Hosts_resultset;
+		AWS_RDS_Hosts_resultset = nullptr;
+	}
+
+	pthread_mutex_destroy(&aws_rds_mutex);
 };
 
 void MySQL_Monitor::p_update_metrics() {
@@ -1645,6 +1663,43 @@ __exit_set_wait_timeout:
 	return ret;
 }
 
+#ifdef DEBUG
+sim_err_t get_sim_err(const string& srv_id, std::function<bool(const sim_err_t&)> check) {
+	pthread_mutex_lock(&GloMyMon->sim_errs_mutex);
+
+	const auto& p_sim_errs { GloMyMon->sim_errs.find(srv_id) };
+	sim_err_t res {};
+
+	if (p_sim_errs != GloMyMon->sim_errs.end() && !p_sim_errs->second.empty()) {
+		const auto sim_err { p_sim_errs->second.front() };
+
+		if (check(sim_err)) {
+			res = sim_err;
+			p_sim_errs->second.pop();
+		}
+	}
+
+	pthread_mutex_unlock(&GloMyMon->sim_errs_mutex);
+
+	return res;
+}
+#endif
+
+#ifdef DEBUG
+bool is_sim_conn_err(const sim_err_t& err) {
+	const vector<uint32_t> SIM_CONN_ERRS { 2001, 2002, 2003, 2004, 2005 };
+	const string& SIM_CONN_ERR_MATCH { "connect" };
+
+	return
+		std::find(SIM_CONN_ERRS.begin(), SIM_CONN_ERRS.end(), err.first) != SIM_CONN_ERRS.end()
+		|| err.second.find(SIM_CONN_ERR_MATCH) != std::string::npos;
+}
+
+#define IS_SIM_ERR(err) ( err.first != 0 )
+#else
+#define IS_SIM_ERR(err) ( false )
+#endif
+
 bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql=mysql_init(NULL);
 		assert(mysql);
@@ -1667,9 +1722,21 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		} else {
 			myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
 		}
-		if (myrc==NULL) {
+
+#ifdef DEBUG
+		const sim_err_t serr {
+			get_sim_err(string { hostname } + ":" + std::to_string(port), is_sim_conn_err)
+		};
+#endif
+
+		if (myrc==NULL || IS_SIM_ERR(serr)) {
+#ifndef DEBUG
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
+#else
+			mysql_error_msg = IS_SIM_ERR(serr) ? strdup(serr.second.c_str()) : strdup(mysql_error(mysql));
+			int myerrno = IS_SIM_ERR(serr) ? serr.first : mysql_errno(mysql);
+#endif
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
 			if (ssl_params != NULL && myerrno == 2026) {
 				proxy_error("Failed to connect to server %s:%d . SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
@@ -1759,7 +1826,7 @@ void * monitor_read_only_thread(void *arg) {
 	} else { // default
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only read_only");
 	}
-#else // TEST_READONLY
+#else // TEST_READONLY || TEST_AWS_RDS
 	{
 		auto get_task_query = [] (MySQL_Monitor_State_Data_Task_Type task_type) -> std::string {
 			if (task_type == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY) {
@@ -3540,7 +3607,13 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
+		const char query[] {
+			"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
+			" FROM mysql_servers JOIN mysql_replication_hostgroups ON"
+			" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
+			" WHERE status NOT IN (2,3) AND hostname NOT LIKE '%" AWS_ENDPOINT_SUFFIX_STRING "'"
+			" GROUP BY hostname, port ORDER BY RANDOM()"
+		};
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -3556,7 +3629,7 @@ void * MySQL_Monitor::monitor_read_only() {
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_read_only_interval;
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		resultset = MyHGM->execute_query(query, &error);
+		resultset = MyHGM->execute_query(const_cast<char*>(query), &error);
 		assert(resultset);
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
@@ -3947,6 +4020,7 @@ void gr_mon_action_over_resp_srv(MySQL_Monitor_State_Data* mmsd, const gr_node_i
 			// it wasn't a timeout, reconfigure immediately
 			MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 		} else {
+			// TODO: Fix typo here?
 			proxy_warning("%s:%d : group replication health check timeout count %d. Max threshold %d.\n",
 				mmsd->hostname, mmsd->port, node_info.num_timeouts, mmsd->max_transactions_behind_count);
 
@@ -5152,6 +5226,10 @@ void * MySQL_Monitor::run() {
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 2048 * 1024);
 
+#ifdef DEBUG
+	pthread_mutex_init(&this->sim_errs_mutex, NULL);
+#endif
+
 	// DNS Cache is not dependent on monitor enable flag, so need to initialize it here
 	pthread_t monitor_dns_cache_thread;
 	if (pthread_create(&monitor_dns_cache_thread, &attr, &monitor_dns_cache_pthread, NULL) != 0) {
@@ -5963,6 +6041,110 @@ void MySQL_Monitor::gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostnam
 	}
 }
 */
+
+void MySQL_Monitor::populate_monitor_mysql_server_aws_rds_log() {
+	const char query1[] {
+		"INSERT OR IGNORE INTO mysql_server_aws_rds_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+	};
+	const char query2[] {
+		"INSERT OR IGNORE INTO mysql_server_aws_rds_log "
+			"(hostname, port, time_start_us, success_time_us, error)"
+		" VALUES (?1, ?2, ?3, ?4, ?5)"
+	};
+
+	sqlite3_stmt* statement1 { nullptr };
+	int rc = monitordb->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, monitordb);
+	sqlite3_stmt* statement2 { nullptr };
+	rc = monitordb->prepare_v2(query2, &statement2);
+	ASSERT_SQLITE_OK(rc, monitordb);
+
+	pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+	monitordb->execute((char *)"DELETE FROM mysql_server_aws_rds_log");
+
+	for (const auto& it2 : GloMyMon->AWS_RDS_Hosts_Map) {
+		const string host { it2.second.addr };
+		const int port { it2.second.port };
+
+		for (const AWS_RDS_status_entry& rse : it2.second.entries) {
+			if (rse.start_time) {
+				if (rse.host_statuses.size()) {
+					for (const AWS_RDS_replica_host_status_entry& hse : rse.host_statuses) {
+						rc=(*proxy_sqlite3_bind_text)(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_int64)(statement1, 2, port); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_int64)(statement1, 3, rse.start_time); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_int64)(statement1, 4, rse.check_time); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_text)(statement1, 5, rse.error.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_text)(statement1, 6, hse.server_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_text)(statement1, 7, hse.read_only ? "YES" : "NO", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_text)(statement1, 8, hse.role.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_text)(statement1, 9, hse.status.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+						rc=(*proxy_sqlite3_bind_text)(statement1, 10, hse.version.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+						SAFE_SQLITE3_STEP(statement1);
+						(*proxy_sqlite3_reset)(statement1);
+					}
+				} else {
+					rc=(*proxy_sqlite3_bind_text)(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 2, port); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 3, rse.start_time); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 4, rse.check_time); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_text)(statement2, 5, rse.error.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+					SAFE_SQLITE3_STEP(statement2);
+					(*proxy_sqlite3_reset)(statement2);
+				}
+			}
+		}
+	}
+
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement2);
+	pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+}
+
+void MySQL_Monitor::populate_monitor_mysql_server_aws_rds_check_status() {
+	const char* query1 {
+		"INSERT OR IGNORE INTO mysql_server_aws_rds_check_status VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+	};
+	sqlite3_stmt* stmt1 { nullptr };
+
+	int rc { monitordb->prepare_v2(query1, &stmt1) };
+	ASSERT_SQLITE_OK(rc, monitordb);
+
+	pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+	monitordb->execute((char *)"DELETE FROM mysql_server_aws_rds_check_status");
+
+	for (const auto& it2 : GloMyMon->AWS_RDS_Hosts_Map) {
+		std::string s { it2.first };
+		std::size_t found { s.find_last_of(":") };
+		std::string host { s.substr(0,found) };
+		std::string port { s.substr(found+1) };
+
+		const AWS_RDS_monitor_node& node { it2.second };
+		const AWS_RDS_status_entry* rse { node.last_entry() };
+
+		if (rse && rse->start_time) {
+			time_t t { node.last_checked_at };
+			struct tm __tm_info;
+			localtime_r(&t, &__tm_info);
+			char lut[25];
+			strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+
+			rc=(*proxy_sqlite3_bind_int64)(stmt1, 1, node.writer_hostgroup); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_text)(stmt1, 2, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(stmt1, 3, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_text)(stmt1, 4, lut, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(stmt1, 5, node.num_checks_tot); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(stmt1, 6, node.num_checks_ok); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_text)(stmt1, 7, rse->error.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+
+			SAFE_SQLITE3_STEP(stmt1);
+			(*proxy_sqlite3_reset)(stmt1);
+		}
+	}
+
+	(*proxy_sqlite3_finalize)(stmt1);
+	pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+}
 
 AWS_Aurora_monitor_node::AWS_Aurora_monitor_node(char *_a, int _p, int _whg) {
 	addr=NULL;
@@ -7186,6 +7368,24 @@ private:
 	MySQL_Monitor_State_Data** mmsds_;
 };
 
+void MySQL_Monitor::monitor_rds_async_actions_handler(
+	const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds
+) {
+	Monitor_Poll monitor_poll(mmsds.size());
+
+	for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : mmsds) {
+		monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.get());
+	}
+
+	Monitor_Poll::Process_Ready_Task_Callback_Args args(
+		mmsds.size(), 100, &MySQL_Monitor::monitor_aws_rds_process_ready_tasks, this
+	);
+
+	if (monitor_poll.event_loop(mysql_thread___monitor_connect_timeout, args) == false) {
+		return;
+	}
+}
+
 MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::task_handler(short event_, short& wait_event) {
 	assert(task_handler_);
 
@@ -7383,6 +7583,11 @@ MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::generic_handler(s
 	MySQL_Monitor_State_Data_Task_Result result_ret = MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING;
 	int status = 0;
 
+#ifdef DEBUG
+	const auto not_conn_err { [] (const sim_err_t& serr) -> bool { return !is_sim_conn_err(serr); } };
+	sim_err_t serr {};
+#endif
+
 __again:
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "async_state_machine=%d\n", async_state_machine_);
 	switch (async_state_machine_) {
@@ -7417,8 +7622,17 @@ __again:
 		break;
 	case ASYNC_QUERY_END:
 		t2 = monotonic_time();
-		if (interr) {
+#ifdef DEBUG
+		serr = get_sim_err(string {hostname} + ":" + std::to_string(port), not_conn_err);
+#endif
+
+		if (interr || IS_SIM_ERR(serr)) {
+#ifndef DEBUG
 			mysql_error_msg = strdup(mysql_error(mysql));
+#else
+			interr = serr.first;
+			mysql_error_msg = IS_SIM_ERR(serr) ? strdup(serr.second.c_str()) : strdup(mysql_error(mysql));
+#endif
 
 			// In the case of SSL-based connection to the backend server, any connection-related errors will cause 
 			// all subsequent calls to the backend servers to fail. This is because OpenSSL maintains a thread-based error 
@@ -7458,8 +7672,16 @@ __again:
 		break;
 	case ASYNC_STORE_RESULT_END:
 		t2 = monotonic_time();
-		if (mysql_errno(mysql)) {
+#ifdef DEBUG
+		serr = get_sim_err(string {hostname} + ":" + std::to_string(port), not_conn_err);
+#endif
+
+		if (mysql_errno(mysql) || IS_SIM_ERR(serr)) {
+#ifndef DEBUG
 			mysql_error_msg = strdup(mysql_error(mysql));
+#else
+			mysql_error_msg = IS_SIM_ERR(serr) ? strdup(serr.second.c_str()) : strdup(mysql_error(mysql));
+#endif
 
 			// In the case of SSL-based connection to the backend server, any connection-related errors will cause 
 			// all subsequent calls to the backend servers to fail. This is because OpenSSL maintains a thread-based error 
@@ -7483,6 +7705,14 @@ __again:
 		assert(0);
 		break;
 	}
+
+#ifdef DEBUG
+	if (async_state_machine_ == ASYNC_QUERY_END || async_state_machine_ == ASYNC_STORE_RESULT_END) {
+		if (serr.second.find("timeout") != std::string::npos) {
+			result_ret = MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
+		}
+	}
+#endif
 
 	return result_ret;
 }
@@ -8452,6 +8682,859 @@ void MySQL_Monitor::monitor_galera_async() {
 	if (monitor_poll.event_loop(mysql_thread___monitor_galera_healthcheck_timeout, args) == false) {
 		return;
 	}
+}
+
+vector<rds_host_def_t> extract_rds_host_defs(
+	uint32_t tg_w_hg, uint32_t tg_r_hg, SQLite3_result* AWS_RDS_Hosts_resultset
+) {
+	vector<rds_host_def_t> result {};
+
+	for (SQLite3_row* row : AWS_RDS_Hosts_resultset->rows) {
+		uint32_t w_hg = atoi(row->fields[0]);
+		int r_hg = atoi(row->fields[1]);
+
+		if (tg_w_hg == w_hg && tg_r_hg == r_hg) {
+			char* hostname = row->fields[2];
+			int port = atoi(row->fields[3]);
+			bool use_ssl = atoi(row->fields[4]);
+
+			rds_host_def_t rds_host_def {};
+			rds_host_def.host = string(hostname);
+			rds_host_def.port = port;
+			rds_host_def.use_ssl = use_ssl;
+			rds_host_def.writer_hostgroup = w_hg;
+			rds_host_def.reader_hostgroup = r_hg;
+
+			// TODO: CONSIDER REMOVING / UPDATING
+			// Extra fields should be updated here when derived from global config. This would mean,
+			// for instance, using here 'mysql_thread___monitor_writer_is_also_reader'. This is
+			// superfluous right now, since we are re-using the logic from
+			// 'MySQL_HostGroups_Manager::read_only_action_v2'. If custom handling for this logic
+			// was required, we should parametrize 'read_only_action_v2' and other reused logics
+			// with the required config.
+			///////////////////////////////////////////////////////////////////
+			rds_host_def.writer_is_also_reader = false;
+			///////////////////////////////////////////////////////////////////
+
+			result.push_back(rds_host_def);
+		}
+	}
+
+	return result;
+}
+
+vector<rds_host_def_t> find_resp_srvs_rds(const vector<rds_host_def_t>& hosts_defs) {
+	vector<rds_host_def_t> resp_srvs {};
+
+	for (const rds_host_def_t& host_def : hosts_defs) {
+		char* c_hostname = const_cast<char*>(host_def.host.c_str());
+
+		if (GloMyMon->server_responds_to_ping(c_hostname, host_def.port)) {
+			resp_srvs.push_back(host_def);
+		} else {
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::proxysql,
+				host_def.writer_hostgroup,
+				const_cast<char*>(host_def.host.c_str()),
+				host_def.port,
+				ER_PROXYSQL_AWS_RDS_NO_PINGABLE_SRV
+			);
+		}
+	}
+
+	return resp_srvs;
+}
+
+unique_ptr<MySQL_Monitor_State_Data> init_mmsd_with_conn_rds(
+	const rds_host_def_t srv_def,
+	uint32_t w_hg,
+	uint32_t r_hg,
+	uint64_t start_time,
+	const rds_mon_st_t& cur_mon_st
+) {
+	MySQL_Monitor_State_Data_Task_Type task_type {};
+
+	switch (cur_mon_st.check_type) {
+		case AWS_RDS_TOPOLOGY_CHECK:
+			task_type = MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY;
+			break;
+		case AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK:
+			task_type = MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY;
+			break;
+		default:
+			proxy_warning("Attempting to add rds_topology query to unsupported read_only check.");
+			assert(0);
+	}
+
+	unique_ptr<MySQL_Monitor_State_Data> mmsd {
+		new MySQL_Monitor_State_Data {
+			task_type,
+			const_cast<char*>(srv_def.host.c_str()),
+			srv_def.port,
+			static_cast<bool>(srv_def.use_ssl)
+		}
+	};
+
+	mmsd->t1 = start_time;
+	mmsd->init_time = start_time;
+	mmsd->writer_hostgroup = w_hg;
+	mmsd->reader_hostgroup = r_hg;
+	mmsd->writer_is_also_reader = srv_def.writer_is_also_reader;
+	mmsd->cur_rds_mon_st = cur_mon_st;
+	mmsd->mysql = GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
+
+	if (mmsd->mysql == NULL) {
+		const bool rc { mmsd->create_new_connection() };
+
+		if (rc && mmsd->mysql) {
+			GloMyMon->My_Conn_Pool->conn_register(mmsd.get());
+			mmsd->created_conn = true;
+		} else {
+			const uint64_t now { monotonic_time() };
+			const string err_msg { create_conn_err_msg(mmsd) };
+
+			proxy_error(
+				"Error on AWS RDS check for %s:%d after %lldms. Unable to create a connection. %s.\n",
+				mmsd->hostname, mmsd->port, (now - mmsd->t1)/1000, err_msg.c_str()
+			);
+
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::proxysql,
+				mmsd->hostgroup_id,
+				mmsd->hostname,
+				mmsd->port,
+				ER_PROXYSQL_AWS_RDS_HEALTH_CHECK_CONN_TIMEOUT
+			);
+
+			// Update 'mmsd' error message to report connection creating failure
+			cfmt_t conn_err_msg = cstr_format(
+				"timeout or error in creating new connection: %s", mmsd->mysql_error_msg
+			);
+			mmsd->mysql_error_msg = strdup(conn_err_msg.str.c_str());
+		}
+	}
+
+	return mmsd;
+}
+
+void rds_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
+	if (mmsd->mysql) {
+		if (mmsd->interr || mmsd->mysql_error_msg) {
+			proxy_error(
+				"Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql,
+				mmsd->mysql->net.fd, mmsd->mysql_error_msg
+			);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
+			);
+		}
+	}
+}
+
+using rds_srv_addr_t = pair<string,int32_t>;
+
+// read_only, id, endpoint, port, role, status, version
+struct rds_srv_st_t {
+	string endpoint {};
+	int port { 0 };
+	string id {};
+	bool read_only { true };
+	string role { 0 };
+	string status { 0 };
+	string version { 0 };
+	bool inv_srv_state { false };
+};
+
+pair<rds_srv_st_t,vector<rds_srv_st_t>> extract_rds_srv_st(MySQL_Monitor_State_Data* mmsd) {
+	rds_srv_st_t node { mmsd->hostname, mmsd->port };
+	vector<rds_srv_st_t> peers {};
+
+	if (mmsd->interr == 0 && mmsd->result) {
+		int num_fields=0;
+		int num_rows=0;
+		MYSQL_FIELD * fields = mysql_fetch_fields(mmsd->result);
+		num_fields = mysql_num_fields(mmsd->result);
+		num_rows = mysql_num_rows(mmsd->result);
+
+		bool check_task_fields =
+			(
+				(mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
+				|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY)
+				 && num_fields == 4
+			)
+			||
+			(
+				(mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
+				|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY)
+				&& num_fields == 7
+			);
+
+		if (fields == NULL || !check_task_fields || num_rows < 1) {
+			if (num_rows == 0) {
+				proxy_error(
+					"Empty resultset for rds monitoring query from server %s:%d."
+					" Server is likely misconfigured\n",
+					mmsd->hostname, mmsd->port
+				);
+			} else {
+				proxy_error(
+					"Invalid resultset for rds monitoring query from server %s:%d. Either "
+						"'mysql_fetch_fields=NULL' or unexpected 'mysql_num_fields=%d'."
+						" Please report this incident\n",
+					 mmsd->hostname, mmsd->port, num_fields
+				);
+			}
+			if (mmsd->mysql_error_msg == NULL) {
+				mmsd->mysql_error_msg = strdup("Invalid or malformed resultset");
+			}
+
+			node.inv_srv_state = true;
+		} else {
+			MYSQL_ROW row { nullptr };
+
+			while ((row = mysql_fetch_row(mmsd->result))) {
+				rds_srv_st_t rds_srv_st {};
+
+				if (row[0] && !strcasecmp(row[0], "0")) {
+					rds_srv_st.read_only = false;
+				}
+				rds_srv_st.endpoint = row[2] ? row[2] : "";
+				rds_srv_st.port = row[3] ? atol(row[3]) : -1;
+
+				if (
+					mmsd->get_task_type() == MON_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
+					|| mmsd->get_task_type() == MON_INNODB_READ_ONLY__AND__AWS_RDS_BLUE_GREEN_TOPOLOGY_DISCOVERY
+				) {
+					rds_srv_st.role = row[4] ? row[4] : "";
+					rds_srv_st.status = row[5] ? row[5] : "";
+					rds_srv_st.version = row[6] ? row[6] : "";
+				}
+
+				if (
+					strcasecmp(rds_srv_st.endpoint.c_str(), mmsd->hostname) == 0
+					&& rds_srv_st.port == mmsd->port
+				) {
+					node = rds_srv_st;
+				} else {
+					peers.push_back(rds_srv_st);
+				}
+
+				proxy_debug(PROXY_DEBUG_MONITOR, 7,
+					"Fetched %u:%s:%d info   interr=%d error=\"%s\" read_only=%d",
+					mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mmsd->interr,
+					mmsd->mysql_error_msg, rds_srv_st.read_only
+				);
+			}
+		}
+	}
+
+	if (mmsd->result) {
+		mysql_free_result(mmsd->result);
+		mmsd->result=NULL;
+	}
+
+	return { node, peers };
+}
+
+struct rds_node_info_t {
+	rds_srv_st_t srv_st {};
+	int num_timeouts { 0 };
+};
+
+pair<rds_node_info_t,vector<rds_srv_st_t>> rds_update_hosts_map(
+	uint64_t start_time,
+	const pair<rds_srv_st_t,vector<rds_srv_st_t>>& p_node_peers,
+	MySQL_Monitor_State_Data* mmsd
+) {
+	// Consider 'time_now' to be 'now - fetch_duration'
+	unsigned long long time_now { realtime_time() - (mmsd->t2 - start_time) };
+	cfmt_t fmt_srv_addr { cstr_format("%s:%d", mmsd->hostname, mmsd->port) };
+
+	// Declare the 'node_info' object
+	rds_node_info_t node_info { p_node_peers.first };
+	const rds_srv_st_t& n_st { p_node_peers.first };
+
+	pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+
+	auto it { GloMyMon->AWS_RDS_Hosts_Map.find(fmt_srv_addr.str) };
+	AWS_RDS_status_entry st_e {
+		time_now,
+		(mmsd->mysql_error_msg ? 0 : mmsd->t2 - mmsd->t1),
+		mmsd->mysql_error_msg ? string { mmsd->mysql_error_msg } : string {}
+	};
+
+	st_e.host_statuses.push_back({
+		n_st.id, n_st.endpoint, n_st.port, n_st.role, n_st.status, n_st.version, n_st.read_only
+	});
+
+	for (const rds_srv_st_t& peer : p_node_peers.second) {
+		st_e.host_statuses.push_back(
+			{ peer.id, peer.endpoint, peer.port, peer.role, peer.status, peer.version, peer.read_only }
+		);
+	}
+
+	if (it != GloMyMon->AWS_RDS_Hosts_Map.end()) {
+		it->second.add_entry(st_e);
+	} else {
+		const auto new_node { AWS_RDS_monitor_node(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup) };
+		it = GloMyMon->AWS_RDS_Hosts_Map.insert(std::make_pair(fmt_srv_addr.str, new_node)).first;
+		it->second.add_entry(st_e);
+	}
+
+	{
+		AWS_RDS_monitor_node& node { it->second };
+
+		if (mmsd->mysql_error_msg) {
+			if (strncasecmp(mmsd->mysql_error_msg, "timeout", 7) == 0) {
+				node_info.num_timeouts = node.get_timeout_count();
+			}
+		}
+	}
+
+	pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+
+	return { node_info, p_node_peers.second };
+}
+
+
+vector<disc_srv_info_t> build_disc_srv_info(
+	MySQL_Monitor_State_Data* mmsd, const vector<rds_srv_st_t>& srvs
+) {
+	vector<disc_srv_info_t> disc_srvs {};
+
+	for (const auto& srv : srvs) {
+		const auto srv_kind { "AWS RDS Autodiscovered" };
+		const srv_info_t srv_info { srv.endpoint, static_cast<uint16_t>(srv.port), srv_kind };
+		const srv_opts_t srv_opts { -1, -1, mmsd->use_ssl };
+
+		disc_srvs.push_back({ static_cast<uint32_t>(mmsd->reader_hostgroup), srv_info, srv_opts });
+	}
+
+	return disc_srvs;
+}
+
+bool is_aws_rds_topology_version_supported(const string& version) {
+	// TODO: implement better check that considers minor and major versions
+	return version == SUPPORTED_AWS_RDS_TOPOLOGY_VERSION;
+}
+
+bool is_aws_rds_multi_az_db_cluster_topology(const string& host, const vector<rds_srv_st_t>& peers) {
+	if (peers.size() != 2) {
+		return false;
+	}
+
+	vector<string> hostnames(1, host);
+	for (const rds_srv_st_t& server : peers) {
+		if (server.endpoint.empty()) {
+			continue;
+		}
+		hostnames.push_back(server.endpoint);
+	}
+
+	const unordered_set<string> expected_instance_names = {"-instance-1", "-instance-2", "-instance-3"};
+	unordered_set<string> discovered_instance_names;
+	for( string hostname : hostnames) {
+		size_t domain_start = hostname.find('.');
+		if (domain_start != string::npos && domain_start > 11) {
+			string prospect_instance_suffix = hostname.substr(domain_start - 11, 11);
+			discovered_instance_names.insert(prospect_instance_suffix);
+		}
+	}
+
+	return (expected_instance_names == discovered_instance_names);
+}
+
+pair<rds_mon_st_t,vector<rds_srv_st_t>> process_discovered_topology(
+	const rds_mon_st_t& cur_mon_st, const pair<rds_node_info_t,vector<rds_srv_st_t>>& p_node_peers
+) {
+	rds_mon_st_t next_mon_st {};
+	std::vector<rds_srv_st_t> validated_peers {};
+
+	const std::string& host { p_node_peers.first.srv_st.endpoint };
+	const std::vector<rds_srv_st_t>& node_peers { p_node_peers.second };
+
+	// Check if the query needs to be changed because it matches a blue/green deployment:
+	// exactly 3 entries for Multi-AZ DB Clusters, even number for blue/green deployment
+	if (cur_mon_st.check_type == AWS_RDS_TOPOLOGY_CHECK && (node_peers.size() + 1) % 2 == 0) {
+		// With the AWS_RDS_TOPOLOGY_CHECK, we didn't get the role and status data,
+		// so we retry with the correct query on the next read_only check
+		next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
+		next_mon_st.next_check_delay = mysql_thread___monitor_aws_rds_topology_discovery_interval;
+
+		return { next_mon_st, {} };
+	} else if (
+		(cur_mon_st.check_type == AWS_RDS_TOPOLOGY_CHECK && (node_peers.size() + 1) != 3)
+		||
+		(
+			next_mon_st.check_type == AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK
+			&&
+			(node_peers.size() + 1) % 2 != 0
+		)
+	) {
+		// Query result matches neither a Multi-AZ DB Cluster nor a Blue/Green deployment
+		// TODO: Account for topology metadata towards the end of a blue/green deployment switchover (possibly
+		// odd number of entries)
+		next_mon_st.check_type = AWS_RDS_TOPOLOGY_CHECK; // Set back to default rds_topology check
+		// TODO: This needs to be notified to the user; potential cluster misconfiguration, for now,
+		// this message will be promoted to WARNING. If this is expected behavior it should be
+		// reverted to DEBUG.
+		proxy_warning(
+			"Query result for RDS_TOPOLOGY metadata table matches neither Multi-AZ DB Clusters,"
+			" nor a Blue/Green deployment   records=%zu\n",
+			node_peers.size() + 1
+		);
+
+		return { next_mon_st, {} };
+	}
+
+	if (p_node_peers.first.srv_st.inv_srv_state) {
+		// NOTE-TODO: Validation is performed in 'extract_rds_srv_st'. In this validation state errors are
+		// already reported about the issues found with the resultset. If further improvements are required
+		// for logging, they should be placed there, during validation.
+		proxy_error("Response from server was ill-formed; aborting further topology processing\n");
+		return { next_mon_st, {} };
+	}
+
+	// Loop through discovered servers and process them
+	for (const auto& server_info : node_peers) {
+		if (server_info.endpoint.empty()) {
+			proxy_warning("Received empty RDS topology record from %s.\n", host.c_str());
+			continue;
+		}
+
+		if (!server_info.version.empty() && !is_aws_rds_topology_version_supported(server_info.version)) {
+			proxy_warning(
+				"Discovered topology version (%s) is not compatible with supported version (%s)\n",
+				server_info.version.c_str(), SUPPORTED_AWS_RDS_TOPOLOGY_VERSION
+			);
+			return { next_mon_st, {} };
+		}
+
+		// TODO: Add logic for selecting a different weight based on discovered role and status
+		// int64_t current_determined_weight = (int64_t)(-1L);
+
+		// NOTE: This section JUST VALIDATES the topology; if servers are to be added or are existing ones is
+		// a check that should be performed after this validation has taken place.
+		validated_peers.push_back(server_info);
+	}
+
+	// Return the peers ONLY IF topology passed validation. AWS_RDS_TOPOLOGY_CHECK is currently meant to only
+	// be used with RDS Multi-AZ DB clusters
+	if (
+		!validated_peers.empty()
+		&&
+		(
+			next_mon_st.check_type != AWS_RDS_TOPOLOGY_CHECK
+			||
+			is_aws_rds_multi_az_db_cluster_topology(host, validated_peers)
+		)
+	) {
+		return { next_mon_st, validated_peers };
+	} else {
+		return { next_mon_st, {} };
+	}
+}
+
+/**
+ * @brief Perform the actual monitoring action on the server based on the 'mmsd' info.
+ *
+ * @param mmsd The 'mmsd' holding info about fetching errors.
+ * @param node_info The fetched server information itself.
+ */
+rds_mon_st_t rds_mon_action_over_resp_srv(
+	MySQL_Monitor_State_Data* mmsd,
+	const pair<rds_node_info_t,vector<rds_srv_st_t>>& p_node_peers,
+	const rds_mon_st_t& cur_mon_st
+) {
+	// TODO-NOTE: For now, we duplicate the current check; in case of *fetch* error we re-attempt.
+	rds_mon_st_t next_mon_st { cur_mon_st };
+	const auto& node_info { p_node_peers.first };
+
+	if (mmsd->mysql_error_msg) {
+		if (node_info.srv_st.inv_srv_state) {
+			proxy_warning("Found invalid or misconfigured instance! TODO: Complete this logic\n");
+		} else {
+			// It was a timeout. Check if we are having consecutive timeout
+			if (node_info.num_timeouts == mysql_thread___monitor_read_only_max_timeout_count) {
+				proxy_error(
+					"AWS RDS server %s:%d missed %d read_only checks, assuming 'read_only'\n",
+					mmsd->hostname, mmsd->port, node_info.num_timeouts
+				);
+
+				MyHGM->p_update_mysql_error_counter(
+					p_mysql_error_type::proxysql,
+					mmsd->hostgroup_id,
+					mmsd->hostname,
+					mmsd->port,
+					ER_PROXYSQL_AWS_RDS_HEALTH_CHECK_TIMEOUT
+				);
+				MyHGM->read_only_action_v2({{node_info.srv_st.endpoint, node_info.srv_st.port, true}});
+			}
+		}
+	} else {
+		if (node_info.srv_st.inv_srv_state) {
+			proxy_warning("Found invalid or misconfigured instance! TODO: Complete this logic\n");
+		} else {
+			// 1. Relevant monitoring 'read_only' action over queried server
+			MyHGM->read_only_action_v2({
+				{
+					node_info.srv_st.endpoint,
+					static_cast<uint32_t>(node_info.srv_st.port),
+					static_cast<int>(node_info.srv_st.read_only)
+				}
+			});
+
+			// 2. Process and validate the discovered topology
+			const auto p_top_res { process_discovered_topology(cur_mon_st, p_node_peers) };
+
+			// 3. Add the new auto-discovered instances as readers
+			if (mmsd->cur_monitored_rds_srvs && p_top_res.second.empty() == false) {
+				const auto is_new_srv {
+					[&mmsd] (const rds_srv_st_t& rds_member) -> bool {
+						for (const rds_host_def_t& host_def : *mmsd->cur_monitored_rds_srvs) {
+							if (rds_member.endpoint == host_def.host && rds_member.port == host_def.port) {
+								return false;
+							}
+						}
+
+						return true;
+					}
+				};
+
+				vector<rds_srv_st_t> disc_srvs {};
+				std::copy_if(
+					p_top_res.second.begin(),
+					p_top_res.second.end(),
+					std::back_inserter(disc_srvs),
+					is_new_srv
+				);
+
+				MyHGM->update_aws_rds_add_autodiscovered(build_disc_srv_info(mmsd, disc_srvs));
+			}
+
+			next_mon_st = p_top_res.first;
+		}
+	}
+
+	return next_mon_st;
+}
+
+rds_mon_st_t async_rds_mon_actions_handler(
+	MySQL_Monitor_State_Data* mmsd, const rds_mon_st_t& cur_mon_st
+) {
+	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
+	// required, we take into account this time into account, otherwise we assume that 'start_time=t1'.
+	uint64_t start_time = 0;
+	if (mmsd->created_conn) {
+		start_time = mmsd->init_time;
+	} else {
+		start_time = mmsd->t1;
+	}
+
+	// Extract the server status from the 'mmsd'. Empty if invalid data format is received.
+	const auto p_node_peers_t { extract_rds_srv_st(mmsd) };
+
+	// Report fetch errors; logs should report 'cause -> effect'
+	rds_report_fetching_errs(mmsd);
+
+	// Perform monitoring actions; tables updates and server placement operations
+	const auto nodes_info { rds_update_hosts_map(start_time, p_node_peers_t, mmsd) };
+	rds_mon_st_t next_mon_st { rds_mon_action_over_resp_srv(mmsd, nodes_info, cur_mon_st) };
+
+	// Handle 'mmsd' MySQL conn return to 'ConnectionPool'
+	handle_mmsd_mysql_conn(mmsd);
+
+	return next_mon_st;
+}
+
+bool MySQL_Monitor::monitor_aws_rds_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
+	for (MySQL_Monitor_State_Data* mmsd : mmsds) {
+		const MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
+		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
+		mmsd->cur_rds_mon_st = async_rds_mon_actions_handler(mmsd, mmsd->cur_rds_mon_st);
+	}
+
+	return true;
+}
+
+AWS_RDS_monitor_node::AWS_RDS_monitor_node(
+	const string& _addr, int _port, int _whg
+) : addr(_addr), port(_port), writer_hostgroup(_whg) {}
+
+bool AWS_RDS_monitor_node::add_entry(const AWS_RDS_status_entry& rse) {
+    bool was_empty { entries.empty() };
+
+    if (entries.size() >= AWS_RDS_Nentries) {
+        entries.pop_front();
+    }
+
+    entries.push_back(rse);
+    num_checks_tot++;
+    if (entries.back().error.empty()) {
+        num_checks_ok++;
+    }
+
+    last_checked_at = time(NULL);
+
+    return was_empty;
+}
+
+int AWS_RDS_monitor_node::get_timeout_count() {
+	int num_timeouts = 0;
+	int max_num_timeout = 10;
+
+	if (mysql_thread___monitor_read_only_max_timeout_count < max_num_timeout) {
+		max_num_timeout = mysql_thread___monitor_read_only_max_timeout_count;
+	}
+
+	unsigned long long start_times[max_num_timeout];
+	bool timeouts[max_num_timeout];
+
+	for (int i = 0; i < max_num_timeout; i++) {
+		start_times[i] = 0;
+		timeouts[i] = false;
+	}
+
+	for (int i = 0; i < AWS_RDS_Nentries; i++) {
+		if (entries[i].start_time) {
+			int smallidx = 0;
+
+			for (int j = 0; j < max_num_timeout; j++) {
+				if (j != smallidx) {
+					if (start_times[j] < start_times[smallidx]) {
+						smallidx = j;
+					}
+				}
+			}
+
+			if (start_times[smallidx] < entries[i].start_time) {
+				start_times[smallidx] = entries[i].start_time;
+				timeouts[smallidx] = false;
+
+				if (!entries[i].error.empty()) {
+					if (strncasecmp(entries[i].error.c_str(), "timeout", 7) == 0) {
+						timeouts[smallidx] = true;
+					}
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < max_num_timeout; i++) {
+		if (timeouts[i]) {
+			num_timeouts++;
+		}
+	}
+
+	return num_timeouts;
+}
+
+void* monitor_AWS_RDS_thread_HG(void* th_args) {
+	set_thread_name("MonitorRDSHG", GloVars.set_thread_name);
+
+	const uintptr_t* thread_data { static_cast<uintptr_t*>(th_args) };
+	const uintptr_t wHG { thread_data[0] };
+	const uintptr_t rHG { thread_data[1] };
+	uintptr_t* const thread_running { reinterpret_cast<uintptr_t*>(thread_data[2]) };
+
+	proxy_info("Started Monitor thread for AWS RDS replication HG writer=%lu, reader=%lu\n", wHG, rHG);
+
+	// Clean up the allocated thread args
+	delete[] thread_data;
+
+	// Quick exit during shutdown/restart
+	if (!GloMTH) { return NULL; }
+
+	// Initial Monitor thread variables version
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version { GloMTH->get_global_version() };
+	// MySQL thread structure used for variable refreshing
+	unique_ptr<MySQL_Thread> mysql_thr { init_mysql_thread_struct() };
+
+	pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+	// Get the initial config checksum; this thread must exist on any config changes
+	uint64_t initial_raw_checksum {
+		GloMyMon->AWS_RDS_Hosts_resultset ? GloMyMon->AWS_RDS_Hosts_resultset->raw_checksum() : 0
+	};
+	// Extract the monitoring data required for the target replication hostgroup
+	vector<rds_host_def_t> hosts_defs { extract_rds_host_defs(wHG, rHG, GloMyMon->AWS_RDS_Hosts_resultset) };
+	pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+
+	uint64_t next_check_time { 0 };
+	uint64_t MAX_CHECK_DELAY_US { 500000 };
+	rds_mon_st_t next_mon_st { AWS_RDS_TOPOLOGY_CHECK };
+
+	while (GloMyMon->shutdown == false && mysql_thread___monitor_enabled == true) {
+		if (!GloMTH) { break; } // quick exit during shutdown/restart
+
+		// Config update check; fetch changes and validate thread
+		{
+			pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+			uint64_t current_raw_checksum {
+				GloMyMon->AWS_RDS_Hosts_resultset ? GloMyMon->AWS_RDS_Hosts_resultset->raw_checksum() : 0
+			};
+			pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+
+			if (current_raw_checksum != initial_raw_checksum) {
+				// Config modified! Update host_defs
+				pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+				hosts_defs = extract_rds_host_defs(wHG, rHG, GloMyMon->AWS_RDS_Hosts_resultset);
+				pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+
+				// Check thread validity; if empty, there is no match for the target hg this thread was
+				// spawned for. Servers, or hostgroups have been manually removed / modified by the user, and
+				// this thread is no longer needed. If required, it would be spawned by config again.
+				if (hosts_defs.empty()) {
+					break;
+				}
+			}
+		}
+
+		// Check variable version changes; refresh if needed and don't delay next check
+		unsigned int glover = GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version = glover;
+			mysql_thr->refresh_variables();
+			next_check_time = 0;
+		}
+
+		uint64_t curtime { monotonic_time() };
+
+		// Delay the next check if needed
+		if (curtime < next_check_time) {
+			const uint64_t time_left { next_check_time - curtime };
+			uint64_t next_check_delay = 0;
+
+			if (time_left > MAX_CHECK_DELAY_US) {
+				next_check_delay = MAX_CHECK_DELAY_US;
+			} else {
+				next_check_delay = time_left;
+			}
+
+			usleep(next_check_delay);
+			continue;
+		}
+
+		// Get the current 'pingable' status for the servers.
+		const vector<rds_host_def_t>& resp_srvs { find_resp_srvs_rds(hosts_defs) };
+		if (resp_srvs.empty()) {
+			proxy_error("No node is pingable for AWS RDS cluster with writer HG %lu\n", wHG);
+
+			if (next_mon_st.next_check_delay) {
+				next_check_time = curtime + next_mon_st.next_check_delay * 1000;
+			} else {
+				next_check_time = curtime + mysql_thread___monitor_read_only_interval * 1000;
+			}
+			continue;
+		}
+
+		// Initialize the 'MMSD' for data fetching for responsive servers
+		vector<unique_ptr<MySQL_Monitor_State_Data>> conn_mmsds {};
+		vector<unique_ptr<MySQL_Monitor_State_Data>> fail_mmsds {};
+
+		// NOTE: Since we perform the monitoring actions independently, we workaround the limitation of
+		// 'Monitor_Poll' of only handling 'MySQL_Monitor_State_Data' which hold valid connections, by:
+		//  1. Separate the 'MySQL_Monitor_State_Data' between failed to obtain conn and not.
+		//  2. Perform the required monitoring actions over the servers that failed to obtain conns.
+		//  3. Delegate the async fetching + actions of 'MySQL_Monitor_State_Data' with conns on 'Monitor_Poll'.
+		///////////////////////////////////////////////////////////////////////////////////////
+
+		// 1. Separate the 'mmsds' based on success of obtaining a conn
+		for (const rds_host_def_t& host_def : resp_srvs) {
+			unique_ptr<MySQL_Monitor_State_Data> mmsd {
+				init_mmsd_with_conn_rds(host_def, wHG, rHG, curtime, next_mon_st)
+			};
+
+			if (mmsd->mysql_error_msg) {
+				fail_mmsds.push_back(std::move(mmsd));
+			} else {
+				conn_mmsds.push_back(std::move(mmsd));
+			}
+		}
+
+		// TODO-NOTE: This must be verified. Right now, with each check, only one of the cluster instances is
+		// selected for discovery and topology check (of discovered instances). This might not be the desired
+		// behavior, for instance, multi-instance topology check might be desired, and only auto-discovery
+		// actions for one instance.
+		int rnd_discoverer = conn_mmsds.size() == 0 ? -1 : rand() % conn_mmsds.size();
+		if (rnd_discoverer != -1) {
+			conn_mmsds[rnd_discoverer]->cur_monitored_rds_srvs = &hosts_defs;
+		}
+
+		// NOTE: This is just a best effort to avoid invalid memory accesses during 'SHUTDOWN SLOW'. Since the
+		// previous section is 'time consuming', there are good changes that we can detect a shutdown before
+		// trying to perform the monitoring actions on the acquired 'mmsd'. This exact scenario and timing has
+		// been previously observed in the CI.
+		if (GloMyMon->shutdown) {
+			break;
+		}
+
+		// 2. Handle 'mmsds' that failed to obtain conns
+		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : fail_mmsds) {
+			mmsd->cur_rds_mon_st = async_rds_mon_actions_handler(mmsd.get(), mmsd->cur_rds_mon_st);
+		}
+
+		// Update 't1' for subsequent fetch operations and reset errors
+		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : conn_mmsds) {
+			if (mmsd->mysql) {
+				mmsd->t1 = monotonic_time();
+				mmsd->interr = 0;
+			}
+		}
+
+		// 3. Perform the async fetch + actions over the 'MySQL_Monitor_State_Data'
+		if (conn_mmsds.empty() == false) {
+			GloMyMon->monitor_rds_async_actions_handler(conn_mmsds);
+		}
+		///////////////////////////////////////////////////////////////////////////////////////
+
+
+		///////////////////////////////////////////////////////////////////////////////////////
+		//                            PROCESS TOPOLOGY RESULTS
+		///////////////////////////////////////////////////////////////////////////////////////
+
+		// NOTE-TODO: For now, we are intentionally ignoring the results from the 'fail_mmsds'. This is
+		// something that could change in the future impl; for now, we only consider that processed
+		// topologies from servers that have been queried can influence the next checks to be
+		// performed, otherwise we go back to the defaults values. This is an assumption, an
+		// alternative implementation might consider that if a connection fails to be created to a
+		// cluster instance (fail_mmsds.size() > 0) a particular type of discovery operation must be
+		// re-attempted.
+
+		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : conn_mmsds) {
+			next_mon_st.check_type = MySQL_Monitor_Aws_Metadata_Check::NONE;
+
+			// TODO: This is an assumption; for now, we consider that if there is any failure during
+			// topology processing we default to 'AWS_RDS_TOPOLOGY_CHECK' as the next check. Due to
+			// this, once this state is returned by any 'mmsd' is preserved over the rest.
+			if (next_mon_st.check_type != AWS_RDS_TOPOLOGY_CHECK) {
+				next_mon_st.check_type = AWS_RDS_BLUE_GREEN_DEPLOYMENT_STATE_CHECK;
+			}
+
+			// TODO: This is an assumption; for now, we consider than the smallest computed
+			// 'next_check_delay' during topology processing should be honored.
+			if (next_mon_st.next_check_delay > mmsd->cur_rds_mon_st.check_type) {
+				next_mon_st.next_check_delay = mmsd->cur_rds_mon_st.next_check_delay;
+			}
+		}
+
+		///////////////////////////////////////////////////////////////////////////////////////
+
+		if (rnd_discoverer != -1) {
+			conn_mmsds[rnd_discoverer]->cur_monitored_rds_srvs = nullptr;
+		}
+
+		// Set the time for the next iteration
+		if (next_mon_st.next_check_delay) {
+			next_check_time = curtime + next_mon_st.next_check_delay * 1000;
+		} else {
+			next_check_time = curtime + mysql_thread___monitor_read_only_interval * 1000;
+		}
+	}
+
+	proxy_info("Stopping Monitor thread for AWS RDS replication HG writer=%lu\n", wHG);
+	*thread_running = 0;
+
+	return NULL;
 }
 
 template class WorkItem<MySQL_Monitor_State_Data>;

@@ -39,6 +39,13 @@
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_FAILOVERS "CREATE TABLE mysql_server_aws_aurora_failovers (writer_hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , inserted_at VARCHAR NOT NULL)"
 
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_RDS_LOG "CREATE TABLE mysql_server_aws_rds_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , error VARCHAR , server_id VARCHAR NOT NULL DEFAULT '' , read_only VARCHAR NOT NULL DEFAULT 'NO' , role VARCHAR , status VARCHAR , version VARCHAR , PRIMARY KEY (hostname, port, time_start_us, server_id))"
+
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_RDS_CHECK_STATUS "CREATE TABLE mysql_server_aws_rds_check_status (writer_hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , last_checked_at VARCHAR , checks_tot INT NOT NULL DEFAULT 0 , checks_ok INT NOT NULL DEFAULT 0 , last_error VARCHAR , PRIMARY KEY (writer_hostgroup, hostname, port))"
+
+// TODO: Left in case cluster state transitions are required to be recorded, should be removed otherwise.
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_RDS_FAILOVERS "CREATE TABLE mysql_server_aws_rds_failovers (writer_hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , inserted_at VARCHAR NOT NULL)"
+
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port) )"
 
 #define MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS "CREATE TABLE proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
@@ -55,6 +62,7 @@ struct cmp_str {
 #define MyGR_Nentries	100
 #define Galera_Nentries	100
 #define AWS_Aurora_Nentries	150
+#define AWS_RDS_Nentries 150
 
 #define N_L_ASE 16
 
@@ -65,6 +73,7 @@ struct cmp_str {
 #define QUERY_INNODB_READ_ONLY_AND_AWS_BLUE_GREEN_TOPOLOGY_DISCOVERY "SELECT @@global.innodb_read_only AS read_only, id, endpoint, port, role, status, version FROM mysql.rds_topology"
 
 #define SUPPORTED_AWS_RDS_TOPOLOGY_VERSION "1.0"
+
 /*
 
 Implementation of monitoring in AWS Aurora will be different than previous modules
@@ -142,6 +151,78 @@ class AWS_Aurora_monitor_node {
 		if (idx_last_entry == -1) return NULL;
 		return (last_entries[idx_last_entry]);
 	}
+};
+
+struct AWS_RDS_replica_host_status_entry {
+	string server_id {};
+	string endpoint {};
+	int port { 0 };
+	string role {};
+	string status {};
+	string version {};
+	bool read_only { true };
+};
+
+struct AWS_RDS_status_entry {
+	unsigned long long start_time { 0 };
+	unsigned long long check_time { 0 };
+	string error {};
+	std::vector<AWS_RDS_replica_host_status_entry> host_statuses {};
+};
+
+struct AWS_RDS_monitor_node {
+	string addr {};
+	int port { 0 };
+	unsigned int writer_hostgroup {};
+	uint64_t num_checks_tot { 0 };
+	uint64_t num_checks_ok { 0 };
+	time_t last_checked_at { 0 };
+
+	//! Use std::deque to store unique_ptr to manage 'AWS_RDS_status_entry' objects.
+	std::deque<AWS_RDS_status_entry> entries { AWS_RDS_Nentries };
+
+	AWS_RDS_monitor_node(const string& _addr, int _port, int _whg);
+	/**
+	 * @brief Adds a new AWS_RDS_status_entry to the circular buffer.
+	 *
+	 *   This method manages a fixed-size circular buffer of AWS_RDS_status_entry objects
+	 *   using std::deque and std::unique_ptr. If the buffer is full, the oldest entry
+	 *   is automatically removed. Ownership of the passed unique_ptr is transferred.
+	 * @param rse The entry to be added.
+	 * @return True if the deque was empty before this entry was added, False otherwise.
+	 */
+	bool add_entry(const AWS_RDS_status_entry& rse);
+	/**
+	 * @brief Retrieves a pointer to the last AWS_RDS_status_entry in the collection.
+	 * @return const AWS_RDS_status_entry* If not empty, a constant pointer to the last entry in the
+	 *   circular buffer `nullptr` otherwise. The returned pointer is valid only as long as the
+	 *   `entries` collection is not modified (e.g., by adding or removing elements).
+	 */
+	const AWS_RDS_status_entry* last_entry() const {
+		if (entries.empty()) {
+			return nullptr;
+		} else {
+			return &entries.back();
+		}
+	}
+	/**
+	 * @brief Counts the number of recent AWS RDS timeout events.
+	 * @details Processes a collection of AWS RDS entries to identify and count
+	 *   timeout events among the 'N' most recent entries. The value of 'N' (maximum
+	 *   number of timeouts to track) is determined by `max_num_timeout`, which is
+	 *   capped by `mysql_thread___monitor_read_only_max_timeout_count`.
+	 * @return int The total count of timeout events among the 'N' most recent AWS RDS entries.
+	 *
+	 * @note
+	 * - `AWS_RDS_Nentries` is expected to be a global or member variable indicating
+	 *   the total number of entries in the `entries` collection.
+	 * - `entries` is expected to be a global or member array/vector of structures
+	 *   with `start_time` (e.g., `unsigned long long`) and `error` (e.g., `std::string`) members.
+	 * - `mysql_thread___monitor_read_only_max_timeout_count` is a global or member
+	 *   variable that can limit the maximum number of timeouts to track.
+	 * - `strncasecmp` is used for case-insensitive comparison of error messages ('timeout').
+	 */
+	int get_timeout_count();
 };
 
 typedef struct _Galera_status_entry_t {
@@ -252,6 +333,39 @@ struct gr_host_def_t {
 	int max_transactions_behind_count;
 };
 
+/**
+ * @brief Holds the info from an RDS server definition.
+ */
+struct rds_host_def_t {
+	string host;
+	int port;
+	int use_ssl;
+	bool writer_is_also_reader;
+	unsigned int writer_hostgroup;
+	unsigned int reader_hostgroup;
+};
+
+/**
+ * @brief Represents the current monitoring state and configuration for AWS RDS topology discovery.
+ *
+ * This structure holds information necessary for the `MySQL_Monitor` to determine
+ * how to proceed with discovering and processing RDS topology metadata.
+ */
+struct rds_mon_st_t {
+	/**
+	 * @brief The type of AWS RDS metadata check to perform.
+	 * @see MySQL_Monitor_Aws_Metadata_Check
+	 */
+	MySQL_Monitor_Aws_Metadata_Check check_type;
+	/**
+	 * @brief The delay in milliseconds until the next topology discovery check.
+	 *  This value can be dynamically adjusted based on the results of the current discovery
+	 *  process. For instance, if a blue/green deployment state is detected, this delay might be set
+	 *  to a shorter interval to quickly re-check for role/status information.
+	 */
+	uint64_t next_check_delay;
+};
+
 class MySQL_Monitor_State_Data {
 public:
 	/* @brief Time prior fetch operations. 'Start time' of the monitoring check. */
@@ -294,6 +408,14 @@ public:
 	 * @details This way we avoid non-needed locking on 'MySQL_HostGroups_Manager' for server search.
 	 */
 	const std::vector<gr_host_def_t>* cur_monitored_gr_srvs = nullptr;
+	/**
+	 * @brief Used by RDS monitoring to track monitored servers.
+	 */
+	const std::vector<rds_host_def_t>* cur_monitored_rds_srvs = nullptr;
+	/**
+	 * @brief Used by RDS monitoring to track monitored servers.
+	 */
+	rds_mon_st_t cur_rds_mon_st {};
 
 	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
@@ -468,6 +590,10 @@ struct DNS_Resolve_Data {
 	unsigned int refresh_intv = 0;
 };
 
+#ifdef DEBUG
+using sim_err_t = std::pair<int,std::string>;
+#endif
+
 class MySQL_Monitor {
 	public:
 	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
@@ -487,6 +613,7 @@ class MySQL_Monitor {
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t aws_aurora_mutex; // for simplicity, a mutex instead of a rwlock
+	pthread_mutex_t aws_rds_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t mysql_servers_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t proxysql_servers_mutex; 
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
@@ -497,6 +624,9 @@ class MySQL_Monitor {
 	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
 	SQLite3_result *AWS_Aurora_Hosts_resultset;
 	uint64_t AWS_Aurora_Hosts_resultset_checksum;
+	SQLite3_result* AWS_RDS_Hosts_resultset { nullptr };
+	uint64_t AWS_RDS_Hosts_resultset_checksum { 0 };
+	std::map<std::string, AWS_RDS_monitor_node> AWS_RDS_Hosts_Map {};
 	unsigned int num_threads;
 	unsigned int aux_threads;
 	unsigned int started_threads;
@@ -528,6 +658,8 @@ class MySQL_Monitor {
 	SQLite3DB *monitor_internal_db;	// internal database
 #ifdef DEBUG
 	bool proxytest_forced_timeout;
+	std::map<string,std::queue<sim_err_t>> sim_errs {};
+	pthread_mutex_t sim_errs_mutex;
 #endif
 
 	std::shared_ptr<DNS_Cache> dns_cache;
@@ -549,6 +681,8 @@ class MySQL_Monitor {
 	void populate_monitor_mysql_server_galera_log();
 	void populate_monitor_mysql_server_aws_aurora_log();
 	void populate_monitor_mysql_server_aws_aurora_check_status();
+	void populate_monitor_mysql_server_aws_rds_log();
+	void populate_monitor_mysql_server_aws_rds_check_status();
 	/**
 	 * @brief Helper function that uses the provided resulset for updating the table 'monitor_internal.mysql_servers'.
 	 * @details When supplying 'MySQL_HostGroups_Manager::mysql_servers_to_monitor' resulset as parameter, the
@@ -569,6 +703,11 @@ class MySQL_Monitor {
 	 * @param mmsds Vector of 'MySQL_Monitor_State_Data' from which to perform the async data fetching.
 	 */
 	void monitor_gr_async_actions_handler(const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds);
+	/**
+	 * @brief Encapsulates the async fetching, and later monitoring actions for an AWS RDS cluster.
+	 * @param mmsds Vector of 'MySQL_Monitor_State_Data' from which to perform the async data fetching.
+	 */
+	void monitor_rds_async_actions_handler(const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds);
 
 private:
 	/**
@@ -601,7 +740,28 @@ private:
 	 * @return Since none of the handlers is allowed to fail, always 'true'.
 	 */
 	bool monitor_group_replication_process_ready_tasks_2(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	/**
+	 * @brief Process the 'MySQL_Monitor_State_Data' after all RDS cluster data is fetched.
+	 * @param mmsds Holds all the fetched RDS cluster info for the performing the monitoring actions.
+	 * @return Since none of the handlers is allowed to fail, always 'true'.
+	 */
+	bool monitor_aws_rds_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 	bool monitor_galera_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 };
+
+/**
+ * @brief RDS hostgroup monitor thread.
+ * @details The thread is responsible for monitoring servers from the two provided hostgroups
+ *  ('wr_hg', 'rd_hg'). The writer hostgroup is used to target the hostgroups defined in
+ *  'mysql_replication_hostgroups'. If the server isn't present, or removed from this table, the
+ *  thread will exit, and will flag it's exit in the provided flag. This monitoring performs
+ *  analogous operations to 'read_only' in a per-cluster (per-hostgroup) basis, including specific
+ *  RDS topology checks and responsiveness tuning. When config is altered, the threads **DO NOT**
+ *  require exiting, this ensures that after servers discovery or config changes monitoring stays as
+ *  responsive as during regular checks.
+ * @param arg Arguments, with expected kind: 'uintptr_t[3] { writer_hg, reader_hg, running_flag }'.
+ * @return NULL on exit.
+ */
+extern "C" void * monitor_AWS_RDS_thread_HG(void *arg);
 
 #endif /* __CLASS_MYSQL_MONITOR_H */

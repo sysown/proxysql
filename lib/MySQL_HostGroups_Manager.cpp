@@ -1959,8 +1959,34 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 		free(query);
 	}
 	incoming_replication_hostgroups=NULL;
+
+	// Regenerate the monitoring resultset for AWS RDS
+	generate_mysql_aws_rds_hostgroups_monitor_resultset();
 }
 
+
+void MySQL_HostGroups_Manager::generate_mysql_aws_rds_hostgroups_monitor_resultset() {
+	pthread_mutex_lock(&GloMyMon->aws_rds_mutex);
+	{
+		const char query[] {
+			"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl"
+			" FROM mysql_servers JOIN mysql_replication_hostgroups"
+				" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
+			" WHERE status NOT IN (2,3) AND hostname LIKE '%rds.amazonaws.com'"
+			" GROUP BY hostname, port ORDER BY RANDOM()"
+		};
+		char* error { nullptr };
+		SQLite3_result* resultset { mydb->execute_statement(query, &error) };
+
+		if (resultset) {
+			if (GloMyMon->AWS_RDS_Hosts_resultset) {
+				delete GloMyMon->AWS_RDS_Hosts_resultset;
+			}
+			GloMyMon->AWS_RDS_Hosts_resultset = resultset;
+		}
+	}
+	pthread_mutex_unlock(&GloMyMon->aws_rds_mutex);
+}
 
 void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table() {
 	if (incoming_group_replication_hostgroups==NULL) {
@@ -4888,6 +4914,49 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 		// we couldn't find the cluster, exits
 	}
 	pthread_mutex_unlock(&Group_Replication_Info_mutex);
+}
+
+void MySQL_HostGroups_Manager::update_aws_rds_add_autodiscovered(
+	const std::vector<disc_srv_info_t>& disc_srvs
+) {
+	if (disc_srvs.empty()) { return; }
+
+	wrlock();
+
+	int srv_rc = -1;
+
+	for (const auto& n_srv : disc_srvs) {
+		srv_rc &= create_new_server_in_hg(n_srv.hg, n_srv.info, n_srv.opts);
+	}
+
+	if (!srv_rc) {
+		purge_mysql_servers_table();
+
+		mydb->execute("DELETE FROM mysql_servers");
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+
+		generate_mysql_servers_table();
+
+		// Update the global checksums after 'mysql_servers' regeneration
+		{
+			unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+			string mysrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
+			save_runtime_mysql_servers(resultset.release());
+			proxy_info("Checksum for table %s is %s\n", "mysql_servers", mysrvs_checksum.c_str());
+
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			update_glovars_mysql_servers_checksum(mysrvs_checksum);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		// Because 'commit' isn't called, we are required to update 'mysql_servers_for_monitor'.
+		update_table_mysql_servers_for_monitor(false);
+		update_hostgroup_manager_mappings();
+		// Update AWS RDS resultset used for monitoring
+		generate_mysql_aws_rds_hostgroups_monitor_resultset();
+	}
+
+	wrunlock();
 }
 
 void MySQL_HostGroups_Manager::update_group_replication_add_autodiscovered(

@@ -2722,11 +2722,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			proxy_warning("Received PROXYSQL_SIMULATOR command: %s\n", query_no_space);
 
 			re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
-			re2::RE2 pattern("\\s*(\\w+) (\\d+) (\\d+\\.\\d+\\.\\d+\\.\\d+):(\\d+) (\\d+)\\s*\\;*", opts);
+			re2::RE2 pattern(
+				"\\s*(\\w+) (\\d+) ([0-9A-Za-z\\_\\-\\.]+):(\\d+) (\\d+)"
+					"(?:\\s([0-9A-Za-z\\_\\-\\.]+)?)?\\s*\\;*",
+				opts
+			);
 			re2::StringPiece input(query_no_space + strlen("PROXYSQL_SIMULATOR"));
 
-			std::string command, s_hg, srv_addr, s_port, s_errcode {};
-			bool c_res = re2::RE2::Consume(&input, pattern, &command, &s_hg, &srv_addr, &s_port, &s_errcode);
+			std::string command, s_hg, srv_addr, s_port, s_eno, s_err {};
+			bool c_res = re2::RE2::Consume(
+				&input, pattern, &command, &s_hg, &srv_addr, &s_port, &s_eno, &s_err
+			);
 
 			long i_hg = 0;
 			long i_port = 0;
@@ -2738,33 +2744,42 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				if (errno == ERANGE || errno == EINVAL) i_hg = LONG_MIN;
 				i_port = std::strtol(s_port.c_str(), &endptr, 10);
 				if (errno == ERANGE || errno == EINVAL) i_port = LONG_MIN;
-				i_errcode = std::strtol(s_errcode.c_str(), &endptr, 10);
+				i_errcode = std::strtol(s_eno.c_str(), &endptr, 10);
 				if (errno == ERANGE || errno == EINVAL) i_errcode = LONG_MIN;
 			}
 
 			if (c_res == true && i_hg != LONG_MIN && i_port != LONG_MIN && i_errcode != LONG_MIN) {
 				if constexpr (std::is_same_v<S, MySQL_Session>) {
-					MyHGM->wrlock();
+					if (command == "mysql_error") {
+						MyHGM->wrlock();
 
-					MySrvC* mysrvc = MyHGM->find_server_in_hg(i_hg, srv_addr, i_port);
-					if (mysrvc != nullptr) {
-						int backup_shun_on_failures;			
-						backup_shun_on_failures = mysql_thread___shun_on_failures;
-						mysql_thread___shun_on_failures = 1;
-						// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
-						mysrvc->connect_error(i_errcode, false);
-						mysrvc->connect_error(i_errcode, false);
-						mysql_thread___shun_on_failures = backup_shun_on_failures;
+						MySrvC* mysrvc = MyHGM->find_server_in_hg(i_hg, srv_addr, i_port);
+						if (mysrvc != nullptr) {
+							int backup_shun_on_failures;
+							backup_shun_on_failures = mysql_thread___shun_on_failures;
+							mysql_thread___shun_on_failures = 1;
+							// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
+							mysrvc->connect_error(i_errcode, false);
+							mysrvc->connect_error(i_errcode, false);
+							mysql_thread___shun_on_failures = backup_shun_on_failures;
+							SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+						} else {
+							std::string t_err_msg{ "Supplied server '%s:%d' wasn't found in hg '%d'" };
+							std::string err_msg{};
+							string_format(t_err_msg, err_msg, srv_addr.c_str(), i_port, i_hg);
+
+							proxy_info("%s\n", err_msg.c_str());
+							SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+						}
+						MyHGM->wrunlock();
+					} else if (command == "mysql_monitor_error" && GloMyMon) {
+						const string srv_id { srv_addr + ":" + s_port };
+						pthread_mutex_lock(&GloMyMon->sim_errs_mutex);
+						GloMyMon->sim_errs[srv_id].push({ i_errcode,  s_err });
+						pthread_mutex_unlock(&GloMyMon->sim_errs_mutex);
+
 						SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-					} else {
-						std::string t_err_msg{ "Supplied server '%s:%d' wasn't found in hg '%d'" };
-						std::string err_msg{};
-						string_format(t_err_msg, err_msg, srv_addr.c_str(), i_port, i_hg);
-
-						proxy_info("%s\n", err_msg.c_str());
-						SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
 					}
-					MyHGM->wrunlock();
 				} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
 					PgHGM->wrlock();
 

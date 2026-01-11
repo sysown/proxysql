@@ -602,6 +602,17 @@ class ProxySQL_Admin {
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
 	void save_mysql_servers_from_runtime();
 	/**
+	 * @brief Creates RDS monitoring threads.
+	 * @details It uses the provided 'mysql_replication_hostgroups' and the promoted 'mysql_servers'
+	 *  resultset to filter the hostnames ending with '.rds.amazonaws.com'. Hostgroups containing at
+	 *  least one of the previous instances are candidates for RDS monitoring, and a thread will be
+	 *  spawned to monitor that particular 'mysql_replication_hostgroups' entry. If config changes,
+	 *  threads are expected signal its exit, if config changes back, threads will be recreated.
+	 * @param run_my_srvs Current 'runtime_mysql_servers' promoted to runtime by config.
+	 * @param in_repl_hgs Current 'mysql_replication_hostgroups' promoted to runtime by config.
+	 */
+	void update_rds_monitoring_for_replication_hostgroups(SQLite3_result* run_my_srvs, SQLite3_result* in_repl_hgs);
+	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
 	 *  'mysql_query_rules_fast_routing' and computes the 'mysql_query_rules' module checksum.
 	 *

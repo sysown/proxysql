@@ -551,6 +551,15 @@ struct srv_opts_t {
 	int32_t use_ssl;
 };
 
+/**
+ * @brief Contains the minimal required data to create an autodiscovered server.
+ */
+struct disc_srv_info_t {
+	uint32_t hg;
+	srv_info_t info;
+	srv_opts_t opts;
+};
+
 class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	private:
 #if 0
@@ -689,6 +698,18 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	void purge_mysql_servers_table();
 	void generate_mysql_servers_table(int *_onlyhg=NULL);
 	void generate_mysql_replication_hostgroups_table();
+	/**
+	 * @brief Regenerates the resultset used by 'MySQL_Monitor' containing the servers to be monitored.
+	 * @details This function is required to be called after any action that results in the addition of a new
+	 * 	server that 'MySQL_Monitor' should be aware of for 'AWS_RDS', i.e. a server added to the
+	 * 	'mysql_hostgroup_attributes'. E.g:
+	 * 	  - Inside 'generate_mysql_replication_hostgroups_table'.
+	 * 	  - Autodiscovery.
+	 *
+	 * 	NOTE: This is a common pattern for all the clusters monitoring.
+	 */
+	void generate_mysql_aws_rds_hostgroups_monitor_resultset();
+
 	Galera_Info *get_galera_node_info(int hostgroup);
 
 	/**
@@ -1109,6 +1130,33 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   to the reader hostgroup by default, later monitoring actions will re-position the server is required.
 	 */
 	void update_group_replication_add_autodiscovered(const std::string& _host, int _port, int _wr_hg);
+	/**
+	 * @brief Tries to add a new server found during RDS autodiscovery to the supplied hostgroup.
+	 * @details For adding the new server, several actions are performed:
+	 *  1. Lookup the target server in the corresponding MyHGC for the supplied hostgroup.
+	 *  2. If server is found, and it's status isn't 'OFFLINE_HARD' do nothing. Otherwise:
+	 *      - If server is found as 'OFFLINE_HARD', reset the internal values corresponding to
+	 *        'servers_defaults' values to '-1', update the defaulted values to the ones in its 'MyHGC', lastly
+	 *        re-enable the server and log the action.
+	 *      - If server isn't found, create it in the corresponding reader hostgroup of the supplied writer
+	 *        hostgroup, setting all 'servers_defaults' params as '-1', log the action.
+	 *      - After any of the two previous actions, always regenerate servers data structures.
+	 *
+	 *  NOTE: Server data structures regeneration requires:
+	 *   1. Purging the 'mysql_servers_table' (Lazy removal of 'OFFLINE_HARD' servers.)
+	 *   2. Regenerate the actual 'myhgm::mysql_servers' table from memory structures.
+	 *   3. Update the 'mysql_servers' resultset used for monitoring. This resultset is used for general
+	 *      monitoring actions like 'ping', 'connect'.
+	 *   4. Regenerate the specific resultset for 'Group Replication' monitoring. This resultset is the way to
+	 *      communicate back to the main monitoring thread that servers config has changed, and a new thread
+	 *      shall be created with the new servers config. This same principle is used for Aurora.
+	 *
+	 * @param _host Server address.
+	 * @param _port Server port.
+	 * @param _rd_hg Reader hostgroup of the cluster being monitored. Autodiscovered servers are always added
+	 *   to the reader hostgroup by default, later monitoring actions will re-position the server is required.
+	 */
+	void update_aws_rds_add_autodiscovered(const std::vector<disc_srv_info_t>& disc_srvs);
 	void converge_group_replication_config(int _writer_hostgroup);
 	/**
 	 * @brief Set the supplied server as SHUNNED, this function shall be called

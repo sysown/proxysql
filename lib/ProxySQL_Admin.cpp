@@ -28,6 +28,7 @@ using json = nlohmann::json;
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
+#include "MySQL_Monitor.hpp"
 
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
@@ -1201,6 +1202,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool monitor_mysql_server_aws_aurora_log=false;
 	bool monitor_mysql_server_aws_aurora_check_status=false;
+	bool monitor_mysql_server_aws_rds_log { false };
+	bool monitor_mysql_server_aws_rds_check_status { false };
 
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
@@ -1462,6 +1465,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	if (strstr(query_no_space,"mysql_server_aws_aurora_check_status")) {
 		monitor_mysql_server_aws_aurora_check_status=true; refresh=true;
 	}
+	if (strstr(query_no_space,"mysql_server_aws_rds_log")) {
+		monitor_mysql_server_aws_rds_log = true; refresh = true;
+	}
+	if (strstr(query_no_space,"mysql_server_aws_rds_check_status")) {
+		monitor_mysql_server_aws_rds_check_status = true; refresh = true;
+	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
 		//pthread_mutex_lock(&admin_mutex);
@@ -1680,6 +1689,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (monitor_mysql_server_aws_aurora_check_status) {
 			if (GloMyMon) {
 				GloMyMon->populate_monitor_mysql_server_aws_aurora_check_status();
+			}
+		}
+		if (monitor_mysql_server_aws_rds_log) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_aws_rds_log();
+			}
+		}
+		if (monitor_mysql_server_aws_rds_check_status) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_aws_rds_check_status();
 			}
 		}
 		//pthread_mutex_unlock(&admin_mutex);
@@ -7218,13 +7237,6 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	} else {
 		MyHGM->servers_add(resultset_servers);
 	}
-	// memory leak was detected here. The following few lines fix that
-	if (runtime_mysql_servers == nullptr) {   
-		if (resultset_servers != nullptr) {
-			delete resultset_servers;
-			resultset_servers = nullptr;
-		}
-	}
 	resultset=NULL;
 
 	query=(char *)"SELECT a.* FROM mysql_replication_hostgroups a JOIN mysql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
@@ -7393,8 +7405,20 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		false, true
 	);
 	
+	// Update RDS monitoring threads for replication hostgroups with RDS servers
+	update_rds_monitoring_for_replication_hostgroups(resultset_servers, resultset_replication);
+
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
+
+	// Free memory associated with MySQL servers; moved here due data requirements by:
+	//  - 'update_rds_monitoring_for_replication_hostgroups'
+	if (runtime_mysql_servers == nullptr) {
+		if (resultset_servers != nullptr) {
+			delete resultset_servers;
+			resultset_servers = nullptr;
+		}
+	}
 
 	// clean up
 	if (resultset) delete resultset;
@@ -7420,6 +7444,95 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 	if (resultset_mysql_servers_ssl_params) {
 		resultset_mysql_servers_ssl_params = NULL;
+	}
+}
+
+std::map<uint32_t, std::pair<pthread_t, uintptr_t>> rds_hg_threads {};
+
+struct rds_srv_cand_t {
+	uint32_t w_hg { 0 };
+	uint32_t r_hg { 0 };
+	const char* host { nullptr };
+
+	friend bool operator<(const rds_srv_cand_t& c1, const rds_srv_cand_t& c2) noexcept;
+};
+
+bool operator<(const rds_srv_cand_t& c1, const rds_srv_cand_t& c2) noexcept {
+	return std::tie(c1.w_hg, c1.r_hg) < std::tie(c2.w_hg, c2.r_hg);
+}
+
+std::set<rds_srv_cand_t> filter_rds_cands(SQLite3_result* run_my_srvs, SQLite3_result* in_repl_hgs) {
+	if (!in_repl_hgs || !run_my_srvs) { return {}; }
+
+	std::set<rds_srv_cand_t> srvs_cands {};
+
+	for (const auto repl_hg : in_repl_hgs->rows) {
+		for (const auto srv : run_my_srvs->rows) {
+			const uint32_t w_hg { static_cast<uint32_t>(strtoul(repl_hg->fields[0], NULL, 10)) };
+			const uint32_t r_hg { static_cast<uint32_t>(strtoul(repl_hg->fields[1], NULL, 10)) };
+
+			if (srvs_cands.find({w_hg, r_hg}) != srvs_cands.end()) {
+				continue;
+			} else {
+				const uint32_t srv_hg { static_cast<uint32_t>(strtoul(srv->fields[0], NULL, 10)) };
+				const char* host { srv->fields[1] };
+
+				if (srv_hg == w_hg || srv_hg == r_hg) {
+					srvs_cands.insert({ w_hg, r_hg, host });
+				}
+			}
+		}
+	}
+
+	return srvs_cands;
+}
+
+void ProxySQL_Admin::update_rds_monitoring_for_replication_hostgroups(
+	SQLite3_result* run_my_srvs, SQLite3_result* in_repl_hgs
+) {
+	const auto srvs_cands { filter_rds_cands(run_my_srvs, in_repl_hgs) };
+
+	if (srvs_cands.size()) {
+		proxy_info("Found %ld RDS replication hostgroups to monitor\n", srvs_cands.size());
+
+		// For each unique writer/reader hostgroup pair with RDS servers, create monitoring thread
+		for (const auto& srv : srvs_cands) {
+			const auto create_rds_thread = [&srv] (uint32_t w_hg, uint32_t r_hg) {
+				rds_hg_threads[w_hg] = { 0, 0 };
+
+				uintptr_t* th_args = new uintptr_t[3];
+				th_args[0] = srv.w_hg;
+				th_args[1] = srv.r_hg;
+				th_args[2] = reinterpret_cast<uintptr_t>(&rds_hg_threads[w_hg].second);
+
+				pthread_t rds_mon_thread;
+
+				proxy_info(
+					"Creating RDS monitoring thread   w_hg=%d r_hg=%d srv=\"%s\"\n", w_hg, r_hg, srv.host
+				);
+
+				if (pthread_create(&rds_mon_thread, NULL, monitor_AWS_RDS_thread_HG, th_args) == 0) {
+					rds_hg_threads[w_hg] = { rds_mon_thread, 1 };
+					pthread_detach(rds_mon_thread);
+				} else {
+					proxy_error("Failed to create RDS monitoring thread   w_hg=%d r_hg=%d\n", w_hg, r_hg);
+					delete[] th_args;
+
+					assert(0 && "Failed to create RDS monitoring thread");
+				}
+			};
+
+			const auto hg_th_it { rds_hg_threads.find(srv.w_hg) };
+
+			if (hg_th_it == rds_hg_threads.end()) {
+				create_rds_thread(srv.w_hg, srv.r_hg);
+			} else {
+				if (!hg_th_it->second.second) {
+					proxy_info("Found terminated AWS RDS monitoring thread; spawning again\n");
+					create_rds_thread(srv.w_hg, srv.r_hg);
+				}
+			}
+		}
 	}
 }
 
