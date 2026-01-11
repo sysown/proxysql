@@ -481,7 +481,7 @@ class ProxySQL_Admin {
 
 	// MCP (Model Context Protocol)
 	void flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
-	void flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	void flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
 
 	public:
 	/**

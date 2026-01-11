@@ -1199,7 +1199,7 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 }
 
 // MCP (Model Context Protocol) VARIABLES
-void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch) {
+void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d\n", replace);
 	if (GloMCPH == NULL) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
@@ -1216,7 +1216,7 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 		return;
 	}
 	if (resultset) {
-		GloMCPH->wrlock();
+		if (lock) wrlock();
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 			char* name = r->fields[0];
@@ -1225,16 +1225,17 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 			char* var_name = name + 4;
 			GloMCPH->set_variable(var_name, val);
 		}
-		GloMCPH->wrunlock();
-		delete resultset;
-	}
 
-	// Also populate runtime_global_variables (same pattern as admin variables)
-	{
-		pthread_mutex_lock(&GloVars.checksum_mutex);
-		flush_mcp_variables___runtime_to_database(admindb, false, false, false, true);
-		flush_GENERIC_variables__checksum__database_to_runtime("mcp", checksum, epoch);
-		pthread_mutex_unlock(&GloVars.checksum_mutex);
+		// Checksums are always generated - same pattern as admin variables
+		{
+			// generate checksum for cluster
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			flush_mcp_variables___runtime_to_database(admindb, false, false, false, true);
+			flush_GENERIC_variables__checksum__database_to_runtime("mcp", checksum, epoch);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+		if (lock) wrunlock();
+		delete resultset;
 	}
 }
 
