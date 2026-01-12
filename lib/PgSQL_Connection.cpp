@@ -1839,7 +1839,29 @@ void PgSQL_Connection::stmt_execute_start() {
 					"Failed to read param format", false);
 				return;
 			}
-			param_formats[i] = format;
+			param_formats[i] = format; // 0 = text, 1 = binary
+		}
+	}
+
+	// Normalize param formats for libpq:
+	// According to the PostgreSQL Bind message specification:
+	// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
+	//  - num_param_formats = 0 -> all parameters are TEXT
+	//  - num_param_formats = 1 -> the single format applies to all parameters
+	//  - num_param_formats = num_param_values -> formats are applied per-parameter in order
+	// Any other number of parameter formats is a protocol error.
+	if (!param_formats.empty()) {
+		if (param_formats.size() == 1 && param_values.size() > 1) {
+			// PostgreSQL protocol allows 1 format for all params,
+			// libpq DOES NOT, we must expand
+			int fmt = param_formats[0];
+			param_formats.resize(param_values.size(), fmt);
+		} else if (param_formats.size() != param_values.size()) {
+			proxy_error("Invalid param format count: got %zu, expected %zu\n",
+				param_formats.size(), param_values.size());
+			set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
+				"Invalid parameter format count", false);
+			return;
 		}
 	}
 
@@ -1858,8 +1880,13 @@ void PgSQL_Connection::stmt_execute_start() {
 		}
 	}
 
+	// If the client did not send any parameter formats (num_param_formats = 0),
+	// PostgreSQL protocol defines this as "all parameters are TEXT".
+	// libpq represents this case by passing paramFormats = nullptr.
+	const int* param_formats_data = (param_formats.empty() == false ? param_formats.data() : nullptr);
+
 	if (PQsendQueryPrepared(pgsql_conn, query.backend_stmt_name, param_values.size(),
-		param_values.data(), param_lengths.data(), param_formats.data(),
+		param_values.data(), param_lengths.data(), param_formats_data,
 		(result_formats.size() > 0) ? result_formats[0] : 0) == 0) {
 		set_error_from_PQerrorMessage();
 		proxy_error("Failed to send execute prepared statement. %s\n", get_error_code_with_message().c_str());
