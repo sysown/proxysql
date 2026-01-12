@@ -207,6 +207,9 @@
 
 #define CLUSTER_QUERY_PGSQL_VARIABLES "PROXY_SELECT variable_name, variable_value FROM runtime_pgsql_variables ORDER BY variable_name"
 
+#define CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM runtime_pgsql_replication_hostgroups ORDER BY writer_hostgroup"
+#define CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES "PROXY_SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM runtime_pgsql_hostgroup_attributes ORDER BY hostgroup_id"
+
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
 	time_t last_updated;
@@ -312,6 +315,8 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 pgsql_users;
 		ProxySQL_Checksum_Value_2 pgsql_servers_v2;
 		ProxySQL_Checksum_Value_2 pgsql_variables;
+		ProxySQL_Checksum_Value_2 pgsql_replication_hostgroups;
+		ProxySQL_Checksum_Value_2 pgsql_hostgroup_attributes;
 	} checksums_values;
 	uint64_t global_checksum;
 };
@@ -464,6 +469,11 @@ struct p_cluster_counter {
 		pulled_pgsql_variables_success,
 		pulled_pgsql_variables_failure,
 
+		pulled_pgsql_replication_hostgroups_success,
+		pulled_pgsql_replication_hostgroups_failure,
+		pulled_pgsql_hostgroup_attributes_success,
+		pulled_pgsql_hostgroup_attributes_failure,
+
 		pulled_mysql_ldap_mapping_success,
 		pulled_mysql_ldap_mapping_failure,
 
@@ -475,6 +485,8 @@ struct p_cluster_counter {
 		sync_conflict_admin_variables_share_epoch,
 		sync_conflict_ldap_variables_share_epoch,
 		sync_conflict_pgsql_variables_share_epoch,
+		sync_conflict_pgsql_replication_hostgroups_share_epoch,
+		sync_conflict_pgsql_hostgroup_attributes_share_epoch,
 
 		sync_delayed_mysql_query_rules_version_one,
 		sync_delayed_mysql_servers_version_one,
@@ -484,6 +496,8 @@ struct p_cluster_counter {
 		sync_delayed_admin_variables_version_one,
 		sync_delayed_ldap_variables_version_one,
 		sync_delayed_pgsql_variables_version_one,
+		sync_delayed_pgsql_replication_hostgroups_version_one,
+		sync_delayed_pgsql_hostgroup_attributes_version_one,
 
 		__size
 	};
@@ -597,6 +611,8 @@ public:
 	std::atomic<int> cluster_pgsql_servers_diffs_before_sync;
 	std::atomic<int> cluster_pgsql_users_diffs_before_sync;
 	std::atomic<int> cluster_pgsql_variables_diffs_before_sync;
+	std::atomic<int> cluster_pgsql_replication_hostgroups_diffs_before_sync;
+	std::atomic<int> cluster_pgsql_hostgroup_attributes_diffs_before_sync;
 	int cluster_mysql_servers_sync_algorithm;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;
@@ -609,6 +625,8 @@ public:
 	bool cluster_pgsql_servers_save_to_disk;
 	bool cluster_pgsql_users_save_to_disk;
 	bool cluster_pgsql_variables_save_to_disk;
+	bool cluster_pgsql_replication_hostgroups_save_to_disk;
+	bool cluster_pgsql_hostgroup_attributes_save_to_disk;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();
 	void init() {};
@@ -673,5 +691,7 @@ public:
 		const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {}, bool fetch_runtime_pgsql_servers = false);
 	void pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
 	void pull_pgsql_variables_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_pgsql_replication_hostgroups_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_pgsql_hostgroup_attributes_from_peer(const std::string& expected_checksum, const time_t epoch);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */
