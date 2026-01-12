@@ -100,8 +100,8 @@ mcp_request() {
     code=$(echo "$response" | tail -n 1)
 
     if [ "${VERBOSE}" = "true" ]; then
-        echo "Request: ${payload}"
-        echo "Response (${code}): ${body}"
+        echo "Request: ${payload}" >&2
+        echo "Response (${code}): ${body}" >&2
     fi
 
     echo "${body}"
