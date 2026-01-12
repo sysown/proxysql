@@ -27,6 +27,7 @@ using json = nlohmann::json;
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 #include "MCP_Thread.h"
+#include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -479,6 +480,7 @@ ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
 MCP_Threads_Handler* GloMCPH = NULL;
+GenAI_Threads_Handler* GloGATH = NULL;
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
 PgSQL_STMT_Manager *GloPgStmt;
@@ -932,6 +934,11 @@ void ProxySQL_Main_init_main_modules() {
 	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;
 	_tmp_GloPTH = new PgSQL_Threads_Handler();
 	GloPTH = _tmp_GloPTH;
+
+	// Initialize GenAI module
+	GenAI_Threads_Handler* _tmp_GloGATH = NULL;
+	_tmp_GloGATH = new GenAI_Threads_Handler();
+	GloGATH = _tmp_GloGATH;
 }
 
 void ProxySQL_Main_init_MCP_module() {
@@ -1275,6 +1282,12 @@ void ProxySQL_Main_shutdown_all_modules() {
 		GloMCPH = NULL;
 #ifdef DEBUG
 		std::cerr << "GloMCPH shutdown in ";
+	if (GloGATH) {
+		cpu_timer t;
+		delete GloGATH;
+		GloGATH = NULL;
+#ifdef DEBUG
+		std::cerr << "GloGATH shutdown in ";
 #endif
 	}
 	if (GloMyLogger) {
@@ -1606,6 +1619,11 @@ void ProxySQL_Main_init_phase3___start_all() {
 	// LDAP
 	if (GloMyLdapAuth) {
 		GloAdmin->init_ldap_variables();
+	}
+
+	// GenAI
+	if (GloGATH) {
+		GloAdmin->init_genai_variables();
 	}
 
 	// HTTP Server should be initialized after other modules. See #4510
