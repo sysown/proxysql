@@ -563,19 +563,16 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	MYSQL_ROW row;
 	time_t now = time(NULL);
 
-	// Fetch the cluster_*_diffs_before_sync variables to ensure consistency at local scope
-	unsigned int diff_av = (unsigned int)GloProxyCluster->cluster_admin_variables_diffs_before_sync;
+	// Fetch the cluster_*_diffs_before_sync variables for manual processing blocks (temporary)
 	unsigned int diff_mqr = (unsigned int)GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync;
 	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_mysql_servers_diffs_before_sync;
 	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_mysql_users_diffs_before_sync;
 	unsigned int diff_ps = (unsigned int)GloProxyCluster->cluster_proxysql_servers_diffs_before_sync;
-	unsigned int diff_mv = (unsigned int)GloProxyCluster->cluster_mysql_variables_diffs_before_sync;
-	unsigned int diff_lv = (unsigned int)GloProxyCluster->cluster_ldap_variables_diffs_before_sync;
 	unsigned int diff_pqr = (unsigned int)GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync;
 	unsigned int diff_ms_pgsql = (unsigned int)GloProxyCluster->cluster_pgsql_servers_diffs_before_sync;
 	unsigned int diff_mu_pgsql = (unsigned int)GloProxyCluster->cluster_pgsql_users_diffs_before_sync;
-	unsigned int diff_mv_pgsql = (unsigned int)GloProxyCluster->cluster_pgsql_variables_diffs_before_sync;
-	
+	// Note: diff_mv_pgsql removed as pgsql_variables is now handled by data-driven approach
+
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 
 	// Data-driven mapping of module names to their checksum fields and sync configuration
@@ -1051,40 +1048,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_pgsql_variables_version_one]->Increment();
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms_pgsql * 10));
 				proxy_warning("Cluster: detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms_pgsql*10));
-			}
-		}
-	}
-
-	// PostgreSQL Variables Sync
-	if (diff_mv_pgsql) {
-		v = &checksums_values.pgsql_variables;
-		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_variables.version,0);
-		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_variables.epoch,0);
-		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_variables.checksum,0);
-		const std::string v_exp_checksum { v->checksum };
-
-		if (v->version > 1) {
-			if (
-				(own_version == 1) // we just booted
-				||
-				(v->epoch > own_epoch) // epoch is newer
-			) {
-				if (v->diff_check >= diff_mv_pgsql) {
-					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					proxy_info("Cluster: detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					GloProxyCluster->pull_pgsql_variables_from_peer(v_exp_checksum, v->epoch);
-				}
-			}
-			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mv_pgsql*10)) == 0)) {
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mv_pgsql * 10));
-				proxy_error("Cluster: detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mv_pgsql*10));
-				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_pgsql_variables_share_epoch]->Increment();
-			}
-		} else {
-			if (v->diff_check && (v->diff_check % (diff_mv_pgsql*10)) == 0) {
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mv_pgsql * 10));
-				proxy_warning("Cluster: detected a peer %s:%d with pgsql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mv_pgsql*10));
-				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_pgsql_variables_version_one]->Increment();
 			}
 		}
 	}
