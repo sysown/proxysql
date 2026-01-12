@@ -22,15 +22,80 @@ MCP_JSONRPC_Resource::~MCP_JSONRPC_Resource() {
 }
 
 bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& req) {
-	// TODO: Implement proper authentication
-	// Future implementation will:
-	// 1. Extract auth token from Authorization header or query parameter
-	// 2. Validate against endpoint-specific credentials stored in handler
-	// 3. Support multiple auth methods (API key, JWT, mTLS)
-	// 4. Return true if authenticated, false otherwise
+	if (!handler) {
+		proxy_error("MCP authentication on %s: handler is NULL\n", endpoint_name.c_str());
+		return false;
+	}
 
-	// For now, always allow
-	return true;
+	// Get the expected auth token for this endpoint
+	char* expected_token = nullptr;
+
+	if (endpoint_name == "config") {
+		expected_token = handler->variables.mcp_config_endpoint_auth;
+	} else if (endpoint_name == "observe") {
+		expected_token = handler->variables.mcp_observe_endpoint_auth;
+	} else if (endpoint_name == "query") {
+		expected_token = handler->variables.mcp_query_endpoint_auth;
+	} else if (endpoint_name == "admin") {
+		expected_token = handler->variables.mcp_admin_endpoint_auth;
+	} else if (endpoint_name == "cache") {
+		expected_token = handler->variables.mcp_cache_endpoint_auth;
+	} else {
+		proxy_error("MCP authentication on %s: unknown endpoint\n", endpoint_name.c_str());
+		return false;
+	}
+
+	// If no auth token is configured, allow the request (no authentication required)
+	if (!expected_token || strlen(expected_token) == 0) {
+		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: no auth configured, allowing request\n", endpoint_name.c_str());
+		return true;
+	}
+
+	// Try to get Bearer token from Authorization header
+	std::string auth_header = req.get_header("Authorization");
+
+	if (auth_header.empty()) {
+		// Try getting from query parameter as fallback
+		const std::map<std::string, std::string, http::arg_comparator>& args = req.get_args();
+		auto it = args.find("token");
+		if (it != args.end()) {
+			auth_header = "Bearer " + it->second;
+		}
+	}
+
+	if (auth_header.empty()) {
+		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: no Authorization header or token param\n", endpoint_name.c_str());
+		return false;
+	}
+
+	// Check if it's a Bearer token
+	const std::string bearer_prefix = "Bearer ";
+	if (auth_header.length() <= bearer_prefix.length() ||
+	    auth_header.compare(0, bearer_prefix.length(), bearer_prefix) != 0) {
+		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: invalid Authorization header format\n", endpoint_name.c_str());
+		return false;
+	}
+
+	// Extract the token
+	std::string provided_token = auth_header.substr(bearer_prefix.length());
+
+	// Trim whitespace
+	size_t start = provided_token.find_first_not_of(" \t\n\r");
+	size_t end = provided_token.find_last_not_of(" \t\n\r");
+	if (start != std::string::npos && end != std::string::npos) {
+		provided_token = provided_token.substr(start, end - start + 1);
+	}
+
+	// Compare tokens
+	bool authenticated = (provided_token == expected_token);
+
+	if (authenticated) {
+		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: success\n", endpoint_name.c_str());
+	} else {
+		proxy_debug(PROXY_DEBUG_GENERIC, 4, "MCP authentication on %s: failed (token mismatch)\n", endpoint_name.c_str());
+	}
+
+	return authenticated;
 }
 
 std::string MCP_JSONRPC_Resource::create_jsonrpc_response(
@@ -211,7 +276,7 @@ const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_POST(
 		return response;
 	}
 
-	// Authenticate request (placeholder - always returns true for now)
+	// Authenticate request
 	if (!authenticate_request(req)) {
 		proxy_error("MCP request on %s: Authentication failed\n", req_path.c_str());
 		if (handler) {

@@ -328,30 +328,71 @@ public:
 
 ### Per-Endpoint Authentication
 
-Each endpoint validates its own Bearer token:
+Each endpoint validates its own Bearer token. The implementation is complete and supports:
+
+- **Bearer token** from `Authorization` header
+- **Query parameter fallback** (`?token=xxx`) for simple testing
+- **No authentication** when token is not configured (backward compatible)
 
 ```cpp
 bool MCP_JSONRPC_Resource::authenticate_request(const http_request& req) {
-    std::string auth_header = req.get_header("Authorization");
+    // Get the expected auth token for this endpoint
+    char* expected_token = nullptr;
 
-    // Get expected token for this endpoint
-    std::string* expected_token = nullptr;
     if (endpoint_name == "config") {
         expected_token = handler->variables.mcp_config_endpoint_auth;
+    } else if (endpoint_name == "observe") {
+        expected_token = handler->variables.mcp_observe_endpoint_auth;
     } else if (endpoint_name == "query") {
         expected_token = handler->variables.mcp_query_endpoint_auth;
+    } else if (endpoint_name == "admin") {
+        expected_token = handler->variables.mcp_admin_endpoint_auth;
+    } else if (endpoint_name == "cache") {
+        expected_token = handler->variables.mcp_cache_endpoint_auth;
     }
-    // ... etc
 
-    // Validate token
+    // If no auth token is configured, allow the request
     if (!expected_token || strlen(expected_token) == 0) {
-        return true; // No auth configured
+        return true; // No authentication required
     }
 
-    // Extract and validate Bearer token
-    // ...
+    // Try to get Bearer token from Authorization header
+    std::string auth_header = req.get_header("Authorization");
+
+    if (auth_header.empty()) {
+        // Fallback: try getting from query parameter
+        const std::map<std::string, std::string, http::arg_comparator>& args = req.get_args();
+        auto it = args.find("token");
+        if (it != args.end()) {
+            auth_header = "Bearer " + it->second;
+        }
+    }
+
+    if (auth_header.empty()) {
+        return false; // No authentication provided
+    }
+
+    // Check if it's a Bearer token
+    const std::string bearer_prefix = "Bearer ";
+    if (auth_header.length() <= bearer_prefix.length() ||
+        auth_header.compare(0, bearer_prefix.length(), bearer_prefix) != 0) {
+        return false; // Invalid format
+    }
+
+    // Extract and validate token
+    std::string provided_token = auth_header.substr(bearer_prefix.length());
+    // Trim whitespace
+    size_t start = provided_token.find_first_not_of(" \t\n\r");
+    size_t end = provided_token.find_last_not_of(" \t\n\r");
+    if (start != std::string::npos && end != std::string::npos) {
+        provided_token = provided_token.substr(start, end - start + 1);
+    }
+
+    return (provided_token == expected_token);
 }
 ```
+
+**Status:** ✅ **Implemented** (lib/MCP_Endpoint.cpp)
 
 ### Connection Pooling Strategy
 
@@ -384,10 +425,10 @@ private:
 
 ### Phase 3: Authentication & Testing
 
-1. Implement per-endpoint authentication
-2. Update test scripts to use dynamic tool discovery
-3. Add integration tests for each endpoint
-4. Documentation updates
+1. ✅ Implement per-endpoint authentication
+2. ⚠️ Update test scripts to use dynamic tool discovery
+3. ⚠️ Add integration tests for each endpoint
+4. ⚠️ Documentation updates
 
 ## Migration Strategy
 
