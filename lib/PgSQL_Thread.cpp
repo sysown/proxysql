@@ -2782,10 +2782,46 @@ void PgSQL_Thread::poll_listener_add(int sock) {
 	listener_DS->fd = sock;
 
 	proxy_debug(PROXY_DEBUG_NET, 1, "Created listener %p for socket %d\n", listener_DS, sock);
+
+	/**
+	 * @brief Register PostgreSQL listener socket with ProxySQL_Poll for incoming connections
+	 *
+	 * This usage pattern registers a PostgreSQL listener socket file descriptor with the ProxySQL_Poll instance
+	 * to monitor for incoming PostgreSQL client connections. The listener data stream handles the accept()
+	 * operation when connection events are detected.
+	 *
+	 * Usage pattern: mypolls.add(POLLIN, sock, listener_DS, monotonic_time())
+	 * - POLLIN: Monitor for read events (new connections ready to accept)
+	 * - sock: Listener socket file descriptor
+	 * - listener_DS: Data stream associated with the listener (accepts connections)
+	 * - monotonic_time(): Current timestamp for tracking socket registration time
+	 *
+	 * Called during: PostgreSQL listener setup and initialization
+	 * Purpose: Enables the thread to accept incoming PostgreSQL client connections
+	 */
 	mypolls.add(POLLIN, sock, listener_DS, monotonic_time());
 }
 
 void PgSQL_Thread::poll_listener_del(int sock) {
+	/**
+	 * @brief Remove PostgreSQL listener socket from the poll set using efficient index lookup
+	 *
+	 * This usage pattern demonstrates the complete removal workflow for PostgreSQL listener sockets:
+	 * 1. Find the index of the socket in the poll set using find_index()
+	 * 2. Remove the socket using remove_index_fast() with the found index
+	 *
+	 * Usage pattern:
+	 * int i = mypolls.find_index(sock);           // Find index by file descriptor
+	 * if (i>=0) {
+	 *     mypolls.remove_index_fast(i);          // Remove by index (O(1) operation)
+	 * }
+	 *
+	 * find_index(sock): Returns index of socket or -1 if not found
+	 * remove_index_fast(i): Removes the entry at index i efficiently
+	 *
+	 * Called during: PostgreSQL listener shutdown and cleanup
+	 * Purpose: Properly removes listener sockets from polling to prevent memory leaks
+	 */
 	int i = mypolls.find_index(sock);
 	if (i >= 0) {
 		PgSQL_Data_Stream* myds = mypolls.myds[i];
@@ -2961,7 +2997,27 @@ void PgSQL_Thread::run() {
 #endif // IDLE_THREADS
 			//this is the only portion of code not protected by a global mutex
 			proxy_debug(PROXY_DEBUG_NET, 5, "Calling poll with timeout %d\n", ttw);
-			// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
+			/**
+	 * @brief Execute main poll() loop to monitor all registered FDs for PostgreSQL thread
+	 *
+	 * This usage pattern demonstrates the core polling mechanism that drives ProxySQL's PostgreSQL event loop.
+	 * The poll() system call blocks until one of the registered file descriptors becomes ready
+	 * or the timeout expires.
+	 *
+	 * Usage pattern: rc = poll(mypolls.fds, mypolls.len, ttw)
+	 * - mypollolls.fds: Array of pollfd structures containing file descriptors and events
+	 * - mypolls.len: Number of file descriptors to monitor
+	 * - ttw: Timeout in milliseconds (dynamic poll timeout)
+	 *
+	 * Return codes:
+	 * - > 0: Number of file descriptors with events
+	 * - 0: Timeout occurred
+	 * - -1: Error (errno set)
+	 *
+	 * Called during: Main PostgreSQL event loop iteration
+	 * Purpose: Enables efficient I/O multiplexing across all PostgreSQL connections
+	 */
+	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
 			rc = poll(mypolls.fds, mypolls.len, ttw);
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
 #ifdef IDLE_THREADS
@@ -4065,6 +4121,25 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 		sess->status = CONNECTING_CLIENT;
 
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
+		/**
+		 * @brief Add PostgreSQL client socket to poll set with both read and write monitoring
+		 *
+		 * This usage pattern registers a PostgreSQL client socket with both POLLIN and POLLOUT events,
+		 * which is typically done during initial client setup when we need to establish the connection
+		 * and also be ready to receive client responses.
+		 *
+		 * Usage pattern: mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime)
+		 * - POLLIN|POLLOUT: Monitor both read and write events
+		 * - sess->client_myds->fd: Client socket file descriptor
+		 * - sess->client_myds: PgSQL_Data_Stream instance for the client
+		 * - curtime: Current timestamp for tracking
+		 *
+		 * Called during: Initial PostgreSQL client connection setup
+		 * Purpose: Enables bidirectional communication with the client during setup phase
+		 *
+		 * Note: This ensures we can establish the connection immediately and also handle
+		 * any client packets that might arrive during the connection process.
+		 */
 		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET, 1, "Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
 

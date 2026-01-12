@@ -2610,6 +2610,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("pgsql_users",		  "PGSQL USERS");
 	generate_load_save_disk_commands("pgsql_servers",	  "PGSQL SERVERS");
 	generate_load_save_disk_commands("pgsql_variables",   "PGSQL VARIABLES");
+	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
@@ -2836,6 +2837,12 @@ void ProxySQL_Admin::init_pgsql_variables() {
 	flush_pgsql_variables___runtime_to_database(configdb, false, false, false);
 	flush_pgsql_variables___runtime_to_database(admindb, false, true, false);
 	flush_pgsql_variables___database_to_runtime(admindb, true);
+}
+
+void ProxySQL_Admin::init_genai_variables() {
+	flush_genai_variables___runtime_to_database(configdb, false, false, false);
+	flush_genai_variables___runtime_to_database(admindb, false, true, false);
+	flush_genai_variables___database_to_runtime(admindb, true);
 }
 
 void ProxySQL_Admin::admin_shutdown() {

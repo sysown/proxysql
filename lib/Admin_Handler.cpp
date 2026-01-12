@@ -42,6 +42,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -151,6 +152,7 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern GenAI_Threads_Handler* GloGATH;
 
 extern void (*flush_logs_function)();
 
@@ -269,6 +271,19 @@ const std::vector<std::string> SAVE_PGSQL_VARIABLES_TO_MEMORY = {
 	"SAVE PGSQL VARIABLES TO MEM" ,
 	"SAVE PGSQL VARIABLES FROM RUNTIME" ,
 	"SAVE PGSQL VARIABLES FROM RUN" };
+
+// GenAI
+const std::vector<std::string> LOAD_GENAI_VARIABLES_FROM_MEMORY = {
+	"LOAD GENAI VARIABLES FROM MEMORY" ,
+	"LOAD GENAI VARIABLES FROM MEM" ,
+	"LOAD GENAI VARIABLES TO RUNTIME" ,
+	"LOAD GENAI VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_GENAI_VARIABLES_TO_MEMORY = {
+	"SAVE GENAI VARIABLES TO MEMORY" ,
+	"SAVE GENAI VARIABLES TO MEM" ,
+	"SAVE GENAI VARIABLES FROM RUNTIME" ,
+	"SAVE GENAI VARIABLES FROM RUN" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -1637,16 +1652,21 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 
 		if ((query_no_space_length > 21) && ((!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21)) ||
-			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)))) {
+			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)) ||
+			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)))) {
 
 			const bool is_pgsql = (query_no_space[5] == 'P' || query_no_space[5] == 'p') ? true : false;
-			const std::string modname = is_pgsql ? "pgsql_variables" : "mysql_variables";
+			const bool is_genai = (query_no_space[5] == 'G' || query_no_space[5] == 'g') ? true : false;
+			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : "mysql_variables");
 
 			tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 			if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
 				l_free(*ql, *q);
 				if (is_pgsql) {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'pgsql-%'");
+				}
+				else if (is_genai) {
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'genai-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1659,6 +1679,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				l_free(*ql, *q);
 				if (is_pgsql) {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'pgsql-%'");
+				}
+				else if (is_genai) {
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'genai-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1676,6 +1699,14 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					return false;
 				}
+			} else if (is_genai) {
+				if (is_admin_command_or_alias(LOAD_GENAI_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+					SPA->load_genai_variables_to_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai variables to RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					return false;
+				}
 			} else {
 				if (is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
@@ -1688,7 +1719,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && (!strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length) ||
-				!strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length)))
+				!strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length) ||
+				!strncasecmp("LOAD GENAI VARIABLES FROM CONFIG", query_no_space, query_no_space_length)))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1699,6 +1731,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql global variables from CONFIG\n");
+					} else if (query_no_space[5] == 'G' || query_no_space[5] == 'g') {
+						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("genai");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai global variables from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_Global_Variables_from_configfile("mysql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql global variables from CONFIG\n");
@@ -1725,6 +1760,14 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->save_pgsql_variables_from_runtime();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql variables from RUNTIME\n");
+				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				return false;
+			}
+		} else if (is_genai) {
+			if (is_admin_command_or_alias(SAVE_GENAI_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+				SPA->save_genai_variables_from_runtime();
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved genai variables from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
