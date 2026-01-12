@@ -3012,10 +3012,46 @@ void MySQL_Thread::poll_listener_add(int sock) {
 	listener_DS->fd=sock;
 
 	proxy_debug(PROXY_DEBUG_NET,1,"Created listener %p for socket %d\n", listener_DS, sock);
+
+	/**
+	 * @brief Register listener socket with ProxySQL_Poll for incoming connections
+	 *
+	 * This usage pattern registers a listener socket file descriptor with the ProxySQL_Poll instance
+	 * to monitor for incoming client connections. The listener data stream handles the accept()
+	 * operation when connection events are detected.
+	 *
+	 * Usage pattern: mypolls.add(POLLIN, sock, listener_DS, monotonic_time())
+	 * - POLLIN: Monitor for read events (new connections ready to accept)
+	 * - sock: Listener socket file descriptor
+	 * - listener_DS: Data stream associated with the listener (accepts connections)
+	 * - monotonic_time(): Current timestamp for tracking socket registration time
+	 *
+	 * Called during: Listener setup and initialization
+	 * Purpose: Enables the thread to accept incoming MySQL client connections
+	 */
 	mypolls.add(POLLIN, sock, listener_DS, monotonic_time());
 }
 
 void MySQL_Thread::poll_listener_del(int sock) {
+	/**
+	 * @brief Remove listener socket from the poll set using efficient index lookup
+	 *
+	 * This usage pattern demonstrates the complete removal workflow for listener sockets:
+	 * 1. Find the index of the socket in the poll set using find_index()
+	 * 2. Remove the socket using remove_index_fast() with the found index
+	 *
+	 * Usage pattern:
+	 * int i = mypollolls.find_index(sock);           // Find index by file descriptor
+	 * if (i>=0) {
+	 *     mypolls.remove_index_fast(i);          // Remove by index (O(1) operation)
+	 * }
+	 *
+	 * find_index(sock): Returns index of socket or -1 if not found
+	 * remove_index_fast(i): Removes the entry at index i efficiently
+	 *
+	 * Called during: Listener shutdown and cleanup
+	 * Purpose: Properly removes listener sockets from polling to prevent memory leaks
+	 */
 	int i=mypolls.find_index(sock);
 	if (i>=0) {
 		MySQL_Data_Stream *myds=mypolls.myds[i];
@@ -3291,6 +3327,26 @@ __run_skip_1:
 		//this is the only portion of code not protected by a global mutex
 		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ttw );
 		// poll is called with a timeout of mypolls.poll_timeout if set , or mysql_thread___poll_timeout
+		/**
+	 * @brief Execute main poll() loop to monitor all registered FDs
+	 *
+	 * This usage pattern demonstrates the core polling mechanism that drives ProxySQL's event loop.
+	 * The poll() system call blocks until one of the registered file descriptors becomes ready
+	 * or the timeout expires.
+	 *
+	 * Usage pattern: rc = poll(mypolls.fds, mypolls.len, ttw)
+	 * - mypollolls.fds: Array of pollfd structures containing file descriptors and events
+	 * - mypolls.len: Number of file descriptors to monitor
+	 * - ttw: Timeout in milliseconds (mydynamic poll timeout)
+	 *
+	 * Return codes:
+	 * - > 0: Number of file descriptors with events
+	 * - 0: Timeout occurred
+	 * - -1: Error (errno set)
+	 *
+	 * Called during: Main event loop iteration
+	 * Purpose: Enables efficient I/O multiplexing across all connections
+	 */
 		rc=poll(mypolls.fds,mypolls.len, ttw);
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
 #ifdef IDLE_THREADS
@@ -3597,6 +3653,23 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 			MySQL_Session *mysess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
 			register_session(this, mysess, false);
 			MySQL_Data_Stream *myds=mysess->client_myds;
+
+			/**
+			 * @brief Add client session to poll set for resumed connections
+			 *
+			 * This usage pattern registers a client data stream for resumed connections
+			 * during session restoration in IDLE_THREADS mode.
+			 *
+			 * Usage pattern: mypolls.add(POLLIN, myds->fd, myds, monotonic_time())
+			 * - POLLIN: Monitor for read events (client data available)
+			 * - myds->fd: Client socket file descriptor
+			 * - myds: MySQL_Data_Stream instance for the client session
+			 * - monotonic_time(): Current timestamp for tracking session registration time
+			 *
+			 * Called during: Session restoration in IDLE_THREADS mode
+			 * Purpose: Enables the thread to receive and process client MySQL protocol data
+			 *          for resumed sessions
+			 */
 			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		}
 	}
@@ -4515,6 +4588,26 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		}
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
+
+		/**
+		 * @brief Add client socket to poll set with both read and write monitoring
+		 *
+		 * This usage pattern registers a client socket with both POLLIN and POLLOUT events,
+		 * which is typically done during initial client setup when we need to send the
+		 * initial handshake packet and also be ready to receive client responses.
+		 *
+		 * Usage pattern: mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime)
+		 * - POLLIN|POLLOUT: Monitor both read and write events
+		 * - sess->client_myds->fd: Client socket file descriptor
+		 * - sess->client_myds: MySQL_Data_Stream instance for the client
+		 * - curtime: Current timestamp for tracking
+		 *
+		 * Called during: Initial client connection setup after handshake packet generation
+		 * Purpose: Enables bidirectional communication with the client during setup phase
+		 *
+		 * Note: This ensures we can send the initial handshake immediately and also handle
+		 * any client packets that might arrive before the handshake is complete.
+		 */
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
 

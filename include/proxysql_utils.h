@@ -263,7 +263,21 @@ inline void replace_checksum_zeros(char* checksum) {
  */
 std::string get_checksum_from_hash(uint64_t hash);
 
-void close_all_non_term_fd(std::vector<int> excludeFDs);
+/**
+ * @brief Closes all open file descriptors except stdin (0), stdout (1), stderr (2), and a specified exclusion list
+ *
+ * This function is typically called after fork() in the child process before exec() to ensure that
+ * the child process does not inherit unintended file descriptors from the parent.
+ *
+ * CRITICAL: This function is designed to be called between fork() and execve() in the child process.
+ * To avoid deadlocks in multi-threaded programs, it must NOT allocate on the heap.
+ *
+ * @param excludeFDs Vector of file descriptors to preserve (in addition to 0, 1, 2)
+ *                   Passed by const reference to avoid heap allocation during copy.
+ *
+ * Thread-safety: Safe to call in child process after fork() before execve()
+ */
+void close_all_non_term_fd(const std::vector<int>& excludeFDs);
 
 /**
  * @brief Returns the expected error for query 'SELECT $$'.
