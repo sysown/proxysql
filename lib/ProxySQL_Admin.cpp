@@ -42,6 +42,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "MCP_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -323,6 +324,7 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern MCP_Threads_Handler* GloMCPH;
 
 extern void (*flush_logs_function)();
 
@@ -1587,6 +1589,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true);
+				flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, false);
 				pthread_mutex_unlock(&GloVars.checksum_mutex);
 			}
 			if (runtime_mysql_servers) {
@@ -2610,6 +2613,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("pgsql_users",		  "PGSQL USERS");
 	generate_load_save_disk_commands("pgsql_servers",	  "PGSQL SERVERS");
 	generate_load_save_disk_commands("pgsql_variables",   "PGSQL VARIABLES");
+	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
 	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
@@ -2839,6 +2843,12 @@ void ProxySQL_Admin::init_pgsql_variables() {
 	flush_pgsql_variables___database_to_runtime(admindb, true);
 }
 
+void ProxySQL_Admin::init_mcp_variables() {
+	if (GloMCPH) {
+		flush_mcp_variables___runtime_to_database(configdb, false, false, false, false, false);
+		flush_mcp_variables___runtime_to_database(admindb, false, true, false, false, false);
+		flush_mcp_variables___database_to_runtime(admindb, true, "", 0);
+	}
 void ProxySQL_Admin::init_genai_variables() {
 	flush_genai_variables___runtime_to_database(configdb, false, false, false);
 	flush_genai_variables___runtime_to_database(admindb, false, true, false);

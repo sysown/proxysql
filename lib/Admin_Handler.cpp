@@ -42,6 +42,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "MCP_Thread.h"
 #include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
@@ -152,6 +153,7 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern MCP_Threads_Handler* GloMCPH;
 extern GenAI_Threads_Handler* GloGATH;
 
 extern void (*flush_logs_function)();
@@ -272,6 +274,17 @@ const std::vector<std::string> SAVE_PGSQL_VARIABLES_TO_MEMORY = {
 	"SAVE PGSQL VARIABLES FROM RUNTIME" ,
 	"SAVE PGSQL VARIABLES FROM RUN" };
 
+const std::vector<std::string> LOAD_MCP_VARIABLES_FROM_MEMORY = {
+	"LOAD MCP VARIABLES FROM MEMORY" ,
+	"LOAD MCP VARIABLES FROM MEM" ,
+	"LOAD MCP VARIABLES TO RUNTIME" ,
+	"LOAD MCP VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_MCP_VARIABLES_TO_MEMORY = {
+	"SAVE MCP VARIABLES TO MEMORY" ,
+	"SAVE MCP VARIABLES TO MEM" ,
+	"SAVE MCP VARIABLES FROM RUNTIME" ,
+	"SAVE MCP VARIABLES FROM RUN" };
 // GenAI
 const std::vector<std::string> LOAD_GENAI_VARIABLES_FROM_MEMORY = {
 	"LOAD GENAI VARIABLES FROM MEMORY" ,
@@ -887,6 +900,8 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
+	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4) && GloMCPH && GloMCPH->has_variable(var_name + 4)) {
+		return true;
 	} else {
 		return false;
 	}
@@ -940,7 +955,15 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			free(buff);
 			run_query = false;
 		} else {
-			const char *update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			// Check if the value is a boolean literal that needs to be quoted as a string
+			// to prevent SQLite from interpreting it as a boolean keyword (storing 1 or 0)
+			bool is_boolean = (strcasecmp(var_value, "true") == 0 || strcasecmp(var_value, "false") == 0);
+			const char *update_format;
+			if (is_boolean) {
+				update_format = (char *)"UPDATE global_variables SET variable_value='%s' WHERE variable_name='%s'";
+			} else {
+				update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			}
 			// Computed length is more than needed since it also counts the format modifiers (%s).
 			size_t query_len = strlen(update_format) + strlen(var_name) + strlen(var_value) + 1;
 			char *query = (char *)l_alloc(query_len);
@@ -1780,6 +1803,66 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				return false;
 			}
 		}
+	}
+
+	// MCP (Model Context Protocol) VARIABLES - DISK commands
+	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
+		const std::string modname = "mcp_variables";
+		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+		if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+		if (is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+	}
+
+	// MCP (Model Context Protocol) LOAD/SAVE handlers
+	if (is_admin_command_or_alias(LOAD_MCP_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		SPA->load_mcp_variables_to_runtime();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp variables to RUNTIME\n");
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+	if (is_admin_command_or_alias(SAVE_MCP_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		SPA->save_mcp_variables_from_runtime();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp variables from RUNTIME\n");
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if ((query_no_space_length == 31) && (!strncasecmp("LOAD MCP VARIABLES FROM CONFIG", query_no_space, query_no_space_length))) {
+		proxy_info("Received %s command\n", query_no_space);
+		if (GloVars.configfile_open) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+			if (GloVars.confFile->OpenFile(NULL)==true) {
+				int rows=0;
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("mcp");
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp global variables from CONFIG\n");
+				SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+				GloVars.confFile->CloseFile();
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+				char *s=(char *)"Unable to open or parse config file %s";
+				char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+				sprintf(m,s,GloVars.config_file);
+				SPA->send_error_msg_to_client(sess, m);
+				free(m);
+			}
+		} else {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+			SPA->send_error_msg_to_client(sess, (char *)"Config file unknown");
+		}
+		return false;
 	}
 
 	if ((query_no_space_length > 14) && (!strncasecmp("LOAD COREDUMP ", query_no_space, 14))) {
@@ -3672,6 +3755,23 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
+		// MCP (Model Context Protocol) VARIABLES CHECKSUM
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MCP VARIABLES") && !strncasecmp("CHECKSUM DISK MCP VARIABLES", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MCP VARIABLES") && !strncasecmp("CHECKSUM MEMORY MCP VARIABLES", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MCP VARIABLES") && !strncasecmp("CHECKSUM MEM MCP VARIABLES", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MCP VARIABLES") && !strncasecmp("CHECKSUM MCP VARIABLES", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
 		if (error) {
 			proxy_error("Error: %s\n", error);
 			char buf[1024];
@@ -3957,6 +4057,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_pgsql_global ORDER BY variable_name");
 		query_length = strlen(query) + 1;
 		GloAdmin->stats___pgsql_global();
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW MCP VARIABLES") && !strncasecmp("SHOW MCP VARIABLES", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name");
+		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 

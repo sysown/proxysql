@@ -26,6 +26,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "MCP_Thread.h"
 #include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
@@ -478,6 +479,7 @@ PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
+MCP_Threads_Handler* GloMCPH = NULL;
 GenAI_Threads_Handler* GloGATH = NULL;
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
@@ -900,6 +902,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyAuth=NULL;
 	GloPgAuth=NULL;
 	GloPTH=NULL;
+	GloMCPH=NULL;
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -936,6 +939,12 @@ void ProxySQL_Main_init_main_modules() {
 	GenAI_Threads_Handler* _tmp_GloGATH = NULL;
 	_tmp_GloGATH = new GenAI_Threads_Handler();
 	GloGATH = _tmp_GloGATH;
+}
+
+void ProxySQL_Main_init_MCP_module() {
+	GloMCPH = new MCP_Threads_Handler();
+	GloMCPH->init();
+	proxy_info("MCP module initialized\n");
 }
 
 
@@ -1267,6 +1276,12 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloPTH shutdown in ";
 #endif
 	}
+	if (GloMCPH) {
+		cpu_timer t;
+		delete GloMCPH;
+		GloMCPH = NULL;
+#ifdef DEBUG
+		std::cerr << "GloMCPH shutdown in ";
 	if (GloGATH) {
 		cpu_timer t;
 		delete GloGATH;
@@ -1439,6 +1454,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
+	ProxySQL_Main_init_MCP_module();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 
@@ -1534,6 +1550,14 @@ void ProxySQL_Main_init_phase3___start_all() {
 		ProxySQL_Main_init_Query_Cache_module();
 #ifdef DEBUG
 		std::cerr << "Main phase3 : Query Cache initialized in ";
+#endif
+	}
+
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_MCP_module();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : MCP module initialized in ";
 #endif
 	}
 
