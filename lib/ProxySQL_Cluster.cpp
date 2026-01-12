@@ -5610,6 +5610,328 @@ string ProxySQL_Cluster::compute_combined_checksum(const vector<MYSQL_RES*>& res
     return combined_checksum;
 }
 
+/*
+ * Memory Management Framework for ProxySQL Cluster Synchronization
+ *
+ * This framework provides safe, standardized memory management patterns
+ * to prevent memory leaks and ensure consistent error handling throughout
+ * the cluster synchronization codebase.
+ */
+
+/**
+ * Safe string allocation with error checking
+ *
+ * @param source Source string to duplicate (can be NULL)
+ * @return Allocated string or NULL if allocation failed or source is NULL
+ */
+char* safe_strdup(const char* source) {
+    if (source == nullptr) {
+        return nullptr;
+    }
+
+    char* result = strdup(source);
+    if (result == nullptr) {
+        proxy_error("Memory allocation failed in safe_strdup for string: %s\n", source);
+    }
+    return result;
+}
+
+/**
+ * Safe memory allocation with error checking
+ *
+ * @param size Size to allocate
+ * @return Pointer to allocated memory or NULL if allocation failed
+ */
+void* safe_malloc(size_t size) {
+    void* result = malloc(size);
+    if (result == nullptr) {
+        proxy_error("Memory allocation failed in safe_malloc for size: %zu\n", size);
+    }
+    return result;
+}
+
+/**
+ * Safe array of strings allocation with error checking
+ *
+ * @param count Number of strings to allocate
+ * @return Array of char pointers or NULL if allocation failed
+ */
+char** safe_string_array_alloc(size_t count) {
+    if (count == 0) {
+        return nullptr;
+    }
+
+    char** result = (char**)safe_malloc(sizeof(char*) * count);
+    if (result == nullptr) {
+        return nullptr;
+    }
+
+    // Initialize all pointers to NULL for safe cleanup
+    for (size_t i = 0; i < count; i++) {
+        result[i] = nullptr;
+    }
+
+    return result;
+}
+
+/**
+ * Safe string array update with automatic cleanup
+ *
+ * @param target_array Array to update (pointer to char**)
+ * @param count Number of elements in array
+ * @param new_values Array of new string values (can contain NULL)
+ * @return true if successful, false if allocation failed
+ */
+bool safe_update_string_array(char*** target_array, size_t count, const char** new_values) {
+    if (target_array == nullptr || count == 0) {
+        return false;
+    }
+
+    // Allocate new array
+    char** new_array = safe_string_array_alloc(count);
+    if (new_array == nullptr) {
+        return false;
+    }
+
+    // Copy strings with error checking
+    for (size_t i = 0; i < count; i++) {
+        if (new_values[i] != nullptr) {
+            new_array[i] = safe_strdup(new_values[i]);
+            if (new_array[i] == nullptr) {
+                // If allocation fails, clean up what we've allocated so far
+                for (size_t j = 0; j < i; j++) {
+                    if (new_array[j] != nullptr) {
+                        free(new_array[j]);
+                        new_array[j] = nullptr;
+                    }
+                }
+                free(new_array);
+                return false;
+            }
+        }
+    }
+
+    // Clean up old array and replace with new one
+    char** old_array = *target_array;
+    *target_array = new_array;
+
+    if (old_array != nullptr) {
+        for (size_t i = 0; i < count; i++) {
+            if (old_array[i] != nullptr) {
+                free(old_array[i]);
+                old_array[i] = nullptr;
+            }
+        }
+        free(old_array);
+    }
+
+    return true;
+}
+
+/**
+ * RAII wrapper for char* strings to ensure automatic cleanup
+ */
+struct ScopedCharPointer {
+    char* ptr;
+
+    explicit ScopedCharPointer(char* p = nullptr) : ptr(p) {}
+
+    ~ScopedCharPointer() {
+        if (ptr != nullptr) {
+            free(ptr);
+            ptr = nullptr;
+        }
+    }
+
+    // Disable copy constructor and assignment to prevent double-free
+    ScopedCharPointer(const ScopedCharPointer&) = delete;
+    ScopedCharPointer& operator=(const ScopedCharPointer&) = delete;
+
+    // Enable move constructor and assignment
+    ScopedCharPointer(ScopedCharPointer&& other) noexcept : ptr(other.ptr) {
+        other.ptr = nullptr;
+    }
+
+    ScopedCharPointer& operator=(ScopedCharPointer&& other) noexcept {
+        if (this != &other) {
+            if (ptr != nullptr) {
+                free(ptr);
+            }
+            ptr = other.ptr;
+            other.ptr = nullptr;
+        }
+        return *this;
+    }
+
+    // Release ownership of the pointer
+    char* release() {
+        char* result = ptr;
+        ptr = nullptr;
+        return result;
+    }
+
+    // Get the raw pointer
+    char* get() const { return ptr; }
+
+    // Boolean conversion
+    explicit operator bool() const { return ptr != nullptr; }
+};
+
+/**
+ * RAII wrapper for char** arrays to ensure automatic cleanup
+ */
+struct ScopedCharArrayPointer {
+    char** ptr;
+    size_t count;
+
+    explicit ScopedCharArrayPointer(char** p = nullptr, size_t c = 0) : ptr(p), count(c) {}
+
+    ~ScopedCharArrayPointer() {
+        if (ptr != nullptr) {
+            for (size_t i = 0; i < count; i++) {
+                if (ptr[i] != nullptr) {
+                    free(ptr[i]);
+                    ptr[i] = nullptr;
+                }
+            }
+            free(ptr);
+            ptr = nullptr;
+        }
+    }
+
+    // Disable copy constructor and assignment to prevent double-free
+    ScopedCharArrayPointer(const ScopedCharArrayPointer&) = delete;
+    ScopedCharArrayPointer& operator=(const ScopedCharArrayPointer&) = delete;
+
+    // Enable move constructor and assignment
+    ScopedCharArrayPointer(ScopedCharArrayPointer&& other) noexcept : ptr(other.ptr), count(other.count) {
+        other.ptr = nullptr;
+        other.count = 0;
+    }
+
+    ScopedCharArrayPointer& operator=(ScopedCharArrayPointer&& other) noexcept {
+        if (this != &other) {
+            if (ptr != nullptr) {
+                for (size_t i = 0; i < count; i++) {
+                    if (ptr[i] != nullptr) {
+                        free(ptr[i]);
+                    }
+                }
+                free(ptr);
+            }
+            ptr = other.ptr;
+            count = other.count;
+            other.ptr = nullptr;
+            other.count = 0;
+        }
+        return *this;
+    }
+
+    // Release ownership of the pointer
+    char** release() {
+        char** result = ptr;
+        ptr = nullptr;
+        count = 0;
+        return result;
+    }
+
+    // Get the raw pointer
+    char** get() const { return ptr; }
+
+    // Get the count
+    size_t size() const { return count; }
+
+    // Boolean conversion
+    explicit operator bool() const { return ptr != nullptr; }
+};
+
+/**
+ * Enhanced safe string update with better error handling
+ *
+ * @param target Pointer to target string pointer
+ * @param new_value New string value (can be NULL)
+ * @return true if successful, false if allocation failed
+ */
+bool safe_update_string(char** target, const char* new_value) {
+    if (target == nullptr) {
+        return false;
+    }
+
+    ScopedCharPointer new_string(safe_strdup(new_value));
+    if (new_value != nullptr && !new_string) {
+        return false;
+    }
+
+    // Clean up old string and replace with new one
+    char* old_string = *target;
+    *target = new_string.release();
+
+    if (old_string != nullptr) {
+        free(old_string);
+    }
+
+    return true;
+}
+
+/**
+ * Safe query string construction with error checking
+ *
+ * @param format Format string (printf-style)
+ * @param ... Variable arguments for format
+ * @return Allocated query string or NULL if allocation failed
+ */
+char* safe_query_construct(const char* format, ...) {
+    if (format == nullptr) {
+        return nullptr;
+    }
+
+    // First, calculate the required buffer size
+    va_list args1, args2;
+    va_start(args1, format);
+    va_copy(args2, args1);
+
+    int size = vsnprintf(nullptr, 0, format, args1);
+    va_end(args1);
+
+    if (size < 0) {
+        va_end(args2);
+        proxy_error("Query format string error in safe_query_construct\n");
+        return nullptr;
+    }
+
+    // Allocate buffer with extra space for null terminator
+    char* buffer = (char*)safe_malloc(size + 1);
+    if (buffer == nullptr) {
+        va_end(args2);
+        return nullptr;
+    }
+
+    // Format the string into the buffer
+    int result = vsnprintf(buffer, size + 1, format, args2);
+    va_end(args2);
+
+    if (result < 0 || result > size) {
+        free(buffer);
+        proxy_error("Query formatting error in safe_query_construct\n");
+        return nullptr;
+    }
+
+    return buffer;
+}
+
+/**
+ * Clean up string pointers with NULL assignment (for backward compatibility)
+ *
+ * @param str1 First string pointer
+ * @param str2 Second string pointer
+ * @param str3 Third string pointer
+ */
+void safe_cleanup_strings(char** str1, char** str2, char** str3) {
+    if (str1 && *str1) { free(*str1); *str1 = nullptr; }
+    if (str2 && *str2) { free(*str2); *str2 = nullptr; }
+    if (str3 && *str3) { free(*str3); *str3 = nullptr; }
+}
+
 void ProxySQL_Node_Address::resolve_hostname() {
 	if (ip_addr) {
 		free(ip_addr);

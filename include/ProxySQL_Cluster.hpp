@@ -735,5 +735,18 @@ public:
 	bool fetch_query_with_metrics(MYSQL* conn, const fetch_query& query, MYSQL_RES** result);
 	std::string compute_single_checksum(MYSQL_RES* result);
 	std::string compute_combined_checksum(const std::vector<MYSQL_RES*>& results);
+
+	// Memory management utilities for safe allocation and cleanup
+	char* safe_strdup(const char* source);
+	void* safe_malloc(size_t size);
+	char** safe_string_array_alloc(size_t count);
+	bool safe_update_string_array(char*** target_array, size_t count, const char** new_values);
+	bool safe_update_string(char** target, const char* new_value);
+	char* safe_query_construct(const char* format, ...);
+	void safe_cleanup_strings(char** str1, char** str2, char** str3);
+
+	// RAII wrappers for automatic memory management
+	struct ScopedCharPointer;
+	struct ScopedCharArrayPointer;
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */
