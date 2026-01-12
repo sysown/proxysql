@@ -254,25 +254,34 @@ void MySQL_Tool_Handler::return_connection(MYSQL* mysql) {
  *         - Failure: {"success":false, "error":"...", "sql_error":code}
  */
 std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
+	fprintf(stderr, "DEBUG execute_query: Starting, query=%s\n", query.c_str());
+
 	json result;
 	result["success"] = false;
 
 	MYSQL* mysql = get_connection();
+	fprintf(stderr, "DEBUG execute_query: Got connection\n");
+
 	if (!mysql) {
 		result["error"] = "No available database connection";
 		return result.dump();
 	}
 
 	// Execute query
+	fprintf(stderr, "DEBUG execute_query: About to call mysql_query\n");
 	if (mysql_query(mysql, query.c_str()) != 0) {
+		fprintf(stderr, "DEBUG execute_query: mysql_query failed\n");
 		result["error"] = mysql_error(mysql);
 		result["sql_error"] = mysql_errno(mysql);
 		return_connection(mysql);
 		return result.dump();
 	}
+	fprintf(stderr, "DEBUG execute_query: mysql_query succeeded\n");
 
 	// Store result
 	MYSQL_RES* res = mysql_store_result(mysql);
+	fprintf(stderr, "DEBUG execute_query: Got result set\n");
+
 	if (!res) {
 		// No result set (e.g., INSERT, UPDATE, etc.)
 		result["success"] = true;
@@ -285,13 +294,20 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 	json columns = json::array();
 	std::vector<std::string> lowercase_columns;
 	MYSQL_FIELD* field;
+	fprintf(stderr, "DEBUG execute_query: About to fetch fields\n");
+	int field_count = 0;
 	while ((field = mysql_fetch_field(res))) {
-		std::string col_name = field->name;
+		field_count++;
+		fprintf(stderr, "DEBUG execute_query: Processing field %d, name=%p\n", field_count, (void*)field->name);
+		// Check if field name is null (can happen in edge cases)
+		// Use placeholder name to maintain column index alignment
+		std::string col_name = field->name ? field->name : "unknown_field";
 		// Convert to lowercase
 		std::transform(col_name.begin(), col_name.end(), col_name.begin(), ::tolower);
 		columns.push_back(col_name);
 		lowercase_columns.push_back(col_name);
 	}
+	fprintf(stderr, "DEBUG execute_query: Processed %d fields\n", field_count);
 
 	// Get rows
 	json rows = json::array();
@@ -300,7 +316,9 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 	while ((row = mysql_fetch_row(res))) {
 		json json_row = json::object();
 		for (unsigned int i = 0; i < num_fields; i++) {
-			json_row[lowercase_columns[i]] = row[i] ? row[i] : nullptr;
+			// Use empty string for NULL values instead of nullptr
+			// to avoid std::string construction from null issues
+			json_row[lowercase_columns[i]] = row[i] ? row[i] : "";
 		}
 		rows.push_back(json_row);
 	}
@@ -334,6 +352,7 @@ std::string MySQL_Tool_Handler::sanitize_query(const std::string& query) {
 bool MySQL_Tool_Handler::is_dangerous_query(const std::string& query) {
 	std::string upper = query;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+	fprintf(stderr, "DEBUG is_dangerous_query: Checking query '%s'\n", upper.c_str());
 
 	// List of dangerous keywords
 	static const char* dangerous[] = {
@@ -345,11 +364,13 @@ bool MySQL_Tool_Handler::is_dangerous_query(const std::string& query) {
 
 	for (const char* word : dangerous) {
 		if (upper.find(word) != std::string::npos) {
+			fprintf(stderr, "DEBUG is_dangerous_query: Found dangerous keyword '%s'\n", word);
 			proxy_debug(PROXY_DEBUG_GENERIC, 3, "Dangerous keyword found: %s\n", word);
 			return true;
 		}
 	}
 
+	fprintf(stderr, "DEBUG is_dangerous_query: No dangerous keywords found\n");
 	return false;
 }
 
@@ -358,7 +379,7 @@ bool MySQL_Tool_Handler::validate_readonly_query(const std::string& query) {
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
 	// Must start with SELECT
-	if (upper.substr(0, 6) != "SELECT ") {
+	if (upper.substr(0, 6) != "SELECT") {
 		return false;
 	}
 
@@ -423,6 +444,10 @@ std::string MySQL_Tool_Handler::list_tables(
 	int page_size,
 	const std::string& name_filter
 ) {
+	fprintf(stderr, "DEBUG: list_tables called with schema='%s', page_token='%s', page_size=%d, name_filter='%s'\n",
+		schema.c_str(), page_token.c_str(), page_size, name_filter.c_str());
+	fprintf(stderr, "DEBUG: mysql_schema='%s'\n", mysql_schema.c_str());
+
 	// Build query to list tables with metadata
 	std::string sql =
 		"SELECT "
@@ -435,37 +460,64 @@ std::string MySQL_Tool_Handler::list_tables(
 		"FROM information_schema.tables t "
 		"WHERE t.table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' ";
 
+	fprintf(stderr, "DEBUG: Built WHERE clause\n");
+
 	if (!name_filter.empty()) {
 		sql += " AND t.table_name LIKE '%" + name_filter + "%'";
 	}
 
+	fprintf(stderr, "DEBUG: Built name_filter clause\n");
+
 	sql += " ORDER BY t.table_name LIMIT " + std::to_string(page_size);
 
+	fprintf(stderr, "DEBUG: Built SQL query: %s\n", sql.c_str());
+
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "list_tables query: %s\n", sql.c_str());
+
+	fprintf(stderr, "DEBUG: About to call execute_query\n");
 
 	// Execute the query
 	std::string response = execute_query(sql);
 
+	fprintf(stderr, "DEBUG: execute_query returned, response length=%zu\n", response.length());
+
+	// Debug: print raw response
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "list_tables raw response: %s\n", response.c_str());
+	fprintf(stderr, "DEBUG: list_tables raw response: %s\n", response.c_str());
+
 	// Parse and format the response
 	json result;
 	try {
+		fprintf(stderr, "DEBUG list_tables: About to parse response\n");
 		json query_result = json::parse(response);
+		fprintf(stderr, "DEBUG list_tables: Parsed response successfully\n");
 		if (query_result["success"] == true) {
+			fprintf(stderr, "DEBUG list_tables: Query successful, processing rows\n");
 			result = json::array();
 			for (const auto& row : query_result["rows"]) {
+				fprintf(stderr, "DEBUG list_tables: Processing row\n");
 				json table_entry;
+				fprintf(stderr, "DEBUG list_tables: About to access table_name\n");
 				table_entry["name"] = row["table_name"];
+				fprintf(stderr, "DEBUG list_tables: About to access table_type\n");
 				table_entry["type"] = row["table_type"];
+				fprintf(stderr, "DEBUG list_tables: About to access row_count\n");
 				table_entry["row_count"] = row["row_count"];
+				fprintf(stderr, "DEBUG list_tables: About to access total_size\n");
 				table_entry["total_size"] = row["total_size"];
+				fprintf(stderr, "DEBUG list_tables: About to access create_time\n");
 				table_entry["create_time"] = row["create_time"];
+				fprintf(stderr, "DEBUG list_tables: About to access update_time (may be null)\n");
 				table_entry["update_time"] = row["update_time"];
+				fprintf(stderr, "DEBUG list_tables: All fields accessed, pushing entry\n");
 				result.push_back(table_entry);
 			}
 		} else {
+			fprintf(stderr, "DEBUG list_tables: Query failed, extracting error\n");
 			result["error"] = query_result["error"];
 		}
 	} catch (const std::exception& e) {
+		fprintf(stderr, "DEBUG list_tables: Exception caught: %s\n", e.what());
 		result["error"] = std::string("Failed to parse query result: ") + e.what();
 	}
 

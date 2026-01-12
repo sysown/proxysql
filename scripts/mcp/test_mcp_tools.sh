@@ -322,9 +322,9 @@ add_test_config "query" "catalog_delete" '{"kind": "test", "key": "test_key"}' "
 add_test_config "query" "catalog_list" '{"kind": "test"}' "" ""
 add_test_config "query" "catalog_stats" '{}' "" ""
 
-# Config endpoint tools (from Config_Tool_Handler)
-add_test_config "config" "get_config" '{}' "" ""
-add_test_config "config" "set_config" '{"variable": "test_var", "value": "test_value"}' "" ""
+# Config endpoint tools (from Config_Tool_Handler) - stub implementations
+add_test_config "config" "get_config" '{"variable_name": "mcp_port"}' "" ""
+add_test_config "config" "set_config" '{"variable_name": "test_var", "value": "test_value"}' "" ""
 add_test_config "config" "reload_config" '{}' "" ""
 add_test_config "config" "list_variables" '{}' "" ""
 add_test_config "config" "get_status" '{}' "" ""
