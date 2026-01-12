@@ -691,7 +691,5 @@ public:
 		const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {}, bool fetch_runtime_pgsql_servers = false);
 	void pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
 	void pull_pgsql_variables_from_peer(const std::string& expected_checksum, const time_t epoch);
-	void pull_pgsql_replication_hostgroups_from_peer(const std::string& expected_checksum, const time_t epoch);
-	void pull_pgsql_hostgroup_attributes_from_peer(const std::string& expected_checksum, const time_t epoch);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */

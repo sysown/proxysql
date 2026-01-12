@@ -313,6 +313,7 @@ class ProxySQL_Admin {
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
 		int cluster_ldap_variables_diffs_before_sync;
+		int cluster_pgsql_variables_diffs_before_sync;
 		int cluster_pgsql_query_rules_diffs_before_sync;
 		int cluster_pgsql_servers_diffs_before_sync;
 		int cluster_pgsql_users_diffs_before_sync;
@@ -324,6 +325,7 @@ class ProxySQL_Admin {
 		bool cluster_mysql_variables_save_to_disk;
 		bool cluster_admin_variables_save_to_disk;
 		bool cluster_ldap_variables_save_to_disk;
+		bool cluster_pgsql_variables_save_to_disk;
 		bool cluster_pgsql_query_rules_save_to_disk;
 		bool cluster_pgsql_servers_save_to_disk;
 		bool cluster_pgsql_users_save_to_disk;
@@ -503,6 +505,7 @@ class ProxySQL_Admin {
 		bool checksum_mysql_variables;
 		bool checksum_admin_variables;
 		bool checksum_ldap_variables;
+		bool checksum_pgsql_variables;
 	} checksum_variables;
 	template<enum SERVER_TYPE pt>
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
