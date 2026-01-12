@@ -281,11 +281,16 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 		return result.dump();
 	}
 
-	// Get column names
+	// Get column names (convert to lowercase for consistency)
 	json columns = json::array();
+	std::vector<std::string> lowercase_columns;
 	MYSQL_FIELD* field;
 	while ((field = mysql_fetch_field(res))) {
-		columns.push_back(field->name);
+		std::string col_name = field->name;
+		// Convert to lowercase
+		std::transform(col_name.begin(), col_name.end(), col_name.begin(), ::tolower);
+		columns.push_back(col_name);
+		lowercase_columns.push_back(col_name);
 	}
 
 	// Get rows
@@ -295,8 +300,7 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 	while ((row = mysql_fetch_row(res))) {
 		json json_row = json::object();
 		for (unsigned int i = 0; i < num_fields; i++) {
-			std::string col_name = columns[i].get<std::string>();
-			json_row[col_name] = row[i] ? row[i] : nullptr;
+			json_row[lowercase_columns[i]] = row[i] ? row[i] : nullptr;
 		}
 		rows.push_back(json_row);
 	}
