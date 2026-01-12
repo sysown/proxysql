@@ -295,7 +295,7 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 	while ((row = mysql_fetch_row(res))) {
 		json json_row = json::object();
 		for (unsigned int i = 0; i < num_fields; i++) {
-			const char* col_name = columns[i].get<std::string>().c_str();
+			std::string col_name = columns[i].get<std::string>();
 			json_row[col_name] = row[i] ? row[i] : nullptr;
 		}
 		rows.push_back(json_row);
