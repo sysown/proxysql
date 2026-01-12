@@ -588,7 +588,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		int sync_conflict_counter;          // Counter for epoch conflicts
 		int sync_delayed_counter;           // Counter for version=1 delays
 
-		bool (*enabled_check)();  // Function to check if module is enabled (nullptr for always enabled)
+		bool (*enabled_check)();   // Function to check if module is enabled (nullptr for always enabled)
 	};
 
 	// Initialize all supported modules with their respective checksum field pointers
@@ -3775,264 +3775,95 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char *ip_addr = NULL;
-	uint16_t p = 0;
-//	pthread_mutex_lock(&mutex);
-	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_mqr = (unsigned int)GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync;
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_query_rules;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_mqr) {
-					epoch = v->epoch;
-					version = v->version;
-					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), node->get_ipaddress())) {
-						proxy_error("Memory allocation failed while updating mysql_query_rules peer info\n");
-						return;
-					}
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-//	pthread_mutex_unlock(&mutex);
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with mysql_query_rules epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_query_rules version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with mysql_query_rules version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("mysql_query_rules", host, port, ip_address, nullptr, nullptr);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_runtime_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char *ip_addr = NULL;
-	uint16_t p = 0;
-	char *pc = NULL;
-//	pthread_mutex_lock(&mutex);
-	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_mysql_servers_diffs_before_sync;
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_servers;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_ms) {
-					epoch = v->epoch;
-					version = v->version;
-					if (pc) {
-						free(pc);
-					}
-					pc = strdup(v->checksum);
-					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), node->get_ipaddress())) {
-						proxy_error("Memory allocation failed while updating runtime_mysql_servers peer info\n");
-						if (pc) {
-							free(pc);
-							pc = NULL;
-						}
-						return;
-					}
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-//	pthread_mutex_unlock(&mutex);
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with mysql_servers epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
-			if (pc) {
-				free(pc);
-				pc = NULL;
-			}
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		*peer_checksum = pc;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers version %llu, epoch %llu, checksum %s\n", hostname, p, version, epoch, pc);
-		proxy_info("Cluster: detected peer %s:%d with mysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("runtime_mysql_servers", host, port, ip_address, peer_checksum, nullptr);
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, 
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port,
 	char** peer_mysql_servers_v2_checksum, char** peer_runtime_mysql_servers_checksum, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char* hostname = NULL;
-	char* ip_addr = NULL;
-	uint16_t p = 0;
-	char* mysql_servers_v2_checksum = NULL;
-	char* runtime_mysql_servers_checksum = NULL;
-	//pthread_mutex_lock(&mutex);
-	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_mysql_servers_diffs_before_sync;
-	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry*>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
-		ProxySQL_Node_Entry* node = it->second;
-		ProxySQL_Checksum_Value_2* v = &node->checksums_values.mysql_servers_v2;
-		if (v->version > 1) {
-			if (v->epoch > epoch) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_ms) {
-					epoch = v->epoch;
-					version = v->version;
-					if (mysql_servers_v2_checksum) {
-						free(mysql_servers_v2_checksum);
-					}
-					if (runtime_mysql_servers_checksum) {
-						free(runtime_mysql_servers_checksum);
-					}
-					mysql_servers_v2_checksum = strdup(v->checksum);
-					runtime_mysql_servers_checksum = strdup(node->checksums_values.mysql_servers.checksum);
-					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), node->get_ipaddress())) {
-						proxy_error("Memory allocation failed while updating mysql_servers_v2 peer info\n");
-						if (mysql_servers_v2_checksum) {
-							free(mysql_servers_v2_checksum);
-							mysql_servers_v2_checksum = NULL;
-						}
-						if (runtime_mysql_servers_checksum) {
-							free(runtime_mysql_servers_checksum);
-							runtime_mysql_servers_checksum = NULL;
-						}
-						return;
-					}
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-	//	pthread_mutex_unlock(&mutex);
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with mysql_servers_v2 epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
-			if (mysql_servers_v2_checksum) {
-				free(mysql_servers_v2_checksum);
-				mysql_servers_v2_checksum = NULL;
-			}
-			if (runtime_mysql_servers_checksum) {
-				free(runtime_mysql_servers_checksum);
-				runtime_mysql_servers_checksum = NULL;
-			}
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		*peer_mysql_servers_v2_checksum = mysql_servers_v2_checksum;
-		*peer_runtime_mysql_servers_checksum = runtime_mysql_servers_checksum;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers_v2 version %llu, epoch %llu, mysql_servers_v2 checksum %s, runtime_mysql_servers %s\n", hostname, p, version, epoch, mysql_servers_v2_checksum, runtime_mysql_servers_checksum);
-		proxy_info("Cluster: detected peer %s:%d with mysql_servers_v2 version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("mysql_servers_v2", host, port, ip_address, peer_mysql_servers_v2_checksum, peer_runtime_mysql_servers_checksum);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char *ip_addr = NULL;
-	uint16_t p = 0;
-//	pthread_mutex_lock(&mutex);
-	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_mysql_users_diffs_before_sync;
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_users;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_mu) {
-					epoch = v->epoch;
-					version = v->version;
-					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), node->get_ipaddress())) {
-						proxy_error("Memory allocation failed while updating mysql_users peer info\n");
-						return;
-					}
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-//	pthread_mutex_unlock(&mutex);
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with mysql_users epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with mysql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("mysql_users", host, port, ip_address, nullptr, nullptr);
 }
 
 /**
- * @brief Unified function to find optimal peer for syncing variables modules
+ * @brief Unified function to find optimal peer for sync operations
  *
- * Data-driven implementation that replaces separate functions for mysql_variables,
- * admin_variables, and ldap_variables. Uses module configuration to determine:
+ * Data-driven implementation that replaces separate functions for various modules.
+ * Uses module configuration to determine:
  * - Which cluster variable to check for diff threshold
  * - Which checksum field to examine in each node
+ * - Whether to return checksum data
  * - Module name for debug logging
  *
- * @param module_name The name of the module ("mysql_variables", "admin_variables", "ldap_variables", "pgsql_variables")
+ * @param module_name The name of the module ("mysql_query_rules", "mysql_users", "proxysql_servers",
+ *                     "pgsql_users", "pgsql_query_rules", "runtime_mysql_servers", "runtime_pgsql_servers",
+ *                     "mysql_servers_v2", "pgsql_servers_v2", "mysql_variables", "admin_variables",
+ *                     "ldap_variables", "pgsql_variables")
  * @param host Pointer to store the selected peer's hostname
  * @param port Pointer to store the selected peer's port
  * @param ip_address Pointer to store the selected peer's IP address
+ * @param peer_checksum Optional: pointer to store checksum (NULL if not needed)
+ * @param peer_secondary_checksum Optional: pointer to store secondary checksum for V2 functions (NULL if not needed)
  */
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* module_name, char **host, uint16_t *port, char** ip_address) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* module_name, char **host, uint16_t *port, char** ip_address, char **peer_checksum, char **peer_secondary_checksum) {
 	// Data-driven mapping of module names to their cluster configurations
-	struct VariablesModuleConfig {
+	struct ModuleConfig {
 		const char* name;
 		std::atomic<int> ProxySQL_Cluster::*diff_member;
 		std::function<ProxySQL_Checksum_Value_2*(ProxySQL_Node_Entry*)> checksum_getter;
+		std::function<ProxySQL_Checksum_Value_2*(ProxySQL_Node_Entry*)> secondary_checksum_getter;
+		bool has_checksum;
+		bool has_secondary_checksum;
+		const char* secondary_module_name;
 	};
 
-	// Initialize all supported variables modules with their configuration
-	const VariablesModuleConfig modules[] = {
+	// Initialize all supported modules with their configuration
+	const ModuleConfig modules[] = {
+		// Basic 3-param modules (no checksum)
+		{"mysql_query_rules", &ProxySQL_Cluster::cluster_mysql_query_rules_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_query_rules; }, nullptr, false, false, nullptr},
+		{"mysql_users", &ProxySQL_Cluster::cluster_mysql_users_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_users; }, nullptr, false, false, nullptr},
+		{"proxysql_servers", &ProxySQL_Cluster::cluster_proxysql_servers_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.proxysql_servers; }, nullptr, false, false, nullptr},
+		{"pgsql_users", &ProxySQL_Cluster::cluster_pgsql_users_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_users; }, nullptr, false, false, nullptr},
+		{"pgsql_query_rules", &ProxySQL_Cluster::cluster_pgsql_query_rules_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_query_rules; }, nullptr, false, false, nullptr},
+
+		// Runtime 4-param modules (with checksum)
+		{"runtime_mysql_servers", &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_servers; }, nullptr, true, false, nullptr},
+		{"runtime_pgsql_servers", &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, nullptr, true, false, nullptr},
+
+		// V2 5-param modules (with dual checksums)
+		{"mysql_servers_v2", &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_servers_v2; },
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_servers; }, true, true, "runtime_mysql_servers"},
+		{"pgsql_servers_v2", &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers_v2; },
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, true, true, "runtime_pgsql_servers"},
+
+		// Variables modules (already unified)
 		{"mysql_variables", &ProxySQL_Cluster::cluster_mysql_variables_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_variables; }},
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_variables; }, nullptr, false, false, nullptr},
 		{"admin_variables", &ProxySQL_Cluster::cluster_admin_variables_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.admin_variables; }},
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.admin_variables; }, nullptr, false, false, nullptr},
 		{"ldap_variables", &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.ldap_variables; }},
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.ldap_variables; }, nullptr, false, false, nullptr},
 		{"pgsql_variables", &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }}
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }, nullptr, false, false, nullptr}
 	};
 
 	// Find the matching module configuration
-	const VariablesModuleConfig* config = nullptr;
+	const ModuleConfig* config = nullptr;
 	for (const auto& module : modules) {
 		if (strcmp(module_name, module.name) == 0) {
 			config = &module;
@@ -4051,6 +3882,8 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 	char *hostname = NULL;
 	char* ip_addr = NULL;
 	uint16_t p = 0;
+	char *checksum = NULL;
+	char *secondary_checksum = NULL;
 
 	// Get diff threshold using member pointer with atomic load
 	unsigned int diff_threshold = (unsigned int)(GloProxyCluster->*(config->diff_member)).load();
@@ -4066,17 +3899,30 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 				if (v->diff_check >= diff_threshold) {
 					epoch = v->epoch;
 					version = v->version;
-					if (hostname) {
-						free(hostname);
-					}
-					if (ip_addr) {
-						free(ip_addr);
-					}
+
+					// Clean up existing allocations
+					if (hostname) free(hostname);
+					if (ip_addr) free(ip_addr);
+					if (checksum) free(checksum);
+					if (secondary_checksum) free(secondary_checksum);
+
+					// Allocate new values
 					hostname=strdup(node->get_hostname());
 					const char* ip = node->get_ipaddress();
 					if (ip)
 						ip_addr = strdup(ip);
 					p = node->get_port();
+
+					if (config->has_checksum) {
+						checksum = strdup(v->checksum);
+					}
+
+					if (config->has_secondary_checksum && config->secondary_checksum_getter) {
+						ProxySQL_Checksum_Value_2 * secondary_v = config->secondary_checksum_getter(node);
+						if (secondary_v) {
+							secondary_checksum = strdup(secondary_v->checksum);
+						}
+					}
 				}
 			}
 		}
@@ -4087,38 +3933,56 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 	if (epoch) {
 		if (max_epoch > epoch) {
 			proxy_warning("Cluster: detected a peer with %s epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", config->name, max_epoch, epoch);
-			if (hostname) {
-				free(hostname);
-				hostname = NULL;
-			}
-			if (ip_addr) {
-				free(ip_addr);
-				ip_addr = NULL;
-			}
+
+			// Clean up allocated memory
+			if (hostname) { free(hostname); hostname = NULL; }
+			if (ip_addr) { free(ip_addr); ip_addr = NULL; }
+			if (checksum) { free(checksum); checksum = NULL; }
+			if (secondary_checksum) { free(secondary_checksum); secondary_checksum = NULL; }
 		}
 	}
+
 	if (hostname) {
 		*host = hostname;
 		*port = p;
 		if (ip_address) {
 			*ip_address = ip_addr;
 		}
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, config->name, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, config->name, version, epoch);
+		if (peer_checksum) {
+			*peer_checksum = checksum;
+		} else if (checksum) {
+			free(checksum);  // Free if not requested
+		}
+		if (peer_secondary_checksum) {
+			*peer_secondary_checksum = secondary_checksum;
+		} else if (secondary_checksum) {
+			free(secondary_checksum);  // Free if not requested
+		}
+
+		const char* log_name = config->secondary_module_name ? config->secondary_module_name : config->name;
+		if (config->has_secondary_checksum && secondary_checksum) {
+			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with %s version %llu, epoch %llu, primary checksum %s, secondary checksum %s\n", hostname, p, config->name, version, epoch, checksum, secondary_checksum);
+			proxy_info("Cluster: detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, config->name, version, epoch);
+		} else if (config->has_checksum) {
+			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with %s version %llu, epoch %llu, checksum %s\n", hostname, p, log_name, version, epoch, checksum);
+			proxy_info("Cluster: detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, log_name, version, epoch);
+		} else {
+			proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, log_name, version, epoch);
+			proxy_info("Cluster: detected peer %s:%d with %s version %llu, epoch %llu\n", hostname, p, log_name, version, epoch);
+		}
 	}
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address) {
-	get_peer_to_sync_variables_module("mysql_variables", host, port, ip_address);
+	get_peer_to_sync_variables_module("mysql_variables", host, port, ip_address, nullptr, nullptr);
 }
 
-
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint16_t *port, char** ip_address) {
-	get_peer_to_sync_variables_module("admin_variables", host, port, ip_address);
+	get_peer_to_sync_variables_module("admin_variables", host, port, ip_address, nullptr, nullptr);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address) {
-	get_peer_to_sync_variables_module("ldap_variables", host, port, ip_address);
+	get_peer_to_sync_variables_module("ldap_variables", host, port, ip_address, nullptr, nullptr);
 }
 
 // void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_variables(char **host, uint16_t *port, char** ip_address) {
@@ -4126,48 +3990,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16
 // }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char *ip_addr = NULL;
-	uint16_t p = 0;
-//	pthread_mutex_lock(&mutex);
-	//unsigned long long curtime = monotonic_time();
-	unsigned int diff_ps = (unsigned int)GloProxyCluster->cluster_proxysql_servers_diffs_before_sync;
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.proxysql_servers;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_ps) {
-					epoch = v->epoch;
-					version = v->version;
-					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), node->get_ipaddress())) {
-						proxy_error("Memory allocation failed while updating proxysql_servers peer info\n");
-						return;
-					}
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-//	pthread_mutex_unlock(&mutex);
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with proxysql_servers epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with proxysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with proxysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("proxysql_servers", host, port, ip_address, nullptr, nullptr);
 }
 
 
@@ -4197,47 +4020,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
  * @see ProxySQL_Checksum_Value_2::pgsql_users
  */
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_users(char **host, uint16_t *port, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char *ip_addr = NULL;
-	uint16_t p = 0;
-	unsigned int diff_mu = (unsigned int)GloProxyCluster->cluster_pgsql_users_diffs_before_sync;
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_users;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_mu) {
-					epoch = v->epoch;
-					version = v->version;
-					const char* ip = node->get_ipaddress();
-					if (!safe_update_peer_info(&hostname, &ip_addr, node->get_hostname(), ip)) {
-						proxy_error("Memory allocation failed while updating pgsql_users peer info\n");
-						return;
-					}
-					p = node->get_port();
-				}
-			}
-		}
-		it++;
-	}
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with pgsql_users epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			// Clean up allocated memory using helper function
-			safe_update_peer_info(&hostname, &ip_addr, NULL, NULL);
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with pgsql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("pgsql_users", host, port, ip_address, nullptr, nullptr);
 }
 
 /**
@@ -4335,73 +4118,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_pgsql_query_rules(char **host, uin
  * @see ProxySQL_Checksum_Value_2::pgsql_servers
  */
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_runtime_pgsql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address) {
-	unsigned long long version = 0;
-	unsigned long long epoch = 0;
-	unsigned long long max_epoch = 0;
-	char *hostname = NULL;
-	char *ip_addr = NULL;
-	uint16_t p = 0;
-	char *checksum = NULL;
-	unsigned int diff_ms = (unsigned int)GloProxyCluster->cluster_pgsql_servers_diffs_before_sync;
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
-		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.pgsql_servers;
-		if (v->version > 1) {
-			if ( v->epoch > epoch ) {
-				max_epoch = v->epoch;
-				if (v->diff_check >= diff_ms) {
-					epoch = v->epoch;
-					version = v->version;
-					if (hostname) {
-						free(hostname);
-					}
-					if (ip_addr) {
-						free(ip_addr);
-					}
-					if (checksum) {
-						free(checksum);
-					}
-					hostname=strdup(node->get_hostname());
-					const char* ip = node->get_ipaddress();
-					if (ip)
-						ip_addr = strdup(ip);
-					p = node->get_port();
-					checksum = strdup(v->checksum);
-				}
-			}
-		}
-		it++;
-	}
-	if (epoch) {
-		if (max_epoch > epoch) {
-			proxy_warning("Cluster: detected a peer with runtime_pgsql_servers epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
-			if (hostname) {
-				free(hostname);
-				hostname = NULL;
-			}
-			if (ip_addr) {
-				free(ip_addr);
-				ip_addr = NULL;
-			}
-			if (checksum) {
-				free(checksum);
-				checksum = NULL;
-			}
-		}
-	}
-	if (hostname) {
-		*host = hostname;
-		*port = p;
-		*ip_address = ip_addr;
-		if (peer_checksum) {
-			*peer_checksum = checksum;
-		} else {
-			if (checksum)
-				free(checksum);
-		}
-		proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with runtime_pgsql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
-		proxy_info("Cluster: detected peer %s:%d with runtime_pgsql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
-	}
+	get_peer_to_sync_variables_module("runtime_pgsql_servers", host, port, ip_address, peer_checksum, nullptr);
 }
 
 /**
@@ -5591,6 +5308,308 @@ const char* ProxySQL_Node_Address::get_host_address() const {
 
 	return host_address;
 }
+/*
+ * Unified Pull Framework for ProxySQL Cluster Synchronization
+ *
+ * This framework provides a data-driven approach to unify all pull_*_from_peer functions,
+ * reducing code duplication and improving maintainability.
+ */
+
+/**
+ * Configuration structure for unified pull operations
+ */
+struct PullOperationConfig {
+    // Basic function info
+    const char* module_name;
+
+    // Peer selection callback
+    std::function<void(char**, uint16_t*, char**)> peer_selector;
+
+    // Query configuration
+    std::vector<fetch_query> queries;
+    bool use_multiple_queries;
+
+    // Configuration callbacks
+    std::function<bool(const string&, const time_t)> checksum_validator;
+    std::function<void(const string&, bool)> data_loader;
+    std::function<void()> runtime_loader;
+    std::function<bool()> save_to_disk_checker;
+
+    // Metrics tracking
+    p_cluster_counter::metric success_metric;
+    p_cluster_counter::metric failure_metric;
+
+    // Mutex for thread safety
+    pthread_mutex_t* operation_mutex;
+
+    // Logging callbacks
+    std::function<const char*()> get_module_display_name;
+    std::function<const char*()> get_description;
+
+    // Optional additional parameters for complex operations
+    std::function<void(void*, MYSQL*)> custom_setup;
+    std::function<void(void*, MYSQL_RES**)> custom_processor;
+    void* custom_context;
+};
+
+/**
+ * Unified pull operation handler that abstracts common patterns
+ *
+ * @param config Configuration structure defining the pull operation
+ * @param expected_checksum Expected checksum for validation (simple operations)
+ * @param epoch Expected epoch timestamp (simple operations)
+ * @param complex_context Additional context for complex operations (checksum structs, etc.)
+ */
+void ProxySQL_Cluster::pull_from_peer_unified(const PullOperationConfig& config,
+                                             const string& expected_checksum,
+                                             const time_t epoch,
+                                             void* complex_context) {
+    char *hostname = NULL;
+    char *ip_address = NULL;
+    uint16_t port = 0;
+    bool fetch_failed = false;
+
+    // Acquire mutex for thread safety
+    pthread_mutex_lock(config.operation_mutex);
+
+    // Select peer using the configured callback
+    config.peer_selector(&hostname, &port, &ip_address);
+
+    if (hostname) {
+        cluster_creds_t creds {};
+
+        MYSQL *conn = mysql_init(NULL);
+        if (conn == NULL) {
+            proxy_error("Unable to initialize MySQL connection for %s\n", config.module_name);
+            goto exit_unified_pull;
+        }
+
+        // Setup credentials
+        creds = GloProxyCluster->get_credentials();
+        if (creds.user.size()) {
+            unsigned int timeout = 1;
+            mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+            {
+                unsigned char val = 1;
+                mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+                mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+            }
+
+            // Log operation start
+            const char* display_name = config.get_module_display_name ? config.get_module_display_name() : config.module_name;
+            proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching %s from peer %s:%d started. Expected checksum: %s\n",
+                       display_name, hostname, port, expected_checksum.c_str());
+            proxy_info("Cluster: Fetching %s from peer %s:%d started. Expected checksum: %s\n",
+                      display_name, hostname, port, expected_checksum.c_str());
+
+            // Establish connection
+            MYSQL* rc_conn = mysql_real_connect(
+                conn, ip_address ? ip_address : hostname, creds.user.c_str(), creds.pass.c_str(), NULL, port, NULL, 0
+            );
+
+            if (rc_conn == NULL) {
+                proxy_error("Cluster: unable to fetch %s from peer %s:%d. Error: %s\n",
+                           display_name, hostname, port, mysql_error(conn));
+                fetch_failed = true;
+            } else {
+                // Update DNS cache
+                MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
+
+                // Custom setup callback if provided
+                if (config.custom_setup) {
+                    config.custom_setup(config.custom_context, conn);
+                }
+
+                // Execute queries and validate checksums
+                bool checksum_valid = false;
+
+                if (config.use_multiple_queries) {
+                    // Handle multiple queries with combined checksum computation
+                    vector<MYSQL_RES*> results;
+                    results.reserve(config.queries.size());
+
+                    bool all_queries_succeeded = true;
+                    for (const auto& query : config.queries) {
+                        MYSQL_RES* result = NULL;
+                        if (!fetch_query_with_metrics(conn, query, &result)) {
+                            all_queries_succeeded = false;
+                            break;
+                        }
+                        results.push_back(result);
+                    }
+
+                    if (all_queries_succeeded) {
+                        // Compute combined checksum for all results
+                        string combined_checksum = compute_combined_checksum(results);
+
+                        // Validate using the configured validator
+                        if (config.checksum_validator) {
+                            checksum_valid = config.checksum_validator(combined_checksum, epoch);
+                        } else {
+                            checksum_valid = (combined_checksum == expected_checksum);
+                        }
+
+                        // Process results using custom processor if provided
+                        if (config.custom_processor) {
+                            config.custom_processor(config.custom_context, results.data());
+                        }
+
+                        // Cleanup results
+                        for (auto result : results) {
+                            if (result) mysql_free_result(result);
+                        }
+                    }
+                } else {
+                    // Single query operation
+                    MYSQL_RES* result = NULL;
+                    fetch_query single_query = config.queries[0];
+
+                    if (fetch_query_with_metrics(conn, single_query, &result)) {
+                        string computed_checksum = compute_single_checksum(result);
+
+                        if (config.checksum_validator) {
+                            checksum_valid = config.checksum_validator(computed_checksum, epoch);
+                        } else {
+                            checksum_valid = (computed_checksum == expected_checksum);
+                        }
+
+                        if (checksum_valid) {
+                            // Process result using custom processor if provided
+                            if (config.custom_processor) {
+                                MYSQL_RES* single_array[] = {result};
+                                config.custom_processor(config.custom_context, single_array);
+                            }
+                        }
+
+                        mysql_free_result(result);
+                    } else {
+                        fetch_failed = true;
+                    }
+                }
+
+                // Load data to runtime if checksum is valid
+                if (checksum_valid && config.data_loader) {
+                    config.data_loader(expected_checksum, true);
+                }
+
+                // Load to runtime if loader provided
+                if (checksum_valid && config.runtime_loader) {
+                    config.runtime_loader();
+                }
+
+                // Save to disk if enabled
+                if (checksum_valid && config.save_to_disk_checker && config.save_to_disk_checker()) {
+                    // Save operation would be implemented by the specific module
+                }
+
+                if (!checksum_valid) {
+                    proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum validation failed for %s from peer %s:%d\n",
+                               display_name, hostname, port);
+                    fetch_failed = true;
+                }
+            }
+
+            mysql_close(conn);
+        } else {
+            proxy_error("Cluster: unable to fetch %s - empty credentials\n", config.module_name);
+            fetch_failed = true;
+        }
+    } else {
+        proxy_debug(PROXY_DEBUG_CLUSTER, 5, "No peer available for %s sync\n", config.module_name);
+        fetch_failed = true;
+    }
+
+exit_unified_pull:
+    // Cleanup resources
+    if (hostname) free(hostname);
+    if (ip_address) free(ip_address);
+
+    // Release mutex
+    pthread_mutex_unlock(config.operation_mutex);
+
+    // Handle fetch failure with delay to prevent busy loops
+    if (fetch_failed) {
+        sleep(1);
+    }
+
+    // Update metrics based on success/failure
+    if (fetch_failed) {
+        if (config.failure_metric != p_cluster_counter::__size) {
+            GloProxyCluster->metrics.p_counter_array[config.failure_metric]->Increment();
+        }
+    } else {
+        if (config.success_metric != p_cluster_counter::__size) {
+            GloProxyCluster->metrics.p_counter_array[config.success_metric]->Increment();
+        }
+    }
+}
+
+/**
+ * Helper function to execute a single query with metrics tracking
+ *
+ * @param conn MySQL connection
+ * @param query Query configuration
+ * @param result Output parameter for query result
+ * @return true if successful, false otherwise
+ */
+bool ProxySQL_Cluster::fetch_query_with_metrics(MYSQL* conn, const fetch_query& query, MYSQL_RES** result) {
+    if (mysql_query(conn, query.query) != 0) {
+        proxy_error("Cluster: query failed for %s: %s\n", query.msgs[1].c_str(), mysql_error(conn));
+        if (query.failure_counter != p_cluster_counter::__size) {
+            GloProxyCluster->metrics.p_counter_array[query.failure_counter]->Increment();
+        }
+        return false;
+    }
+
+    *result = mysql_store_result(conn);
+    if (*result == NULL) {
+        proxy_error("Cluster: unable to store result for %s: %s\n", query.msgs[1].c_str(), mysql_error(conn));
+        if (query.failure_counter != p_cluster_counter::__size) {
+            GloProxyCluster->metrics.p_counter_array[query.failure_counter]->Increment();
+        }
+        return false;
+    }
+
+    if (query.success_counter != p_cluster_counter::__size) {
+        GloProxyCluster->metrics.p_counter_array[query.success_counter]->Increment();
+    }
+    return true;
+}
+
+/**
+ * Helper function to compute checksum for a single result set
+ *
+ * @param result MySQL result set
+ * @return Computed checksum string
+ */
+string ProxySQL_Cluster::compute_single_checksum(MYSQL_RES* result) {
+    uint64_t checksum_value = mysql_raw_checksum(result);
+    return std::to_string(checksum_value);
+}
+
+/**
+ * Helper function to compute combined checksum for multiple result sets
+ *
+ * @param results Vector of MySQL result sets
+ * @return Combined checksum string
+ */
+string ProxySQL_Cluster::compute_combined_checksum(const vector<MYSQL_RES*>& results) {
+    string combined_checksum;
+    combined_checksum.reserve(256);
+
+    for (const auto& result : results) {
+        uint64_t partial_checksum = mysql_raw_checksum(result);
+        combined_checksum += std::to_string(partial_checksum) + "|";
+    }
+
+    // Remove trailing pipe
+    if (!combined_checksum.empty() && combined_checksum.back() == '|') {
+        combined_checksum.pop_back();
+    }
+
+    return combined_checksum;
+}
+
 void ProxySQL_Node_Address::resolve_hostname() {
 	if (ip_addr) {
 		free(ip_addr);

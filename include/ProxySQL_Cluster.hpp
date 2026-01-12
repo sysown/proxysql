@@ -411,7 +411,7 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, char** peer_mysql_servers_v2_checksum, 
 		char** peer_runtime_mysql_servers_checksum, char** ip_address);
 	void get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address);
-	void get_peer_to_sync_variables_module(const char* module_name, char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_variables_module(const char* module_name, char **host, uint16_t *port, char** ip_address, char **peer_checksum, char **peer_secondary_checksum);
 	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_admin_variables(char **host, uint16_t* port, char** ip_address);
 	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address);
@@ -691,5 +691,49 @@ public:
 		const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {}, bool fetch_runtime_pgsql_servers = false);
 	void pull_pgsql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
 	void pull_pgsql_variables_from_peer(const std::string& expected_checksum, const time_t epoch);
+
+	// Configuration structure for unified pull operations
+	struct PullOperationConfig {
+	    // Basic function info
+	    const char* module_name;
+
+	    // Peer selection callback
+	    std::function<void(char**, uint16_t*, char**)> peer_selector;
+
+	    // Query configuration
+	    std::vector<fetch_query> queries;
+	    bool use_multiple_queries;
+
+	    // Configuration callbacks
+	    std::function<bool(const std::string&, const time_t)> checksum_validator;
+	    std::function<void(const std::string&, bool)> data_loader;
+	    std::function<void()> runtime_loader;
+	    std::function<bool()> save_to_disk_checker;
+
+	    // Metrics tracking
+	    p_cluster_counter::metric success_metric;
+	    p_cluster_counter::metric failure_metric;
+
+	    // Mutex for thread safety
+	    pthread_mutex_t* operation_mutex;
+
+	    // Logging callbacks
+	    std::function<const char*()> get_module_display_name;
+	    std::function<const char*()> get_description;
+
+	    // Optional additional parameters for complex operations
+	    std::function<void(void*, MYSQL*)> custom_setup;
+	    std::function<void(void*, MYSQL_RES**)> custom_processor;
+	    void* custom_context;
+	};
+
+	// Unified pull framework for data-driven operations
+	void pull_from_peer_unified(const PullOperationConfig& config,
+	                             const std::string& expected_checksum,
+	                             const time_t epoch,
+	                             void* complex_context = nullptr);
+	bool fetch_query_with_metrics(MYSQL* conn, const fetch_query& query, MYSQL_RES** result);
+	std::string compute_single_checksum(MYSQL_RES* result);
+	std::string compute_combined_checksum(const std::vector<MYSQL_RES*>& results);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */
