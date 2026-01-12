@@ -81,7 +81,9 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
 	pgsql_tokenizer.oo \
 	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo \
-	MySQL_Catalog.oo MySQL_Tool_Handler.oo
+	MySQL_Catalog.oo MySQL_Tool_Handler.oo \
+	Config_Tool_Handler.oo Query_Tool_Handler.oo \
+	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Observe_Tool_Handler.oo
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp

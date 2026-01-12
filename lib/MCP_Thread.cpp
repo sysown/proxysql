@@ -1,5 +1,10 @@
 #include "MCP_Thread.h"
 #include "MySQL_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
+#include "Query_Tool_Handler.h"
+#include "Admin_Tool_Handler.h"
+#include "Cache_Tool_Handler.h"
+#include "Observe_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "ProxySQL_MCP_Server.hpp"
 
@@ -57,6 +62,13 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 
 	mcp_server = NULL;
 	mysql_tool_handler = NULL;
+
+	// Initialize new tool handlers
+	config_tool_handler = NULL;
+	query_tool_handler = NULL;
+	admin_tool_handler = NULL;
+	cache_tool_handler = NULL;
+	observe_tool_handler = NULL;
 }
 
 MCP_Threads_Handler::~MCP_Threads_Handler() {
@@ -92,6 +104,28 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 	if (mysql_tool_handler) {
 		delete mysql_tool_handler;
 		mysql_tool_handler = NULL;
+	}
+
+	// Clean up new tool handlers
+	if (config_tool_handler) {
+		delete config_tool_handler;
+		config_tool_handler = NULL;
+	}
+	if (query_tool_handler) {
+		delete query_tool_handler;
+		query_tool_handler = NULL;
+	}
+	if (admin_tool_handler) {
+		delete admin_tool_handler;
+		admin_tool_handler = NULL;
+	}
+	if (cache_tool_handler) {
+		delete cache_tool_handler;
+		cache_tool_handler = NULL;
+	}
+	if (observe_tool_handler) {
+		delete observe_tool_handler;
+		observe_tool_handler = NULL;
 	}
 
 	// Destroy the rwlock

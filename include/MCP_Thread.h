@@ -10,6 +10,12 @@
 // Forward declarations
 class ProxySQL_MCP_Server;
 class MySQL_Tool_Handler;
+class MCP_Tool_Handler;
+class Config_Tool_Handler;
+class Query_Tool_Handler;
+class Admin_Tool_Handler;
+class Cache_Tool_Handler;
+class Observe_Tool_Handler;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -74,8 +80,26 @@ public:
 	 * This provides tools for LLM-based MySQL database exploration,
 	 * including inventory, structure, profiling, sampling, query,
 	 * relationship inference, and catalog operations.
+	 *
+	 * @deprecated Use query_tool_handler instead. Kept for backward compatibility.
 	 */
 	MySQL_Tool_Handler* mysql_tool_handler;
+
+	/**
+	 * @brief Pointers to the new dedicated tool handlers for each endpoint
+	 *
+	 * Each endpoint now has its own dedicated tool handler:
+	 * - config_tool_handler: /mcp/config endpoint
+	 * - query_tool_handler: /mcp/query endpoint
+	 * - admin_tool_handler: /mcp/admin endpoint
+	 * - cache_tool_handler: /mcp/cache endpoint
+	 * - observe_tool_handler: /mcp/observe endpoint
+	 */
+	Config_Tool_Handler* config_tool_handler;
+	Query_Tool_Handler* query_tool_handler;
+	Admin_Tool_Handler* admin_tool_handler;
+	Cache_Tool_Handler* cache_tool_handler;
+	Observe_Tool_Handler* observe_tool_handler;
 
 
 	/**

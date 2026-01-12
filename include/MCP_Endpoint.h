@@ -6,8 +6,9 @@
 #include <string>
 #include <memory>
 
-// Forward declaration
+// Forward declarations
 class MCP_Threads_Handler;
+class MCP_Tool_Handler;
 
 // Include httpserver after proxysql.h
 #include "httpserver.hpp"
@@ -23,11 +24,15 @@ using json = nlohmann::json;
  * This class extends httpserver::http_resource to provide JSON-RPC 2.0
  * endpoints for MCP protocol communication. Each endpoint handles
  * POST requests with JSON-RPC 2.0 formatted payloads.
+ *
+ * Each endpoint has its own dedicated tool handler that provides
+ * endpoint-specific tools.
  */
 class MCP_JSONRPC_Resource : public httpserver::http_resource {
 private:
-	MCP_Threads_Handler* handler;
-	std::string endpoint_name;
+	MCP_Threads_Handler* handler;       ///< Pointer to MCP handler for variable access
+	MCP_Tool_Handler* tool_handler;     ///< Pointer to endpoint's dedicated tool handler
+	std::string endpoint_name;           ///< Endpoint name (config, query, admin, etc.)
 
 	/**
 	 * @brief Authenticate the incoming request
@@ -112,9 +117,10 @@ public:
 	 * @brief Constructor for MCP_JSONRPC_Resource
 	 *
 	 * @param h Pointer to the MCP_Threads_Handler instance
+	 * @param th Pointer to the endpoint's dedicated tool handler
 	 * @param name The name of this endpoint (e.g., "config", "query")
 	 */
-	MCP_JSONRPC_Resource(MCP_Threads_Handler* h, const std::string& name);
+	MCP_JSONRPC_Resource(MCP_Threads_Handler* h, MCP_Tool_Handler* th, const std::string& name);
 
 	/**
 	 * @brief Destructor

@@ -6,6 +6,12 @@ using json = nlohmann::json;
 #include "MCP_Endpoint.h"
 #include "MCP_Thread.h"
 #include "MySQL_Tool_Handler.h"
+#include "MCP_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
+#include "Query_Tool_Handler.h"
+#include "Admin_Tool_Handler.h"
+#include "Cache_Tool_Handler.h"
+#include "Observe_Tool_Handler.h"
 #include "proxysql_utils.h"
 
 using namespace httpserver;
@@ -53,36 +59,20 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 			.no_post_process()
 	));
 
-	// Register MCP endpoints
-	// Each endpoint is a distinct MCP server with its own authentication
-	std::unique_ptr<httpserver::http_resource> config_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, "config"));
-	ws->register_resource("/mcp/config", config_resource.get(), true);
-	_endpoints.push_back({"/mcp/config", std::move(config_resource)});
+	// Initialize tool handlers for each endpoint
+	proxy_info("Initializing MCP tool handlers...\n");
 
-	std::unique_ptr<httpserver::http_resource> observe_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, "observe"));
-	ws->register_resource("/mcp/observe", observe_resource.get(), true);
-	_endpoints.push_back({"/mcp/observe", std::move(observe_resource)});
+	// 1. Config Tool Handler
+	handler->config_tool_handler = new Config_Tool_Handler(handler);
+	if (handler->config_tool_handler->init() == 0) {
+		proxy_info("Config Tool Handler initialized\n");
+	} else {
+		proxy_error("Failed to initialize Config Tool Handler\n");
+		delete handler->config_tool_handler;
+		handler->config_tool_handler = NULL;
+	}
 
-	std::unique_ptr<httpserver::http_resource> query_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, "query"));
-	ws->register_resource("/mcp/query", query_resource.get(), true);
-	_endpoints.push_back({"/mcp/query", std::move(query_resource)});
-
-	std::unique_ptr<httpserver::http_resource> admin_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, "admin"));
-	ws->register_resource("/mcp/admin", admin_resource.get(), true);
-	_endpoints.push_back({"/mcp/admin", std::move(admin_resource)});
-
-	std::unique_ptr<httpserver::http_resource> cache_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, "cache"));
-	ws->register_resource("/mcp/cache", cache_resource.get(), true);
-	_endpoints.push_back({"/mcp/cache", std::move(cache_resource)});
-
-	proxy_info("Registered 5 MCP endpoints: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache\n");
-
-	// Initialize MySQL Tool Handler with the configuration from MCP variables
+	// 2. Query Tool Handler (wraps MySQL_Tool_Handler for backward compatibility)
 	if (!handler->mysql_tool_handler) {
 		proxy_info("Initializing MySQL Tool Handler...\n");
 		handler->mysql_tool_handler = new MySQL_Tool_Handler(
@@ -94,7 +84,6 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 			handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : ""
 		);
 
-		// Initialize the tool handler
 		if (handler->mysql_tool_handler->init() != 0) {
 			proxy_error("Failed to initialize MySQL Tool Handler\n");
 			delete handler->mysql_tool_handler;
@@ -103,6 +92,61 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 			proxy_info("MySQL Tool Handler initialized successfully\n");
 		}
 	}
+
+	// Create Query_Tool_Handler that wraps the MySQL_Tool_Handler
+	if (handler->mysql_tool_handler) {
+		handler->query_tool_handler = new Query_Tool_Handler(handler->mysql_tool_handler);
+		if (handler->query_tool_handler->init() == 0) {
+			proxy_info("Query Tool Handler initialized\n");
+		}
+	}
+
+	// 3. Admin Tool Handler
+	handler->admin_tool_handler = new Admin_Tool_Handler(handler);
+	if (handler->admin_tool_handler->init() == 0) {
+		proxy_info("Admin Tool Handler initialized\n");
+	}
+
+	// 4. Cache Tool Handler
+	handler->cache_tool_handler = new Cache_Tool_Handler(handler);
+	if (handler->cache_tool_handler->init() == 0) {
+		proxy_info("Cache Tool Handler initialized\n");
+	}
+
+	// 5. Observe Tool Handler
+	handler->observe_tool_handler = new Observe_Tool_Handler(handler);
+	if (handler->observe_tool_handler->init() == 0) {
+		proxy_info("Observe Tool Handler initialized\n");
+	}
+
+	// Register MCP endpoints
+	// Each endpoint gets its own dedicated tool handler
+	std::unique_ptr<httpserver::http_resource> config_resource =
+		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->config_tool_handler, "config"));
+	ws->register_resource("/mcp/config", config_resource.get(), true);
+	_endpoints.push_back({"/mcp/config", std::move(config_resource)});
+
+	std::unique_ptr<httpserver::http_resource> observe_resource =
+		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->observe_tool_handler, "observe"));
+	ws->register_resource("/mcp/observe", observe_resource.get(), true);
+	_endpoints.push_back({"/mcp/observe", std::move(observe_resource)});
+
+	std::unique_ptr<httpserver::http_resource> query_resource =
+		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->query_tool_handler, "query"));
+	ws->register_resource("/mcp/query", query_resource.get(), true);
+	_endpoints.push_back({"/mcp/query", std::move(query_resource)});
+
+	std::unique_ptr<httpserver::http_resource> admin_resource =
+		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->admin_tool_handler, "admin"));
+	ws->register_resource("/mcp/admin", admin_resource.get(), true);
+	_endpoints.push_back({"/mcp/admin", std::move(admin_resource)});
+
+	std::unique_ptr<httpserver::http_resource> cache_resource =
+		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->cache_tool_handler, "cache"));
+	ws->register_resource("/mcp/cache", cache_resource.get(), true);
+	_endpoints.push_back({"/mcp/cache", std::move(cache_resource)});
+
+	proxy_info("Registered 5 MCP endpoints with dedicated tool handlers: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache\n");
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
