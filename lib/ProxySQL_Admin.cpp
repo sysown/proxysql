@@ -1108,12 +1108,8 @@ void ProxySQL_Admin::flush_logs() {
 	proxy_debug(PROXY_DEBUG_ADMIN, 1, "Running PROXYSQL FLUSH LOGS\n");
 }
 
-
 // Explicitly instantiate the required template class and member functions
-template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, int, char const*);
-template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
-template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
-template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
+// NOTE: send_ok_msg_to_client and send_error_msg_to_client instantiations moved to after definitions (near line 5730)
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)1>(SQLite3DB*);
 
@@ -2849,6 +2845,8 @@ void ProxySQL_Admin::init_mcp_variables() {
 		flush_mcp_variables___runtime_to_database(admindb, false, true, false, false, false);
 		flush_mcp_variables___database_to_runtime(admindb, true, "", 0);
 	}
+}
+
 void ProxySQL_Admin::init_genai_variables() {
 	flush_genai_variables___runtime_to_database(configdb, false, false, false);
 	flush_genai_variables___runtime_to_database(admindb, false, true, false);
@@ -5721,6 +5719,13 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 		assert(0);
 	}
 }
+
+// Explicit template instantiations for send_ok_msg_to_client and send_error_msg_to_client
+// These must come after the template definitions above
+template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
+template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
 
 template <enum SERVER_TYPE pt>
 void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {

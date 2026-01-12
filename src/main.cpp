@@ -1282,6 +1282,8 @@ void ProxySQL_Main_shutdown_all_modules() {
 		GloMCPH = NULL;
 #ifdef DEBUG
 		std::cerr << "GloMCPH shutdown in ";
+#endif
+	}
 	if (GloGATH) {
 		cpu_timer t;
 		delete GloGATH;
