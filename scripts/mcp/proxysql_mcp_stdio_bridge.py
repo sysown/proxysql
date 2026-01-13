@@ -271,17 +271,18 @@ class StdioMCPServer:
 
     async def _writeline(self, data: Any):
         """Write JSON data to stdout."""
-        loop = asyncio.get_event_loop()
         output = json.dumps(data, ensure_ascii=False) + "\n"
+        output_bytes = output.encode('utf-8')
 
-        debug_log(f"[_writeline] Writing {len(output)} bytes to stdout")
+        debug_log(f"[_writeline] Writing {len(output_bytes)} bytes to stdout")
         debug_log(f"[_writeline] sys.stdout: {sys.stdout}")
-        debug_log(f"[_writeline] sys.stdout.fileno(): {sys.stdout.fileno() if hasattr(sys.stdout, 'fileno') else 'N/A'}")
+        debug_log(f"[_writeline] sys.stdout.buffer: {sys.stdout.buffer}")
 
-        await loop.run_in_executor(None, sys.stdout.write, output)
-
-        debug_log(f"[_writeline] Data written, now flushing...")
-        await loop.run_in_executor(None, sys.stdout.flush)
+        # Write directly to the binary buffer to avoid any TextIOWrapper issues
+        # This bypasses Python's text encoding layer and writes raw bytes
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, sys.stdout.buffer.write, output_bytes)
+        await loop.run_in_executor(None, sys.stdout.buffer.flush)
 
         debug_log(f"[_writeline] Flush complete")
 
