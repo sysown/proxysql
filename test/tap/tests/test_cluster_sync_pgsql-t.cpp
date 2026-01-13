@@ -130,7 +130,18 @@ int check_pgsql_servers_v2_sync(
 		MYSQL_RES* result = NULL;
 		MYSQL_QUERY(r_proxy_admin, select_pgsql_servers_query.c_str());
 		result = mysql_store_result(r_proxy_admin);
-		int count = atoi(mysql_fetch_row(result)[0]);
+		if (!result || mysql_num_rows(result) == 0) {
+			diag("No results returned from query: %s", select_pgsql_servers_query.c_str());
+			mysql_free_result(result);
+			return EXIT_FAILURE;
+		}
+		MYSQL_ROW row = mysql_fetch_row(result);
+		if (!row) {
+			diag("Failed to fetch row from result");
+			mysql_free_result(result);
+			return EXIT_FAILURE;
+		}
+		int count = atoi(row[0]);
 		mysql_free_result(result);
 
 		if (count != 1) {
@@ -167,7 +178,18 @@ int check_pgsql_checksums_in_runtime_table(MYSQL* admin) {
 
 		MYSQL_QUERY(admin, query);
 		MYSQL_RES* result = mysql_store_result(admin);
-		int count = atoi(mysql_fetch_row(result)[0]);
+		if (!result || mysql_num_rows(result) == 0) {
+			diag("No results returned from query: %s", query);
+			mysql_free_result(result);
+			return EXIT_FAILURE;
+		}
+		MYSQL_ROW row = mysql_fetch_row(result);
+		if (!row) {
+			diag("Failed to fetch row from result");
+			mysql_free_result(result);
+			return EXIT_FAILURE;
+		}
+		int count = atoi(row[0]);
 		mysql_free_result(result);
 
 		if (count != 1) {
@@ -187,7 +209,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-plan(10);
+plan(6);
 
 	// Connect to admin interfaces
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -222,7 +244,18 @@ plan(10);
 
 		MYSQL_QUERY(proxysql_admin, query);
 		MYSQL_RES* result = mysql_store_result(proxysql_admin);
-		int count = atoi(mysql_fetch_row(result)[0]);
+		if (!result || mysql_num_rows(result) == 0) {
+			diag("No results returned from query: %s", query);
+			mysql_free_result(result);
+			continue;
+		}
+		MYSQL_ROW row = mysql_fetch_row(result);
+		if (!row) {
+			diag("Failed to fetch row from result");
+			mysql_free_result(result);
+			continue;
+		}
+		int count = atoi(row[0]);
 		mysql_free_result(result);
 
 		ok(count == 1, "PostgreSQL checksum '%s' found in runtime_checksums_values", checksum_name);

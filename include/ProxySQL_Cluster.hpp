@@ -42,6 +42,7 @@
  *   - 'runtime_pgsql_users': runtime PostgreSQL user authentication settings
  *   - 'runtime_pgsql_query_rules': runtime PostgreSQL query routing rules
  *   - 'pgsql_servers_v2': static PostgreSQL server configuration
+ *   - 'pgsql_variables': PostgreSQL server variables configuration
  *
  * IMPORTANT: For further clarify this means that it's important that the actual resultset produced by the intercepted
  * query preserve the filtering and ordering expressed in this queries.
@@ -104,7 +105,7 @@
  * @see runtime_pgsql_servers
  * @see pull_runtime_pgsql_servers_from_peer()
  */
-#define CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"ONLINE\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"ONLINE\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_pgsql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+#define CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, CASE status WHEN 'ONLINE' THEN 'ONLINE' WHEN 'OFFLINE_SOFT' THEN 'OFFLINE_SOFT' WHEN 'OFFLINE_HARD' THEN 'OFFLINE_HARD' END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_pgsql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
 /**
  * @brief Query to be intercepted by 'ProxySQL_Admin' for 'pgsql_servers_v2'.
@@ -415,6 +416,7 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_admin_variables(char **host, uint16_t* port, char** ip_address);
 	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_pgsql_variables(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char ** ip_address);
 	void get_peer_to_sync_pgsql_query_rules(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_runtime_pgsql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
@@ -484,6 +486,9 @@ struct p_cluster_counter {
 		sync_conflict_mysql_variables_share_epoch,
 		sync_conflict_admin_variables_share_epoch,
 		sync_conflict_ldap_variables_share_epoch,
+		sync_conflict_pgsql_query_rules_share_epoch,
+		sync_conflict_pgsql_servers_share_epoch,
+		sync_conflict_pgsql_users_share_epoch,
 		sync_conflict_pgsql_variables_share_epoch,
 		sync_conflict_pgsql_replication_hostgroups_share_epoch,
 		sync_conflict_pgsql_hostgroup_attributes_share_epoch,
