@@ -471,17 +471,22 @@ class StdioMCPServer:
             debug_log(f"[tools/call] Unwrapped result:")
             debug_log(f"    {json.dumps(actual_result, indent=4)}")
             log_separator("-")
+            # Wrap in TextContent for MCP protocol compliance
+            wrapped_result = [{"type": "text", "text": json.dumps(actual_result, indent=2)}]
+            debug_log(f"[tools/call] Wrapped in TextContent: {json.dumps(wrapped_result, indent=4)}")
             return {
                 "jsonrpc": "2.0",
-                "result": actual_result,
+                "result": wrapped_result,
                 "id": req_id
             }
 
-        # Fallback: return result as-is
-        debug_log(f"[tools/call] No wrapping detected, returning result as-is")
+        # Fallback: return result as-is, wrapped in TextContent
+        debug_log(f"[tools/call] No wrapping detected, wrapping result in TextContent")
+        wrapped_result = [{"type": "text", "text": json.dumps(proxysql_result, indent=2)}]
+        debug_log(f"[tools/call] Wrapped result: {json.dumps(wrapped_result, indent=4)}")
         return {
             "jsonrpc": "2.0",
-            "result": proxysql_result,
+            "result": wrapped_result,
             "id": req_id
         }
 
