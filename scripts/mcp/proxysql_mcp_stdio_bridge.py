@@ -33,27 +33,29 @@ from datetime import datetime
 
 import httpx
 
-# Redirect stderr to a log file in /tmp
-LOG_FILE = "/tmp/proxysql_mcp_bridge.log"
-stderr_log_file = open(LOG_FILE, "a", buffering=1)
-sys.stderr = stderr_log_file
-sys.__stderr__ = stderr_log_file
+# DON'T redirect stderr - it may interfere with stdout/stdin pipes
+# Commented out to test if this is causing the issue
+# LOG_FILE = "/tmp/proxysql_mcp_bridge.log"
+# stderr_log_file = open(LOG_FILE, "a", buffering=1)
+# sys.stderr = stderr_log_file
+# sys.__stderr__ = stderr_log_file
 
-# Debug logging - ALWAYS ON for extreme verbosity
-VERBOSE = True  # Always verbose logging
+# Debug logging - write to file instead of stderr to avoid pipe interference
+LOG_FILE = "/tmp/proxysql_mcp_bridge.log"
+_log_file = open(LOG_FILE, "a", buffering=1)
 
 def log_timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 def debug_log(msg: str):
-    """Always log everything for extreme verbosity."""
+    """Write to log file instead of stderr."""
     timestamp = log_timestamp()
-    sys.stderr.write(f"[{timestamp}] {msg}\n")
-    sys.stderr.flush()
+    _log_file.write(f"[{timestamp}] {msg}\n")
+    _log_file.flush()
 
 def log_separator(char="=", length=80):
-    sys.stderr.write(char * length + "\n")
-    sys.stderr.flush()
+    _log_file.write(char * length + "\n")
+    _log_file.flush()
 
 
 class ProxySQLMCPEndpoint:
