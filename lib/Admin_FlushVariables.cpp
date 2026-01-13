@@ -895,13 +895,6 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
 			}
 			q += " ORDER BY variable_name";
-
-			// PostgreSQL variables filtering
-			q += ";\nSELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-\%' AND variable_name NOT IN ('pgsql-interfaces')";
-			if (GloVars.cluster_sync_interfaces == false) {
-				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
-			}
-			q += " ORDER BY variable_name";
 			admindb->execute_statement(q.c_str(), &error, &cols, &affected_rows, &resultset);
 			uint64_t hash1 = resultset->raw_checksum();
 			uint32_t d32[2];
@@ -918,6 +911,41 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 				GloVars.checksums_values.mysql_variables.epoch = t;
 			}
 			GloVars.epoch_version = t;
+			GloVars.generate_global_checksum();
+			GloVars.checksums_values.updates_cnt++;
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+			delete resultset;
+		}
+
+		{
+			// Generate checksum for PostgreSQL variables
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true, true);
+			char* error = NULL;
+			int cols = 0;
+			int affected_rows = 0;
+			SQLite3_result* resultset = NULL;
+			std::string q;
+			q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-\%' AND variable_name NOT IN ('pgsql-interfaces')";
+			if (GloVars.cluster_sync_interfaces == false) {
+				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
+			}
+			q += " ORDER BY variable_name";
+			admindb->execute_statement(q.c_str(), &error, &cols, &affected_rows, &resultset);
+			uint64_t hash1 = resultset->raw_checksum();
+			uint32_t d32[2];
+			char buf[20];
+			memcpy(&d32, &hash1, sizeof(hash1));
+			sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
+			GloVars.checksums_values.pgsql_variables.set_checksum(buf);
+			GloVars.checksums_values.pgsql_variables.version++;
+			time_t t = time(NULL);
+			if (epoch != 0 && checksum != "" && GloVars.checksums_values.pgsql_variables.checksum == checksum) {
+				GloVars.checksums_values.pgsql_variables.epoch = epoch;
+			}
+			else {
+				GloVars.checksums_values.pgsql_variables.epoch = t;
+			}
 			GloVars.generate_global_checksum();
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);

@@ -657,8 +657,9 @@ bool pgsql_variable_validate_integer(const char* value, const params_t* params, 
    (void)session;
    if (transformed_value) *transformed_value = nullptr;
    char* end = nullptr;
+   errno = 0;
    long num = strtol(value, &end, 10);
-   if (end == value || *end != '\0') return false;
+   if (end == value || *end != '\0' || errno == ERANGE) return false;
    if (num < params->int_range.min || num > params->int_range.max) return false;
    return true;
 }

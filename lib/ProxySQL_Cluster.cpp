@@ -3621,7 +3621,11 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 		{"ldap_variables", &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync,
 		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.ldap_variables; }, nullptr, false, false, nullptr},
 		{"pgsql_variables", &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }, nullptr, false, false, nullptr}
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }, nullptr, false, false, nullptr},
+		{"pgsql_replication_hostgroups", &ProxySQL_Cluster::cluster_pgsql_replication_hostgroups_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, nullptr, false, false, nullptr},
+		{"pgsql_hostgroup_attributes", &ProxySQL_Cluster::cluster_pgsql_hostgroup_attributes_diffs_before_sync,
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, nullptr, false, false, nullptr}
 	};
 
 	// Find the matching module configuration

@@ -81,7 +81,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<7>(values),  // max_replication_lag
 			std::get<8>(values),  // use_ssl
 			std::get<9>(values),  // max_latency_ms
-			std::get<10>(values).c_str()  // comment
+			std::get<11>(values).c_str()  // comment
 		);
 		insert_pgsql_servers_queries.push_back(insert_pgsql_servers_query);
 	}
@@ -123,7 +123,7 @@ int check_pgsql_servers_v2_sync(
 			std::get<7>(values),
 			std::get<8>(values),
 			std::get<9>(values),
-			std::get<10>(values).c_str()
+			std::get<11>(values).c_str()
 		);
 
 		// Check on replica
@@ -182,7 +182,11 @@ int check_pgsql_checksums_in_runtime_table(MYSQL* admin) {
 
 		MYSQL_QUERY(admin, query);
 		MYSQL_RES* result = mysql_store_result(admin);
-		if (!result || mysql_num_rows(result) == 0) {
+		if (!result) {
+			diag("Failed to store result from query: %s", query);
+			return EXIT_FAILURE;
+		}
+		if (mysql_num_rows(result) == 0) {
 			diag("No results returned from query: %s", query);
 			mysql_free_result(result);
 			return EXIT_FAILURE;
