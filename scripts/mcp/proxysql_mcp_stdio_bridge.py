@@ -25,6 +25,7 @@ Or configure in Claude Code's MCP settings:
 """
 
 import asyncio
+import io
 import json
 import os
 import sys
@@ -33,15 +34,29 @@ from datetime import datetime
 
 import httpx
 
+# CRITICAL: Ensure unbuffered stdout for MCP stdio protocol
+# Also set PYTHONUNBUFFERED=1 in environment for extra safety
+os.environ['PYTHONUNBUFFERED'] = '1'
+
 # Redirect stderr to a log file in /tmp
 LOG_FILE = "/tmp/proxysql_mcp_bridge.log"
 stderr_log_file = open(LOG_FILE, "a", buffering=1)
 sys.stderr = stderr_log_file
 sys.__stderr__ = stderr_log_file
 
-# CRITICAL: Ensure stdout is line-buffered for stdio MCP protocol
-# Without this, responses may be buffered and never sent to Claude Code
-sys.stdout.reconfigure(line_buffering=True)
+# CRITICAL: Force stdout to be unbuffered
+# Reconfigure doesn't work reliably when stderr is redirected, so we
+# need to replace stdout with an unbuffered wrapper
+unbuffered_stdout = io.TextIOWrapper(
+    sys.stdout.buffer,
+    encoding='utf-8',
+    errors='strict',
+    newline='\n',
+    line_buffering=False  # Explicitly disable line buffering too
+)
+sys.stdout = unbuffered_stdout
+# Also update __stdout__ for completeness
+sys.__stdout__ = unbuffered_stdout
 
 # Debug logging - ALWAYS ON for extreme verbosity
 VERBOSE = True  # Always verbose logging
