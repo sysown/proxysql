@@ -4265,7 +4265,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync = 0;
 			variables.cluster_pgsql_query_rules_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_query_rules_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_mysql_query_rules', setting 'admin-cluster_mysql_query_rules_diffs_before_sync=0'\n");
+			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_query_rules', setting 'admin-cluster_pgsql_query_rules_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -4281,7 +4281,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			GloProxyCluster->cluster_mysql_servers_diffs_before_sync = 0;
 			variables.cluster_pgsql_servers_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_servers_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_mysql_servers', setting 'admin-cluster_mysql_servers_diffs_before_sync=0'\n");
+			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_servers', setting 'admin-cluster_pgsql_servers_diffs_before_sync=0'\n");
 			return true;
 		}
 
@@ -4298,7 +4298,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			GloProxyCluster->cluster_mysql_users_diffs_before_sync = 0;
 			variables.cluster_pgsql_users_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_users_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_mysql_users', setting 'admin-cluster_mysql_users_diffs_before_sync=0'\n");
+			proxy_warning("Disabling deprecated 'admin-checksum_pgsql_users', setting 'admin-cluster_pgsql_users_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -4314,7 +4314,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			GloProxyCluster->cluster_mysql_variables_diffs_before_sync = 0;
 			variables.cluster_pgsql_variables_diffs_before_sync = 0;
 			GloProxyCluster->cluster_pgsql_variables_diffs_before_sync = 0;
-			proxy_warning("Disabling deprecated 'admin-checksum_mysql_variables', setting 'admin-cluster_mysql_variables_diffs_before_sync=0'\n");
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_variables', setting 'admin-cluster_mysql_variables_diffs_before_sync=0' and 'admin-cluster_pgsql_variables_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;

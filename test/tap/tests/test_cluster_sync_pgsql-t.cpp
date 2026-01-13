@@ -130,7 +130,11 @@ int check_pgsql_servers_v2_sync(
 		MYSQL_RES* result = NULL;
 		MYSQL_QUERY(r_proxy_admin, select_pgsql_servers_query.c_str());
 		result = mysql_store_result(r_proxy_admin);
-		if (!result || mysql_num_rows(result) == 0) {
+		if (!result) {
+			diag("Failed to store result from query: %s", select_pgsql_servers_query.c_str());
+			return EXIT_FAILURE;
+		}
+		if (mysql_num_rows(result) == 0) {
 			diag("No results returned from query: %s", select_pgsql_servers_query.c_str());
 			mysql_free_result(result);
 			return EXIT_FAILURE;
