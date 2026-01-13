@@ -25,7 +25,6 @@ Or configure in Claude Code's MCP settings:
 """
 
 import asyncio
-import io
 import json
 import os
 import sys
@@ -34,29 +33,11 @@ from datetime import datetime
 
 import httpx
 
-# CRITICAL: Ensure unbuffered stdout for MCP stdio protocol
-# Also set PYTHONUNBUFFERED=1 in environment for extra safety
-os.environ['PYTHONUNBUFFERED'] = '1'
-
 # Redirect stderr to a log file in /tmp
 LOG_FILE = "/tmp/proxysql_mcp_bridge.log"
 stderr_log_file = open(LOG_FILE, "a", buffering=1)
 sys.stderr = stderr_log_file
 sys.__stderr__ = stderr_log_file
-
-# CRITICAL: Force stdout to be unbuffered
-# Reconfigure doesn't work reliably when stderr is redirected, so we
-# need to replace stdout with an unbuffered wrapper
-unbuffered_stdout = io.TextIOWrapper(
-    sys.stdout.buffer,
-    encoding='utf-8',
-    errors='strict',
-    newline='\n',
-    line_buffering=False  # Explicitly disable line buffering too
-)
-sys.stdout = unbuffered_stdout
-# Also update __stdout__ for completeness
-sys.__stdout__ = unbuffered_stdout
 
 # Debug logging - ALWAYS ON for extreme verbosity
 VERBOSE = True  # Always verbose logging
@@ -292,8 +273,17 @@ class StdioMCPServer:
         """Write JSON data to stdout."""
         loop = asyncio.get_event_loop()
         output = json.dumps(data, ensure_ascii=False) + "\n"
+
+        debug_log(f"[_writeline] Writing {len(output)} bytes to stdout")
+        debug_log(f"[_writeline] sys.stdout: {sys.stdout}")
+        debug_log(f"[_writeline] sys.stdout.fileno(): {sys.stdout.fileno() if hasattr(sys.stdout, 'fileno') else 'N/A'}")
+
         await loop.run_in_executor(None, sys.stdout.write, output)
+
+        debug_log(f"[_writeline] Data written, now flushing...")
         await loop.run_in_executor(None, sys.stdout.flush)
+
+        debug_log(f"[_writeline] Flush complete")
 
     async def _write_notification(self, method: str, params: Optional[Dict[str, Any]] = None):
         """Write a notification (no id)."""
