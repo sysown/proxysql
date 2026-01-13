@@ -348,22 +348,37 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	if (response.is_object() && response.contains("success") && response.contains("result")) {
 		bool success = response["success"].get<bool>();
 		if (!success) {
-			// Tool execution failed - return error
-			json error_result;
-			if (response.contains("error")) {
-				error_result["error"] = response["error"];
-			} else {
-				error_result["error"] = "Tool execution failed";
-			}
-			if (response.contains("code")) {
-				error_result["code"] = response["code"];
-			}
-			return error_result;
+			// Tool execution failed - return error in MCP format
+			json mcp_result;
+			mcp_result["content"] = json::array();
+			json error_content;
+			error_content["type"] = "text";
+			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
+			error_content["text"] = error_msg;
+			mcp_result["content"].push_back(error_content);
+			mcp_result["isError"] = true;
+			return mcp_result;
 		}
-		// Success - extract and return the actual result
-		return response["result"];
+		// Success - wrap result in MCP-compliant format with content array
+		// Per MCP spec: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
+		json actual_result = response["result"];
+		json mcp_result;
+		mcp_result["content"] = json::array();
+		json text_content;
+		text_content["type"] = "text";
+		text_content["text"] = actual_result.dump(2);  // Pretty-print JSON with 2-space indent
+		mcp_result["content"].push_back(text_content);
+		mcp_result["isError"] = false;
+		return mcp_result;
 	}
 
-	// Fallback: return response as-is (for compatibility with non-standard handlers)
-	return response;
+	// Fallback: wrap response in MCP format (for compatibility with non-standard handlers)
+	json mcp_result;
+	mcp_result["content"] = json::array();
+	json text_content;
+	text_content["type"] = "text";
+	text_content["text"] = response.dump(2);
+	mcp_result["content"].push_back(text_content);
+	mcp_result["isError"] = false;
+	return mcp_result;
 }
