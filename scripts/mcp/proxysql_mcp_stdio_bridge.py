@@ -34,7 +34,9 @@ from datetime import datetime
 import httpx
 
 # Minimal logging to file for debugging
-_log_file = open("/tmp/proxysql_mcp_bridge.log", "a", buffering=1)
+# Log path can be configured via PROXYSQL_MCP_BRIDGE_LOG environment variable
+_log_file_path = os.getenv("PROXYSQL_MCP_BRIDGE_LOG", "/tmp/proxysql_mcp_bridge.log")
+_log_file = open(_log_file_path, "a", buffering=1)
 def _log(msg):
     _log_file.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {msg}\n")
     _log_file.flush()
@@ -105,6 +107,15 @@ class ProxySQLMCPEndpoint:
                 },
                 "id": request.get("id", "")
             }
+        except httpx.RequestError as e:
+            return {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32002,
+                    "message": f"Request to ProxySQL failed: {e}"
+                },
+                "id": request.get("id", "")
+            }
         except Exception as e:
             return {
                 "jsonrpc": "2.0",
@@ -172,12 +183,14 @@ class StdioMCPServer:
 
                 except json.JSONDecodeError as e:
                     await self._write_error(-32700, f"Parse error: {e}", "")
+                except asyncio.CancelledError:
+                    raise  # Re-raise to allow proper task cancellation
                 except Exception as e:
                     await self._write_error(-32603, f"Internal error: {e}", "")
 
     async def _readline(self) -> Optional[str]:
         """Read a line from stdin."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         line = await loop.run_in_executor(None, sys.stdin.readline)
         if not line:
             return None
@@ -185,7 +198,7 @@ class StdioMCPServer:
 
     async def _writeline(self, data: Any):
         """Write JSON data to stdout."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         output = json.dumps(data, ensure_ascii=False) + "\n"
         _log(f"WRITE stdout: {len(output)} bytes: {repr(output[:200])}")
         await loop.run_in_executor(None, sys.stdout.write, output)

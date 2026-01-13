@@ -359,26 +359,23 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 			mcp_result["isError"] = true;
 			return mcp_result;
 		}
-		// Success - wrap result in MCP-compliant format with content array
-		// Per MCP spec: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
-		json actual_result = response["result"];
-		json mcp_result;
-		mcp_result["content"] = json::array();
-		json text_content;
-		text_content["type"] = "text";
-		text_content["text"] = actual_result.dump(2);  // Pretty-print JSON with 2-space indent
-		mcp_result["content"].push_back(text_content);
-		mcp_result["isError"] = false;
-		return mcp_result;
+		// Success - use the "result" field as the content to be wrapped
+		response = response["result"];
 	}
 
-	// Fallback: wrap response in MCP format (for compatibility with non-standard handlers)
+	// Wrap the response (or the 'result' field) in MCP-compliant format
+	// Per MCP spec: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 	json mcp_result;
-	mcp_result["content"] = json::array();
 	json text_content;
 	text_content["type"] = "text";
-	text_content["text"] = response.dump(2);
-	mcp_result["content"].push_back(text_content);
+
+	if (response.is_string()) {
+		text_content["text"] = response.get<std::string>();
+	} else {
+		text_content["text"] = response.dump(2);  // Pretty-print JSON with 2-space indent
+	}
+
+	mcp_result["content"] = json::array({text_content});
 	mcp_result["isError"] = false;
 	return mcp_result;
 }
