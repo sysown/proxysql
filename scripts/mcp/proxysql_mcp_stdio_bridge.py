@@ -282,8 +282,10 @@ class StdioMCPServer:
 
         response = await self._proxysql.tools_list()
 
+        debug_log(f"tools_list raw response: {json.dumps(response)}")
+
         # The response from ProxySQL is the full JSON-RPC response
-        # We need to extract the result and return it in our format
+        # ProxySQL wraps results in {"result": {...}, "success": true}
         if "error" in response:
             return {
                 "jsonrpc": "2.0",
@@ -291,9 +293,29 @@ class StdioMCPServer:
                 "id": req_id
             }
 
+        # Extract the actual result from ProxySQL's wrapped format
+        proxysql_result = response.get("result", {})
+        if isinstance(proxysql_result, dict) and "result" in proxysql_result:
+            # ProxySQL format: {"result": {...}, "success": true}
+            actual_result = proxysql_result.get("result", {})
+            success = proxysql_result.get("success", True)
+            if not success:
+                return {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32000, "message": "ProxySQL tool call failed"},
+                    "id": req_id
+                }
+            debug_log(f"tools_list unwrapped result: {json.dumps(actual_result)}")
+            return {
+                "jsonrpc": "2.0",
+                "result": actual_result,
+                "id": req_id
+            }
+
+        # Fallback: return result as-is
         return {
             "jsonrpc": "2.0",
-            "result": response.get("result", {}),
+            "result": proxysql_result,
             "id": req_id
         }
 
@@ -311,6 +333,8 @@ class StdioMCPServer:
 
         response = await self._proxysql.tools_call(name, arguments, req_id)
 
+        debug_log(f"tools_call({name}) raw response: {json.dumps(response)}")
+
         if "error" in response:
             return {
                 "jsonrpc": "2.0",
@@ -318,9 +342,30 @@ class StdioMCPServer:
                 "id": req_id
             }
 
+        # Extract the actual result from ProxySQL's wrapped format
+        # ProxySQL wraps results in {"result": {...}, "success": true}
+        proxysql_result = response.get("result", {})
+        if isinstance(proxysql_result, dict) and "result" in proxysql_result:
+            # ProxySQL format: {"result": {...}, "success": true}
+            actual_result = proxysql_result.get("result", {})
+            success = proxysql_result.get("success", True)
+            if not success:
+                return {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32000, "message": "ProxySQL tool call failed"},
+                    "id": req_id
+                }
+            debug_log(f"tools_call({name}) unwrapped result: {json.dumps(actual_result)}")
+            return {
+                "jsonrpc": "2.0",
+                "result": actual_result,
+                "id": req_id
+            }
+
+        # Fallback: return result as-is
         return {
             "jsonrpc": "2.0",
-            "result": response.get("result", {}),
+            "result": proxysql_result,
             "id": req_id
         }
 
