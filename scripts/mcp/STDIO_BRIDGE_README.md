@@ -107,7 +107,35 @@ Once configured, you can ask Claude:
 > "Show me 5 rows from the orders table"
 > "Run SELECT COUNT(*) FROM customers"
 
+## Logging
+
+For debugging, the bridge writes logs to `/tmp/proxysql_mcp_bridge.log`:
+
+```bash
+tail -f /tmp/proxysql_mcp_bridge.log
+```
+
+The log shows:
+- stdout writes (byte counts and previews)
+- tool calls (name, arguments, responses from ProxySQL)
+- Any errors or issues
+
+This can help diagnose communication issues between Claude Code, the bridge, and ProxySQL.
+
 ## Troubleshooting
+
+### Debug Mode
+
+If tools aren't working, check the bridge log file for detailed information:
+
+```bash
+cat /tmp/proxysql_mcp_bridge.log
+```
+
+Look for:
+- `"tools/call: name=..."` - confirms tool calls are being forwarded
+- `"response from ProxySQL:"` - shows what ProxySQL returned
+- `"WRITE stdout:"` - confirms responses are being sent to Claude Code
 
 ### Connection Refused
 Make sure ProxySQL MCP server is running:
