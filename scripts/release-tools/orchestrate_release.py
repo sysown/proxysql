@@ -19,6 +19,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
+from string import Template
 
 
 def run_cmd(cmd_list, verbose=False):
@@ -38,106 +39,59 @@ def run_cmd(cmd_list, verbose=False):
 
 
 def generate_llm_prompt(from_tag, to_tag, data_files, output_dir, verbose=False):
-    """Generate comprehensive prompt for LLM."""
+    """Generate comprehensive prompt for LLM using template."""
 
-    # Read some data to include in prompt
-    pr_summary = ""
+    # Read the template file
+    template_path = Path(__file__).parent / "examples" / "enhanced_prompt_template.md"
+
     try:
-        with open(data_files['pr_summary'], 'r') as f:
-            pr_summary = f.read()[:2000]  # First 2000 chars
-    except:
-        pass
+        with open(template_path, 'r') as f:
+            template_content = f.read()
+    except FileNotFoundError:
+        print(f"Error: Template file not found at {template_path}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading template file: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    prompt = f"""
-# ProxySQL Release Notes Generation Task
+    # Create template and substitute variables
+    template = Template(template_content)
 
-## Context
-You need to generate release notes and changelogs for ProxySQL version {to_tag} (changes since {from_tag}).
+    # Extract filenames for template substitution
+    pr_data_basename = Path(data_files['pr_data']).name
+    pr_summary_basename = Path(data_files['pr_summary']).name
+    structured_notes_basename = Path(data_files['structured_notes']).name
+    commit_categories_basename = Path(data_files['commit_categories']).name
 
-## Available Data Files
-The following files have been prepared for your analysis:
+    # Substitute template variables
+    try:
+        prompt = template.substitute(
+            VERSION=to_tag,
+            PR_DATA=pr_data_basename,
+            PR_DATA_SUMMARY=pr_summary_basename,
+            STRUCTURED_NOTES=structured_notes_basename,
+            COMMIT_CATEGORIES=commit_categories_basename
+        )
+    except KeyError as e:
+        print(f"Error: Missing template variable: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error substituting template variables: {e}", file=sys.stderr)
+        sys.exit(1)
 
-1. **PR Data**: `{data_files['pr_data']}` - JSON with all PR details (titles, descriptions, labels, commits)
-2. **PR Summary**: `{data_files['pr_summary']}` - Markdown summary of all PRs
-3. **Structured Notes**: `{data_files['structured_notes']}` - Commit-level organized data
-4. **Commit Categorization**: `{data_files['commit_categories']}` - Commits categorized by type
-
-## Task Requirements
-
-### 1. Generate Release Notes (like ProxySQL v3.0.3 format)
-- **Descriptive content**: Not just PR titles, but explanations of what each feature/fix does and why it matters
-- **Logical grouping**: Organize under categories like:
-  - PostgreSQL Improvements
-  - MySQL Protocol Enhancements
-  - Monitoring & Diagnostics
-  - Bug Fixes (with subcategories: MySQL, PostgreSQL, Monitoring, Security)
-  - Performance Optimizations
-  - Documentation
-  - Testing
-  - Build/Packaging
-  - Other Changes
-- **Backtick formatting**: Use `backticks` around all technical terms:
-  - Function names: `Read_Global_Variables_from_configfile()`
-  - Variable names: `wait_timeout`, `cur_cmd_cmnt`
-  - SQL queries: `SELECT @@version`, `SELECT VERSION()`
-  - Protocol commands: `COM_PING`, `CLIENT_DEPRECATE_EOF`
-  - Configuration options: `cache_empty_result=0`
-  - Metrics: `PgSQL_Monitor_ssl_connections_OK`
-- **Commit references**: Include relevant commit hashes (short form) and PR numbers
-- **Remove WIP/skip-ci tags**: Make all entries production-ready
-- **Include release hash**: The final commit is `faa64a570d19fe35af43494db0babdee3e3cdc89`
-
-### 2. Generate Detailed Changelog
-- List all changes with commit hashes and PR references
-- Include brief descriptions from commit messages
-- Categorize changes for easy reference
-
-### 3. Generate Commit List (optional)
-- Complete list of all commits since {from_tag}
-
-## Example Structure (from ProxySQL 3.0.3)
-```
-# ProxySQL 3.0.3 Release Notes
-
-This release of ProxySQL 3.0.3 includes a significant number of new features...
-
-## New Features:
-
-### PostgreSQL Extended Query Protocol Support:
-- Add PostgreSQL extended query (prepared statement) support (24fecc1f, #5044)
-    - Lays groundwork for handling PostgreSQL extended query protocol...
-- Added `Describe` message handling (a741598a, #5044)
-- Added `Close` statement handling (4d0618c2, #5044)
-
-### Build System & Dependencies:
-- Upgrade `coredumper` to Percona fork hash `8f2623b` (a315f128, #5171)
-- Upgrade `curl` to v8.16.0 (40414de1, #5154)
-```
-
-## Your Output Should Be:
-1. **`ProxySQL-{to_tag}-Release-Notes.md`** - Main release notes
-2. **`CHANGELOG-{to_tag}-detailed.md`** - Detailed changelog
-3. **`CHANGELOG-{to_tag}-commits.md`** - Complete commit list (optional)
-
-## Analysis Approach
-1. Review the PR data to understand scope and significance of changes
-2. Identify major themes and group related changes
-3. Write descriptive explanations, not just copy titles
-4. Apply backtick formatting consistently
-5. Verify all technical terms are properly formatted
-
-## Available Data Preview
-{pr_summary[:500]}...
-"""
-
-    prompt_file = os.path.join(output_dir, f"llm-prompt-{to_tag}.md")
-    with open(prompt_file, 'w') as f:
-        f.write(prompt)
+    # Write the generated prompt
+    prompt_file = output_dir / f"llm-prompt-{to_tag}.md"
+    try:
+        with open(prompt_file, 'w') as f:
+            f.write(prompt)
+    except Exception as e:
+        print(f"Error writing prompt file: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if verbose:
         print(f"LLM prompt written to {prompt_file}")
 
-    return prompt_file
+    return str(prompt_file)
 
 
 def main():
@@ -172,7 +126,7 @@ Examples:
         print("\n1. Collecting PR data...")
 
     pr_data_file = output_dir / f"pr-data-{args.to_tag}.json"
-    pr_summary_file = output_dir / f"pr-summary-{args.to_tag}.md"
+    pr_summary_file = output_dir / f"pr-data-{args.to_tag}-summary.md"
 
     cmd_list = ["python", str(Path(__file__).parent / "collect_pr_data.py"), "--from-tag", args.from_tag, "--to-tag", args.to_tag, "--output", str(pr_data_file)]
     if args.verbose:

@@ -1,15 +1,20 @@
 # Enhanced Release Notes Generation Prompt
 
-Generate comprehensive, human-readable release notes for ProxySQL X.X.X using the provided data files. Focus on creating descriptive content that explains what each feature/fix does and why it matters, not just listing PR titles.
+Generate comprehensive, human-readable release notes for ProxySQL $VERSION using the provided data files.
+Focus on creating descriptive content that explains what each feature/fix does and why it matters, not just
+listing PR titles.
 
 ## Available Data Files
-1. `pr-data.json` - All PR details from GitHub including titles, descriptions, labels
-2. `structured-notes.md` - Commit-level organized data with technical details
-3. `commit-categories.md` - Commits categorized by type (bug fix, feature, documentation, etc.)
+
+1. **PR Data**: `$PR_DATA` - JSON with all PR details (titles, descriptions, labels, commits)
+2. **PR Summary**: `$PR_DATA_SUMMARY` - Markdown summary of all PRs
+3. **Structured Notes**: `$STRUCTURED_NOTES` - Commit-level organized data with technical details
+4. **Commit Categorization**: `$COMMIT_CATEGORIES` - Commits categorized by type (bug fix, feature, documentation, etc...)
 
 ## Requirements
 
 ### 1. Overall Structure
+
 - Start with a **concise introduction paragraph** summarizing the release's significance
 - Include a **"Highlights" section** with bullet points summarizing key areas of improvement
 - Organize changes under logical categories: New Features, Bug Fixes, Improvements, Documentation, Testing, Build/Packaging, Other Changes
@@ -17,6 +22,7 @@ Generate comprehensive, human-readable release notes for ProxySQL X.X.X using th
 - End with the release commit hash in backticks
 
 ### 2. Writing Style
+
 - Write **descriptive paragraphs** for each feature/fix (2-4 sentences minimum)
 - Explain **what the change does** and **why it matters** to users/administrators
 - Use **complete sentences** with proper grammar and flow
@@ -24,6 +30,7 @@ Generate comprehensive, human-readable release notes for ProxySQL X.X.X using th
 - Maintain a **professional yet accessible** tone
 
 ### 3. Technical Formatting
+
 - Wrap **all technical terms** in backticks:
   - Function names: `Read_Global_Variables_from_configfile()`
   - Variable names: `wait_timeout`, `cur_cmd_cmnt`
@@ -38,30 +45,41 @@ Generate comprehensive, human-readable release notes for ProxySQL X.X.X using th
 
 ### 4. Section Guidelines
 
+Completely skip the following commits for the release notes:
+
+- Commits uniquely removing dead-code or deprecated implementations.
+
 #### Highlights Section
+
 - 4-6 bullet points summarizing the most significant improvements
 - Focus on user/administrator benefits
 - Example: "Enhanced PostgreSQL support with SSL/TLS backend connections"
 
 #### New Features Section
+
 - Group related features under subcategories (PostgreSQL Improvements, MySQL Protocol Enhancements, Monitoring & Diagnostics)
 - Start each subcategory with a brief introduction sentence
 - For each feature: **Bold title**, (commit, #PR), then descriptive paragraph
 
 #### Bug Fixes Section
+
 - Start with an introductory sentence: "This release addresses several critical issues affecting..."
 - Group by affected components (MySQL, Monitoring, Security & Configuration)
 - For each fix: Clearly state the problem, then explain the solution
+- Place every commit or PR labeled with 'fix' in this section
 
 #### Improvements Section
+
 - Focus on performance, stability, and efficiency enhancements
 - Explain the impact (reduced contention, improved compatibility, etc.)
 
 #### Other Sections (Documentation, Testing, Build/Packaging)
+
 - Include brief introductory sentences for each section
 - Explain the practical value (better maintainability, expanded platform support, etc.)
 
 ### 5. Quality Checklist
+
 - [ ] Every feature/fix has descriptive paragraph(s), not just title
 - [ ] All technical terms properly wrapped in backticks
 - [ ] Commit hashes and PR numbers included
@@ -83,13 +101,17 @@ Explain benefits to users/administrators.
 ```
 
 ## Output Files
+
 Generate the following files:
+
 - `ProxySQL-X.X.X-Release-Notes-Enhanced.md` - Main enhanced release notes
 - `CHANGELOG-X.X.X-detailed.md` - Detailed changelog (optional)
 - `CHANGELOG-X.X.X-commits.md` - Complete commit list (optional)
 
 ## Tone & Audience
+
 Write for:
+
 1. **Database administrators** who need to understand new features and fixes
 2. **Developers** integrating with ProxySQL
 3. **System architects** evaluating ProxySQL for their infrastructure
