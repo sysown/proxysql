@@ -3327,21 +3327,6 @@ cluster_nodes_metrics_map = std::make_tuple(
 ProxySQL_Cluster_Nodes::ProxySQL_Cluster_Nodes() {
 	pthread_mutex_init(&mutex,NULL);
 
-	// Initialize atomic counters to value 3
-	cluster_mysql_query_rules_diffs_before_sync = 3;
-	cluster_mysql_servers_diffs_before_sync = 3;
-	cluster_mysql_users_diffs_before_sync = 3;
-	cluster_proxysql_servers_diffs_before_sync = 3;
-	cluster_mysql_variables_diffs_before_sync = 3;
-	cluster_ldap_variables_diffs_before_sync = 3;
-	cluster_admin_variables_diffs_before_sync = 3;
-	cluster_pgsql_query_rules_diffs_before_sync = 3;
-	cluster_pgsql_servers_diffs_before_sync = 3;
-	cluster_pgsql_users_diffs_before_sync = 3;
-	cluster_pgsql_variables_diffs_before_sync = 3;
-	cluster_pgsql_replication_hostgroups_diffs_before_sync = 3;
-	cluster_pgsql_hostgroup_attributes_diffs_before_sync = 3;
-
 	init_prometheus_dyn_counter_array<cluster_nodes_metrics_map_idx, p_cluster_nodes_dyn_counter>(
 		cluster_nodes_metrics_map, this->metrics.p_dyn_counter_array
 	);
