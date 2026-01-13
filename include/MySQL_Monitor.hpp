@@ -329,18 +329,27 @@ private:
 	MySQL_Monitor_State_Data_Task_Result galera_handler(short event_, short& wait_event) {
 		return generic_handler(event_, wait_event);
 	}
+
+	friend unique_ptr<MySQL_Monitor_State_Data> init_mmsd_with_conn(const gr_host_def_t srv_def, uint32_t writer_hg, 
+		uint64_t start_time);
 };
 
 template<typename T>
 class WorkItem {
 	public:
-	T *data;
-	void *(*routine) (void *);
-	WorkItem(T*_data, void *(*start_routine) (void *)) {
-		data=_data;
-		routine=start_routine;
-		}
-	~WorkItem() {}
+	std::vector<T*> data;
+	using entry_point = void *(*)(const std::vector<T*>& data);
+	entry_point start_routine;
+	WorkItem(T*_data, entry_point _start_routine) {
+		data.push_back(_data);
+		start_routine = _start_routine;
+	}
+	WorkItem(std::vector<T*>&& _data, entry_point _start_routine)
+		: data(std::move(_data)), start_routine(_start_routine) {}
+	WorkItem(const std::vector<T*>& _data, entry_point _start_routine)
+		: data(_data), start_routine(_start_routine) {
+	}
+	~WorkItem() = default;
 };
 
 struct p_mon_counter {

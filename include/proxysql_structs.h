@@ -1166,7 +1166,6 @@ __thread int  pgsql_thread___query_digests_max_query_length;
 __thread int  pgsql_thread___query_digests_grouping_limit;
 __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
-__thread bool pgsql_thread___enable_load_data_local_infile;
 __thread char* pgsql_thread___auditlog_filename;
 __thread int pgsql_thread___auditlog_filesize;
 __thread char* pgsql_thread___eventslog_filename;
@@ -1209,6 +1208,7 @@ __thread int pgsql_thread___max_stmts_cache;
 
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
+__thread int mysql_thread___select_version_forwarding;
 __thread char *mysql_thread___keep_multiplexing_variables;
 __thread char *mysql_thread___default_authentication_plugin;
 __thread char *mysql_thread___proxy_protocol_networks;
@@ -1470,7 +1470,6 @@ extern __thread int  pgsql_thread___query_digests_max_query_length;
 extern __thread int  pgsql_thread___query_digests_grouping_limit;
 extern __thread int  pgsql_thread___query_digests_groups_grouping_limit;
 
-extern __thread bool pgsql_thread___enable_load_data_local_infile;
 extern __thread char* pgsql_thread___auditlog_filename;
 extern __thread int pgsql_thread___auditlog_filesize;
 extern __thread char* pgsql_thread___eventslog_filename;
@@ -1513,6 +1512,7 @@ extern __thread int pgsql_thread___max_stmts_cache;
 
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
+extern __thread int mysql_thread___select_version_forwarding;
 extern __thread char *mysql_thread___keep_multiplexing_variables;
 extern __thread char *mysql_thread___default_authentication_plugin;
 extern __thread char *mysql_thread___proxy_protocol_networks;
@@ -1802,7 +1802,7 @@ extern var_track_err_st perm_track_errs[];
 #define PGSQL_TRACKED_VARIABLES
 #ifdef PROXYSQL_EXTERN
 
-#ifndef EXCLUDE_TRACKING_VARAIABLES
+#ifndef EXCLUDE_TRACKING_VARIABLES
 
 extern const pgsql_variable_validator pgsql_variable_validator_bool;
 extern const pgsql_variable_validator pgsql_variable_validator_intervalstyle;
@@ -1839,7 +1839,7 @@ pgsql_variable_st pgsql_tracked_variables[]{
 	{ PGSQL_SYNCHRONOUS_COMMIT,	   SETTING_VARIABLE,	"synchronous_commit", "synchronous_commit", "on", (PGTRACKED_VAR_OPT_QUOTE), &pgsql_variable_validator_synchronous_commit, nullptr},
 };
 
-#endif //EXCLUDE_TRACKING_VARAIABLES
+#endif //EXCLUDE_TRACKING_VARIABLES
 
 #else
 extern pgsql_variable_st pgsql_tracked_variables[];

@@ -321,6 +321,24 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 		delete PSarrayOUT;
 	}
 
+	/**
+	 * @brief Remove PostgreSQL data stream from poll set during destruction
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used during PgSQL_Data_Stream cleanup:
+	 * - Removes the data stream entry from the poll set to prevent polling on closed socket
+	 * - Uses the stored poll_fds_idx for efficient removal (O(1) operation)
+	 * - Called only if mypolls is not NULL (data stream is registered with a poll instance)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->remove_index_fast(poll_fds_idx)
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - remove_index_fast(poll_fds_idx): Remove by stored index from data stream
+	 *
+	 * Called during: PgSQL_Data_Stream destructor
+	 * Purpose: Prevent memory leaks and ensure proper cleanup of poll entries
+	 *
+	 * Note: Each data stream maintains its poll_fds_idx to track its position in the poll array
+	 *       for efficient removal without requiring find_index() lookup.
+	 */
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
 	if (fd > 0) {
@@ -438,7 +456,8 @@ void PgSQL_Data_Stream::shut_hard() {
 }
 
 void PgSQL_Data_Stream::check_data_flow() {
-	if ((PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
+	// This does not apply to frontend data streams because response data is buffered during extended queries.
+	if ((myds_type != MYDS_FRONTEND) && (PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
 		// there is data at both sides of the data stream: this is considered a fatal error
 		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a PgSQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
 		shut_soft();
@@ -651,6 +670,26 @@ int PgSQL_Data_Stream::read_from_net() {
 	else {
 		queue_w(queueIN, r);
 		bytes_info.bytes_recv += r;
+
+		/**
+		 * @brief Update receive timestamp in ProxySQL_Poll for PostgreSQL activity tracking
+		 *
+		 * This usage pattern demonstrates how ProxySQL_Poll is used for PostgreSQL activity monitoring:
+		 * - Updates the last receive timestamp in the poll entry for timeout management
+		 * - Called after successful data reception to track connection activity
+		 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+		 *
+		 * Usage pattern: if (mypolls) mypolls->last_recv[poll_fds_idx] = sess->thread->curtime
+		 * - mypolls: Check if data stream is registered with a poll instance
+		 * - last_recv[poll_fds_idx]: Update the receive timestamp for this data stream
+		 * - sess->thread->curtime: Current timestamp from the thread
+		 *
+		 * Called during: After receiving data on the PostgreSQL data stream
+		 * Purpose: Enable timeout management and connection activity monitoring
+		 *
+		 * Note: This timestamp is used by the idle connection timeout system to detect
+		 *       inactive PostgreSQL connections that should be closed.
+		 */
 		if (mypolls) mypolls->last_recv[poll_fds_idx] = sess->thread->curtime;
 	}
 	return r;
@@ -758,6 +797,25 @@ int PgSQL_Data_Stream::write_to_net() {
 	}
 	else {
 		queue_r(queueOUT, bytes_io);
+		/**
+		 * @brief Update send timestamp in ProxySQL_Poll for PostgreSQL activity tracking
+		 *
+		 * This usage pattern demonstrates how ProxySQL_Poll is used for PostgreSQL activity monitoring:
+		 * - Updates the last send timestamp in the poll entry for timeout management
+		 * - Called after successful data transmission to track connection activity
+		 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+		 *
+		 * Usage pattern: if (mypolls) mypolls->last_sent[poll_fds_idx] = sess->thread->curtime
+		 * - mypolls: Check if data stream is registered with a poll instance
+		 * - last_sent[poll_fds_idx]: Update the send timestamp for this data stream
+		 * - sess->thread->curtime: Current timestamp from the thread
+		 *
+		 * Called during: After sending data on the PostgreSQL data stream
+		 * Purpose: Enable timeout management and connection activity monitoring
+		 *
+		 * Note: This timestamp is used by the idle connection timeout system to detect
+		 *       inactive PostgreSQL connections that should be closed.
+		 */
 		if (mypolls) mypolls->last_sent[poll_fds_idx] = sess->thread->curtime;
 		bytes_info.bytes_sent += bytes_io;
 	}

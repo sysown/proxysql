@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #include <functional>
 #include <vector>
 
+#include "proxysql_utils.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "prometheus_helpers.h"
 #define PGSQL_THREAD_IMPLEMENTATION
@@ -288,9 +289,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"connect_timeout_client",
 	(char*)"connect_timeout_server",
 	(char*)"connect_timeout_server_max",
-	(char*)"enable_client_deprecate_eof",
-	(char*)"enable_server_deprecate_eof",
-	(char*)"enable_load_data_local_infile",
 	(char*)"eventslog_filename",
 	(char*)"eventslog_filesize",
 	(char*)"eventslog_default_log",
@@ -307,7 +305,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"have_ssl",
 	(char*)"have_compress",
 	(char*)"interfaces",
-	(char*)"log_mysql_warnings_enabled",
 	(char*)"monitor_enabled",
 	(char*)"monitor_history",
 	(char*)"monitor_connect_interval",
@@ -410,7 +407,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"server_encoding",
 	(char*)"keep_multiplexing_variables",
 	(char*)"kill_backend_connection_when_disconnect",
-	(char*)"client_session_track_gtid",
 	(char*)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char*)"session_idle_show_processlist",
@@ -443,14 +439,12 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"init_connect",
 	(char*)"ldap_user_variable",
 	(char*)"add_ldap_user_comment",
-	(char*)"default_session_track_gtids",
 	(char*)"min_num_servers_lantency_awareness",
 	(char*)"aurora_max_lag_ms_only_read_from_replicas",
 	(char*)"stats_time_backend_query",
 	(char*)"stats_time_query_processor",
 	(char*)"query_cache_stores_empty_result",
 	(char*)"data_packets_history_size",
-	(char*)"handle_warnings",
 	NULL
 };
 
@@ -924,7 +918,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_retries_on_failure = 1;
 	variables.client_host_cache_size = 0;
 	variables.client_host_error_counts = 0;
-	variables.handle_warnings = 1;
 	variables.connect_retries_on_failure = 10;
 	variables.connection_delay_multiplex_ms = 0;
 	variables.connection_max_age_ms = 0;
@@ -1023,7 +1016,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 		variables.default_variables[i] = strdup(pgsql_tracked_variables[i].default_value);
 	}
-	variables.default_session_track_gtids = strdup((char*)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
 	variables.ping_interval_server_msec = 10000;
 	variables.ping_timeout_server = 200;
 	variables.default_schema = strdup((char*)"information_schema");
@@ -1060,7 +1052,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.stats_time_query_processor = false;
 	variables.query_cache_stores_empty_result = true;
 	variables.kill_backend_connection_when_disconnect = true;
-	variables.client_session_track_gtid = true;
 	variables.sessions_sort = true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms = 1;
@@ -1083,10 +1074,6 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
 	variables.query_digests_groups_grouping_limit = 10; // changed in 2.6.0 , was 0
-	variables.enable_client_deprecate_eof = true;
-	variables.enable_server_deprecate_eof = true;
-	variables.enable_load_data_local_infile = false;
-	variables.log_mysql_warnings_enabled = false;
 	variables.data_packets_history_size = 0;
 	// status variables
 	status_variables.mirror_sessions_current = 0;
@@ -1401,12 +1388,6 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		else {
 			return strdup(variables.add_ldap_user_comment);
 		}
-	}
-	if (!strcasecmp(name, "default_session_track_gtids")) {
-		if (variables.default_session_track_gtids == NULL) {
-			variables.default_session_track_gtids = strdup((char*)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
-		}
-		return strdup(variables.default_session_track_gtids);
 	}
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
@@ -1765,25 +1746,6 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		return true;
 	}
 
-	if (!strcasecmp(name, "default_session_track_gtids")) {
-		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
-		variables.default_session_track_gtids = NULL;
-		if (vallen) {
-			// we only accept 2 value for session_track_gtids = OFF or OWN_GTID
-			if (strcasecmp(value, (char*)"OFF") == 0) {
-				// for convention, we stored the value as uppercase
-				variables.default_session_track_gtids = strdup((char*)"OFF");
-				return true;
-			}
-			else if (strcasecmp(value, (char*)"OWN_GTID") == 0) {
-				// for convention, we stored the value as uppercase
-				variables.default_session_track_gtids = strdup((char*)"OWN_GTID");
-				return true;
-			}
-		}
-		return false; // we couldn't set it to a valid value. It will be reset to default
-	}
-
 	if (!strncmp(name, "default_", 8)) {
 		for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 			char buf[128];
@@ -2026,17 +1988,12 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["autocommit_false_is_transaction"] = make_tuple(&variables.autocommit_false_is_transaction, false);
 		VariablesPointers_bool["autocommit_false_not_reusable"] = make_tuple(&variables.autocommit_false_not_reusable, false);
 		VariablesPointers_bool["automatic_detect_sqli"] = make_tuple(&variables.automatic_detect_sqli, false);
-		VariablesPointers_bool["client_session_track_gtid"] = make_tuple(&variables.client_session_track_gtid, false);
 		VariablesPointers_bool["commands_stats"] = make_tuple(&variables.commands_stats, false);
 		VariablesPointers_bool["connection_warming"] = make_tuple(&variables.connection_warming, false);
 		VariablesPointers_bool["default_reconnect"] = make_tuple(&variables.default_reconnect, false);
-		VariablesPointers_bool["enable_client_deprecate_eof"] = make_tuple(&variables.enable_client_deprecate_eof, false);
-		VariablesPointers_bool["enable_server_deprecate_eof"] = make_tuple(&variables.enable_server_deprecate_eof, false);
-		VariablesPointers_bool["enable_load_data_local_infile"] = make_tuple(&variables.enable_load_data_local_infile, false);
 		VariablesPointers_bool["enforce_autocommit_on_reads"] = make_tuple(&variables.enforce_autocommit_on_reads, false);
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
-		VariablesPointers_bool["log_mysql_warnings_enabled"] = make_tuple(&variables.log_mysql_warnings_enabled, false);
 		VariablesPointers_bool["log_unhealthy_connections"] = make_tuple(&variables.log_unhealthy_connections, false);
 		VariablesPointers_bool["monitor_enabled"] = make_tuple(&variables.monitor_enabled, false);
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
@@ -2173,7 +2130,6 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["ping_timeout_server"] = make_tuple(&variables.ping_timeout_server, 10, 600 * 1000, false);
 		VariablesPointers_int["client_host_cache_size"] = make_tuple(&variables.client_host_cache_size, 0, 1024 * 1024, false);
 		VariablesPointers_int["client_host_error_counts"] = make_tuple(&variables.client_host_error_counts, 0, 1024 * 1024, false);
-		VariablesPointers_int["handle_warnings"] = make_tuple(&variables.handle_warnings, 0, 1, false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"] = make_tuple(&variables.auditlog_filesize, 1024 * 1024, 1 * 1024 * 1024 * 1024, false);
@@ -2399,43 +2355,6 @@ void PgSQL_Threads_Handler::stop_listeners() {
 	free_tokenizer(&tok);
 }
 
-/**
- * @brief Gets the client address stored in 'client_addr' member as
- *   an string if available. If member 'client_addr' is NULL, returns an
- *   empty string.
- *
- * @return Either an string holding the string representation of internal
- *   member 'client_addr', or empty string if this member is NULL.
- */
-static std::string get_client_addr(struct sockaddr* client_addr) {
-	char buf[INET6_ADDRSTRLEN];
-	std::string str_client_addr{};
-
-	if (client_addr == NULL) {
-		return str_client_addr;
-	}
-
-	switch (client_addr->sa_family) {
-	case AF_INET: {
-		struct sockaddr_in* ipv4 = (struct sockaddr_in*)client_addr;
-		inet_ntop(client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-		str_client_addr = std::string{ buf };
-		break;
-	}
-	case AF_INET6: {
-		struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)client_addr;
-		inet_ntop(client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-		str_client_addr = std::string{ buf };
-		break;
-	}
-	default:
-		str_client_addr = std::string{ "localhost" };
-		break;
-	}
-
-	return str_client_addr;
-}
-
 PgSQL_Client_Host_Cache_Entry PgSQL_Threads_Handler::find_client_host_cache(struct sockaddr* client_sockaddr) {
 	PgSQL_Client_Host_Cache_Entry entry{ 0, 0 };
 	// Client_sockaddr **shouldn't** ever by 'NULL', no matter the
@@ -2621,7 +2540,6 @@ PgSQL_Threads_Handler::~PgSQL_Threads_Handler() {
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
-	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
 	if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
@@ -2756,8 +2674,7 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (pgsql_thread___init_connect) { free(pgsql_thread___init_connect); pgsql_thread___init_connect = NULL; }
 	//if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable = NULL; }
 	//if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment = NULL; }
-	//if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids = NULL; }
-	
+
 	if (pgsql_thread___server_version) { free(pgsql_thread___server_version); pgsql_thread___server_version = NULL; }
 	if (pgsql_thread___server_encoding) { free(pgsql_thread___server_encoding); pgsql_thread___server_encoding = NULL; }
 
@@ -2865,10 +2782,46 @@ void PgSQL_Thread::poll_listener_add(int sock) {
 	listener_DS->fd = sock;
 
 	proxy_debug(PROXY_DEBUG_NET, 1, "Created listener %p for socket %d\n", listener_DS, sock);
+
+	/**
+	 * @brief Register PostgreSQL listener socket with ProxySQL_Poll for incoming connections
+	 *
+	 * This usage pattern registers a PostgreSQL listener socket file descriptor with the ProxySQL_Poll instance
+	 * to monitor for incoming PostgreSQL client connections. The listener data stream handles the accept()
+	 * operation when connection events are detected.
+	 *
+	 * Usage pattern: mypolls.add(POLLIN, sock, listener_DS, monotonic_time())
+	 * - POLLIN: Monitor for read events (new connections ready to accept)
+	 * - sock: Listener socket file descriptor
+	 * - listener_DS: Data stream associated with the listener (accepts connections)
+	 * - monotonic_time(): Current timestamp for tracking socket registration time
+	 *
+	 * Called during: PostgreSQL listener setup and initialization
+	 * Purpose: Enables the thread to accept incoming PostgreSQL client connections
+	 */
 	mypolls.add(POLLIN, sock, listener_DS, monotonic_time());
 }
 
 void PgSQL_Thread::poll_listener_del(int sock) {
+	/**
+	 * @brief Remove PostgreSQL listener socket from the poll set using efficient index lookup
+	 *
+	 * This usage pattern demonstrates the complete removal workflow for PostgreSQL listener sockets:
+	 * 1. Find the index of the socket in the poll set using find_index()
+	 * 2. Remove the socket using remove_index_fast() with the found index
+	 *
+	 * Usage pattern:
+	 * int i = mypolls.find_index(sock);           // Find index by file descriptor
+	 * if (i>=0) {
+	 *     mypolls.remove_index_fast(i);          // Remove by index (O(1) operation)
+	 * }
+	 *
+	 * find_index(sock): Returns index of socket or -1 if not found
+	 * remove_index_fast(i): Removes the entry at index i efficiently
+	 *
+	 * Called during: PostgreSQL listener shutdown and cleanup
+	 * Purpose: Properly removes listener sockets from polling to prevent memory leaks
+	 */
 	int i = mypolls.find_index(sock);
 	if (i >= 0) {
 		PgSQL_Data_Stream* myds = mypolls.myds[i];
@@ -2992,7 +2945,7 @@ void PgSQL_Thread::run() {
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
 			if (idle_maintenance_thread == false) {
-				int r = rand() % (GloPTH->num_threads);
+				int r = rand_fast() % (GloPTH->num_threads);
 				PgSQL_Thread* thr = GloPTH->pgsql_threads_idles[r].worker;
 				worker_thread_assigns_sessions_to_idle_thread(thr);
 				worker_thread_gets_sessions_from_idle_thread();
@@ -3016,7 +2969,7 @@ void PgSQL_Thread::run() {
 			// The delay for the active-wait is a fraction of 'poll_timeout'. Since other
 			// threads may be waiting on poll for further operations, checks are meaningless
 			// until that timeout expires (other workers make progress).
-			usleep(std::min(std::max(pgsql_thread___poll_timeout/20, 10000), 40000) + (rand() % 2000));
+			usleep(std::min(std::max(pgsql_thread___poll_timeout/20, 10000), 40000) + (rand_fast() % 2000));
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
@@ -3044,7 +2997,27 @@ void PgSQL_Thread::run() {
 #endif // IDLE_THREADS
 			//this is the only portion of code not protected by a global mutex
 			proxy_debug(PROXY_DEBUG_NET, 5, "Calling poll with timeout %d\n", ttw);
-			// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
+			/**
+	 * @brief Execute main poll() loop to monitor all registered FDs for PostgreSQL thread
+	 *
+	 * This usage pattern demonstrates the core polling mechanism that drives ProxySQL's PostgreSQL event loop.
+	 * The poll() system call blocks until one of the registered file descriptors becomes ready
+	 * or the timeout expires.
+	 *
+	 * Usage pattern: rc = poll(mypolls.fds, mypolls.len, ttw)
+	 * - mypollolls.fds: Array of pollfd structures containing file descriptors and events
+	 * - mypolls.len: Number of file descriptors to monitor
+	 * - ttw: Timeout in milliseconds (dynamic poll timeout)
+	 *
+	 * Return codes:
+	 * - > 0: Number of file descriptors with events
+	 * - 0: Timeout occurred
+	 * - -1: Error (errno set)
+	 *
+	 * Called during: Main PostgreSQL event loop iteration
+	 * Purpose: Enables efficient I/O multiplexing across all PostgreSQL connections
+	 */
+	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
 			rc = poll(mypolls.fds, mypolls.len, ttw);
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
 #ifdef IDLE_THREADS
@@ -3173,7 +3146,7 @@ void PgSQL_Thread::run() {
 		__run_skip_2 :
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			// this is an idle thread
-			unsigned int w = rand() % (GloPTH->num_threads);
+			unsigned int w = rand_fast() % (GloPTH->num_threads);
 			PgSQL_Thread* thr = GloPTH->pgsql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
 				idle_thread_assigns_sessions_to_worker_thread(thr);
@@ -3892,8 +3865,6 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___ldap_user_variable = GloPTH->get_variable_string((char*)"ldap_user_variable");
 	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
 	mysql_thread___add_ldap_user_comment = GloPTH->get_variable_string((char*)"add_ldap_user_comment");
-	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
-	mysql_thread___default_session_track_gtids = GloPTH->get_variable_string((char*)"default_session_track_gtids");
 	*/
 	
 	for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
@@ -3978,16 +3949,8 @@ void PgSQL_Thread::refresh_variables() {
 	variables.stats_time_backend_query = (bool)GloPTH->get_variable_int((char*)"stats_time_backend_query");
 	variables.stats_time_query_processor = (bool)GloPTH->get_variable_int((char*)"stats_time_query_processor");
 
-	mysql_thread___client_session_track_gtid = (bool)GloPTH->get_variable_int((char*)"client_session_track_gtid");
-
-	mysql_thread___enable_client_deprecate_eof = (bool)GloPTH->get_variable_int((char*)"enable_client_deprecate_eof");
-	mysql_thread___enable_server_deprecate_eof = (bool)GloPTH->get_variable_int((char*)"enable_server_deprecate_eof");
-	*/
-	pgsql_thread___enable_load_data_local_infile = (bool)GloPTH->get_variable_int((char*)"enable_load_data_local_infile");
-	/*mysql_thread___log_mysql_warnings_enabled = (bool)GloPTH->get_variable_int((char*)"log_mysql_warnings_enabled");
 	mysql_thread___client_host_cache_size = GloPTH->get_variable_int((char*)"client_host_cache_size");
 	mysql_thread___client_host_error_counts = GloPTH->get_variable_int((char*)"client_host_error_counts");
-	mysql_thread___handle_warnings = GloPTH->get_variable_int((char*)"handle_warnings");
 #ifdef DEBUG
 	mysql_thread___session_debug = (bool)GloPTH->get_variable_int((char*)"session_debug");
 #endif // DEBUG
@@ -4158,6 +4121,25 @@ void PgSQL_Thread::listener_handle_new_connection(PgSQL_Data_Stream * myds, unsi
 		sess->status = CONNECTING_CLIENT;
 
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
+		/**
+		 * @brief Add PostgreSQL client socket to poll set with both read and write monitoring
+		 *
+		 * This usage pattern registers a PostgreSQL client socket with both POLLIN and POLLOUT events,
+		 * which is typically done during initial client setup when we need to establish the connection
+		 * and also be ready to receive client responses.
+		 *
+		 * Usage pattern: mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime)
+		 * - POLLIN|POLLOUT: Monitor both read and write events
+		 * - sess->client_myds->fd: Client socket file descriptor
+		 * - sess->client_myds: PgSQL_Data_Stream instance for the client
+		 * - curtime: Current timestamp for tracking
+		 *
+		 * Called during: Initial PostgreSQL client connection setup
+		 * Purpose: Enables bidirectional communication with the client during setup phase
+		 *
+		 * Note: This ensures we can establish the connection immediately and also handle
+		 * any client packets that might arrive during the connection process.
+		 */
 		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET, 1, "Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
 
@@ -4479,6 +4461,18 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		{
 			pta[0] = (char*)"PgSQL_Monitor_read_only_check_ERR";
 			sprintf(buf, "%lu", GloPgMon->readonly_check_ERR);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_ssl_connections_OK";
+			sprintf(buf, "%lu", GloPgMon->ssl_connections_OK);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_non_ssl_connections_OK";
+			sprintf(buf, "%lu", GloPgMon->non_ssl_connections_OK);
 			pta[1] = buf;
 			result->add_row(pta);
 		}

@@ -266,6 +266,13 @@ struct mon_srv_t {
 	string addr;
 	uint16_t port;
 	bool ssl;
+	struct ssl_opts_t {
+		string ssl_p2s_key;
+		string ssl_p2s_cert;
+		string ssl_p2s_ca;
+		string ssl_p2s_crl;
+		string ssl_p2s_crlpath;
+	} ssl_opt;
 };
 
 struct mon_user_t {
@@ -353,15 +360,21 @@ unique_ptr<SQLite3_result> fetch_hgm_srvs_conf(PgSQL_HostGroups_Manager* hgm, co
 
 vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 	vector<mon_srv_t> srvs {};
-
+	srvs.reserve(srvs_info->rows.size());
 	for (const auto& row : srvs_info->rows) {
 		srvs.push_back({
 			string { row->fields[0] },
 			static_cast<uint16_t>(std::atoi(row->fields[1])),
-			static_cast<bool>(std::atoi(row->fields[2]))
+			static_cast<bool>(std::atoi(row->fields[2])),
+			mon_srv_t::ssl_opts_t {
+				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+				string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+				string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+				string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
+			}
 		});
 	}
-
 	return srvs;
 }
 
@@ -624,6 +637,13 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 		case PGRES_POLLING_OK:
 			pgconn.state = ASYNC_ST::ASYNC_CONNECT_END;
 
+			// connection successful, update SSL stats
+			if (PQsslInUse(pgconn.conn)) {
+				__sync_fetch_and_add(&GloPgMon->ssl_connections_OK, 1);
+			} else {
+				__sync_fetch_and_add(&GloPgMon->non_ssl_connections_OK, 1);
+			}
+
 			if (st.task.type == task_type_t::connect) {
 				st.task.end = monotonic_time();
 			} else if (st.task.type == task_type_t::ping) {
@@ -870,18 +890,44 @@ pair<bool,pgsql_conn_t> get_task_conn(conn_pool_t& conn_pool, task_st_t& task_st
 	}
 }
 
+static void append_conninfo_param(std::ostringstream& conninfo, const std::string& key, const std::string& val) {
+	if (val.empty()) return;
+
+	std::string escaped_val;
+	escaped_val.reserve(val.length() * 2);  // Reserve maximum possible size
+
+	for (char c : val) {
+		if (c == '\'' || c == '\\') {
+			escaped_val.push_back('\\');
+		}
+		escaped_val.push_back(c);
+	}
+
+	conninfo << key << "='" << escaped_val << "' ";
+}
+
 string build_conn_str(const task_st_t& task_st) {
 	const mon_srv_t& srv_info { task_st.op_st.srv_info };
 	const mon_user_t& user_info { task_st.op_st.user_info };
 
-	return string {
-		"host='" + srv_info.addr + "' "
-			+ "port='" + std::to_string(srv_info.port) + "' "
-			+ "user='" + user_info.user + "' "
-			+ "password='" + user_info.pass + "' "
-			+ "dbname='" + user_info.dbname + "' "
-			+ "application_name=ProxySQL-Monitor"
-	};
+	std::ostringstream conninfo;
+	append_conninfo_param(conninfo, "user", user_info.user); // username
+	append_conninfo_param(conninfo, "password", user_info.pass); // password
+	append_conninfo_param(conninfo, "dbname", user_info.dbname); // dbname
+	append_conninfo_param(conninfo, "host", srv_info.addr); // backend address
+	conninfo << "port=" << srv_info.port << " "; // backend port
+	conninfo << "application_name=ProxySQL-Monitor "; // application name
+	if (srv_info.ssl) {
+		conninfo << "sslmode='require' "; // SSL required
+		append_conninfo_param(conninfo, "sslkey", srv_info.ssl_opt.ssl_p2s_key);
+		append_conninfo_param(conninfo, "sslcert", srv_info.ssl_opt.ssl_p2s_cert);
+		append_conninfo_param(conninfo, "sslrootcert", srv_info.ssl_opt.ssl_p2s_ca);
+		append_conninfo_param(conninfo, "sslcrl", srv_info.ssl_opt.ssl_p2s_crl);
+		append_conninfo_param(conninfo, "sslcrldir", srv_info.ssl_opt.ssl_p2s_crlpath);
+	} else {
+		conninfo << "sslmode='disable' "; // not supporting SSL
+	}
+	return conninfo.str();
 }
 
 pgsql_conn_t create_new_conn(task_st_t& task_st) {
