@@ -29,16 +29,35 @@ import json
 import os
 import sys
 from typing import Any, Dict, Optional
+from datetime import datetime
 
 import httpx
 
-# Debug logging to stderr (doesn't interfere with stdio protocol)
-DEBUG = os.getenv("PROXYSQL_MCP_DEBUG", "0").lower() in ("1", "true", "yes")
+# Redirect stderr to a log file in /tmp
+LOG_FILE = "/tmp/proxysql_mcp_bridge.log"
+stderr_log_file = open(LOG_FILE, "a", buffering=1)
+sys.stderr = stderr_log_file
+sys.__stderr__ = stderr_log_file
+
+# CRITICAL: Ensure stdout is line-buffered for stdio MCP protocol
+# Without this, responses may be buffered and never sent to Claude Code
+sys.stdout.reconfigure(line_buffering=True)
+
+# Debug logging - ALWAYS ON for extreme verbosity
+VERBOSE = True  # Always verbose logging
+
+def log_timestamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 def debug_log(msg: str):
-    if DEBUG:
-        sys.stderr.write(f"[DEBUG] {msg}\n")
-        sys.stderr.flush()
+    """Always log everything for extreme verbosity."""
+    timestamp = log_timestamp()
+    sys.stderr.write(f"[{timestamp}] {msg}\n")
+    sys.stderr.flush()
+
+def log_separator(char="=", length=80):
+    sys.stderr.write(char * length + "\n")
+    sys.stderr.flush()
 
 
 class ProxySQLMCPEndpoint:
@@ -66,6 +85,10 @@ class ProxySQLMCPEndpoint:
 
     async def _initialize(self):
         """Initialize the MCP connection."""
+        log_separator("=")
+        debug_log("[ProxySQLMCPEndpoint] Initializing connection to ProxySQL MCP server")
+        log_separator("=")
+
         request = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -81,6 +104,10 @@ class ProxySQLMCPEndpoint:
         }
         response = await self._call(request)
         self._initialized = True
+
+        log_separator("=")
+        debug_log("[ProxySQLMCPEndpoint] Initialization complete")
+        log_separator("=")
         return response
 
     async def _call(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,13 +119,25 @@ class ProxySQLMCPEndpoint:
         if self.auth_token:
             headers["Authorization"] = f"Bearer {self.auth_token}"
 
-        debug_log(f"ProxySQL Request: {json.dumps(request)}")
+        log_separator("-")
+        debug_log(f"[HTTP REQUEST TO PROXYSQL MCP SERVER]")
+        debug_log(f"  URL: {self.endpoint}")
+        debug_log(f"  Headers: {json.dumps(headers)}")
+        debug_log(f"  Body: {json.dumps(request, indent=2)}")
+        log_separator("-")
 
         try:
             r = await self._client.post(self.endpoint, json=request, headers=headers)
             r.raise_for_status()
             response = r.json()
-            debug_log(f"ProxySQL Response: {json.dumps(response)}")
+
+            log_separator("-")
+            debug_log(f"[HTTP RESPONSE FROM PROXYSQL MCP SERVER]")
+            debug_log(f"  Status: {r.status_code}")
+            debug_log(f"  Headers: {dict(r.headers)}")
+            debug_log(f"  Body: {json.dumps(response, indent=2)}")
+            log_separator("-")
+
             return response
         except httpx.HTTPStatusError as e:
             error_resp = {
@@ -110,7 +149,12 @@ class ProxySQLMCPEndpoint:
                 },
                 "id": request.get("id", "")
             }
-            debug_log(f"ProxySQL HTTP Error: {json.dumps(error_resp)}")
+            log_separator("-")
+            debug_log(f"[HTTP ERROR FROM PROXYSQL MCP SERVER]")
+            debug_log(f"  Status: {e.response.status_code}")
+            debug_log(f"  Response: {e.response.text}")
+            debug_log(f"  Error Response: {json.dumps(error_resp, indent=2)}")
+            log_separator("-")
             return error_resp
         except Exception as e:
             error_resp = {
@@ -121,7 +165,11 @@ class ProxySQLMCPEndpoint:
                 },
                 "id": request.get("id", "")
             }
-            debug_log(f"ProxySQL Exception: {json.dumps(error_resp)}")
+            log_separator("-")
+            debug_log(f"[EXCEPTION DURING HTTP REQUEST]")
+            debug_log(f"  Exception: {type(e).__name__}: {e}")
+            debug_log(f"  Error Response: {json.dumps(error_resp, indent=2)}")
+            log_separator("-")
             return error_resp
 
     async def tools_list(self) -> Dict[str, Any]:
@@ -160,6 +208,13 @@ class StdioMCPServer:
 
     async def run(self):
         """Main server loop."""
+        log_separator("=")
+        debug_log("[PROXYSQL MCP STDIO BRIDGE STARTING]")
+        debug_log(f"  Endpoint: {self.proxysql_endpoint}")
+        debug_log(f"  Auth Token: {'***SET***' if self.auth_token else 'NONE'}")
+        debug_log(f"  Verify SSL: {self.verify_ssl}")
+        log_separator("=")
+
         async with ProxySQLMCPEndpoint(self.proxysql_endpoint, self.auth_token, self.verify_ssl) as client:
             self._proxysql = client
 
@@ -167,25 +222,45 @@ class StdioMCPServer:
             await self._write_notification("notifications/initialized")
 
             # Main message loop
+            msg_count = 0
             while True:
                 try:
                     line = await self._readline()
                     if not line:
+                        debug_log("[STDIN CLOSED - RECEIVED EOF]")
                         break
 
-                    debug_log(f"Received from Claude: {line}")
-                    message = json.loads(line)
+                    msg_count += 1
+                    log_separator("=")
+                    debug_log(f"[MESSAGE #{msg_count} - RECEIVED FROM STDIN]")
+                    debug_log(f"  Raw line: {repr(line)}")
+                    debug_log(f"  Parsed JSON:")
+                    try:
+                        message = json.loads(line)
+                        debug_log(f"    {json.dumps(message, indent=4)}")
+                    except json.JSONDecodeError as e:
+                        debug_log(f"    [INVALID JSON - {e}]")
+                        raise
+                    log_separator("=")
+
                     response = await self._handle_message(message)
 
                     if response:
-                        debug_log(f"Sending to Claude: {json.dumps(response)}")
+                        log_separator("=")
+                        debug_log(f"[MESSAGE #{msg_count} - SENDING TO STDOUT]")
+                        debug_log(f"  Response JSON:")
+                        debug_log(f"    {json.dumps(response, indent=4)}")
+                        log_separator("=")
                         await self._writeline(response)
+                    else:
+                        debug_log(f"[MESSAGE #{msg_count} - NO RESPONSE (notification only)]")
 
                 except json.JSONDecodeError as e:
-                    debug_log(f"JSON decode error: {e}")
+                    debug_log(f"[JSON DECODE ERROR]: {e}")
+                    debug_log(f"  Invalid line: {repr(line)}")
                     await self._write_error(-32700, f"Parse error: {e}", "")
                 except Exception as e:
-                    debug_log(f"Handler error: {e}")
+                    debug_log(f"[HANDLER ERROR]: {e}")
                     import traceback
                     traceback.print_exc(file=sys.stderr)
                     await self._write_error(-32603, f"Internal error: {e}", "")
@@ -213,6 +288,7 @@ class StdioMCPServer:
         }
         if params:
             notification["params"] = params
+        debug_log(f"[NOTIFICATION] Sending: {json.dumps(notification, indent=4)}")
         await self._writeline(notification)
 
     async def _write_response(self, result: Any, req_id: str):
@@ -242,6 +318,8 @@ class StdioMCPServer:
         req_id = message.get("id", "")
         params = message.get("params", {})
 
+        debug_log(f"[HANDLE MESSAGE] method='{method}', id='{req_id}'")
+
         if method == "initialize":
             return await self._handle_initialize(req_id, params)
         elif method == "tools/list":
@@ -249,14 +327,19 @@ class StdioMCPServer:
         elif method == "tools/call":
             return await self._handle_tools_call(req_id, params)
         elif method == "ping":
+            debug_log(f"[ping] Responding with status=ok")
             return {"jsonrpc": "2.0", "result": {"status": "ok"}, "id": req_id}
         else:
+            debug_log(f"[HANDLE MESSAGE] Unknown method: {method}")
             await self._write_error(-32601, f"Method not found: {method}", req_id)
             return None
 
     async def _handle_initialize(self, req_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle initialize request."""
-        return {
+        debug_log(f"[initialize] Handling request with id={req_id}")
+        debug_log(f"[initialize] Client params: {json.dumps(params, indent=4)}")
+
+        result = {
             "jsonrpc": "2.0",
             "result": {
                 "protocolVersion": "2024-11-05",
@@ -270,10 +353,15 @@ class StdioMCPServer:
             },
             "id": req_id
         }
+        debug_log(f"[initialize] Sending response: {json.dumps(result['result'], indent=4)}")
+        return result
 
     async def _handle_tools_list(self, req_id: str) -> Dict[str, Any]:
         """Handle tools/list request - forward to ProxySQL."""
+        debug_log(f"[tools/list] Handling request with id={req_id}")
+
         if not self._proxysql:
+            debug_log(f"[tools/list] ERROR - ProxySQL client not initialized")
             return {
                 "jsonrpc": "2.0",
                 "error": {"code": -32000, "message": "ProxySQL client not initialized"},
@@ -282,11 +370,15 @@ class StdioMCPServer:
 
         response = await self._proxysql.tools_list()
 
-        debug_log(f"tools_list raw response: {json.dumps(response)}")
+        log_separator("-")
+        debug_log(f"[tools/list] Raw response from ProxySQL:")
+        debug_log(f"    {json.dumps(response, indent=4)}")
+        log_separator("-")
 
         # The response from ProxySQL is the full JSON-RPC response
         # ProxySQL wraps results in {"result": {...}, "success": true}
         if "error" in response:
+            debug_log(f"[tools/list] Returning error to client")
             return {
                 "jsonrpc": "2.0",
                 "error": response["error"],
@@ -299,13 +391,18 @@ class StdioMCPServer:
             # ProxySQL format: {"result": {...}, "success": true}
             actual_result = proxysql_result.get("result", {})
             success = proxysql_result.get("success", True)
+            debug_log(f"[tools/list] Detected ProxySQL wrapped format, success={success}")
             if not success:
+                debug_log(f"[tools/list] ERROR - ProxySQL reported failure")
                 return {
                     "jsonrpc": "2.0",
                     "error": {"code": -32000, "message": "ProxySQL tool call failed"},
                     "id": req_id
                 }
-            debug_log(f"tools_list unwrapped result: {json.dumps(actual_result)}")
+            log_separator("-")
+            debug_log(f"[tools/list] Unwrapped result:")
+            debug_log(f"    {json.dumps(actual_result, indent=4)}")
+            log_separator("-")
             return {
                 "jsonrpc": "2.0",
                 "result": actual_result,
@@ -313,6 +410,7 @@ class StdioMCPServer:
             }
 
         # Fallback: return result as-is
+        debug_log(f"[tools/list] No wrapping detected, returning result as-is")
         return {
             "jsonrpc": "2.0",
             "result": proxysql_result,
@@ -321,21 +419,28 @@ class StdioMCPServer:
 
     async def _handle_tools_call(self, req_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle tools/call request - forward to ProxySQL."""
+        name = params.get("name", "")
+        arguments = params.get("arguments", {})
+        debug_log(f"[tools/call] Handling request: tool='{name}', id={req_id}")
+        debug_log(f"[tools/call] Arguments: {json.dumps(arguments, indent=4)}")
+
         if not self._proxysql:
+            debug_log(f"[tools/call] ERROR - ProxySQL client not initialized")
             return {
                 "jsonrpc": "2.0",
                 "error": {"code": -32000, "message": "ProxySQL client not initialized"},
                 "id": req_id
             }
 
-        name = params.get("name", "")
-        arguments = params.get("arguments", {})
-
         response = await self._proxysql.tools_call(name, arguments, req_id)
 
-        debug_log(f"tools_call({name}) raw response: {json.dumps(response)}")
+        log_separator("-")
+        debug_log(f"[tools/call] Raw response from ProxySQL:")
+        debug_log(f"    {json.dumps(response, indent=4)}")
+        log_separator("-")
 
         if "error" in response:
+            debug_log(f"[tools/call] Returning error to client")
             return {
                 "jsonrpc": "2.0",
                 "error": response["error"],
@@ -349,13 +454,18 @@ class StdioMCPServer:
             # ProxySQL format: {"result": {...}, "success": true}
             actual_result = proxysql_result.get("result", {})
             success = proxysql_result.get("success", True)
+            debug_log(f"[tools/call] Detected ProxySQL wrapped format, success={success}")
             if not success:
+                debug_log(f"[tools/call] ERROR - ProxySQL reported failure")
                 return {
                     "jsonrpc": "2.0",
                     "error": {"code": -32000, "message": "ProxySQL tool call failed"},
                     "id": req_id
                 }
-            debug_log(f"tools_call({name}) unwrapped result: {json.dumps(actual_result)}")
+            log_separator("-")
+            debug_log(f"[tools/call] Unwrapped result:")
+            debug_log(f"    {json.dumps(actual_result, indent=4)}")
+            log_separator("-")
             return {
                 "jsonrpc": "2.0",
                 "result": actual_result,
@@ -363,6 +473,7 @@ class StdioMCPServer:
             }
 
         # Fallback: return result as-is
+        debug_log(f"[tools/call] No wrapping detected, returning result as-is")
         return {
             "jsonrpc": "2.0",
             "result": proxysql_result,
@@ -371,10 +482,20 @@ class StdioMCPServer:
 
 
 async def main():
+    log_separator("=")
+    debug_log("[PROXYSQL MCP STDIO BRIDGE - MAIN STARTING]")
+    log_separator("=")
+
     # Get configuration from environment
     endpoint = os.getenv("PROXYSQL_MCP_ENDPOINT", "https://127.0.0.1:6071/mcp/query")
     token = os.getenv("PROXYSQL_MCP_TOKEN", "")
     insecure_ssl = os.getenv("PROXYSQL_MCP_INSECURE_SSL", "0").lower() in ("1", "true", "yes")
+
+    debug_log(f"[CONFIG] PROXYSQL_MCP_ENDPOINT: {endpoint}")
+    debug_log(f"[CONFIG] PROXYSQL_MCP_TOKEN: {'***SET***' if token else 'NOT SET'}")
+    debug_log(f"[CONFIG] PROXYSQL_MCP_INSECURE_SSL: {insecure_ssl}")
+    debug_log(f"[CONFIG] LOG_FILE: {LOG_FILE}")
+    log_separator("=")
 
     # Validate endpoint
     if not endpoint:
@@ -387,9 +508,11 @@ async def main():
     try:
         await server.run()
     except KeyboardInterrupt:
-        pass
+        debug_log("[MAIN] Interrupted by KeyboardInterrupt")
     except Exception as e:
-        sys.stderr.write(f"Error: {e}\n")
+        debug_log(f"[MAIN] ERROR: {e}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
 
