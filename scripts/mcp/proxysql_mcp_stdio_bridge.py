@@ -363,10 +363,7 @@ class StdioMCPServer:
 
     async def _handle_tools_list(self, req_id: str) -> Dict[str, Any]:
         """Handle tools/list request - forward to ProxySQL."""
-        debug_log(f"[tools/list] Handling request with id={req_id}")
-
         if not self._proxysql:
-            debug_log(f"[tools/list] ERROR - ProxySQL client not initialized")
             return {
                 "jsonrpc": "2.0",
                 "error": {"code": -32000, "message": "ProxySQL client not initialized"},
@@ -375,118 +372,48 @@ class StdioMCPServer:
 
         response = await self._proxysql.tools_list()
 
-        log_separator("-")
-        debug_log(f"[tools/list] Raw response from ProxySQL:")
-        debug_log(f"    {json.dumps(response, indent=4)}")
-        log_separator("-")
-
-        # The response from ProxySQL is the full JSON-RPC response
-        # ProxySQL wraps results in {"result": {...}, "success": true}
         if "error" in response:
-            debug_log(f"[tools/list] Returning error to client")
             return {
                 "jsonrpc": "2.0",
                 "error": response["error"],
                 "id": req_id
             }
 
-        # Extract the actual result from ProxySQL's wrapped format
-        proxysql_result = response.get("result", {})
-        if isinstance(proxysql_result, dict) and "result" in proxysql_result:
-            # ProxySQL format: {"result": {...}, "success": true}
-            actual_result = proxysql_result.get("result", {})
-            success = proxysql_result.get("success", True)
-            debug_log(f"[tools/list] Detected ProxySQL wrapped format, success={success}")
-            if not success:
-                debug_log(f"[tools/list] ERROR - ProxySQL reported failure")
-                return {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32000, "message": "ProxySQL tool call failed"},
-                    "id": req_id
-                }
-            log_separator("-")
-            debug_log(f"[tools/list] Unwrapped result:")
-            debug_log(f"    {json.dumps(actual_result, indent=4)}")
-            log_separator("-")
-            return {
-                "jsonrpc": "2.0",
-                "result": actual_result,
-                "id": req_id
-            }
-
-        # Fallback: return result as-is
-        debug_log(f"[tools/list] No wrapping detected, returning result as-is")
         return {
             "jsonrpc": "2.0",
-            "result": proxysql_result,
+            "result": response.get("result", {}),
             "id": req_id
         }
 
     async def _handle_tools_call(self, req_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle tools/call request - forward to ProxySQL."""
-        name = params.get("name", "")
-        arguments = params.get("arguments", {})
-        debug_log(f"[tools/call] Handling request: tool='{name}', id={req_id}")
-        debug_log(f"[tools/call] Arguments: {json.dumps(arguments, indent=4)}")
-
         if not self._proxysql:
-            debug_log(f"[tools/call] ERROR - ProxySQL client not initialized")
             return {
                 "jsonrpc": "2.0",
                 "error": {"code": -32000, "message": "ProxySQL client not initialized"},
                 "id": req_id
             }
 
+        name = params.get("name", "")
+        arguments = params.get("arguments", {})
+
+        debug_log(f"[tools/call] Calling tool='{name}' with args: {json.dumps(arguments)}")
+
         response = await self._proxysql.tools_call(name, arguments, req_id)
 
-        log_separator("-")
-        debug_log(f"[tools/call] Raw response from ProxySQL:")
-        debug_log(f"    {json.dumps(response, indent=4)}")
-        log_separator("-")
-
         if "error" in response:
-            debug_log(f"[tools/call] Returning error to client")
+            debug_log(f"[tools/call] Error from ProxySQL: {response['error']}")
             return {
                 "jsonrpc": "2.0",
                 "error": response["error"],
                 "id": req_id
             }
 
-        # Extract the actual result from ProxySQL's wrapped format
-        # ProxySQL wraps results in {"result": {...}, "success": true}
-        proxysql_result = response.get("result", {})
-        if isinstance(proxysql_result, dict) and "result" in proxysql_result:
-            # ProxySQL format: {"result": {...}, "success": true}
-            actual_result = proxysql_result.get("result", {})
-            success = proxysql_result.get("success", True)
-            debug_log(f"[tools/call] Detected ProxySQL wrapped format, success={success}")
-            if not success:
-                debug_log(f"[tools/call] ERROR - ProxySQL reported failure")
-                return {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32000, "message": "ProxySQL tool call failed"},
-                    "id": req_id
-                }
-            log_separator("-")
-            debug_log(f"[tools/call] Unwrapped result:")
-            debug_log(f"    {json.dumps(actual_result, indent=4)}")
-            log_separator("-")
-            # Wrap in TextContent for MCP protocol compliance
-            wrapped_result = [{"type": "text", "text": json.dumps(actual_result, indent=2)}]
-            debug_log(f"[tools/call] Wrapped in TextContent: {json.dumps(wrapped_result, indent=4)}")
-            return {
-                "jsonrpc": "2.0",
-                "result": wrapped_result,
-                "id": req_id
-            }
-
-        # Fallback: return result as-is, wrapped in TextContent
-        debug_log(f"[tools/call] No wrapping detected, wrapping result in TextContent")
-        wrapped_result = [{"type": "text", "text": json.dumps(proxysql_result, indent=2)}]
-        debug_log(f"[tools/call] Wrapped result: {json.dumps(wrapped_result, indent=4)}")
+        # Simply pass through the result - no wrapping, no unwrapping
+        debug_log(f"[tools/call] Returning result: {json.dumps(response.get('result', {}))}")
         return {
             "jsonrpc": "2.0",
-            "result": wrapped_result,
+            "result": response.get("result", {}),
             "id": req_id
         }
 
