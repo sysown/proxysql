@@ -118,22 +118,6 @@ public:
 	static std::string datestyle_to_string(std::string_view input, const PgSQL_DateStyle_t& default_datestyle);
 };
 
-//std::string proxysql_session_type_str(enum proxysql_session_type session_type);
-
-// these structs will be used for various regex hardcoded
-// their initial use will be for sql_log_bin , sql_mode and time_zone
-// issues #509 , #815 and #816
-class PgSQL_Session_Regex {
-private:
-	void* opt;
-	void* re;
-	char* s;
-public:
-	PgSQL_Session_Regex(char* p);
-	~PgSQL_Session_Regex();
-	bool match(char* m);
-};
-
 class PgSQL_STMT_Global_info;
 using Parse_Param_Types = std::vector<uint32_t>; // Vector of parameter types for prepared statements
 
@@ -165,7 +149,7 @@ struct PgSQL_Extended_Query_Info {
 	const char* stmt_client_name;
 	const char* stmt_client_portal_name;
 	const PgSQL_Bind_Message* bind_msg;
-	PgSQL_STMT_Global_info* stmt_info;
+	const PgSQL_STMT_Global_info* stmt_info;
 	uint64_t stmt_global_id;
 	uint32_t stmt_backend_id;
 	uint8_t stmt_type;
@@ -544,16 +528,6 @@ public:
 	//bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
 #endif // 0
-	/**
-	 * @brief This status variable tracks whether the session is performing an
-	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
-	 * @details It becomes 'true' when the packet is detected and processed by:
-	 *    - 'MySQL_Protocol::process_pkt_COM_CHANGE_USER'
-	 *   It's reset before sending the final response for 'Auth Switch' to the client by:
-	 *   -  'PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'
-	 *   This flag was introduced for issue #3504.
-	 */
-	bool change_user_auth_switch;
 
 //	MySQL_STMTs_meta* sess_STMTs_meta;
 //	StmtLongDataHandler* SLDH;

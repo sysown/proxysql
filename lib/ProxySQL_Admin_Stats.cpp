@@ -40,7 +40,7 @@ extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 extern PgSQL_Threads_Handler* GloPTH;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
-extern PgSQL_STMT_Manager_v14* GloPgStmt;
+extern PgSQL_STMT_Manager* GloPgStmt;
 extern MySQL_Query_Processor* GloMyQPro;
 extern PgSQL_Query_Processor* GloPgQPro;
 extern ProxySQL_Cluster *GloProxyCluster;

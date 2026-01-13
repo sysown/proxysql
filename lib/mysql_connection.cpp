@@ -738,8 +738,29 @@ bool MySQL_Connection::match_ff_req_options(const MySQL_Connection *c) {
 
 	// Only required to be checked for fast_forward sessions
 	if (frontend->myds && frontend->myds->sess->session_fast_forward) {
-		return (frontend->options.client_flag & CLIENT_DEPRECATE_EOF) ==
+		bool ret = (frontend->options.client_flag & CLIENT_DEPRECATE_EOF) ==
 				(backend->mysql->server_capabilities & CLIENT_DEPRECATE_EOF);
+		if (ret == false) {
+			if (frontend->myds && frontend->myds->PSarrayIN) {
+				PtrSizeArray * PSarrayIN = frontend->myds->PSarrayIN;
+				if (PSarrayIN->len == 1) {
+					PtrSize_t pkt = PSarrayIN->pdata[0];
+					if (pkt.size >= 5) {
+						unsigned char c = *reinterpret_cast<unsigned char*>(static_cast<char*>(pkt.ptr) + 4);
+						switch ((enum_mysql_command)c) {
+							case _MYSQL_COM_BINLOG_DUMP:
+							case _MYSQL_COM_BINLOG_DUMP_GTID:
+							case _MYSQL_COM_REGISTER_SLAVE:
+								ret = true;
+								break;
+							default:
+								break;
+						};
+					}
+				}
+			}
+		}
+		return ret;
 	} else {
 		return true;
 	}

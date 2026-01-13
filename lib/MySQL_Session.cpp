@@ -56,6 +56,11 @@ using json = nlohmann::json;
 #define SELECT_VARIABLE_IDENTITY_LEN 17
 #define SELECT_VARIABLE_IDENTITY_LIMIT1 "SELECT @@IDENTITY LIMIT 1"
 #define SELECT_VARIABLE_IDENTITY_LIMIT1_LEN 25
+#define SELECT_MYSQL_VERSION "SELECT @@version"
+#define SELECT_MYSQL_VERSION_LEN 16
+#define SELECT_MYSQL_VERSION_FUNC "SELECT VERSION()"
+#define SELECT_MYSQL_VERSION_FUNC_LEN 16
+
 #define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
 #define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
@@ -684,6 +689,7 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+	this->wait_timeout = mysql_thread___wait_timeout;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;
 }
@@ -1089,6 +1095,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["active_transactions"] = active_transactions;
 	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
 	j["warning_in_hg"] = warning_in_hg;
+	j["wait_timeout"] = this->wait_timeout;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	json& jqpo = j["qpo"];
@@ -6594,6 +6601,60 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection charset to %d\n", c->nr);
 							client_myds->myconn->set_charset(c->nr, NAMES);
 						}
+					} else if (var == "wait_timeout") {
+						std::string value = *values++;
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Client requested SET wait_timeout = %s\n", value.c_str());
+
+					// Increment counter for SET wait_timeout commands
+					thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
+
+						unsigned long long client_timeout = 0;
+						try {
+							client_timeout = std::stoull(value) * 1000;
+						} catch (const std::exception& e) {
+							char errmsg[128];
+							snprintf(errmsg, sizeof(errmsg),
+									 "Incorrect argument type wait_timeout value: %s", value.c_str());
+							client_myds->DSS = STATE_QUERY_SENT_NET;
+							client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr, 1, 1231, (char *)"42000", errmsg, true);
+							client_myds->DSS = STATE_SLEEP;
+							status = WAITING_CLIENT_DATA;
+							return true;
+						}
+
+						// Apply ProxySQL's safe limits: clamp between 1 second (1000ms) and 20 days (20*24*3600*1000ms)
+						const unsigned long long MIN_WAIT_TIMEOUT = 1000; // 1 second minimum
+						const unsigned long long MAX_WAIT_TIMEOUT = 20 * 24 * 3600 * 1000; // 20 days maximum
+
+						unsigned long long original_timeout = client_timeout;
+						if (client_timeout < MIN_WAIT_TIMEOUT) {
+							client_timeout = MIN_WAIT_TIMEOUT;
+						} else if (client_timeout > MAX_WAIT_TIMEOUT) {
+							client_timeout = MAX_WAIT_TIMEOUT;
+						}
+
+						// Warn if value was clamped due to ProxySQL limits
+						if (original_timeout != client_timeout) {
+							proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu ms, clamped to %llu ms (ProxySQL limits: 1s to 20 days)\n",
+											client_myds->addr.addr, client_myds->addr.port,
+											client_myds->myconn->userinfo->username,
+											original_timeout,
+											client_timeout);
+						}
+
+						// Warn if client's value exceeds current global timeout (after clamping)
+						if (client_timeout > static_cast<unsigned long long>(mysql_thread___wait_timeout)) {
+							proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu ms, exceeds the global mysql-wait_timeout = %d ms. Global timeout will still be enforced.\n",
+											client_myds->addr.addr, client_myds->addr.port,
+											client_myds->myconn->userinfo->username,
+											client_timeout,
+											mysql_thread___wait_timeout);
+						}
+
+						if (static_cast<unsigned long long>(this->wait_timeout) != client_timeout) {
+							this->wait_timeout = client_timeout;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection wait_timeout to %llu ms\n", client_timeout);
+						}
 					} else if (var == "tx_isolation") {
 						std::string value1 = *values;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET tx_isolation value %s\n", value1.c_str());
@@ -6996,6 +7057,88 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 	}
 
+	// handle case, about SELECT_MYSQL_VERSION or SELECT VERSION()
+	if ((pkt->size==SELECT_MYSQL_VERSION_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION,(char *)pkt->ptr+5,pkt->size-5)==0) ||
+		(pkt->size==SELECT_MYSQL_VERSION_FUNC_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION_FUNC,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+		char *version_to_return = NULL;
+		int mode = mysql_thread___select_version_forwarding;  // SelectVersionForwardingMode enum values
+
+		if (mode == SELECT_VERSION_ALWAYS) {
+			// always: proxy to backend, don't handle here
+			return false;
+		}
+		else if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL || mode == SELECT_VERSION_SMART_FALLBACK_PROXY) {
+			// smart modes: try to get version from backend connection, then fallback based on mode
+			int target_hg = (current_hostgroup >= 0) ? current_hostgroup : default_hostgroup;
+
+			if (target_hg >= 0) {
+				version_to_return = get_backend_version_for_hostgroup(target_hg);
+
+				// Check if backend is ProxySQL (to avoid recursion)
+				if (version_to_return && strstr(version_to_return, "ProxySQL")) {
+					version_to_return = NULL;
+				}
+			}
+
+			// Fallback behavior depends on mode
+			if (!version_to_return) {
+				if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL) {
+					// fallback to internal (ProxySQL) version
+					version_to_return = mysql_thread___server_version;
+				} else {
+					// SELECT_VERSION_SMART_FALLBACK_PROXY: fallback to proxying the query
+					return false;
+				}
+			}
+		}
+		else {
+			// SELECT_VERSION_NEVER (mode 0): use ProxySQL's version
+			version_to_return = mysql_thread___server_version;
+		}
+
+		// Generate response packet with version_to_return
+		char buf2[32];
+		int l0=0;
+		if (pkt->size == SELECT_MYSQL_VERSION_LEN+5)
+			l0 = strlen(SELECT_MYSQL_VERSION);
+		else
+			l0 = strlen(SELECT_MYSQL_VERSION_FUNC);
+		memcpy(buf2, (char *)pkt->ptr + 5, l0);
+		buf2[l0]=0;
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		MySQL_Data_Stream *myds=client_myds;
+		MySQL_Protocol *myprot=&client_myds->myprot;
+		myds->DSS=STATE_QUERY_SENT_DS;
+		int sid=1;
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",33,31,MYSQL_TYPE_VAR_STRING,0,0,false,0,NULL); sid++;
+		myds->DSS=STATE_COLUMN_DEFINITION;
+
+		bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
+		char **p=(char **)malloc(sizeof(char*)*1);
+		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+		l[0]= strlen(version_to_return);
+		p[0]=version_to_return;
+		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+		myds->DSS=STATE_ROW;
+		if (deprecate_eof_active) {
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,0,0,setStatus,0,NULL,true); sid++;
+		} else {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
+		myds->DSS=STATE_SLEEP;
+		RequestEnd(NULL);
+		l_free(pkt->size,pkt->ptr);
+		free(p);
+		free(l);
+		return true;
+	}
+
 	// handle command KILL #860
 	//if (prepared == false) {
 		if (handle_command_query_kill(pkt)) {
@@ -7055,6 +7198,62 @@ __exit_set_destination_hostgroup:
 		}
 	}
 	return false;
+}
+
+char * MySQL_Session::get_backend_version_for_hostgroup(int hostgroup_id) {
+	// Step 1: Validate input
+	if (hostgroup_id < 0) {
+		return NULL;
+	}
+
+	// Step 2: Access the global MySQL_HostGroups_Manager
+	// MyHGM is the global instance
+	MySQL_HostGroups_Manager *myhgm = MyHGM;
+	if (!myhgm) {
+		return NULL;
+	}
+
+	// Step 3: Lock for reading
+	// We only have wrlock(), no rdlock() - use wrlock() for safety
+	myhgm->wrlock();
+
+	// Step 4: Find the hostgroup
+	MyHGC *myhgc = myhgm->MyHGC_lookup(hostgroup_id);
+	if (!myhgc) {
+		// Hostgroup doesn't exist
+		myhgm->wrunlock();
+		return NULL;
+	}
+
+	// Step 5: Check if the hostgroup has any servers
+	if (!myhgc->mysrvs || !myhgc->mysrvs->servers || myhgc->mysrvs->servers->len == 0) {
+		myhgm->wrunlock();
+		return NULL;
+	}
+
+	// Step 6: Iterate through servers in the hostgroup
+	for (unsigned int i = 0; i < myhgc->mysrvs->servers->len; i++) {
+		MySrvC *mysrvc = myhgc->mysrvs->idx(i);
+		if (!mysrvc) {
+			continue;
+		}
+
+		// Step 7: Check if this server has any free connections
+		if (mysrvc->ConnectionsFree && mysrvc->ConnectionsFree->conns_length() > 0) {
+			// Step 8: Peek at the first free connection WITHOUT removing it
+			// ConnectionsFree::index() only returns a pointer, doesn't remove from array
+			MySQL_Connection *myconn = mysrvc->ConnectionsFree->index(0);
+			if (myconn && myconn->options.server_version) {
+				// Found a connection with a version string
+				myhgm->wrunlock();
+				return myconn->options.server_version;
+			}
+		}
+	}
+
+	// Step 9: No free connections found in any server of this hostgroup
+	myhgm->wrunlock();
+	return NULL;
 }
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *pkt) {
@@ -7434,10 +7633,25 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
 			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
 				if (mysql_errno(mysql)==0 &&
-					(mysql_warning_count(mysql)==0 || 
+					(mysql_warning_count(mysql)==0 ||
 					 mysql_thread___query_cache_handle_warnings==1)) { // no errors
+					/**
+					 * @brief Check if the query result should be cached based on cache_empty_result setting
+					 *
+					 * The cache_empty_result field in query rule has three possible values:
+					 * - 1: Always cache the result, regardless of whether it's empty or not
+					 * - 0: Cache only non-empty results (num_rows > 0). Empty resultsets are not cached.
+					 * - -1: Use global setting (thread->variables.query_cache_stores_empty_result)
+					 *       OR cache if result is non-empty (num_rows > 0)
+					 *
+					 * Previously, when cache_empty_result was set to 0, nothing was cached at all.
+					 * This fix adds support for caching non-empty results when cache_empty_result=0.
+					 *
+					 * @see Issue #5248: Setting cache_empty_result to "0" on individual mysql_query_rules doesn't work
+					 */
 					if (
 						(qpo->cache_empty_result==1)
+						|| (qpo->cache_empty_result == 0 && MyRS->num_rows)
 						|| (
 							(qpo->cache_empty_result == -1)
 							&&
@@ -7662,6 +7876,46 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 		}
 		myds->free_mysql_real_query();
 	}
+
+	// NOTE: Unexpected-Ping-Handling: Section 2-2
+	///////////////////////////////////////////////////////////////////////////////////////////////
+	// Implements part-2 of the temporary workaround for the handling of unexpected 'COM_PING' packets
+	// received during query processing, while a resultset is yet being streamed to the client. We send a
+	// number of OK packets matching the 'queued' pings. This should ALWAYS be done before the session status
+	// goes back to 'WAITING_CLIENT_DATA', otherwise the flow between client-server could be compromised. By
+	// always sending the OK packets before this transisiton we ensure that the client doesn't hang waiting
+	// for response.
+	//
+	// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
+	// it will make the 'unexp_com_pings' field obsolete.
+	///////////////////////////////////////////////////////////////////////////////////////////////
+	if (client_myds->unexp_com_pings) {
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+
+		if (client_myds->unexp_com_pings) {
+			const string cli_addr { get_client_addr(this->client_myds->client_addr) };
+
+			while (client_myds->unexp_com_pings) {
+				proxy_warning(
+					"Sending OK packet for unexpected COM_PING packet   client_addr=\"%s\"\n",
+					cli_addr.c_str()
+				);
+
+				client_myds->pkt_sid += 1;
+				uint16_t st = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
+				if (autocommit) { st |= SERVER_STATUS_AUTOCOMMIT; }
+
+				client_myds->myprot.generate_pkt_OK(
+					true, NULL, NULL, client_myds->pkt_sid, 0, 0, st, 0, NULL
+				);
+				client_myds->unexp_com_pings--;
+			}
+		}
+
+		client_myds->DSS = STATE_SLEEP;
+	}
+	///////////////////////////////////////////////////////////////////////////
+
 	if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 		// reset status of the session
 		status=WAITING_CLIENT_DATA;
@@ -7781,7 +8035,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 				MySQL_Connection *mc = client_myds->myconn;
 				if (mc->userinfo && mc->userinfo->username) {
 					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
-						char* qu = query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
+						char* qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
 							mysql_thread___query_digests_lowercase);
 						string nq=string(qu,strlen(qu));
 						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);

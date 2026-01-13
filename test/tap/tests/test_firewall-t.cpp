@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 	
 	// Test that firewall initialized and blocks all queries
-	if (mysql_query(mysql, "select @@version")) {
+	if (mysql_query(mysql, "select /* set_testing */ @@version")) {
 		int myerrno = mysql_errno(mysql);
 		ok(myerrno == 1148, "Any query should be blocked");
 	}

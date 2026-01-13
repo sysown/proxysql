@@ -41,6 +41,6 @@ clean:
 .SILENT: cleanall
 cleanall:
 	cd ../deps && ${MAKE} -s clean
-	cd tap && ${MAKE} -s clean
+	cd tap && ${MAKE} -s cleanall
 	cd tests && ${MAKE} -s clean
 	cd tests_with_deps && ${MAKE} -s clean

@@ -179,7 +179,7 @@ PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	options.init_connect = NULL;
 	options.init_connect_sent = false;
 	userinfo = new PgSQL_Connection_userinfo();
-	local_stmts = new PgSQL_STMTs_local_v14(false); // false by default, it is a backend
+	local_stmts = new PgSQL_STMT_Local(false); // false by default, it is a backend
 
 	//for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
 	//	variables[i].value = NULL;
@@ -1663,8 +1663,7 @@ void PgSQL_Connection::stmt_prepare_start() {
 			return;
 		}
 	} else {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -1730,8 +1729,7 @@ void PgSQL_Connection::stmt_describe_start() {
 			return;
 		}
 	} else {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -1755,8 +1753,7 @@ void PgSQL_Connection::resync_start() {
 
 	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
-	// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-	if (PQpipelineSync(pgsql_conn) == 0) {
+	if (PQsendPipelineSync(pgsql_conn) == 0) {
 		proxy_error("Failed to send pipeline sync.\n");
 		resync_failed = true;
 		return;
@@ -1842,7 +1839,29 @@ void PgSQL_Connection::stmt_execute_start() {
 					"Failed to read param format", false);
 				return;
 			}
-			param_formats[i] = format;
+			param_formats[i] = format; // 0 = text, 1 = binary
+		}
+	}
+
+	// Normalize param formats for libpq:
+	// According to the PostgreSQL Bind message specification:
+	// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
+	//  - num_param_formats = 0 -> all parameters are TEXT
+	//  - num_param_formats = 1 -> the single format applies to all parameters
+	//  - num_param_formats = num_param_values -> formats are applied per-parameter in order
+	// Any other number of parameter formats is a protocol error.
+	if (!param_formats.empty()) {
+		if (param_formats.size() == 1 && param_values.size() > 1) {
+			// PostgreSQL protocol allows 1 format for all params,
+			// libpq DOES NOT, we must expand
+			int fmt = param_formats[0];
+			param_formats.resize(param_values.size(), fmt);
+		} else if (param_formats.size() != param_values.size()) {
+			proxy_error("Invalid param format count: got %zu, expected %zu\n",
+				param_formats.size(), param_values.size());
+			set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
+				"Invalid parameter format count", false);
+			return;
 		}
 	}
 
@@ -1861,8 +1880,13 @@ void PgSQL_Connection::stmt_execute_start() {
 		}
 	}
 
+	// If the client did not send any parameter formats (num_param_formats = 0),
+	// PostgreSQL protocol defines this as "all parameters are TEXT".
+	// libpq represents this case by passing paramFormats = nullptr.
+	const int* param_formats_data = (param_formats.empty() == false ? param_formats.data() : nullptr);
+
 	if (PQsendQueryPrepared(pgsql_conn, query.backend_stmt_name, param_values.size(),
-		param_values.data(), param_lengths.data(), param_formats.data(),
+		param_values.data(), param_lengths.data(), param_formats_data,
 		(result_formats.size() > 0) ? result_formats[0] : 0) == 0) {
 		set_error_from_PQerrorMessage();
 		proxy_error("Failed to send execute prepared statement. %s\n", get_error_code_with_message().c_str());
@@ -1878,8 +1902,7 @@ void PgSQL_Connection::stmt_execute_start() {
 			return;
 		}
 	} else {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -1905,8 +1928,7 @@ void PgSQL_Connection::reset_session_start() {
 
 	reset_session_in_pipeline = is_pipeline_active();
 	if (reset_session_in_pipeline) {
-		// FIXME: Switch to PQsendPipelineSync once libpq is updated to version 17 or higher
-		if (PQpipelineSync(pgsql_conn) == 0) {
+		if (PQsendPipelineSync(pgsql_conn) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -2504,7 +2526,7 @@ void PgSQL_Connection::reset() {
 	reusable = true;
 	creation_time = monotonic_time();
 	delete local_stmts;
-	local_stmts = new PgSQL_STMTs_local_v14(false);
+	local_stmts = new PgSQL_STMT_Local(false);
 
 	// reset all variables
 	for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
