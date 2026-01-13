@@ -341,5 +341,29 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP tool call: %s with args: %s\n", tool_name.c_str(), arguments.dump().c_str());
 
-	return tool_handler->execute_tool(tool_name, arguments);
+	json response = tool_handler->execute_tool(tool_name, arguments);
+
+	// Unwrap ProxySQL's {"success": ..., "result": ...} format for MCP compliance
+	// Tool handlers use create_success_response() which adds this wrapper
+	if (response.is_object() && response.contains("success") && response.contains("result")) {
+		bool success = response["success"].get<bool>();
+		if (!success) {
+			// Tool execution failed - return error
+			json error_result;
+			if (response.contains("error")) {
+				error_result["error"] = response["error"];
+			} else {
+				error_result["error"] = "Tool execution failed";
+			}
+			if (response.contains("code")) {
+				error_result["code"] = response["code"];
+			}
+			return error_result;
+		}
+		// Success - extract and return the actual result
+		return response["result"];
+	}
+
+	// Fallback: return response as-is (for compatibility with non-standard handlers)
+	return response;
 }
