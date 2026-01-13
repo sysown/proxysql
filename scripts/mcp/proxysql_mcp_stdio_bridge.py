@@ -307,11 +307,24 @@ class StdioMCPServer:
                 "id": req_id
             }
 
-        result = response.get("result", {})
-        _log(f"tools/call: returning result: {json.dumps(result)[:500]}")
+        raw_result = response.get("result", {})
+        _log(f"tools/call: raw_result: {json.dumps(raw_result)[:500]}")
+
+        # Wrap result in MCP-compliant format with content array
+        # Per MCP spec: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
+        formatted_result = {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(raw_result, indent=2)
+                }
+            ],
+            "isError": False
+        }
+        _log(f"tools/call: returning formatted: {json.dumps(formatted_result)[:500]}")
         return {
             "jsonrpc": "2.0",
-            "result": result,
+            "result": formatted_result,
             "id": req_id
         }
 
