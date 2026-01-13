@@ -32,6 +32,14 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+# Debug logging to stderr (doesn't interfere with stdio protocol)
+DEBUG = os.getenv("PROXYSQL_MCP_DEBUG", "0").lower() in ("1", "true", "yes")
+
+def debug_log(msg: str):
+    if DEBUG:
+        sys.stderr.write(f"[DEBUG] {msg}\n")
+        sys.stderr.flush()
+
 
 class ProxySQLMCPEndpoint:
     """Client for ProxySQL's HTTPS MCP endpoint."""
@@ -84,12 +92,16 @@ class ProxySQLMCPEndpoint:
         if self.auth_token:
             headers["Authorization"] = f"Bearer {self.auth_token}"
 
+        debug_log(f"ProxySQL Request: {json.dumps(request)}")
+
         try:
             r = await self._client.post(self.endpoint, json=request, headers=headers)
             r.raise_for_status()
-            return r.json()
+            response = r.json()
+            debug_log(f"ProxySQL Response: {json.dumps(response)}")
+            return response
         except httpx.HTTPStatusError as e:
-            return {
+            error_resp = {
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32000,
@@ -98,8 +110,10 @@ class ProxySQLMCPEndpoint:
                 },
                 "id": request.get("id", "")
             }
+            debug_log(f"ProxySQL HTTP Error: {json.dumps(error_resp)}")
+            return error_resp
         except Exception as e:
-            return {
+            error_resp = {
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32603,
@@ -107,6 +121,8 @@ class ProxySQLMCPEndpoint:
                 },
                 "id": request.get("id", "")
             }
+            debug_log(f"ProxySQL Exception: {json.dumps(error_resp)}")
+            return error_resp
 
     async def tools_list(self) -> Dict[str, Any]:
         """List available tools."""
@@ -157,15 +173,21 @@ class StdioMCPServer:
                     if not line:
                         break
 
+                    debug_log(f"Received from Claude: {line}")
                     message = json.loads(line)
                     response = await self._handle_message(message)
 
                     if response:
+                        debug_log(f"Sending to Claude: {json.dumps(response)}")
                         await self._writeline(response)
 
                 except json.JSONDecodeError as e:
+                    debug_log(f"JSON decode error: {e}")
                     await self._write_error(-32700, f"Parse error: {e}", "")
                 except Exception as e:
+                    debug_log(f"Handler error: {e}")
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
                     await self._write_error(-32603, f"Internal error: {e}", "")
 
     async def _readline(self) -> Optional[str]:
