@@ -59,12 +59,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If you kept this file as `requirements_cli.txt`, use:
-
-```bash
-pip install -r requirements_cli.txt
-```
-
 ---
 
 ## Configuration

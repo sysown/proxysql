@@ -1,4 +1,3 @@
-\
 #!/usr/bin/env python3
 """
 Database Discovery Agent (Async CLI, Rich UI)
@@ -469,7 +468,7 @@ def render(ui: UIState) -> Layout:
     if ui.last_event:
         events.append(ui.last_event)
     if ui.last_error:
-        events.append("\\n")
+        events.append("\n")
         events.append(ui.last_error, style="bold red")
 
     layout.split_column(
@@ -524,7 +523,7 @@ async def cmd_run(args: argparse.Namespace):
             if args.debug:
                 tb = traceback.format_exc()
                 trace.write({"type": "error.traceback", "traceback": tb})
-                ui.last_error += "\\n" + tb
+                ui.last_error += "\n" + tb
         finally:
             await mcp.close()
             await llm.close()
@@ -569,7 +568,7 @@ def main():
     try:
         asyncio.run(args.func(args))
     except KeyboardInterrupt:
-        Console().print("\\n[yellow]Interrupted[/yellow]")
+        Console().print("\n[yellow]Interrupted[/yellow]")
         raise SystemExit(130)
 
 if __name__ == "__main__":

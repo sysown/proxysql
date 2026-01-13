@@ -32,7 +32,7 @@ chmod +x proxysql_mcp_stdio_bridge.py
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `PROXYSQL_MCP_ENDPOINT` | Yes | - | ProxySQL MCP endpoint URL (e.g., `https://127.0.0.1:6071/mcp/query`) |
+| `PROXYSQL_MCP_ENDPOINT` | No | `https://127.0.0.1:6071/mcp/query` | ProxySQL MCP endpoint URL |
 | `PROXYSQL_MCP_TOKEN` | No | - | Bearer token for authentication (if configured) |
 | `PROXYSQL_MCP_INSECURE_SSL` | No | 0 | Set to 1 to disable SSL verification (for self-signed certs) |
 
@@ -45,7 +45,7 @@ Add to your Claude Code MCP settings (usually `~/.config/claude-code/mcp_config.
   "mcpServers": {
     "proxysql": {
       "command": "python3",
-      "args": ["/home/rene/proxysql-vec/scripts/mcp/proxysql_mcp_stdio_bridge.py"],
+      "args": ["./scripts/mcp/proxysql_mcp_stdio_bridge.py"],
       "env": {
         "PROXYSQL_MCP_ENDPOINT": "https://127.0.0.1:6071/mcp/query",
         "PROXYSQL_MCP_TOKEN": "your_token_here",
