@@ -187,8 +187,10 @@ class StdioMCPServer:
         """Write JSON data to stdout."""
         loop = asyncio.get_event_loop()
         output = json.dumps(data, ensure_ascii=False) + "\n"
+        _log(f"WRITE stdout: {len(output)} bytes: {repr(output[:200])}")
         await loop.run_in_executor(None, sys.stdout.write, output)
         await loop.run_in_executor(None, sys.stdout.flush)
+        _log(f"WRITE stdout: flushed")
 
     async def _write_notification(self, method: str, params: Optional[Dict[str, Any]] = None):
         """Write a notification (no id)."""
@@ -284,6 +286,10 @@ class StdioMCPServer:
 
     async def _handle_tools_call(self, req_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle tools/call request - forward to ProxySQL."""
+        name = params.get("name", "")
+        arguments = params.get("arguments", {})
+        _log(f"tools/call: name={name}, id={req_id}")
+
         if not self._proxysql:
             return {
                 "jsonrpc": "2.0",
@@ -291,10 +297,8 @@ class StdioMCPServer:
                 "id": req_id
             }
 
-        name = params.get("name", "")
-        arguments = params.get("arguments", {})
-
         response = await self._proxysql.tools_call(name, arguments, req_id)
+        _log(f"tools/call: response from ProxySQL: {json.dumps(response)[:500]}")
 
         if "error" in response:
             return {
@@ -303,9 +307,11 @@ class StdioMCPServer:
                 "id": req_id
             }
 
+        result = response.get("result", {})
+        _log(f"tools/call: returning result: {json.dumps(result)[:500]}")
         return {
             "jsonrpc": "2.0",
-            "result": response.get("result", {}),
+            "result": result,
             "id": req_id
         }
 
@@ -316,6 +322,8 @@ async def main():
     token = os.getenv("PROXYSQL_MCP_TOKEN", "")
     insecure_ssl = os.getenv("PROXYSQL_MCP_INSECURE_SSL", "0").lower() in ("1", "true", "yes")
 
+    _log(f"START: endpoint={endpoint}, insecure_ssl={insecure_ssl}")
+
     # Validate endpoint
     if not endpoint:
         sys.stderr.write("Error: PROXYSQL_MCP_ENDPOINT environment variable is required\n")
@@ -325,10 +333,12 @@ async def main():
     server = StdioMCPServer(endpoint, token or None, verify_ssl=not insecure_ssl)
 
     try:
+        _log("Starting server.run()")
         await server.run()
     except KeyboardInterrupt:
-        pass
+        _log("KeyboardInterrupt")
     except Exception as e:
+        _log(f"Error: {e}")
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
 
