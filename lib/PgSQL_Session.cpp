@@ -5191,91 +5191,59 @@ bool PgSQL_Session::handle_command_query_kill(PtrSize_t* pkt) {
 			// Note: This simple check might have false positives if $1 appears in comments or string literals
 			// but those cases would fail later when checking bind_msg or parameter validation
 			const char* digest_text = CurrentQuery.QueryParserArgs.digest_text;
-			bool is_parameterized = strstr(digest_text, "$1") != nullptr;
+
+			// Use protocol facts (Bind) 
+			const PgSQL_Bind_Message* bind_msg = CurrentQuery.extended_query_info.bind_msg;
+			const bool is_parameterized = bind_msg && bind_msg->data().num_param_values > 0;
 			if (is_parameterized) {
-				// Check if there are multiple parameters (e.g., $1, $2)
-				// Look for $2, $3, etc. to reject multiple parameters
-				const char* p = digest_text;
-				int max_param = 0;
-				while ((p = strstr(p, "$")) != nullptr) {
-					p++; // Skip '$'
-					if (isdigit(*p)) {
-						char* end;
-						long param_num = strtol(p, &end, 10);
-						if (p != end) { // check if any digits were parsed
-							if (param_num > max_param) {
-								max_param = static_cast<int>(param_num);
-							}
-							p = end;
-							continue;
-						}
-					}
-					p++;
-				}
-				if (max_param > 1) {
-					// Multiple parameters not supported
+				// Check that we have exactly one parameter
+				if (bind_msg->data().num_param_values != 1) {
 					send_parameter_error_response("function requires exactly one parameter");
 					l_free(pkt->size, pkt->ptr);
 					return true;
 				}
-						
-				// Handle parameterized query
-				if (CurrentQuery.extended_query_info.bind_msg) {
-					const PgSQL_Bind_Message* bind_msg = CurrentQuery.extended_query_info.bind_msg;
-					auto param_reader = bind_msg->get_param_value_reader();
-					PgSQL_Param_Value param;
-							
-					// Check that we have exactly one parameter
-					if (bind_msg->data().num_param_values != 1) {
-						send_parameter_error_response("function requires exactly one parameter");
+				auto param_reader = bind_msg->get_param_value_reader();
+				PgSQL_Param_Value param;
+				if (param_reader.next(&param)) {
+					// Get parameter format (default to text format 0)
+					uint16_t param_format = 0;
+					if (bind_msg->data().num_param_formats == 1) {
+						// Single format applies to all parameters
+						auto format_reader = bind_msg->get_param_format_reader();
+						format_reader.next(&param_format);
+					}
+								
+					// Extract PID from parameter
+					int32_t pid = extract_pid_from_param(param, param_format);
+					if (pid > 0) {
+						// Determine if this is terminate or cancel
+						int tki = -1;
+						if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_TERMINATE_BACKEND) {
+							tki = 0;  // Connection terminate
+						} else if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_CANCEL_BACKEND) {
+							tki = 1;  // Query cancel
+						}
+									
+						if (tki >= 0) {
+							return handle_kill_success(pid, tki, digest_text, mc, pkt);
+						}
+					} else {
+						// Invalid parameter - send appropriate error response
+						if (pid == -2) {
+							// NULL parameter
+							send_parameter_error_response("NULL is not allowed", PGSQL_ERROR_CODES::ERRCODE_NULL_VALUE_NOT_ALLOWED);
+						} else if (pid == -1) {
+							// Invalid format (not a valid integer)
+							send_parameter_error_response("invalid input syntax for integer", PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE);
+						} else if (pid == 0) {
+							// PID <= 0 (non-positive)
+							send_parameter_error_response("PID must be a positive integer", PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE);
+						}
 						l_free(pkt->size, pkt->ptr);
 						return true;
 					}
-							
-					if (param_reader.next(&param)) {
-						// Get parameter format (default to text format 0)
-						uint16_t param_format = 0;
-						if (bind_msg->data().num_param_formats == 1) {
-							// Single format applies to all parameters
-							auto format_reader = bind_msg->get_param_format_reader();
-							format_reader.next(&param_format);
-						}
-								
-						// Extract PID from parameter
-						int32_t pid = extract_pid_from_param(param, param_format);
-						if (pid > 0) {
-							// Determine if this is terminate or cancel
-							int tki = -1;
-							if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_TERMINATE_BACKEND) {
-								tki = 0;  // Connection terminate
-							} else if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_CANCEL_BACKEND) {
-								tki = 1;  // Query cancel
-							}
-									
-							if (tki >= 0) {
-								return handle_kill_success(pid, tki, digest_text, mc, pkt);
-							}
-						} else {
-							// Invalid parameter - send appropriate error response
-							if (pid == -2) {
-								// NULL parameter
-								send_parameter_error_response("NULL is not allowed", PGSQL_ERROR_CODES::ERRCODE_NULL_VALUE_NOT_ALLOWED);
-							} else if (pid == -1) {
-								// Invalid format (not a valid integer)
-								send_parameter_error_response("invalid input syntax for integer", PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE);
-							} else if (pid == 0) {
-								// PID <= 0 (non-positive)
-								send_parameter_error_response("PID must be a positive integer", PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE);
-							}
-							l_free(pkt->size, pkt->ptr);
-							return true;
-						}
-					} else {
-						// No parameter available - this shouldn't happen
-						return false;
-					}
 				} else {
-					// No bind message available (shouldn't happen for Execute phase)
+					// No parameter available - this shouldn't happen
 					return false;
 				}
 			} else {
