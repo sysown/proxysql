@@ -5306,19 +5306,14 @@ int32_t PgSQL_Session::extract_pid_from_param(const PgSQL_Param_Value& param, ui
 		// Convert text to integer
 		std::string str_val(reinterpret_cast<const char*>(param.value), param.len);
 
-		// Validate that the string contains only digits
-		for (size_t i = 0; i < str_val.size(); i++) {
-			if (!isdigit(str_val[i])) {
-				return -1;
-			}
-		}
-		
-		// Parse the integer
+		// Parse the integer (allow leading +/- and whitespace, then validate semantics)
 		char* endptr;
+		errno = 0;
 		long pid = strtol(str_val.c_str(), &endptr, 10);
-		
-		// Check for conversion errors
-		if (endptr != str_val.c_str() + str_val.size()) {
+
+		// Require full consumption (ignoring trailing whitespace)
+		while (endptr && *endptr && isspace(static_cast<unsigned char>(*endptr))) endptr++;
+		if (endptr == str_val.c_str() || (endptr && *endptr) || errno == ERANGE) {
 			return -1;
 		}
 		
