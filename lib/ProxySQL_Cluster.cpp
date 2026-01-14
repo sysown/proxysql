@@ -3106,26 +3106,6 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						"Cluster: Loading to runtime PostgreSQL Servers from peer " + string(hostname) + ":" + std::to_string(port) + ".",
 						"Cluster: NOT saving to disk PostgreSQL Servers from peer " + string(hostname) + ":" + std::to_string(port) + "."
 					}
-				},
-				{
-					CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS,
-					p_cluster_counter::pulled_pgsql_replication_hostgroups_success,
-					p_cluster_counter::pulled_pgsql_replication_hostgroups_failure,
-					{
-						"Cluster: Fetching PostgreSQL Replication Hostgroups from peer " + string(hostname) + ":" + std::to_string(port) + " completed.",
-						"Cluster: Loading to runtime PostgreSQL Replication Hostgroups from peer " + string(hostname) + ":" + std::to_string(port) + ".",
-						"Cluster: NOT saving to disk PostgreSQL Replication Hostgroups from peer " + string(hostname) + ":" + std::to_string(port) + "."
-					}
-				},
-				{
-					CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES,
-					p_cluster_counter::pulled_pgsql_hostgroup_attributes_success,
-					p_cluster_counter::pulled_pgsql_hostgroup_attributes_failure,
-					{
-						"Cluster: Fetching PostgreSQL Hostgroup Attributes from peer " + string(hostname) + ":" + std::to_string(port) + " completed.",
-						"Cluster: Loading to runtime PostgreSQL Hostgroup Attributes from peer " + string(hostname) + ":" + std::to_string(port) + ".",
-						"Cluster: NOT saving to disk PostgreSQL Hostgroup Attributes from peer " + string(hostname) + ":" + std::to_string(port) + "."
-					}
 				}
 			};
 
@@ -3621,11 +3601,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 		{"ldap_variables", &ProxySQL_Cluster::cluster_ldap_variables_diffs_before_sync,
 		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.ldap_variables; }, nullptr, false, false, nullptr},
 		{"pgsql_variables", &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }, nullptr, false, false, nullptr},
-		{"pgsql_replication_hostgroups", &ProxySQL_Cluster::cluster_pgsql_replication_hostgroups_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, nullptr, false, false, nullptr},
-		{"pgsql_hostgroup_attributes", &ProxySQL_Cluster::cluster_pgsql_hostgroup_attributes_diffs_before_sync,
-		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, nullptr, false, false, nullptr}
+		 [](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }, nullptr, false, false, nullptr}
 	};
 
 	// Find the matching module configuration
@@ -4852,87 +4828,6 @@ cluster_metrics_map = std::make_tuple(
 				{ "reason", "version_one" }
 			}
 		),
-		// ====================================================================
-
-		// pgsql_replication_hostgroups
-		// ====================================================================
-		std::make_tuple (
-			p_cluster_counter::pulled_pgsql_replication_hostgroups_success,
-			"proxysql_cluster_pulled_total",
-			"Number of times a 'module' have been pulled from a peer.",
-			metric_tags {
-				{ "module_name", "pgsql_replication_hostgroups" },
-				{ "status", "success" }
-			}
-		),
-		std::make_tuple (
-			p_cluster_counter::pulled_pgsql_replication_hostgroups_failure,
-			"proxysql_cluster_pulled_total",
-			"Number of times a 'module' have been pulled from a peer.",
-			metric_tags {
-				{ "module_name", "pgsql_replication_hostgroups" },
-				{ "status", "failure" }
-			}
-		),
-		std::make_tuple (
-			p_cluster_counter::sync_conflict_pgsql_replication_hostgroups_share_epoch,
-			"proxysql_cluster_sync_conflict_total",
-			"Number of times a 'module' has not been able to be synced.",
-			metric_tags {
-				{ "module_name", "pgsql_replication_hostgroups" },
-				{ "reason", "share_epoch" }
-			}
-		),
-		std::make_tuple (
-			p_cluster_counter::sync_delayed_pgsql_replication_hostgroups_version_one,
-			"proxysql_cluster_syn_conflict_total",
-			"Number of times a 'module' has not been able to be synced.",
-			metric_tags {
-				{ "module_name", "pgsql_replication_hostgroups" },
-				{ "reason", "version_one" }
-			}
-		),
-		// ====================================================================
-
-		// pgsql_hostgroup_attributes
-		// ====================================================================
-		std::make_tuple (
-			p_cluster_counter::pulled_pgsql_hostgroup_attributes_success,
-			"proxysql_cluster_pulled_total",
-			"Number of times a 'module' have been pulled from a peer.",
-			metric_tags {
-				{ "module_name", "pgsql_hostgroup_attributes" },
-				{ "status", "success" }
-			}
-		),
-		std::make_tuple (
-			p_cluster_counter::pulled_pgsql_hostgroup_attributes_failure,
-			"proxysql_cluster_pulled_total",
-			"Number of times a 'module' have been pulled from a peer.",
-			metric_tags {
-				{ "module_name", "pgsql_hostgroup_attributes" },
-				{ "status", "failure" }
-			}
-		),
-		std::make_tuple (
-			p_cluster_counter::sync_conflict_pgsql_hostgroup_attributes_share_epoch,
-			"proxysql_cluster_sync_conflict_total",
-			"Number of times a 'module' has not been able to be synced.",
-			metric_tags {
-				{ "module_name", "pgsql_hostgroup_attributes" },
-				{ "reason", "share_epoch" }
-			}
-		),
-		std::make_tuple (
-			p_cluster_counter::sync_delayed_pgsql_hostgroup_attributes_version_one,
-			"proxysql_cluster_syn_conflict_total",
-			"Number of times a 'module' has not been able to be synced.",
-			metric_tags {
-				{ "module_name", "pgsql_hostgroup_attributes" },
-				{ "reason", "version_one" }
-			}
-		),
-		// ====================================================================
 	},
 	cluster_gauge_vector {}
 );
@@ -4962,14 +4857,10 @@ ProxySQL_Cluster::ProxySQL_Cluster() : proxysql_servers_to_monitor(NULL) {
 	cluster_pgsql_servers_diffs_before_sync = 3;
 	cluster_pgsql_users_diffs_before_sync = 3;
 	cluster_pgsql_variables_diffs_before_sync = 3;
-	cluster_pgsql_replication_hostgroups_diffs_before_sync = 3;
-	cluster_pgsql_hostgroup_attributes_diffs_before_sync = 3;
 	cluster_mysql_query_rules_save_to_disk = true;
 	cluster_mysql_servers_save_to_disk = true;
 	cluster_mysql_users_save_to_disk = true;
 	cluster_proxysql_servers_save_to_disk = true;
-	cluster_pgsql_replication_hostgroups_save_to_disk = true;
-	cluster_pgsql_hostgroup_attributes_save_to_disk = true;
 	cluster_mysql_servers_sync_algorithm = 1;
 	init_prometheus_counter_array<cluster_metrics_map_idx, p_cluster_counter>(cluster_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<cluster_metrics_map_idx, p_cluster_gauge>(cluster_metrics_map, this->metrics.p_gauge_array);

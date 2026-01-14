@@ -316,8 +316,6 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 pgsql_users;
 		ProxySQL_Checksum_Value_2 pgsql_servers_v2;
 		ProxySQL_Checksum_Value_2 pgsql_variables;
-		ProxySQL_Checksum_Value_2 pgsql_replication_hostgroups;
-		ProxySQL_Checksum_Value_2 pgsql_hostgroup_attributes;
 	} checksums_values;
 	uint64_t global_checksum;
 };
@@ -471,11 +469,6 @@ struct p_cluster_counter {
 		pulled_pgsql_variables_success,
 		pulled_pgsql_variables_failure,
 
-		pulled_pgsql_replication_hostgroups_success,
-		pulled_pgsql_replication_hostgroups_failure,
-		pulled_pgsql_hostgroup_attributes_success,
-		pulled_pgsql_hostgroup_attributes_failure,
-
 		pulled_mysql_ldap_mapping_success,
 		pulled_mysql_ldap_mapping_failure,
 
@@ -490,8 +483,6 @@ struct p_cluster_counter {
 		sync_conflict_pgsql_servers_share_epoch,
 		sync_conflict_pgsql_users_share_epoch,
 		sync_conflict_pgsql_variables_share_epoch,
-		sync_conflict_pgsql_replication_hostgroups_share_epoch,
-		sync_conflict_pgsql_hostgroup_attributes_share_epoch,
 
 		sync_delayed_mysql_query_rules_version_one,
 		sync_delayed_mysql_servers_version_one,
@@ -501,8 +492,6 @@ struct p_cluster_counter {
 		sync_delayed_admin_variables_version_one,
 		sync_delayed_ldap_variables_version_one,
 		sync_delayed_pgsql_variables_version_one,
-		sync_delayed_pgsql_replication_hostgroups_version_one,
-		sync_delayed_pgsql_hostgroup_attributes_version_one,
 
 		__size
 	};
@@ -616,8 +605,6 @@ public:
 	std::atomic<int> cluster_pgsql_servers_diffs_before_sync;
 	std::atomic<int> cluster_pgsql_users_diffs_before_sync;
 	std::atomic<int> cluster_pgsql_variables_diffs_before_sync;
-	std::atomic<int> cluster_pgsql_replication_hostgroups_diffs_before_sync;
-	std::atomic<int> cluster_pgsql_hostgroup_attributes_diffs_before_sync;
 	int cluster_mysql_servers_sync_algorithm;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;
@@ -630,8 +617,6 @@ public:
 	bool cluster_pgsql_servers_save_to_disk;
 	bool cluster_pgsql_users_save_to_disk;
 	bool cluster_pgsql_variables_save_to_disk;
-	bool cluster_pgsql_replication_hostgroups_save_to_disk;
-	bool cluster_pgsql_hostgroup_attributes_save_to_disk;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();
 	void init() {};
