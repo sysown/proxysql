@@ -502,7 +502,7 @@ int main(int argc, char** argv) {
     {
         auto test_conn = createNewConnection(BACKEND);
         if (!test_conn || PQstatus(test_conn.get()) != CONNECTION_OK) {
-            skip(2, "Connection failed");
+            skip(1, "Connection failed");
         } else {
             // Test with SELECT pg_cancel_backend($1, $2)
             std::string stmt_name = "multi_param_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
@@ -511,7 +511,6 @@ int main(int argc, char** argv) {
             PGresult* res = PQprepare(test_conn.get(), stmt_name.c_str(), "SELECT pg_cancel_backend($1, $2)", 2, NULL);
             bool prepare_failed = (PQresultStatus(res) == PGRES_FATAL_ERROR);
             PQclear(res);
-
 
             ok(prepare_failed, "Multiple parameters should return error");
 
