@@ -3094,7 +3094,17 @@ handler_again:
 						if (myconn->query_result && myconn->query_result->get_resultset_size() > (unsigned int)pgsql_thread___threshold_resultset_size) {
 							myconn->query_result->get_resultset(client_myds->PSarrayOUT);
 						} else {
-							in_pending_state = true;
+
+							if (processing_extended_query && client_myds && mirror == false) {
+								const unsigned int buffered_data = client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
+								if (buffered_data > overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size)) {
+									// Don't enter pending state when PSarrayOUT exceeds threshold. This allows ProxySQL
+									// to flush accumulated data to the client before attempting to read backend responses.
+									// Prevents deadlock. Issue#5300
+								} else {
+									in_pending_state = true;
+								}
+							}
 						}
 						break;
 						// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
