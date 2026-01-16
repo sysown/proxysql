@@ -3875,6 +3875,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 // Query format:
 //   NL2SQL: Show me top 10 customers by revenue
 // Returns: Resultset with the generated SQL query
+//
+// Note: This now uses the async GENAI path to avoid blocking MySQL threads.
+// The NL2SQL query is converted to a JSON GENAI request and sent asynchronously.
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___nl2sql(const char* query, size_t query_len, PtrSize_t* pkt) {
 	// Skip leading space after "NL2SQL:"
 	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
@@ -3892,10 +3895,20 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return;
 	}
 
-	// Check AI module is initialized
+	// Check GenAI module is initialized (NL2SQL now uses GenAI module)
+	if (!GloGATH) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1241, (char*)"HY000", "GenAI module is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Check AI manager is available for NL2SQL converter
 	if (!GloAI) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1241, (char*)"HY000", "AI features module is not initialized", true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1242, (char*)"HY000", "AI features module is not initialized", true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -3906,13 +3919,44 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	NL2SQL_Converter* nl2sql = GloAI->get_nl2sql();
 	if (!nl2sql) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1242, (char*)"HY000", "NL2SQL converter is not initialized", true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1243, (char*)"HY000", "NL2SQL converter is not initialized", true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 		return;
 	}
 
+	// Increment total requests counter
+	GloAI->increment_nl2sql_total_requests();
+
+#ifdef epoll_create1
+	// Build JSON query for NL2SQL operation
+	json json_query;
+	json_query["type"] = "nl2sql";
+	json_query["query"] = std::string(query, query_len);
+	json_query["allow_cache"] = true;
+
+	// Add schema if available
+	if (client_myds->myconn->userinfo->schemaname) {
+		json_query["schema"] = std::string(client_myds->myconn->userinfo->schemaname);
+	}
+
+	std::string json_str = json_query.dump();
+
+	// Use async GENAI path to avoid blocking
+	if (!handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(json_str.c_str(), json_str.length(), pkt)) {
+		// Async send failed - error already sent to client
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Request sent asynchronously - don't free pkt, will be freed in response handler
+	// Return immediately, session is now free to handle other queries
+	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Query sent asynchronously via GenAI: %s\n", std::string(query, query_len).c_str());
+#else
+	// Fallback to synchronous blocking path for systems without epoll
 	// Build NL2SQL request
 	NL2SQLRequest req;
 	req.natural_language = std::string(query, query_len);
@@ -3920,10 +3964,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	req.allow_cache = true;
 	req.max_latency_ms = 0; // No specific latency requirement
 
-	// Increment total requests counter
-	GloAI->increment_nl2sql_total_requests();
-
-	// Call NL2SQL converter (synchronous for Phase 2)
+	// Call NL2SQL converter (blocking fallback)
 	NL2SQLResult result = nl2sql->convert(req);
 
 	// Update performance counters based on result
@@ -3948,9 +3989,13 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 
 		// Update model call counters
+		char* prefer_local = GloGATH->get_variable((char*)"prefer_local_models");
+		bool prefer_local_models = prefer_local && (strcmp(prefer_local, "true") == 0);
+		if (prefer_local) free(prefer_local);
+
 		if (result.provider_used == "openai") {
 			// Check if it's a local call (Ollama) or cloud call
-			if (GloAI->get_variable("ai_prefer_local_models") &&
+			if (prefer_local_models &&
 			    (result.explanation.find("localhost") != std::string::npos ||
 			     result.explanation.find("127.0.0.1") != std::string::npos)) {
 				GloAI->increment_nl2sql_local_model_calls();
@@ -3967,7 +4012,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		std::string err_msg = "Failed to convert natural language to SQL: ";
 		err_msg += result.explanation;
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1243, (char*)"HY000", (char*)err_msg.c_str(), true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1244, (char*)"HY000", (char*)err_msg.c_str(), true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -4009,8 +4054,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	client_myds->DSS = STATE_SLEEP;
 	status = WAITING_CLIENT_DATA;
 
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Converted '%s' to SQL (confidence: %.2f)\n",
+	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Converted '%s' to SQL (confidence: %.2f) [blocking fallback]\n",
 	            req.natural_language.c_str(), result.confidence);
+#endif
 }
 
 #ifdef epoll_create1

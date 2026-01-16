@@ -1,4 +1,5 @@
 #include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
 #include "proxysql_debug.h"
 #include <cstring>
 #include <sstream>
@@ -13,6 +14,9 @@
 #include "json.hpp"
 
 using json = nlohmann::json;
+
+// Global AI Features Manager - needed for NL2SQL operations
+extern AI_Features_Manager *GloAI;
 
 // Platform compatibility
 #ifndef EFD_CLOEXEC
@@ -1692,8 +1696,82 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 			return result.dump();
 		}
 
+		// Handle nl2sql operation
+		if (op_type == "nl2sql") {
+			// Check if AI manager is available
+			if (!GloAI) {
+				result["error"] = "AI features manager is not initialized";
+				return result.dump();
+			}
+
+			// Extract natural language query
+			if (!query_json.contains("query") || !query_json["query"].is_string()) {
+				result["error"] = "NL2SQL operation requires a 'query' string";
+				return result.dump();
+			}
+			std::string nl_query = query_json["query"].get<std::string>();
+
+			if (nl_query.empty()) {
+				result["error"] = "NL2SQL query cannot be empty";
+				return result.dump();
+			}
+
+			// Extract optional schema name
+			std::string schema_name;
+			if (query_json.contains("schema") && query_json["schema"].is_string()) {
+				schema_name = query_json["schema"].get<std::string>();
+			}
+
+			// Extract optional cache flag
+			bool allow_cache = true;
+			if (query_json.contains("allow_cache") && query_json["allow_cache"].is_boolean()) {
+				allow_cache = query_json["allow_cache"].get<bool>();
+			}
+
+			// Get NL2SQL converter
+			NL2SQL_Converter* nl2sql = GloAI->get_nl2sql();
+			if (!nl2sql) {
+				result["error"] = "NL2SQL converter is not initialized";
+				return result.dump();
+			}
+
+			// Build NL2SQL request
+			NL2SQLRequest req;
+			req.natural_language = nl_query;
+			req.schema_name = schema_name;
+			req.allow_cache = allow_cache;
+			req.max_latency_ms = 0; // No specific latency requirement
+
+			// Convert (this will use cache if available)
+			NL2SQLResult sql_result = nl2sql->convert(req);
+
+			if (sql_result.sql_query.empty() || sql_result.sql_query.find("NL2SQL conversion failed") == 0) {
+				result["error"] = "Failed to convert natural language to SQL: " + sql_result.explanation;
+				return result.dump();
+			}
+
+			// Build result
+			result["columns"] = json::array({"sql_query", "confidence", "explanation", "cached"});
+
+			json rows = json::array();
+			json row = json::array();
+			row.push_back(sql_result.sql_query);
+
+			char conf_buf[32];
+			snprintf(conf_buf, sizeof(conf_buf), "%.2f", sql_result.confidence);
+			row.push_back(std::string(conf_buf));
+
+			row.push_back(sql_result.explanation);
+			row.push_back(sql_result.cached ? "true" : "false");
+
+			rows.push_back(row);
+			result["rows"] = rows;
+
+			return result.dump();
+		}
+
 		// Unknown operation type
-		result["error"] = "Unknown operation type: " + op_type + ". Use 'embed' or 'rerank'";
+		result["error"] = "Unknown operation type: " + op_type + ". Use 'embed', 'rerank', or 'nl2sql'";
 		return result.dump();
 
 	} catch (const json::parse_error& e) {
