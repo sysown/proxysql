@@ -66,6 +66,9 @@ int main(int argc, char** argv) {
 
     CommandLine cl;
 
+    if (cl.getEnv())
+        return exit_status();
+
     // Get connections
     MYSQL* admin = mysql_init(NULL);
     if (!admin) {
@@ -99,10 +102,10 @@ int main(int argc, char** argv) {
     diag("Using log file: %s", log_path.c_str());
 
     // Create test database and table
-    MYSQL_QUERY(admin, "CREATE DATABASE IF NOT EXISTS test");
-    MYSQL_QUERY(admin, "USE test");
-    MYSQL_QUERY(admin, "CREATE TABLE IF NOT EXISTS setting (setting_id VARCHAR(100) PRIMARY KEY, value VARCHAR(100))");
-    MYSQL_QUERY(admin, "INSERT IGNORE INTO setting (setting_id, value) VALUES ('foo', '1.0')");
+    MYSQL_QUERY(proxy, "CREATE DATABASE IF NOT EXISTS test");
+    MYSQL_QUERY(proxy, "USE test");
+    MYSQL_QUERY(proxy, "CREATE TABLE IF NOT EXISTS setting (setting_id VARCHAR(100) PRIMARY KEY, value VARCHAR(100))");
+    MYSQL_QUERY(proxy, "INSERT IGNORE INTO setting (setting_id, value) VALUES ('foo', '1.0')");
 
     // Clear stats to start fresh
     MYSQL_QUERY(admin, "PROXYSQL FLUSH STATS");
@@ -207,7 +210,7 @@ int main(int argc, char** argv) {
     ok(set_warning_found, "Actual SET statement also triggers warning (expected) - new matches: %zu", set_match_count - match_count);
 
     // Cleanup
-    MYSQL_QUERY(admin, "DROP TABLE IF EXISTS test.setting");
+    MYSQL_QUERY(proxy, "DROP TABLE IF EXISTS test.setting");
 
     mysql_close(proxy);
     mysql_close(admin);
