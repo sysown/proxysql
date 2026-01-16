@@ -5,6 +5,7 @@
 | Test Type | Location | Purpose | LLM Required |
 |-----------|----------|---------|--------------|
 | Unit Tests | `test/tap/tests/nl2sql_*.cpp` | Test individual components | Mocked |
+| Validation Tests | `test/tap/tests/ai_validation-t.cpp` | Test config validation | No |
 | Integration | `test/tap/tests/nl2sql_integration-t.cpp` | Test with real database | Mocked/Live |
 | E2E | `scripts/mcp/test_nl2sql_e2e.sh` | Complete workflow | Live |
 | MCP Tools | `scripts/mcp/test_nl2sql_tools.sh` | MCP protocol | Live |
@@ -121,6 +122,49 @@ PROXYSQL_VERBOSE=1 make test_nl2sql
 - [x] API key fallback logic
 - [x] Default selection
 - [x] Configuration integration
+
+### Validation Tests (`ai_validation-t.cpp`)
+
+These are self-contained unit tests for configuration validation functions. They test the validation logic without requiring a running ProxySQL instance or LLM.
+
+**Test Categories:**
+- [x] URL format validation (15 tests)
+  - Valid URLs (http://, https://)
+  - Invalid URLs (missing protocol, wrong protocol, missing host)
+  - Edge cases (NULL, empty, long URLs)
+- [x] API key format validation (14 tests)
+  - Valid keys (OpenAI, Anthropic, custom)
+  - Whitespace rejection (spaces, tabs, newlines)
+  - Length validation (minimums, provider-specific formats)
+- [x] Numeric range validation (13 tests)
+  - Boundary values (min, max, within range)
+  - Invalid values (out of range, empty, non-numeric)
+  - Variable-specific ranges (cache threshold, timeout, rate limit)
+- [x] Provider name validation (8 tests)
+  - Valid providers (openai, anthropic)
+  - Invalid providers (ollama, uppercase, unknown)
+  - Edge cases (NULL, empty, with spaces)
+- [x] Edge cases and boundary conditions (11 tests)
+  - NULL pointer handling
+  - Very long values
+  - URL special characters (query strings, ports, fragments)
+  - API key boundary lengths
+
+**Running Validation Tests:**
+```bash
+cd test/tap/tests
+make ai_validation-t
+./ai_validation-t
+```
+
+**Expected Output:**
+```
+1..61
+# 2026-01-16 18:47:09  === URL Format Validation Tests ===
+ok 1 - URL 'http://localhost:11434/v1/chat/completions' is valid
+...
+ok 61 - Anthropic key at 25 character boundary accepted
+```
 
 ### Integration Tests (`nl2sql_integration-t.cpp`)
 
