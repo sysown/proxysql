@@ -133,6 +133,19 @@ coredumper/coredumper/src/libcoredumper.a:
 coredumper: coredumper/coredumper/src/libcoredumper.a
 
 
+$(CURL_ROOT)/lib/libcurl.a:
+	cd curl && rm -rf curl-*/ || true
+	cd curl && tar -zxf curl-*.tar.gz
+	cd curl/curl && autoreconf -fi
+ifeq ($(UNAME_S),Darwin)
+	cd curl/curl && patch configure < ../configure.patch
+endif
+	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --prefix=$(CURL_ROOT) --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl
+	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE}
+
+curl: $(CURL_ROOT)/lib/libcurl.a
+
+
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && tar -zxf libmicrohttpd-*.tar.gz
@@ -347,7 +360,22 @@ $(JSON_PATH)/include/nlohmann/json.hpp:
 json: $(JSON_PATH)/include/nlohmann/json.hpp
 
 
-$(OTEL_ROOT)/lib/libopentelemetry.a: curl json
+$(ABSL_ROOT)/lib/libabsl.a:
+	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd abseil && tar -zxf abseil-cpp-20250512.0.tar.gz
+ifneq (,$(filter $(DISTRO)$(DISTVERS),almalinux8 opensuse15))
+	cd abseil/abseil-cpp && patch -p0 < ../constexpr.patch
+endif
+	cd abseil/abseil-cpp && mkdir -p build
+	cd abseil/abseil-cpp/build && cmake .. $(CMAKE_FLAGS) -DCMAKE_INSTALL_PREFIX=$(ABSL_ROOT) -DBUILD_TESTING=OFF
+	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd $(ABSL_ROOT)/lib && ${AR} -crs --thin libabsl.a *.a
+	# cd $(ABSL_ROOT)/lib && ls libabsl_*.a | xargs -n1 ${AR} -x
+	# cd $(ABSL_ROOT)/lib && ${AR} -crs libabsl.a *.o && rm *.o
+
+abseil: $(ABSL_ROOT)/lib/libabsl.a
+
+$(OTEL_ROOT)/lib/libopentelemetry.a: abseil curl json
 	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
 	cd opentelemetry && tar -zxf opentelemetry-cpp-1.21.0.tar.gz
 	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
@@ -366,7 +394,6 @@ $(OTEL_ROOT)/lib/libopentelemetry.a: curl json
 								-DCMAKE_INSTALL_PREFIX=$(OTEL_ROOT) \
 								-DCMAKE_PREFIX_PATH="$(CURL_ROOT);$(JSON_PATH)"
 	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
-	cd opentelemetry/opentelemetry-cpp/build && ${MAKE} install
 	cd $(OTEL_ROOT)/lib && ${AR} -crs --thin libopentelemetry.a *.a
 	# cd $(OTEL_ROOT)/lib && ls libopentelemetry_*.a | xargs -n1 ${AR} -x
 	# cd $(OTEL_ROOT)/lib && ${AR} -crs libopentelemetry.a *.o && rm *.o
