@@ -8,12 +8,28 @@ typos, invalid field names, deprecated variables, and invalid values.
 
 **Issue:** https://github.com/sysown/proxysql/issues/5288
 
+## Test Architecture
+
+The test suite is divided into two complementary test types, each testing different aspects:
+
+| Test Type | Scope | ProxySQL State | What It Tests |
+|-----------|-------|----------------|---------------|
+| **Shell Script Tests** | Startup validation | Spawns new process | CLI flags, exit codes, strict mode |
+| **TAP C++ Tests** | Runtime validation | Connects to running instance | LOAD CONFIG behavior, entry filtering |
+
+### Key Design Decision
+
+The `--strict` flag is set at **startup only** and affects both startup and runtime validation:
+- Shell tests spawn ProxySQL with different flags to test startup behavior
+- TAP tests connect to an already-running ProxySQL and test observable behavior
+- TAP tests are **mode-agnostic** - they work whether ProxySQL was started with `--strict` or not
+
 ## Test Structure
 
 ```
 test/config_validation/
 ├── test_config_validation.sh          # Original validation tests
-├── test_strict_mode.sh                 # New comprehensive --strict flag tests
+├── test_strict_mode.sh                 # Startup + strict flag tests (30+ tests)
 ├── valid_mysql_servers.ini             # Valid MySQL server configuration
 ├── typo_mysql_servers.ini              # MySQL config with typo (adddress)
 ├── invalid_field_mysql_servers.ini     # MySQL config with invalid field
@@ -31,15 +47,17 @@ test/config_validation/
 
 test/tap/tests/
 ├── test_load_from_config_validation-t.cpp    # Existing LOAD CONFIG tests
-├── test_strict_config_validation-t.cpp       # New MySQL validation tests
-└── test_strict_pgsql_validation-t.cpp        # New PostgreSQL validation tests
+├── test_strict_config_validation-t.cpp       # MySQL runtime validation (mode-agnostic)
+└── test_strict_pgsql_validation-t.cpp        # PostgreSQL runtime validation (mode-agnostic)
 ```
 
-## Shell Script Tests
+## Shell Script Tests (Startup & CLI Flags)
 
 ### test_strict_mode.sh
 
-**Purpose:** Comprehensive testing of the `--strict` flag implementation
+**Purpose:** Test `--strict` flag, CLI aliases, and startup validation
+
+**How it works:** Spawns new ProxySQL processes with different command-line options
 
 **Test Groups (30+ tests):**
 
@@ -50,33 +68,31 @@ test/tap/tests/
 
 2. **Non-Strict Mode Tests** (4 tests)
    - Valid config passes
-   - Typo shows warning but passes
+   - Typo shows warning but ProxySQL starts
    - Invalid regex shows warning
    - Invalid value shows warning
 
 3. **Strict Mode Tests** (5 tests)
    - Valid config passes
-   - Typo causes fatal error
-   - Unknown field causes fatal error
-   - Invalid regex causes fatal error
-   - Invalid value causes fatal error
+   - Typo causes fatal error and exit
+   - Unknown field causes fatal error and exit
+   - Invalid regex causes fatal error and exit
+   - Invalid value causes fatal error and exit
 
 4. **Combined Flag Tests** (4 tests)
-   - `--strict --validate-config` (valid)
-   - `--strict --validate-config` (invalid)
-   - `--strict --dry-run` (valid)
-   - `--strict --dry-run` (invalid)
+   - `--strict --validate-config` (valid/invalid)
+   - `--strict --dry-run` (valid/invalid)
 
 5. **Suggestion Detection Tests** (2 tests)
-   - 'adddress' -> 'address' suggestion
-   - 'mathc_pattern' -> 'match_pattern' suggestion
+   - 'adddress' -> 'address' typo suggestion
+   - 'mathc_pattern' -> 'match_pattern' typo suggestion
 
 6. **Module-Dependent Configuration Tests** (2 tests)
    - Module config without module loaded (should pass)
    - Module config in strict mode without module
 
 7. **Multi-Section Configuration Tests** (2 tests)
-   - Mixed valid/invalid (should fail)
+   - Mixed valid/invalid behavior
    - All valid sections
 
 8. **PostgreSQL Configuration Tests** (3 tests)
@@ -90,24 +106,27 @@ cd /home/rene/proxysql_5263/test/config_validation
 ./test_strict_mode.sh
 ```
 
-## C++ Integration Tests (TAP Framework)
+## C++ Integration Tests (Runtime Validation)
 
 ### test_strict_config_validation-t.cpp
 
 **Purpose:** Test MySQL configuration validation at runtime
 
+**How it works:** Connects to running ProxySQL, executes `LOAD ... FROM CONFIG` commands
+
+**Mode-Agnostic Design:**
+- Tests work whether ProxySQL was started with `--strict` or not
+- Focus on **observable behavior**: what entries actually get loaded
+- Uses conditional checks based on LOAD command result
+
 **Test Cases (10 tests):**
 
-1. Valid mysql_servers config loads successfully
-2. Correct number of servers loaded
-3. Config with typo loads with warning in non-strict mode
-4. Invalid entry not loaded (typo detected)
-5. Query rules with typo load with warning
-6. Only valid rule loaded, invalid skipped
-7. Query rules with invalid regex load with warnings
-8. Only valid regex rule loaded
-9. Valid query rules load successfully
-10. All valid rules loaded
+1. Valid mysql_servers config - correct entries loaded
+2. Config with typo - invalid entry not loaded (0 entries)
+3. Mixed valid/invalid query rules - only valid loaded
+4. Invalid regex patterns - only valid regex rule loaded
+5. Valid query rules - all entries loaded
+6. Valid entry followed by invalid entry - only valid loaded
 
 **Building and running:**
 ```bash
@@ -120,20 +139,16 @@ make test_strict_config_validation-t
 
 **Purpose:** Test PostgreSQL configuration validation at runtime
 
+**How it works:** Same as MySQL test but for PostgreSQL objects
+
 **Test Cases (12 tests):**
 
-1. Valid pgsql_servers config loads successfully
-2. Correct number of pgsql servers loaded
-3. Config with typo loads with warning
-4. Invalid entry not loaded (typo detected)
-5. Valid pgsql_users config loads successfully
-6. Correct number of pgsql users loaded
-7. Config with typo loads with warning
-8. Invalid entry not loaded (typo detected)
-9. Valid pgsql_query_rules config loads successfully
-10. Correct number of pgsql rules loaded
-11. Config with typo loads with warning
-12. Only valid rule loaded, invalid skipped
+1. Valid pgsql_servers - correct entries loaded
+2. pgsql_servers with typo - invalid entry not loaded
+3. Valid pgsql_users - correct entries loaded
+4. pgsql_users with typo - invalid entry not loaded
+5. Valid pgsql_query_rules - correct entries loaded
+6. pgsql_query_rules with typo - only valid loaded
 
 **Building and running:**
 ```bash
@@ -146,28 +161,28 @@ make test_strict_pgsql_validation-t
 
 ### MySQL Servers Configurations
 
-| File | Description | Expected Result |
-|------|-------------|-----------------|
-| `valid_mysql_servers.ini` | Valid server definitions | Pass |
-| `typo_mysql_servers.ini` | 'adddress' instead of 'address' | Warning/Fail (strict) |
-| `invalid_field_mysql_servers.ini` | Unknown field 'invalid_field' | Warning/Fail (strict) |
+| File | Description | Shell Test | TAP Test |
+|------|-------------|------------|----------|
+| `valid_mysql_servers.ini` | Valid server definitions | Pass ✓ | Entries loaded |
+| `typo_mysql_servers.ini` | 'adddress' typo | Warn/Fail | 0 entries (skipped) |
+| `invalid_field_mysql_servers.ini` | Unknown field | Warn/Fail | 0 entries (skipped) |
 
 ### MySQL Query Rules Configurations
 
-| File | Description | Expected Result |
-|------|-------------|-----------------|
-| `valid_mysql_query_rules.ini` | Valid query rules | Pass |
-| `typo_mysql_query_rules.ini` | 'mathc_pattern' typo | Warning/Fail (strict) |
-| `query_rule_with_typo.ini` | Issue #5288 example | Warning/Fail (strict) |
-| `invalid_regex_patterns.ini` | Unclosed groups/brackets | Warning/Fail (strict) |
+| File | Description | Shell Test | TAP Test |
+|------|-------------|------------|----------|
+| `valid_mysql_query_rules.ini` | Valid query rules | Pass ✓ | All loaded |
+| `typo_mysql_query_rules.ini` | 'mathc_pattern' typo | Warn/Fail | Only valid loaded |
+| `query_rule_with_typo.ini` | Issue #5288 example | Warn/Fail | Only valid loaded |
+| `invalid_regex_patterns.ini` | Unclosed groups/brackets | Warn/Fail | Only valid loaded |
 
 ### PostgreSQL Configurations
 
-| File | Description | Expected Result |
-|------|-------------|-----------------|
-| `valid_postgresql.ini` | Valid PostgreSQL config | Pass |
-| `typo_pgsql_servers.ini` | Server typo | Warning/Fail (strict) |
-| `invalid_pgsql_users.ini` | User invalid field | Warning/Fail (strict) |
+| File | Description | Shell Test | TAP Test |
+|------|-------------|------------|----------|
+| `valid_postgresql.ini` | Valid PostgreSQL config | Pass ✓ | All loaded |
+| `typo_pgsql_servers.ini` | Server typo | Warn/Fail | 0 entries (skipped) |
+| `invalid_pgsql_users.ini` | User invalid field | Warn/Fail | 0 entries (skipped) |
 
 ### Special Configuration Files
 
@@ -180,21 +195,23 @@ make test_strict_pgsql_validation-t
 
 ## Expected Behaviors
 
-### Non-Strict Mode (Default)
+### Non-Strict Mode (Default - Startup)
 
-```
+```bash
 $ proxysql --config=config_with_typo.ini
 [WARNING] Invalid configuration in mysql_servers at entry 0:
 [WARNING]   Unknown field 'adddress'
 [WARNING]   Did you mean 'address'?
 [INFO] ProxySQL starting...
+# Exit code: 0, ProxySQL runs
 ```
 
-**Behavior:** Warnings logged, but ProxySQL starts
+**Shell test:** Expects exit code 0, warning in output
+**TAP test:** Invalid entry skipped, 0 entries loaded
 
-### Strict Mode
+### Strict Mode (Startup)
 
-```
+```bash
 $ proxysql --strict --config=config_with_typo.ini
 [ERROR] Invalid configuration in mysql_servers at entry 0:
 [ERROR]   Unknown field 'adddress'
@@ -204,19 +221,23 @@ $ proxysql --strict --config=config_with_typo.ini
 # Exit code: 1
 ```
 
-**Behavior:** Errors logged, ProxySQL exits with failure
+**Shell test:** Expects exit code 1, error in output
+**TAP test:** Invalid entry skipped, 0 entries loaded
 
-### Validate-Only Mode
+### Runtime LOAD CONFIG (Mode-Agnostic)
 
+```sql
+-- Mixed valid/invalid config
+mysql> LOAD MYSQL SERVERS FROM CONFIG;
+-- In non-strict: Succeeds with warning
+-- In strict: May fail entirely
+
+-- Observable result (both modes):
+-- Invalid entries are NOT loaded
+-- Valid entries ARE loaded
 ```
-$ proxysql --validate-config --config=config_with_typo.ini
-[ERROR] Invalid configuration in mysql_servers at entry 0:
-[ERROR]   Unknown field 'adddress'
-[FATAL] Configuration validation failed
-# Exit code: 1
-```
 
-**Behavior:** Validate and exit without starting
+**TAP test focus:** Verifies observable result (invalid skipped, valid loaded)
 
 ## Building All Tests
 
@@ -234,11 +255,11 @@ make test_strict_pgsql_validation-t
 ## Running All Tests
 
 ```bash
-# Run shell script tests
+# Run shell script tests (startup + CLI flags)
 cd /home/rene/proxysql_5263/test/config_validation
 ./test_strict_mode.sh
 
-# Run C++ integration tests
+# Run C++ integration tests (runtime validation)
 cd /home/rene/proxysql_5263/test/tap/tests
 ./test_strict_config_validation-t
 ./test_strict_pgsql_validation-t
@@ -249,29 +270,54 @@ cd /home/rene/proxysql_5263/test/tap/tests
 
 ## Test Coverage Summary
 
-| Feature | Shell Tests | C++ Tests | Coverage |
+| Feature | Shell Tests | TAP Tests | Coverage |
 |---------|-------------|-----------|----------|
+| **CLI & Startup** |
 | CLI Aliases (--validate-config, --dry-run) | ✓ | - | Complete |
-| Non-strict mode (warnings) | ✓ | ✓ | Complete |
-| Strict mode (fatal errors) | ✓ | - | Complete |
-| Typo detection with suggestions | ✓ | ✓ | Complete |
-| Invalid regex detection | ✓ | ✓ | Complete |
-| Invalid value range detection | ✓ | - | Complete |
+| Non-strict mode startup (warnings) | ✓ | - | Complete |
+| Strict mode startup (fatal errors) | ✓ | - | Complete |
+| Typo suggestions in output | ✓ | - | Complete |
+| **Runtime Validation** |
+| Invalid entries skipped | - | ✓ | Complete |
+| Valid entries still loaded | - | ✓ | Complete |
+| Mixed valid/invalid handling | - | ✓ | Complete |
+| **Config Types** |
 | MySQL servers validation | ✓ | ✓ | Complete |
 | MySQL users validation | - | ✓ | Partial |
 | MySQL query rules validation | ✓ | ✓ | Complete |
 | PostgreSQL servers validation | ✓ | ✓ | Complete |
 | PostgreSQL users validation | ✓ | ✓ | Complete |
 | PostgreSQL query rules validation | - | ✓ | Partial |
+| **Validation Types** |
+| Typo detection | ✓ | ✓ | Complete |
+| Invalid regex detection | ✓ | ✓ | Complete |
+| Invalid value range detection | ✓ | - | Partial |
 | Module-dependent config | ✓ | - | Partial |
 | Runtime LOAD CONFIG validation | - | ✓ | Complete |
 
 ## Notes
 
-- Shell tests test the full ProxySQL binary with different command-line options
-- C++ tests use the TAP framework and test runtime validation through SQL commands
-- Both test types are complementary and should be run together for complete coverage
+- **Shell tests** spawn new ProxySQL processes with different CLI flags
+- **TAP tests** connect to a running ProxySQL and test runtime behavior
+- TAP tests are **mode-agnostic** - they test observable behavior regardless of startup mode
+- Both test types are **complementary** - shell tests cover startup/CLI, TAP tests cover runtime
 - Tests assume ProxySQL is already built (`make` in the source directory)
+
+## Why Both Test Types?
+
+1. **Shell Script Tests** - Essential for testing:
+   - CLI flag parsing (`--strict`, `--validate-config`, `--dry-run`)
+   - Exit codes and error messages
+   - Startup validation behavior
+   - Strict vs non-strict mode differences
+
+2. **TAP C++ Tests** - Essential for testing:
+   - Runtime `LOAD ... FROM CONFIG` validation
+   - Entry filtering behavior (invalid skipped, valid loaded)
+   - Mixed valid/invalid configuration handling
+   - Integration with running ProxySQL instance
+
+**Neither test type can replace the other** - they test different aspects of the system.
 
 ## Future Enhancements
 
