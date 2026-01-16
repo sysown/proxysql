@@ -1,3 +1,32 @@
+/**
+ * @file ai_features_manager.h
+ * @brief AI Features Manager for ProxySQL
+ *
+ * The AI_Features_Manager class coordinates all AI-related features in ProxySQL:
+ * - NL2SQL (Natural Language to SQL) conversion
+ * - Anomaly detection for security monitoring
+ * - Vector storage for semantic caching
+ * - Hybrid model routing (local Ollama + cloud APIs)
+ *
+ * Architecture:
+ * - Central configuration management with 'ai-' variable prefix
+ * - Thread-safe operations using pthread rwlock
+ * - Follows same pattern as MCP_Threads_Handler and GenAI_Threads_Handler
+ * - Coordinates with MySQL_Session for query interception
+ *
+ * @date 2025-01-16
+ * @version 0.1.0
+ *
+ * Example Usage:
+ * @code
+ * // Access NL2SQL converter
+ * NL2SQL_Converter* nl2sql = GloAI->get_nl2sql();
+ * NL2SQLRequest req;
+ * req.natural_language = "Show top customers";
+ * NL2SQLResult result = nl2sql->convert(req);
+ * @endcode
+ */
+
 #ifndef __CLASS_AI_FEATURES_MANAGER_H
 #define __CLASS_AI_FEATURES_MANAGER_H
 
@@ -23,6 +52,12 @@ class SQLite3DB;
  *
  * This class follows the same pattern as MCP_Threads_Handler and GenAI_Threads_Handler
  * for configuration management and lifecycle.
+ *
+ * Thread Safety:
+ * - All public methods are thread-safe using pthread rwlock
+ * - Use wrlock()/wrunlock() for manual locking if needed
+ *
+ * @see NL2SQL_Converter, Anomaly_Detector
  */
 class AI_Features_Manager {
 private:
@@ -97,28 +132,132 @@ public:
 		double daily_cloud_spend_usd;
 	} status_variables;
 
+	/**
+	 * @brief Constructor - initializes with default configuration
+	 */
 	AI_Features_Manager();
+
+	/**
+	 * @brief Destructor - cleanup resources
+	 */
 	~AI_Features_Manager();
 
-	// Lifecycle
+	/**
+	 * @brief Initialize all AI features
+	 *
+	 * Initializes vector database, NL2SQL converter, and anomaly detector.
+	 * This must be called after ProxySQL configuration is loaded.
+	 *
+	 * @return 0 on success, non-zero on failure
+	 */
 	int init();
+
+	/**
+	 * @brief Shutdown all AI features
+	 *
+	 * Gracefully shuts down all components and frees resources.
+	 * Safe to call multiple times.
+	 */
 	void shutdown();
 
-	// Thread-safe locking
+	/**
+	 * @brief Acquire write lock for thread-safe operations
+	 *
+	 * Use this for manual locking when performing multiple operations
+	 * that need to be atomic.
+	 *
+	 * @note Must be paired with wrunlock()
+	 */
 	void wrlock();
+
+	/**
+	 * @brief Release write lock
+	 *
+	 * @note Must be called after wrlock()
+	 */
 	void wrunlock();
 
-	// Component access
+	/**
+	 * @brief Get NL2SQL converter instance
+	 *
+	 * @return Pointer to NL2SQL_Converter or NULL if not initialized
+	 *
+	 * @note Thread-safe when called within wrlock()/wrunlock() pair
+	 */
 	NL2SQL_Converter* get_nl2sql() { return nl2sql_converter; }
+
+	/**
+	 * @brief Get anomaly detector instance
+	 *
+	 * @return Pointer to Anomaly_Detector or NULL if not initialized
+	 *
+	 * @note Thread-safe when called within wrlock()/wrunlock() pair
+	 */
 	Anomaly_Detector* get_anomaly_detector() { return anomaly_detector; }
+
+	/**
+	 * @brief Get vector database instance
+	 *
+	 * @return Pointer to SQLite3DB or NULL if not initialized
+	 *
+	 * @note Thread-safe when called within wrlock()/wrunlock() pair
+	 */
 	SQLite3DB* get_vector_db() { return vector_db; }
 
-	// Variable management (for admin interface)
+	/**
+	 * @brief Get configuration variable value
+	 *
+	 * Retrieves the value of an AI configuration variable by name.
+	 * Variable names should be without the 'ai_' prefix.
+	 *
+	 * @param name Variable name (e.g., "nl2sql_enabled")
+	 * @return Variable value or NULL if not found
+	 *
+	 * Example:
+	 * @code
+	 * char* enabled = GloAI->get_variable("nl2sql_enabled");
+	 * if (enabled && strcmp(enabled, "true") == 0) { ... }
+	 * @endcode
+	 */
 	char* get_variable(const char* name);
+
+	/**
+	 * @brief Set configuration variable value
+	 *
+	 * Updates an AI configuration variable at runtime.
+	 * Variable names should be without the 'ai_' prefix.
+	 *
+	 * @param name Variable name (e.g., "nl2sql_enabled")
+	 * @param value New value
+	 * @return true on success, false on failure
+	 *
+	 * Example:
+	 * @code
+	 * GloAI->set_variable("nl2sql_ollama_model", "llama3.3");
+	 * @endcode
+	 */
 	bool set_variable(const char* name, const char* value);
+
+	/**
+	 * @brief Get list of all AI variable names
+	 *
+	 * Returns NULL-terminated array of variable names for admin interface.
+	 *
+	 * @return Array of strings (must be freed by caller)
+	 */
 	char** get_variables_list();
 
-	// Status reporting
+	/**
+	 * @brief Get AI features status as JSON
+	 *
+	 * Returns comprehensive status including:
+	 * - Enabled features
+	 * - Status counters (requests, cache hits, etc.)
+	 * - Current configuration
+	 * - Daily cloud spend
+	 *
+	 * @return JSON string with status information
+	 */
 	std::string get_status_json();
 };
 

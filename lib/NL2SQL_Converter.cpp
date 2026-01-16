@@ -1,3 +1,16 @@
+/**
+ * @file NL2SQL_Converter.cpp
+ * @brief Implementation of Natural Language to SQL Converter
+ *
+ * This file implements the NL2SQL conversion pipeline including:
+ * - Vector cache operations for semantic similarity
+ * - Model selection based on latency/budget
+ * - LLM API calls (Ollama, OpenAI, Anthropic)
+ * - SQL validation and cleaning
+ *
+ * @see NL2SQL_Converter.h
+ */
+
 #include "NL2SQL_Converter.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
@@ -12,6 +25,14 @@ using json = nlohmann::json;
 // Global instance is defined elsewhere if needed
 // NL2SQL_Converter *GloNL2SQL = NULL;
 
+// ============================================================================
+// Constructor/Destructor
+// ============================================================================
+
+/**
+ * Constructor initializes with default configuration values.
+ * The vector_db will be set by AI_Features_Manager during init().
+ */
 NL2SQL_Converter::NL2SQL_Converter() : vector_db(NULL) {
 	config.enabled = true;
 	config.query_prefix = strdup("NL2SQL:");
@@ -36,6 +57,14 @@ NL2SQL_Converter::~NL2SQL_Converter() {
 	free(config.anthropic_key);
 }
 
+// ============================================================================
+// Lifecycle
+// ============================================================================
+
+/**
+ * Initialize the NL2SQL converter.
+ * The vector DB will be provided by AI_Features_Manager during initialization.
+ */
 int NL2SQL_Converter::init() {
 	proxy_info("NL2SQL: Initializing NL2SQL Converter v%s\n", NL2SQL_CONVERTER_VERSION);
 
@@ -187,15 +216,22 @@ std::string NL2SQL_Converter::get_schema_context(const std::vector<std::string>&
 // ============================================================================
 
 /**
- * @brief Convert natural language to SQL
+ * @brief Convert natural language to SQL (main entry point)
  *
- * This is the main entry point for NL2SQL conversion. The flow is:
+ * Conversion Pipeline:
  * 1. Check vector cache for semantically similar queries
  * 2. Build prompt with schema context
  * 3. Select appropriate model (Ollama/OpenAI/Anthropic)
- * 4. Call LLM API
+ * 4. Call LLM API via HTTP
  * 5. Parse and clean SQL response
  * 6. Store in vector cache for future use
+ *
+ * The confidence score is calculated based on:
+ * - SQL keyword validation (does it look like SQL?)
+ * - Response quality (non-empty, well-formed)
+ * - Default score of 0.85 for valid-looking SQL
+ *
+ * @note This is a synchronous blocking call.
  */
 NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req) {
 	NL2SQLResult result;

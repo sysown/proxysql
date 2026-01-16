@@ -1,3 +1,23 @@
+/**
+ * @file LLM_Clients.cpp
+ * @brief HTTP client implementations for LLM providers
+ *
+ * This file implements HTTP clients for three LLM providers:
+ * - Ollama (local): POST http://localhost:11434/api/generate
+ * - OpenAI (cloud): POST https://api.openai.com/v1/chat/completions
+ * - Anthropic (cloud): POST https://api.anthropic.com/v1/messages
+ *
+ * All clients use libcurl for HTTP requests and nlohmann/json for
+ * request/response parsing. Each client handles:
+ * - Request formatting for the specific API
+ * - Authentication headers
+ * - Response parsing and SQL extraction
+ * - Markdown code block stripping
+ * - Error handling and logging
+ *
+ * @see NL2SQL_Converter.h
+ */
+
 #include "NL2SQL_Converter.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
@@ -14,6 +34,18 @@ using json = nlohmann::json;
 // Write callback for curl responses
 // ============================================================================
 
+/**
+ * @brief libcurl write callback for collecting HTTP response data
+ *
+ * This callback is invoked by libcurl as data arrives.
+ * It appends the received data to a std::string buffer.
+ *
+ * @param contents Pointer to received data
+ * @param size Size of each element
+ * @param nmemb Number of elements
+ * @param userp User pointer (std::string* for response buffer)
+ * @return Total bytes processed
+ */
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 	size_t totalSize = size * nmemb;
 	std::string* response = static_cast<std::string*>(userp);
@@ -26,10 +58,12 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
 // ============================================================================
 
 /**
- * @brief Call Ollama API for text generation
+ * @brief Call Ollama API for text generation (local LLM)
  *
  * Ollama endpoint: POST http://localhost:11434/api/generate
+ *
  * Request format:
+ * @code{.json}
  * {
  *   "model": "llama3.2",
  *   "prompt": "Convert to SQL: Show top customers",
@@ -39,12 +73,20 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
  *     "num_predict": 500
  *   }
  * }
+ * @endcode
+ *
  * Response format:
+ * @code{.json}
  * {
  *   "response": "SELECT * FROM customers...",
  *   "model": "llama3.2",
  *   "total_duration": 123456789
  * }
+ * @endcode
+ *
+ * @param prompt The prompt to send to Ollama
+ * @param model Model name (e.g., "llama3.2")
+ * @return Generated SQL or empty string on error
  */
 std::string NL2SQL_Converter::call_ollama(const std::string& prompt, const std::string& model) {
 	std::string response_data;
@@ -124,10 +166,12 @@ std::string NL2SQL_Converter::call_ollama(const std::string& prompt, const std::
 }
 
 /**
- * @brief Call OpenAI API for text generation
+ * @brief Call OpenAI API for text generation (cloud LLM)
  *
  * OpenAI endpoint: POST https://api.openai.com/v1/chat/completions
+ *
  * Request format:
+ * @code{.json}
  * {
  *   "model": "gpt-4o-mini",
  *   "messages": [
@@ -137,7 +181,10 @@ std::string NL2SQL_Converter::call_ollama(const std::string& prompt, const std::
  *   "temperature": 0.1,
  *   "max_tokens": 500
  * }
+ * @endcode
+ *
  * Response format:
+ * @code{.json}
  * {
  *   "choices": [{
  *     "message": {
@@ -148,6 +195,11 @@ std::string NL2SQL_Converter::call_ollama(const std::string& prompt, const std::
  *   }],
  *   "usage": {"total_tokens": 123}
  * }
+ * @endcode
+ *
+ * @param prompt The prompt to send to OpenAI
+ * @param model Model name (e.g., "gpt-4o-mini")
+ * @return Generated SQL or empty string on error
  */
 std::string NL2SQL_Converter::call_openai(const std::string& prompt, const std::string& model) {
 	std::string response_data;

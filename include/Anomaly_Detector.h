@@ -1,3 +1,37 @@
+/**
+ * @file anomaly_detector.h
+ * @brief Real-time Anomaly Detection for ProxySQL
+ *
+ * The Anomaly_Detector class provides security threat detection using:
+ * - Embedding-based similarity to known threats
+ * - Statistical outlier detection
+ * - Rule-based pattern matching
+ * - Rate limiting per user/host
+ *
+ * Key Features:
+ * - Multi-stage detection pipeline
+ * - Behavioral profiling and tracking
+ * - Configurable risk thresholds
+ * - Auto-block or log-only modes
+ *
+ * @date 2025-01-16
+ * @version 0.1.0 (stub implementation)
+ *
+ * Example Usage:
+ * @code
+ * Anomaly_Detector* detector = GloAI->get_anomaly_detector();
+ * AnomalyResult result = detector->analyze(
+ *     "SELECT * FROM users",
+ *     "app_user",
+ *     "192.168.1.100",
+ *     "production"
+ * );
+ * if (result.should_block) {
+ *     proxy_warning("Query blocked: %s\n", result.explanation.c_str());
+ * }
+ * @endcode
+ */
+
 #ifndef __CLASS_ANOMALY_DETECTOR_H
 #define __CLASS_ANOMALY_DETECTOR_H
 
@@ -13,6 +47,9 @@ class SQLite3DB;
 
 /**
  * @brief Anomaly detection result
+ *
+ * Contains the outcome of an anomaly check including risk score,
+ * anomaly type, explanation, and whether to block the query.
  */
 struct AnomalyResult {
 	bool is_anomaly;              ///< True if anomaly detected
