@@ -42,11 +42,14 @@ class SQLite3DB;
  * @brief Result structure for NL2SQL conversion
  *
  * Contains the generated SQL query along with metadata including
- * confidence score, explanation, and cache status.
+ * confidence score, explanation, cache status, and error details.
  *
  * @note The confidence score is a heuristic based on SQL validation
  *       and LLM response quality. Actual SQL correctness should be
  *       verified before execution.
+ *
+ * @note When errors occur, error_code, error_details, and http_status_code
+ *       provide diagnostic information for troubleshooting.
  */
 struct NL2SQLResult {
 	std::string sql_query;                  ///< Generated SQL query
@@ -56,7 +59,13 @@ struct NL2SQLResult {
 	bool cached;                             ///< True if from semantic cache
 	int64_t cache_id;                        ///< Cache entry ID for tracking
 
-	NL2SQLResult() : confidence(0.0f), cached(false), cache_id(0) {}
+	// Error details - populated when conversion fails
+	std::string error_code;                  ///< Structured error code (e.g., "ERR_API_KEY_MISSING")
+	std::string error_details;               ///< Detailed error context with query, provider, URL
+	int http_status_code;                    ///< HTTP status code if applicable (0 if N/A)
+	std::string provider_used;               ///< Which provider was attempted
+
+	NL2SQLResult() : confidence(0.0f), cached(false), cache_id(0), http_status_code(0) {}
 };
 
 /**
@@ -78,6 +87,46 @@ struct NL2SQLRequest {
 
 	NL2SQLRequest() : max_latency_ms(0), allow_cache(true) {}
 };
+
+/**
+ * @brief Error codes for NL2SQL conversion
+ *
+ * Structured error codes that provide machine-readable error information
+ * for programmatic handling and user-friendly error messages.
+ *
+ * Error codes are strings that can be used for:
+ * - Conditional logic (switch on error type)
+ * - Logging and monitoring
+ * - User error messages
+ *
+ * @see nl2sql_error_code_to_string()
+ */
+enum class NL2SQLErrorCode {
+	SUCCESS = 0,                      ///< No error
+	ERR_API_KEY_MISSING,              ///< API key not configured
+	ERR_API_KEY_INVALID,              ///< API key format is invalid
+	ERR_TIMEOUT,                      ///< Request timed out
+	ERR_CONNECTION_FAILED,            ///< Network connection failed
+	ERR_RATE_LIMITED,                 ///< Rate limited by provider (HTTP 429)
+	ERR_SERVER_ERROR,                 ///< Server error (HTTP 5xx)
+	ERR_EMPTY_RESPONSE,               ///< Empty response from LLM
+	ERR_INVALID_RESPONSE,             ///< Malformed response from LLM
+	ERR_SQL_INJECTION_DETECTED,       ///< SQL injection pattern detected
+	ERR_VALIDATION_FAILED,            ///< Input validation failed
+	ERR_UNKNOWN_PROVIDER,             ///< Invalid provider name
+	ERR_REQUEST_TOO_LARGE             ///< Request exceeds size limit
+};
+
+/**
+ * @brief Convert error code enum to string representation
+ *
+ * Returns the string representation of an error code for logging
+ * and display purposes.
+ *
+ * @param code The error code to convert
+ * @return String representation of the error code
+ */
+const char* nl2sql_error_code_to_string(NL2SQLErrorCode code);
 
 /**
  * @brief Model provider format types for NL2SQL conversion
