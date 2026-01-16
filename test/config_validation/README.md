@@ -189,12 +189,9 @@ The test suite can be integrated into CI/CD pipelines:
 ```bash
 #!/bin/bash
 # Example CI test script
-set -e
 
 # Run validation tests
-./test_config_validation.sh
-
-if [ $? -eq 0 ]; then
+if ./test_config_validation.sh; then
     echo "All configuration validation tests passed!"
     exit 0
 else

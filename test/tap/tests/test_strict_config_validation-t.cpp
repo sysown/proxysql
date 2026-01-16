@@ -168,8 +168,8 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    // Plan: 10 tests total
-    plan(10);
+    // NO_PLAN - number of tests varies based on ProxySQL mode (strict vs non-strict)
+    plan(NO_PLAN);
 
     MYSQL* admin = mysql_init(NULL);
     if (!admin) {

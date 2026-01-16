@@ -3,14 +3,17 @@
 # Quick Test Script for Configuration Validation
 # This script quickly tests various configuration scenarios
 
-PROXYSQL_PATH="/home/rene/proxysql_5263/src/proxysql"
-TEST_DIR="/home/rene/proxysql_5263/test/config_validation"
+# Configuration - use relative paths from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEST_DIR="$SCRIPT_DIR"
+# Allow PROXYSQL_PATH to be overridden by environment variable
+PROXYSQL_PATH="${PROXYSQL_PATH:-$SCRIPT_DIR/../../src/proxysql}"
 
 echo "Quick Configuration Validation Tests"
 echo "===================================="
 
-# Change to test directory
-cd "$TEST_DIR"
+# Change to test directory with error handling
+cd "$TEST_DIR" || { echo "ERROR: Cannot change to test directory: $TEST_DIR"; exit 1; }
 
 echo -e "\n1. Testing valid MySQL servers configuration..."
 timeout 5s "$PROXYSQL_PATH" --validate-only "valid_mysql_servers.ini"

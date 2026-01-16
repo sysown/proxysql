@@ -9,9 +9,11 @@ echo "========================================"
 echo "ProxySQL Configuration Validation Tests"
 echo "========================================"
 
-# Configuration
-PROXYSQL_PATH="/home/rene/proxysql_5263/src/proxysql"
-TEST_DIR="/home/rene/proxysql_5263/test/config_validation"
+# Configuration - use relative paths from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEST_DIR="$SCRIPT_DIR"
+# Allow PROXYSQL_PATH to be overridden by environment variable
+PROXYSQL_PATH="${PROXYSQL_PATH:-$SCRIPT_DIR/../../src/proxysql}"
 LOG_DIR="/tmp/config_validation_tests"
 RESULTS_FILE="$LOG_DIR/test_results.txt"
 

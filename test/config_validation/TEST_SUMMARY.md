@@ -102,7 +102,7 @@ test/tap/tests/
 
 **Running the tests:**
 ```bash
-cd /home/rene/proxysql_5263/test/config_validation
+cd <path_to_proxysql_repo>/test/config_validation
 ./test_strict_mode.sh
 ```
 
@@ -130,7 +130,7 @@ cd /home/rene/proxysql_5263/test/config_validation
 
 **Building and running:**
 ```bash
-cd /home/rene/proxysql_5263/test/tap/tests
+cd <path_to_proxysql_repo>/test/tap/tests
 make test_strict_config_validation-t
 ./test_strict_config_validation-t
 ```
@@ -152,7 +152,7 @@ make test_strict_config_validation-t
 
 **Building and running:**
 ```bash
-cd /home/rene/proxysql_5263/test/tap/tests
+cd <path_to_proxysql_repo>/test/tap/tests
 make test_strict_pgsql_validation-t
 ./test_strict_pgsql_validation-t
 ```
@@ -243,7 +243,7 @@ mysql> LOAD MYSQL SERVERS FROM CONFIG;
 
 ```bash
 # Build the TAP test framework
-cd /home/rene/proxysql_5263/test/tap
+cd <path_to_proxysql_repo>/test/tap
 make
 
 # Build specific tests
@@ -256,11 +256,11 @@ make test_strict_pgsql_validation-t
 
 ```bash
 # Run shell script tests (startup + CLI flags)
-cd /home/rene/proxysql_5263/test/config_validation
+cd <path_to_proxysql_repo>/test/config_validation
 ./test_strict_mode.sh
 
 # Run C++ integration tests (runtime validation)
-cd /home/rene/proxysql_5263/test/tap/tests
+cd <path_to_proxysql_repo>/test/tap/tests
 ./test_strict_config_validation-t
 ./test_strict_pgsql_validation-t
 
