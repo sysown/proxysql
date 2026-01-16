@@ -79,20 +79,3 @@ SET GLOBAL admin-validate_only = 1;
   register: validation_result
   failed_when: validation_result.rc != 0
 ```
-
-## Getting Help
-
-### Reporting Issues
-- Visit the [ProxySQL GitHub Repository](https://github.com/sysown/proxysql)
-- Search existing issues or create a new one
-- Include version information and configuration details
-
-### Community Support
-- Join the [ProxySQL Slack Channel](https://proxysql.slack.com/)
-- Participate in discussions on GitHub
-- Review existing documentation and FAQ
-
----
-
-*Last updated: v3.0.5288*  
-*For the latest information, always refer to the main documentation file.*

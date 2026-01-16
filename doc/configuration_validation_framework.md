@@ -350,15 +350,3 @@ if (config_root.exists("new_section")) {
     validate_config_fields(new_section, "new_section", valid_new_section_fields);
 }
 ```
-
-## Version History
-
-- **v3.0.5288**: Initial implementation of configuration validation framework
-  - Basic field validation for MySQL configuration sections
-  - Command-line arguments for strict and validate-only modes
-  - Intelligent typo detection and suggestions
-  - Integration with existing config reader functions
-
----
-
-For more information and to report issues, please visit the [ProxySQL GitHub repository](https://github.com/sysown/proxysql).
