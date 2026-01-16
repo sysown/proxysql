@@ -61,6 +61,12 @@
 #include "proxysql_sslkeylog.h"
 #include "jemalloc.h"
 
+// AI Features includes
+#include "AI_Features_Manager.h"
+#include "NL2SQL_Converter.h"
+#include "Anomaly_Detector.h"
+#include "AI_Vector_Storage.h"
+
 #ifndef NOJEM
 #if defined(__APPLE__) && defined(__MACH__)
 #ifndef mallctl
