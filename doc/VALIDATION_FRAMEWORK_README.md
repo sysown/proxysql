@@ -34,10 +34,8 @@ This is the comprehensive documentation covering:
 ### Global Variables
 ```sql
 -- Enable strict validation
-SET GLOBAL admin-strict_mode = 1;
 
 -- Enable validate-only mode
-SET GLOBAL admin-validate_only = 1;
 ```
 
 ## Key Features

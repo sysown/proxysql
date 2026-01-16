@@ -169,16 +169,6 @@ Output:
 [ERROR]   Did you mean 'match_pattern'?
 ```
 
-## Global Variables
-
-The following global variables control the validation behavior:
-
-```sql
--- Enable strict validation mode (0 = disabled, 1 = enabled)
-SET GLOBAL admin-strict_mode = 1;
-
--- Enable validate-only mode (exits after validation)
-SET GLOBAL admin-validate_only = 1;
 ```
 
 ## Integration with Existing Systems
@@ -240,9 +230,9 @@ fi
    - Future versions will include type validation and range checking
    - Will validate numeric ranges, string formats, and data types
 
-2. **Module Variables**: Dynamic module variables (mysql-*, pgsql-*, admin-*) are not validated
-   - These variables are handled by individual modules
-   - Module validation will be added in future versions
+2. **Module Variables**: Dynamic module variables (mysql-*, pgsql-*, admin-*) are validated by their respective modules
+   - These variables are validated by their respective modules using module-specific logic
+   - The framework focuses on configuration structure validation
 
 3. **Deprecation Detection**: Currently does not detect deprecated configuration options
    - Future versions will provide warnings for deprecated fields
@@ -312,14 +302,9 @@ fi
 
 #### Enable Debug Logging
 ```sql
-SET GLOBAL admin-log_level = 'DEBUG';
+
 ```
 
-#### Check Global Variables
-```sql
-SHOW VARIABLES LIKE '%strict%';
-SHOW VARIABLES LIKE '%validate%';
-```
 
 #### Manual Validation
 ```bash
