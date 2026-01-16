@@ -366,7 +366,7 @@ int init();
 
 **Return Value:**
 - `0`: Success
-- `非零`: Error
+- `non-zero`: Error
 
 **Initialization Steps:**
 1. Load configuration

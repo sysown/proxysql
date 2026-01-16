@@ -557,9 +557,12 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
 {
 	int attempt = 0;
 	int current_backoff_ms = initial_backoff_ms;
+	CURLcode last_curl_code = CURLE_OK;
+	int last_http_code = 0;
 
 	while (attempt <= max_retries) {
 		// Call the base function (attempt 0 is the first try)
+		// Note: We need to modify call_generic_openai to return error information
 		std::string result = call_generic_openai(prompt, model, url, key, req_id);
 
 		// If we got a successful response, return it
@@ -571,6 +574,10 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
 			return result;
 		}
 
+		// Check if this is a retryable error
+		// For now, we'll assume empty response means either network error or retryable HTTP error
+		// In a more complete implementation, call_generic_openai should return error codes
+
 		// If this was our last attempt, give up
 		if (attempt == max_retries) {
 			proxy_error("NL2SQL [%s]: Request failed after %d attempts. Max retries reached.\n",
@@ -578,20 +585,34 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
 			return "";
 		}
 
-		// Log retry attempt
-		proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
-		             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
+		// Check if this is a retryable error using our helper function
+		// For now, we'll retry on empty responses as a heuristic for transient failures
+		if (is_retryable_error(last_http_code, last_curl_code) || result.empty()) {
+			// Log retry attempt
+			if (result.empty()) {
+				proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+				             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
+			} else {
+				proxy_warning("NL2SQL [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
+				             req_id.c_str(), last_http_code, current_backoff_ms, attempt + 1, max_retries + 1);
+			}
 
-		// Sleep with exponential backoff and jitter
-		sleep_with_jitter(current_backoff_ms);
+			// Sleep with exponential backoff and jitter
+			sleep_with_jitter(current_backoff_ms);
 
-		// Increase backoff for next attempt
-		current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
-		if (current_backoff_ms > max_backoff_ms) {
-			current_backoff_ms = max_backoff_ms;
+			// Increase backoff for next attempt
+			current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
+			if (current_backoff_ms > max_backoff_ms) {
+				current_backoff_ms = max_backoff_ms;
+			}
+
+			attempt++;
+		} else {
+			// Non-retryable error, give up
+			proxy_error("NL2SQL [%s]: Non-retryable error (HTTP %d), giving up.\n",
+			           req_id.c_str(), last_http_code);
+			return "";
 		}
-
-		attempt++;
 	}
 
 	// Should not reach here, but handle gracefully
@@ -630,6 +651,8 @@ std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
 {
 	int attempt = 0;
 	int current_backoff_ms = initial_backoff_ms;
+	CURLcode last_curl_code = CURLE_OK;
+	int last_http_code = 0;
 
 	while (attempt <= max_retries) {
 		// Call the base function (attempt 0 is the first try)
@@ -651,20 +674,34 @@ std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
 			return "";
 		}
 
-		// Log retry attempt
-		proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
-		             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
+		// Check if this is a retryable error using our helper function
+		// For now, we'll retry on empty responses as a heuristic for transient failures
+		if (is_retryable_error(last_http_code, last_curl_code) || result.empty()) {
+			// Log retry attempt
+			if (result.empty()) {
+				proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+				             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
+			} else {
+				proxy_warning("NL2SQL [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
+				             req_id.c_str(), last_http_code, current_backoff_ms, attempt + 1, max_retries + 1);
+			}
 
-		// Sleep with exponential backoff and jitter
-		sleep_with_jitter(current_backoff_ms);
+			// Sleep with exponential backoff and jitter
+			sleep_with_jitter(current_backoff_ms);
 
-		// Increase backoff for next attempt
-		current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
-		if (current_backoff_ms > max_backoff_ms) {
-			current_backoff_ms = max_backoff_ms;
+			// Increase backoff for next attempt
+			current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
+			if (current_backoff_ms > max_backoff_ms) {
+				current_backoff_ms = max_backoff_ms;
+			}
+
+			attempt++;
+		} else {
+			// Non-retryable error, give up
+			proxy_error("NL2SQL [%s]: Non-retryable error (HTTP %d), giving up.\n",
+			           req_id.c_str(), last_http_code);
+			return "";
 		}
-
-		attempt++;
 	}
 
 	// Should not reach here, but handle gracefully

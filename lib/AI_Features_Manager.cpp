@@ -468,11 +468,33 @@ bool validate_numeric_range(const char* value, int min_val, int max_val, const c
 		return false;
 	}
 
-	int int_val = atoi(value);
+	// Use strtol for better error handling
+	char* end_ptr = nullptr;
+	long long_val = strtol(value, &end_ptr, 10);
 
-	if (int_val < min_val || int_val > max_val) {
-		proxy_error("AI: Variable %s value %d is out of valid range [%d, %d]\n",
-			var_name, int_val, min_val, max_val);
+	// Check for conversion errors
+	if (end_ptr == value) {
+		// No digits found
+		proxy_error("AI: Variable %s has invalid numeric format: '%s'\n", var_name, value);
+		return false;
+	}
+
+	// Check for trailing characters
+	if (*end_ptr != '\0') {
+		proxy_error("AI: Variable %s has invalid numeric format (trailing characters): '%s'\n", var_name, value);
+		return false;
+	}
+
+	// Check for range
+	if (long_val < min_val || long_val > max_val) {
+		proxy_error("AI: Variable %s value %ld is out of valid range [%d, %d]\n",
+			var_name, long_val, min_val, max_val);
+		return false;
+	}
+
+	// Check for integer overflow (if long is larger than int on this platform)
+	if (long_val > INT_MAX || long_val < INT_MIN) {
+		proxy_error("AI: Variable %s value %ld is outside int range\n", var_name, long_val);
 		return false;
 	}
 

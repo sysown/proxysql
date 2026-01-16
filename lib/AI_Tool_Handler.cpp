@@ -116,7 +116,13 @@ int AI_Tool_Handler::get_json_int(const json& j, const std::string& key, int def
 		if (j[key].is_number()) {
 			return j[key].get<int>();
 		} else if (j[key].is_string()) {
-			return std::stoi(j[key].get<std::string>());
+			try {
+				return std::stoi(j[key].get<std::string>());
+			} catch (const std::exception& e) {
+				proxy_error("AI_Tool_Handler: Failed to convert string to int for key '%s': %s\n",
+				           key.c_str(), e.what());
+				return default_val;
+			}
 		}
 	}
 	return default_val;
