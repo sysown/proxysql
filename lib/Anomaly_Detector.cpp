@@ -745,9 +745,41 @@ int Anomaly_Detector::add_threat_pattern(const std::string& pattern_name,
  * @return JSON array of threat patterns
  */
 std::string Anomaly_Detector::list_threat_patterns() {
-	// TODO: Query from database
-	// For now, return empty array
-	return "[]";
+	if (!vector_db) {
+		return "[]";
+	}
+
+	json patterns = json::array();
+
+	sqlite3* db = vector_db->get_db();
+	const char* query = "SELECT id, pattern_name, pattern_type, query_example, severity, created_at "
+	                   "FROM anomaly_patterns ORDER BY severity DESC";
+
+	sqlite3_stmt* stmt = NULL;
+	int rc = sqlite3_prepare_v2(db, query, -1, &stmt, NULL);
+
+	if (rc != SQLITE_OK) {
+		proxy_error("Anomaly: Failed to query threat patterns: %s\n", sqlite3_errmsg(db));
+		return "[]";
+	}
+
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		json pattern;
+		pattern["id"] = sqlite3_column_int64(stmt, 0);
+		const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+		const char* type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+		const char* example = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+		pattern["pattern_name"] = name ? name : "";
+		pattern["pattern_type"] = type ? type : "";
+		pattern["query_example"] = example ? example : "";
+		pattern["severity"] = sqlite3_column_int(stmt, 4);
+		pattern["created_at"] = sqlite3_column_int64(stmt, 5);
+		patterns.push_back(pattern);
+	}
+
+	sqlite3_finalize(stmt);
+
+	return patterns.dump();
 }
 
 /**
@@ -759,7 +791,34 @@ std::string Anomaly_Detector::list_threat_patterns() {
 bool Anomaly_Detector::remove_threat_pattern(int pattern_id) {
 	proxy_info("Anomaly: Removing threat pattern: %d\n", pattern_id);
 
-	// TODO: Remove from database
+	if (!vector_db) {
+		proxy_error("Anomaly: Cannot remove pattern - no vector DB\n");
+		return false;
+	}
+
+	sqlite3* db = vector_db->get_db();
+
+	// First, remove from virtual table
+	char del_vec[256];
+	snprintf(del_vec, sizeof(del_vec), "DELETE FROM anomaly_patterns_vec WHERE rowid = %d", pattern_id);
+	char* err = NULL;
+	int rc = sqlite3_exec(db, del_vec, NULL, NULL, &err);
+	if (rc != SQLITE_OK) {
+		proxy_error("Anomaly: Failed to delete from vec table: %s\n", err ? err : "unknown");
+		if (err) sqlite3_free(err);
+		return false;
+	}
+
+	// Then, remove from main table
+	snprintf(del_vec, sizeof(del_vec), "DELETE FROM anomaly_patterns WHERE id = %d", pattern_id);
+	rc = sqlite3_exec(db, del_vec, NULL, NULL, &err);
+	if (rc != SQLITE_OK) {
+		proxy_error("Anomaly: Failed to delete pattern: %s\n", err ? err : "unknown");
+		if (err) sqlite3_free(err);
+		return false;
+	}
+
+	proxy_info("Anomaly: Removed threat pattern %d\n", pattern_id);
 	return true;
 }
 
@@ -791,6 +850,39 @@ std::string Anomaly_Detector::get_statistics() {
 		total_queries += entry.second.query_count;
 	}
 	stats["total_queries_tracked"] = total_queries;
+
+	// Count threat patterns
+	if (vector_db) {
+		sqlite3* db = vector_db->get_db();
+		const char* count_query = "SELECT COUNT(*) FROM anomaly_patterns";
+		sqlite3_stmt* stmt = NULL;
+		int rc = sqlite3_prepare_v2(db, count_query, -1, &stmt, NULL);
+
+		if (rc == SQLITE_OK) {
+			rc = sqlite3_step(stmt);
+			if (rc == SQLITE_ROW) {
+				stats["threat_patterns_count"] = sqlite3_column_int(stmt, 0);
+			}
+			sqlite3_finalize(stmt);
+		}
+
+		// Count by pattern type
+		const char* type_query = "SELECT pattern_type, COUNT(*) FROM anomaly_patterns GROUP BY pattern_type";
+		rc = sqlite3_prepare_v2(db, type_query, -1, &stmt, NULL);
+
+		if (rc == SQLITE_OK) {
+			json by_type = json::object();
+			while (sqlite3_step(stmt) == SQLITE_ROW) {
+				const char* type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+				int count = sqlite3_column_int(stmt, 1);
+				if (type) {
+					by_type[type] = count;
+				}
+			}
+			sqlite3_finalize(stmt);
+			stats["threat_patterns_by_type"] = by_type;
+		}
+	}
 
 	return stats.dump();
 }
