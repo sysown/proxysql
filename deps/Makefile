@@ -392,7 +392,7 @@ $(OTEL_ROOT)/lib/libopentelemetry.a: abseil curl json
 								-DWITH_OTLP_GRPC=OFF                       \
 								-DOTELCPP_PROTO_PATH=$(OTEL_PROTO_DIR)     \
 								-DCMAKE_INSTALL_PREFIX=$(OTEL_ROOT) \
-								-DCMAKE_PREFIX_PATH="$(CURL_ROOT);$(JSON_PATH)"
+								-DCMAKE_PREFIX_PATH="$(ABSL_ROOT);$(CURL_ROOT);$(JSON_PATH)"
 	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd $(OTEL_ROOT)/lib && ${AR} -crs --thin libopentelemetry.a *.a
 	# cd $(OTEL_ROOT)/lib && ls libopentelemetry_*.a | xargs -n1 ${AR} -x
