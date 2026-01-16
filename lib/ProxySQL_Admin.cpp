@@ -3974,7 +3974,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_pgsql_query_rules_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
-			intv = checksum_variables.checksum_mysql_query_rules ? intv : 0; // Reuse mysql_query_rules checksum
+			intv = checksum_variables.checksum_pgsql_variables ? intv : 0;
 			if (variables.cluster_pgsql_query_rules_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_pgsql_query_rules_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
@@ -3989,7 +3989,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_pgsql_servers_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
-			intv = checksum_variables.checksum_mysql_servers ? intv : 0; // Reuse mysql_servers checksum
+			intv = checksum_variables.checksum_pgsql_variables ? intv : 0;
 			if (variables.cluster_pgsql_servers_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_pgsql_servers_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
@@ -4004,7 +4004,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_pgsql_users_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
-			intv = checksum_variables.checksum_mysql_users ? intv : 0; // Reuse mysql_users checksum
+			intv = checksum_variables.checksum_pgsql_variables ? intv : 0;
 			if (variables.cluster_pgsql_users_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_pgsql_users_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
