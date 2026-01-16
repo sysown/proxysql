@@ -218,6 +218,35 @@ static const std::unordered_set<std::string> valid_mysql_group_replication_hostg
 static const std::unordered_set<std::string> valid_mysql_galera_hostgroup_fields = {"comment"};
 static const std::unordered_set<std::string> valid_mysql_hostgroup_attribute_fields = {"hostgroup_id", "disabled", "comment"};
 
+// PostgreSQL configuration validation fields
+static const std::unordered_set<std::string> valid_pgsql_server_fields = {
+	"address", "port", "hostgroup_id", "hostname", "weight",
+	"max_connections", "max_replication_lag", "use_ssl", "compression",
+	"status", "max_latency_ms", "comment"
+};
+
+static const std::unordered_set<std::string> valid_pgsql_user_fields = {
+	"username", "password", "default_hostgroup", "max_connections",
+	"default_schema", "schema_locked", "transaction_persistent",
+	"fast_forward", "backend", "frontend", "default_query_rule",
+	"compression", "comment"
+};
+
+static const std::unordered_set<std::string> valid_pgsql_replication_hostgroup_fields = {"comment"};
+static const std::unordered_set<std::string> valid_pgsql_group_replication_hostgroup_fields = {"comment"};
+
+static const std::unordered_set<std::string> valid_pgsql_query_rule_fields = {
+	"rule_id", "active", "username", "schemaname", "flagIN",
+	"client_addr", "proxy_addr", "proxy_port", "digest",
+	"match_digest", "match_pattern", "negate_match_pattern",
+	"re_modifiers", "flagOUT", "replace_pattern", "destination_hostgroup",
+	"cache_ttl", "cache_empty_result", "cache_timeout", "reconnect",
+	"timeout", "retries", "delay", "next_query_flagIN",
+	"mirror_flagOUT", "mirror_hostgroup", "error_msg", "OK_msg",
+	"sticky_conn", "multiplex", "gtid_from_hostgroup", "log",
+	"apply", "attributes", "comment"
+};
+
 void ProxySQL_Config::addField(std::string& data, const char* name, const char* value, const char* dq) {
 	std::stringstream ss;
 	if (!value || !strlen(value)) return;
@@ -1985,6 +2014,18 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			rows++;
 		}
 	}
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("pgsql_servers")) {
+		const Setting &pgsql_servers = config_root["pgsql_servers"];
+		validate_config_fields(pgsql_servers, "pgsql_servers", valid_pgsql_server_fields);
+	}
+	if (config_root.exists("pgsql_replication_hostgroups")) {
+		const Setting &pgsql_replication_hostgroups = config_root["pgsql_replication_hostgroups"];
+		validate_config_fields(pgsql_replication_hostgroups, "pgsql_replication_hostgroups", valid_pgsql_replication_hostgroup_fields);
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
@@ -2081,6 +2122,14 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile(std::string& error) {
 		free(query);
 		rows++;
 	}
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("pgsql_users")) {
+		const Setting &pgsql_users = config_root["pgsql_users"];
+		validate_config_fields(pgsql_users, "pgsql_users", valid_pgsql_user_fields);
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
@@ -2421,6 +2470,14 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		free(query);
 		rows++;
 	}
+
+	// NEW: Validate all fields after reading
+	const Setting& config_root = GloVars.confFile->cfg.getRoot();
+	if (config_root.exists("pgsql_query_rules")) {
+		const Setting &pgsql_query_rules = config_root["pgsql_query_rules"];
+		validate_config_fields(pgsql_query_rules, "pgsql_query_rules", valid_pgsql_query_rule_fields);
+	}
+
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }

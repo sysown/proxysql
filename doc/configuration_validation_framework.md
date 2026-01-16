@@ -109,6 +109,8 @@ For detailed information about all features, configuration sections, and trouble
 - **mysql_users**: `username`, `password`, `default_hostgroup`, `max_connections`, `default_schema`, `schema_locked`, `transaction_persistent`, `fast_forward`, `backend`, `frontend`, `default_query_rule`, `compression`, `comment`
 
 ### Hostgroup Configuration
+
+### PostgreSQL Configuration\n- **pgsql_query_rules**: `rule_id`, `active`, `username`, `database`, `flagIN`, `client_addr`, `proxy_addr`, `proxy_port`, `digest`, `match_digest`, `match_pattern`, `negate_match_pattern`, `re_modifiers`, `flagOUT`, `replace_pattern`, `destination_hostgroup`, `cache_ttl`, `cache_empty_result`, `cache_timeout`, `reconnect`, `timeout`, `retries`, `delay`, `next_query_flagIN`, `mirror_flagOUT`, `mirror_hostgroup`, `error_msg`, `OK_msg`, `sticky_conn`, `multiplex`, `log`, `apply`, `attributes`, `comment`\n\n- **pgsql_servers**: `address`, `port`, `hostgroup_id`, `hostname`, `weight`, `max_connections`, `max_replication_lag`, `use_ssl`, `compression`, `status`, `max_latency_ms`, `comment`\n\n- **pgsql_users**: `username`, `password`, `default_hostgroup`, `max_connections`, `default_schema`, `schema_locked`, `transaction_persistent`, `fast_forward`, `backend`, `frontend`, `default_query_rule`, `compression`, `comment`\n\n- **pgsql_replication_hostgroups**: `comment`
 - **mysql_replication_hostgroups**: `comment`
 - **mysql_group_replication_hostgroups**: `comment`
 - **mysql_galera_hostgroups**: `comment`
