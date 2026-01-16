@@ -168,6 +168,9 @@ class Base_Session {
 		int __line,
 		const char *name
 	) {
+		if (!GloOTelTracer) {
+			return nullptr;
+		}
 		return GloOTelTracer->StartSpan(span_stack, __file, __line, name);
 	}
 };

@@ -27,7 +27,16 @@ public:
 
 	unsafe_shared_ptr(std::nullptr_t) noexcept : ptr_(nullptr), ref_count_(nullptr) {}
 
-	explicit unsafe_shared_ptr(T* p) : ptr_(p), ref_count_(p ? new size_t(1) : nullptr) {}
+	explicit unsafe_shared_ptr(T* p) : ptr_(p), ref_count_(nullptr) {
+    if (ptr_) {
+        try {
+            ref_count_ = new size_t(1);
+        } catch (...) {
+            delete ptr_;
+            throw;
+        }
+    }
+}
 
 	unsafe_shared_ptr(const unsafe_shared_ptr& other) noexcept
 		: ptr_(other.ptr_), ref_count_(other.ref_count_) {
@@ -104,13 +113,9 @@ public:
 	}
 
 	void reset(T* p) {
-		if (ref_count_ && --(*ref_count_) == 0) {
-			delete ptr_;
-			delete ref_count_;
-		}
-
-		ptr_ = p;
-		ref_count_ = p ? new size_t(1) : nullptr;
+		unsafe_shared_ptr temp(p);
+		std::swap(ptr_, temp.ptr_);
+		std::swap(ref_count_, temp.ref_count_);
 	}
 };
 

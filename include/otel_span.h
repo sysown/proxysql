@@ -5,6 +5,7 @@
 #include <memory>
 #include <signal.h>
 #include <utility>
+#include <vector>
 
 #include "opentelemetry/nostd/shared_ptr.h"
 #include "opentelemetry/trace/span_context.h"
@@ -122,6 +123,10 @@ private:
 
 public:
 	OTelSpan() = default;
+	OTelSpan(const OTelSpan&) = delete;
+	OTelSpan& operator=(const OTelSpan&) = delete;
+	OTelSpan(OTelSpan&&) = delete;
+	OTelSpan& operator=(OTelSpan&&) = delete;
 
 	explicit OTelSpan(
 		otel_trace_api::Tracer* tracer,

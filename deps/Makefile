@@ -394,7 +394,7 @@ $(PROTOBUF_ROOT)/lib/libprotobuf.a: abseil
 								-Dprotobuf_LOCAL_DEPENDENCIES_ONLY=ON
 	cd protobuf/protobuf/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd protobuf/protobuf/build && ${MAKE} install
-	cd $(PROTOBUF_ROOT)/lib && ${AR} -crs --thin libutf8.a *.a
+	cd $(PROTOBUF_ROOT)/lib && ${AR} -crs --thin libprotobuf.a *.a
 	# cd $(PROTOBUF_ROOT)/lib && ls libutf8_*.a | xargs -n1 ${AR} -x
 	# cd $(PROTOBUF_ROOT)/lib && ${AR} -crs libutf8.a *.o && rm *.o
 ifeq ($(PROXYDEBUG),1)

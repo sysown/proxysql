@@ -90,7 +90,7 @@ STATICMYLIBS := -Wl,-Bstatic    \
 				-lproxysql      \
 				-lopentelemetry \
 				-lprotobuf      \
-				-lutf8          \
+				-lutf8_range -lutf8_validity \
 				-labsl          \
 				-ldaemon        \
 				-lconfig++      \
