@@ -159,7 +159,7 @@ int AI_Features_Manager::init_vector_db() {
 	if (vector_db->execute(create_nl2sql_vec) != 0) {
 		proxy_error("AI: Failed to create nl2sql_cache_vec virtual table\n");
 		// Virtual table creation failure is not critical - log and continue
-		proxy_debug(PROXY_DEBUG_AI_GENERIC, 3, "Continuing without nl2sql_cache_vec");
+		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without nl2sql_cache_vec");
 	}
 
 	// 2. Anomaly patterns virtual table
@@ -170,7 +170,7 @@ int AI_Features_Manager::init_vector_db() {
 
 	if (vector_db->execute(create_anomaly_vec) != 0) {
 		proxy_error("AI: Failed to create anomaly_patterns_vec virtual table\n");
-		proxy_debug(PROXY_DEBUG_AI_GENERIC, 3, "Continuing without anomaly_patterns_vec");
+		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without anomaly_patterns_vec");
 	}
 
 	// 3. Query history virtual table
@@ -181,7 +181,7 @@ int AI_Features_Manager::init_vector_db() {
 
 	if (vector_db->execute(create_history_vec) != 0) {
 		proxy_error("AI: Failed to create query_history_vec virtual table\n");
-		proxy_debug(PROXY_DEBUG_AI_GENERIC, 3, "Continuing without query_history_vec");
+		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without query_history_vec");
 	}
 
 	proxy_info("AI: Vector storage initialized successfully with virtual tables\n");
