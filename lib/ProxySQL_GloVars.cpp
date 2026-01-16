@@ -223,6 +223,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #endif
 
 	global.sqlite3_server=false;
+	global.strict_mode=false;
+	global.validate_only=false;
 	global.data_packets_history_size=0;
 #ifdef PROXYSQLCLICKHOUSE
 	global.clickhouse_server=false;
@@ -280,6 +282,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,0,0,(const char *)"Do not check for the latest version of ProxySQL",(const char *)"--no-version-check");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
+	opt->add((const char *)"",0,0,0,(const char *)"Enable strict configuration validation at startup. Exits with error if config has unknown fields, deprecated variables, or invalid patterns.",(const char *)"--strict");
+	opt->add((const char *)"",0,0,0,(const char *)"Validate configuration file and exit. Use with --strict to fail on errors.",(const char *)"--validate-config",(const char *)"--dry-run");
 	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
 	// Bootstrap General options
 	opt->add((const char *)"",0,1,0,(const char *)"Start ProxySQL in Group Replication bootstrap mode."
@@ -418,6 +422,15 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	}
 	if (opt->isSet("--sqlite3-server")) {
 		global.sqlite3_server=true;
+	}
+	if (opt->isSet("--strict")) {
+		__cmd_proxysql_strict = true;
+		global.strict_mode = true;
+	}
+	// Handle both --validate-config and --dry-run aliases
+	if (opt->isSet("--validate-config") || opt->isSet("--dry-run")) {
+		__cmd_proxysql_validate_only = true;
+		global.validate_only = true;
 	}
 #ifdef PROXYSQLCLICKHOUSE
 	if (opt->isSet("--clickhouse-server")) {

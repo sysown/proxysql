@@ -3,6 +3,8 @@
 
 #include <string>
 #include <libconfig.h++>
+#include <vector>
+#include <unordered_set>
 
 class SQLite3DB;
 extern const char* config_header;
@@ -56,6 +58,30 @@ public:
 	int Write_Scheduler_to_configfile(std::string& data);
 	int Write_Restapi_to_configfile(std::string& data);
 	int Write_ProxySQL_Servers_to_configfile(std::string& data);
+
+// Configuration validation methods
+	void add_validation_error(const std::string& section, const std::string& location,
+	                          const std::string& field, const std::string& message,
+	                          const std::string& suggestion = "", bool is_fatal = true);
+	void add_validation_warning(const std::string& section, const std::string& location,
+	                            const std::string& field, const std::string& message);
+	void report_validation_results();
+	bool validate_config_fields(const libconfig::Setting& section, const std::string& section_name,
+	                            const std::unordered_set<std::string>& valid_fields);
+	std::string find_closest_match(const std::string& input, const std::unordered_set<std::string>& candidates);
+
+// Configuration validation
+	struct ConfigValidationError {
+		std::string section;       // e.g., "mysql_query_rules"
+		std::string location;      // e.g., "rule_id 100" or "line 42"
+		std::string field;         // e.g., "mathc_pattern"
+		std::string message;       // Error message
+		std::string suggestion;    // Suggested correction (optional)
+		bool is_fatal;             // If true, causes exit in strict mode
+	};
+
+	std::vector<ConfigValidationError> validation_errors;
+	std::vector<ConfigValidationError> validation_warnings;
 
 private:
 	bool validate_backend_users(proxysql_config_type type, const libconfig::Setting& config, std::string& error);
