@@ -355,7 +355,7 @@ char* AI_Features_Manager::get_variable(const char* name) {
  * @param url The URL to validate
  * @return true if URL looks valid, false otherwise
  */
-static bool validate_url_format(const char* url) {
+bool validate_url_format(const char* url) {
 	if (!url || strlen(url) == 0) {
 		return true; // Empty URL is valid (will use defaults)
 	}
@@ -392,7 +392,7 @@ static bool validate_url_format(const char* url) {
  * @param provider_name The provider name (for logging)
  * @return true if key looks valid, false otherwise
  */
-static bool validate_api_key_format(const char* key, const char* provider_name) {
+bool validate_api_key_format(const char* key, const char* provider_name) {
 	if (!key || strlen(key) == 0) {
 		return true; // Empty key is valid for local endpoints
 	}
@@ -437,7 +437,7 @@ static bool validate_api_key_format(const char* key, const char* provider_name) 
  * @param var_name Variable name for error logging
  * @return true if value is in range, false otherwise
  */
-static bool validate_numeric_range(const char* value, int min_val, int max_val, const char* var_name) {
+bool validate_numeric_range(const char* value, int min_val, int max_val, const char* var_name) {
 	if (!value || strlen(value) == 0) {
 		proxy_error("AI: Variable %s is empty\n", var_name);
 		return false;
@@ -460,7 +460,7 @@ static bool validate_numeric_range(const char* value, int min_val, int max_val, 
  * @param provider The provider name to validate
  * @return true if provider is valid, false otherwise
  */
-static bool validate_provider_name(const char* provider) {
+bool validate_provider_name(const char* provider) {
 	if (!provider || strlen(provider) == 0) {
 		proxy_error("AI: Provider name is empty\n");
 		return false;
