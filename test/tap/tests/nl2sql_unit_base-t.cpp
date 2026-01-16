@@ -35,6 +35,7 @@
 #include "utils.h"
 
 using std::string;
+using std::vector;
 
 // Global admin connection
 MYSQL* g_admin = NULL;
