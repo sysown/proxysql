@@ -28,8 +28,60 @@
 
 #include "json.hpp"
 #include <curl/curl.h>
+#include <time.h>
 
 using json = nlohmann::json;
+
+// ============================================================================
+// Structured Logging Macros
+// ============================================================================
+
+/**
+ * @brief Logging macros for LLM API calls with request correlation
+ *
+ * These macros provide structured logging with:
+ * - Request ID for correlation across log lines
+ * - Key parameters (URL, model, prompt length)
+ * - Response metrics (status code, duration, response preview)
+ * - Error context (phase, error message, status)
+ */
+
+#define LOG_LLM_REQUEST(req_id, url, model, prompt) \
+	do { \
+		if (req_id && strlen(req_id) > 0) { \
+			proxy_debug(PROXY_DEBUG_NL2SQL, 2, \
+				"NL2SQL [%s]: REQUEST url=%s model=%s prompt_len=%zu\n", \
+				req_id, url, model, prompt.length()); \
+		} else { \
+			proxy_debug(PROXY_DEBUG_NL2SQL, 2, \
+				"NL2SQL: REQUEST url=%s model=%s prompt_len=%zu\n", \
+				url, model, prompt.length()); \
+		} \
+	} while(0)
+
+#define LOG_LLM_RESPONSE(req_id, status, duration_ms, response_preview) \
+	do { \
+		if (req_id && strlen(req_id) > 0) { \
+			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
+				"NL2SQL [%s]: RESPONSE status=%d duration_ms=%ld response=%s\n", \
+				req_id, status, duration_ms, response_preview.c_str()); \
+		} else { \
+			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
+				"NL2SQL: RESPONSE status=%d duration_ms=%ld response=%s\n", \
+				status, duration_ms, response_preview.c_str()); \
+		} \
+	} while(0)
+
+#define LOG_LLM_ERROR(req_id, phase, error, status) \
+	do { \
+		if (req_id && strlen(req_id) > 0) { \
+			proxy_error("NL2SQL [%s]: ERROR phase=%s error=%s status=%d\n", \
+				req_id, phase, error, status); \
+		} else { \
+			proxy_error("NL2SQL: ERROR phase=%s error=%s status=%d\n", \
+				phase, error, status); \
+		} \
+	} while(0)
 
 // ============================================================================
 // Write callback for curl responses
@@ -99,15 +151,24 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
  * @param model Model name to use
  * @param url Full API endpoint URL
  * @param key API key (can be NULL for local endpoints)
+ * @param req_id Request ID for correlation (optional)
  * @return Generated SQL or empty string on error
  */
 std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, const std::string& model,
-                                                   const std::string& url, const char* key) {
+                                                   const std::string& url, const char* key,
+                                                   const std::string& req_id) {
+	// Start timing
+	struct timespec start_ts, end_ts;
+	clock_gettime(CLOCK_MONOTONIC, &start_ts);
+
+	// Log request
+	LOG_LLM_REQUEST(req_id.c_str(), url.c_str(), model.c_str(), prompt);
+
 	std::string response_data;
 	CURL* curl = curl_easy_init();
 
 	if (!curl) {
-		proxy_error("NL2SQL: Failed to initialize curl for OpenAI-compatible provider\n");
+		LOG_LLM_ERROR(req_id.c_str(), "init", "Failed to initialize curl", 0);
 		return "";
 	}
 
@@ -152,14 +213,16 @@ std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, con
 
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Calling OpenAI-compatible provider: %s (model: %s)\n",
-	            url.c_str(), model.c_str());
-
 	// Perform request
 	CURLcode res = curl_easy_perform(curl);
 
+	// Calculate duration
+	clock_gettime(CLOCK_MONOTONIC, &end_ts);
+	int64_t duration_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 +
+	                      (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
+
 	if (res != CURLE_OK) {
-		proxy_error("NL2SQL: OpenAI-compatible curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		LOG_LLM_ERROR(req_id.c_str(), "curl", curl_easy_strerror(res), 0);
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 		return "";
@@ -199,20 +262,21 @@ std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, con
 					sql = sql.substr(trim_start, trim_end - trim_start + 1);
 				}
 
-				proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: OpenAI-compatible provider returned SQL: %s\n", sql.c_str());
+				// Log successful response with timing
+				std::string preview = sql.length() > 100 ? sql.substr(0, 100) + "..." : sql;
+				LOG_LLM_RESPONSE(req_id.c_str(), 200, duration_ms, preview);
 				return sql;
 			}
 		}
 
-		proxy_error("NL2SQL: OpenAI-compatible response missing expected fields\n");
+		LOG_LLM_ERROR(req_id.c_str(), "parse", "Response missing expected fields", 0);
 		return "";
 
 	} catch (const json::parse_error& e) {
-		proxy_error("NL2SQL: Failed to parse OpenAI-compatible response JSON: %s\n", e.what());
-		proxy_error("NL2SQL: Response was: %s\n", response_data.c_str());
+		LOG_LLM_ERROR(req_id.c_str(), "parse_json", e.what(), 0);
 		return "";
 	} catch (const std::exception& e) {
-		proxy_error("NL2SQL: Error processing OpenAI-compatible response: %s\n", e.what());
+		LOG_LLM_ERROR(req_id.c_str(), "process", e.what(), 0);
 		return "";
 	}
 }
@@ -250,20 +314,29 @@ std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, con
  * @param model Model name to use
  * @param url Full API endpoint URL
  * @param key API key (required for Anthropic)
+ * @param req_id Request ID for correlation (optional)
  * @return Generated SQL or empty string on error
  */
 std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, const std::string& model,
-                                                      const std::string& url, const char* key) {
+                                                      const std::string& url, const char* key,
+                                                      const std::string& req_id) {
+	// Start timing
+	struct timespec start_ts, end_ts;
+	clock_gettime(CLOCK_MONOTONIC, &start_ts);
+
+	// Log request
+	LOG_LLM_REQUEST(req_id.c_str(), url.c_str(), model.c_str(), prompt);
+
 	std::string response_data;
 	CURL* curl = curl_easy_init();
 
 	if (!curl) {
-		proxy_error("NL2SQL: Failed to initialize curl for Anthropic-compatible provider\n");
+		LOG_LLM_ERROR(req_id.c_str(), "init", "Failed to initialize curl", 0);
 		return "";
 	}
 
 	if (!key || strlen(key) == 0) {
-		proxy_error("NL2SQL: Anthropic-compatible provider requires API key\n");
+		LOG_LLM_ERROR(req_id.c_str(), "auth", "API key required", 0);
 		curl_easy_cleanup(curl);
 		return "";
 	}
@@ -309,14 +382,16 @@ std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, 
 
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Calling Anthropic-compatible provider: %s (model: %s)\n",
-	            url.c_str(), model.c_str());
-
 	// Perform request
 	CURLcode res = curl_easy_perform(curl);
 
+	// Calculate duration
+	clock_gettime(CLOCK_MONOTONIC, &end_ts);
+	int64_t duration_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 +
+	                      (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
+
 	if (res != CURLE_OK) {
-		proxy_error("NL2SQL: Anthropic-compatible curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		LOG_LLM_ERROR(req_id.c_str(), "curl", curl_easy_strerror(res), 0);
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 		return "";
@@ -359,20 +434,21 @@ std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, 
 					sql.pop_back();
 				}
 
-				proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Anthropic-compatible provider returned SQL: %s\n", sql.c_str());
+				// Log successful response with timing
+				std::string preview = sql.length() > 100 ? sql.substr(0, 100) + "..." : sql;
+				LOG_LLM_RESPONSE(req_id.c_str(), 200, duration_ms, preview);
 				return sql;
 			}
 		}
 
-		proxy_error("NL2SQL: Anthropic-compatible response missing expected fields\n");
+		LOG_LLM_ERROR(req_id.c_str(), "parse", "Response missing expected fields", 0);
 		return "";
 
 	} catch (const json::parse_error& e) {
-		proxy_error("NL2SQL: Failed to parse Anthropic-compatible response JSON: %s\n", e.what());
-		proxy_error("NL2SQL: Response was: %s\n", response_data.c_str());
+		LOG_LLM_ERROR(req_id.c_str(), "parse_json", e.what(), 0);
 		return "";
 	} catch (const std::exception& e) {
-		proxy_error("NL2SQL: Error processing Anthropic-compatible response: %s\n", e.what());
+		LOG_LLM_ERROR(req_id.c_str(), "process", e.what(), 0);
 		return "";
 	}
 }

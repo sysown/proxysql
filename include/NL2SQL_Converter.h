@@ -85,7 +85,18 @@ struct NL2SQLRequest {
 	bool allow_cache;                        ///< Enable semantic cache lookup
 	std::vector<std::string> context_tables; ///< Optional table hints for schema
 
-	NL2SQLRequest() : max_latency_ms(0), allow_cache(true) {}
+	// Request tracking for correlation and debugging
+	std::string request_id;                  ///< Unique ID for this request (UUID-like)
+
+	NL2SQLRequest() : max_latency_ms(0), allow_cache(true) {
+		// Generate UUID-like request ID for correlation
+		char uuid[64];
+		snprintf(uuid, sizeof(uuid), "%08lx-%04x-%04x-%04x-%012lx",
+		         (unsigned long)rand(), (unsigned)rand() & 0xffff,
+		         (unsigned)rand() & 0xffff, (unsigned)rand() & 0xffff,
+		         (unsigned long)rand() & 0xffffffffffff);
+		request_id = uuid;
+	}
 };
 
 /**
@@ -189,9 +200,11 @@ private:
 	// Internal methods
 	std::string build_prompt(const NL2SQLRequest& req, const std::string& schema_context);
 	std::string call_generic_openai(const std::string& prompt, const std::string& model,
-	                                 const std::string& url, const char* key);
+	                                 const std::string& url, const char* key,
+	                                 const std::string& req_id = "");
 	std::string call_generic_anthropic(const std::string& prompt, const std::string& model,
-	                                    const std::string& url, const char* key);
+	                                    const std::string& url, const char* key,
+	                                    const std::string& req_id = "");
 	NL2SQLResult check_vector_cache(const NL2SQLRequest& req);
 	void store_in_vector_cache(const NL2SQLRequest& req, const NL2SQLResult& result);
 	std::string get_schema_context(const std::vector<std::string>& tables);
