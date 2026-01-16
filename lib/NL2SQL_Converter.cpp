@@ -394,6 +394,147 @@ std::string NL2SQL_Converter::get_schema_context(const std::vector<std::string>&
 }
 
 // ============================================================================
+// SQL Validation
+// ============================================================================
+
+/**
+ * @brief Validate SQL and generate confidence score
+ *
+ * Performs multi-factor validation:
+ * 1. SQL keyword detection
+ * 2. Structural validation (parentheses, quotes)
+ * 3. Common SQL injection pattern detection
+ * 4. Length and complexity checks
+ *
+ * @param sql The SQL to validate
+ * @return Confidence score 0.0-1.0
+ */
+float NL2SQL_Converter::validate_and_score_sql(const std::string& sql) {
+	if (sql.empty()) {
+		return 0.0f;
+	}
+
+	float confidence = 0.0f;
+	int checks_passed = 0;
+	int total_checks = 0;
+
+	// Trim leading whitespace for validation
+	size_t start = sql.find_first_not_of(" \t\n\r");
+	if (start == std::string::npos) {
+		return 0.0f; // Empty or whitespace only
+	}
+	std::string trimmed_sql = sql.substr(start);
+	std::string upper_sql = trimmed_sql;
+	std::transform(upper_sql.begin(), upper_sql.end(), upper_sql.begin(), ::toupper);
+
+	// Check 1: SQL keyword detection
+	total_checks++;
+	static const std::vector<std::string> sql_keywords = {
+		"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
+		"TRUNCATE", "REPLACE", "GRANT", "REVOKE", "SHOW", "DESCRIBE",
+		"EXPLAIN", "WITH", "CALL", "BEGIN", "COMMIT", "ROLLBACK"
+	};
+	for (const auto& keyword : sql_keywords) {
+		if (upper_sql.find(keyword) == 0 || upper_sql.find("-- " + keyword) == 0) {
+			confidence += 0.4f;
+			checks_passed++;
+			break;
+		}
+	}
+
+	// Check 2: Structural validation - balanced parentheses
+	total_checks++;
+	int paren_count = 0;
+	bool balanced_parens = true;
+	for (char c : sql) {
+		if (c == '(') paren_count++;
+		else if (c == ')') paren_count--;
+		if (paren_count < 0) {
+			balanced_parens = false;
+			break;
+		}
+	}
+	if (balanced_parens && paren_count == 0) {
+		confidence += 0.15f;
+		checks_passed++;
+	} else if (paren_count != 0) {
+		// Unbalanced parentheses reduce confidence
+		confidence -= 0.1f;
+	}
+
+	// Check 3: Balanced quotes
+	total_checks++;
+	int single_quotes = 0;
+	int double_quotes = 0;
+	for (size_t i = 0; i < sql.length(); i++) {
+		if (sql[i] == '\'' && (i == 0 || sql[i-1] != '\\')) {
+			single_quotes++;
+		}
+		if (sql[i] == '"' && (i == 0 || sql[i-1] != '\\')) {
+			double_quotes++;
+		}
+	}
+	if (single_quotes % 2 == 0 && double_quotes % 2 == 0) {
+		confidence += 0.15f;
+		checks_passed++;
+	} else {
+		confidence -= 0.1f;
+	}
+
+	// Check 4: Minimum length check
+	total_checks++;
+	if (sql.length() >= 10) {
+		confidence += 0.1f;
+		checks_passed++;
+	}
+
+	// Check 5: Contains FROM clause for SELECT statements (quality indicator)
+	total_checks++;
+	if (upper_sql.find("SELECT") == 0 && upper_sql.find("FROM") != std::string::npos) {
+		confidence += 0.1f;
+		checks_passed++;
+	}
+
+	// Check 6: SQL injection pattern detection (negative impact)
+	total_checks++;
+	static const std::vector<std::string> injection_patterns = {
+		"; DROP", "; DELETE", "; INSERT", "; UPDATE",
+		"1=1", "1 = 1", "OR TRUE", "AND TRUE",
+		"UNION SELECT", "'; --", "\"; --"
+	};
+	bool has_injection = false;
+	std::string check_upper = upper_sql;
+	for (const auto& pattern : injection_patterns) {
+		std::string pattern_upper = pattern;
+		std::transform(pattern_upper.begin(), pattern_upper.end(), pattern_upper.begin(), ::toupper);
+		if (check_upper.find(pattern_upper) != std::string::npos) {
+			has_injection = true;
+			break;
+		}
+	}
+	if (!has_injection) {
+		confidence += 0.1f;
+		checks_passed++;
+	} else {
+		confidence -= 0.3f; // Significant penalty for injection patterns
+		proxy_warning("NL2SQL: Potential SQL injection pattern detected in generated SQL\n");
+	}
+
+	// Normalize confidence to 0.0-1.0 range
+	if (confidence < 0.0f) confidence = 0.0f;
+	if (confidence > 1.0f) confidence = 1.0f;
+
+	// Additional logging for low confidence
+	if (confidence < 0.5f) {
+		proxy_debug(PROXY_DEBUG_NL2SQL, 2,
+			"NL2SQL: Low confidence score %.2f (passed %d/%d checks). SQL: %s\n",
+			confidence, checks_passed, total_checks, sql.c_str());
+	}
+
+	return confidence;
+}
+
+// ============================================================================
 // Main Conversion Method
 // ============================================================================
 
@@ -477,34 +618,13 @@ NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req) {
 		return result;
 	}
 
-	// Basic SQL validation - check if it starts with SELECT/INSERT/UPDATE/DELETE/etc.
-	static const std::vector<std::string> sql_keywords = {
-		"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "SHOW", "DESCRIBE", "EXPLAIN", "WITH"
-	};
+	// Improved SQL validation
+	float confidence = validate_and_score_sql(raw_sql);
+	result.sql_query = raw_sql;
+	result.confidence = confidence;
 
-	bool valid_sql = false;
-	std::string upper_sql = raw_sql;
-	std::transform(upper_sql.begin(), upper_sql.end(), upper_sql.begin(), ::toupper);
-
-	for (const auto& keyword : sql_keywords) {
-		if (upper_sql.find(keyword) == 0 || upper_sql.find("-- " + keyword) == 0) {
-			valid_sql = true;
-			break;
-		}
-	}
-
-	if (!valid_sql) {
-		// Doesn't look like SQL - might be explanation text
-		proxy_warning("NL2SQL: Response doesn't look like SQL: %s\n", raw_sql.c_str());
-		result.sql_query = "-- NL2SQL conversion may have failed\n" + raw_sql;
-		result.confidence = 0.3f;
-	} else {
-		result.sql_query = raw_sql;
-		result.confidence = 0.85f;
-	}
-
-	// Store in vector cache for future use
-	if (req.allow_cache && valid_sql) {
+	// Store in vector cache for future use if confidence is good enough
+	if (req.allow_cache && confidence >= 0.5f) {
 		store_in_vector_cache(req, result);
 	}
 

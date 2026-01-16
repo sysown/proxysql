@@ -148,6 +148,7 @@ private:
 	std::string get_schema_context(const std::vector<std::string>& tables);
 	ModelProvider select_model(const NL2SQLRequest& req);
 	std::vector<float> get_query_embedding(const std::string& text);
+	float validate_and_score_sql(const std::string& sql);
 
 public:
 	/**
