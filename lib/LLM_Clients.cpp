@@ -2,10 +2,11 @@
  * @file LLM_Clients.cpp
  * @brief HTTP client implementations for LLM providers
  *
- * This file implements HTTP clients for three LLM providers:
- * - Ollama (local): POST http://localhost:11434/api/generate
- * - OpenAI (cloud): POST https://api.openai.com/v1/chat/completions
- * - Anthropic (cloud): POST https://api.anthropic.com/v1/messages
+ * This file implements HTTP clients for LLM providers:
+ * - Generic OpenAI-compatible: POST {configurable_url}/v1/chat/completions
+ * - Generic Anthropic-compatible: POST {configurable_url}/v1/messages
+ *
+ * Note: Ollama is supported via its OpenAI-compatible endpoint at /v1/chat/completions
  *
  * All clients use libcurl for HTTP requests and nlohmann/json for
  * request/response parsing. Each client handles:
@@ -58,122 +59,19 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
 // ============================================================================
 
 /**
- * @brief Call Ollama API for text generation (local LLM)
+ * @brief Call generic OpenAI-compatible API for text generation
  *
- * Ollama endpoint: POST http://localhost:11434/api/generate
- *
- * Request format:
- * @code{.json}
- * {
- *   "model": "llama3.2",
- *   "prompt": "Convert to SQL: Show top customers",
- *   "stream": false,
- *   "options": {
- *     "temperature": 0.1,
- *     "num_predict": 500
- *   }
- * }
- * @endcode
- *
- * Response format:
- * @code{.json}
- * {
- *   "response": "SELECT * FROM customers...",
- *   "model": "llama3.2",
- *   "total_duration": 123456789
- * }
- * @endcode
- *
- * @param prompt The prompt to send to Ollama
- * @param model Model name (e.g., "llama3.2")
- * @return Generated SQL or empty string on error
- */
-std::string NL2SQL_Converter::call_ollama(const std::string& prompt, const std::string& model) {
-	std::string response_data;
-	CURL* curl = curl_easy_init();
-
-	if (!curl) {
-		proxy_error("NL2SQL: Failed to initialize curl for Ollama\n");
-		return "";
-	}
-
-	// Build JSON request
-	json payload;
-	payload["model"] = model;
-	payload["prompt"] = prompt;
-	payload["stream"] = false;
-
-	// Add options for better SQL generation
-	json options;
-	options["temperature"] = 0.1;
-	options["num_predict"] = 500;
-	options["top_p"] = 0.9;
-	payload["options"] = options;
-
-	std::string json_str = payload.dump();
-
-	// Configure curl
-	char url[256];
-	snprintf(url, sizeof(url), "http://localhost:11434/api/generate");
-
-	curl_easy_setopt(curl, CURLOPT_URL, url);
-	curl_easy_setopt(curl, CURLOPT_POST, 1L);
-	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, config.timeout_ms);
-
-	// Add headers
-	struct curl_slist* headers = nullptr;
-	headers = curl_slist_append(headers, "Content-Type: application/json");
-	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Calling Ollama with model: %s\n", model.c_str());
-
-	// Perform request
-	CURLcode res = curl_easy_perform(curl);
-
-	if (res != CURLE_OK) {
-		proxy_error("NL2SQL: Ollama curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-		curl_slist_free_all(headers);
-		curl_easy_cleanup(curl);
-		return "";
-	}
-
-	curl_slist_free_all(headers);
-	curl_easy_cleanup(curl);
-
-	// Parse response
-	try {
-		json response_json = json::parse(response_data);
-
-		if (response_json.contains("response") && response_json["response"].is_string()) {
-			std::string sql = response_json["response"].get<std::string>();
-			proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Ollama returned SQL: %s\n", sql.c_str());
-			return sql;
-		} else {
-			proxy_error("NL2SQL: Ollama response missing 'response' field\n");
-			return "";
-		}
-	} catch (const json::parse_error& e) {
-		proxy_error("NL2SQL: Failed to parse Ollama response JSON: %s\n", e.what());
-		proxy_error("NL2SQL: Response was: %s\n", response_data.c_str());
-		return "";
-	} catch (const std::exception& e) {
-		proxy_error("NL2SQL: Error processing Ollama response: %s\n", e.what());
-		return "";
-	}
-}
-
-/**
- * @brief Call OpenAI API for text generation (cloud LLM)
- *
- * OpenAI endpoint: POST https://api.openai.com/v1/chat/completions
+ * This function works with any OpenAI-compatible API:
+ * - OpenAI (https://api.openai.com/v1/chat/completions)
+ * - Z.ai (https://api.z.ai/api/coding/paas/v4/chat/completions)
+ * - vLLM (http://localhost:8000/v1/chat/completions)
+ * - LM Studio (http://localhost:1234/v1/chat/completions)
+ * - Any other OpenAI-compatible endpoint
  *
  * Request format:
  * @code{.json}
  * {
- *   "model": "gpt-4o-mini",
+ *   "model": "your-model-name",
  *   "messages": [
  *     {"role": "system", "content": "You are a SQL expert..."},
  *     {"role": "user", "content": "Convert to SQL: Show top customers"}
@@ -197,22 +95,19 @@ std::string NL2SQL_Converter::call_ollama(const std::string& prompt, const std::
  * }
  * @endcode
  *
- * @param prompt The prompt to send to OpenAI
- * @param model Model name (e.g., "gpt-4o-mini")
+ * @param prompt The prompt to send to the API
+ * @param model Model name to use
+ * @param url Full API endpoint URL
+ * @param key API key (can be NULL for local endpoints)
  * @return Generated SQL or empty string on error
  */
-std::string NL2SQL_Converter::call_openai(const std::string& prompt, const std::string& model) {
+std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, const std::string& model,
+                                                   const std::string& url, const char* key) {
 	std::string response_data;
 	CURL* curl = curl_easy_init();
 
 	if (!curl) {
-		proxy_error("NL2SQL: Failed to initialize curl for OpenAI\n");
-		return "";
-	}
-
-	if (!config.openai_key) {
-		proxy_error("NL2SQL: OpenAI API key not configured\n");
-		curl_easy_cleanup(curl);
+		proxy_error("NL2SQL: Failed to initialize curl for OpenAI-compatible provider\n");
 		return "";
 	}
 
@@ -238,7 +133,7 @@ std::string NL2SQL_Converter::call_openai(const std::string& prompt, const std::
 	std::string json_str = payload.dump();
 
 	// Configure curl
-	curl_easy_setopt(curl, CURLOPT_URL, "https://api.openai.com/v1/chat/completions");
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
@@ -249,19 +144,22 @@ std::string NL2SQL_Converter::call_openai(const std::string& prompt, const std::
 	struct curl_slist* headers = nullptr;
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 
-	char auth_header[512];
-	snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", config.openai_key);
-	headers = curl_slist_append(headers, auth_header);
+	if (key && strlen(key) > 0) {
+		char auth_header[512];
+		snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", key);
+		headers = curl_slist_append(headers, auth_header);
+	}
 
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Calling OpenAI with model: %s\n", model.c_str());
+	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Calling OpenAI-compatible provider: %s (model: %s)\n",
+	            url.c_str(), model.c_str());
 
 	// Perform request
 	CURLcode res = curl_easy_perform(curl);
 
 	if (res != CURLE_OK) {
-		proxy_error("NL2SQL: OpenAI curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		proxy_error("NL2SQL: OpenAI-compatible curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 		return "";
@@ -282,52 +180,54 @@ std::string NL2SQL_Converter::call_openai(const std::string& prompt, const std::
 
 				// Strip markdown code blocks if present
 				std::string sql = content;
-				if (sql.find("```sql") == 0) {
-					sql = sql.substr(6);
-					size_t end_pos = sql.rfind("```");
-					if (end_pos != std::string::npos) {
-						sql = sql.substr(0, end_pos);
+				size_t start = sql.find("```sql");
+				if (start != std::string::npos) {
+					start = sql.find('\n', start);
+					if (start != std::string::npos) {
+						sql = sql.substr(start + 1);
 					}
-				} else if (sql.find("```") == 0) {
-					sql = sql.substr(3);
-					size_t end_pos = sql.rfind("```");
-					if (end_pos != std::string::npos) {
-						sql = sql.substr(0, end_pos);
-					}
+				}
+				size_t end = sql.find("```");
+				if (end != std::string::npos) {
+					sql = sql.substr(0, end);
 				}
 
 				// Trim whitespace
-				while (!sql.empty() && (sql.front() == '\n' || sql.front() == ' ' || sql.front() == '\t')) {
-					sql.erase(0, 1);
-				}
-				while (!sql.empty() && (sql.back() == '\n' || sql.back() == ' ' || sql.back() == '\t')) {
-					sql.pop_back();
+				size_t trim_start = sql.find_first_not_of(" \t\n\r");
+				size_t trim_end = sql.find_last_not_of(" \t\n\r");
+				if (trim_start != std::string::npos && trim_end != std::string::npos) {
+					sql = sql.substr(trim_start, trim_end - trim_start + 1);
 				}
 
-				proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: OpenAI returned SQL: %s\n", sql.c_str());
+				proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: OpenAI-compatible provider returned SQL: %s\n", sql.c_str());
 				return sql;
 			}
 		}
 
-		proxy_error("NL2SQL: OpenAI response missing expected fields\n");
+		proxy_error("NL2SQL: OpenAI-compatible response missing expected fields\n");
 		return "";
+
 	} catch (const json::parse_error& e) {
-		proxy_error("NL2SQL: Failed to parse OpenAI response JSON: %s\n", e.what());
+		proxy_error("NL2SQL: Failed to parse OpenAI-compatible response JSON: %s\n", e.what());
 		proxy_error("NL2SQL: Response was: %s\n", response_data.c_str());
 		return "";
 	} catch (const std::exception& e) {
-		proxy_error("NL2SQL: Error processing OpenAI response: %s\n", e.what());
+		proxy_error("NL2SQL: Error processing OpenAI-compatible response: %s\n", e.what());
 		return "";
 	}
 }
 
 /**
- * @brief Call Anthropic Claude API for text generation
+ * @brief Call generic Anthropic-compatible API for text generation
  *
- * Anthropic endpoint: POST https://api.anthropic.com/v1/messages
+ * This function works with any Anthropic-compatible API:
+ * - Anthropic (https://api.anthropic.com/v1/messages)
+ * - Other Anthropic-format endpoints
+ *
  * Request format:
+ * @code{.json}
  * {
- *   "model": "claude-3-haiku-20240307",
+ *   "model": "your-model-name",
  *   "max_tokens": 500,
  *   "messages": [
  *     {"role": "user", "content": "Convert to SQL: Show top customers"}
@@ -335,24 +235,35 @@ std::string NL2SQL_Converter::call_openai(const std::string& prompt, const std::
  *   "system": "You are a SQL expert...",
  *   "temperature": 0.1
  * }
+ * @endcode
+ *
  * Response format:
+ * @code{.json}
  * {
  *   "content": [{"type": "text", "text": "SELECT * FROM customers..."}],
  *   "model": "claude-3-haiku-20240307",
  *   "usage": {"input_tokens": 10, "output_tokens": 20}
  * }
+ * @endcode
+ *
+ * @param prompt The prompt to send to the API
+ * @param model Model name to use
+ * @param url Full API endpoint URL
+ * @param key API key (required for Anthropic)
+ * @return Generated SQL or empty string on error
  */
-std::string NL2SQL_Converter::call_anthropic(const std::string& prompt, const std::string& model) {
+std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, const std::string& model,
+                                                      const std::string& url, const char* key) {
 	std::string response_data;
 	CURL* curl = curl_easy_init();
 
 	if (!curl) {
-		proxy_error("NL2SQL: Failed to initialize curl for Anthropic\n");
+		proxy_error("NL2SQL: Failed to initialize curl for Anthropic-compatible provider\n");
 		return "";
 	}
 
-	if (!config.anthropic_key) {
-		proxy_error("NL2SQL: Anthropic API key not configured\n");
+	if (!key || strlen(key) == 0) {
+		proxy_error("NL2SQL: Anthropic-compatible provider requires API key\n");
 		curl_easy_cleanup(curl);
 		return "";
 	}
@@ -378,7 +289,7 @@ std::string NL2SQL_Converter::call_anthropic(const std::string& prompt, const st
 	std::string json_str = payload.dump();
 
 	// Configure curl
-	curl_easy_setopt(curl, CURLOPT_URL, "https://api.anthropic.com/v1/messages");
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
@@ -390,7 +301,7 @@ std::string NL2SQL_Converter::call_anthropic(const std::string& prompt, const st
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 
 	char api_key_header[512];
-	snprintf(api_key_header, sizeof(api_key_header), "x-api-key: %s", config.anthropic_key);
+	snprintf(api_key_header, sizeof(api_key_header), "x-api-key: %s", key);
 	headers = curl_slist_append(headers, api_key_header);
 
 	// Anthropic-specific version header
@@ -398,13 +309,14 @@ std::string NL2SQL_Converter::call_anthropic(const std::string& prompt, const st
 
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Calling Anthropic with model: %s\n", model.c_str());
+	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Calling Anthropic-compatible provider: %s (model: %s)\n",
+	            url.c_str(), model.c_str());
 
 	// Perform request
 	CURLcode res = curl_easy_perform(curl);
 
 	if (res != CURLE_OK) {
-		proxy_error("NL2SQL: Anthropic curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		proxy_error("NL2SQL: Anthropic-compatible curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 		return "";
@@ -447,19 +359,20 @@ std::string NL2SQL_Converter::call_anthropic(const std::string& prompt, const st
 					sql.pop_back();
 				}
 
-				proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Anthropic returned SQL: %s\n", sql.c_str());
+				proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Anthropic-compatible provider returned SQL: %s\n", sql.c_str());
 				return sql;
 			}
 		}
 
-		proxy_error("NL2SQL: Anthropic response missing expected fields\n");
+		proxy_error("NL2SQL: Anthropic-compatible response missing expected fields\n");
 		return "";
+
 	} catch (const json::parse_error& e) {
-		proxy_error("NL2SQL: Failed to parse Anthropic response JSON: %s\n", e.what());
+		proxy_error("NL2SQL: Failed to parse Anthropic-compatible response JSON: %s\n", e.what());
 		proxy_error("NL2SQL: Response was: %s\n", response_data.c_str());
 		return "";
 	} catch (const std::exception& e) {
-		proxy_error("NL2SQL: Error processing Anthropic response: %s\n", e.what());
+		proxy_error("NL2SQL: Error processing Anthropic-compatible response: %s\n", e.what());
 		return "";
 	}
 }

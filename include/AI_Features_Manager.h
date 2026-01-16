@@ -92,14 +92,12 @@ public:
 
 		// NL2SQL configuration
 		char* ai_nl2sql_query_prefix;
-		char* ai_nl2sql_model_provider;
-		char* ai_nl2sql_ollama_model;
-		char* ai_nl2sql_openai_model;
-		char* ai_nl2sql_anthropic_model;
+		char* ai_nl2sql_provider;         // "openai" or "anthropic"
+		char* ai_nl2sql_provider_url;     // Generic endpoint URL
+		char* ai_nl2sql_provider_model;   // Model name
+		char* ai_nl2sql_provider_key;     // API key
 		int ai_nl2sql_cache_similarity_threshold;
 		int ai_nl2sql_timeout_ms;
-		char* ai_nl2sql_openai_key;
-		char* ai_nl2sql_anthropic_key;
 
 		// Anomaly detection configuration
 		int ai_anomaly_risk_threshold;

@@ -26,14 +26,12 @@ AI_Features_Manager::AI_Features_Manager()
 	variables.ai_anomaly_detection_enabled = false;
 
 	variables.ai_nl2sql_query_prefix = strdup("NL2SQL:");
-	variables.ai_nl2sql_model_provider = strdup("ollama");
-	variables.ai_nl2sql_ollama_model = strdup("llama3.2");
-	variables.ai_nl2sql_openai_model = strdup("gpt-4o-mini");
-	variables.ai_nl2sql_anthropic_model = strdup("claude-3-haiku");
+	variables.ai_nl2sql_provider = strdup("openai");
+	variables.ai_nl2sql_provider_url = strdup("http://localhost:11434/v1/chat/completions");
+	variables.ai_nl2sql_provider_model = strdup("llama3.2");
+	variables.ai_nl2sql_provider_key = NULL;
 	variables.ai_nl2sql_cache_similarity_threshold = 85;
 	variables.ai_nl2sql_timeout_ms = 30000;
-	variables.ai_nl2sql_openai_key = NULL;
-	variables.ai_nl2sql_anthropic_key = NULL;
 
 	variables.ai_anomaly_risk_threshold = 70;
 	variables.ai_anomaly_similarity_threshold = 80;
@@ -57,12 +55,10 @@ AI_Features_Manager::~AI_Features_Manager() {
 
 	// Free configuration strings
 	free(variables.ai_nl2sql_query_prefix);
-	free(variables.ai_nl2sql_model_provider);
-	free(variables.ai_nl2sql_ollama_model);
-	free(variables.ai_nl2sql_openai_model);
-	free(variables.ai_nl2sql_anthropic_model);
-	free(variables.ai_nl2sql_openai_key);
-	free(variables.ai_nl2sql_anthropic_key);
+	free(variables.ai_nl2sql_provider);
+	free(variables.ai_nl2sql_provider_url);
+	free(variables.ai_nl2sql_provider_model);
+	free(variables.ai_nl2sql_provider_key);
 	free(variables.ai_vector_db_path);
 
 	pthread_rwlock_destroy(&rwlock);
@@ -197,6 +193,20 @@ int AI_Features_Manager::init_nl2sql() {
 	proxy_info("AI: Initializing NL2SQL Converter\n");
 
 	nl2sql_converter = new NL2SQL_Converter();
+
+	// Set vector database
+	nl2sql_converter->set_vector_db(vector_db);
+
+	// Update config with current variables
+	nl2sql_converter->update_config(
+		variables.ai_nl2sql_provider,
+		variables.ai_nl2sql_provider_url,
+		variables.ai_nl2sql_provider_model,
+		variables.ai_nl2sql_provider_key,
+		variables.ai_nl2sql_cache_similarity_threshold,
+		variables.ai_nl2sql_timeout_ms
+	);
+
 	if (nl2sql_converter->init() != 0) {
 		proxy_error("AI: Failed to initialize NL2SQL Converter\n");
 		delete nl2sql_converter;
@@ -311,12 +321,14 @@ char* AI_Features_Manager::get_variable(const char* name) {
 		return variables.ai_anomaly_detection_enabled ? strdup("true") : strdup("false");
 	if (strcmp(name, "ai_nl2sql_query_prefix") == 0)
 		return strdup(variables.ai_nl2sql_query_prefix);
-	if (strcmp(name, "ai_nl2sql_model_provider") == 0)
-		return strdup(variables.ai_nl2sql_model_provider);
-	if (strcmp(name, "ai_nl2sql_ollama_model") == 0)
-		return strdup(variables.ai_nl2sql_ollama_model);
-	if (strcmp(name, "ai_nl2sql_openai_model") == 0)
-		return strdup(variables.ai_nl2sql_openai_model);
+	if (strcmp(name, "ai_nl2sql_provider") == 0)
+		return strdup(variables.ai_nl2sql_provider);
+	if (strcmp(name, "ai_nl2sql_provider_url") == 0)
+		return strdup(variables.ai_nl2sql_provider_url);
+	if (strcmp(name, "ai_nl2sql_provider_model") == 0)
+		return strdup(variables.ai_nl2sql_provider_model);
+	if (strcmp(name, "ai_nl2sql_provider_key") == 0)
+		return variables.ai_nl2sql_provider_key ? strdup(variables.ai_nl2sql_provider_key) : strdup("");
 	if (strcmp(name, "ai_anomaly_risk_threshold") == 0) {
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%d", variables.ai_anomaly_risk_threshold);
@@ -355,19 +367,24 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 		variables.ai_nl2sql_query_prefix = strdup(value);
 		changed = true;
 	}
-	else if (strcmp(name, "ai_nl2sql_model_provider") == 0) {
-		free(variables.ai_nl2sql_model_provider);
-		variables.ai_nl2sql_model_provider = strdup(value);
+	else if (strcmp(name, "ai_nl2sql_provider") == 0) {
+		free(variables.ai_nl2sql_provider);
+		variables.ai_nl2sql_provider = strdup(value);
 		changed = true;
 	}
-	else if (strcmp(name, "ai_nl2sql_ollama_model") == 0) {
-		free(variables.ai_nl2sql_ollama_model);
-		variables.ai_nl2sql_ollama_model = strdup(value);
+	else if (strcmp(name, "ai_nl2sql_provider_url") == 0) {
+		free(variables.ai_nl2sql_provider_url);
+		variables.ai_nl2sql_provider_url = strdup(value);
 		changed = true;
 	}
-	else if (strcmp(name, "ai_nl2sql_openai_model") == 0) {
-		free(variables.ai_nl2sql_openai_model);
-		variables.ai_nl2sql_openai_model = strdup(value);
+	else if (strcmp(name, "ai_nl2sql_provider_model") == 0) {
+		free(variables.ai_nl2sql_provider_model);
+		variables.ai_nl2sql_provider_model = strdup(value);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_nl2sql_provider_key") == 0) {
+		free(variables.ai_nl2sql_provider_key);
+		variables.ai_nl2sql_provider_key = strdup(value);
 		changed = true;
 	}
 	else if (strcmp(name, "ai_anomaly_risk_threshold") == 0) {
@@ -395,10 +412,10 @@ char** AI_Features_Manager::get_variables_list() {
 		"ai_nl2sql_enabled",
 		"ai_anomaly_detection_enabled",
 		"ai_nl2sql_query_prefix",
-		"ai_nl2sql_model_provider",
-		"ai_nl2sql_ollama_model",
-		"ai_nl2sql_openai_model",
-		"ai_nl2sql_anthropic_model",
+		"ai_nl2sql_provider",
+		"ai_nl2sql_provider_url",
+		"ai_nl2sql_provider_model",
+		"ai_nl2sql_provider_key",
 		"ai_nl2sql_cache_similarity_threshold",
 		"ai_nl2sql_timeout_ms",
 		"ai_anomaly_risk_threshold",
@@ -415,11 +432,11 @@ char** AI_Features_Manager::get_variables_list() {
 	};
 
 	// Clone the array
-	char** result = (char**)malloc(sizeof(char*) * 21);
+	char** result = (char**)malloc(sizeof(char*) * 20);
 	for (int i = 0; vars[i]; i++) {
 		result[i] = strdup(vars[i]);
 	}
-	result[20] = NULL;
+	result[19] = NULL;
 
 	return result;
 }

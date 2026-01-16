@@ -5,7 +5,7 @@
  * This file implements the NL2SQL conversion pipeline including:
  * - Vector cache operations for semantic similarity
  * - Model selection based on latency/budget
- * - LLM API calls (Ollama, OpenAI, Anthropic)
+ * - Generic LLM API calls (Ollama, OpenAI-compatible, Anthropic-compatible)
  * - SQL validation and cleaning
  *
  * @see NL2SQL_Converter.h
@@ -40,25 +40,20 @@ extern GenAI_Threads_Handler *GloGATH;
 NL2SQL_Converter::NL2SQL_Converter() : vector_db(NULL) {
 	config.enabled = true;
 	config.query_prefix = strdup("NL2SQL:");
-	config.model_provider = strdup("ollama");
-	config.ollama_model = strdup("llama3.2");
-	config.openai_model = strdup("gpt-4o-mini");
-	config.anthropic_model = strdup("claude-3-haiku");
+	config.provider = strdup("openai");
+	config.provider_url = strdup("http://localhost:11434/v1/chat/completions");  // Ollama default
+	config.provider_model = strdup("llama3.2");
+	config.provider_key = NULL;
 	config.cache_similarity_threshold = 85;
 	config.timeout_ms = 30000;
-	config.openai_key = NULL;
-	config.anthropic_key = NULL;
-	config.prefer_local = true;
 }
 
 NL2SQL_Converter::~NL2SQL_Converter() {
 	free(config.query_prefix);
-	free(config.model_provider);
-	free(config.ollama_model);
-	free(config.openai_model);
-	free(config.anthropic_model);
-	free(config.openai_key);
-	free(config.anthropic_key);
+	free(config.provider);
+	free(config.provider_url);
+	free(config.provider_model);
+	free(config.provider_key);
 }
 
 // ============================================================================
@@ -81,6 +76,24 @@ int NL2SQL_Converter::init() {
 
 void NL2SQL_Converter::close() {
 	proxy_info("NL2SQL: NL2SQL Converter closed\n");
+}
+
+void NL2SQL_Converter::update_config(const char* provider, const char* provider_url,
+                                     const char* provider_model, const char* provider_key,
+                                     int cache_threshold, int timeout) {
+	// Free old values
+	free(config.provider);
+	free(config.provider_url);
+	free(config.provider_model);
+	free(config.provider_key);
+
+	// Set new values
+	config.provider = strdup(provider ? provider : "openai");
+	config.provider_url = strdup(provider_url ? provider_url : "http://localhost:11434/v1/chat/completions");
+	config.provider_model = strdup(provider_model ? provider_model : "llama3.2");
+	config.provider_key = provider_key ? strdup(provider_key) : NULL;
+	config.cache_similarity_threshold = cache_threshold;
+	config.timeout_ms = timeout;
 }
 
 // ============================================================================
@@ -300,38 +313,40 @@ void NL2SQL_Converter::store_in_vector_cache(const NL2SQLRequest& req, const NL2
  * @brief Select the best model provider for the given request
  *
  * Selection criteria:
- * 1. Hard latency requirement -> local Ollama
- * 2. Explicit provider preference -> use that
- * 3. Default preference (prefer_local) -> Ollama or cloud
+ * 1. Explicit provider preference -> use that
+ * 2. For generic providers: check API key availability (only for cloud)
+ *
+ * @note For local endpoints (like Ollama), API key is optional
  */
 ModelProvider NL2SQL_Converter::select_model(const NL2SQLRequest& req) {
-	// Hard latency requirement - local is faster
-	if (req.max_latency_ms > 0 && req.max_latency_ms < 500) {
-		proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Selecting local Ollama due to latency constraint\n");
-		return ModelProvider::LOCAL_OLLAMA;
-	}
-
 	// Check provider preference
-	std::string provider(config.model_provider ? config.model_provider : "ollama");
+	std::string provider(config.provider ? config.provider : "openai");
 
 	if (provider == "openai") {
-		// Check if API key is configured
-		if (config.openai_key) {
-			return ModelProvider::CLOUD_OPENAI;
-		} else {
-			proxy_warning("NL2SQL: OpenAI requested but no API key configured, falling back to Ollama\n");
+		// For local endpoints, API key is optional
+		// Check if this is a local endpoint
+		std::string url(config.provider_url ? config.provider_url : "");
+		bool is_local = (url.find("localhost") != std::string::npos ||
+		                url.find("127.0.0.1") != std::string::npos ||
+		                url.find("http://localhost:11434") != std::string::npos);
+
+		if (!is_local && !config.provider_key) {
+			proxy_error("NL2SQL: OpenAI-compatible provider requested but API key not configured\n");
+			return ModelProvider::FALLBACK_ERROR;
 		}
+		return ModelProvider::GENERIC_OPENAI;
 	} else if (provider == "anthropic") {
-		// Check if API key is configured
-		if (config.anthropic_key) {
-			return ModelProvider::CLOUD_ANTHROPIC;
-		} else {
-			proxy_warning("NL2SQL: Anthropic requested but no API key configured, falling back to Ollama\n");
+		// Anthropic always requires API key
+		if (!config.provider_key) {
+			proxy_error("NL2SQL: Anthropic-compatible provider requested but API key not configured\n");
+			return ModelProvider::FALLBACK_ERROR;
 		}
+		return ModelProvider::GENERIC_ANTHROPIC;
 	}
 
-	// Default to Ollama
-	return ModelProvider::LOCAL_OLLAMA;
+	// Unknown provider, default to OpenAI format
+	proxy_warning("NL2SQL: Unknown provider '%s', defaulting to OpenAI format\n", provider.c_str());
+	return ModelProvider::GENERIC_OPENAI;
 }
 
 // ============================================================================
@@ -388,7 +403,7 @@ std::string NL2SQL_Converter::get_schema_context(const std::vector<std::string>&
  * Conversion Pipeline:
  * 1. Check vector cache for semantically similar queries
  * 2. Build prompt with schema context
- * 3. Select appropriate model (Ollama/OpenAI/Anthropic)
+ * 3. Select appropriate model (Ollama or generic provider)
  * 4. Call LLM API via HTTP
  * 5. Parse and clean SQL response
  * 6. Store in vector cache for future use
@@ -423,20 +438,35 @@ NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req) {
 
 	// Call appropriate LLM
 	std::string raw_sql;
+	std::string url;
+	const char* model = NULL;
+	const char* key = config.provider_key;
+
 	switch (provider) {
-		case ModelProvider::CLOUD_OPENAI:
-			raw_sql = call_openai(prompt, config.openai_model ? config.openai_model : "gpt-4o-mini");
-			result.explanation = "Generated by OpenAI " + std::string(config.openai_model);
+		case ModelProvider::GENERIC_OPENAI:
+			// Use configured URL or default Ollama endpoint
+			url = (config.provider_url && strlen(config.provider_url) > 0)
+			      ? config.provider_url
+			      : "http://localhost:11434/v1/chat/completions";
+			model = config.provider_model ? config.provider_model : "llama3.2";
+			raw_sql = call_generic_openai(prompt, model, url, key);
+			result.explanation = "Generated by OpenAI-compatible provider (" + std::string(model) + ")";
 			break;
-		case ModelProvider::CLOUD_ANTHROPIC:
-			raw_sql = call_anthropic(prompt, config.anthropic_model ? config.anthropic_model : "claude-3-haiku");
-			result.explanation = "Generated by Anthropic " + std::string(config.anthropic_model);
+		case ModelProvider::GENERIC_ANTHROPIC:
+			// Use configured URL or default Anthropic endpoint
+			url = (config.provider_url && strlen(config.provider_url) > 0)
+			      ? config.provider_url
+			      : "https://api.anthropic.com/v1/messages";
+			model = config.provider_model ? config.provider_model : "claude-3-haiku";
+			raw_sql = call_generic_anthropic(prompt, model, url, key);
+			result.explanation = "Generated by Anthropic-compatible provider (" + std::string(model) + ")";
 			break;
-		case ModelProvider::LOCAL_OLLAMA:
+		case ModelProvider::FALLBACK_ERROR:
 		default:
-			raw_sql = call_ollama(prompt, config.ollama_model ? config.ollama_model : "llama3.2");
-			result.explanation = "Generated by local Ollama " + std::string(config.ollama_model);
-			break;
+			result.sql_query = "-- NL2SQL conversion failed: API key not configured for provider\n";
+			result.confidence = 0.0f;
+			result.explanation = "Error: API key not configured";
+			return result;
 	}
 
 	// Validate and clean SQL

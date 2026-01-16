@@ -6,11 +6,20 @@ NL2SQL (Natural Language to SQL) is a ProxySQL feature that converts natural lan
 
 ## Features
 
-- **Hybrid Deployment**: Local Ollama + Cloud APIs (OpenAI, Anthropic)
+- **Generic Provider Support**: Works with any OpenAI-compatible or Anthropic-compatible endpoint
 - **Semantic Caching**: Vector-based cache for similar queries using sqlite-vec
 - **Schema Awareness**: Understands your database schema for better conversions
 - **Multi-Provider**: Switch between LLM providers seamlessly
 - **Security**: Generated SQL is returned for review before execution
+
+**Supported Endpoints:**
+- Ollama (via OpenAI-compatible `/v1/chat/completions` endpoint)
+- OpenAI
+- Anthropic
+- vLLM
+- LM Studio
+- Z.ai
+- Any other OpenAI-compatible or Anthropic-compatible endpoint
 
 ## Quick Start
 
@@ -24,29 +33,49 @@ LOAD MYSQL VARIABLES TO RUNTIME;
 
 ### 2. Configure LLM Provider
 
-**Using local Ollama (default):**
+ProxySQL uses a **generic provider configuration** that supports any OpenAI-compatible or Anthropic-compatible endpoint.
+
+**Using Ollama (default):**
+
+Ollama is used via its OpenAI-compatible endpoint:
 
 ```sql
-SET ai_nl2sql_model_provider='ollama';
-SET ai_nl2sql_ollama_model='llama3.2';
+SET ai_nl2sql_provider='openai';
+SET ai_nl2sql_provider_url='http://localhost:11434/v1/chat/completions';
+SET ai_nl2sql_provider_model='llama3.2';
+SET ai_nl2sql_provider_key='';  -- Empty for local Ollama
 LOAD MYSQL VARIABLES TO RUNTIME;
 ```
 
 **Using OpenAI:**
 
 ```sql
-SET ai_nl2sql_model_provider='openai';
-SET ai_nl2sql_openai_model='gpt-4o-mini';
-SET ai_nl2sql_openai_key='sk-...';
+SET ai_nl2sql_provider='openai';
+SET ai_nl2sql_provider_url='https://api.openai.com/v1/chat/completions';
+SET ai_nl2sql_provider_model='gpt-4o-mini';
+SET ai_nl2sql_provider_key='sk-...';
 LOAD MYSQL VARIABLES TO RUNTIME;
 ```
 
 **Using Anthropic:**
 
 ```sql
-SET ai_nl2sql_model_provider='anthropic';
-SET ai_nl2sql_anthropic_model='claude-3-haiku';
-SET ai_nl2sql_anthropic_key='sk-ant-...';
+SET ai_nl2sql_provider='anthropic';
+SET ai_nl2sql_provider_url='https://api.anthropic.com/v1/messages';
+SET ai_nl2sql_provider_model='claude-3-haiku';
+SET ai_nl2sql_provider_key='sk-ant-...';
+LOAD MYSQL VARIABLES TO RUNTIME;
+```
+
+**Using any OpenAI-compatible endpoint:**
+
+This works with **any** OpenAI-compatible API (vLLM, LM Studio, Z.ai, etc.):
+
+```sql
+SET ai_nl2sql_provider='openai';
+SET ai_nl2sql_provider_url='https://your-endpoint.com/v1/chat/completions';
+SET ai_nl2sql_provider_model='your-model-name';
+SET ai_nl2sql_provider_key='your-api-key';  -- Empty for local endpoints
 LOAD MYSQL VARIABLES TO RUNTIME;
 ```
 
@@ -68,10 +97,10 @@ mysql> NL2SQL: Show top 10 customers by revenue;
 |----------|---------|-------------|
 | `ai_nl2sql_enabled` | true | Enable/disable NL2SQL |
 | `ai_nl2sql_query_prefix` | NL2SQL: | Prefix for NL2SQL queries |
-| `ai_nl2sql_model_provider` | ollama | LLM provider (ollama/openai/anthropic) |
-| `ai_nl2sql_ollama_model` | llama3.2 | Ollama model name |
-| `ai_nl2sql_openai_model` | gpt-4o-mini | OpenAI model name |
-| `ai_nl2sql_anthropic_model` | claude-3-haiku | Anthropic model name |
+| `ai_nl2sql_provider` | openai | Provider format: `openai` or `anthropic` |
+| `ai_nl2sql_provider_url` | http://localhost:11434/v1/chat/completions | Endpoint URL |
+| `ai_nl2sql_provider_model` | llama3.2 | Model name |
+| `ai_nl2sql_provider_key` | (none) | API key (optional for local endpoints) |
 | `ai_nl2sql_cache_similarity_threshold` | 85 | Semantic similarity threshold (0-100) |
 | `ai_nl2sql_timeout_ms` | 30000 | LLM request timeout in milliseconds |
 | `ai_nl2sql_prefer_local` | true | Prefer local models when possible |
@@ -80,9 +109,9 @@ mysql> NL2SQL: Show top 10 customers by revenue;
 
 The system automatically selects the best model based on:
 
-1. **Latency requirements**: Local Ollama for fast queries (< 500ms)
-2. **API key availability**: Falls back to Ollama if keys missing
-3. **User preference**: Respects `ai_nl2sql_model_provider` setting
+1. **Provider format**: Uses `ai_nl2sql_provider` setting (openai or anthropic)
+2. **API key availability**: For cloud endpoints, API key is required
+3. **Local endpoints**: API key is optional for local endpoints (localhost, 127.0.0.1)
 
 ## Examples
 
@@ -145,7 +174,7 @@ NL2SQL returns a resultset with:
 
 1. **Try a different model:**
    ```sql
-   SET ai_nl2sql_ollama_model='llama3.3';
+   SET ai_nl2sql_provider_model='gpt-4o';
    ```
 
 2. **Increase timeout for complex queries:**

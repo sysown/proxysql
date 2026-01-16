@@ -46,73 +46,56 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 
 ### Model Selection
 
-#### `ai_nl2sql_model_provider`
+#### `ai_nl2sql_provider`
 
-- **Type**: Enum (`ollama`, `openai`, `anthropic`)
-- **Default**: `ollama`
-- **Description**: Preferred LLM provider
+- **Type**: Enum (`openai`, `anthropic`)
+- **Default**: `openai`
+- **Description**: Provider format to use
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_model_provider='openai';
+  SET ai_nl2sql_provider='openai';
   LOAD MYSQL VARIABLES TO RUNTIME;
   ```
 
-#### `ai_nl2sql_ollama_model`
+#### `ai_nl2sql_provider_url`
+
+- **Type**: String
+- **Default**: `http://localhost:11434/v1/chat/completions`
+- **Description**: Endpoint URL
+- **Runtime**: Yes
+- **Example**:
+  ```sql
+  -- For OpenAI
+  SET ai_nl2sql_provider_url='https://api.openai.com/v1/chat/completions';
+
+  -- For Ollama (via OpenAI-compatible endpoint)
+  SET ai_nl2sql_provider_url='http://localhost:11434/v1/chat/completions';
+
+  -- For Anthropic
+  SET ai_nl2sql_provider_url='https://api.anthropic.com/v1/messages';
+  ```
+
+#### `ai_nl2sql_provider_model`
 
 - **Type**: String
 - **Default**: `llama3.2`
-- **Description**: Ollama model name
+- **Description**: Model name
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_ollama_model='llama3.3';
+  SET ai_nl2sql_provider_model='gpt-4o';
   ```
 
-#### `ai_nl2sql_openai_model`
-
-- **Type**: String
-- **Default**: `gpt-4o-mini`
-- **Description**: OpenAI model name
-- **Runtime**: Yes
-- **Example**:
-  ```sql
-  SET ai_nl2sql_openai_model='gpt-4o';
-  ```
-
-#### `ai_nl2sql_anthropic_model`
-
-- **Type**: String
-- **Default**: `claude-3-haiku`
-- **Description**: Anthropic model name
-- **Runtime**: Yes
-- **Example**:
-  ```sql
-  SET ai_nl2sql_anthropic_model='claude-3-5-sonnet-20241022';
-  ```
-
-### API Keys
-
-#### `ai_nl2sql_openai_key`
+#### `ai_nl2sql_provider_key`
 
 - **Type**: String (sensitive)
 - **Default**: NULL
-- **Description**: OpenAI API key
+- **Description**: API key (optional for local endpoints)
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_openai_key='sk-proj-...';
-  ```
-
-#### `ai_nl2sql_anthropic_key`
-
-- **Type**: String (sensitive)
-- **Default**: NULL
-- **Description**: Anthropic API key
-- **Runtime**: Yes
-- **Example**:
-  ```sql
-  SET ai_nl2sql_anthropic_key='sk-ant-...';
+  SET ai_nl2sql_provider_key='sk-your-api-key';
   ```
 
 ### Cache Configuration
@@ -210,10 +193,9 @@ struct NL2SQLResult {
 
 ```cpp
 enum class ModelProvider {
-    LOCAL_OLLAMA,      // Local models via Ollama
-    CLOUD_OPENAI,      // OpenAI API
-    CLOUD_ANTHROPIC,   // Anthropic API
-    FALLBACK_ERROR     // No model available
+    GENERIC_OPENAI,    // Any OpenAI-compatible endpoint (configurable URL)
+    GENERIC_ANTHROPIC, // Any Anthropic-compatible endpoint (configurable URL)
+    FALLBACK_ERROR     // No model available (error state)
 };
 ```
 
