@@ -15,6 +15,8 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
+#include "Anomaly_Detector.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
 #include "MySQL_Authentication.hpp"
@@ -3610,6 +3612,86 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	return false;
 }
 
+/**
+ * @brief AI-based anomaly detection for queries
+ *
+ * Uses the Anomaly_Detector to perform multi-stage security analysis:
+ * - SQL injection pattern detection (regex-based)
+ * - Rate limiting per user/host
+ * - Statistical anomaly detection
+ * - Embedding-based threat similarity
+ *
+ * @return true if query should be blocked, false otherwise
+ */
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly() {
+	// Check if AI features are available
+	if (!GloAI) {
+		return false;
+	}
+
+	Anomaly_Detector* detector = GloAI->get_anomaly_detector();
+	if (!detector) {
+		return false;
+	}
+
+	// Get user and client information
+	char* username = NULL;
+	char* client_address = NULL;
+	if (client_myds && client_myds->myconn && client_myds->myconn->userinfo) {
+		username = client_myds->myconn->userinfo->username;
+	}
+	if (client_myds && client_myds->addr.addr) {
+		client_address = client_myds->addr.addr;
+	}
+
+	if (!username) username = (char*)"";
+	if (!client_address) client_address = (char*)"";
+
+	// Get schema name if available
+	std::string schema = "";
+	if (client_myds && client_myds->myconn && client_myds->myconn->userinfo && client_myds->myconn->userinfo->schemaname) {
+		schema = client_myds->myconn->userinfo->schemaname;
+	}
+
+	// Build query string
+	std::string query((char *)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+
+	// Run anomaly detection
+	AnomalyResult result = detector->analyze(query, username, client_address, schema);
+
+	// Handle anomaly detected
+	if (result.is_anomaly) {
+		thread->status_variables.stvar[st_var_ai_detected_anomalies]++;
+
+		// Log the anomaly with details
+		proxy_error("AI Anomaly detected from %s@%s (risk: %.2f, type: %s): %s\n",
+		           username, client_address, result.risk_score,
+		           result.anomaly_type.c_str(), result.explanation.c_str());
+		fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+		fprintf(stderr, "\n");
+
+		// Check if should block
+		if (result.should_block) {
+			thread->status_variables.stvar[st_var_ai_blocked_queries]++;
+
+			// Generate error message
+			char err_msg[512];
+			snprintf(err_msg, sizeof(err_msg),
+			        "AI Anomaly Detection: Query blocked due to %s (risk score: %.2f)",
+			        result.explanation.c_str(), result.risk_score);
+
+			// Send error to client
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1313,
+			                                       (char*)"HY000", err_msg, true);
+			RequestEnd(NULL, 1313, err_msg);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 // Handler for GENAI: queries - experimental GenAI integration
 // Query formats:
 //   GENAI: {"type": "embed", "documents": ["doc1", "doc2", ...]}
@@ -5061,6 +5143,13 @@ __get_pkts_from_client:
 									if (mirror==false && rc_break==false) {
 										if (mysql_thread___automatic_detect_sqli) {
 											if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi()) {
+												handler_ret = -1;
+												return handler_ret;
+											}
+										}
+										// AI-based anomaly detection
+										if (GloAI && GloAI->get_anomaly_detector()) {
+											if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly()) {
 												handler_ret = -1;
 												return handler_ret;
 											}
