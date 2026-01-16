@@ -342,6 +342,143 @@ char* AI_Features_Manager::get_variable(const char* name) {
 	return NULL;
 }
 
+// ============================================================================
+// Configuration Validation Helper Functions
+// ============================================================================
+
+/**
+ * @brief Validate a URL string format
+ *
+ * Checks if the URL appears to be well-formed (has protocol and host).
+ * This is a basic check, not full URL validation.
+ *
+ * @param url The URL to validate
+ * @return true if URL looks valid, false otherwise
+ */
+static bool validate_url_format(const char* url) {
+	if (!url || strlen(url) == 0) {
+		return true; // Empty URL is valid (will use defaults)
+	}
+
+	// Check for protocol prefix (http://, https://)
+	const char* http_prefix = "http://";
+	const char* https_prefix = "https://";
+
+	bool has_protocol = (strncmp(url, http_prefix, strlen(http_prefix)) == 0 ||
+	                     strncmp(url, https_prefix, strlen(https_prefix)) == 0);
+
+	if (!has_protocol) {
+		return false;
+	}
+
+	// Check for host part (at least something after ://)
+	const char* host_start = strstr(url, "://");
+	if (!host_start || strlen(host_start + 3) == 0) {
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * @brief Validate an API key format
+ *
+ * Checks for common API key mistakes:
+ * - Contains spaces or newlines
+ * - Contains "sk-" followed by nothing (incomplete key)
+ * - Too short to be valid
+ *
+ * @param key The API key to validate
+ * @param provider_name The provider name (for logging)
+ * @return true if key looks valid, false otherwise
+ */
+static bool validate_api_key_format(const char* key, const char* provider_name) {
+	if (!key || strlen(key) == 0) {
+		return true; // Empty key is valid for local endpoints
+	}
+
+	size_t len = strlen(key);
+
+	// Check for whitespace
+	for (size_t i = 0; i < len; i++) {
+		if (key[i] == ' ' || key[i] == '\t' || key[i] == '\n' || key[i] == '\r') {
+			proxy_error("AI: API key for %s contains whitespace\n", provider_name);
+			return false;
+		}
+	}
+
+	// Check minimum length (most API keys are at least 20 chars)
+	if (len < 10) {
+		proxy_error("AI: API key for %s appears too short (only %zu chars)\n", provider_name, len);
+		return false;
+	}
+
+	// Check for incomplete OpenAI key format
+	if (strncmp(key, "sk-", 3) == 0 && len < 20) {
+		proxy_error("AI: API key for %s appears to be incomplete OpenAI key (only %zu chars)\n", provider_name, len);
+		return false;
+	}
+
+	// Check for incomplete Anthropic key format
+	if (strncmp(key, "sk-ant-", 7) == 0 && len < 25) {
+		proxy_error("AI: API key for %s appears to be incomplete Anthropic key (only %zu chars)\n", provider_name, len);
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * @brief Validate a numeric range value
+ *
+ * @param value The string value to validate
+ * @param min_val Minimum acceptable value
+ * @param max_val Maximum acceptable value
+ * @param var_name Variable name for error logging
+ * @return true if value is in range, false otherwise
+ */
+static bool validate_numeric_range(const char* value, int min_val, int max_val, const char* var_name) {
+	if (!value || strlen(value) == 0) {
+		proxy_error("AI: Variable %s is empty\n", var_name);
+		return false;
+	}
+
+	int int_val = atoi(value);
+
+	if (int_val < min_val || int_val > max_val) {
+		proxy_error("AI: Variable %s value %d is out of valid range [%d, %d]\n",
+			var_name, int_val, min_val, max_val);
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * @brief Validate a provider name
+ *
+ * @param provider The provider name to validate
+ * @return true if provider is valid, false otherwise
+ */
+static bool validate_provider_name(const char* provider) {
+	if (!provider || strlen(provider) == 0) {
+		proxy_error("AI: Provider name is empty\n");
+		return false;
+	}
+
+	const char* valid_providers[] = {"openai", "anthropic", NULL};
+	for (int i = 0; valid_providers[i]; i++) {
+		if (strcmp(provider, valid_providers[i]) == 0) {
+			return true;
+		}
+	}
+
+	proxy_error("AI: Invalid provider '%s'. Valid providers: openai, anthropic\n", provider);
+	return false;
+}
+
+// ============================================================================
+
 bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 	wrlock();
 
@@ -368,27 +505,82 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider") == 0) {
+		if (!validate_provider_name(value)) {
+			wrunlock();
+			return false;
+		}
 		free(variables.ai_nl2sql_provider);
 		variables.ai_nl2sql_provider = strdup(value);
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider_url") == 0) {
+		if (!validate_url_format(value)) {
+			proxy_error("AI: Invalid URL format for ai_nl2sql_provider_url: '%s'. "
+			           "URL must start with http:// or https:// and include a host.\n", value);
+			wrunlock();
+			return false;
+		}
 		free(variables.ai_nl2sql_provider_url);
 		variables.ai_nl2sql_provider_url = strdup(value);
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider_model") == 0) {
+		if (strlen(value) == 0) {
+			proxy_error("AI: Model name cannot be empty\n");
+			wrunlock();
+			return false;
+		}
 		free(variables.ai_nl2sql_provider_model);
 		variables.ai_nl2sql_provider_model = strdup(value);
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider_key") == 0) {
+		if (!validate_api_key_format(value, variables.ai_nl2sql_provider)) {
+			wrunlock();
+			return false;
+		}
 		free(variables.ai_nl2sql_provider_key);
 		variables.ai_nl2sql_provider_key = strdup(value);
 		changed = true;
 	}
+	else if (strcmp(name, "ai_nl2sql_cache_similarity_threshold") == 0) {
+		if (!validate_numeric_range(value, 0, 100, "ai_nl2sql_cache_similarity_threshold")) {
+			wrunlock();
+			return false;
+		}
+		variables.ai_nl2sql_cache_similarity_threshold = atoi(value);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_nl2sql_timeout_ms") == 0) {
+		if (!validate_numeric_range(value, 1000, 300000, "ai_nl2sql_timeout_ms")) {
+			wrunlock();
+			return false;
+		}
+		variables.ai_nl2sql_timeout_ms = atoi(value);
+		changed = true;
+	}
 	else if (strcmp(name, "ai_anomaly_risk_threshold") == 0) {
+		if (!validate_numeric_range(value, 0, 100, "ai_anomaly_risk_threshold")) {
+			wrunlock();
+			return false;
+		}
 		variables.ai_anomaly_risk_threshold = atoi(value);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_anomaly_similarity_threshold") == 0) {
+		if (!validate_numeric_range(value, 0, 100, "ai_anomaly_similarity_threshold")) {
+			wrunlock();
+			return false;
+		}
+		variables.ai_anomaly_similarity_threshold = atoi(value);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_anomaly_rate_limit") == 0) {
+		if (!validate_numeric_range(value, 1, 10000, "ai_anomaly_rate_limit")) {
+			wrunlock();
+			return false;
+		}
+		variables.ai_anomaly_rate_limit = atoi(value);
 		changed = true;
 	}
 	else if (strcmp(name, "ai_prefer_local_models") == 0) {
@@ -398,6 +590,40 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 	else if (strcmp(name, "ai_vector_db_path") == 0) {
 		free(variables.ai_vector_db_path);
 		variables.ai_vector_db_path = strdup(value);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_anomaly_auto_block") == 0) {
+		variables.ai_anomaly_auto_block = (strcmp(value, "true") == 0);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_anomaly_log_only") == 0) {
+		variables.ai_anomaly_log_only = (strcmp(value, "true") == 0);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_daily_budget_usd") == 0) {
+		double budget = atof(value);
+		if (budget < 0 || budget > 10000) {
+			proxy_error("AI: ai_daily_budget_usd value %.2f is out of valid range [0, 10000]\n", budget);
+			wrunlock();
+			return false;
+		}
+		variables.ai_daily_budget_usd = budget;
+		changed = true;
+	}
+	else if (strcmp(name, "ai_max_cloud_requests_per_hour") == 0) {
+		if (!validate_numeric_range(value, 1, 10000, "ai_max_cloud_requests_per_hour")) {
+			wrunlock();
+			return false;
+		}
+		variables.ai_max_cloud_requests_per_hour = atoi(value);
+		changed = true;
+	}
+	else if (strcmp(name, "ai_vector_dimension") == 0) {
+		if (!validate_numeric_range(value, 128, 4096, "ai_vector_dimension")) {
+			wrunlock();
+			return false;
+		}
+		variables.ai_vector_dimension = atoi(value);
 		changed = true;
 	}
 
@@ -440,6 +666,10 @@ char** AI_Features_Manager::get_variables_list() {
 
 	return result;
 }
+
+// ============================================================================
+// Configuration Validation
+// ============================================================================
 
 std::string AI_Features_Manager::get_status_json() {
 	char buf[1024];
