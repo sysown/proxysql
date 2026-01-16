@@ -141,6 +141,7 @@ private:
 	void store_in_vector_cache(const NL2SQLRequest& req, const NL2SQLResult& result);
 	std::string get_schema_context(const std::vector<std::string>& tables);
 	ModelProvider select_model(const NL2SQLRequest& req);
+	std::vector<float> get_query_embedding(const std::string& text);
 
 public:
 	/**

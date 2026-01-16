@@ -14,6 +14,7 @@
 #include "NL2SQL_Converter.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
+#include "GenAI_Thread.h"
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
@@ -21,6 +22,9 @@
 #include <regex>
 
 using json = nlohmann::json;
+
+// Global GenAI handler for embedding generation
+extern GenAI_Threads_Handler *GloGATH;
 
 // Global instance is defined elsewhere if needed
 // NL2SQL_Converter *GloNL2SQL = NULL;

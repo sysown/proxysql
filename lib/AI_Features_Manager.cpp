@@ -147,7 +147,44 @@ int AI_Features_Manager::init_vector_db() {
 		return -1;
 	}
 
-	proxy_info("AI: Vector storage initialized successfully\n");
+	// Create virtual vector tables for similarity search using sqlite-vec
+	// Note: sqlite-vec extension is auto-loaded in Admin_Bootstrap.cpp:612
+
+	// 1. NL2SQL cache virtual table
+	const char* create_nl2sql_vec =
+		"CREATE VIRTUAL TABLE IF NOT EXISTS nl2sql_cache_vec USING vec0("
+		"embedding float(1536)"
+		");";
+
+	if (vector_db->execute(create_nl2sql_vec) != 0) {
+		proxy_error("AI: Failed to create nl2sql_cache_vec virtual table\n");
+		// Virtual table creation failure is not critical - log and continue
+		proxy_debug(PROXY_DEBUG_AI_GENERIC, 3, "Continuing without nl2sql_cache_vec");
+	}
+
+	// 2. Anomaly patterns virtual table
+	const char* create_anomaly_vec =
+		"CREATE VIRTUAL TABLE IF NOT EXISTS anomaly_patterns_vec USING vec0("
+		"embedding float(1536)"
+		");";
+
+	if (vector_db->execute(create_anomaly_vec) != 0) {
+		proxy_error("AI: Failed to create anomaly_patterns_vec virtual table\n");
+		proxy_debug(PROXY_DEBUG_AI_GENERIC, 3, "Continuing without anomaly_patterns_vec");
+	}
+
+	// 3. Query history virtual table
+	const char* create_history_vec =
+		"CREATE VIRTUAL TABLE IF NOT EXISTS query_history_vec USING vec0("
+		"embedding float(1536)"
+		");";
+
+	if (vector_db->execute(create_history_vec) != 0) {
+		proxy_error("AI: Failed to create query_history_vec virtual table\n");
+		proxy_debug(PROXY_DEBUG_AI_GENERIC, 3, "Continuing without query_history_vec");
+	}
+
+	proxy_info("AI: Vector storage initialized successfully with virtual tables\n");
 	return 0;
 }
 
