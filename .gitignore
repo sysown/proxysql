@@ -172,7 +172,21 @@ test/cluster/node??/*
 #pkgroot
 pkgroot/
 
-#files generated during CI run
+# CMake build artifacts
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Test binaries
+tests/basic_test
+tests/*.out
+tests/*.exe
+
+# files generated during CI run
 proxysql-save.cfg
 test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/proxysql*.pem

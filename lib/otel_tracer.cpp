@@ -30,8 +30,28 @@
 #define OTEL_BSP_EXPORT_SIZE_DEFAULT	512
 
 namespace otel_trace_sdk = opentelemetry::sdk::trace;
+namespace otel_resource = opentelemetry::sdk::resource;
 
 using std::string;
+
+// Helper function for error logging
+inline void otel_log_error(const char* message) {
+#ifdef DEBUG
+	std::cerr << "[OpenTelemetry Error] " << message << std::endl;
+#endif
+}
+
+// Helper function for warning logging
+inline void otel_log_warning(const char* message) {
+#ifdef DEBUG
+	std::cerr << "[OpenTelemetry Warning] " << message << std::endl;
+#endif
+}
+
+// Global tracer instance (for backward compatibility)
+namespace {
+	OTelTracer* g_global_tracer = nullptr;
+}
 
 const std::vector<string> otel_variables = {
 	"trace_enable",
@@ -70,10 +90,37 @@ OTelTracer::OTelTracer() : variables{} {
 	variables.bsp_schedule_delay = OTEL_BSP_SCHED_DELAY_DEFAULT;
 	variables.bsp_max_queue_size = OTEL_BSP_QUEUE_SIZE_DEFAULT;
 	variables.bsp_max_export_batch_size = OTEL_BSP_EXPORT_SIZE_DEFAULT;
+
+	// Register this instance as the global tracer
+	wrlock();
+	if (!g_global_tracer) {
+		g_global_tracer = this;
+	}
+	unlock();
 }
 
 OTelTracer::~OTelTracer() {
 	pthread_rwlock_destroy(&rwlock);
+
+	// Unregister this instance from the global tracer
+	wrlock();
+	if (g_global_tracer == this) {
+		g_global_tracer = nullptr;
+	}
+	unlock();
+}
+
+OTelTracer* OTelTracer::GetGlobalTracer() {
+	return g_global_tracer;
+}
+
+void OTelTracer::SetGlobalTracer(OTelTracer* tracer) {
+	pthread_rwlock_t rwlock_local;
+	pthread_rwlock_init(&rwlock_local, nullptr);
+	pthread_rwlock_wrlock(&rwlock_local);
+	g_global_tracer = tracer;
+	pthread_rwlock_unlock(&rwlock_local);
+	pthread_rwlock_destroy(&rwlock_local);
 }
 
 void OTelTracer::Setup() {
@@ -88,6 +135,42 @@ void OTelTracer::Setup() {
 		return;
 	}
 
+	// Validate configuration parameters first
+	try {
+		if (variables.service_name.empty()) {
+			otel_log_warning("Service name is empty, using default");
+			variables.service_name = OTEL_SERVICE_NAME_DEFAULT;
+		}
+
+		if (variables.exporter_otlp_endpoint.empty()) {
+			otel_log_warning("OTLP endpoint is empty, using default");
+			variables.exporter_otlp_endpoint = OTEL_OTLP_ENDPOINT_DEFAULT;
+		}
+
+		if (variables.exporter_otlp_timeout <= 0) {
+			otel_log_warning("Invalid OTLP timeout value, using default");
+			variables.exporter_otlp_timeout = OTEL_OTLP_TIMEOUT_DEFAULT;
+		}
+
+		if (variables.bsp_schedule_delay < 0) {
+			otel_log_warning("Invalid BSP schedule delay, using default");
+			variables.bsp_schedule_delay = OTEL_BSP_SCHED_DELAY_DEFAULT;
+		}
+
+		if (variables.bsp_max_queue_size == 0) {
+			otel_log_warning("Invalid BSP queue size, using default");
+			variables.bsp_max_queue_size = OTEL_BSP_QUEUE_SIZE_DEFAULT;
+		}
+
+		if (variables.bsp_max_export_batch_size == 0) {
+			otel_log_warning("Invalid BSP export batch size, using default");
+			variables.bsp_max_export_batch_size = OTEL_BSP_EXPORT_SIZE_DEFAULT;
+		}
+	} catch (...) {
+		otel_log_error("Configuration validation failed, continuing with defaults");
+		// Continue with setup despite validation errors
+	}
+
 	// configure exporter
 	otel_exporter::OtlpHttpExporterOptions exporter_opt;
 	exporter_opt.url = variables.exporter_otlp_endpoint;
@@ -97,12 +180,24 @@ void OTelTracer::Setup() {
 	exporter_opt.http_headers = get_otlp_headers();
 	auto exporter  = otel_exporter::OtlpHttpExporterFactory::Create(exporter_opt);
 
+	if (!exporter) {
+		otel_log_error("Failed to create OTLP exporter, disabling tracing");
+		unlock();
+		return;
+	}
+
 	// configure batch span processor
 	otel_trace_sdk::BatchSpanProcessorOptions proc_opt;
 	proc_opt.schedule_delay_millis = std::chrono::milliseconds(variables.bsp_schedule_delay);
 	proc_opt.max_queue_size = variables.bsp_max_queue_size;
 	proc_opt.max_export_batch_size = variables.bsp_max_export_batch_size;
 	auto processor = otel_trace_sdk::BatchSpanProcessorFactory::Create(std::move(exporter), proc_opt);
+
+	if (!processor) {
+		otel_log_error("Failed to create span processor, disabling tracing");
+		unlock();
+		return;
+	}
 
 	// configure service attributes
 	auto resource = otel_resource::Resource::Create(get_resource_attributes());
@@ -114,6 +209,11 @@ void OTelTracer::Setup() {
 
 	// create tracer object
 	tracer = provider->GetTracer(OTEL_TRACER_NAME_DEFAULT);
+
+#ifdef DEBUG
+	std::cout << "[OpenTelemetry] Successfully initialized tracer for service: "
+			  << variables.service_name << std::endl;
+#endif
 
 	unlock();
 }

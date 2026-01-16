@@ -28,7 +28,7 @@ IDIRS := -I$(PROXYSQL_IDIR)       \
 		-I$(JSON_IDIR)            \
 		-I$(ABSL_IDIR)            \
 		-I$(PROTOBUF_IDIR)        \
-		-I$(OTEL_IDIR)            \
+		$(patsubst %,-I%,$(subst :, ,$(OTEL_IDIR))) \
 		-I$(SSL_IDIR)             \
 
 LDIRS := -L$(PROXYSQL_LDIR)     \
@@ -89,9 +89,6 @@ STATICMYLIBS := -Wl,-Bstatic    \
 				-lconfig        \
 				-lproxysql      \
 				-lopentelemetry \
-				-lprotobuf      \
-				-lutf8          \
-				-labsl          \
 				-ldaemon        \
 				-lconfig++      \
 				-lre2           \
@@ -101,7 +98,6 @@ STATICMYLIBS := -Wl,-Bstatic    \
 				-lhttpserver    \
 				-lmicrohttpd    \
 				-linjection     \
-				-lcurl          \
 				-lev            \
 				-lscram         \
 				-lusual         \
@@ -116,7 +112,7 @@ ifeq ($(UNAME_S),Linux)
 	STATICMYLIBS += -lcoredumper
 endif
 
-MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread -lssl -lcrypto -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
+MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread -lssl -lcrypto -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -lprotobuf -lidn2 -lcurl $(EXTRALINK)
 
 ifeq ($(UNAME_S),Darwin)
 	MYLIBS :=-lre2 -lmariadbclient -lpq -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid

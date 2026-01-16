@@ -22,6 +22,13 @@ class PgSQL_Session;
 
 extern OTelTracer *GloOTelTracer;
 
+// Thread Safety Considerations for OpenTelemetry Macros:
+// - SESSION_TRACE macros are designed to be used within the context of a single session
+// - Ensure that session objects are not accessed concurrently by multiple threads
+// - The unsafe_shared_ptr<OTelSpanStack> should only be accessed by the thread owning the session
+// - GloOTelTracer provides thread-safe access through its internal rwlock
+// - Session creation and destruction should be synchronized externally if used in multi-threaded environments
+
 #define SESSION_TRACE(session) \
 	session->CreateSessionSpan(__FILE__, __LINE__, __func__)
 
@@ -168,6 +175,9 @@ class Base_Session {
 		int __line,
 		const char *name
 	) {
+		if (!GloOTelTracer) {
+			return nullptr;
+		}
 		return GloOTelTracer->StartSpan(span_stack, __file, __line, name);
 	}
 };

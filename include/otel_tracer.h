@@ -33,6 +33,11 @@ public:
 
 	void Setup();
 
+	// Dependency injection support
+	static OTelTracer* GetGlobalTracer();
+	static void SetGlobalTracer(OTelTracer* tracer);
+	bool IsTracerAvailable() const noexcept { return tracer != nullptr; }
+
 	std::unique_ptr<OTelSpan> StartSpan(
 		unsafe_shared_ptr<OTelSpanStack> stack,
 		const char *__file,

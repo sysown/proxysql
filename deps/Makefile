@@ -48,7 +48,6 @@ targets := check_openssl_version    \
 			lz4                     \
 			cityhash                \
 			microhttpd              \
-			curl                    \
 			ev                      \
 			libhttpserver           \
 			libinjection            \
@@ -57,8 +56,6 @@ targets := check_openssl_version    \
 			libusual                \
 			libscram                \
 			json                    \
-			abseil                  \
-			protobuf                \
 			otel
 
 ifeq ($(UNAME_S),Linux)
@@ -136,20 +133,6 @@ coredumper/coredumper/src/libcoredumper.a:
 coredumper: coredumper/coredumper/src/libcoredumper.a
 
 
-$(CURL_ROOT)/lib/libcurl.a:
-	cd curl && rm -rf curl-*/ || true
-	cd curl && tar -zxf curl-*.tar.gz
-	cd curl/curl && autoreconf -fi
-ifeq ($(UNAME_S),Darwin)
-	cd curl/curl && patch configure < ../configure.patch
-endif
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --prefix=$(CURL_ROOT) --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl
-	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE}
-	cd curl/curl && ${MAKE} install
-
-curl: $(CURL_ROOT)/lib/libcurl.a
-
-
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && tar -zxf libmicrohttpd-*.tar.gz
@@ -175,12 +158,11 @@ lz4/lz4/lib/liblz4.a:
 lz4: lz4/lz4/lib/liblz4.a
 
 
-clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a: abseil
+clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp-*.tar.gz
 	cd clickhouse-cpp/clickhouse-cpp && cmake .         \
-										$(CMAKE_FLAGS)  \
-										-DCMAKE_PREFIX_PATH=$(abspath abseil/abseil-cpp/local)
+										$(CMAKE_FLAGS)
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
@@ -365,46 +347,7 @@ $(JSON_PATH)/include/nlohmann/json.hpp:
 json: $(JSON_PATH)/include/nlohmann/json.hpp
 
 
-$(ABSL_ROOT)/lib/libabsl.a:
-	cd abseil && rm -rf abseil-cpp-*/ || true
-	cd abseil && tar -zxf abseil-cpp-20250512.0.tar.gz
-ifneq (,$(filter $(DISTRO)$(DISTVERS),almalinux8 opensuse15))
-	cd abseil/abseil-cpp && patch -p0 < ../constexpr.patch
-endif
-	cd abseil/abseil-cpp && mkdir -p build
-	cd abseil/abseil-cpp/build && cmake .. $(CMAKE_FLAGS) -DCMAKE_INSTALL_PREFIX=$(ABSL_ROOT) -DBUILD_TESTING=OFF
-	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
-	cd abseil/abseil-cpp/build && ${MAKE} install
-	cd $(ABSL_ROOT)/lib && ${AR} -crs --thin libabsl.a *.a
-	# cd $(ABSL_ROOT)/lib && ls libabsl_*.a | xargs -n1 ${AR} -x
-	# cd $(ABSL_ROOT)/lib && ${AR} -crs libabsl.a *.o && rm *.o
-
-abseil: $(ABSL_ROOT)/lib/libabsl.a
-
-
-$(PROTOBUF_ROOT)/lib/libprotobuf.a: abseil
-	cd protobuf && rm -rf protobuf-*/ || true
-	cd protobuf && tar -zxf protobuf-31.0.tar.gz
-	cd protobuf/protobuf && mkdir -p build
-	cd protobuf/protobuf/build && cmake ..                                     \
-								$(CMAKE_FLAGS)                                 \
-								-DCMAKE_PREFIX_PATH=$(ABSL_ROOT)        \
-								-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_ROOT) \
-								-Dprotobuf_BUILD_TESTS=OFF                     \
-								-Dprotobuf_LOCAL_DEPENDENCIES_ONLY=ON
-	cd protobuf/protobuf/build && CC=${CC} CXX=${CXX} ${MAKE}
-	cd protobuf/protobuf/build && ${MAKE} install
-	cd $(PROTOBUF_ROOT)/lib && ${AR} -crs --thin libutf8.a *.a
-	# cd $(PROTOBUF_ROOT)/lib && ls libutf8_*.a | xargs -n1 ${AR} -x
-	# cd $(PROTOBUF_ROOT)/lib && ${AR} -crs libutf8.a *.o && rm *.o
-ifeq ($(PROXYDEBUG),1)
-	cd $(PROTOBUF_ROOT)/lib && cp libprotobufd.a libprotobuf.a
-endif
-
-protobuf: $(PROTOBUF_ROOT)/lib/libprotobuf.a
-
-
-$(OTEL_ROOT)/lib/libopentelemetry.a: protobuf abseil curl json
+$(OTEL_ROOT)/lib/libopentelemetry.a: json
 	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
 	cd opentelemetry && tar -zxf opentelemetry-cpp-1.21.0.tar.gz
 	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
@@ -421,9 +364,10 @@ $(OTEL_ROOT)/lib/libopentelemetry.a: protobuf abseil curl json
 								-DWITH_OTLP_GRPC=OFF                       \
 								-DOTELCPP_PROTO_PATH=$(OTEL_PROTO_DIR)     \
 								-DCMAKE_INSTALL_PREFIX=$(OTEL_ROOT) \
-								-DCMAKE_PREFIX_PATH="$(PROTOBUF_ROOT);$(ABSL_ROOT);$(CURL_ROOT);$(JSON_PATH)"
+								-DCMAKE_PREFIX_PATH="$(JSON_PATH)"
 	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
-	cd opentelemetry/opentelemetry-cpp/build && ${MAKE} install
+	mkdir -p $(OTEL_ROOT)/lib
+	find opentelemetry/opentelemetry-cpp/build -name "*.a" -exec cp {} $(OTEL_ROOT)/lib/ \;
 	cd $(OTEL_ROOT)/lib && ${AR} -crs --thin libopentelemetry.a *.a
 	# cd $(OTEL_ROOT)/lib && ls libopentelemetry_*.a | xargs -n1 ${AR} -x
 	# cd $(OTEL_ROOT)/lib && ${AR} -crs libopentelemetry.a *.o && rm *.o
@@ -454,7 +398,6 @@ cleanall:
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
-	cd curl && rm -rf curl-*/ || true
 	cd libev && rm -rf libev-*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
@@ -465,8 +408,6 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
-	cd abseil && rm -rf abseil-cpp-*/ || true
-	cd protobuf && rm -rf protobuf-*/ || true
 	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
 	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
 .PHONY: cleanall
