@@ -269,7 +269,6 @@ PgSQL_Session::PgSQL_Session() {
 	active_transactions = 0;
 
 	use_ssl = false;
-	change_user_auth_switch = false;
 
 	match_regexes = NULL;
 	copy_cmd_matcher = NULL;
@@ -3095,7 +3094,17 @@ handler_again:
 						if (myconn->query_result && myconn->query_result->get_resultset_size() > (unsigned int)pgsql_thread___threshold_resultset_size) {
 							myconn->query_result->get_resultset(client_myds->PSarrayOUT);
 						} else {
-							in_pending_state = true;
+
+							if (processing_extended_query && client_myds && mirror == false) {
+								const unsigned int buffered_data = client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
+								if (buffered_data > overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size)) {
+									// Don't enter pending state when PSarrayOUT exceeds threshold. This allows ProxySQL
+									// to flush accumulated data to the client before attempting to read backend responses.
+									// Prevents deadlock. Issue#5300
+								} else {
+									in_pending_state = true;
+								}
+							}
 						}
 						break;
 						// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
@@ -3475,20 +3484,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 				free(addr);
 				free(client_addr);
-			}
-			else {
-				uint8_t _pid = 2;
-				if (client_myds->switching_auth_stage) _pid += 2;
-				if (is_encrypted) _pid++;
-				// If this condition is met, it means that the
-				// 'STATE_SERVER_HANDSHAKE' being performed isn't from the start of a
-				// connection, but as a consequence of a 'COM_USER_CHANGE' which
-				// requires an 'Auth Switch'. Thus, we impose a 'pid' of '3' for the
-				// response 'OK' packet. See #3504 for more context.
-				if (change_user_auth_switch) {
-					_pid = 3;
-					change_user_auth_switch = 0;
-				}
+			} else {
 				if (use_ssl == true && is_encrypted == false) {
 					*wrong_pass = true;
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL);
@@ -3503,8 +3499,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					__sync_add_and_fetch(&PgHGM->status.client_connections_aborted, 1);
 					free(_s);
 					__sync_fetch_and_add(&PgHGM->status.access_denied_wrong_password, 1);
-				}
-				else {
+				} else {
 					// we are good!
 					//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
@@ -4440,11 +4435,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_Q
 	}
 
 	// Handle KILL command
-	//if (prepared == false) {
 	if (handle_command_query_kill(pkt)) {
 		return true;
 	}
-	//
+
 	// Query cache handling
 	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET) {
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
@@ -5186,55 +5180,249 @@ bool PgSQL_Session::handle_command_query_kill(PtrSize_t* pkt) {
 	if (!CurrentQuery.QueryParserArgs.digest_text)
 		return false;
 
-	if (client_myds && client_myds->myconn) {
-		PgSQL_Connection* mc = client_myds->myconn;
-		if (mc->userinfo && mc->userinfo->username) {
-			if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_CANCEL_BACKEND || 
-				CurrentQuery.PgQueryCmd == PGSQL_QUERY_TERMINATE_BACKEND) {
-				char* qu = pgsql_query_strip_comments((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength,
-					pgsql_thread___query_digests_lowercase);
-				string nq = string(qu, strlen(qu));
-				re2::RE2::Options* opt2 = new re2::RE2::Options(RE2::Quiet);
-				opt2->set_case_sensitive(false);
-				char* pattern = (char*)"^SELECT\\s+(?:pg_catalog\\.)?PG_(TERMINATE|CANCEL)_BACKEND\\s*\\(\\s*(\\d+)\\s*\\)\\s*;?\\s*$";
-				re2::RE2* re = new RE2(pattern, *opt2);
-				string tk;
-				int id = 0;
-				RE2::FullMatch(nq, *re, &tk, &id);
-				delete re;
-				delete opt2;
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "filtered query= \"%s\"\n", qu);
-				free(qu);
+	if (!client_myds ||
+		!client_myds->myconn ||
+		!client_myds->myconn->userinfo ||
+		!client_myds->myconn->userinfo->username) {
+		return false;
+	}
 
-				if (id) {
-					int tki = -1;
-					// Note: tk will capture "TERMINATE" or "CANCEL" (case insensitive match)
-					if (strcasecmp(tk.c_str(), "TERMINATE") == 0) {
-						tki = 0;  // Connection terminate
-					} else if (strcasecmp(tk.c_str(), "CANCEL") == 0) {
-						tki = 1;  // Query cancel
+	PgSQL_Connection* mc = client_myds->myconn;
+	if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_CANCEL_BACKEND || 
+		CurrentQuery.PgQueryCmd == PGSQL_QUERY_TERMINATE_BACKEND) {
+				
+		if (cmd == 'Q') {
+			// Simple query protocol - only handle literal values
+			// Parameterized queries in simple protocol are invalid and will be handled by PostgreSQL
+			return handle_literal_kill_query(pkt, mc);
+		} else {
+			// cmd == 'E' - Execute phase of extended query protocol
+			// Check if this is a parameterized query (contains $1)
+			// Note: This simple check might have false positives if $1 appears in comments or string literals
+			// but those cases would fail later when checking bind_msg or parameter validation
+			const char* digest_text = CurrentQuery.QueryParserArgs.digest_text;
+
+			// Use protocol facts (Bind) 
+			const PgSQL_Bind_Message* bind_msg = CurrentQuery.extended_query_info.bind_msg;
+			const bool is_parameterized = bind_msg && bind_msg->data().num_param_values > 0;
+			if (is_parameterized) {
+				// Check that we have exactly one parameter
+				if (bind_msg->data().num_param_values != 1) {
+					send_parameter_error_response("function requires exactly one parameter");
+					l_free(pkt->size, pkt->ptr);
+					return true;
+				}
+				auto param_reader = bind_msg->get_param_value_reader();
+				PgSQL_Param_Value param;
+				if (param_reader.next(&param)) {
+					// Get parameter format (default to text format 0)
+					uint16_t param_format = 0;
+					if (bind_msg->data().num_param_formats == 1) {
+						// Single format applies to all parameters
+						auto format_reader = bind_msg->get_param_format_reader();
+						format_reader.next(&param_format);
 					}
-					if (tki >= 0) {
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "Killing %s %d\n", (tki == 0 ? "CONNECTION" : "QUERY"), id);
-						GloPTH->kill_connection_or_query(id, 0, mc->userinfo->username, (tki == 0 ? false : true));
-						client_myds->DSS = STATE_QUERY_SENT_NET;
-					
-						std::unique_ptr<SQLite3_result> resultset = std::make_unique<SQLite3_result>(1);
-						resultset->add_column_definition(SQLITE_TEXT, tki == 0 ? "pg_terminate_backend" : "pg_cancel_backend");
-						char* pta[1];
-						pta[0] = (char*)"t";
-						resultset->add_row(pta);
-						bool send_ready_packet = is_extended_query_ready_for_query();
-						unsigned int nTxn = NumActiveTransactions();
-						char txn_state = (nTxn ? 'T' : 'I');
-						SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset.get(), nullptr, 0, (const char*)pkt->ptr + 5, send_ready_packet, txn_state);
-
-						RequestEnd(NULL, false);
+								
+					// Extract PID from parameter
+					int32_t pid = extract_pid_from_param(param, param_format);
+					if (pid > 0) {
+						// Determine if this is terminate or cancel
+						int tki = -1;
+						if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_TERMINATE_BACKEND) {
+							tki = 0;  // Connection terminate
+						} else if (CurrentQuery.PgQueryCmd == PGSQL_QUERY_CANCEL_BACKEND) {
+							tki = 1;  // Query cancel
+						}
+									
+						if (tki >= 0) {
+							return handle_kill_success(pid, tki, digest_text, mc, pkt);
+						}
+					} else {
+						// Invalid parameter - send appropriate error response
+						if (pid == -2) {
+							// NULL parameter
+							send_parameter_error_response("NULL is not allowed", PGSQL_ERROR_CODES::ERRCODE_NULL_VALUE_NOT_ALLOWED);
+						} else if (pid == -1) {
+							// Invalid format (not a valid integer)
+							send_parameter_error_response("invalid input syntax for integer", PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE);
+						} else if (pid == 0) {
+							// PID <= 0 (non-positive)
+							send_parameter_error_response("PID must be a positive integer", PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE);
+						}
 						l_free(pkt->size, pkt->ptr);
 						return true;
 					}
+				} else {
+					// No parameter available - this shouldn't happen
+					return false;
 				}
+			} else {
+				// Literal query in extended protocol
+				return handle_literal_kill_query(pkt, mc);
 			}
+		}
+	}
+
+	return false;
+}
+
+int32_t PgSQL_Session::extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const {
+
+	if (param.len == -1) {
+		// NULL parameter
+		return -2; // Special value for NULL
+	}
+	
+	/* ---------------- TEXT FORMAT ---------------- */
+	if (format == 0) {
+		// Text format
+		if (param.len == 0) {
+			// Empty string
+			return -1;
+		}
+		
+		// Convert text to integer
+		std::string str_val(reinterpret_cast<const char*>(param.value), param.len);
+
+		// Parse the integer (allow leading +/- and whitespace, then validate semantics)
+		char* endptr;
+		errno = 0;
+		long pid = strtol(str_val.c_str(), &endptr, 10);
+
+		// Require full consumption (ignoring trailing whitespace)
+		while (endptr && *endptr && isspace(static_cast<unsigned char>(*endptr))) endptr++;
+		if (endptr == str_val.c_str() || (endptr && *endptr) || errno == ERANGE) {
+			return -1;
+		}
+		
+		// Check valid range
+		if (pid <= 0) {
+			return 0; // Special value for non-positive
+		}
+		if (pid > INT_MAX) {
+			return -1; // Out of range
+		}
+		
+		return static_cast<int32_t>(pid);
+	} 
+
+	/* ---------------- BINARY FORMAT ---------------- */
+	// PostgreSQL sends int4 or int8 for integer parameters
+	if (format == 1) { // Binary format (format == 1)
+		
+		if (param.len == 4) {
+			// uint32 in network byte order
+			uint32_t host_u32;
+			get_uint32be(reinterpret_cast<const unsigned char*>(param.value), &host_u32);
+			if (host_u32 & 0x80000000u) { // negative int4
+				return 0;
+			}
+			int32_t pid = static_cast<int32_t>(host_u32);
+			return pid;
+		} 
+		
+		if (param.len == 8) {
+			// int64 in network byte order (PostgreSQL sends int8 for some integer types)
+			uint64_t host_u64 = 0;
+			get_uint64be(reinterpret_cast<const unsigned char*>(param.value), &host_u64);
+			if (host_u64 & 0x8000000000000000ull) { // negative int8
+				return 0;
+			}
+			if (host_u64 > static_cast<uint64_t>(INT32_MAX)) {
+				return -1; // out of range for PID
+			}
+			int64_t pid = static_cast<int64_t>(host_u64);
+			return static_cast<int32_t>(pid);
+		}
+
+		// Invalid integer width for Bind
+		return -1;
+	}
+
+	char buf[INET6_ADDRSTRLEN];
+	switch (client_myds->client_addr->sa_family) {
+	case AF_INET: {
+		struct sockaddr_in* ipv4 = (struct sockaddr_in*)client_myds->client_addr;
+		inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+		break;
+	}
+	case AF_INET6: {
+		struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)client_myds->client_addr;
+		inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+		break;
+	}
+	default:
+		sprintf(buf, "localhost");
+		break;
+	}
+	// Unknown format code
+	proxy_error("Unknown parameter format code: %u received from client %s:%d", format, buf, client_myds->addr.port);
+	return -1;
+}
+
+void PgSQL_Session::send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES error_code) {
+	if (!client_myds) return;
+	
+	// Create proper PostgreSQL error message
+	std::string full_error = std::string("invalid input syntax for integer: \"") + 
+		(error_message ? error_message : "parameter error") + "\"";
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+	// Generate and send error packet using PostgreSQL protocol
+	client_myds->myprot.generate_error_packet(true, is_extended_query_ready_for_query(), 
+		full_error.c_str(), error_code, false, true);
+	
+	RequestEnd(NULL, true);
+}
+
+bool PgSQL_Session::handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt) {
+
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "Killing %s %d\n",
+		(tki == 0 ? "CONNECTION" : "QUERY"), pid);
+	GloPTH->kill_connection_or_query(pid, 0, mc->userinfo->username, (tki == 0 ? false : true));
+	client_myds->DSS = STATE_QUERY_SENT_NET;
+
+	std::unique_ptr<SQLite3_result> resultset = std::make_unique<SQLite3_result>(1);
+	resultset->add_column_definition(SQLITE_TEXT, tki == 0 ? "pg_terminate_backend" : "pg_cancel_backend");
+	char* pta[1];
+	pta[0] = (char*)"t";
+	resultset->add_row(pta);
+	bool send_ready_packet = is_extended_query_ready_for_query();
+	unsigned int nTxn = NumActiveTransactions();
+	char txn_state = (nTxn ? 'T' : 'I');
+	SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset.get(), nullptr, 0, digest_text, send_ready_packet, txn_state);
+
+	RequestEnd(NULL, false);
+	l_free(pkt->size, pkt->ptr);
+	return true;
+}
+
+bool PgSQL_Session::handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc) {
+	// Handle literal query (original implementation)
+	char* qu = pgsql_query_strip_comments((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength,
+		pgsql_thread___query_digests_lowercase);
+	std::string nq(qu);
+
+	re2::RE2::Options opt2(RE2::Quiet);
+	opt2.set_case_sensitive(false);
+	const char* pattern = "^SELECT\\s+(?:pg_catalog\\.)?PG_(TERMINATE|CANCEL)_BACKEND\\s*\\(\\s*(\\d+)\\s*\\)\\s*;?\\s*$";
+	re2::RE2 re(pattern, opt2);
+	std::string tk;
+	uint32_t id = 0;
+	RE2::FullMatch(nq, re, &tk, &id);
+	
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "filtered query= \"%s\"\n", qu);
+	free(qu);
+
+	if (id > 0) {
+		int tki = -1;
+		// Note: tk will capture "TERMINATE" or "CANCEL" (case insensitive match)
+		if (strcasecmp(tk.c_str(), "TERMINATE") == 0) {
+			tki = 0;  // Connection terminate
+		} else if (strcasecmp(tk.c_str(), "CANCEL") == 0) {
+			tki = 1;  // Query cancel
+		}
+		if (tki >= 0) {
+			return handle_kill_success(id, tki, CurrentQuery.QueryParserArgs.digest_text, mc, pkt);
 		}
 	}
 	return false;
@@ -6138,6 +6326,17 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 			if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(dig, &lock_hostgroup)) {
 				// if we are here, it means we have handled the special command
 				return 0;
+			}
+
+			PGSQL_QUERY_command pg_query_cmd = extended_query_info.stmt_info->PgQueryCmd;
+			if (pg_query_cmd == PGSQL_QUERY_CANCEL_BACKEND ||
+				pg_query_cmd == PGSQL_QUERY_TERMINATE_BACKEND) {
+				CurrentQuery.PgQueryCmd = pg_query_cmd;
+				auto execute_pkt = execute_msg->get_raw_pkt(); // detach the packet from the describe message
+				if (handle_command_query_kill(&execute_pkt)) {
+					execute_msg->detach(); // detach the packet from the execute message
+					return 0;
+				}
 			}
 		}
 		current_hostgroup = previous_hostgroup; // reset current hostgroup to previous hostgroup

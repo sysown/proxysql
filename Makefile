@@ -43,7 +43,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 3.0.5
+CURVER ?= 3.0.6
 #export DEBUG
 #export EXTRALINK
 export MAKE
@@ -374,7 +374,6 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
-	cd test/deps && ${MAKE} clean
 	rm -f pkgroot || true
 
 .PHONY: cleandeps
