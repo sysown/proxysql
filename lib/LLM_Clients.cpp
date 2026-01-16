@@ -276,13 +276,17 @@ std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, con
 	// Perform request
 	CURLcode res = curl_easy_perform(curl);
 
+	// Get HTTP response code
+	long http_code = 0;
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
 	// Calculate duration
 	clock_gettime(CLOCK_MONOTONIC, &end_ts);
 	int64_t duration_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 +
 	                      (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
 
 	if (res != CURLE_OK) {
-		LOG_LLM_ERROR(req_id.c_str(), "curl", curl_easy_strerror(res), 0);
+		LOG_LLM_ERROR(req_id.c_str(), "curl", curl_easy_strerror(res), http_code);
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 		return "";
@@ -324,19 +328,19 @@ std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, con
 
 				// Log successful response with timing
 				std::string preview = sql.length() > 100 ? sql.substr(0, 100) + "..." : sql;
-				LOG_LLM_RESPONSE(req_id.c_str(), 200, duration_ms, preview);
+				LOG_LLM_RESPONSE(req_id.c_str(), http_code, duration_ms, preview);
 				return sql;
 			}
 		}
 
-		LOG_LLM_ERROR(req_id.c_str(), "parse", "Response missing expected fields", 0);
+		LOG_LLM_ERROR(req_id.c_str(), "parse", "Response missing expected fields", http_code);
 		return "";
 
 	} catch (const json::parse_error& e) {
-		LOG_LLM_ERROR(req_id.c_str(), "parse_json", e.what(), 0);
+		LOG_LLM_ERROR(req_id.c_str(), "parse_json", e.what(), http_code);
 		return "";
 	} catch (const std::exception& e) {
-		LOG_LLM_ERROR(req_id.c_str(), "process", e.what(), 0);
+		LOG_LLM_ERROR(req_id.c_str(), "process", e.what(), http_code);
 		return "";
 	}
 }
@@ -445,13 +449,17 @@ std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, 
 	// Perform request
 	CURLcode res = curl_easy_perform(curl);
 
+	// Get HTTP response code
+	long http_code = 0;
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
 	// Calculate duration
 	clock_gettime(CLOCK_MONOTONIC, &end_ts);
 	int64_t duration_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 +
 	                      (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
 
 	if (res != CURLE_OK) {
-		LOG_LLM_ERROR(req_id.c_str(), "curl", curl_easy_strerror(res), 0);
+		LOG_LLM_ERROR(req_id.c_str(), "curl", curl_easy_strerror(res), http_code);
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 		return "";
@@ -496,19 +504,19 @@ std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, 
 
 				// Log successful response with timing
 				std::string preview = sql.length() > 100 ? sql.substr(0, 100) + "..." : sql;
-				LOG_LLM_RESPONSE(req_id.c_str(), 200, duration_ms, preview);
+				LOG_LLM_RESPONSE(req_id.c_str(), http_code, duration_ms, preview);
 				return sql;
 			}
 		}
 
-		LOG_LLM_ERROR(req_id.c_str(), "parse", "Response missing expected fields", 0);
+		LOG_LLM_ERROR(req_id.c_str(), "parse", "Response missing expected fields", http_code);
 		return "";
 
 	} catch (const json::parse_error& e) {
-		LOG_LLM_ERROR(req_id.c_str(), "parse_json", e.what(), 0);
+		LOG_LLM_ERROR(req_id.c_str(), "parse_json", e.what(), http_code);
 		return "";
 	} catch (const std::exception& e) {
-		LOG_LLM_ERROR(req_id.c_str(), "process", e.what(), 0);
+		LOG_LLM_ERROR(req_id.c_str(), "process", e.what(), http_code);
 		return "";
 	}
 }

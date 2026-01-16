@@ -3920,8 +3920,47 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	req.allow_cache = true;
 	req.max_latency_ms = 0; // No specific latency requirement
 
+	// Increment total requests counter
+	GloAI->increment_nl2sql_total_requests();
+
 	// Call NL2SQL converter (synchronous for Phase 2)
 	NL2SQLResult result = nl2sql->convert(req);
+
+	// Update performance counters based on result
+	if (result.cache_hit) {
+		GloAI->increment_nl2sql_cache_hits();
+	} else {
+		GloAI->increment_nl2sql_cache_misses();
+	}
+
+	// Update timing counters
+	GloAI->add_nl2sql_response_time_ms(result.total_time_ms);
+	GloAI->add_nl2sql_cache_lookup_time_ms(result.cache_lookup_time_ms);
+	GloAI->increment_nl2sql_cache_lookups();
+
+	if (result.cache_hit) {
+		// For cache hits, we're done
+	} else {
+		// For cache misses, also count LLM call time and cache store time
+		GloAI->add_nl2sql_cache_store_time_ms(result.cache_store_time_ms);
+		if (result.cache_store_time_ms > 0) {
+			GloAI->increment_nl2sql_cache_stores();
+		}
+
+		// Update model call counters
+		if (result.provider_used == "openai") {
+			// Check if it's a local call (Ollama) or cloud call
+			if (GloAI->get_variable("ai_prefer_local_models") &&
+			    (result.explanation.find("localhost") != std::string::npos ||
+			     result.explanation.find("127.0.0.1") != std::string::npos)) {
+				GloAI->increment_nl2sql_local_model_calls();
+			} else {
+				GloAI->increment_nl2sql_cloud_model_calls();
+			}
+		} else if (result.provider_used == "anthropic") {
+			GloAI->increment_nl2sql_cloud_model_calls();
+		}
+	}
 
 	if (result.sql_query.empty() || result.sql_query.find("NL2SQL conversion failed") == 0) {
 		// Conversion failed

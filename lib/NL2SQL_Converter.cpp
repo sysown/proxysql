@@ -20,6 +20,7 @@
 #include <sstream>
 #include <algorithm>
 #include <regex>
+#include <chrono>
 
 using json = nlohmann::json;
 
@@ -646,16 +647,28 @@ float NL2SQL_Converter::validate_and_score_sql(const std::string& sql) {
 NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req) {
 	NL2SQLResult result;
 
+	// Start timing the entire conversion
+	auto start_time = std::chrono::steady_clock::now();
+
 	proxy_info("NL2SQL: Converting query: %s\n", req.natural_language.c_str());
 
 	// Check vector cache first
+	auto cache_start = std::chrono::steady_clock::now();
 	if (req.allow_cache) {
 		result = check_vector_cache(req);
 		if (result.cached && !result.sql_query.empty()) {
 			proxy_info("NL2SQL: Cache hit! Returning cached SQL\n");
+			// Set timing information for cache hit
+			auto cache_end = std::chrono::steady_clock::now();
+			int cache_lookup_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(cache_end - cache_start).count();
+			result.total_time_ms = cache_lookup_time_ms;
+			result.cache_lookup_time_ms = cache_lookup_time_ms;
+			result.cache_hit = true;
 			return result;
 		}
 	}
+	auto cache_end = std::chrono::steady_clock::now();
+	int cache_lookup_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(cache_end - cache_start).count();
 
 	// Build prompt with schema context
 	std::string schema_context = get_schema_context(req.context_tables);
@@ -670,6 +683,8 @@ NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req) {
 	const char* model = NULL;
 	const char* key = config.provider_key;
 
+	// Time the LLM call
+	auto llm_start = std::chrono::steady_clock::now();
 	switch (provider) {
 		case ModelProvider::GENERIC_OPENAI:
 			// Use configured URL or default Ollama endpoint
@@ -712,6 +727,8 @@ NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req) {
 			return result;
 		}
 	}
+	auto llm_end = std::chrono::steady_clock::now();
+	int llm_call_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(llm_end - llm_start).count();
 
 	// Validate and clean SQL
 	if (raw_sql.empty()) {
@@ -735,11 +752,25 @@ NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req) {
 	result.confidence = confidence;
 
 	// Store in vector cache for future use if confidence is good enough
+	auto cache_store_start = std::chrono::steady_clock::now();
 	if (req.allow_cache && confidence >= 0.5f) {
 		store_in_vector_cache(req, result);
 	}
+	auto cache_store_end = std::chrono::steady_clock::now();
+	int cache_store_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(cache_store_end - cache_store_start).count();
 
 	proxy_info("NL2SQL: Conversion complete. Confidence: %.2f\n", result.confidence);
+
+	// Calculate total time
+	auto end_time = std::chrono::steady_clock::now();
+	int total_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+	// Populate timing information in result
+	result.total_time_ms = total_time_ms;
+	result.cache_lookup_time_ms = cache_lookup_time_ms;
+	result.cache_store_time_ms = cache_store_time_ms;
+	result.llm_call_time_ms = llm_call_time_ms;
+	result.cache_hit = false; // This will be set to true if we return from cache hit
 
 	return result;
 }

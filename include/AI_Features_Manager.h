@@ -124,6 +124,12 @@ public:
 		unsigned long long nl2sql_cache_hits;
 		unsigned long long nl2sql_local_model_calls;
 		unsigned long long nl2sql_cloud_model_calls;
+		unsigned long long nl2sql_total_response_time_ms;  // Total response time for all LLM calls
+		unsigned long long nl2sql_cache_total_lookup_time_ms;  // Total time spent in cache lookups
+		unsigned long long nl2sql_cache_total_store_time_ms;  // Total time spent in cache storage
+		unsigned long long nl2sql_cache_lookups;
+		unsigned long long nl2sql_cache_stores;
+		unsigned long long nl2sql_cache_misses;
 		unsigned long long anomaly_total_checks;
 		unsigned long long anomaly_blocked_queries;
 		unsigned long long anomaly_flagged_queries;
@@ -183,6 +189,18 @@ public:
 	 * @note Thread-safe when called within wrlock()/wrunlock() pair
 	 */
 	NL2SQL_Converter* get_nl2sql() { return nl2sql_converter; }
+
+	// Status variable update methods
+	void increment_nl2sql_total_requests() { __sync_fetch_and_add(&status_variables.nl2sql_total_requests, 1); }
+	void increment_nl2sql_cache_hits() { __sync_fetch_and_add(&status_variables.nl2sql_cache_hits, 1); }
+	void increment_nl2sql_cache_misses() { __sync_fetch_and_add(&status_variables.nl2sql_cache_misses, 1); }
+	void increment_nl2sql_local_model_calls() { __sync_fetch_and_add(&status_variables.nl2sql_local_model_calls, 1); }
+	void increment_nl2sql_cloud_model_calls() { __sync_fetch_and_add(&status_variables.nl2sql_cloud_model_calls, 1); }
+	void add_nl2sql_response_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.nl2sql_total_response_time_ms, ms); }
+	void add_nl2sql_cache_lookup_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.nl2sql_cache_total_lookup_time_ms, ms); }
+	void add_nl2sql_cache_store_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.nl2sql_cache_total_store_time_ms, ms); }
+	void increment_nl2sql_cache_lookups() { __sync_fetch_and_add(&status_variables.nl2sql_cache_lookups, 1); }
+	void increment_nl2sql_cache_stores() { __sync_fetch_and_add(&status_variables.nl2sql_cache_stores, 1); }
 
 	/**
 	 * @brief Get anomaly detector instance

@@ -25,10 +25,27 @@ AI_Features_Manager::AI_Features_Manager()
 	variables.ai_nl2sql_enabled = false;
 	variables.ai_anomaly_detection_enabled = false;
 
+	// Initialize string variables with null checks
 	variables.ai_nl2sql_query_prefix = strdup("NL2SQL:");
+	if (!variables.ai_nl2sql_query_prefix) {
+		proxy_error("AI: Failed to allocate memory for ai_nl2sql_query_prefix\n");
+	}
+
 	variables.ai_nl2sql_provider = strdup("openai");
+	if (!variables.ai_nl2sql_provider) {
+		proxy_error("AI: Failed to allocate memory for ai_nl2sql_provider\n");
+	}
+
 	variables.ai_nl2sql_provider_url = strdup("http://localhost:11434/v1/chat/completions");
+	if (!variables.ai_nl2sql_provider_url) {
+		proxy_error("AI: Failed to allocate memory for ai_nl2sql_provider_url\n");
+	}
+
 	variables.ai_nl2sql_provider_model = strdup("llama3.2");
+	if (!variables.ai_nl2sql_provider_model) {
+		proxy_error("AI: Failed to allocate memory for ai_nl2sql_provider_model\n");
+	}
+
 	variables.ai_nl2sql_provider_key = NULL;
 	variables.ai_nl2sql_cache_similarity_threshold = 85;
 	variables.ai_nl2sql_timeout_ms = 30000;
@@ -44,6 +61,10 @@ AI_Features_Manager::AI_Features_Manager()
 	variables.ai_max_cloud_requests_per_hour = 100;
 
 	variables.ai_vector_db_path = strdup("/var/lib/proxysql/ai_features.db");
+	if (!variables.ai_vector_db_path) {
+		proxy_error("AI: Failed to allocate memory for ai_vector_db_path\n");
+	}
+
 	variables.ai_vector_dimension = 1536;  // OpenAI text-embedding-3-small
 
 	// Initialize status counters
@@ -69,6 +90,10 @@ int AI_Features_Manager::init_vector_db() {
 
 	// Ensure directory exists
 	char* path_copy = strdup(variables.ai_vector_db_path);
+	if (!path_copy) {
+		proxy_error("AI: Failed to allocate memory for path copy in init_vector_db\n");
+		return -1;
+	}
 	char* dir = dirname(path_copy);
 	struct stat st;
 	if (stat(dir, &st) != 0) {
@@ -455,25 +480,25 @@ bool validate_numeric_range(const char* value, int min_val, int max_val, const c
 }
 
 /**
- * @brief Validate a provider name
+ * @brief Validate a provider format
  *
- * @param provider The provider name to validate
- * @return true if provider is valid, false otherwise
+ * @param provider The provider format to validate
+ * @return true if provider format is valid, false otherwise
  */
-bool validate_provider_name(const char* provider) {
+bool validate_provider_format(const char* provider) {
 	if (!provider || strlen(provider) == 0) {
-		proxy_error("AI: Provider name is empty\n");
+		proxy_error("AI: Provider format is empty\n");
 		return false;
 	}
 
-	const char* valid_providers[] = {"openai", "anthropic", NULL};
-	for (int i = 0; valid_providers[i]; i++) {
-		if (strcmp(provider, valid_providers[i]) == 0) {
+	const char* valid_formats[] = {"openai", "anthropic", NULL};
+	for (int i = 0; valid_formats[i]; i++) {
+		if (strcmp(provider, valid_formats[i]) == 0) {
 			return true;
 		}
 	}
 
-	proxy_error("AI: Invalid provider '%s'. Valid providers: openai, anthropic\n", provider);
+	proxy_error("AI: Invalid provider format '%s'. Valid formats: openai, anthropic (API compatibility types)\n", provider);
 	return false;
 }
 
@@ -502,15 +527,25 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 	else if (strcmp(name, "ai_nl2sql_query_prefix") == 0) {
 		free(variables.ai_nl2sql_query_prefix);
 		variables.ai_nl2sql_query_prefix = strdup(value);
+		if (!variables.ai_nl2sql_query_prefix) {
+			proxy_error("AI: Failed to allocate memory for ai_nl2sql_query_prefix\n");
+			wrunlock();
+			return false;
+		}
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider") == 0) {
-		if (!validate_provider_name(value)) {
+		if (!validate_provider_format(value)) {
 			wrunlock();
 			return false;
 		}
 		free(variables.ai_nl2sql_provider);
 		variables.ai_nl2sql_provider = strdup(value);
+		if (!variables.ai_nl2sql_provider) {
+			proxy_error("AI: Failed to allocate memory for ai_nl2sql_provider\n");
+			wrunlock();
+			return false;
+		}
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider_url") == 0) {
@@ -522,6 +557,11 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 		}
 		free(variables.ai_nl2sql_provider_url);
 		variables.ai_nl2sql_provider_url = strdup(value);
+		if (!variables.ai_nl2sql_provider_url) {
+			proxy_error("AI: Failed to allocate memory for ai_nl2sql_provider_url\n");
+			wrunlock();
+			return false;
+		}
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider_model") == 0) {
@@ -532,6 +572,11 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 		}
 		free(variables.ai_nl2sql_provider_model);
 		variables.ai_nl2sql_provider_model = strdup(value);
+		if (!variables.ai_nl2sql_provider_model) {
+			proxy_error("AI: Failed to allocate memory for ai_nl2sql_provider_model\n");
+			wrunlock();
+			return false;
+		}
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_provider_key") == 0) {
@@ -541,6 +586,11 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 		}
 		free(variables.ai_nl2sql_provider_key);
 		variables.ai_nl2sql_provider_key = strdup(value);
+		if (!variables.ai_nl2sql_provider_key) {
+			proxy_error("AI: Failed to allocate memory for ai_nl2sql_provider_key\n");
+			wrunlock();
+			return false;
+		}
 		changed = true;
 	}
 	else if (strcmp(name, "ai_nl2sql_cache_similarity_threshold") == 0) {
@@ -590,6 +640,11 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value) {
 	else if (strcmp(name, "ai_vector_db_path") == 0) {
 		free(variables.ai_vector_db_path);
 		variables.ai_vector_db_path = strdup(value);
+		if (!variables.ai_vector_db_path) {
+			proxy_error("AI: Failed to allocate memory for ai_vector_db_path\n");
+			wrunlock();
+			return false;
+		}
 		changed = true;
 	}
 	else if (strcmp(name, "ai_anomaly_auto_block") == 0) {
@@ -672,7 +727,7 @@ char** AI_Features_Manager::get_variables_list() {
 // ============================================================================
 
 std::string AI_Features_Manager::get_status_json() {
-	char buf[1024];
+	char buf[2048];
 	snprintf(buf, sizeof(buf),
 		"{"
 		"\"version\": \"%s\","
@@ -680,7 +735,13 @@ std::string AI_Features_Manager::get_status_json() {
 		"\"total_requests\": %llu,"
 		"\"cache_hits\": %llu,"
 		"\"local_calls\": %llu,"
-		"\"cloud_calls\": %llu"
+		"\"cloud_calls\": %llu,"
+		"\"total_response_time_ms\": %llu,"
+		"\"cache_total_lookup_time_ms\": %llu,"
+		"\"cache_total_store_time_ms\": %llu,"
+		"\"cache_lookups\": %llu,"
+		"\"cache_stores\": %llu,"
+		"\"cache_misses\": %llu"
 		"},"
 		"\"anomaly\": {"
 		"\"total_checks\": %llu,"
@@ -696,6 +757,12 @@ std::string AI_Features_Manager::get_status_json() {
 		status_variables.nl2sql_cache_hits,
 		status_variables.nl2sql_local_model_calls,
 		status_variables.nl2sql_cloud_model_calls,
+		status_variables.nl2sql_total_response_time_ms,
+		status_variables.nl2sql_cache_total_lookup_time_ms,
+		status_variables.nl2sql_cache_total_store_time_ms,
+		status_variables.nl2sql_cache_lookups,
+		status_variables.nl2sql_cache_stores,
+		status_variables.nl2sql_cache_misses,
 		status_variables.anomaly_total_checks,
 		status_variables.anomaly_blocked_queries,
 		status_variables.anomaly_flagged_queries,

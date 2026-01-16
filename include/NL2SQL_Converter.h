@@ -65,7 +65,16 @@ struct NL2SQLResult {
 	int http_status_code;                    ///< HTTP status code if applicable (0 if N/A)
 	std::string provider_used;               ///< Which provider was attempted
 
-	NL2SQLResult() : confidence(0.0f), cached(false), cache_id(0), http_status_code(0) {}
+	// Performance timing information
+	int total_time_ms;                       ///< Total conversion time in milliseconds
+	int cache_lookup_time_ms;                ///< Cache lookup time in milliseconds
+	int cache_store_time_ms;                 ///< Cache store time in milliseconds
+	int llm_call_time_ms;                    ///< LLM call time in milliseconds
+	bool cache_hit;                          ///< True if cache was hit
+
+	NL2SQLResult() : confidence(0.0f), cached(false), cache_id(0), http_status_code(0),
+	                 total_time_ms(0), cache_lookup_time_ms(0), cache_store_time_ms(0),
+	                 llm_call_time_ms(0), cache_hit(false) {}
 };
 
 /**

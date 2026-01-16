@@ -98,14 +98,14 @@ static bool validate_numeric_range(const char* value, int min_val, int max_val, 
 	return true;
 }
 
-static bool validate_provider_name(const char* provider) {
+static bool validate_provider_format(const char* provider) {
 	if (!provider || strlen(provider) == 0) {
 		return false;
 	}
 
-	const char* valid_providers[] = {"openai", "anthropic", NULL};
-	for (int i = 0; valid_providers[i]; i++) {
-		if (strcmp(provider, valid_providers[i]) == 0) {
+	const char* valid_formats[] = {"openai", "anthropic", NULL};
+	for (int i = 0; valid_formats[i]; i++) {
+		if (strcmp(provider, valid_formats[i]) == 0) {
 			return true;
 		}
 	}
@@ -232,28 +232,28 @@ void test_numeric_range_validation() {
 // Test: Provider Name Validation
 // ============================================================================
 
-void test_provider_name_validation() {
-	diag("=== Provider Name Validation Tests ===");
+void test_provider_format_validation() {
+	diag("=== Provider Format Validation Tests ===");
 
-	// Valid providers
-	ok(validate_provider_name("openai"),
-	   "Provider 'openai' accepted");
-	ok(validate_provider_name("anthropic"),
-	   "Provider 'anthropic' accepted");
+	// Valid formats
+	ok(validate_provider_format("openai"),
+	   "Provider format 'openai' accepted");
+	ok(validate_provider_format("anthropic"),
+	   "Provider format 'anthropic' accepted");
 
-	// Invalid providers
-	ok(!validate_provider_name(""),
-	   "Empty provider rejected");
-	ok(!validate_provider_name("ollama"),
-	   "Provider 'ollama' rejected (removed)");
-	ok(!validate_provider_name("OpenAI"),
+	// Invalid formats
+	ok(!validate_provider_format(""),
+	   "Empty provider format rejected");
+	ok(!validate_provider_format("ollama"),
+	   "Provider format 'ollama' rejected (removed)");
+	ok(!validate_provider_format("OpenAI"),
 	   "Uppercase 'OpenAI' rejected (case sensitive)");
-	ok(!validate_provider_name("ANTHROPIC"),
+	ok(!validate_provider_format("ANTHROPIC"),
 	   "Uppercase 'ANTHROPIC' rejected (case sensitive)");
-	ok(!validate_provider_name("invalid"),
-	   "Unknown provider rejected");
-	ok(!validate_provider_name(" OpenAI "),
-	   "Provider with spaces rejected");
+	ok(!validate_provider_format("invalid"),
+	   "Unknown provider format rejected");
+	ok(!validate_provider_format(" OpenAI "),
+	   "Provider format with spaces rejected");
 }
 
 // ============================================================================
@@ -272,8 +272,8 @@ void test_edge_cases() {
 	   "NULL API key accepted (uses default)");
 
 	// NULL pointer handling - Provider
-	ok(!validate_provider_name(NULL),
-	   "NULL provider rejected");
+	ok(!validate_provider_format(NULL),
+	   "NULL provider format rejected");
 
 	// NULL pointer handling - Numeric range
 	ok(!validate_numeric_range(NULL, 0, 100, "test_var"),
@@ -332,7 +332,7 @@ int main() {
 	test_url_validation();
 	test_api_key_validation();
 	test_numeric_range_validation();
-	test_provider_name_validation();
+	test_provider_format_validation();
 	test_edge_cases();
 
 	return exit_status();
