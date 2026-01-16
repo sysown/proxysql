@@ -43,6 +43,16 @@
 
 set -e
 
+# Cleanup function for temp files
+cleanup() {
+    if [ -n "$MCP_CONFIG_FILE" ] && [[ "$MCP_CONFIG_FILE" == /tmp/tmp.* ]]; then
+        rm -f "$MCP_CONFIG_FILE" 2>/dev/null || true
+    fi
+}
+
+# Set trap to cleanup on exit
+trap cleanup EXIT
+
 # Default values
 DATABASE_NAME=""
 SCHEMA_NAME=""
@@ -146,12 +156,17 @@ log_info "Starting Headless Database Discovery"
 log_info "Output will be saved to: $OUTPUT_FILE"
 
 # Build MCP configuration
+MCP_CONFIG_FILE=""
 MCP_ARGS=""
 if [ -n "$MCP_CONFIG" ]; then
-    MCP_ARGS="--mcp-config '$MCP_CONFIG'"
+    # Write inline config to temp file
+    MCP_CONFIG_FILE=$(mktemp)
+    echo "$MCP_CONFIG" > "$MCP_CONFIG_FILE"
+    MCP_ARGS="--mcp-config $MCP_CONFIG_FILE"
     log_verbose "Using inline MCP configuration"
 elif [ -n "$MCP_FILE" ]; then
     if [ -f "$MCP_FILE" ]; then
+        MCP_CONFIG_FILE="$MCP_FILE"
         MCP_ARGS="--mcp-config $MCP_FILE"
         log_verbose "Using MCP configuration from: $MCP_FILE"
     else
@@ -159,17 +174,40 @@ elif [ -n "$MCP_FILE" ]; then
         exit 1
     fi
 elif [ -n "$PROXYSQL_MCP_ENDPOINT" ]; then
-    # Build inline MCP config for ProxySQL
-    PROXYSQL_MCP_CONFIG="{\"mcpServers\": {\"proxysql\": {\"command\": \"python3\", \"args\": [\"$(dirname "$0")/../mcp/proxysql_mcp_stdio_bridge.py\"], \"env\": {\"PROXYSQL_MCP_ENDPOINT\": \"$PROXYSQL_MCP_ENDPOINT\""
+    # Build MCP config for ProxySQL and write to temp file
+    MCP_CONFIG_FILE=$(mktemp)
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    BRIDGE_PATH="$SCRIPT_DIR/../mcp/proxysql_mcp_stdio_bridge.py"
+
+    # Build the JSON config
+    cat > "$MCP_CONFIG_FILE" << MCPJSONEOF
+{
+  "mcpServers": {
+    "proxysql": {
+      "command": "python3",
+      "args": ["$BRIDGE_PATH"],
+      "env": {
+        "PROXYSQL_MCP_ENDPOINT": "$PROXYSQL_MCP_ENDPOINT"
+MCPJSONEOF
+
     if [ -n "$PROXYSQL_MCP_TOKEN" ]; then
-        PROXYSQL_MCP_CONFIG+=", \"PROXYSQL_MCP_TOKEN\": \"$PROXYSQL_MCP_TOKEN\""
+        echo ",        \"PROXYSQL_MCP_TOKEN\": \"$PROXYSQL_MCP_TOKEN\"" >> "$MCP_CONFIG_FILE"
     fi
+
     if [ "$PROXYSQL_MCP_INSECURE_SSL" = "1" ]; then
-        PROXYSQL_MCP_CONFIG+=", \"PROXYSQL_MCP_INSECURE_SSL\": \"1\""
+        echo ",        \"PROXYSQL_MCP_INSECURE_SSL\": \"1\"" >> "$MCP_CONFIG_FILE"
     fi
-    PROXYSQL_MCP_CONFIG+="}}}}"
-    MCP_ARGS="--mcp-config '$PROXYSQL_MCP_CONFIG'"
+
+    cat >> "$MCP_CONFIG_FILE" << 'MCPJSONEOF2'
+      }
+    }
+  }
+}
+MCPJSONEOF2
+
+    MCP_ARGS="--mcp-config $MCP_CONFIG_FILE"
     log_verbose "Using ProxySQL MCP endpoint: $PROXYSQL_MCP_ENDPOINT"
+    log_verbose "MCP config written to: $MCP_CONFIG_FILE"
 else
     log_verbose "No explicit MCP configuration, using available MCP servers"
 fi
@@ -278,15 +316,13 @@ fi
 
 # Execute Claude Code in headless mode
 # Using --print for non-interactive output
-# Using --output-format text for readable markdown output
 # Using --no-session-persistence to avoid saving the session
 
-eval_command="$CLAUDE_CMD --print --no-session-persistence --timeout ${TIMEOUT} $MCP_ARGS"
-
-log_verbose "Executing: $eval_command"
+log_verbose "Executing: $CLAUDE_CMD --print --no-session-persistence --permission-mode bypassPermissions $MCP_ARGS"
 
 # Run the discovery and capture output
-if eval "$eval_command" <<< "$DISCOVERY_PROMPT" > "$OUTPUT_FILE" 2>&1; then
+# Wrap with timeout command to enforce timeout
+if timeout "${TIMEOUT}s" $CLAUDE_CMD --print --no-session-persistence --permission-mode bypassPermissions $MCP_ARGS <<< "$DISCOVERY_PROMPT" > "$OUTPUT_FILE" 2>&1; then
     log_success "Discovery completed successfully!"
     log_info "Report saved to: $OUTPUT_FILE"
 
@@ -319,3 +355,9 @@ else
 fi
 
 log_success "Done!"
+
+# Cleanup temp MCP config file if we created one
+if [ -n "$MCP_CONFIG_FILE" ] && [[ "$MCP_CONFIG_FILE" == /tmp/tmp.* ]]; then
+    rm -f "$MCP_CONFIG_FILE"
+    log_verbose "Cleaned up temp MCP config: $MCP_CONFIG_FILE"
+fi

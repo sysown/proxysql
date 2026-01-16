@@ -28,6 +28,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -89,33 +90,40 @@ def find_claude_executable() -> Optional[str]:
     return None
 
 
-def build_mcp_config(args) -> Optional[str]:
-    """Build MCP configuration from command line arguments."""
+def build_mcp_config(args) -> tuple[Optional[str], Optional[str]]:
+    """Build MCP configuration from command line arguments.
+
+    Returns:
+        (config_file_path, config_json_string) - exactly one will be non-None
+    """
     if args.mcp_config:
-        return args.mcp_config
+        # Write inline config to temp file
+        fd, path = tempfile.mkstemp(suffix='.json')
+        with os.fdopen(fd, 'w') as f:
+            f.write(args.mcp_config)
+        return path, None
 
     if args.mcp_file:
         if os.path.isfile(args.mcp_file):
-            with open(args.mcp_file, 'r') as f:
-                return f.read()
+            return args.mcp_file, None
         else:
             log_error(f"MCP configuration file not found: {args.mcp_file}")
-            return None
+            return None, None
 
     # Check for ProxySQL MCP environment variables
     proxysql_endpoint = os.environ.get('PROXYSQL_MCP_ENDPOINT')
     if proxysql_endpoint:
-        script_dir = Path(__file__).parent.parent
-        bridge_path = script_dir / 'scripts' / 'mcp' / 'proxysql_mcp_stdio_bridge.py'
+        script_dir = Path(__file__).resolve().parent
+        bridge_path = script_dir / '../mcp' / 'proxysql_mcp_stdio_bridge.py'
 
         if not bridge_path.exists():
-            bridge_path = Path(__file__).parent / 'mcp' / 'proxysql_mcp_stdio_bridge.py'
+            bridge_path = script_dir / 'mcp' / 'proxysql_mcp_stdio_bridge.py'
 
         mcp_config = {
             "mcpServers": {
                 "proxysql": {
                     "command": "python3",
-                    "args": [str(bridge_path)],
+                    "args": [str(bridge_path.resolve())],
                     "env": {
                         "PROXYSQL_MCP_ENDPOINT": proxysql_endpoint
                     }
@@ -130,9 +138,13 @@ def build_mcp_config(args) -> Optional[str]:
         if os.environ.get('PROXYSQL_MCP_INSECURE_SSL') == '1':
             mcp_config["mcpServers"]["proxysql"]["env"]["PROXYSQL_MCP_INSECURE_SSL"] = "1"
 
-        return json.dumps(mcp_config)
+        # Write to temp file
+        fd, path = tempfile.mkstemp(suffix='_mcp_config.json')
+        with os.fdopen(fd, 'w') as f:
+            json.dump(mcp_config, f, indent=2)
+        return path, None
 
-    return None
+    return None, None
 
 
 def build_discovery_prompt(database: Optional[str], schema: Optional[str]) -> str:
@@ -248,21 +260,21 @@ def run_discovery(args):
     log_verbose(f"Claude Code executable: {claude_cmd}", args.verbose)
 
     # Build MCP configuration
-    mcp_config = build_mcp_config(args)
-    if mcp_config:
-        log_verbose("Using MCP configuration", args.verbose)
+    mcp_config_file, _ = build_mcp_config(args)
+    if mcp_config_file:
+        log_verbose(f"Using MCP configuration: {mcp_config_file}", args.verbose)
 
     # Build command arguments
     cmd_args = [
         claude_cmd,
-        '--print',                    # Non-interactive mode
-        '--no-session-persistence',   # Don't save session
-        f'--timeout={args.timeout}',  # Set timeout
+        '--print',                          # Non-interactive mode
+        '--no-session-persistence',         # Don't save session
+        '--permission-mode', 'bypassPermissions',  # Bypass permission checks in headless mode
     ]
 
     # Add MCP configuration if available
-    if mcp_config:
-        cmd_args.extend(['--mcp-config', mcp_config])
+    if mcp_config_file:
+        cmd_args.extend(['--mcp-config', mcp_config_file])
 
     # Build discovery prompt
     prompt = build_discovery_prompt(args.database, args.schema)
@@ -319,6 +331,14 @@ def run_discovery(args):
     except Exception as e:
         log_error(f"Error running discovery: {e}")
         sys.exit(1)
+    finally:
+        # Cleanup temp MCP config file if we created one
+        if mcp_config_file and mcp_config_file.startswith('/tmp/'):
+            try:
+                os.unlink(mcp_config_file)
+                log_verbose(f"Cleaned up temp MCP config: {mcp_config_file}", args.verbose)
+            except Exception:
+                pass
 
     log_success("Done!")
 
