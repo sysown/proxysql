@@ -49,12 +49,12 @@ MYSQL* g_proxy = NULL;
 
 /**
  * @brief Get AI variable value via Admin interface
+ * AI variables are stored as columns in mysql_servers table with ai_ prefix
  */
 string get_ai_variable(const char* name) {
 	char query[256];
 	snprintf(query, sizeof(query),
-			 "SELECT * FROM runtime_mysql_servers WHERE variable_name='ai_%s'",
-			 name);
+			 "SELECT ai_%s FROM mysql_servers LIMIT 1", name);
 
 	if (mysql_query(g_admin, query)) {
 		diag("Failed to query variable: %s", mysql_error(g_admin));
@@ -67,7 +67,7 @@ string get_ai_variable(const char* name) {
 	}
 
 	MYSQL_ROW row = mysql_fetch_row(result);
-	string value = row ? (row[1] ? row[1] : "") : "";
+	string value = row ? (row[0] ? row[0] : "") : "";
 
 	mysql_free_result(result);
 	return value;
