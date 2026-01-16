@@ -88,6 +88,41 @@ void NL2SQL_Converter::close() {
 // ============================================================================
 
 /**
+ * @brief Generate vector embedding for text
+ *
+ * Generates a 1536-dimensional embedding using the GenAI module.
+ * This embedding represents the semantic meaning of the text.
+ *
+ * @param text Input text to embed
+ * @return Vector embedding (empty if not available)
+ */
+std::vector<float> NL2SQL_Converter::get_query_embedding(const std::string& text) {
+	if (!GloGATH) {
+		proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: GenAI handler not available for embedding");
+		return {};
+	}
+
+	// Generate embedding using GenAI
+	GenAI_EmbeddingResult emb_result = GloGATH->embed_documents({text});
+
+	if (!emb_result.data || emb_result.count == 0) {
+		proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Failed to generate embedding");
+		return {};
+	}
+
+	// Convert to std::vector<float>
+	std::vector<float> embedding(emb_result.data, emb_result.data + emb_result.embedding_size);
+
+	// Free the result data (GenAI allocates with malloc)
+	if (emb_result.data) {
+		free(emb_result.data);
+	}
+
+	proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Generated embedding with %zu dimensions", embedding.size());
+	return embedding;
+}
+
+/**
  * @brief Check vector cache for semantically similar previous conversions
  *
  * Uses sqlite-vec to find previous NL2SQL conversions with similar
@@ -96,18 +131,82 @@ void NL2SQL_Converter::close() {
  */
 NL2SQLResult NL2SQL_Converter::check_vector_cache(const NL2SQLRequest& req) {
 	NL2SQLResult result;
+	result.cached = false;
 
 	if (!vector_db || !req.allow_cache) {
-		result.cached = false;
 		return result;
 	}
 
 	proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Checking vector cache for: %s\n",
 	            req.natural_language.c_str());
 
-	// TODO: Implement sqlite-vec similarity search
-	// For Phase 2, this is a stub
-	result.cached = false;
+	// Generate embedding for the query
+	std::vector<float> query_embedding = get_query_embedding(req.natural_language);
+	if (query_embedding.empty()) {
+		proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Failed to generate embedding for cache lookup");
+		return result;
+	}
+
+	// Convert embedding to JSON for sqlite-vec MATCH
+	std::string embedding_json = "[";
+	for (size_t i = 0; i < query_embedding.size(); i++) {
+		if (i > 0) embedding_json += ",";
+		embedding_json += std::to_string(query_embedding[i]);
+	}
+	embedding_json += "]";
+
+	// Calculate distance threshold from similarity
+	// Similarity 0-100 -> Distance 0-2 (cosine distance: 0=similar, 2=dissimilar)
+	float distance_threshold = 2.0f - (config.cache_similarity_threshold / 50.0f);
+
+	// Build KNN search query
+	char search[1024];
+	snprintf(search, sizeof(search),
+		"SELECT c.natural_language, c.generated_sql, c.schema_context, "
+		"       vec_distance_cosine(v.embedding, '%s') as distance "
+		"FROM nl2sql_cache c "
+		"JOIN nl2sql_cache_vec v ON c.id = v.rowid "
+		"WHERE v.embedding MATCH '%s' "
+		"AND distance < %f "
+		"ORDER BY distance "
+		"LIMIT 1",
+		embedding_json.c_str(), embedding_json.c_str(), distance_threshold);
+
+	// Execute search
+	sqlite3* db = vector_db->get_db();
+	sqlite3_stmt* stmt = NULL;
+	int rc = sqlite3_prepare_v2(db, search, -1, &stmt, NULL);
+
+	if (rc != SQLITE_OK) {
+		proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Cache search prepare failed: %s", sqlite3_errmsg(db));
+		return result;
+	}
+
+	// Check if any cached queries matched
+	rc = sqlite3_step(stmt);
+	if (rc == SQLITE_ROW) {
+		// Found similar cached query
+		result.cached = true;
+
+		// Extract cached result (natural_lang and schema_ctx available but not currently used)
+		// const char* natural_lang = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+		const char* generated_sql = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+		// const char* schema_ctx = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+		double distance = sqlite3_column_double(stmt, 3);
+
+		// Calculate similarity score from distance
+		float similarity = 1.0f - (distance / 2.0f);
+		result.confidence = similarity;
+		result.sql_query = generated_sql ? generated_sql : "";
+		result.explanation = "Retrieved from semantic cache (similarity: " +
+		                     std::to_string((int)(similarity * 100)) + "%)";
+
+		proxy_info("NL2SQL: Cache hit! (distance: %.3f, similarity: %.0f%%)\n",
+		          distance, similarity * 100);
+	}
+
+	sqlite3_finalize(stmt);
+
 	return result;
 }
 
@@ -125,8 +224,72 @@ void NL2SQL_Converter::store_in_vector_cache(const NL2SQLRequest& req, const NL2
 	proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Storing in vector cache: %s -> %s\n",
 	            req.natural_language.c_str(), result.sql_query.c_str());
 
-	// TODO: Implement sqlite-vec insert with embedding
-	// For Phase 2, this is a stub
+	// Generate embedding for the natural language query
+	std::vector<float> embedding = get_query_embedding(req.natural_language);
+	if (embedding.empty()) {
+		proxy_debug(PROXY_DEBUG_NL2SQL, 3, "NL2SQL: Failed to generate embedding for cache storage");
+		return;
+	}
+
+	// Insert into main table with embedding BLOB
+	sqlite3* db = vector_db->get_db();
+	sqlite3_stmt* stmt = NULL;
+	const char* insert = "INSERT INTO nl2sql_cache "
+		"(natural_language, generated_sql, schema_context, embedding) "
+		"VALUES (?, ?, ?, ?)";
+
+	int rc = sqlite3_prepare_v2(db, insert, -1, &stmt, NULL);
+	if (rc != SQLITE_OK) {
+		proxy_error("NL2SQL: Failed to prepare cache insert: %s\n", sqlite3_errmsg(db));
+		return;
+	}
+
+	// Bind values
+	sqlite3_bind_text(stmt, 1, req.natural_language.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 2, result.sql_query.c_str(), -1, SQLITE_TRANSIENT);
+
+	// Schema context (may be empty)
+	std::string schema_context;
+	if (!req.context_tables.empty()) {
+		schema_context = "{"; // Simple format: table names
+		for (size_t i = 0; i < req.context_tables.size(); i++) {
+			if (i > 0) schema_context += ",";
+			schema_context += req.context_tables[i];
+		}
+		schema_context += "}";
+	}
+	sqlite3_bind_text(stmt, 3, schema_context.c_str(), -1, SQLITE_TRANSIENT);
+
+	// Bind embedding as BLOB
+	sqlite3_bind_blob(stmt, 4, embedding.data(), embedding.size() * sizeof(float), SQLITE_TRANSIENT);
+
+	// Execute insert
+	rc = sqlite3_step(stmt);
+	if (rc != SQLITE_DONE) {
+		proxy_error("NL2SQL: Failed to insert into cache: %s\n", sqlite3_errmsg(db));
+		sqlite3_finalize(stmt);
+		return;
+	}
+
+	sqlite3_finalize(stmt);
+
+	// Get the inserted rowid
+	sqlite3_int64 rowid = sqlite3_last_insert_rowid(db);
+
+	// Update virtual table (sqlite-vec needs explicit rowid insertion)
+	char update_vec[256];
+	snprintf(update_vec, sizeof(update_vec),
+		"INSERT INTO nl2sql_cache_vec(rowid) VALUES (%lld)", rowid);
+
+	char* err = NULL;
+	rc = sqlite3_exec(db, update_vec, NULL, NULL, &err);
+	if (rc != SQLITE_OK) {
+		proxy_error("NL2SQL: Failed to update vec table: %s\n", err ? err : "unknown");
+		if (err) sqlite3_free(err);
+		return;
+	}
+
+	proxy_info("NL2SQL: Stored in cache (id: %lld)\n", rowid);
 }
 
 // ============================================================================

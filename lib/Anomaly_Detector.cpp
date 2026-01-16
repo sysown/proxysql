@@ -733,10 +733,66 @@ int Anomaly_Detector::add_threat_pattern(const std::string& pattern_name,
 	proxy_info("Anomaly: Adding threat pattern: %s (type: %s, severity: %d)\n",
 	          pattern_name.c_str(), pattern_type.c_str(), severity);
 
-	// TODO: Store in database when vector DB is fully integrated
-	// For now, just log
+	if (!vector_db) {
+		proxy_error("Anomaly: Cannot add pattern - no vector DB\n");
+		return -1;
+	}
 
-	return 0;  // Return pattern ID
+	// Generate embedding for the query example
+	std::vector<float> embedding = get_query_embedding(query_example);
+	if (embedding.empty()) {
+		proxy_error("Anomaly: Failed to generate embedding for threat pattern\n");
+		return -1;
+	}
+
+	// Insert into main table with embedding BLOB
+	sqlite3* db = vector_db->get_db();
+	sqlite3_stmt* stmt = NULL;
+	const char* insert = "INSERT INTO anomaly_patterns "
+		"(pattern_name, pattern_type, query_example, embedding, severity) "
+		"VALUES (?, ?, ?, ?, ?)";
+
+	int rc = sqlite3_prepare_v2(db, insert, -1, &stmt, NULL);
+	if (rc != SQLITE_OK) {
+		proxy_error("Anomaly: Failed to prepare pattern insert: %s\n", sqlite3_errmsg(db));
+		return -1;
+	}
+
+	// Bind values
+	sqlite3_bind_text(stmt, 1, pattern_name.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 2, pattern_type.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 3, query_example.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_blob(stmt, 4, embedding.data(), embedding.size() * sizeof(float), SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, 5, severity);
+
+	// Execute insert
+	rc = sqlite3_step(stmt);
+	if (rc != SQLITE_DONE) {
+		proxy_error("Anomaly: Failed to insert pattern: %s\n", sqlite3_errmsg(db));
+		sqlite3_finalize(stmt);
+		return -1;
+	}
+
+	sqlite3_finalize(stmt);
+
+	// Get the inserted rowid
+	sqlite3_int64 rowid = sqlite3_last_insert_rowid(db);
+
+	// Update virtual table (sqlite-vec needs explicit rowid insertion)
+	char update_vec[256];
+	snprintf(update_vec, sizeof(update_vec),
+		"INSERT INTO anomaly_patterns_vec(rowid) VALUES (%lld)", rowid);
+
+	char* err = NULL;
+	rc = sqlite3_exec(db, update_vec, NULL, NULL, &err);
+	if (rc != SQLITE_OK) {
+		proxy_error("Anomaly: Failed to update vec table: %s\n", err ? err : "unknown");
+		if (err) sqlite3_free(err);
+		return -1;
+	}
+
+	proxy_info("Anomaly: Added threat pattern '%s' (id: %lld)\n", pattern_name.c_str(), rowid);
+	return (int)rowid;
 }
 
 /**
