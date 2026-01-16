@@ -56,6 +56,7 @@ targets := check_openssl_version    \
 			libusual                \
 			libscram                \
 			json                    \
+			abseil                  \
 			otel
 
 ifeq ($(UNAME_S),Linux)
@@ -434,6 +435,7 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
+	cd abseil && rm -rf abseil-cpp-*/ || true
 	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
 	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
 .PHONY: cleanall
