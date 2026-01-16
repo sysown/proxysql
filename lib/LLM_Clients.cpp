@@ -107,6 +107,66 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
 }
 
 // ============================================================================
+// Retry Logic Helper Functions
+// ============================================================================
+
+/**
+ * @brief Check if an error is retryable based on HTTP status code
+ *
+ * Determines whether a failed LLM API call should be retried based on:
+ * - HTTP status codes (408 timeout, 429 rate limit, 5xx server errors)
+ * - CURL error codes (network failures, timeouts)
+ *
+ * @param http_status_code HTTP status code from response
+ * @param curl_code libcurl error code
+ * @return true if error is retryable, false otherwise
+ */
+static bool is_retryable_error(int http_status_code, CURLcode curl_code) {
+	// Retry on specific HTTP status codes
+	if (http_status_code == 408 ||           // Request Timeout
+	    http_status_code == 429 ||           // Too Many Requests (rate limit)
+	    http_status_code == 500 ||           // Internal Server Error
+	    http_status_code == 502 ||           // Bad Gateway
+	    http_status_code == 503 ||           // Service Unavailable
+	    http_status_code == 504) {           // Gateway Timeout
+		return true;
+	}
+
+	// Retry on specific curl errors (network issues, timeouts)
+	if (curl_code == CURLE_OPERATION_TIMEDOUT ||
+	    curl_code == CURLE_COULDNT_CONNECT ||
+	    curl_code == CURLE_READ_ERROR ||
+	    curl_code == CURLE_RECV_ERROR) {
+		return true;
+	}
+
+	return false;
+}
+
+/**
+ * @brief Sleep with exponential backoff and jitter
+ *
+ * Implements exponential backoff with jitter to prevent thundering herd
+ * problem when multiple requests retry simultaneously.
+ *
+ * @param base_delay_ms Base delay in milliseconds
+ * @param jitter_factor Jitter as fraction of base delay (default 0.1 = 10%)
+ */
+static void sleep_with_jitter(int base_delay_ms, double jitter_factor = 0.1) {
+	// Add random jitter to prevent synchronized retries
+	int jitter_ms = static_cast<int>(base_delay_ms * jitter_factor);
+	int random_jitter = (rand() % (2 * jitter_ms)) - jitter_ms;
+
+	int total_delay_ms = base_delay_ms + random_jitter;
+	if (total_delay_ms < 0) total_delay_ms = 0;
+
+	struct timespec ts;
+	ts.tv_sec = total_delay_ms / 1000;
+	ts.tv_nsec = (total_delay_ms % 1000) * 1000000;
+	nanosleep(&ts, NULL);
+}
+
+// ============================================================================
 // HTTP Client implementations for different LLM providers
 // ============================================================================
 
@@ -451,4 +511,154 @@ std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, 
 		LOG_LLM_ERROR(req_id.c_str(), "process", e.what(), 0);
 		return "";
 	}
+}
+
+// ============================================================================
+// Retry Wrapper Functions
+// ============================================================================
+
+/**
+ * @brief Call OpenAI-compatible API with retry logic
+ *
+ * Wrapper around call_generic_openai() that implements:
+ * - Exponential backoff with jitter
+ * - Retry on empty responses (transient failures)
+ * - Configurable max retries and backoff parameters
+ *
+ * @param prompt The prompt to send to the API
+ * @param model Model name to use
+ * @param url Full API endpoint URL
+ * @param key API key (can be NULL for local endpoints)
+ * @param req_id Request ID for correlation
+ * @param max_retries Maximum number of retry attempts
+ * @param initial_backoff_ms Initial backoff delay in milliseconds
+ * @param backoff_multiplier Multiplier for exponential backoff
+ * @param max_backoff_ms Maximum backoff delay in milliseconds
+ * @return Generated SQL or empty string if all retries fail
+ */
+std::string NL2SQL_Converter::call_generic_openai_with_retry(
+    const std::string& prompt,
+    const std::string& model,
+    const std::string& url,
+    const char* key,
+    const std::string& req_id,
+    int max_retries,
+    int initial_backoff_ms,
+    double backoff_multiplier,
+    int max_backoff_ms)
+{
+	int attempt = 0;
+	int current_backoff_ms = initial_backoff_ms;
+
+	while (attempt <= max_retries) {
+		// Call the base function (attempt 0 is the first try)
+		std::string result = call_generic_openai(prompt, model, url, key, req_id);
+
+		// If we got a successful response, return it
+		if (!result.empty()) {
+			if (attempt > 0) {
+				proxy_info("NL2SQL [%s]: Request succeeded after %d retries\n",
+				          req_id.c_str(), attempt);
+			}
+			return result;
+		}
+
+		// If this was our last attempt, give up
+		if (attempt == max_retries) {
+			proxy_error("NL2SQL [%s]: Request failed after %d attempts. Max retries reached.\n",
+			           req_id.c_str(), attempt + 1);
+			return "";
+		}
+
+		// Log retry attempt
+		proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+		             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
+
+		// Sleep with exponential backoff and jitter
+		sleep_with_jitter(current_backoff_ms);
+
+		// Increase backoff for next attempt
+		current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
+		if (current_backoff_ms > max_backoff_ms) {
+			current_backoff_ms = max_backoff_ms;
+		}
+
+		attempt++;
+	}
+
+	// Should not reach here, but handle gracefully
+	return "";
+}
+
+/**
+ * @brief Call Anthropic-compatible API with retry logic
+ *
+ * Wrapper around call_generic_anthropic() that implements:
+ * - Exponential backoff with jitter
+ * - Retry on empty responses (transient failures)
+ * - Configurable max retries and backoff parameters
+ *
+ * @param prompt The prompt to send to the API
+ * @param model Model name to use
+ * @param url Full API endpoint URL
+ * @param key API key (required for Anthropic)
+ * @param req_id Request ID for correlation
+ * @param max_retries Maximum number of retry attempts
+ * @param initial_backoff_ms Initial backoff delay in milliseconds
+ * @param backoff_multiplier Multiplier for exponential backoff
+ * @param max_backoff_ms Maximum backoff delay in milliseconds
+ * @return Generated SQL or empty string if all retries fail
+ */
+std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
+    const std::string& prompt,
+    const std::string& model,
+    const std::string& url,
+    const char* key,
+    const std::string& req_id,
+    int max_retries,
+    int initial_backoff_ms,
+    double backoff_multiplier,
+    int max_backoff_ms)
+{
+	int attempt = 0;
+	int current_backoff_ms = initial_backoff_ms;
+
+	while (attempt <= max_retries) {
+		// Call the base function (attempt 0 is the first try)
+		std::string result = call_generic_anthropic(prompt, model, url, key, req_id);
+
+		// If we got a successful response, return it
+		if (!result.empty()) {
+			if (attempt > 0) {
+				proxy_info("NL2SQL [%s]: Request succeeded after %d retries\n",
+				          req_id.c_str(), attempt);
+			}
+			return result;
+		}
+
+		// If this was our last attempt, give up
+		if (attempt == max_retries) {
+			proxy_error("NL2SQL [%s]: Request failed after %d attempts. Max retries reached.\n",
+			           req_id.c_str(), attempt + 1);
+			return "";
+		}
+
+		// Log retry attempt
+		proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+		             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
+
+		// Sleep with exponential backoff and jitter
+		sleep_with_jitter(current_backoff_ms);
+
+		// Increase backoff for next attempt
+		current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
+		if (current_backoff_ms > max_backoff_ms) {
+			current_backoff_ms = max_backoff_ms;
+		}
+
+		attempt++;
+	}
+
+	// Should not reach here, but handle gracefully
+	return "";
 }

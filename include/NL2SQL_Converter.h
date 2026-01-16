@@ -88,7 +88,15 @@ struct NL2SQLRequest {
 	// Request tracking for correlation and debugging
 	std::string request_id;                  ///< Unique ID for this request (UUID-like)
 
-	NL2SQLRequest() : max_latency_ms(0), allow_cache(true) {
+	// Retry configuration for transient failures
+	int max_retries;                         ///< Maximum retry attempts (default: 3)
+	int retry_backoff_ms;                    ///< Initial backoff in ms (default: 1000)
+	double retry_multiplier;                 ///< Backoff multiplier (default: 2.0)
+	int retry_max_backoff_ms;                ///< Maximum backoff in ms (default: 30000)
+
+	NL2SQLRequest() : max_latency_ms(0), allow_cache(true),
+	                  max_retries(3), retry_backoff_ms(1000),
+	                  retry_multiplier(2.0), retry_max_backoff_ms(30000) {
 		// Generate UUID-like request ID for correlation
 		char uuid[64];
 		snprintf(uuid, sizeof(uuid), "%08lx-%04x-%04x-%04x-%012lx",
@@ -205,6 +213,17 @@ private:
 	std::string call_generic_anthropic(const std::string& prompt, const std::string& model,
 	                                    const std::string& url, const char* key,
 	                                    const std::string& req_id = "");
+	// Retry wrapper methods
+	std::string call_generic_openai_with_retry(const std::string& prompt, const std::string& model,
+	                                            const std::string& url, const char* key,
+	                                            const std::string& req_id,
+	                                            int max_retries, int initial_backoff_ms,
+	                                            double backoff_multiplier, int max_backoff_ms);
+	std::string call_generic_anthropic_with_retry(const std::string& prompt, const std::string& model,
+	                                               const std::string& url, const char* key,
+	                                               const std::string& req_id,
+	                                               int max_retries, int initial_backoff_ms,
+	                                               double backoff_multiplier, int max_backoff_ms);
 	NL2SQLResult check_vector_cache(const NL2SQLRequest& req);
 	void store_in_vector_cache(const NL2SQLRequest& req, const NL2SQLResult& result);
 	std::string get_schema_context(const std::vector<std::string>& tables);
