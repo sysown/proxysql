@@ -4,6 +4,43 @@
 
 ProxySQL now includes a comprehensive configuration validation framework that detects invalid configuration fields and provides helpful suggestions to users. This feature helps catch configuration errors early, reduces runtime issues, and improves the overall user experience.
 
+## Quick Start
+
+### Basic Usage
+```bash
+# Validate configuration only
+./proxysql --validate-only
+
+# Start with strict validation (fail on errors)
+./proxysql --strict-mode
+
+# Normal mode (warnings only)
+./proxysql
+```
+
+### Key Features
+- ✅ **Field Validation**: Validates all configuration fields against known valid fields
+- ✅ **Intelligent Suggestions**: Levenshtein distance algorithm for typo detection
+- ✅ **Multiple Validation Modes**: Strict, non-strict, and validate-only modes
+- ✅ **Comprehensive Coverage**: All major MySQL configuration sections supported
+
+### Integration Examples
+```bash
+#!/bin/bash
+# CI/CD Pipeline validation
+./proxysql --validate-only || exit 1
+```
+
+```yaml
+# Ansible example
+- name: Validate ProxySQL config
+  command: proxysql --validate-only
+  register: validation_result
+  failed_when: validation_result.rc != 0
+```
+
+For detailed information about all features, configuration sections, and troubleshooting, continue reading below.
+
 ## Features
 
 ### 1. Field Validation
@@ -169,33 +206,6 @@ Output:
 [ERROR]   Did you mean 'match_pattern'?
 ```
 
-```
-
-## Integration with Existing Systems
-
-### CI/CD Pipeline Integration
-```bash
-#!/bin/bash
-# Validate configuration before deployment
-./proxysql --validate-only
-if [ $? -eq 0 ]; then
-    echo "Configuration validation passed"
-    # Continue with deployment
-else
-    echo "Configuration validation failed"
-    exit 1
-fi
-```
-
-### Configuration Management Tools
-```yaml
-# Example Ansible playbook
-- name: Validate ProxySQL configuration
-  command: /usr/local/bin/proxysql --validate-only
-  register: validation_result
-  failed_when: validation_result.rc != 0
-```
-
 ## Performance Impact
 
 - **Minimal Overhead**: Validation adds only a small overhead during startup
@@ -230,8 +240,7 @@ fi
    - Future versions will include type validation and range checking
    - Will validate numeric ranges, string formats, and data types
 
-2. **Module Variables**: Dynamic module variables (mysql-*, pgsql-*, admin-*) are validated by their respective modules
-   - These variables are validated by their respective modules using module-specific logic
+2. **Module Variables**: Dynamic module variables (mysql-*, pgsql-*, admin-*) are validated by their respective modules using module-specific logic
    - The framework focuses on configuration structure validation
 
 3. **Deprecation Detection**: Currently does not detect deprecated configuration options
@@ -296,21 +305,7 @@ fi
 # Issue: mysql- variables not validated
 [WARNING] Unknown variable 'mysql-max_connections'
 ```
-**Solution**: Module variables are validated by their respective modules. Use the MySQL module's interfaces to manage these variables.
-
-### Debug Information
-
-#### Enable Debug Logging
-```sql
-
-```
-
-
-#### Manual Validation
-```bash
-./proxysql --validate-only
-echo $?
-```
+**Solution**: Module variables are validated by their respective modules. These variables use module-specific validation logic.
 
 ## Contributing
 
@@ -335,3 +330,15 @@ if (config_root.exists("new_section")) {
     validate_config_fields(new_section, "new_section", valid_new_section_fields);
 }
 ```
+
+## Version History
+
+- **v3.0.5288**: Initial implementation of configuration validation framework
+  - Basic field validation for MySQL configuration sections
+  - Command-line arguments for strict and validate-only modes
+  - Intelligent typo detection and suggestions
+  - Integration with existing config reader functions
+
+---
+
+For more information and to report issues, please visit the [ProxySQL GitHub repository](https://github.com/sysown/proxysql).
