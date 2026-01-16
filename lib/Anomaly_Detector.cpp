@@ -38,7 +38,7 @@ AnomalyResult Anomaly_Detector::analyze(const std::string& query, const std::str
 	AnomalyResult result;
 
 	// Stub implementation - Phase 3 will implement full functionality
-	proxy_debug(PROXY_DEBUG_ANOMALY, "Anomaly: Analyzing query from %s@%s\n", user.c_str(), client_host.c_str());
+	proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Anomaly: Analyzing query from %s@%s\n", user.c_str(), client_host.c_str());
 
 	result.is_anomaly = false;
 	result.risk_score = 0.0f;
