@@ -3,6 +3,7 @@
 #include "proxysql.h"
 #include <sstream>
 #include <algorithm>
+#include "../deps/json/json.hpp"
 
 MySQL_Catalog::MySQL_Catalog(const std::string& path)
 	: db(NULL), db_path(path)
@@ -220,31 +221,40 @@ std::string MySQL_Catalog::search(
 		return "[]";
 	}
 
-	// Build JSON result
-	std::ostringstream json;
-	json << "[";
-	bool first = true;
+	// Build JSON result using nlohmann::json
+	nlohmann::json results = nlohmann::json::array();
 
 	if (resultset) {
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
 		     it != resultset->rows.end(); ++it) {
 			SQLite3_row* row = *it;
-			if (!first) json << ",";
-			first = false;
 
-			json << "{"
-			     << "\"kind\":\"" << (row->fields[0] ? row->fields[0] : "") << "\","
-			     << "\"key\":\"" << (row->fields[1] ? row->fields[1] : "") << "\","
-			     << "\"document\":" << (row->fields[2] ? row->fields[2] : "null") << ","
-			     << "\"tags\":\"" << (row->fields[3] ? row->fields[3] : "") << "\","
-			     << "\"links\":\"" << (row->fields[4] ? row->fields[4] : "") << "\""
-			     << "}";
+			nlohmann::json entry;
+			entry["kind"] = std::string(row->fields[0] ? row->fields[0] : "");
+			entry["key"] = std::string(row->fields[1] ? row->fields[1] : "");
+
+			// Parse the stored JSON document - nlohmann::json handles escaping
+			const char* doc_str = row->fields[2];
+			if (doc_str) {
+				try {
+					entry["document"] = nlohmann::json::parse(doc_str);
+				} catch (const nlohmann::json::parse_error& e) {
+					// If document is not valid JSON, store as string
+					entry["document"] = std::string(doc_str);
+				}
+			} else {
+				entry["document"] = nullptr;
+			}
+
+			entry["tags"] = std::string(row->fields[3] ? row->fields[3] : "");
+			entry["links"] = std::string(row->fields[4] ? row->fields[4] : "");
+
+			results.push_back(entry);
 		}
 		delete resultset;
 	}
 
-	json << "]";
-	return json.str();
+	return results.dump();
 }
 
 std::string MySQL_Catalog::list(
@@ -282,31 +292,42 @@ std::string MySQL_Catalog::list(
 	resultset = NULL;
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 
-	// Build JSON result with total count
-	std::ostringstream json;
-	json << "{\"total\":" << total << ",\"results\":[";
+	// Build JSON result using nlohmann::json
+	nlohmann::json result;
+	result["total"] = total;
+	nlohmann::json results = nlohmann::json::array();
 
-	bool first = true;
 	if (resultset) {
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
 		     it != resultset->rows.end(); ++it) {
 			SQLite3_row* row = *it;
-			if (!first) json << ",";
-			first = false;
 
-			json << "{"
-			     << "\"kind\":\"" << (row->fields[0] ? row->fields[0] : "") << "\","
-			     << "\"key\":\"" << (row->fields[1] ? row->fields[1] : "") << "\","
-			     << "\"document\":" << (row->fields[2] ? row->fields[2] : "null") << ","
-			     << "\"tags\":\"" << (row->fields[3] ? row->fields[3] : "") << "\","
-			     << "\"links\":\"" << (row->fields[4] ? row->fields[4] : "") << "\""
-			     << "}";
+			nlohmann::json entry;
+			entry["kind"] = std::string(row->fields[0] ? row->fields[0] : "");
+			entry["key"] = std::string(row->fields[1] ? row->fields[1] : "");
+
+			// Parse the stored JSON document
+			const char* doc_str = row->fields[2];
+			if (doc_str) {
+				try {
+					entry["document"] = nlohmann::json::parse(doc_str);
+				} catch (const nlohmann::json::parse_error& e) {
+					entry["document"] = std::string(doc_str);
+				}
+			} else {
+				entry["document"] = nullptr;
+			}
+
+			entry["tags"] = std::string(row->fields[3] ? row->fields[3] : "");
+			entry["links"] = std::string(row->fields[4] ? row->fields[4] : "");
+
+			results.push_back(entry);
 		}
 		delete resultset;
 	}
 
-	json << "]}";
-	return json.str();
+	result["results"] = results;
+	return result.dump();
 }
 
 int MySQL_Catalog::merge(
