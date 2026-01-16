@@ -56,8 +56,6 @@ targets := check_openssl_version    \
 			libusual                \
 			libscram                \
 			json                    \
-			abseil                  \
-			protobuf                \
 			otel
 
 ifeq ($(UNAME_S),Linux)
@@ -160,12 +158,11 @@ lz4/lz4/lib/liblz4.a:
 lz4: lz4/lz4/lib/liblz4.a
 
 
-clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a: abseil
+clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp-*.tar.gz
 	cd clickhouse-cpp/clickhouse-cpp && cmake .         \
-										$(CMAKE_FLAGS)  \
-										-DCMAKE_PREFIX_PATH=$(abspath abseil/abseil-cpp/local)
+										$(CMAKE_FLAGS)
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
@@ -350,7 +347,7 @@ $(JSON_PATH)/include/nlohmann/json.hpp:
 json: $(JSON_PATH)/include/nlohmann/json.hpp
 
 
-$(OTEL_ROOT)/lib/libopentelemetry.a: json
+$(OTEL_ROOT)/lib/libopentelemetry.a: curl json
 	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
 	cd opentelemetry && tar -zxf opentelemetry-cpp-1.21.0.tar.gz
 	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
@@ -367,7 +364,7 @@ $(OTEL_ROOT)/lib/libopentelemetry.a: json
 								-DWITH_OTLP_GRPC=OFF                       \
 								-DOTELCPP_PROTO_PATH=$(OTEL_PROTO_DIR)     \
 								-DCMAKE_INSTALL_PREFIX=$(OTEL_ROOT) \
-								-DCMAKE_PREFIX_PATH="$(JSON_PATH)"
+								-DCMAKE_PREFIX_PATH="$(CURL_ROOT);$(JSON_PATH)"
 	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
 	cd opentelemetry/opentelemetry-cpp/build && ${MAKE} install
 	cd $(OTEL_ROOT)/lib && ${AR} -crs --thin libopentelemetry.a *.a
@@ -410,8 +407,6 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
-	cd abseil && rm -rf abseil-cpp-*/ || true
-	cd protobuf && rm -rf protobuf-*/ || true
 	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
 	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
 .PHONY: cleanall
