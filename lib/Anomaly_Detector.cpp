@@ -15,6 +15,7 @@
 #include "Anomaly_Detector.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
+#include "GenAI_Thread.h"
 #include "cpp.h"
 #include <cstring>
 #include <cstdlib>
@@ -28,6 +29,9 @@
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
+
+// Global GenAI handler for embedding generation
+extern GenAI_Threads_Handler *GloGATH;
 
 // ============================================================================
 // Constants
@@ -417,12 +421,86 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 		return result;
 	}
 
-	// TODO: Query the vector database for similar threat patterns
-	// This requires sqlite-vec similarity search
-	// For now, this is a placeholder
+	// Convert embedding to JSON for sqlite-vec MATCH
+	std::string embedding_json = "[";
+	for (size_t i = 0; i < query_embedding.size(); i++) {
+		if (i > 0) embedding_json += ",";
+		embedding_json += std::to_string(query_embedding[i]);
+	}
+	embedding_json += "]";
+
+	// Calculate distance threshold from similarity
+	// Similarity 0-100 -> Distance 0-2 (cosine distance: 0=similar, 2=dissimilar)
+	float distance_threshold = 2.0f - (config.similarity_threshold / 50.0f);
+
+	// Search for similar threat patterns
+	char search[1024];
+	snprintf(search, sizeof(search),
+		"SELECT p.pattern_name, p.pattern_type, p.severity, "
+		"       vec_distance_cosine(v.embedding, '%s') as distance "
+		"FROM anomaly_patterns p "
+		"JOIN anomaly_patterns_vec v ON p.id = v.rowid "
+		"WHERE v.embedding MATCH '%s' "
+		"AND distance < %f "
+		"ORDER BY distance "
+		"LIMIT 5",
+		embedding_json.c_str(), embedding_json.c_str(), distance_threshold);
+
+	// Execute search
+	sqlite3* db = vector_db->get_db();
+	sqlite3_stmt* stmt = NULL;
+	int rc = sqlite3_prepare_v2(db, search, -1, &stmt, NULL);
+
+	if (rc != SQLITE_OK) {
+		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Embedding search prepare failed: %s", sqlite3_errmsg(db));
+		return result;
+	}
+
+	// Check if any threat patterns matched
+	rc = sqlite3_step(stmt);
+	if (rc == SQLITE_ROW) {
+		// Found similar threat pattern
+		result.is_anomaly = true;
+
+		// Extract pattern info
+		const char* pattern_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+		const char* pattern_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+		int severity = sqlite3_column_int(stmt, 2);
+		double distance = sqlite3_column_double(stmt, 3);
+
+		// Calculate risk score based on severity and similarity
+		// - Base score from severity (1-10) -> 0.1-1.0
+		// - Boost by similarity (lower distance = higher risk)
+		result.risk_score = (severity / 10.0f) * (1.0f - (distance / 2.0f));
+
+		// Set anomaly type
+		result.anomaly_type = "embedding_similarity";
+
+		// Build explanation
+		char explanation[512];
+		snprintf(explanation, sizeof(explanation),
+			"Query similar to known threat pattern '%s' (type: %s, severity: %d, distance: %.2f)",
+			pattern_name ? pattern_name : "unknown",
+			pattern_type ? pattern_type : "unknown",
+			severity, distance);
+		result.explanation = explanation;
+
+		// Add matched pattern to rules
+		if (pattern_name) {
+			result.matched_rules.push_back(std::string("pattern:") + pattern_name);
+		}
+
+		// Determine if should block
+		result.should_block = (result.risk_score > (config.risk_threshold / 100.0f));
+
+		proxy_info("Anomaly: Embedding similarity detected (pattern: %s, score: %.2f)\n",
+			pattern_name ? pattern_name : "unknown", result.risk_score);
+	}
+
+	sqlite3_finalize(stmt);
 
 	proxy_debug(PROXY_DEBUG_ANOMALY, 3,
-	           "Anomaly: Embedding similarity check performed (vector_db available)\n");
+	           "Anomaly: Embedding similarity check performed\n");
 
 	return result;
 }
@@ -433,18 +511,38 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
  * Generates a vector representation of the query using a sentence
  * transformer or similar embedding model.
  *
- * TODO: Integrate with LLM for embedding generation
+ * Uses the GenAI module (GloGATH) for embedding generation via llama-server.
  *
  * @param query SQL query
  * @return Vector embedding (empty if not available)
  */
 std::vector<float> Anomaly_Detector::get_query_embedding(const std::string& query) {
-	// Placeholder for embedding generation
-	// In production, this would call an embedding model
+	if (!GloGATH) {
+		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "GenAI handler not available for embedding");
+		return {};
+	}
 
-	// For now, return empty vector
-	// This will be implemented when we integrate an embedding service
-	return std::vector<float>();
+	// Normalize query first for better embedding quality
+	std::string normalized = normalize_query(query);
+
+	// Generate embedding using GenAI
+	GenAI_EmbeddingResult result = GloGATH->embed_documents({normalized});
+
+	if (!result.data || result.count == 0) {
+		proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Failed to generate embedding");
+		return {};
+	}
+
+	// Convert to std::vector<float>
+	std::vector<float> embedding(result.data, result.data + result.embedding_size);
+
+	// Free the result data (GenAI allocates with malloc)
+	if (result.data) {
+		free(result.data);
+	}
+
+	proxy_debug(PROXY_DEBUG_ANOMALY, 3, "Generated embedding with %zu dimensions", embedding.size());
+	return embedding;
 }
 
 // ============================================================================
