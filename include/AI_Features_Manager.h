@@ -79,45 +79,10 @@ private:
 
 public:
 	/**
-	 * @brief Configuration variables for AI features
-	 *
-	 * These are accessible via the admin interface with 'ai-' prefix
-	 * and can be modified at runtime.
-	 */
-	struct {
-		// Master switches
-		bool ai_features_enabled;
-		bool ai_nl2sql_enabled;
-		bool ai_anomaly_detection_enabled;
-
-		// NL2SQL configuration
-		char* ai_nl2sql_query_prefix;
-		char* ai_nl2sql_provider;         // "openai" or "anthropic"
-		char* ai_nl2sql_provider_url;     // Generic endpoint URL
-		char* ai_nl2sql_provider_model;   // Model name
-		char* ai_nl2sql_provider_key;     // API key
-		int ai_nl2sql_cache_similarity_threshold;
-		int ai_nl2sql_timeout_ms;
-
-		// Anomaly detection configuration
-		int ai_anomaly_risk_threshold;
-		int ai_anomaly_similarity_threshold;
-		int ai_anomaly_rate_limit;
-		bool ai_anomaly_auto_block;
-		bool ai_anomaly_log_only;
-
-		// Hybrid model routing
-		bool ai_prefer_local_models;
-		double ai_daily_budget_usd;
-		int ai_max_cloud_requests_per_hour;
-
-		// Vector storage
-		char* ai_vector_db_path;
-		int ai_vector_dimension;
-	} variables;
-
-	/**
 	 * @brief Status variables (read-only counters)
+	 *
+	 * These track metrics and usage statistics for AI features.
+	 * Configuration is managed by the GenAI module (GloGATH).
 	 */
 	struct {
 		unsigned long long nl2sql_total_requests;
@@ -221,56 +186,15 @@ public:
 	SQLite3DB* get_vector_db() { return vector_db; }
 
 	/**
-	 * @brief Get configuration variable value
-	 *
-	 * Retrieves the value of an AI configuration variable by name.
-	 * Variable names should be without the 'ai_' prefix.
-	 *
-	 * @param name Variable name (e.g., "nl2sql_enabled")
-	 * @return Variable value or NULL if not found
-	 *
-	 * Example:
-	 * @code
-	 * char* enabled = GloAI->get_variable("nl2sql_enabled");
-	 * if (enabled && strcmp(enabled, "true") == 0) { ... }
-	 * @endcode
-	 */
-	char* get_variable(const char* name);
-
-	/**
-	 * @brief Set configuration variable value
-	 *
-	 * Updates an AI configuration variable at runtime.
-	 * Variable names should be without the 'ai_' prefix.
-	 *
-	 * @param name Variable name (e.g., "nl2sql_enabled")
-	 * @param value New value
-	 * @return true on success, false on failure
-	 *
-	 * Example:
-	 * @code
-	 * GloAI->set_variable("nl2sql_ollama_model", "llama3.3");
-	 * @endcode
-	 */
-	bool set_variable(const char* name, const char* value);
-
-	/**
-	 * @brief Get list of all AI variable names
-	 *
-	 * Returns NULL-terminated array of variable names for admin interface.
-	 *
-	 * @return Array of strings (must be freed by caller)
-	 */
-	char** get_variables_list();
-
-	/**
 	 * @brief Get AI features status as JSON
 	 *
 	 * Returns comprehensive status including:
 	 * - Enabled features
 	 * - Status counters (requests, cache hits, etc.)
-	 * - Current configuration
 	 * - Daily cloud spend
+	 *
+	 * Note: Configuration is managed by the GenAI module (GloGATH).
+	 * Use GenAI get/set methods for configuration access.
 	 *
 	 * @return JSON string with status information
 	 */

@@ -32,11 +32,43 @@ using json = nlohmann::json;
 // Define the array of variable names for the GenAI module
 // Note: These do NOT include the "genai_" prefix - it's added by the flush functions
 static const char* genai_thread_variables_names[] = {
+	// Original GenAI variables
 	"threads",
 	"embedding_uri",
 	"rerank_uri",
 	"embedding_timeout_ms",
 	"rerank_timeout_ms",
+
+	// AI Features master switches
+	"enabled",
+	"nl2sql_enabled",
+	"anomaly_enabled",
+
+	// NL2SQL configuration
+	"nl2sql_query_prefix",
+	"nl2sql_provider",
+	"nl2sql_provider_url",
+	"nl2sql_provider_model",
+	"nl2sql_provider_key",
+	"nl2sql_cache_similarity_threshold",
+	"nl2sql_timeout_ms",
+
+	// Anomaly detection configuration
+	"anomaly_risk_threshold",
+	"anomaly_similarity_threshold",
+	"anomaly_rate_limit",
+	"anomaly_auto_block",
+	"anomaly_log_only",
+
+	// Hybrid model routing
+	"prefer_local_models",
+	"daily_budget_usd",
+	"max_cloud_requests_per_hour",
+
+	// Vector storage configuration
+	"vector_db_path",
+	"vector_dimension",
+
 	NULL
 };
 
@@ -115,6 +147,36 @@ GenAI_Threads_Handler::GenAI_Threads_Handler() {
 	variables.genai_embedding_timeout_ms = 30000;
 	variables.genai_rerank_timeout_ms = 30000;
 
+	// AI Features master switches
+	variables.genai_enabled = false;
+	variables.genai_nl2sql_enabled = false;
+	variables.genai_anomaly_enabled = false;
+
+	// NL2SQL configuration
+	variables.genai_nl2sql_query_prefix = strdup("NL2SQL:");
+	variables.genai_nl2sql_provider = strdup("openai");
+	variables.genai_nl2sql_provider_url = strdup("http://localhost:11434/v1/chat/completions");
+	variables.genai_nl2sql_provider_model = strdup("llama3.2");
+	variables.genai_nl2sql_provider_key = NULL;
+	variables.genai_nl2sql_cache_similarity_threshold = 85;
+	variables.genai_nl2sql_timeout_ms = 30000;
+
+	// Anomaly detection configuration
+	variables.genai_anomaly_risk_threshold = 70;
+	variables.genai_anomaly_similarity_threshold = 80;
+	variables.genai_anomaly_rate_limit = 100;
+	variables.genai_anomaly_auto_block = true;
+	variables.genai_anomaly_log_only = false;
+
+	// Hybrid model routing
+	variables.genai_prefer_local_models = true;
+	variables.genai_daily_budget_usd = 10.0;
+	variables.genai_max_cloud_requests_per_hour = 100;
+
+	// Vector storage configuration
+	variables.genai_vector_db_path = strdup("/var/lib/proxysql/ai_features.db");
+	variables.genai_vector_dimension = 1536;  // OpenAI text-embedding-3-small
+
 	status_variables.threads_initialized = 0;
 	status_variables.active_requests = 0;
 	status_variables.completed_requests = 0;
@@ -130,6 +192,22 @@ GenAI_Threads_Handler::~GenAI_Threads_Handler() {
 		free(variables.genai_embedding_uri);
 	if (variables.genai_rerank_uri)
 		free(variables.genai_rerank_uri);
+
+	// Free NL2SQL string variables
+	if (variables.genai_nl2sql_query_prefix)
+		free(variables.genai_nl2sql_query_prefix);
+	if (variables.genai_nl2sql_provider)
+		free(variables.genai_nl2sql_provider);
+	if (variables.genai_nl2sql_provider_url)
+		free(variables.genai_nl2sql_provider_url);
+	if (variables.genai_nl2sql_provider_model)
+		free(variables.genai_nl2sql_provider_model);
+	if (variables.genai_nl2sql_provider_key)
+		free(variables.genai_nl2sql_provider_key);
+
+	// Free vector storage string variables
+	if (variables.genai_vector_db_path)
+		free(variables.genai_vector_db_path);
 
 	pthread_rwlock_destroy(&rwlock);
 }
@@ -268,6 +346,7 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	if (!name)
 		return NULL;
 
+	// Original GenAI variables
 	if (!strcmp(name, "threads")) {
 		char buf[64];
 		sprintf(buf, "%d", variables.genai_threads);
@@ -290,6 +369,92 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 		return strdup(buf);
 	}
 
+	// AI Features master switches
+	if (!strcmp(name, "enabled")) {
+		return strdup(variables.genai_enabled ? "true" : "false");
+	}
+	if (!strcmp(name, "nl2sql_enabled")) {
+		return strdup(variables.genai_nl2sql_enabled ? "true" : "false");
+	}
+	if (!strcmp(name, "anomaly_enabled")) {
+		return strdup(variables.genai_anomaly_enabled ? "true" : "false");
+	}
+
+	// NL2SQL configuration
+	if (!strcmp(name, "nl2sql_query_prefix")) {
+		return strdup(variables.genai_nl2sql_query_prefix ? variables.genai_nl2sql_query_prefix : "");
+	}
+	if (!strcmp(name, "nl2sql_provider")) {
+		return strdup(variables.genai_nl2sql_provider ? variables.genai_nl2sql_provider : "");
+	}
+	if (!strcmp(name, "nl2sql_provider_url")) {
+		return strdup(variables.genai_nl2sql_provider_url ? variables.genai_nl2sql_provider_url : "");
+	}
+	if (!strcmp(name, "nl2sql_provider_model")) {
+		return strdup(variables.genai_nl2sql_provider_model ? variables.genai_nl2sql_provider_model : "");
+	}
+	if (!strcmp(name, "nl2sql_provider_key")) {
+		return strdup(variables.genai_nl2sql_provider_key ? variables.genai_nl2sql_provider_key : "");
+	}
+	if (!strcmp(name, "nl2sql_cache_similarity_threshold")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_nl2sql_cache_similarity_threshold);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "nl2sql_timeout_ms")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_nl2sql_timeout_ms);
+		return strdup(buf);
+	}
+
+	// Anomaly detection configuration
+	if (!strcmp(name, "anomaly_risk_threshold")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_anomaly_risk_threshold);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "anomaly_similarity_threshold")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_anomaly_similarity_threshold);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "anomaly_rate_limit")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_anomaly_rate_limit);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "anomaly_auto_block")) {
+		return strdup(variables.genai_anomaly_auto_block ? "true" : "false");
+	}
+	if (!strcmp(name, "anomaly_log_only")) {
+		return strdup(variables.genai_anomaly_log_only ? "true" : "false");
+	}
+
+	// Hybrid model routing
+	if (!strcmp(name, "prefer_local_models")) {
+		return strdup(variables.genai_prefer_local_models ? "true" : "false");
+	}
+	if (!strcmp(name, "daily_budget_usd")) {
+		char buf[64];
+		sprintf(buf, "%.2f", variables.genai_daily_budget_usd);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "max_cloud_requests_per_hour")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_max_cloud_requests_per_hour);
+		return strdup(buf);
+	}
+
+	// Vector storage configuration
+	if (!strcmp(name, "vector_db_path")) {
+		return strdup(variables.genai_vector_db_path ? variables.genai_vector_db_path : "");
+	}
+	if (!strcmp(name, "vector_dimension")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_vector_dimension);
+		return strdup(buf);
+	}
+
 	return NULL;
 }
 
@@ -297,6 +462,7 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 	if (!name || !value)
 		return false;
 
+	// Original GenAI variables
 	if (!strcmp(name, "threads")) {
 		int val = atoi(value);
 		if (val < 1 || val > 256) {
@@ -334,6 +500,148 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 			return false;
 		}
 		variables.genai_rerank_timeout_ms = val;
+		return true;
+	}
+
+	// AI Features master switches
+	if (!strcmp(name, "enabled")) {
+		variables.genai_enabled = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "nl2sql_enabled")) {
+		variables.genai_nl2sql_enabled = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "anomaly_enabled")) {
+		variables.genai_anomaly_enabled = (strcmp(value, "true") == 0);
+		return true;
+	}
+
+	// NL2SQL configuration
+	if (!strcmp(name, "nl2sql_query_prefix")) {
+		if (variables.genai_nl2sql_query_prefix)
+			free(variables.genai_nl2sql_query_prefix);
+		variables.genai_nl2sql_query_prefix = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "nl2sql_provider")) {
+		if (variables.genai_nl2sql_provider)
+			free(variables.genai_nl2sql_provider);
+		variables.genai_nl2sql_provider = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "nl2sql_provider_url")) {
+		if (variables.genai_nl2sql_provider_url)
+			free(variables.genai_nl2sql_provider_url);
+		variables.genai_nl2sql_provider_url = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "nl2sql_provider_model")) {
+		if (variables.genai_nl2sql_provider_model)
+			free(variables.genai_nl2sql_provider_model);
+		variables.genai_nl2sql_provider_model = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "nl2sql_provider_key")) {
+		if (variables.genai_nl2sql_provider_key)
+			free(variables.genai_nl2sql_provider_key);
+		variables.genai_nl2sql_provider_key = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "nl2sql_cache_similarity_threshold")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100) {
+			proxy_error("Invalid value for genai_nl2sql_cache_similarity_threshold: %d (must be 0-100)\n", val);
+			return false;
+		}
+		variables.genai_nl2sql_cache_similarity_threshold = val;
+		return true;
+	}
+	if (!strcmp(name, "nl2sql_timeout_ms")) {
+		int val = atoi(value);
+		if (val < 1000 || val > 600000) {
+			proxy_error("Invalid value for genai_nl2sql_timeout_ms: %d (must be 1000-600000)\n", val);
+			return false;
+		}
+		variables.genai_nl2sql_timeout_ms = val;
+		return true;
+	}
+
+	// Anomaly detection configuration
+	if (!strcmp(name, "anomaly_risk_threshold")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100) {
+			proxy_error("Invalid value for genai_anomaly_risk_threshold: %d (must be 0-100)\n", val);
+			return false;
+		}
+		variables.genai_anomaly_risk_threshold = val;
+		return true;
+	}
+	if (!strcmp(name, "anomaly_similarity_threshold")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100) {
+			proxy_error("Invalid value for genai_anomaly_similarity_threshold: %d (must be 0-100)\n", val);
+			return false;
+		}
+		variables.genai_anomaly_similarity_threshold = val;
+		return true;
+	}
+	if (!strcmp(name, "anomaly_rate_limit")) {
+		int val = atoi(value);
+		if (val < 1 || val > 10000) {
+			proxy_error("Invalid value for genai_anomaly_rate_limit: %d (must be 1-10000)\n", val);
+			return false;
+		}
+		variables.genai_anomaly_rate_limit = val;
+		return true;
+	}
+	if (!strcmp(name, "anomaly_auto_block")) {
+		variables.genai_anomaly_auto_block = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "anomaly_log_only")) {
+		variables.genai_anomaly_log_only = (strcmp(value, "true") == 0);
+		return true;
+	}
+
+	// Hybrid model routing
+	if (!strcmp(name, "prefer_local_models")) {
+		variables.genai_prefer_local_models = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "daily_budget_usd")) {
+		double val = atof(value);
+		if (val < 0 || val > 10000) {
+			proxy_error("Invalid value for genai_daily_budget_usd: %.2f (must be 0-10000)\n", val);
+			return false;
+		}
+		variables.genai_daily_budget_usd = val;
+		return true;
+	}
+	if (!strcmp(name, "max_cloud_requests_per_hour")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100000) {
+			proxy_error("Invalid value for genai_max_cloud_requests_per_hour: %d (must be 0-100000)\n", val);
+			return false;
+		}
+		variables.genai_max_cloud_requests_per_hour = val;
+		return true;
+	}
+
+	// Vector storage configuration
+	if (!strcmp(name, "vector_db_path")) {
+		if (variables.genai_vector_db_path)
+			free(variables.genai_vector_db_path);
+		variables.genai_vector_db_path = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "vector_dimension")) {
+		int val = atoi(value);
+		if (val < 1 || val > 100000) {
+			proxy_error("Invalid value for genai_vector_dimension: %d (must be 1-100000)\n", val);
+			return false;
+		}
+		variables.genai_vector_dimension = val;
 		return true;
 	}
 

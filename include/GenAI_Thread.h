@@ -199,6 +199,36 @@ public:
 		// Timeouts (in milliseconds)
 		int genai_embedding_timeout_ms; ///< Timeout for embedding requests (default: 30000)
 		int genai_rerank_timeout_ms;    ///< Timeout for reranking requests (default: 30000)
+
+		// AI Features master switches
+		bool genai_enabled;              ///< Master enable for all AI features (default: false)
+		bool genai_nl2sql_enabled;       ///< Enable NL2SQL feature (default: false)
+		bool genai_anomaly_enabled;      ///< Enable anomaly detection (default: false)
+
+		// NL2SQL configuration
+		char* genai_nl2sql_query_prefix; ///< Prefix for NL2SQL queries (default: "NL2SQL:")
+		char* genai_nl2sql_provider;     ///< Provider format: "openai" or "anthropic" (default: "openai")
+		char* genai_nl2sql_provider_url; ///< LLM endpoint URL (default: http://localhost:11434/v1/chat/completions)
+		char* genai_nl2sql_provider_model; ///< Model name (default: "llama3.2")
+		char* genai_nl2sql_provider_key; ///< API key (default: NULL)
+		int genai_nl2sql_cache_similarity_threshold; ///< Semantic cache threshold 0-100 (default: 85)
+		int genai_nl2sql_timeout_ms;     ///< LLM request timeout in ms (default: 30000)
+
+		// Anomaly detection configuration
+		int genai_anomaly_risk_threshold;      ///< Risk score threshold for blocking 0-100 (default: 70)
+		int genai_anomaly_similarity_threshold; ///< Similarity threshold 0-100 (default: 80)
+		int genai_anomaly_rate_limit;          ///< Max queries per minute (default: 100)
+		bool genai_anomaly_auto_block;         ///< Auto-block suspicious queries (default: true)
+		bool genai_anomaly_log_only;           ///< Log-only mode (default: false)
+
+		// Hybrid model routing
+		bool genai_prefer_local_models;        ///< Prefer local Ollama over cloud (default: true)
+		double genai_daily_budget_usd;         ///< Daily cloud spend limit (default: 10.0)
+		int genai_max_cloud_requests_per_hour; ///< Cloud API rate limit (default: 100)
+
+		// Vector storage configuration
+		char* genai_vector_db_path;            ///< Vector database file path (default: /var/lib/proxysql/ai_features.db)
+		int genai_vector_dimension;            ///< Embedding dimension (default: 1536)
 	} variables;
 
 	struct {

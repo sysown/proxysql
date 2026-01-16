@@ -20,23 +20,23 @@ The Anomaly Detection module provides real-time security threat detection for Pr
 
 ```sql
 -- Via admin interface
-SET ai_anomaly_enabled='true';
+SET genai-anomaly_enabled='true';
 ```
 
 ### 2. Configure Detection
 
 ```sql
 -- Set risk threshold (0-100)
-SET ai_anomaly_risk_threshold='70';
+SET genai-anomaly_risk_threshold='70';
 
 -- Set rate limit (queries per minute)
-SET ai_anomaly_rate_limit='100';
+SET genai-anomaly_rate_limit='100';
 
 -- Enable auto-blocking
-SET ai_anomaly_auto_block='true';
+SET genai-anomaly_auto_block='true';
 
 -- Or enable log-only mode
-SET ai_anomaly_log_only='false';
+SET genai-anomaly_log_only='false';
 ```
 
 ### 3. Monitor Detection Results
@@ -56,12 +56,12 @@ curl http://localhost:4200/metrics | grep proxysql_ai
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ai_anomaly_enabled` | true | Enable/disable anomaly detection |
-| `ai_anomaly_risk_threshold` | 70 | Risk score threshold (0-100) for blocking |
-| `ai_anomaly_rate_limit` | 100 | Max queries per minute per user/host |
-| `ai_anomaly_similarity_threshold` | 85 | Similarity threshold for embedding matching (0-100) |
-| `ai_anomaly_auto_block` | true | Automatically block suspicious queries |
-| `ai_anomaly_log_only` | false | Log anomalies without blocking |
+| `genai-anomaly_enabled` | true | Enable/disable anomaly detection |
+| `genai-anomaly_risk_threshold` | 70 | Risk score threshold (0-100) for blocking |
+| `genai-anomaly_rate_limit` | 100 | Max queries per minute per user/host |
+| `genai-anomaly_similarity_threshold` | 85 | Similarity threshold for embedding matching (0-100) |
+| `genai-anomaly_auto_block` | true | Automatically block suspicious queries |
+| `genai-anomaly_log_only` | false | Log anomalies without blocking |
 
 ### Status Variables
 
