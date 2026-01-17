@@ -186,25 +186,45 @@ def run_discovery(args):
             words = len(result.stdout.split())
             log_info(f"Report size: {lines} lines, {words} words")
 
-            # Try to extract key sections
-            lines_list = result.stdout.split('\n')
-            sections = [line for line in lines_list if line.startswith('# ')]
-            if sections:
-                log_info("Report sections:")
-                for section in sections[:10]:
-                    print(f"  - {section}")
+            # Check if output is empty
+            if lines == 0 or not result.stdout.strip():
+                log_warn("Output file is empty - discovery may have failed silently")
+                log_info("Try running with --verbose to see more details")
+                log_info("Check that Claude Code is working: claude --version")
+            else:
+                # Try to extract key sections
+                lines_list = result.stdout.split('\n')
+                sections = [line for line in lines_list if line.startswith('# ')]
+                if sections:
+                    log_info("Report sections:")
+                    for section in sections[:10]:
+                        print(f"  - {section}")
         else:
             log_error(f"Discovery failed with exit code: {result.returncode}")
             log_info(f"Check {output_file} for error details")
 
+            # Check if output file is empty
+            if os.path.exists(output_file):
+                file_size = os.path.getsize(output_file)
+                if file_size == 0:
+                    log_warn("Output file is empty (0 bytes)")
+                    log_info("This usually means Claude Code failed to start or produced no output")
+                    log_info("Check that Claude Code is installed and working:")
+                    log_info(f"  {claude_cmd} --version")
+                    log_info("Or try with --verbose for more debugging information")
+
             if result.stderr:
                 log_verbose(f"Stderr: {result.stderr}", args.verbose)
+            else:
+                log_warn("No stderr output captured - check if Claude Code started correctly")
 
             sys.exit(result.returncode)
 
     except subprocess.TimeoutExpired:
-        log_error("Discovery timed out")
-        log_info("Try increasing timeout with --timeout option")
+        log_error(f"Discovery timed out after {args.timeout} seconds")
+        log_error("The multi-agent discovery process can take a long time for complex databases")
+        log_info(f"Try increasing timeout with: --timeout {args.timeout * 2}")
+        log_info(f"Example: {sys.argv[0]} --timeout {args.timeout * 2}")
         sys.exit(1)
     except Exception as e:
         log_error(f"Error running discovery: {e}")
@@ -277,8 +297,8 @@ Findings are shared via MCP catalog and output as a structured markdown report.
     parser.add_argument(
         '-t', '--timeout',
         type=int,
-        default=300,
-        help='Timeout for discovery in seconds (default: 300)'
+        default=3600,
+        help='Timeout for discovery in seconds (default: 3600 = 1 hour)'
     )
     parser.add_argument(
         '-v', '--verbose',

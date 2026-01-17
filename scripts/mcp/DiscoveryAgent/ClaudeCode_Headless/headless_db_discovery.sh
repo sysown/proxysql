@@ -17,7 +17,7 @@
 #   -o, --output FILE          Output file for results (default: discovery_YYYYMMDD_HHMMSS.md)
 #   -m, --mcp-config JSON      MCP server configuration (inline JSON)
 #   -f, --mcp-file FILE        MCP server configuration file
-#   -t, --timeout SECONDS      Timeout for discovery (default: 300)
+#   -t, --timeout SECONDS      Timeout for discovery in seconds (default: 3600 = 1 hour)
 #   -v, --verbose              Enable verbose output
 #   -h, --help                 Show this help message
 #
@@ -46,7 +46,7 @@ SCHEMA_NAME=""
 OUTPUT_FILE=""
 MCP_CONFIG=""
 MCP_FILE=""
-TIMEOUT=300
+TIMEOUT=3600  # 1 hour default (multi-agent discovery takes longer)
 VERBOSE=0
 CLAUDE_CMD="${CLAUDE_PATH:-$HOME/.local/bin/claude}"
 
@@ -217,6 +217,12 @@ if timeout "${TIMEOUT}s" $CLAUDE_CMD "${CLAUDE_ARGS[@]}" <<< "$DISCOVERY_PROMPT"
         words=$(wc -w < "$OUTPUT_FILE")
         log_info "Report size: $lines lines, $words words"
 
+        # Check if file is empty (no output)
+        if [ "$lines" -eq 0 ]; then
+            log_warn "Output file is empty - discovery may have failed silently"
+            log_info "Try running with --verbose to see more details"
+        fi
+
         # Try to extract key info if report contains markdown headers
         if grep -q "^# " "$OUTPUT_FILE"; then
             log_info "Report sections:"
@@ -227,13 +233,30 @@ if timeout "${TIMEOUT}s" $CLAUDE_CMD "${CLAUDE_ARGS[@]}" <<< "$DISCOVERY_PROMPT"
     fi
 else
     exit_code=$?
-    log_error "Discovery failed with exit code: $exit_code"
-    log_info "Check $OUTPUT_FILE for error details"
+
+    # Exit code 124 means timeout command killed the process
+    if [ "$exit_code" -eq 124 ]; then
+        log_error "Discovery timed out after ${TIMEOUT} seconds"
+        log_error "The multi-agent discovery process can take a long time for complex databases"
+        log_info "Try increasing timeout with: --timeout $((TIMEOUT * 2))"
+        log_info "Example: $0 --timeout $((TIMEOUT * 2))"
+    else
+        log_error "Discovery failed with exit code: $exit_code"
+        log_info "Check $OUTPUT_FILE for error details"
+    fi
 
     # Show last few lines of output if it exists
     if [ -f "$OUTPUT_FILE" ]; then
-        log_verbose "Last 20 lines of output:"
-        tail -20 "$OUTPUT_FILE" | sed 's/^/  /'
+        file_size=$(wc -c < "$OUTPUT_FILE")
+        if [ "$file_size" -gt 0 ]; then
+            log_verbose "Last 30 lines of output:"
+            tail -30 "$OUTPUT_FILE" | sed 's/^/  /'
+        else
+            log_warn "Output file is empty (0 bytes)"
+            log_info "This usually means Claude Code failed to start or produced no output"
+            log_info "Check that Claude Code is installed: $CLAUDE_CMD --version"
+            log_info "Or try with --verbose for more debugging information"
+        fi
     fi
 
     exit $exit_code
