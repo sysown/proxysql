@@ -4,14 +4,15 @@ Multi-agent database discovery system for comprehensive analysis through MCP (Mo
 
 ## Overview
 
-This directory contains scripts for running **4-agent collaborative database discovery** in headless (non-interactive) mode using Claude Code.
+This directory contains scripts for running **6-agent collaborative database discovery** in headless (non-interactive) mode using Claude Code.
 
 **Key Features:**
-- **4 Collaborating Agents:** STRUCTURAL, STATISTICAL, SEMANTIC, QUERY
-- **4-Round Protocol:** Blind exploration → Pattern recognition → Hypothesis testing → Final synthesis
+- **6 Agents (5 Analysis + 1 Meta):** STRUCTURAL, STATISTICAL, SEMANTIC, QUERY, SECURITY, META
+- **5-Round Protocol:** Blind exploration → Pattern recognition → Hypothesis testing → Final synthesis → Meta analysis
 - **MCP Catalog Collaboration:** Agents share findings via catalog
 - **Comprehensive Reports:** Structured markdown with health scores and prioritized recommendations
-- **Evidence-Based:** 15+ hypothesis validations with direct database evidence
+- **Evidence-Based:** 20+ hypothesis validations with direct database evidence
+- **Self-Improving:** META agent analyzes report quality and suggests prompt improvements
 
 ## Quick Start
 
@@ -46,35 +47,43 @@ python ./headless_db_discovery.py --verbose
 
 ## Multi-Agent Discovery Architecture
 
-### The 4 Agents
+### The 6 Agents
 
-| Agent | Focus | Key MCP Tools |
-|-------|-------|---------------|
-| **STRUCTURAL** | Schemas, tables, relationships, indexes, constraints | `list_schemas`, `list_tables`, `describe_table`, `get_constraints`, `suggest_joins` |
-| **STATISTICAL** | Data distributions, quality, anomalies | `table_profile`, `sample_rows`, `column_profile`, `sample_distinct`, `run_sql_readonly` |
-| **SEMANTIC** | Business domain, entities, rules, terminology | `sample_rows`, `sample_distinct`, `run_sql_readonly` |
-| **QUERY** | Index efficiency, query patterns, optimization | `describe_table`, `explain_sql`, `suggest_joins`, `run_sql_readonly` |
+| Agent | Type | Focus | Key MCP Tools |
+|-------|------|-------|---------------|
+| **STRUCTURAL** | Analysis | Schemas, tables, relationships, indexes, constraints | `list_schemas`, `list_tables`, `describe_table`, `get_constraints`, `suggest_joins` |
+| **STATISTICAL** | Analysis | Data distributions, quality, anomalies | `table_profile`, `sample_rows`, `column_profile`, `sample_distinct`, `run_sql_readonly` |
+| **SEMANTIC** | Analysis | Business domain, entities, rules, terminology | `sample_rows`, `sample_distinct`, `run_sql_readonly` |
+| **QUERY** | Analysis | Index efficiency, query patterns, optimization | `describe_table`, `explain_sql`, `suggest_joins`, `run_sql_readonly` |
+| **SECURITY** | Analysis | Sensitive data, access patterns, vulnerabilities | `sample_rows`, `sample_distinct`, `column_profile`, `run_sql_readonly` |
+| **META** | Meta | Report quality analysis, prompt improvement suggestions | `catalog_search`, `catalog_get` (reads findings) |
 
-### 4-Round Protocol
+### 5-Round Protocol
 
 1. **Round 1: Blind Exploration** (Parallel)
-   - All 4 agents explore independently
+   - All 5 analysis agents explore independently
    - Each discovers patterns without seeing others' findings
    - Findings written to MCP catalog
 
 2. **Round 2: Pattern Recognition** (Collaborative)
-   - All agents read each other's findings via `catalog_search`
+   - All 5 analysis agents read each other's findings via `catalog_search`
    - Identify cross-cutting patterns and anomalies
    - Collaborative analysis documented
 
 3. **Round 3: Hypothesis Testing** (Validation)
-   - Each agent validates 3-4 specific hypotheses
+   - Each analysis agent validates 3-4 specific hypotheses
    - Results documented with PASS/FAIL/MIXED and evidence
-   - 15+ hypothesis validations total
+   - 20+ hypothesis validations total
 
 4. **Round 4: Final Synthesis**
-   - All findings synthesized into comprehensive report
+   - All 5 analysis agents synthesize findings into comprehensive report
    - Written to MCP catalog and local file
+
+5. **Round 5: Meta Analysis** (META agent only)
+   - META agent reads the complete final report
+   - Analyzes each section for depth, completeness, quality
+   - Identifies gaps and suggests prompt improvements
+   - Writes separate meta-analysis document to MCP catalog
 
 ## What Gets Discovered
 
@@ -108,6 +117,32 @@ python ./headless_db_discovery.py --verbose
 - Query pattern identification
 - Optimization recommendations with expected improvements
 
+### 5. Security Analysis
+- **Sensitive Data Identification:**
+  - PII: names, emails, phone numbers, SSN, addresses
+  - Credentials: passwords, API keys, tokens
+  - Financial data: credit cards, bank accounts
+  - Health data: medical records
+- **Access Pattern Analysis:**
+  - Overly permissive schemas
+  - Missing row-level security
+- **Vulnerability Assessment:**
+  - SQL injection vectors
+  - Weak authentication patterns
+  - Missing encryption indicators
+- **Compliance Assessment:**
+  - GDPR indicators (personal data)
+  - PCI-DSS indicators (payment data)
+  - Data retention patterns
+- **Data Classification:**
+  - PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED
+
+### 6. Meta Analysis
+- Report quality assessment by section (depth, completeness)
+- Gap identification (what was missed)
+- Prompt improvement suggestions for future runs
+- Evolution history tracking
+
 ## Output Format
 
 The generated report includes:
@@ -117,9 +152,9 @@ The generated report includes:
 
 ## Executive Summary
 - Database identity (system type, purpose, scale)
-- Critical findings (top 3)
+- Critical findings (top 5 - one from each agent)
 - Health score: current X/10 → potential Y/10
-- Top 3 recommendations (prioritized)
+- Top 5 recommendations (prioritized)
 
 ## 1. STRUCTURAL ANALYSIS
 - Schema inventory
@@ -145,10 +180,17 @@ The generated report includes:
 - Optimization opportunities
 - Expected improvements
 
-## 5. CRITICAL FINDINGS
+## 5. SECURITY ANALYSIS
+- Sensitive data identification
+- Access pattern analysis
+- Vulnerability assessment
+- Compliance indicators
+- Security recommendations
+
+## 6. CRITICAL FINDINGS
 - Each with: description, impact quantification, root cause, remediation
 
-## 6. RECOMMENDATIONS ROADMAP
+## 7. RECOMMENDATIONS ROADMAP
 - URGENT: [actions with impact/effort]
 - HIGH: [actions]
 - MODERATE: [actions]
@@ -159,7 +201,14 @@ The generated report includes:
 - B. Query examples with EXPLAIN
 - C. Statistical distributions
 - D. Business glossary
+- E. Security data classification
 ```
+
+Additionally, a separate **META ANALYSIS** document is generated with:
+- Section quality ratings (depth, completeness)
+- Specific prompt improvement suggestions
+- Gap identification
+- Evolution history
 
 ## Command-Line Options
 

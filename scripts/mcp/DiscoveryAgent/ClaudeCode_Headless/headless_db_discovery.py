@@ -258,19 +258,23 @@ Examples:
 Environment Variables:
   CLAUDE_PATH    Path to claude executable
 
-The discovery uses a 4-agent collaborative approach:
+The discovery uses a 6-agent collaborative approach:
   - STRUCTURAL: Schemas, tables, relationships, indexes, constraints
   - STATISTICAL: Data distributions, quality, anomalies
   - SEMANTIC: Business domain, entities, rules, terminology
   - QUERY: Index efficiency, query patterns, optimization
+  - SECURITY: Sensitive data, access patterns, vulnerabilities
+  - META: Report quality analysis, prompt improvement suggestions
 
-Agents collaborate through 4 rounds:
-  1. Blind Exploration (independent discovery)
+Agents collaborate through 5 rounds:
+  1. Blind Exploration (5 analysis agents, independent discovery)
   2. Pattern Recognition (cross-agent collaboration)
   3. Hypothesis Testing (validation with evidence)
   4. Final Synthesis (comprehensive report)
+  5. Meta Analysis (META agent analyzes report quality)
 
 Findings are shared via MCP catalog and output as a structured markdown report.
+The META agent also generates a separate meta-analysis document with prompt improvement suggestions.
         """
     )
 
