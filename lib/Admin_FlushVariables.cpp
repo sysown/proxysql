@@ -1079,11 +1079,11 @@ void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, 
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
 
-		// Check if NL2SQL needs to be initialized
-		if (GloAI && GloGATH->variables.genai_nl2sql_enabled && !GloAI->get_nl2sql()) {
-			proxy_info("NL2SQL enabled but not initialized, initializing now\n");
-			if (GloAI->init_nl2sql() != 0) {
-				proxy_error("Failed to initialize NL2SQL converter\n");
+		// Check if LLM bridge needs to be initialized
+		if (GloAI && GloGATH->variables.genai_llm_enabled && !GloAI->get_llm_bridge()) {
+			proxy_info("LLM bridge enabled but not initialized, initializing now\n");
+			if (GloAI->init_llm_bridge() != 0) {
+				proxy_error("Failed to initialize LLM bridge\n");
 			}
 		}
 

@@ -121,10 +121,10 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		proxy_info("Observe Tool Handler initialized\n");
 	}
 
-	// 6. AI Tool Handler (for NL2SQL and other AI features)
+	// 6. AI Tool Handler (for LLM and other AI features)
 	extern AI_Features_Manager *GloAI;
 	if (GloAI) {
-		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_nl2sql(), GloAI->get_anomaly_detector());
+		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_llm_bridge(), GloAI->get_anomaly_detector());
 		if (handler->ai_tool_handler->init() == 0) {
 			proxy_info("AI Tool Handler initialized\n");
 		} else {
@@ -164,7 +164,7 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	ws->register_resource("/mcp/cache", cache_resource.get(), true);
 	_endpoints.push_back({"/mcp/cache", std::move(cache_resource)});
 
-	// 6. AI endpoint (for NL2SQL and other AI features)
+	// 6. AI endpoint (for LLM and other AI features)
 	if (handler->ai_tool_handler) {
 		std::unique_ptr<httpserver::http_resource> ai_resource =
 			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->ai_tool_handler, "ai"));

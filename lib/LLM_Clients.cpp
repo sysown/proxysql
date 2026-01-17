@@ -19,7 +19,7 @@
  * @see NL2SQL_Converter.h
  */
 
-#include "NL2SQL_Converter.h"
+#include "LLM_Bridge.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include <cstring>
@@ -50,11 +50,11 @@ using json = nlohmann::json;
 	do { \
 		if (req_id && strlen(req_id) > 0) { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 2, \
-				"NL2SQL [%s]: REQUEST url=%s model=%s prompt_len=%zu\n", \
+				"LLM [%s]: REQUEST url=%s model=%s prompt_len=%zu\n", \
 				req_id, url, model, prompt.length()); \
 		} else { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 2, \
-				"NL2SQL: REQUEST url=%s model=%s prompt_len=%zu\n", \
+				"LLM: REQUEST url=%s model=%s prompt_len=%zu\n", \
 				url, model, prompt.length()); \
 		} \
 	} while(0)
@@ -63,11 +63,11 @@ using json = nlohmann::json;
 	do { \
 		if (req_id && strlen(req_id) > 0) { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
-				"NL2SQL [%s]: RESPONSE status=%d duration_ms=%ld response=%s\n", \
+				"LLM [%s]: RESPONSE status=%d duration_ms=%ld response=%s\n", \
 				req_id, status, duration_ms, response_preview.c_str()); \
 		} else { \
 			proxy_debug(PROXY_DEBUG_NL2SQL, 3, \
-				"NL2SQL: RESPONSE status=%d duration_ms=%ld response=%s\n", \
+				"LLM: RESPONSE status=%d duration_ms=%ld response=%s\n", \
 				status, duration_ms, response_preview.c_str()); \
 		} \
 	} while(0)
@@ -75,10 +75,10 @@ using json = nlohmann::json;
 #define LOG_LLM_ERROR(req_id, phase, error, status) \
 	do { \
 		if (req_id && strlen(req_id) > 0) { \
-			proxy_error("NL2SQL [%s]: ERROR phase=%s error=%s status=%d\n", \
+			proxy_error("LLM [%s]: ERROR phase=%s error=%s status=%d\n", \
 				req_id, phase, error, status); \
 		} else { \
-			proxy_error("NL2SQL: ERROR phase=%s error=%s status=%d\n", \
+			proxy_error("LLM: ERROR phase=%s error=%s status=%d\n", \
 				phase, error, status); \
 		} \
 	} while(0)
@@ -214,7 +214,7 @@ static void sleep_with_jitter(int base_delay_ms, double jitter_factor = 0.1) {
  * @param req_id Request ID for correlation (optional)
  * @return Generated SQL or empty string on error
  */
-std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, const std::string& model,
+std::string LLM_Bridge::call_generic_openai(const std::string& prompt, const std::string& model,
                                                    const std::string& url, const char* key,
                                                    const std::string& req_id) {
 	// Start timing
@@ -381,7 +381,7 @@ std::string NL2SQL_Converter::call_generic_openai(const std::string& prompt, con
  * @param req_id Request ID for correlation (optional)
  * @return Generated SQL or empty string on error
  */
-std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, const std::string& model,
+std::string LLM_Bridge::call_generic_anthropic(const std::string& prompt, const std::string& model,
                                                       const std::string& url, const char* key,
                                                       const std::string& req_id) {
 	// Start timing
@@ -544,7 +544,7 @@ std::string NL2SQL_Converter::call_generic_anthropic(const std::string& prompt, 
  * @param max_backoff_ms Maximum backoff delay in milliseconds
  * @return Generated SQL or empty string if all retries fail
  */
-std::string NL2SQL_Converter::call_generic_openai_with_retry(
+std::string LLM_Bridge::call_generic_openai_with_retry(
     const std::string& prompt,
     const std::string& model,
     const std::string& url,
@@ -568,7 +568,7 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
 		// If we got a successful response, return it
 		if (!result.empty()) {
 			if (attempt > 0) {
-				proxy_info("NL2SQL [%s]: Request succeeded after %d retries\n",
+				proxy_info("LLM [%s]: Request succeeded after %d retries\n",
 				          req_id.c_str(), attempt);
 			}
 			return result;
@@ -580,7 +580,7 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
 
 		// If this was our last attempt, give up
 		if (attempt == max_retries) {
-			proxy_error("NL2SQL [%s]: Request failed after %d attempts. Max retries reached.\n",
+			proxy_error("LLM [%s]: Request failed after %d attempts. Max retries reached.\n",
 			           req_id.c_str(), attempt + 1);
 			return "";
 		}
@@ -590,10 +590,10 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
 		if (is_retryable_error(last_http_code, last_curl_code) || result.empty()) {
 			// Log retry attempt
 			if (result.empty()) {
-				proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+				proxy_warning("LLM [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
 				             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
 			} else {
-				proxy_warning("NL2SQL [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
+				proxy_warning("LLM [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
 				             req_id.c_str(), last_http_code, current_backoff_ms, attempt + 1, max_retries + 1);
 			}
 
@@ -609,7 +609,7 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
 			attempt++;
 		} else {
 			// Non-retryable error, give up
-			proxy_error("NL2SQL [%s]: Non-retryable error (HTTP %d), giving up.\n",
+			proxy_error("LLM [%s]: Non-retryable error (HTTP %d), giving up.\n",
 			           req_id.c_str(), last_http_code);
 			return "";
 		}
@@ -638,7 +638,7 @@ std::string NL2SQL_Converter::call_generic_openai_with_retry(
  * @param max_backoff_ms Maximum backoff delay in milliseconds
  * @return Generated SQL or empty string if all retries fail
  */
-std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
+std::string LLM_Bridge::call_generic_anthropic_with_retry(
     const std::string& prompt,
     const std::string& model,
     const std::string& url,
@@ -661,7 +661,7 @@ std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
 		// If we got a successful response, return it
 		if (!result.empty()) {
 			if (attempt > 0) {
-				proxy_info("NL2SQL [%s]: Request succeeded after %d retries\n",
+				proxy_info("LLM [%s]: Request succeeded after %d retries\n",
 				          req_id.c_str(), attempt);
 			}
 			return result;
@@ -669,7 +669,7 @@ std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
 
 		// If this was our last attempt, give up
 		if (attempt == max_retries) {
-			proxy_error("NL2SQL [%s]: Request failed after %d attempts. Max retries reached.\n",
+			proxy_error("LLM [%s]: Request failed after %d attempts. Max retries reached.\n",
 			           req_id.c_str(), attempt + 1);
 			return "";
 		}
@@ -679,10 +679,10 @@ std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
 		if (is_retryable_error(last_http_code, last_curl_code) || result.empty()) {
 			// Log retry attempt
 			if (result.empty()) {
-				proxy_warning("NL2SQL [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+				proxy_warning("LLM [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
 				             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
 			} else {
-				proxy_warning("NL2SQL [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
+				proxy_warning("LLM [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
 				             req_id.c_str(), last_http_code, current_backoff_ms, attempt + 1, max_retries + 1);
 			}
 
@@ -698,7 +698,7 @@ std::string NL2SQL_Converter::call_generic_anthropic_with_retry(
 			attempt++;
 		} else {
 			// Non-retryable error, give up
-			proxy_error("NL2SQL [%s]: Non-retryable error (HTTP %d), giving up.\n",
+			proxy_error("LLM [%s]: Non-retryable error (HTTP %d), giving up.\n",
 			           req_id.c_str(), last_http_code);
 			return "";
 		}

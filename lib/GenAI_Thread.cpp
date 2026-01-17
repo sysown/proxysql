@@ -45,17 +45,17 @@ static const char* genai_thread_variables_names[] = {
 
 	// AI Features master switches
 	"enabled",
-	"nl2sql_enabled",
+	"llm_enabled",
 	"anomaly_enabled",
 
-	// NL2SQL configuration
-	"nl2sql_query_prefix",
-	"nl2sql_provider",
-	"nl2sql_provider_url",
-	"nl2sql_provider_model",
-	"nl2sql_provider_key",
-	"nl2sql_cache_similarity_threshold",
-	"nl2sql_timeout_ms",
+	// LLM bridge configuration
+	"llm_provider",
+	"llm_provider_url",
+	"llm_provider_model",
+	"llm_provider_key",
+	"llm_cache_similarity_threshold",
+	"llm_cache_enabled",
+	"llm_timeout_ms",
 
 	// Anomaly detection configuration
 	"anomaly_risk_threshold",
@@ -153,17 +153,17 @@ GenAI_Threads_Handler::GenAI_Threads_Handler() {
 
 	// AI Features master switches
 	variables.genai_enabled = false;
-	variables.genai_nl2sql_enabled = false;
+	variables.genai_llm_enabled = false;
 	variables.genai_anomaly_enabled = false;
 
-	// NL2SQL configuration
-	variables.genai_nl2sql_query_prefix = strdup("NL2SQL:");
-	variables.genai_nl2sql_provider = strdup("openai");
-	variables.genai_nl2sql_provider_url = strdup("http://localhost:11434/v1/chat/completions");
-	variables.genai_nl2sql_provider_model = strdup("llama3.2");
-	variables.genai_nl2sql_provider_key = NULL;
-	variables.genai_nl2sql_cache_similarity_threshold = 85;
-	variables.genai_nl2sql_timeout_ms = 30000;
+	// LLM bridge configuration
+	variables.genai_llm_provider = strdup("openai");
+	variables.genai_llm_provider_url = strdup("http://localhost:11434/v1/chat/completions");
+	variables.genai_llm_provider_model = strdup("llama3.2");
+	variables.genai_llm_provider_key = NULL;
+	variables.genai_llm_cache_similarity_threshold = 85;
+	variables.genai_llm_cache_enabled = true;
+	variables.genai_llm_timeout_ms = 30000;
 
 	// Anomaly detection configuration
 	variables.genai_anomaly_risk_threshold = 70;
@@ -197,17 +197,15 @@ GenAI_Threads_Handler::~GenAI_Threads_Handler() {
 	if (variables.genai_rerank_uri)
 		free(variables.genai_rerank_uri);
 
-	// Free NL2SQL string variables
-	if (variables.genai_nl2sql_query_prefix)
-		free(variables.genai_nl2sql_query_prefix);
-	if (variables.genai_nl2sql_provider)
-		free(variables.genai_nl2sql_provider);
-	if (variables.genai_nl2sql_provider_url)
-		free(variables.genai_nl2sql_provider_url);
-	if (variables.genai_nl2sql_provider_model)
-		free(variables.genai_nl2sql_provider_model);
-	if (variables.genai_nl2sql_provider_key)
-		free(variables.genai_nl2sql_provider_key);
+	// Free LLM bridge string variables
+	if (variables.genai_llm_provider)
+		free(variables.genai_llm_provider);
+	if (variables.genai_llm_provider_url)
+		free(variables.genai_llm_provider_url);
+	if (variables.genai_llm_provider_model)
+		free(variables.genai_llm_provider_model);
+	if (variables.genai_llm_provider_key)
+		free(variables.genai_llm_provider_key);
 
 	// Free vector storage string variables
 	if (variables.genai_vector_db_path)
@@ -377,37 +375,34 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	if (!strcmp(name, "enabled")) {
 		return strdup(variables.genai_enabled ? "true" : "false");
 	}
-	if (!strcmp(name, "nl2sql_enabled")) {
-		return strdup(variables.genai_nl2sql_enabled ? "true" : "false");
+	if (!strcmp(name, "llm_enabled")) {
+		return strdup(variables.genai_llm_enabled ? "true" : "false");
 	}
 	if (!strcmp(name, "anomaly_enabled")) {
 		return strdup(variables.genai_anomaly_enabled ? "true" : "false");
 	}
 
-	// NL2SQL configuration
-	if (!strcmp(name, "nl2sql_query_prefix")) {
-		return strdup(variables.genai_nl2sql_query_prefix ? variables.genai_nl2sql_query_prefix : "");
+	// LLM configuration
+	if (!strcmp(name, "llm_provider")) {
+		return strdup(variables.genai_llm_provider ? variables.genai_llm_provider : "");
 	}
-	if (!strcmp(name, "nl2sql_provider")) {
-		return strdup(variables.genai_nl2sql_provider ? variables.genai_nl2sql_provider : "");
+	if (!strcmp(name, "llm_provider_url")) {
+		return strdup(variables.genai_llm_provider_url ? variables.genai_llm_provider_url : "");
 	}
-	if (!strcmp(name, "nl2sql_provider_url")) {
-		return strdup(variables.genai_nl2sql_provider_url ? variables.genai_nl2sql_provider_url : "");
+	if (!strcmp(name, "llm_provider_model")) {
+		return strdup(variables.genai_llm_provider_model ? variables.genai_llm_provider_model : "");
 	}
-	if (!strcmp(name, "nl2sql_provider_model")) {
-		return strdup(variables.genai_nl2sql_provider_model ? variables.genai_nl2sql_provider_model : "");
+	if (!strcmp(name, "llm_provider_key")) {
+		return strdup(variables.genai_llm_provider_key ? variables.genai_llm_provider_key : "");
 	}
-	if (!strcmp(name, "nl2sql_provider_key")) {
-		return strdup(variables.genai_nl2sql_provider_key ? variables.genai_nl2sql_provider_key : "");
-	}
-	if (!strcmp(name, "nl2sql_cache_similarity_threshold")) {
+	if (!strcmp(name, "llm_cache_similarity_threshold")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_nl2sql_cache_similarity_threshold);
+		sprintf(buf, "%d", variables.genai_llm_cache_similarity_threshold);
 		return strdup(buf);
 	}
-	if (!strcmp(name, "nl2sql_timeout_ms")) {
+	if (!strcmp(name, "llm_timeout_ms")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_nl2sql_timeout_ms);
+		sprintf(buf, "%d", variables.genai_llm_timeout_ms);
 		return strdup(buf);
 	}
 
@@ -512,8 +507,8 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 		variables.genai_enabled = (strcmp(value, "true") == 0);
 		return true;
 	}
-	if (!strcmp(name, "nl2sql_enabled")) {
-		variables.genai_nl2sql_enabled = (strcmp(value, "true") == 0);
+	if (!strcmp(name, "llm_enabled")) {
+		variables.genai_llm_enabled = (strcmp(value, "true") == 0);
 		return true;
 	}
 	if (!strcmp(name, "anomaly_enabled")) {
@@ -521,53 +516,47 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 		return true;
 	}
 
-	// NL2SQL configuration
-	if (!strcmp(name, "nl2sql_query_prefix")) {
-		if (variables.genai_nl2sql_query_prefix)
-			free(variables.genai_nl2sql_query_prefix);
-		variables.genai_nl2sql_query_prefix = strdup(value);
+	// LLM configuration
+	if (!strcmp(name, "llm_provider")) {
+		if (variables.genai_llm_provider)
+			free(variables.genai_llm_provider);
+		variables.genai_llm_provider = strdup(value);
 		return true;
 	}
-	if (!strcmp(name, "nl2sql_provider")) {
-		if (variables.genai_nl2sql_provider)
-			free(variables.genai_nl2sql_provider);
-		variables.genai_nl2sql_provider = strdup(value);
+	if (!strcmp(name, "llm_provider_url")) {
+		if (variables.genai_llm_provider_url)
+			free(variables.genai_llm_provider_url);
+		variables.genai_llm_provider_url = strdup(value);
 		return true;
 	}
-	if (!strcmp(name, "nl2sql_provider_url")) {
-		if (variables.genai_nl2sql_provider_url)
-			free(variables.genai_nl2sql_provider_url);
-		variables.genai_nl2sql_provider_url = strdup(value);
+	if (!strcmp(name, "llm_provider_model")) {
+		if (variables.genai_llm_provider_model)
+			free(variables.genai_llm_provider_model);
+		variables.genai_llm_provider_model = strdup(value);
 		return true;
 	}
-	if (!strcmp(name, "nl2sql_provider_model")) {
-		if (variables.genai_nl2sql_provider_model)
-			free(variables.genai_nl2sql_provider_model);
-		variables.genai_nl2sql_provider_model = strdup(value);
+	if (!strcmp(name, "llm_provider_key")) {
+		if (variables.genai_llm_provider_key)
+			free(variables.genai_llm_provider_key);
+		variables.genai_llm_provider_key = strdup(value);
 		return true;
 	}
-	if (!strcmp(name, "nl2sql_provider_key")) {
-		if (variables.genai_nl2sql_provider_key)
-			free(variables.genai_nl2sql_provider_key);
-		variables.genai_nl2sql_provider_key = strdup(value);
-		return true;
-	}
-	if (!strcmp(name, "nl2sql_cache_similarity_threshold")) {
+	if (!strcmp(name, "llm_cache_similarity_threshold")) {
 		int val = atoi(value);
 		if (val < 0 || val > 100) {
-			proxy_error("Invalid value for genai_nl2sql_cache_similarity_threshold: %d (must be 0-100)\n", val);
+			proxy_error("Invalid value for genai_llm_cache_similarity_threshold: %d (must be 0-100)\n", val);
 			return false;
 		}
-		variables.genai_nl2sql_cache_similarity_threshold = val;
+		variables.genai_llm_cache_similarity_threshold = val;
 		return true;
 	}
-	if (!strcmp(name, "nl2sql_timeout_ms")) {
+	if (!strcmp(name, "llm_timeout_ms")) {
 		int val = atoi(value);
 		if (val < 1000 || val > 600000) {
-			proxy_error("Invalid value for genai_nl2sql_timeout_ms: %d (must be 1000-600000)\n", val);
+			proxy_error("Invalid value for genai_llm_timeout_ms: %d (must be 1000-600000)\n", val);
 			return false;
 		}
-		variables.genai_nl2sql_timeout_ms = val;
+		variables.genai_llm_timeout_ms = val;
 		return true;
 	}
 
@@ -1709,30 +1698,30 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 			return result.dump();
 		}
 
-		// Handle nl2sql operation
-		if (op_type == "nl2sql") {
+		// Handle llm operation
+		if (op_type == "llm") {
 			// Check if AI manager is available
 			if (!GloAI) {
 				result["error"] = "AI features manager is not initialized";
 				return result.dump();
 			}
 
-			// Extract natural language query
-			if (!query_json.contains("query") || !query_json["query"].is_string()) {
-				result["error"] = "NL2SQL operation requires a 'query' string";
+			// Extract prompt
+			if (!query_json.contains("prompt") || !query_json["prompt"].is_string()) {
+				result["error"] = "LLM operation requires a 'prompt' string";
 				return result.dump();
 			}
-			std::string nl_query = query_json["query"].get<std::string>();
+			std::string prompt = query_json["prompt"].get<std::string>();
 
-			if (nl_query.empty()) {
-				result["error"] = "NL2SQL query cannot be empty";
+			if (prompt.empty()) {
+				result["error"] = "LLM prompt cannot be empty";
 				return result.dump();
 			}
 
-			// Extract optional schema name
-			std::string schema_name;
-			if (query_json.contains("schema") && query_json["schema"].is_string()) {
-				schema_name = query_json["schema"].get<std::string>();
+			// Extract optional system message
+			std::string system_message;
+			if (query_json.contains("system_message") && query_json["system_message"].is_string()) {
+				system_message = query_json["system_message"].get<std::string>();
 			}
 
 			// Extract optional cache flag
@@ -1741,41 +1730,37 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 				allow_cache = query_json["allow_cache"].get<bool>();
 			}
 
-			// Get NL2SQL converter
-			NL2SQL_Converter* nl2sql = GloAI->get_nl2sql();
-			if (!nl2sql) {
-				result["error"] = "NL2SQL converter is not initialized";
+			// Get LLM bridge
+			LLM_Bridge* llm_bridge = GloAI->get_llm_bridge();
+			if (!llm_bridge) {
+				result["error"] = "LLM bridge is not initialized";
 				return result.dump();
 			}
 
-			// Build NL2SQL request
-			NL2SQLRequest req;
-			req.natural_language = nl_query;
-			req.schema_name = schema_name;
+			// Build LLM request
+			LLMRequest req;
+			req.prompt = prompt;
+			req.system_message = system_message;
 			req.allow_cache = allow_cache;
 			req.max_latency_ms = 0; // No specific latency requirement
 
-			// Convert (this will use cache if available)
-			NL2SQLResult sql_result = nl2sql->convert(req);
+			// Process (this will use cache if available)
+			LLMResult llm_result = llm_bridge->process(req);
 
-			if (sql_result.sql_query.empty() || sql_result.sql_query.find("NL2SQL conversion failed") == 0) {
-				result["error"] = "Failed to convert natural language to SQL: " + sql_result.explanation;
+			if (!llm_result.error_code.empty()) {
+				result["error"] = "LLM processing failed: " + llm_result.error_details;
 				return result.dump();
 			}
 
-			// Build result
-			result["columns"] = json::array({"sql_query", "confidence", "explanation", "cached"});
+			// Build result - return as single row with text_response
+			result["columns"] = json::array({"text_response", "explanation", "cached", "provider"});
 
 			json rows = json::array();
 			json row = json::array();
-			row.push_back(sql_result.sql_query);
-
-			char conf_buf[32];
-			snprintf(conf_buf, sizeof(conf_buf), "%.2f", sql_result.confidence);
-			row.push_back(std::string(conf_buf));
-
-			row.push_back(sql_result.explanation);
-			row.push_back(sql_result.cached ? "true" : "false");
+			row.push_back(llm_result.text_response);
+			row.push_back(llm_result.explanation);
+			row.push_back(llm_result.cached ? "true" : "false");
+			row.push_back(llm_result.provider_used);
 
 			rows.push_back(row);
 			result["rows"] = rows;
@@ -1784,7 +1769,7 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 		}
 
 		// Unknown operation type
-		result["error"] = "Unknown operation type: " + op_type + ". Use 'embed', 'rerank', or 'nl2sql'";
+		result["error"] = "Unknown operation type: " + op_type + ". Use 'embed', 'rerank', or 'llm'";
 		return result.dump();
 
 	} catch (const json::parse_error& e) {

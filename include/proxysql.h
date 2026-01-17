@@ -63,7 +63,7 @@
 
 // AI Features includes
 #include "AI_Features_Manager.h"
-#include "NL2SQL_Converter.h"
+#include "LLM_Bridge.h"
 #include "Anomaly_Detector.h"
 #include "AI_Vector_Storage.h"
 

@@ -1,6 +1,6 @@
 #include "AI_Features_Manager.h"
 #include "GenAI_Thread.h"
-#include "NL2SQL_Converter.h"
+#include "LLM_Bridge.h"
 #include "Anomaly_Detector.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
@@ -20,7 +20,7 @@ class ProxySQL_Admin;
 extern ProxySQL_Admin *GloAdmin;
 
 AI_Features_Manager::AI_Features_Manager()
-	: shutdown_(0), nl2sql_converter(NULL), anomaly_detector(NULL), vector_db(NULL)
+	: shutdown_(0), llm_bridge(NULL), anomaly_detector(NULL), vector_db(NULL)
 {
 	pthread_rwlock_init(&rwlock, NULL);
 
@@ -69,21 +69,21 @@ int AI_Features_Manager::init_vector_db() {
 		return -1;
 	}
 
-	// Create tables for NL2SQL cache
-	const char* create_nl2sql_cache =
-		"CREATE TABLE IF NOT EXISTS nl2sql_cache ("
+	// Create tables for LLM cache
+	const char* create_llm_cache =
+		"CREATE TABLE IF NOT EXISTS llm_cache ("
 		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"natural_language TEXT NOT NULL,"
-		"generated_sql TEXT NOT NULL,"
-		"schema_context TEXT,"
+		"prompt TEXT NOT NULL,"
+		"response TEXT NOT NULL,"
+		"system_message TEXT,"
 		"embedding BLOB,"
 		"hit_count INTEGER DEFAULT 0,"
 		"last_hit INTEGER,"
 		"created_at INTEGER DEFAULT (strftime('%s', 'now'))"
 		");";
 
-	if (vector_db->execute(create_nl2sql_cache) != 0) {
-		proxy_error("AI: Failed to create nl2sql_cache table\n");
+	if (vector_db->execute(create_llm_cache) != 0) {
+		proxy_error("AI: Failed to create llm_cache table\n");
 		return -1;
 	}
 
@@ -108,8 +108,8 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_query_history =
 		"CREATE TABLE IF NOT EXISTS query_history ("
 		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"query_text TEXT NOT NULL,"
-		"generated_sql TEXT,"
+		"prompt TEXT NOT NULL,"
+		"response TEXT,"
 		"embedding BLOB,"
 		"execution_time_ms INTEGER,"
 		"success BOOLEAN,"
@@ -124,16 +124,16 @@ int AI_Features_Manager::init_vector_db() {
 	// Create virtual vector tables for similarity search using sqlite-vec
 	// Note: sqlite-vec extension is auto-loaded in Admin_Bootstrap.cpp:612
 
-	// 1. NL2SQL cache virtual table
-	const char* create_nl2sql_vec =
-		"CREATE VIRTUAL TABLE IF NOT EXISTS nl2sql_cache_vec USING vec0("
+	// 1. LLM cache virtual table
+	const char* create_llm_vec =
+		"CREATE VIRTUAL TABLE IF NOT EXISTS llm_cache_vec USING vec0("
 		"embedding float(1536)"
 		");";
 
-	if (vector_db->execute(create_nl2sql_vec) != 0) {
-		proxy_error("AI: Failed to create nl2sql_cache_vec virtual table\n");
+	if (vector_db->execute(create_llm_vec) != 0) {
+		proxy_error("AI: Failed to create llm_cache_vec virtual table\n");
 		// Virtual table creation failure is not critical - log and continue
-		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without nl2sql_cache_vec");
+		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without llm_cache_vec");
 	}
 
 	// 2. Anomaly patterns virtual table
@@ -162,37 +162,37 @@ int AI_Features_Manager::init_vector_db() {
 	return 0;
 }
 
-int AI_Features_Manager::init_nl2sql() {
-	if (!GloGATH->variables.genai_nl2sql_enabled) {
-		proxy_info("AI: NL2SQL disabled, skipping initialization\n");
+int AI_Features_Manager::init_llm_bridge() {
+	if (!GloGATH->variables.genai_llm_enabled) {
+		proxy_info("AI: LLM bridge disabled, skipping initialization\n");
 		return 0;
 	}
 
-	proxy_info("AI: Initializing NL2SQL Converter\n");
+	proxy_info("AI: Initializing LLM Bridge\n");
 
-	nl2sql_converter = new NL2SQL_Converter();
+	llm_bridge = new LLM_Bridge();
 
 	// Set vector database
-	nl2sql_converter->set_vector_db(vector_db);
+	llm_bridge->set_vector_db(vector_db);
 
 	// Update config with current variables from GenAI module
-	nl2sql_converter->update_config(
-		GloGATH->variables.genai_nl2sql_provider,
-		GloGATH->variables.genai_nl2sql_provider_url,
-		GloGATH->variables.genai_nl2sql_provider_model,
-		GloGATH->variables.genai_nl2sql_provider_key,
-		GloGATH->variables.genai_nl2sql_cache_similarity_threshold,
-		GloGATH->variables.genai_nl2sql_timeout_ms
+	llm_bridge->update_config(
+		GloGATH->variables.genai_llm_provider,
+		GloGATH->variables.genai_llm_provider_url,
+		GloGATH->variables.genai_llm_provider_model,
+		GloGATH->variables.genai_llm_provider_key,
+		GloGATH->variables.genai_llm_cache_similarity_threshold,
+		GloGATH->variables.genai_llm_timeout_ms
 	);
 
-	if (nl2sql_converter->init() != 0) {
-		proxy_error("AI: Failed to initialize NL2SQL Converter\n");
-		delete nl2sql_converter;
-		nl2sql_converter = NULL;
+	if (llm_bridge->init() != 0) {
+		proxy_error("AI: Failed to initialize LLM Bridge\n");
+		delete llm_bridge;
+		llm_bridge = NULL;
 		return -1;
 	}
 
-	proxy_info("AI: NL2SQL Converter initialized\n");
+	proxy_info("AI: LLM Bridge initialized\n");
 	return 0;
 }
 
@@ -223,11 +223,11 @@ void AI_Features_Manager::close_vector_db() {
 	}
 }
 
-void AI_Features_Manager::close_nl2sql() {
-	if (nl2sql_converter) {
-		nl2sql_converter->close();
-		delete nl2sql_converter;
-		nl2sql_converter = NULL;
+void AI_Features_Manager::close_llm_bridge() {
+	if (llm_bridge) {
+		llm_bridge->close();
+		delete llm_bridge;
+		llm_bridge = NULL;
 	}
 }
 
@@ -247,15 +247,15 @@ int AI_Features_Manager::init() {
 		return 0;
 	}
 
-	// Initialize vector storage first (needed by both NL2SQL and Anomaly Detector)
+	// Initialize vector storage first (needed by both LLM bridge and Anomaly Detector)
 	if (init_vector_db() != 0) {
 		proxy_error("AI: Failed to initialize vector storage\n");
 		return -1;
 	}
 
-	// Initialize NL2SQL
-	if (init_nl2sql() != 0) {
-		proxy_error("AI: Failed to initialize NL2SQL\n");
+	// Initialize LLM bridge
+	if (init_llm_bridge() != 0) {
+		proxy_error("AI: Failed to initialize LLM bridge\n");
 		return -1;
 	}
 
@@ -275,7 +275,7 @@ void AI_Features_Manager::shutdown() {
 
 	proxy_info("AI: Shutting down AI Features Manager\n");
 
-	close_nl2sql();
+	close_llm_bridge();
 	close_anomaly_detector();
 	close_vector_db();
 
@@ -299,7 +299,7 @@ std::string AI_Features_Manager::get_status_json() {
 	snprintf(buf, sizeof(buf),
 		"{"
 		"\"version\": \"%s\","
-		"\"nl2sql\": {"
+		"\"llm\": {"
 		"\"total_requests\": %llu,"
 		"\"cache_hits\": %llu,"
 		"\"local_calls\": %llu,"
@@ -321,16 +321,16 @@ std::string AI_Features_Manager::get_status_json() {
 		"}"
 		"}",
 		AI_FEATURES_MANAGER_VERSION,
-		status_variables.nl2sql_total_requests,
-		status_variables.nl2sql_cache_hits,
-		status_variables.nl2sql_local_model_calls,
-		status_variables.nl2sql_cloud_model_calls,
-		status_variables.nl2sql_total_response_time_ms,
-		status_variables.nl2sql_cache_total_lookup_time_ms,
-		status_variables.nl2sql_cache_total_store_time_ms,
-		status_variables.nl2sql_cache_lookups,
-		status_variables.nl2sql_cache_stores,
-		status_variables.nl2sql_cache_misses,
+		status_variables.llm_total_requests,
+		status_variables.llm_cache_hits,
+		status_variables.llm_local_model_calls,
+		status_variables.llm_cloud_model_calls,
+		status_variables.llm_total_response_time_ms,
+		status_variables.llm_cache_total_lookup_time_ms,
+		status_variables.llm_cache_total_store_time_ms,
+		status_variables.llm_cache_lookups,
+		status_variables.llm_cache_stores,
+		status_variables.llm_cache_misses,
 		status_variables.anomaly_total_checks,
 		status_variables.anomaly_blocked_queries,
 		status_variables.anomaly_flagged_queries,

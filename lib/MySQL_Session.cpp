@@ -16,6 +16,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
+#include "LLM_Bridge.h"
 #include "Anomaly_Detector.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
@@ -3871,31 +3872,33 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 #endif  // epoll_create1 - fallback blocking path
 }
 
-// Handler for NL2SQL: queries - Natural Language to SQL conversion
+// Handler for LLM: queries - Generic LLM bridge processing
 // Query format:
-//   NL2SQL: Show me top 10 customers by revenue
-// Returns: Resultset with the generated SQL query
+//   LLM: Summarize the customer feedback
+//   LLM: Generate a Python function to validate emails
+//   LLM: Explain this SQL query: SELECT * FROM users
+// Returns: Resultset with the text response from LLM
 //
 // Note: This now uses the async GENAI path to avoid blocking MySQL threads.
-// The NL2SQL query is converted to a JSON GENAI request and sent asynchronously.
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___nl2sql(const char* query, size_t query_len, PtrSize_t* pkt) {
-	// Skip leading space after "NL2SQL:"
+// The LLM query is converted to a JSON GENAI request and sent asynchronously.
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(const char* query, size_t query_len, PtrSize_t* pkt) {
+	// Skip leading space after "LLM:"
 	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
 		query++;
 		query_len--;
 	}
 
 	if (query_len == 0) {
-		// Empty query after NL2SQL:
+		// Empty query after LLM:
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1240, (char*)"HY000", "Empty NL2SQL: query", true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1240, (char*)"HY000", "Empty LLM: query", true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 		return;
 	}
 
-	// Check GenAI module is initialized (NL2SQL now uses GenAI module)
+	// Check GenAI module is initialized (LLM now uses GenAI module)
 	if (!GloGATH) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1241, (char*)"HY000", "GenAI module is not initialized", true);
@@ -3905,7 +3908,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return;
 	}
 
-	// Check AI manager is available for NL2SQL converter
+	// Check AI manager is available for LLM bridge
 	if (!GloAI) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1242, (char*)"HY000", "AI features module is not initialized", true);
@@ -3915,11 +3918,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return;
 	}
 
-	// Get NL2SQL converter from AI manager
-	NL2SQL_Converter* nl2sql = GloAI->get_nl2sql();
-	if (!nl2sql) {
+	// Get LLM bridge from AI manager
+	LLM_Bridge* llm_bridge = GloAI->get_llm_bridge();
+	if (!llm_bridge) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1243, (char*)"HY000", "NL2SQL converter is not initialized", true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1243, (char*)"HY000", "LLM bridge is not initialized", true);
 		l_free(pkt->size, pkt->ptr);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -3927,16 +3930,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 	// Increment total requests counter
-	GloAI->increment_nl2sql_total_requests();
+	GloAI->increment_llm_total_requests();
 
 #ifdef epoll_create1
-	// Build JSON query for NL2SQL operation
+	// Build JSON query for LLM operation
 	json json_query;
-	json_query["type"] = "nl2sql";
-	json_query["query"] = std::string(query, query_len);
+	json_query["type"] = "llm";
+	json_query["prompt"] = std::string(query, query_len);
 	json_query["allow_cache"] = true;
 
-	// Add schema if available
+	// Add schema if available (for context)
 	if (client_myds->myconn->userinfo->schemaname) {
 		json_query["schema"] = std::string(client_myds->myconn->userinfo->schemaname);
 	}
@@ -3954,38 +3957,38 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	// Request sent asynchronously - don't free pkt, will be freed in response handler
 	// Return immediately, session is now free to handle other queries
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Query sent asynchronously via GenAI: %s\n", std::string(query, query_len).c_str());
+	proxy_debug(PROXY_DEBUG_GENAI, 2, "LLM: Query sent asynchronously via GenAI: %s\n", std::string(query, query_len).c_str());
 #else
 	// Fallback to synchronous blocking path for systems without epoll
-	// Build NL2SQL request
-	NL2SQLRequest req;
-	req.natural_language = std::string(query, query_len);
+	// Build LLM request
+	LLMRequest req;
+	req.prompt = std::string(query, query_len);
 	req.schema_name = client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "";
 	req.allow_cache = true;
 	req.max_latency_ms = 0; // No specific latency requirement
 
-	// Call NL2SQL converter (blocking fallback)
-	NL2SQLResult result = nl2sql->convert(req);
+	// Call LLM bridge (blocking fallback)
+	LLMResult result = llm_bridge->process(req);
 
 	// Update performance counters based on result
 	if (result.cache_hit) {
-		GloAI->increment_nl2sql_cache_hits();
+		GloAI->increment_llm_cache_hits();
 	} else {
-		GloAI->increment_nl2sql_cache_misses();
+		GloAI->increment_llm_cache_misses();
 	}
 
 	// Update timing counters
-	GloAI->add_nl2sql_response_time_ms(result.total_time_ms);
-	GloAI->add_nl2sql_cache_lookup_time_ms(result.cache_lookup_time_ms);
-	GloAI->increment_nl2sql_cache_lookups();
+	GloAI->add_llm_response_time_ms(result.total_time_ms);
+	GloAI->add_llm_cache_lookup_time_ms(result.cache_lookup_time_ms);
+	GloAI->increment_llm_cache_lookups();
 
 	if (result.cache_hit) {
 		// For cache hits, we're done
 	} else {
 		// For cache misses, also count LLM call time and cache store time
-		GloAI->add_nl2sql_cache_store_time_ms(result.cache_store_time_ms);
+		GloAI->add_llm_cache_store_time_ms(result.cache_store_time_ms);
 		if (result.cache_store_time_ms > 0) {
-			GloAI->increment_nl2sql_cache_stores();
+			GloAI->increment_llm_cache_stores();
 		}
 
 		// Update model call counters
@@ -3998,19 +4001,23 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			if (prefer_local_models &&
 			    (result.explanation.find("localhost") != std::string::npos ||
 			     result.explanation.find("127.0.0.1") != std::string::npos)) {
-				GloAI->increment_nl2sql_local_model_calls();
+				GloAI->increment_llm_local_model_calls();
 			} else {
-				GloAI->increment_nl2sql_cloud_model_calls();
+				GloAI->increment_llm_cloud_model_calls();
 			}
 		} else if (result.provider_used == "anthropic") {
-			GloAI->increment_nl2sql_cloud_model_calls();
+			GloAI->increment_llm_cloud_model_calls();
 		}
 	}
 
-	if (result.sql_query.empty() || result.sql_query.find("NL2SQL conversion failed") == 0) {
-		// Conversion failed
-		std::string err_msg = "Failed to convert natural language to SQL: ";
-		err_msg += result.explanation;
+	if (result.text_response.empty() && !result.error_code.empty()) {
+		// LLM processing failed
+		std::string err_msg = "LLM processing failed: ";
+		err_msg += result.error_code;
+		if (!result.error_details.empty()) {
+			err_msg += " - ";
+			err_msg += result.error_details;
+		}
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1244, (char*)"HY000", (char*)err_msg.c_str(), true);
 		l_free(pkt->size, pkt->ptr);
@@ -4019,8 +4026,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return;
 	}
 
-	// Build resultset with the generated SQL
-	std::vector<std::string> columns = {"sql_query", "confidence", "explanation", "cached"};
+	// Build resultset with the generated text response
+	std::vector<std::string> columns = {"text_response", "explanation", "cached", "provider"};
 	std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(columns.size()));
 
 	// Add column definitions
@@ -4030,13 +4037,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	// Add single row with the result
 	char** row_data = (char**)malloc(columns.size() * sizeof(char*));
-	row_data[0] = strdup(result.sql_query.c_str());
-
-	char conf_buf[32];
-	snprintf(conf_buf, sizeof(conf_buf), "%.2f", result.confidence);
-	row_data[1] = strdup(conf_buf);
-	row_data[2] = strdup(result.explanation.c_str());
-	row_data[3] = strdup(result.cached ? "true" : "false");
+	row_data[0] = strdup(result.text_response.c_str());
+	row_data[1] = strdup(result.explanation.c_str());
+	row_data[2] = strdup(result.cached ? "true" : "false");
+	row_data[3] = strdup(result.provider_used.c_str());
 
 	resultset->add_row(row_data);
 
@@ -4054,8 +4058,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	client_myds->DSS = STATE_SLEEP;
 	status = WAITING_CLIENT_DATA;
 
-	proxy_debug(PROXY_DEBUG_NL2SQL, 2, "NL2SQL: Converted '%s' to SQL (confidence: %.2f) [blocking fallback]\n",
-	            req.natural_language.c_str(), result.confidence);
+	proxy_debug(PROXY_DEBUG_GENAI, 2, "LLM: Processed prompt '%s' [blocking fallback]\n",
+	            req.prompt.c_str());
 #endif
 }
 
@@ -7037,10 +7041,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 
-		// Check for NL2SQL: queries - Natural Language to SQL conversion
-		if (query_len >= 8 && strncasecmp(query_ptr, "NL2SQL:", 7) == 0) {
-			// This is a NL2SQL: query - handle with NL2SQL converter
-			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___nl2sql(query_ptr + 7, query_len - 7, pkt);
+		// Check for LLM: queries - Generic LLM bridge processing
+		if (query_len >= 5 && strncasecmp(query_ptr, "LLM:", 4) == 0) {
+			// This is a LLM: query - handle with LLM bridge
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(query_ptr + 4, query_len - 4, pkt);
 			return true;
 		}
 	}

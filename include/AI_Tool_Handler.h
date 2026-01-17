@@ -19,7 +19,7 @@
 #include <map>
 
 // Forward declarations
-class NL2SQL_Converter;
+class LLM_Bridge;
 class Anomaly_Detector;
 
 /**
@@ -31,7 +31,7 @@ class Anomaly_Detector;
  */
 class AI_Tool_Handler : public MCP_Tool_Handler {
 private:
-	NL2SQL_Converter* nl2sql_converter;
+	LLM_Bridge* llm_bridge;
 	Anomaly_Detector* anomaly_detector;
 	bool owns_components;
 
@@ -50,7 +50,7 @@ public:
 	/**
 	 * @brief Constructor - uses existing AI components
 	 */
-	AI_Tool_Handler(NL2SQL_Converter* nl2sql, Anomaly_Detector* anomaly);
+	AI_Tool_Handler(LLM_Bridge* llm, Anomaly_Detector* anomaly);
 
 	/**
 	 * @brief Constructor - creates own components

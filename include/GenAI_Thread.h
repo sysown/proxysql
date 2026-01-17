@@ -26,6 +26,7 @@ enum GenAI_Operation : uint32_t {
 	GENAI_OP_EMBEDDING = 0,  ///< Generate embeddings for documents
 	GENAI_OP_RERANK = 1,     ///< Rerank documents by relevance to query
 	GENAI_OP_JSON = 2,       ///< Autonomous JSON query processing (handles embed/rerank/document_from_sql)
+	GENAI_OP_LLM = 3,        ///< Generic LLM bridge processing
 };
 
 /**
@@ -202,17 +203,17 @@ public:
 
 		// AI Features master switches
 		bool genai_enabled;              ///< Master enable for all AI features (default: false)
-		bool genai_nl2sql_enabled;       ///< Enable NL2SQL feature (default: false)
+		bool genai_llm_enabled;          ///< Enable LLM bridge feature (default: false)
 		bool genai_anomaly_enabled;      ///< Enable anomaly detection (default: false)
 
-		// NL2SQL configuration
-		char* genai_nl2sql_query_prefix; ///< Prefix for NL2SQL queries (default: "NL2SQL:")
-		char* genai_nl2sql_provider;     ///< Provider format: "openai" or "anthropic" (default: "openai")
-		char* genai_nl2sql_provider_url; ///< LLM endpoint URL (default: http://localhost:11434/v1/chat/completions)
-		char* genai_nl2sql_provider_model; ///< Model name (default: "llama3.2")
-		char* genai_nl2sql_provider_key; ///< API key (default: NULL)
-		int genai_nl2sql_cache_similarity_threshold; ///< Semantic cache threshold 0-100 (default: 85)
-		int genai_nl2sql_timeout_ms;     ///< LLM request timeout in ms (default: 30000)
+		// LLM bridge configuration
+		char* genai_llm_provider;            ///< Provider format: "openai" or "anthropic" (default: "openai")
+		char* genai_llm_provider_url;        ///< LLM endpoint URL (default: http://localhost:11434/v1/chat/completions)
+		char* genai_llm_provider_model;       ///< Model name (default: "llama3.2")
+		char* genai_llm_provider_key;         ///< API key (default: NULL)
+		int genai_llm_cache_similarity_threshold; ///< Semantic cache threshold 0-100 (default: 85)
+		int genai_llm_cache_enabled;          ///< Enable semantic cache (default: true)
+		int genai_llm_timeout_ms;             ///< LLM request timeout in ms (default: 30000)
 
 		// Anomaly detection configuration
 		int genai_anomaly_risk_threshold;      ///< Risk score threshold for blocking 0-100 (default: 70)

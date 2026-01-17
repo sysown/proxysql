@@ -9,7 +9,7 @@
  */
 
 #include "AI_Tool_Handler.h"
-#include "NL2SQL_Converter.h"
+#include "LLM_Bridge.h"
 #include "Anomaly_Detector.h"
 #include "AI_Features_Manager.h"
 #include "proxysql_debug.h"
@@ -29,8 +29,8 @@ using json = nlohmann::json;
 /**
  * @brief Constructor using existing AI components
  */
-AI_Tool_Handler::AI_Tool_Handler(NL2SQL_Converter* nl2sql, Anomaly_Detector* anomaly)
-	: nl2sql_converter(nl2sql),
+AI_Tool_Handler::AI_Tool_Handler(LLM_Bridge* llm, Anomaly_Detector* anomaly)
+	: llm_bridge(llm),
 	  anomaly_detector(anomaly),
 	  owns_components(false)
 {
@@ -42,13 +42,13 @@ AI_Tool_Handler::AI_Tool_Handler(NL2SQL_Converter* nl2sql, Anomaly_Detector* ano
  * Note: This implementation uses global instances
  */
 AI_Tool_Handler::AI_Tool_Handler()
-	: nl2sql_converter(NULL),
+	: llm_bridge(NULL),
 	  anomaly_detector(NULL),
 	  owns_components(false)
 {
 	// Use global instances from AI_Features_Manager
 	if (GloAI) {
-		nl2sql_converter = GloAI->get_nl2sql();
+		llm_bridge = GloAI->get_llm_bridge();
 		anomaly_detector = GloAI->get_anomaly_detector();
 	}
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "AI_Tool_Handler created (using global instances)\n");
@@ -70,8 +70,8 @@ AI_Tool_Handler::~AI_Tool_Handler() {
  * @brief Initialize the tool handler
  */
 int AI_Tool_Handler::init() {
-	if (!nl2sql_converter) {
-		proxy_error("AI_Tool_Handler: NL2SQL converter not available\n");
+	if (!llm_bridge) {
+		proxy_error("AI_Tool_Handler: LLM bridge not available\n");
 		return -1;
 	}
 	proxy_info("AI_Tool_Handler initialized\n");
@@ -199,73 +199,13 @@ json AI_Tool_Handler::execute_tool(const std::string& tool_name, const json& arg
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "AI_Tool_Handler: execute_tool(%s)\n", tool_name.c_str());
 
 	try {
-		// NL2SQL conversion tool
+		// LLM processing tool (generic, replaces NL2SQL)
 		if (tool_name == "ai_nl2sql_convert") {
-			if (!nl2sql_converter) {
-				return create_error_response("NL2SQL converter not available");
-			}
-
-			// Extract parameters
-			std::string natural_language = get_json_string(arguments, "natural_language");
-			if (natural_language.empty()) {
-				return create_error_response("Missing required parameter: natural_language");
-			}
-
-			std::string schema = get_json_string(arguments, "schema");
-			int max_latency_ms = get_json_int(arguments, "max_latency_ms", 0);
-			bool allow_cache = true;
-			if (arguments.contains("allow_cache") && !arguments["allow_cache"].is_null()) {
-				if (arguments["allow_cache"].is_boolean()) {
-					allow_cache = arguments["allow_cache"].get<bool>();
-				} else if (arguments["allow_cache"].is_string()) {
-					std::string val = arguments["allow_cache"].get<std::string>();
-					allow_cache = (val == "true" || val == "1");
-				}
-			}
-
-			// Parse context_tables
-			std::vector<std::string> context_tables;
-			std::string tables_str = get_json_string(arguments, "context_tables");
-			if (!tables_str.empty()) {
-				std::istringstream ts(tables_str);
-				std::string table;
-				while (std::getline(ts, table, ',')) {
-					table.erase(0, table.find_first_not_of(" \t"));
-					table.erase(table.find_last_not_of(" \t") + 1);
-					if (!table.empty()) {
-						context_tables.push_back(table);
-					}
-				}
-			}
-
-			// Create NL2SQL request
-			NL2SQLRequest req;
-			req.natural_language = natural_language;
-			req.schema_name = schema;
-			req.max_latency_ms = max_latency_ms;
-			req.allow_cache = allow_cache;
-			req.context_tables = context_tables;
-
-			// Call NL2SQL converter
-			NL2SQLResult result = nl2sql_converter->convert(req);
-
-			// Build response
-			json response_data;
-			response_data["sql_query"] = result.sql_query;
-			response_data["confidence"] = result.confidence;
-			response_data["explanation"] = result.explanation;
-			response_data["cached"] = result.cached;
-			response_data["cache_id"] = result.cache_id;
-
-			// Add tables used if available
-			if (!result.tables_used.empty()) {
-				response_data["tables_used"] = result.tables_used;
-			}
-
-			proxy_info("AI_Tool_Handler: NL2SQL conversion complete. SQL: %s, Confidence: %.2f\n",
-			         result.sql_query.c_str(), result.confidence);
-
-			return create_success_response(response_data);
+			// NOTE: The ai_nl2sql_convert tool is deprecated.
+			// NL2SQL functionality has been replaced with a generic LLM bridge.
+			// Future NL2SQL will be implemented as a Web UI using external agents (Claude Code + MCP server).
+			return create_error_response("The ai_nl2sql_convert tool is deprecated. "
+			                             "Use the generic LLM: queries via MySQL protocol instead.");
 		}
 
 		// Unknown tool

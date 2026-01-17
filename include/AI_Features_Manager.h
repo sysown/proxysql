@@ -3,41 +3,41 @@
  * @brief AI Features Manager for ProxySQL
  *
  * The AI_Features_Manager class coordinates all AI-related features in ProxySQL:
- * - NL2SQL (Natural Language to SQL) conversion
+ * - LLM Bridge (generic LLM access via MySQL protocol)
  * - Anomaly detection for security monitoring
  * - Vector storage for semantic caching
  * - Hybrid model routing (local Ollama + cloud APIs)
  *
  * Architecture:
- * - Central configuration management with 'ai-' variable prefix
+ * - Central configuration management with 'genai-' variable prefix
  * - Thread-safe operations using pthread rwlock
  * - Follows same pattern as MCP_Threads_Handler and GenAI_Threads_Handler
  * - Coordinates with MySQL_Session for query interception
  *
- * @date 2025-01-16
- * @version 0.1.0
+ * @date 2025-01-17
+ * @version 1.0.0
  *
  * Example Usage:
  * @code
- * // Access NL2SQL converter
- * NL2SQL_Converter* nl2sql = GloAI->get_nl2sql();
- * NL2SQLRequest req;
- * req.natural_language = "Show top customers";
- * NL2SQLResult result = nl2sql->convert(req);
+ * // Access LLM bridge
+ * LLM_Bridge* llm = GloAI->get_llm_bridge();
+ * LLMRequest req;
+ * req.prompt = "Summarize this data";
+ * LLMResult result = llm->process(req);
  * @endcode
  */
 
 #ifndef __CLASS_AI_FEATURES_MANAGER_H
 #define __CLASS_AI_FEATURES_MANAGER_H
 
-#define AI_FEATURES_MANAGER_VERSION "0.1.0"
+#define AI_FEATURES_MANAGER_VERSION "1.0.0"
 
 #include "proxysql.h"
 #include <pthread.h>
 #include <string>
 
 // Forward declarations
-class NL2SQL_Converter;
+class LLM_Bridge;
 class Anomaly_Detector;
 class SQLite3DB;
 
@@ -45,7 +45,7 @@ class SQLite3DB;
  * @brief AI Features Manager
  *
  * Coordinates all AI features in ProxySQL:
- * - NL2SQL (Natural Language to SQL) conversion
+ * - LLM Bridge (generic LLM access)
  * - Anomaly detection for security
  * - Vector storage for semantic caching
  * - Hybrid model routing (local Ollama + cloud APIs)
@@ -57,7 +57,7 @@ class SQLite3DB;
  * - All public methods are thread-safe using pthread rwlock
  * - Use wrlock()/wrunlock() for manual locking if needed
  *
- * @see NL2SQL_Converter, Anomaly_Detector
+ * @see LLM_Bridge, Anomaly_Detector
  */
 class AI_Features_Manager {
 private:
@@ -65,7 +65,7 @@ private:
 	pthread_rwlock_t rwlock;
 
 	// Sub-components
-	NL2SQL_Converter* nl2sql_converter;
+	LLM_Bridge* llm_bridge;
 	Anomaly_Detector* anomaly_detector;
 	SQLite3DB* vector_db;
 
@@ -73,7 +73,7 @@ private:
 	int init_vector_db();
 	int init_anomaly_detector();
 	void close_vector_db();
-	void close_nl2sql();
+	void close_llm_bridge();
 	void close_anomaly_detector();
 
 public:
@@ -84,16 +84,16 @@ public:
 	 * Configuration is managed by the GenAI module (GloGATH).
 	 */
 	struct {
-		unsigned long long nl2sql_total_requests;
-		unsigned long long nl2sql_cache_hits;
-		unsigned long long nl2sql_local_model_calls;
-		unsigned long long nl2sql_cloud_model_calls;
-		unsigned long long nl2sql_total_response_time_ms;  // Total response time for all LLM calls
-		unsigned long long nl2sql_cache_total_lookup_time_ms;  // Total time spent in cache lookups
-		unsigned long long nl2sql_cache_total_store_time_ms;  // Total time spent in cache storage
-		unsigned long long nl2sql_cache_lookups;
-		unsigned long long nl2sql_cache_stores;
-		unsigned long long nl2sql_cache_misses;
+		unsigned long long llm_total_requests;
+		unsigned long long llm_cache_hits;
+		unsigned long long llm_local_model_calls;
+		unsigned long long llm_cloud_model_calls;
+		unsigned long long llm_total_response_time_ms;  // Total response time for all LLM calls
+		unsigned long long llm_cache_total_lookup_time_ms;  // Total time spent in cache lookups
+		unsigned long long llm_cache_total_store_time_ms;  // Total time spent in cache storage
+		unsigned long long llm_cache_lookups;
+		unsigned long long llm_cache_stores;
+		unsigned long long llm_cache_misses;
 		unsigned long long anomaly_total_checks;
 		unsigned long long anomaly_blocked_queries;
 		unsigned long long anomaly_flagged_queries;
@@ -113,7 +113,7 @@ public:
 	/**
 	 * @brief Initialize all AI features
 	 *
-	 * Initializes vector database, NL2SQL converter, and anomaly detector.
+	 * Initializes vector database, LLM bridge, and anomaly detector.
 	 * This must be called after ProxySQL configuration is loaded.
 	 *
 	 * @return 0 on success, non-zero on failure
@@ -129,14 +129,14 @@ public:
 	void shutdown();
 
 	/**
-	 * @brief Initialize NL2SQL converter
+	 * @brief Initialize LLM bridge
 	 *
-	 * Initializes the NL2SQL converter if not already initialized.
-	 * This can be called at runtime after enabling nl2sql.
+	 * Initializes the LLM bridge if not already initialized.
+	 * This can be called at runtime after enabling llm.
 	 *
 	 * @return 0 on success, non-zero on failure
 	 */
-	int init_nl2sql();
+	int init_llm_bridge();
 
 	/**
 	 * @brief Acquire write lock for thread-safe operations
@@ -156,25 +156,25 @@ public:
 	void wrunlock();
 
 	/**
-	 * @brief Get NL2SQL converter instance
+	 * @brief Get LLM bridge instance
 	 *
-	 * @return Pointer to NL2SQL_Converter or NULL if not initialized
+	 * @return Pointer to LLM_Bridge or NULL if not initialized
 	 *
 	 * @note Thread-safe when called within wrlock()/wrunlock() pair
 	 */
-	NL2SQL_Converter* get_nl2sql() { return nl2sql_converter; }
+	LLM_Bridge* get_llm_bridge() { return llm_bridge; }
 
 	// Status variable update methods
-	void increment_nl2sql_total_requests() { __sync_fetch_and_add(&status_variables.nl2sql_total_requests, 1); }
-	void increment_nl2sql_cache_hits() { __sync_fetch_and_add(&status_variables.nl2sql_cache_hits, 1); }
-	void increment_nl2sql_cache_misses() { __sync_fetch_and_add(&status_variables.nl2sql_cache_misses, 1); }
-	void increment_nl2sql_local_model_calls() { __sync_fetch_and_add(&status_variables.nl2sql_local_model_calls, 1); }
-	void increment_nl2sql_cloud_model_calls() { __sync_fetch_and_add(&status_variables.nl2sql_cloud_model_calls, 1); }
-	void add_nl2sql_response_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.nl2sql_total_response_time_ms, ms); }
-	void add_nl2sql_cache_lookup_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.nl2sql_cache_total_lookup_time_ms, ms); }
-	void add_nl2sql_cache_store_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.nl2sql_cache_total_store_time_ms, ms); }
-	void increment_nl2sql_cache_lookups() { __sync_fetch_and_add(&status_variables.nl2sql_cache_lookups, 1); }
-	void increment_nl2sql_cache_stores() { __sync_fetch_and_add(&status_variables.nl2sql_cache_stores, 1); }
+	void increment_llm_total_requests() { __sync_fetch_and_add(&status_variables.llm_total_requests, 1); }
+	void increment_llm_cache_hits() { __sync_fetch_and_add(&status_variables.llm_cache_hits, 1); }
+	void increment_llm_cache_misses() { __sync_fetch_and_add(&status_variables.llm_cache_misses, 1); }
+	void increment_llm_local_model_calls() { __sync_fetch_and_add(&status_variables.llm_local_model_calls, 1); }
+	void increment_llm_cloud_model_calls() { __sync_fetch_and_add(&status_variables.llm_cloud_model_calls, 1); }
+	void add_llm_response_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.llm_total_response_time_ms, ms); }
+	void add_llm_cache_lookup_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.llm_cache_total_lookup_time_ms, ms); }
+	void add_llm_cache_store_time_ms(unsigned long long ms) { __sync_fetch_and_add(&status_variables.llm_cache_total_store_time_ms, ms); }
+	void increment_llm_cache_lookups() { __sync_fetch_and_add(&status_variables.llm_cache_lookups, 1); }
+	void increment_llm_cache_stores() { __sync_fetch_and_add(&status_variables.llm_cache_stores, 1); }
 
 	/**
 	 * @brief Get anomaly detector instance

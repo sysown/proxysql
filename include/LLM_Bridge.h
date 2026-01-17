@@ -1,35 +1,34 @@
 /**
- * @file nl2sql_converter.h
- * @brief Natural Language to SQL Converter for ProxySQL
+ * @file llm_bridge.h
+ * @brief Generic LLM Bridge for ProxySQL
  *
- * The NL2SQL_Converter class provides natural language to SQL conversion
+ * The LLM_Bridge class provides a generic interface to Large Language Models
  * using multiple LLM providers with hybrid deployment and vector-based
  * semantic caching.
  *
  * Key Features:
  * - Multi-provider LLM support (local + generic cloud)
  * - Semantic similarity caching using sqlite-vec
- * - Schema-aware conversion
+ * - Generic prompt handling (not SQL-specific)
  * - Configurable model selection based on latency/budget
  * - Generic provider support (OpenAI-compatible, Anthropic-compatible)
  *
- * @date 2025-01-16
- * @version 0.2.0
+ * @date 2025-01-17
+ * @version 1.0.0
  *
  * Example Usage:
  * @code
- * NL2SQLRequest req;
- * req.natural_language = "Show top 10 customers";
- * req.schema_name = "sales";
- * NL2SQLResult result = converter->convert(req);
- * std::cout << result.sql_query << std::endl;
+ * LLMRequest req;
+ * req.prompt = "Summarize this data...";
+ * LLMResult result = bridge->process(req);
+ * std::cout << result.text_response << std::endl;
  * @endcode
  */
 
-#ifndef __CLASS_NL2SQL_CONVERTER_H
-#define __CLASS_NL2SQL_CONVERTER_H
+#ifndef __CLASS_LLM_BRIDGE_H
+#define __CLASS_LLM_BRIDGE_H
 
-#define NL2SQL_CONVERTER_VERSION "0.2.0"
+#define LLM_BRIDGE_VERSION "1.0.0"
 
 #include "proxysql.h"
 #include <string>
@@ -39,73 +38,65 @@
 class SQLite3DB;
 
 /**
- * @brief Result structure for NL2SQL conversion
+ * @brief Result structure for LLM bridge processing
  *
- * Contains the generated SQL query along with metadata including
- * confidence score, explanation, cache status, and error details.
- *
- * @note The confidence score is a heuristic based on SQL validation
- *       and LLM response quality. Actual SQL correctness should be
- *       verified before execution.
+ * Contains the LLM text response along with metadata including
+ * cache status, error details, and performance timing.
  *
  * @note When errors occur, error_code, error_details, and http_status_code
  *       provide diagnostic information for troubleshooting.
  */
-struct NL2SQLResult {
-	std::string sql_query;                  ///< Generated SQL query
-	float confidence;                        ///< Confidence score 0.0-1.0
-	std::string explanation;                 ///< Which model generated this
-	std::vector<std::string> tables_used;    ///< Tables referenced in SQL
-	bool cached;                             ///< True if from semantic cache
-	int64_t cache_id;                        ///< Cache entry ID for tracking
+struct LLMResult {
+	std::string text_response;                 ///< LLM-generated text response
+	std::string explanation;                   ///< Which model generated this
+	bool cached;                                ///< True if from semantic cache
+	int64_t cache_id;                           ///< Cache entry ID for tracking
 
-	// Error details - populated when conversion fails
-	std::string error_code;                  ///< Structured error code (e.g., "ERR_API_KEY_MISSING")
-	std::string error_details;               ///< Detailed error context with query, provider, URL
-	int http_status_code;                    ///< HTTP status code if applicable (0 if N/A)
-	std::string provider_used;               ///< Which provider was attempted
+	// Error details - populated when processing fails
+	std::string error_code;                     ///< Structured error code (e.g., "ERR_API_KEY_MISSING")
+	std::string error_details;                  ///< Detailed error context with query, provider, URL
+	int http_status_code;                       ///< HTTP status code if applicable (0 if N/A)
+	std::string provider_used;                  ///< Which provider was attempted
 
 	// Performance timing information
-	int total_time_ms;                       ///< Total conversion time in milliseconds
-	int cache_lookup_time_ms;                ///< Cache lookup time in milliseconds
-	int cache_store_time_ms;                 ///< Cache store time in milliseconds
-	int llm_call_time_ms;                    ///< LLM call time in milliseconds
-	bool cache_hit;                          ///< True if cache was hit
+	int total_time_ms;                          ///< Total processing time in milliseconds
+	int cache_lookup_time_ms;                   ///< Cache lookup time in milliseconds
+	int cache_store_time_ms;                    ///< Cache store time in milliseconds
+	int llm_call_time_ms;                       ///< LLM call time in milliseconds
+	bool cache_hit;                             ///< True if cache was hit
 
-	NL2SQLResult() : confidence(0.0f), cached(false), cache_id(0), http_status_code(0),
-	                 total_time_ms(0), cache_lookup_time_ms(0), cache_store_time_ms(0),
-	                 llm_call_time_ms(0), cache_hit(false) {}
+	LLMResult() : cached(false), cache_id(0), http_status_code(0),
+	             total_time_ms(0), cache_lookup_time_ms(0), cache_store_time_ms(0),
+	             llm_call_time_ms(0), cache_hit(false) {}
 };
 
 /**
- * @brief Request structure for NL2SQL conversion
+ * @brief Request structure for LLM bridge processing
  *
- * Contains the natural language query and context for conversion.
- * Context includes schema name and optional table list for better
- * SQL generation.
+ * Contains the prompt text and context for LLM processing.
  *
  * @note If max_latency_ms is set and < 500ms, the system will prefer
  *       local Ollama regardless of provider preference.
  */
-struct NL2SQLRequest {
-	std::string natural_language;           ///< Natural language query text
-	std::string schema_name;                 ///< Current database/schema name
-	int max_latency_ms;                      ///< Max acceptable latency (ms)
-	bool allow_cache;                        ///< Enable semantic cache lookup
-	std::vector<std::string> context_tables; ///< Optional table hints for schema
+struct LLMRequest {
+	std::string prompt;                         ///< Prompt text for LLM
+	std::string system_message;                 ///< Optional system role message
+	std::string schema_name;                    ///< Optional schema/database context
+	int max_latency_ms;                         ///< Max acceptable latency (ms)
+	bool allow_cache;                           ///< Enable semantic cache lookup
 
 	// Request tracking for correlation and debugging
-	std::string request_id;                  ///< Unique ID for this request (UUID-like)
+	std::string request_id;                     ///< Unique ID for this request (UUID-like)
 
 	// Retry configuration for transient failures
-	int max_retries;                         ///< Maximum retry attempts (default: 3)
-	int retry_backoff_ms;                    ///< Initial backoff in ms (default: 1000)
-	double retry_multiplier;                 ///< Backoff multiplier (default: 2.0)
-	int retry_max_backoff_ms;                ///< Maximum backoff in ms (default: 30000)
+	int max_retries;                            ///< Maximum retry attempts (default: 3)
+	int retry_backoff_ms;                       ///< Initial backoff in ms (default: 1000)
+	double retry_multiplier;                    ///< Backoff multiplier (default: 2.0)
+	int retry_max_backoff_ms;                   ///< Maximum backoff in ms (default: 30000)
 
-	NL2SQLRequest() : max_latency_ms(0), allow_cache(true),
-	                  max_retries(3), retry_backoff_ms(1000),
-	                  retry_multiplier(2.0), retry_max_backoff_ms(30000) {
+	LLMRequest() : max_latency_ms(0), allow_cache(true),
+	              max_retries(3), retry_backoff_ms(1000),
+	              retry_multiplier(2.0), retry_max_backoff_ms(30000) {
 		// Generate UUID-like request ID for correlation
 		char uuid[64];
 		snprintf(uuid, sizeof(uuid), "%08lx-%04x-%04x-%04x-%012lx",
@@ -117,7 +108,7 @@ struct NL2SQLRequest {
 };
 
 /**
- * @brief Error codes for NL2SQL conversion
+ * @brief Error codes for LLM bridge processing
  *
  * Structured error codes that provide machine-readable error information
  * for programmatic handling and user-friendly error messages.
@@ -127,9 +118,9 @@ struct NL2SQLRequest {
  * - Logging and monitoring
  * - User error messages
  *
- * @see nl2sql_error_code_to_string()
+ * @see llm_error_code_to_string()
  */
-enum class NL2SQLErrorCode {
+enum class LLMErrorCode {
 	SUCCESS = 0,                      ///< No error
 	ERR_API_KEY_MISSING,              ///< API key not configured
 	ERR_API_KEY_INVALID,              ///< API key format is invalid
@@ -139,7 +130,6 @@ enum class NL2SQLErrorCode {
 	ERR_SERVER_ERROR,                 ///< Server error (HTTP 5xx)
 	ERR_EMPTY_RESPONSE,               ///< Empty response from LLM
 	ERR_INVALID_RESPONSE,             ///< Malformed response from LLM
-	ERR_SQL_INJECTION_DETECTED,       ///< SQL injection pattern detected
 	ERR_VALIDATION_FAILED,            ///< Input validation failed
 	ERR_UNKNOWN_PROVIDER,             ///< Invalid provider name
 	ERR_REQUEST_TOO_LARGE             ///< Request exceeds size limit
@@ -154,10 +144,10 @@ enum class NL2SQLErrorCode {
  * @param code The error code to convert
  * @return String representation of the error code
  */
-const char* nl2sql_error_code_to_string(NL2SQLErrorCode code);
+const char* llm_error_code_to_string(LLMErrorCode code);
 
 /**
- * @brief Model provider format types for NL2SQL conversion
+ * @brief Model provider format types for LLM bridge
  *
  * Defines the API format to use for generic providers:
  * - GENERIC_OPENAI: Any OpenAI-compatible endpoint (including Ollama)
@@ -176,34 +166,33 @@ enum class ModelProvider {
 };
 
 /**
- * @brief NL2SQL Converter class
+ * @brief Generic LLM Bridge class
  *
- * Converts natural language queries to SQL using LLMs with hybrid
- * local/cloud model support and vector cache.
+ * Processes prompts using LLMs with hybrid local/cloud model support
+ * and vector cache.
  *
  * Architecture:
  * - Vector cache for semantic similarity (sqlite-vec)
  * - Model selection based on latency/budget
  * - Generic HTTP client (libcurl) supporting multiple API formats
- * - Schema-aware prompt building
+ * - Generic prompt handling (not tied to SQL)
  *
  * Configuration Variables:
- * - ai_nl2sql_provider: "ollama", "openai", or "anthropic"
- * - ai_nl2sql_provider_url: Custom endpoint URL (for generic providers)
- * - ai_nl2sql_provider_model: Model name
- * - ai_nl2sql_provider_key: API key (optional for local)
+ * - genai_llm_provider: "ollama", "openai", or "anthropic"
+ * - genai_llm_provider_url: Custom endpoint URL (for generic providers)
+ * - genai_llm_provider_model: Model name
+ * - genai_llm_provider_key: API key (optional for local)
  *
  * Thread Safety:
  * - This class is NOT thread-safe by itself
  * - External locking must be provided by AI_Features_Manager
  *
- * @see AI_Features_Manager, NL2SQLRequest, NL2SQLResult
+ * @see AI_Features_Manager, LLMRequest, LLMResult
  */
-class NL2SQL_Converter {
+class LLM_Bridge {
 private:
 	struct {
 		bool enabled;
-		char* query_prefix;
 		char* provider;                 ///< "openai" or "anthropic"
 		char* provider_url;             ///< Generic endpoint URL
 		char* provider_model;           ///< Model name
@@ -215,7 +204,7 @@ private:
 	SQLite3DB* vector_db;
 
 	// Internal methods
-	std::string build_prompt(const NL2SQLRequest& req, const std::string& schema_context);
+	std::string build_prompt(const LLMRequest& req);
 	std::string call_generic_openai(const std::string& prompt, const std::string& model,
 	                                 const std::string& url, const char* key,
 	                                 const std::string& req_id = "");
@@ -233,34 +222,31 @@ private:
 	                                               const std::string& req_id,
 	                                               int max_retries, int initial_backoff_ms,
 	                                               double backoff_multiplier, int max_backoff_ms);
-	NL2SQLResult check_vector_cache(const NL2SQLRequest& req);
-	void store_in_vector_cache(const NL2SQLRequest& req, const NL2SQLResult& result);
-	std::string get_schema_context(const std::vector<std::string>& tables);
-	ModelProvider select_model(const NL2SQLRequest& req);
-	std::vector<float> get_query_embedding(const std::string& text);
-	float validate_and_score_sql(const std::string& sql);
+	LLMResult check_cache(const LLMRequest& req);
+	void store_in_cache(const LLMRequest& req, const LLMResult& result);
+	ModelProvider select_model(const LLMRequest& req);
+	std::vector<float> get_text_embedding(const std::string& text);
 
 public:
 	/**
 	 * @brief Constructor - initializes with default configuration
 	 *
 	 * Sets up default values:
-	 * - query_prefix: "NL2SQL:"
 	 * - provider: "openai"
 	 * - provider_url: "http://localhost:11434/v1/chat/completions" (Ollama default)
 	 * - provider_model: "llama3.2"
 	 * - cache_similarity_threshold: 85
 	 * - timeout_ms: 30000
 	 */
-	NL2SQL_Converter();
+	LLM_Bridge();
 
 	/**
 	 * @brief Destructor - frees allocated resources
 	 */
-	~NL2SQL_Converter();
+	~LLM_Bridge();
 
 	/**
-	 * @brief Initialize the NL2SQL converter
+	 * @brief Initialize the LLM bridge
 	 *
 	 * Initializes vector DB connection and validates configuration.
 	 * The vector_db will be provided by AI_Features_Manager.
@@ -270,7 +256,7 @@ public:
 	int init();
 
 	/**
-	 * @brief Shutdown the NL2SQL converter
+	 * @brief Shutdown the LLM bridge
 	 *
 	 * Closes vector DB connection and cleans up resources.
 	 */
@@ -296,45 +282,38 @@ public:
 	                   const char* provider_key, int cache_threshold, int timeout);
 
 	/**
-	 * @brief Convert natural language query to SQL
+	 * @brief Process a prompt using the LLM
 	 *
-	 * This is the main entry point for NL2SQL conversion. The flow is:
-	 * 1. Check vector cache for semantically similar queries
-	 * 2. Build prompt with schema context
+	 * This is the main entry point for LLM bridge processing. The flow is:
+	 * 1. Check vector cache for semantically similar prompts
+	 * 2. Build prompt with optional system message
 	 * 3. Select appropriate model (Ollama or generic provider)
 	 * 4. Call LLM API
-	 * 5. Parse and clean SQL response
+	 * 5. Parse response
 	 * 6. Store in vector cache for future use
 	 *
-	 * @param req NL2SQL request containing natural language query and context
-	 * @return NL2SQLResult with generated SQL, confidence score, and metadata
+	 * @param req LLM request containing prompt and context
+	 * @return LLMResult with text response and metadata
 	 *
 	 * @note This is a synchronous blocking call. For non-blocking behavior,
 	 *       use the async interface via MySQL_Session.
 	 *
-	 * @note The confidence score is heuristic-based. Actual SQL correctness
-	 *       should be verified before execution.
-	 *
-	 * @see NL2SQLRequest, NL2SQLResult, ModelProvider
-	 *
 	 * Example:
 	 * @code
-	 * NL2SQLRequest req;
-	 * req.natural_language = "Find customers with orders > $1000";
+	 * LLMRequest req;
+	 * req.prompt = "Explain this query: SELECT * FROM users";
 	 * req.allow_cache = true;
-	 * NL2SQLResult result = converter.convert(req);
-	 * if (result.confidence > 0.7f) {
-	 *     execute_sql(result.sql_query);
-	 * }
+	 * LLMResult result = bridge.process(req);
+	 * std::cout << result.text_response << std::endl;
 	 * @endcode
 	 */
-	NL2SQLResult convert(const NL2SQLRequest& req);
+	LLMResult process(const LLMRequest& req);
 
 	/**
 	 * @brief Clear the vector cache
 	 *
-	 * Removes all cached NL2SQL conversions from the vector database.
-	 * This is useful for testing or when schema changes significantly.
+	 * Removes all cached LLM responses from the vector database.
+	 * This is useful for testing or when context changes significantly.
 	 */
 	void clear_cache();
 
@@ -342,7 +321,7 @@ public:
 	 * @brief Get cache statistics
 	 *
 	 * Returns JSON string with cache metrics:
-	 * - entries: Total number of cached conversions
+	 * - entries: Total number of cached responses
 	 * - hits: Number of cache hits
 	 * - misses: Number of cache misses
 	 *
@@ -351,7 +330,4 @@ public:
 	std::string get_cache_stats();
 };
 
-// Global instance (defined by AI_Features_Manager)
-// extern NL2SQL_Converter *GloNL2SQL;
-
-#endif // __CLASS_NL2SQL_CONVERTER_H
+#endif // __CLASS_LLM_BRIDGE_H
