@@ -26,6 +26,7 @@ enum GenAI_Operation : uint32_t {
 	GENAI_OP_EMBEDDING = 0,  ///< Generate embeddings for documents
 	GENAI_OP_RERANK = 1,     ///< Rerank documents by relevance to query
 	GENAI_OP_JSON = 2,       ///< Autonomous JSON query processing (handles embed/rerank/document_from_sql)
+	GENAI_OP_LLM = 3,        ///< Generic LLM bridge processing
 };
 
 /**
@@ -199,6 +200,36 @@ public:
 		// Timeouts (in milliseconds)
 		int genai_embedding_timeout_ms; ///< Timeout for embedding requests (default: 30000)
 		int genai_rerank_timeout_ms;    ///< Timeout for reranking requests (default: 30000)
+
+		// AI Features master switches
+		bool genai_enabled;              ///< Master enable for all AI features (default: false)
+		bool genai_llm_enabled;          ///< Enable LLM bridge feature (default: false)
+		bool genai_anomaly_enabled;      ///< Enable anomaly detection (default: false)
+
+		// LLM bridge configuration
+		char* genai_llm_provider;            ///< Provider format: "openai" or "anthropic" (default: "openai")
+		char* genai_llm_provider_url;        ///< LLM endpoint URL (default: http://localhost:11434/v1/chat/completions)
+		char* genai_llm_provider_model;       ///< Model name (default: "llama3.2")
+		char* genai_llm_provider_key;         ///< API key (default: NULL)
+		int genai_llm_cache_similarity_threshold; ///< Semantic cache threshold 0-100 (default: 85)
+		int genai_llm_cache_enabled;          ///< Enable semantic cache (default: true)
+		int genai_llm_timeout_ms;             ///< LLM request timeout in ms (default: 30000)
+
+		// Anomaly detection configuration
+		int genai_anomaly_risk_threshold;      ///< Risk score threshold for blocking 0-100 (default: 70)
+		int genai_anomaly_similarity_threshold; ///< Similarity threshold 0-100 (default: 80)
+		int genai_anomaly_rate_limit;          ///< Max queries per minute (default: 100)
+		bool genai_anomaly_auto_block;         ///< Auto-block suspicious queries (default: true)
+		bool genai_anomaly_log_only;           ///< Log-only mode (default: false)
+
+		// Hybrid model routing
+		bool genai_prefer_local_models;        ///< Prefer local Ollama over cloud (default: true)
+		double genai_daily_budget_usd;         ///< Daily cloud spend limit (default: 10.0)
+		int genai_max_cloud_requests_per_hour; ///< Cloud API rate limit (default: 100)
+
+		// Vector storage configuration
+		char* genai_vector_db_path;            ///< Vector database file path (default: /var/lib/proxysql/ai_features.db)
+		int genai_vector_dimension;            ///< Embedding dimension (default: 1536)
 	} variables;
 
 	struct {
@@ -270,6 +301,14 @@ public:
 	 * @return Dynamically allocated array of strings, terminated by NULL
 	 */
 	char** get_variables_list();
+
+	/**
+	 * @brief Check if a variable exists
+	 *
+	 * @param name The name of the variable to check
+	 * @return true if the variable exists, false otherwise
+	 */
+	bool has_variable(const char* name);
 
 	/**
 	 * @brief Print the version information

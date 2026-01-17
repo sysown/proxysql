@@ -910,7 +910,13 @@ std::string MySQL_Tool_Handler::catalog_get(const std::string& kind, const std::
 	if (rc == 0) {
 		result["kind"] = kind;
 		result["key"] = key;
-		result["document"] = json::parse(document);
+		// Parse as raw JSON value to preserve nested structure
+		try {
+			result["document"] = json::parse(document);
+		} catch (const json::parse_error& e) {
+			// If not valid JSON, store as string
+			result["document"] = document;
+		}
 	} else {
 		result["error"] = "Entry not found";
 	}

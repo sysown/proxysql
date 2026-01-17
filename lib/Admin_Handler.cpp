@@ -884,6 +884,40 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	return true;
 }
 
+// Creates a masked copy of the query string for logging, masking sensitive values like API keys
+// Returns a newly allocated string that must be freed by the caller
+static char* mask_sensitive_values_in_query(const char* query) {
+	if (!query || !strstr(query, "_key="))
+		return strdup(query);
+
+	char* masked = strdup(query);
+	char* key_pos = strstr(masked, "_key=");
+	if (key_pos) {
+		key_pos += 5; // Move past "_key="
+		char* value_start = key_pos;
+		// Find the end of the value (either single quote, space, or end of string)
+		char* value_end = value_start;
+		if (*value_start == '\'') {
+			value_start++; // Skip opening quote
+			value_end = value_start;
+			while (*value_end && *value_end != '\'')
+				value_end++;
+		} else {
+			while (*value_end && *value_end != ' ' && *value_end != '\0')
+				value_end++;
+		}
+
+		size_t value_len = value_end - value_start;
+		if (value_len > 2) {
+			// Keep first 2 chars, mask the rest
+			for (size_t i = 2; i < value_len; i++) {
+				value_start[i] = 'x';
+			}
+		}
+	}
+	return masked;
+}
+
 // Returns true if the given name is either a know mysql or admin global variable.
 bool is_valid_global_variable(const char *var_name) {
 	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
@@ -902,6 +936,8 @@ bool is_valid_global_variable(const char *var_name) {
 #endif /* PROXYSQLCLICKHOUSE */
 	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4) && GloMCPH && GloMCPH->has_variable(var_name + 4)) {
 		return true;
+	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6) && GloGATH && GloGATH->has_variable(var_name + 6)) {
+		return true;
 	} else {
 		return false;
 	}
@@ -918,7 +954,9 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
 			if (strncasecmp(query_no_space,(char *)"SET @@session.autocommit",strlen((char *)"SET @@session.autocommit"))) {
-				proxy_info("Received command %s\n", query_no_space);
+				char* masked_query = mask_sensitive_values_in_query(query_no_space);
+				proxy_info("Received command %s\n", masked_query);
+				free(masked_query);
 			}
 		}
 	}

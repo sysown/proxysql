@@ -542,6 +542,8 @@ void init_debug_struct() {
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MONITOR].name=(char *)"debug_monitor";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_CLUSTER].name=(char *)"debug_cluster";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_GENAI].name=(char *)"debug_genai";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_NL2SQL].name=(char *)"debug_nl2sql";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_ANOMALY].name=(char *)"debug_anomaly";
 
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		// if this happen, the above table is not populated correctly

@@ -481,6 +481,7 @@ MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
 MCP_Threads_Handler* GloMCPH = NULL;
 GenAI_Threads_Handler* GloGATH = NULL;
+AI_Features_Manager *GloAI = NULL;
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
 PgSQL_STMT_Manager *GloPgStmt;
@@ -941,6 +942,12 @@ void ProxySQL_Main_init_main_modules() {
 	GloGATH = _tmp_GloGATH;
 }
 
+void ProxySQL_Main_init_AI_module() {
+	GloAI = new AI_Features_Manager();
+	GloAI->init();
+	proxy_info("AI Features module initialized\n");
+}
+
 void ProxySQL_Main_init_MCP_module() {
 	GloMCPH = new MCP_Threads_Handler();
 	GloMCPH->init();
@@ -1292,6 +1299,14 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloGATH shutdown in ";
 #endif
 	}
+	if (GloAI) {
+		cpu_timer t;
+		delete GloAI;
+		GloAI = NULL;
+#ifdef DEBUG
+		std::cerr << "GloAI shutdown in ";
+#endif
+	}
 	if (GloMyLogger) {
 		cpu_timer t;
 		delete GloMyLogger;
@@ -1457,6 +1472,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 
 	ProxySQL_Main_init_main_modules();
 	ProxySQL_Main_init_MCP_module();
+	ProxySQL_Main_init_AI_module();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 
