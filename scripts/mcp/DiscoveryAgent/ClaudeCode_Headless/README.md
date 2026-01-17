@@ -101,6 +101,13 @@ python ./headless_db_discovery.py --verbose
 - Distinct value counts and selectivity
 - Statistical summaries (min/max/avg)
 - Anomaly detection (duplicates, outliers, skew)
+- **Statistical Significance Testing** ✨:
+  - Normality tests (Shapiro-Wilk, Anderson-Darling)
+  - Correlation analysis (Pearson, Spearman) with confidence intervals
+  - Chi-square tests for categorical associations
+  - Outlier detection with statistical tests
+  - Group comparisons (t-test, Mann-Whitney U)
+  - All tests report p-values and effect sizes
 
 ### 3. Semantic Analysis
 - Business domain identification (e.g., e-commerce, healthcare)
@@ -116,6 +123,14 @@ python ./headless_db_discovery.py --verbose
 - Join performance analysis
 - Query pattern identification
 - Optimization recommendations with expected improvements
+- **Performance Baseline Measurement** ✨:
+  - Actual query execution times (not just EXPLAIN)
+  - Primary key lookups with timing
+  - Table scan performance
+  - Index range scan efficiency
+  - JOIN query benchmarks
+  - Aggregation query performance
+  - Efficiency scoring (EXPLAIN vs actual time comparison)
 
 ### 5. Security Analysis
 - **Sensitive Data Identification:**
@@ -147,10 +162,17 @@ python ./headless_db_discovery.py --verbose
 - **90+ Answerable Questions** across all agents (minimum 15-20 per agent)
 - **Executable Answer Plans** for each question using MCP tools
 - **Question Templates** with structured answer formats
-- **Cross-Domain Questions** requiring multiple agents
+- **15+ Cross-Domain Questions** requiring multiple agents (enhanced in v1.3)
 - **Complexity Ratings** (LOW/MEDIUM/HIGH) with time estimates
 
 Each agent generates a catalog of questions they can answer about the database, with step-by-step plans for how to answer each question using MCP tools. This creates a reusable knowledge base for future LLM interactions.
+
+**Cross-Domain Categories (v1.3):**
+- Performance + Security (4 questions)
+- Structure + Semantics (3 questions)
+- Statistics + Query (3 questions)
+- Security + Semantics (3 questions)
+- All Agents (2 questions)
 
 ## Output Format
 
@@ -297,9 +319,32 @@ Based on the schema analysis:
 - "Does this database comply with GDPR?"
 
 #### Cross-Domain Questions (META Agent)
+**15+ minimum questions across 5 categories:**
+
+**Performance + Security (4 questions):**
 - "What are the security implications of query performance issues?"
-- "How does data quality affect business intelligence?"
-- "What is the cost-benefit of proposed optimizations?"
+- "Which slow queries expose the most sensitive data?"
+- "Can query optimization create security vulnerabilities?"
+- "What is the performance impact of security measures?"
+
+**Structure + Semantics (3 questions):**
+- "How does the schema design support or hinder business workflows?"
+- "What business rules are enforced (or missing) in the schema constraints?"
+- "Which tables represent core business entities vs. supporting data?"
+
+**Statistics + Query (3 questions):**
+- "Which data distributions are causing query performance issues?"
+- "How would data deduplication affect index efficiency?"
+- "What is the statistical significance of query performance variations?"
+
+**Security + Semantics (3 questions):**
+- "What business processes involve sensitive data exposure risks?"
+- "Which business entities require enhanced security measures?"
+- "How do business rules affect data access patterns?"
+
+**All Agents (2 questions):**
+- "What is the overall database health score across all dimensions?"
+- "Which business-critical workflows have the highest technical debt?"
 
 ### Using Question Catalogs
 
