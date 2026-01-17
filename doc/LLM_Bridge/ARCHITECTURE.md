@@ -1,4 +1,4 @@
-# NL2SQL Architecture
+# LLM Bridge Architecture
 
 ## System Overview
 
@@ -13,7 +13,7 @@ GenAI Module (async via socketpair)
     ├─ GenAI worker thread processes request
     └─ AI_Features_Manager::get_nl2sql()
         ↓
-    NL2SQL_Converter::convert()
+    LLM_Bridge::convert()
         ├─ check_vector_cache()  ← sqlite-vec similarity search
         ├─ build_prompt()         ← Schema context via MySQL_Tool_Handler
         ├─ select_model()         ← Ollama/OpenAI/Anthropic selection
@@ -22,7 +22,7 @@ GenAI Module (async via socketpair)
         ↓
     Async response back to MySQL_Session
     ↓
-Return Resultset (sql_query, confidence, ...)
+Return Resultset (text_response, confidence, ...)
 ```
 
 **Important**: NL2SQL uses an **asynchronous, non-blocking architecture**. The MySQL thread is not blocked while waiting for the LLM response. The request is sent via socketpair to the GenAI module, which processes it in a worker thread and delivers the result asynchronously.
@@ -39,7 +39,7 @@ Return Resultset (sql_query, confidence, ...)
 2. **GenAI Worker Thread**:
    - Receives request via socketpair
    - Calls `process_json_query()` with nl2sql operation type
-   - Invokes `NL2SQL_Converter::convert()`
+   - Invokes `LLM_Bridge::convert()`
    - Processes LLM response (HTTP via libcurl)
    - Sends result back via socketpair
 
@@ -50,9 +50,9 @@ Return Resultset (sql_query, confidence, ...)
 
 ## Components
 
-### 1. NL2SQL_Converter
+### 1. LLM_Bridge
 
-**Location**: `include/NL2SQL_Converter.h`, `lib/NL2SQL_Converter.cpp`
+**Location**: `include/LLM_Bridge.h`, `lib/LLM_Bridge.cpp`
 
 Main class coordinating the NL2SQL conversion pipeline.
 
@@ -186,17 +186,17 @@ HTTP clients for each LLM provider using libcurl.
 
 ```sql
 -- Cache entries
-CREATE TABLE nl2sql_cache (
+CREATE TABLE llm_cache (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     natural_language TEXT NOT NULL,
-    sql_query TEXT NOT NULL,
+    text_response TEXT NOT NULL,
     model_provider TEXT,
     confidence REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Virtual table for similarity search
-CREATE VIRTUAL TABLE nl2sql_cache_vec USING vec0(
+CREATE VIRTUAL TABLE llm_cache_vec USING vec0(
     embedding FLOAT[1536],  -- Dimension depends on embedding model
     id INTEGER PRIMARY KEY
 );
@@ -204,9 +204,9 @@ CREATE VIRTUAL TABLE nl2sql_cache_vec USING vec0(
 
 **Similarity Search:**
 ```sql
-SELECT nc.sql_query, nc.confidence, distance
-FROM nl2sql_cache_vec
-JOIN nl2sql_cache nc ON nl2sql_cache_vec.id = nc.id
+SELECT nc.text_response, nc.confidence, distance
+FROM llm_cache_vec
+JOIN llm_cache nc ON llm_cache_vec.id = nc.id
 WHERE embedding MATCH ?
 AND k = 10  -- Return top 10 matches
 ORDER BY distance
@@ -233,8 +233,8 @@ Coordinates all AI features including NL2SQL.
 
 **Responsibilities:**
 - Initialize vector database
-- Create and manage NL2SQL_Converter instance
-- Handle configuration variables with `ai_nl2sql_` prefix
+- Create and manage LLM_Bridge instance
+- Handle configuration variables with `genai_llm_` prefix
 - Provide thread-safe access to components
 
 ## Flow Diagrams
@@ -292,7 +292,7 @@ Coordinates all AI features including NL2SQL.
                   ▼
          ┌──────────────────┐
          │  Return Result   │
-         │ - sql_query      │
+         │ - text_response      │
          │ - confidence     │
          │ - explanation    │
          └──────────────────┘
@@ -341,7 +341,7 @@ Coordinates all AI features including NL2SQL.
 
 ## Data Structures
 
-### NL2SQLRequest
+### LLM BridgeRequest
 
 ```cpp
 struct NL2SQLRequest {
@@ -353,11 +353,11 @@ struct NL2SQLRequest {
 };
 ```
 
-### NL2SQLResult
+### LLM BridgeResult
 
 ```cpp
 struct NL2SQLResult {
-    std::string sql_query;                  // Generated SQL
+    std::string text_response;                  // Generated SQL
     float confidence;                        // 0.0-1.0 score
     std::string explanation;                 // Model info
     std::vector<std::string> tables_used;    // Referenced tables
@@ -370,20 +370,20 @@ struct NL2SQLResult {
 
 ### Variable Namespacing
 
-All NL2SQL variables use `ai_nl2sql_` prefix:
+All LLM variables use `genai_llm_` prefix:
 
 ```
-ai_nl2sql_enabled
-ai_nl2sql_query_prefix
-ai_nl2sql_model_provider
-ai_nl2sql_ollama_model
-ai_nl2sql_openai_model
-ai_nl2sql_anthropic_model
-ai_nl2sql_cache_similarity_threshold
-ai_nl2sql_timeout_ms
-ai_nl2sql_openai_key
-ai_nl2sql_anthropic_key
-ai_nl2sql_prefer_local
+genai_llm_enabled
+genai_llm_query_prefix
+genai_llm_model_provider
+genai_llm_ollama_model
+genai_llm_openai_model
+genai_llm_anthropic_model
+genai_llm_cache_similarity_threshold
+genai_llm_timeout_ms
+genai_llm_openai_key
+genai_llm_anthropic_key
+genai_llm_prefer_local
 ```
 
 ### Variable Persistence
@@ -393,7 +393,7 @@ Runtime (memory)
     ↑
     | LOAD MYSQL VARIABLES TO RUNTIME
     |
-    | SET ai_nl2sql_... = 'value'
+    | SET genai_llm_... = 'value'
     |
     | SAVE MYSQL VARIABLES TO DISK
     ↓
@@ -402,7 +402,7 @@ Disk (config file)
 
 ## Thread Safety
 
-- **NL2SQL_Converter**: NOT thread-safe by itself
+- **LLM_Bridge**: NOT thread-safe by itself
 - **AI_Features_Manager**: Provides thread-safe access via `wrlock()`/`wrunlock()`
 - **Vector Cache**: Thread-safe via SQLite mutex
 
@@ -439,7 +439,7 @@ NL2SQL: Conversion complete. Confidence: 0.85
 
 1. **Caching**: Enable for repeated queries
 2. **Local First**: Prefer Ollama for lower latency
-3. **Timeout**: Set appropriate `ai_nl2sql_timeout_ms`
+3. **Timeout**: Set appropriate `genai_llm_timeout_ms`
 4. **Batch Requests**: Not yet implemented (planned)
 
 ### Resource Usage

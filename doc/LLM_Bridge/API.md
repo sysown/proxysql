@@ -1,4 +1,4 @@
-# NL2SQL API Reference
+# LLM Bridge API Reference
 
 ## Complete API Documentation
 
@@ -8,17 +8,17 @@ This document provides a comprehensive reference for all NL2SQL APIs, including 
 
 - [Configuration Variables](#configuration-variables)
 - [Data Structures](#data-structures)
-- [NL2SQL_Converter Class](#nl2sql_converter-class)
+- [LLM_Bridge Class](#nl2sql_converter-class)
 - [AI_Features_Manager Class](#ai_features_manager-class)
 - [MySQL Protocol Integration](#mysql-protocol-integration)
 
 ## Configuration Variables
 
-All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the ProxySQL admin interface.
+All LLM variables use the `genai_llm_` prefix and are accessible via the ProxySQL admin interface.
 
 ### Master Switch
 
-#### `ai_nl2sql_enabled`
+#### `genai_llm_enabled`
 
 - **Type**: Boolean
 - **Default**: `true`
@@ -26,13 +26,13 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_enabled='true';
+  SET genai_llm_enabled='true';
   LOAD MYSQL VARIABLES TO RUNTIME;
   ```
 
 ### Query Detection
 
-#### `ai_nl2sql_query_prefix`
+#### `genai_llm_query_prefix`
 
 - **Type**: String
 - **Default**: `NL2SQL:`
@@ -40,13 +40,13 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_query_prefix='SQL:';
+  SET genai_llm_query_prefix='SQL:';
   -- Now use: SQL: Show customers
   ```
 
 ### Model Selection
 
-#### `ai_nl2sql_provider`
+#### `genai_llm_provider`
 
 - **Type**: Enum (`openai`, `anthropic`)
 - **Default**: `openai`
@@ -54,11 +54,11 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_provider='openai';
+  SET genai_llm_provider='openai';
   LOAD MYSQL VARIABLES TO RUNTIME;
   ```
 
-#### `ai_nl2sql_provider_url`
+#### `genai_llm_provider_url`
 
 - **Type**: String
 - **Default**: `http://localhost:11434/v1/chat/completions`
@@ -67,16 +67,16 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Example**:
   ```sql
   -- For OpenAI
-  SET ai_nl2sql_provider_url='https://api.openai.com/v1/chat/completions';
+  SET genai_llm_provider_url='https://api.openai.com/v1/chat/completions';
 
   -- For Ollama (via OpenAI-compatible endpoint)
-  SET ai_nl2sql_provider_url='http://localhost:11434/v1/chat/completions';
+  SET genai_llm_provider_url='http://localhost:11434/v1/chat/completions';
 
   -- For Anthropic
-  SET ai_nl2sql_provider_url='https://api.anthropic.com/v1/messages';
+  SET genai_llm_provider_url='https://api.anthropic.com/v1/messages';
   ```
 
-#### `ai_nl2sql_provider_model`
+#### `genai_llm_provider_model`
 
 - **Type**: String
 - **Default**: `llama3.2`
@@ -84,10 +84,10 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_provider_model='gpt-4o';
+  SET genai_llm_provider_model='gpt-4o';
   ```
 
-#### `ai_nl2sql_provider_key`
+#### `genai_llm_provider_key`
 
 - **Type**: String (sensitive)
 - **Default**: NULL
@@ -95,12 +95,12 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_provider_key='sk-your-api-key';
+  SET genai_llm_provider_key='sk-your-api-key';
   ```
 
 ### Cache Configuration
 
-#### `ai_nl2sql_cache_similarity_threshold`
+#### `genai_llm_cache_similarity_threshold`
 
 - **Type**: Integer (0-100)
 - **Default**: `85`
@@ -108,12 +108,12 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_cache_similarity_threshold='90';
+  SET genai_llm_cache_similarity_threshold='90';
   ```
 
 ### Performance
 
-#### `ai_nl2sql_timeout_ms`
+#### `genai_llm_timeout_ms`
 
 - **Type**: Integer
 - **Default**: `30000` (30 seconds)
@@ -121,12 +121,12 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_timeout_ms='60000';
+  SET genai_llm_timeout_ms='60000';
   ```
 
 ### Routing
 
-#### `ai_nl2sql_prefer_local`
+#### `genai_llm_prefer_local`
 
 - **Type**: Boolean
 - **Default**: `true`
@@ -134,12 +134,12 @@ All NL2SQL variables use the `ai_nl2sql_` prefix and are accessible via the Prox
 - **Runtime**: Yes
 - **Example**:
   ```sql
-  SET ai_nl2sql_prefer_local='false';
+  SET genai_llm_prefer_local='false';
   ```
 
 ## Data Structures
 
-### NL2SQLRequest
+### LLM BridgeRequest
 
 ```cpp
 struct NL2SQLRequest {
@@ -187,11 +187,11 @@ struct NL2SQLRequest {
 | `retry_multiplier` | double | 2.0 | Exponential backoff multiplier |
 | `retry_max_backoff_ms` | int | 30000 | Maximum backoff in milliseconds |
 
-### NL2SQLResult
+### LLM BridgeResult
 
 ```cpp
 struct NL2SQLResult {
-    std::string sql_query;                  // Generated SQL query
+    std::string text_response;                  // Generated SQL query
     float confidence;                        // Confidence score 0.0-1.0
     std::string explanation;                 // Which model generated this
     std::vector<std::string> tables_used;    // Tables referenced in SQL
@@ -212,7 +212,7 @@ struct NL2SQLResult {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `sql_query` | string | "" | Generated SQL query |
+| `text_response` | string | "" | Generated SQL query |
 | `confidence` | float | 0.0 | Confidence score (0.0-1.0) |
 | `explanation` | string | "" | Model/provider info |
 | `tables_used` | vector<string> | {} | Tables referenced in SQL |
@@ -233,7 +233,7 @@ enum class ModelProvider {
 };
 ```
 
-### NL2SQLErrorCode Enum
+### LLM BridgeErrorCode Enum
 
 ```cpp
 enum class NL2SQLErrorCode {
@@ -260,12 +260,12 @@ const char* nl2sql_error_code_to_string(NL2SQLErrorCode code);
 
 Converts error code enum to string representation for logging and display purposes.
 
-## NL2SQL_Converter Class
+## LLM Bridge_Converter Class
 
 ### Constructor
 
 ```cpp
-NL2SQL_Converter::NL2SQL_Converter();
+LLM_Bridge::LLM_Bridge();
 ```
 
 Initializes with default configuration values.
@@ -273,7 +273,7 @@ Initializes with default configuration values.
 ### Destructor
 
 ```cpp
-NL2SQL_Converter::~NL2SQL_Converter();
+LLM_Bridge::~LLM_Bridge();
 ```
 
 Frees allocated resources.
@@ -283,7 +283,7 @@ Frees allocated resources.
 #### `init()`
 
 ```cpp
-int NL2SQL_Converter::init();
+int LLM_Bridge::init();
 ```
 
 Initialize the NL2SQL converter.
@@ -293,7 +293,7 @@ Initialize the NL2SQL converter.
 #### `close()`
 
 ```cpp
-void NL2SQL_Converter::close();
+void LLM_Bridge::close();
 ```
 
 Shutdown and cleanup resources.
@@ -301,7 +301,7 @@ Shutdown and cleanup resources.
 #### `convert()`
 
 ```cpp
-NL2SQLResult NL2SQL_Converter::convert(const NL2SQLRequest& req);
+NL2SQLResult LLM_Bridge::convert(const NL2SQLRequest& req);
 ```
 
 Convert natural language to SQL.
@@ -318,14 +318,14 @@ req.natural_language = "Show top 10 customers";
 req.allow_cache = true;
 NL2SQLResult result = converter->convert(req);
 if (result.confidence > 0.7f) {
-    execute_sql(result.sql_query);
+    execute_sql(result.text_response);
 }
 ```
 
 #### `clear_cache()`
 
 ```cpp
-void NL2SQL_Converter::clear_cache();
+void LLM_Bridge::clear_cache();
 ```
 
 Clear all cached NL2SQL conversions.
@@ -333,7 +333,7 @@ Clear all cached NL2SQL conversions.
 #### `get_cache_stats()`
 
 ```cpp
-std::string NL2SQL_Converter::get_cache_stats();
+std::string LLM_Bridge::get_cache_stats();
 ```
 
 Get cache statistics as JSON.
@@ -356,16 +356,16 @@ Get cache statistics as JSON.
 #### `get_nl2sql()`
 
 ```cpp
-NL2SQL_Converter* AI_Features_Manager::get_nl2sql();
+LLM_Bridge* AI_Features_Manager::get_nl2sql();
 ```
 
 Get the NL2SQL converter instance.
 
-**Returns**: Pointer to NL2SQL_Converter or NULL
+**Returns**: Pointer to LLM_Bridge or NULL
 
 **Example**:
 ```cpp
-NL2SQL_Converter* nl2sql = GloAI->get_nl2sql();
+LLM_Bridge* nl2sql = GloAI->get_nl2sql();
 if (nl2sql) {
     NL2SQLResult result = nl2sql->convert(req);
 }
@@ -380,7 +380,7 @@ char* AI_Features_Manager::get_variable(const char* name);
 Get configuration variable value.
 
 **Parameters**:
-- `name`: Variable name (without `ai_nl2sql_` prefix)
+- `name`: Variable name (without `genai_llm_` prefix)
 
 **Returns**: Variable value or NULL
 
@@ -398,7 +398,7 @@ bool AI_Features_Manager::set_variable(const char* name, const char* value);
 Set configuration variable value.
 
 **Parameters**:
-- `name`: Variable name (without `ai_nl2sql_` prefix)
+- `name`: Variable name (without `genai_llm_` prefix)
 - `value`: New value
 
 **Returns**: true on success, false on failure
@@ -424,7 +424,7 @@ Results are returned as a standard MySQL resultset with columns:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `sql_query` | TEXT | Generated SQL query |
+| `text_response` | TEXT | Generated SQL query |
 | `confidence` | FLOAT | Confidence score |
 | `explanation` | TEXT | Model info |
 | `cached` | BOOLEAN | From cache |
@@ -440,7 +440,7 @@ Results are returned as a standard MySQL resultset with columns:
 mysql> USE my_database;
 mysql> NL2SQL: Show top 10 customers by revenue;
 +---------------------------------------------+------------+-------------------------+--------+----------+
-| sql_query                                    | confidence | explanation             | cached | cache_id |
+| text_response                                    | confidence | explanation             | cached | cache_id |
 +---------------------------------------------+------------+-------------------------+--------+----------+
 | SELECT * FROM customers ORDER BY revenue    |      0.850 | Generated by Ollama    |      0 |        0 |
 | DESC LIMIT 10                               |            | llama3.2                |        |          |
@@ -456,9 +456,9 @@ These error codes are returned in the `error_code` field of NL2SQLResult:
 
 | Code | Description | HTTP Status | Action |
 |------|-------------|-------------|--------|
-| `ERR_API_KEY_MISSING` | API key not configured | N/A | Configure API key via `ai_nl2sql_provider_key` |
+| `ERR_API_KEY_MISSING` | API key not configured | N/A | Configure API key via `genai_llm_provider_key` |
 | `ERR_API_KEY_INVALID` | API key format is invalid | N/A | Verify API key format |
-| `ERR_TIMEOUT` | Request timed out | N/A | Increase `ai_nl2sql_timeout_ms` |
+| `ERR_TIMEOUT` | Request timed out | N/A | Increase `genai_llm_timeout_ms` |
 | `ERR_CONNECTION_FAILED` | Network connection failed | 0 | Check network connectivity |
 | `ERR_RATE_LIMITED` | Rate limited by provider | 429 | Wait and retry, or use different endpoint |
 | `ERR_SERVER_ERROR` | Server error (5xx) | 500-599 | Retry or check provider status |
@@ -473,8 +473,8 @@ These error codes are returned in the `error_code` field of NL2SQLResult:
 
 | Code | Description | Action |
 |------|-------------|--------|
-| `ER_NL2SQL_DISABLED` | NL2SQL feature is disabled | Enable via `ai_nl2sql_enabled` |
-| `ER_NL2SQL_TIMEOUT` | LLM request timed out | Increase `ai_nl2sql_timeout_ms` |
+| `ER_NL2SQL_DISABLED` | NL2SQL feature is disabled | Enable via `genai_llm_enabled` |
+| `ER_NL2SQL_TIMEOUT` | LLM request timed out | Increase `genai_llm_timeout_ms` |
 | `ER_NL2SQL_NO_MODEL` | No LLM model available | Configure API key or Ollama |
 | `ER_NL2SQL_API_ERROR` | LLM API returned error | Check logs and API key |
 | `ER_NL2SQL_INVALID_QUERY` | Query doesn't start with prefix | Use correct prefix format |
@@ -486,7 +486,7 @@ Monitor NL2SQL performance via status variables:
 ```sql
 -- View all AI status variables
 SELECT * FROM runtime_mysql_servers
-WHERE variable_name LIKE 'ai_nl2sql_%';
+WHERE variable_name LIKE 'genai_llm_%';
 
 -- Key metrics
 SELECT * FROM stats_ai_nl2sql;
@@ -495,7 +495,7 @@ SELECT * FROM stats_ai_nl2sql;
 | Variable | Description |
 |----------|-------------|
 | `nl2sql_total_requests` | Total NL2SQL conversions |
-| `nl2sql_cache_hits` | Cache hit count |
+| `llm_cache_hits` | Cache hit count |
 | `nl2sql_local_model_calls` | Ollama API calls |
 | `nl2sql_cloud_model_calls` | Cloud API calls |
 

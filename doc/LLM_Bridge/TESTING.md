@@ -1,4 +1,4 @@
-# NL2SQL Testing Guide
+# LLM Bridge Testing Guide
 
 ## Test Suite Overview
 
@@ -355,7 +355,7 @@ gdb ./nl2sql_unit_base
 diag("Generated SQL: %s", sql.c_str());
 
 // Check MySQL errors
-if (mysql_query(admin, query)) {
+if (mytext_response(admin, query)) {
     diag("MySQL error: %s", mysql_error(admin));
 }
 ```
