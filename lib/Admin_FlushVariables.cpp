@@ -1059,7 +1059,8 @@ void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, 
 		proxy_error("Error on %s : %s\n", q, error);
 		return;
 	}
-	else {
+	if (resultset) {
+		// Set variables in GloGATH's internal state
 		GloGATH->wrlock();
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
@@ -1072,6 +1073,16 @@ void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, 
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0], value);
 			}
 		}
+
+		// Populate runtime_global_variables table
+		{
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			GloGATH->wrunlock();  // Release outer lock before calling runtime_to_database
+			flush_genai_variables___runtime_to_database(admindb, false, false, false, true, true);
+			GloGATH->wrlock();  // Re-acquire outer lock
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
 		GloGATH->wrunlock();
 	}
 	if (resultset) delete resultset;
