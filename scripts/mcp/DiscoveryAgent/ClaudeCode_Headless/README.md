@@ -1,0 +1,314 @@
+# Headless Database Discovery with Claude Code
+
+Multi-agent database discovery system for comprehensive analysis through MCP (Model Context Protocol).
+
+## Overview
+
+This directory contains scripts for running **4-agent collaborative database discovery** in headless (non-interactive) mode using Claude Code.
+
+**Key Features:**
+- **4 Collaborating Agents:** STRUCTURAL, STATISTICAL, SEMANTIC, QUERY
+- **4-Round Protocol:** Blind exploration → Pattern recognition → Hypothesis testing → Final synthesis
+- **MCP Catalog Collaboration:** Agents share findings via catalog
+- **Comprehensive Reports:** Structured markdown with health scores and prioritized recommendations
+- **Evidence-Based:** 15+ hypothesis validations with direct database evidence
+
+## Quick Start
+
+### Using the Python Script (Recommended)
+
+```bash
+# Basic discovery - discovers the first available database
+python ./headless_db_discovery.py
+
+# Discover a specific database
+python ./headless_db_discovery.py --database mydb
+
+# Specify output file
+python ./headless_db_discovery.py --output my_report.md
+
+# With verbose output
+python ./headless_db_discovery.py --verbose
+```
+
+### Using the Bash Script
+
+```bash
+# Basic discovery
+./headless_db_discovery.sh
+
+# Discover specific database
+./headless_db_discovery.sh -d mydb
+
+# With custom timeout
+./headless_db_discovery.sh -t 600
+```
+
+## Multi-Agent Discovery Architecture
+
+### The 4 Agents
+
+| Agent | Focus | Key MCP Tools |
+|-------|-------|---------------|
+| **STRUCTURAL** | Schemas, tables, relationships, indexes, constraints | `list_schemas`, `list_tables`, `describe_table`, `get_constraints`, `suggest_joins` |
+| **STATISTICAL** | Data distributions, quality, anomalies | `table_profile`, `sample_rows`, `column_profile`, `sample_distinct`, `run_sql_readonly` |
+| **SEMANTIC** | Business domain, entities, rules, terminology | `sample_rows`, `sample_distinct`, `run_sql_readonly` |
+| **QUERY** | Index efficiency, query patterns, optimization | `describe_table`, `explain_sql`, `suggest_joins`, `run_sql_readonly` |
+
+### 4-Round Protocol
+
+1. **Round 1: Blind Exploration** (Parallel)
+   - All 4 agents explore independently
+   - Each discovers patterns without seeing others' findings
+   - Findings written to MCP catalog
+
+2. **Round 2: Pattern Recognition** (Collaborative)
+   - All agents read each other's findings via `catalog_search`
+   - Identify cross-cutting patterns and anomalies
+   - Collaborative analysis documented
+
+3. **Round 3: Hypothesis Testing** (Validation)
+   - Each agent validates 3-4 specific hypotheses
+   - Results documented with PASS/FAIL/MIXED and evidence
+   - 15+ hypothesis validations total
+
+4. **Round 4: Final Synthesis**
+   - All findings synthesized into comprehensive report
+   - Written to MCP catalog and local file
+
+## What Gets Discovered
+
+### 1. Structural Analysis
+- Complete table schemas (columns, types, constraints)
+- Primary keys, foreign keys, unique constraints
+- Indexes and their purposes
+- Entity Relationship Diagram (ERD)
+- Design patterns and anti-patterns
+
+### 2. Statistical Analysis
+- Row counts and cardinality
+- Data distributions for key columns
+- Null value percentages
+- Distinct value counts and selectivity
+- Statistical summaries (min/max/avg)
+- Anomaly detection (duplicates, outliers, skew)
+
+### 3. Semantic Analysis
+- Business domain identification (e.g., e-commerce, healthcare)
+- Entity type classification (master vs transactional)
+- Business rules and constraints
+- Entity lifecycles and state machines
+- Domain terminology glossary
+
+### 4. Query Analysis
+- Index coverage and efficiency
+- Missing index identification
+- Composite index opportunities
+- Join performance analysis
+- Query pattern identification
+- Optimization recommendations with expected improvements
+
+## Output Format
+
+The generated report includes:
+
+```markdown
+# COMPREHENSIVE DATABASE DISCOVERY REPORT
+
+## Executive Summary
+- Database identity (system type, purpose, scale)
+- Critical findings (top 3)
+- Health score: current X/10 → potential Y/10
+- Top 3 recommendations (prioritized)
+
+## 1. STRUCTURAL ANALYSIS
+- Schema inventory
+- Relationship diagram
+- Design patterns
+- Issues & recommendations
+
+## 2. STATISTICAL ANALYSIS
+- Table profiles
+- Data quality score
+- Distribution profiles
+- Anomalies detected
+
+## 3. SEMANTIC ANALYSIS
+- Business domain identification
+- Entity catalog
+- Business rules inference
+- Domain glossary
+
+## 4. QUERY ANALYSIS
+- Index coverage assessment
+- Query pattern analysis
+- Optimization opportunities
+- Expected improvements
+
+## 5. CRITICAL FINDINGS
+- Each with: description, impact quantification, root cause, remediation
+
+## 6. RECOMMENDATIONS ROADMAP
+- URGENT: [actions with impact/effort]
+- HIGH: [actions]
+- MODERATE: [actions]
+- Expected timeline with metrics
+
+## Appendices
+- A. Table DDL
+- B. Query examples with EXPLAIN
+- C. Statistical distributions
+- D. Business glossary
+```
+
+## Command-Line Options
+
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--database` | `-d` | Database name to discover | First available |
+| `--schema` | `-s` | Schema name to analyze | All schemas |
+| `--output` | `-o` | Output file path | `discovery_YYYYMMDD_HHMMSS.md` |
+| `--timeout` | `-t` | Timeout in seconds | 300 |
+| `--verbose` | `-v` | Enable verbose output | Disabled |
+| `--help` | `-h` | Show help message | - |
+
+## System Prompts
+
+The discovery uses the system prompt in `prompts/multi_agent_discovery_prompt.md`:
+
+- **`prompts/multi_agent_discovery_prompt.md`** - Concise system prompt for actual use
+- **`prompts/multi_agent_discovery_reference.md`** - Comprehensive reference documentation
+
+## Examples
+
+### CI/CD Integration
+
+```yaml
+# .github/workflows/database-discovery.yml
+name: Database Discovery
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly
+  workflow_dispatch:
+
+jobs:
+  discovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Claude Code
+        run: npm install -g @anthropics/claude-code
+      - name: Run Discovery
+        env:
+          PROXYSQL_MCP_ENDPOINT: ${{ secrets.PROXYSQL_MCP_ENDPOINT }}
+          PROXYSQL_MCP_TOKEN: ${{ secrets.PROXYSQL_MCP_TOKEN }}
+        run: |
+          cd scripts/mcp/DiscoveryAgent/ClaudeCode_Headless
+          python ./headless_db_discovery.py \
+            --database production \
+            --output discovery_$(date +%Y%m%d).md
+      - name: Upload Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: discovery-report
+          path: discovery_*.md
+```
+
+### Monitoring Automation
+
+```bash
+#!/bin/bash
+# weekly_discovery.sh - Run weekly and compare results
+
+REPORT_DIR="/var/db-discovery/reports"
+mkdir -p "$REPORT_DIR"
+
+# Run discovery
+python ./headless_db_discovery.py \
+  --database mydb \
+  --output "$REPORT_DIR/discovery_$(date +%Y%m%d).md"
+
+# Compare with previous week
+PREV=$(ls -t "$REPORT_DIR"/discovery_*.md | head -2 | tail -1)
+if [ -f "$PREV" ]; then
+  echo "=== Changes since last discovery ==="
+  diff "$PREV" "$REPORT_DIR/discovery_$(date +%Y%m%d).md" || true
+fi
+```
+
+### Custom Discovery Focus
+
+```python
+# Modify the prompt in the script for focused discovery
+def build_discovery_prompt(database: Optional[str]) -> str:
+    prompt = f"""Using the 4-agent discovery protocol, focus on:
+    1. Security aspects of {database}
+    2. Performance optimization opportunities
+    3. Data quality issues
+
+    Follow the standard 4-round protocol but prioritize these areas.
+    """
+    return prompt
+```
+
+## Troubleshooting
+
+### "Claude Code executable not found"
+
+Set the `CLAUDE_PATH` environment variable:
+
+```bash
+export CLAUDE_PATH="/path/to/claude"
+python ./headless_db_discovery.py
+```
+
+Or install Claude Code:
+
+```bash
+npm install -g @anthropics/claude-code
+```
+
+### "No MCP servers available"
+
+Ensure MCP servers are configured in your Claude Code settings or provide MCP configuration via command line.
+
+### Discovery times out
+
+Increase the timeout:
+
+```bash
+python ./headless_db_discovery.py --timeout 600
+```
+
+### Output is truncated
+
+The multi-agent prompt is designed for comprehensive output. If truncated:
+1. Increase timeout
+2. Check MCP server connection stability
+3. Review MCP catalog for partial results
+
+## Directory Structure
+
+```
+ClaudeCode_Headless/
+├── README.md                           # This file
+├── prompts/
+│   ├── multi_agent_discovery_prompt.md      # Concise system prompt
+│   └── multi_agent_discovery_reference.md   # Comprehensive reference
+├── headless_db_discovery.py            # Python script
+├── headless_db_discovery.sh            # Bash script
+└── examples/
+    ├── DATABASE_DISCOVERY_REPORT.md        # Example output
+    └── DATABASE_QUESTION_CAPABILITIES.md   # Feature documentation
+```
+
+## Related Documentation
+
+- [Multi-Agent Database Discovery System](../../doc/multi_agent_database_discovery.md)
+- [Claude Code Documentation](https://docs.anthropic.com/claude-code)
+- [MCP Specification](https://modelcontextprotocol.io/)
+
+## License
+
+Same license as the proxysql-vec project.
