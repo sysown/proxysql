@@ -673,6 +673,19 @@ char** GenAI_Threads_Handler::get_variables_list() {
 	return list;
 }
 
+bool GenAI_Threads_Handler::has_variable(const char* name) {
+	if (!name)
+		return false;
+
+	// Check if name exists in genai_thread_variables_names
+	for (int i = 0; genai_thread_variables_names[i]; i++) {
+		if (!strcmp(name, genai_thread_variables_names[i]))
+			return true;
+	}
+
+	return false;
+}
+
 void GenAI_Threads_Handler::print_version() {
 	fprintf(stderr, "GenAI Threads Handler rev. %s -- %s -- %s\n", GENAI_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 }

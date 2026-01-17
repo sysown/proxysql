@@ -302,6 +302,14 @@ public:
 	char** get_variables_list();
 
 	/**
+	 * @brief Check if a variable exists
+	 *
+	 * @param name The name of the variable to check
+	 * @return true if the variable exists, false otherwise
+	 */
+	bool has_variable(const char* name);
+
+	/**
 	 * @brief Print the version information
 	 */
 	void print_version();

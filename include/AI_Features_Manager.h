@@ -71,7 +71,6 @@ private:
 
 	// Helper methods
 	int init_vector_db();
-	int init_nl2sql();
 	int init_anomaly_detector();
 	void close_vector_db();
 	void close_nl2sql();
@@ -128,6 +127,16 @@ public:
 	 * Safe to call multiple times.
 	 */
 	void shutdown();
+
+	/**
+	 * @brief Initialize NL2SQL converter
+	 *
+	 * Initializes the NL2SQL converter if not already initialized.
+	 * This can be called at runtime after enabling nl2sql.
+	 *
+	 * @return 0 on success, non-zero on failure
+	 */
+	int init_nl2sql();
 
 	/**
 	 * @brief Acquire write lock for thread-safe operations
