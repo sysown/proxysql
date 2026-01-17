@@ -1054,7 +1054,7 @@ void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, 
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
 	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'genai-%'";
-	admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", q, error);
 		return;
