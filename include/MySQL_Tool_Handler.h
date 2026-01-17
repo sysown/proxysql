@@ -317,11 +317,13 @@ public:
 	 * @param kind Entry kind
 	 * @param key Unique key
 	 * @param document JSON document
+	 * @param schema Schema name (empty for all schemas)
 	 * @param tags Comma-separated tags
 	 * @param links Comma-separated links
 	 * @return JSON result
 	 */
 	std::string catalog_upsert(
+		const std::string& schema,
 		const std::string& kind,
 		const std::string& key,
 		const std::string& document,
@@ -331,14 +333,16 @@ public:
 
 	/**
 	 * @brief Get catalog entry
+	 * @param schema Schema name (empty for all schemas)
 	 * @param kind Entry kind
 	 * @param key Unique key
 	 * @return JSON document or error
 	 */
-	std::string catalog_get(const std::string& kind, const std::string& key);
+	std::string catalog_get(const std::string& schema, const std::string& kind, const std::string& key);
 
 	/**
 	 * @brief Search catalog
+	 * @param schema Schema name (empty for all schemas)
 	 * @param query Search query
 	 * @param kind Optional kind filter
 	 * @param tags Optional tag filter
@@ -347,6 +351,7 @@ public:
 	 * @return JSON array of matching entries
 	 */
 	std::string catalog_search(
+		const std::string& schema,
 		const std::string& query,
 		const std::string& kind = "",
 		const std::string& tags = "",
@@ -356,12 +361,14 @@ public:
 
 	/**
 	 * @brief List catalog entries
+	 * @param schema Schema name (empty for all schemas)
 	 * @param kind Optional kind filter
 	 * @param limit Max results per page (default 50)
 	 * @param offset Pagination offset (default 0)
 	 * @return JSON with total count and results array
 	 */
 	std::string catalog_list(
+		const std::string& schema = "",
 		const std::string& kind = "",
 		int limit = 50,
 		int offset = 0
@@ -384,11 +391,12 @@ public:
 
 	/**
 	 * @brief Delete catalog entry
+	 * @param schema Schema name (empty for all schemas)
 	 * @param kind Entry kind
 	 * @param key Unique key
 	 * @return JSON result
 	 */
-	std::string catalog_delete(const std::string& kind, const std::string& key);
+	std::string catalog_delete(const std::string& schema, const std::string& kind, const std::string& key);
 };
 
 #endif /* CLASS_MYSQL_TOOL_HANDLER_H */

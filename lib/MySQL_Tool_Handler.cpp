@@ -881,16 +881,18 @@ std::string MySQL_Tool_Handler::find_reference_candidates(
 // Catalog tools (LLM memory)
 
 std::string MySQL_Tool_Handler::catalog_upsert(
+	const std::string& schema,
 	const std::string& kind,
 	const std::string& key,
 	const std::string& document,
 	const std::string& tags,
 	const std::string& links
 ) {
-	int rc = catalog->upsert(kind, key, document, tags, links);
+	int rc = catalog->upsert(schema, kind, key, document, tags, links);
 
 	json result;
 	result["success"] = (rc == 0);
+	result["schema"] = schema;
 	if (rc == 0) {
 		result["kind"] = kind;
 		result["key"] = key;
@@ -901,12 +903,13 @@ std::string MySQL_Tool_Handler::catalog_upsert(
 	return result.dump();
 }
 
-std::string MySQL_Tool_Handler::catalog_get(const std::string& kind, const std::string& key) {
+std::string MySQL_Tool_Handler::catalog_get(const std::string& schema, const std::string& kind, const std::string& key) {
 	std::string document;
-	int rc = catalog->get(kind, key, document);
+	int rc = catalog->get(schema, kind, key, document);
 
 	json result;
 	result["success"] = (rc == 0);
+	result["schema"] = schema;
 	if (rc == 0) {
 		result["kind"] = kind;
 		result["key"] = key;
@@ -925,15 +928,17 @@ std::string MySQL_Tool_Handler::catalog_get(const std::string& kind, const std::
 }
 
 std::string MySQL_Tool_Handler::catalog_search(
+	const std::string& schema,
 	const std::string& query,
 	const std::string& kind,
 	const std::string& tags,
 	int limit,
 	int offset
 ) {
-	std::string results = catalog->search(query, kind, tags, limit, offset);
+	std::string results = catalog->search(schema, query, kind, tags, limit, offset);
 
 	json result;
+	result["schema"] = schema;
 	result["query"] = query;
 	result["results"] = json::parse(results);
 
@@ -941,13 +946,15 @@ std::string MySQL_Tool_Handler::catalog_search(
 }
 
 std::string MySQL_Tool_Handler::catalog_list(
+	const std::string& schema,
 	const std::string& kind,
 	int limit,
 	int offset
 ) {
-	std::string results = catalog->list(kind, limit, offset);
+	std::string results = catalog->list(schema, kind, limit, offset);
 
 	json result;
+	result["schema"] = schema.empty() ? "all" : schema;
 	result["kind"] = kind.empty() ? "all" : kind;
 	result["results"] = json::parse(results);
 
@@ -978,11 +985,12 @@ std::string MySQL_Tool_Handler::catalog_merge(
 	return result.dump();
 }
 
-std::string MySQL_Tool_Handler::catalog_delete(const std::string& kind, const std::string& key) {
-	int rc = catalog->remove(kind, key);
+std::string MySQL_Tool_Handler::catalog_delete(const std::string& schema, const std::string& kind, const std::string& key) {
+	int rc = catalog->remove(schema, kind, key);
 
 	json result;
 	result["success"] = (rc == 0);
+	result["schema"] = schema;
 	result["kind"] = kind;
 	result["key"] = key;
 

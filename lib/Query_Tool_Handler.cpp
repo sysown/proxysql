@@ -179,28 +179,28 @@ json Query_Tool_Handler::get_tool_list() {
 		"catalog_upsert",
 		"Store or update an entry in the catalog (LLM external memory)",
 		{"kind", "key", "document"},
-		{{"tags", "string"}, {"links", "string"}}
+		{{"schema", "string"}, {"tags", "string"}, {"links", "string"}}
 	));
 
 	tools.push_back(create_tool_schema(
 		"catalog_get",
 		"Retrieve an entry from the catalog",
 		{"kind", "key"},
-		{}
+		{{"schema", "string"}}
 	));
 
 	tools.push_back(create_tool_schema(
 		"catalog_search",
 		"Search the catalog for entries matching a query",
 		{"query"},
-		{{"kind", "string"}, {"tags", "string"}, {"limit", "integer"}, {"offset", "integer"}}
+		{{"schema", "string"}, {"kind", "string"}, {"tags", "string"}, {"limit", "integer"}, {"offset", "integer"}}
 	));
 
 	tools.push_back(create_tool_schema(
 		"catalog_list",
 		"List catalog entries by kind",
 		{},
-		{{"kind", "string"}, {"limit", "integer"}, {"offset", "integer"}}
+		{{"schema", "string"}, {"kind", "string"}, {"limit", "integer"}, {"offset", "integer"}}
 	));
 
 	tools.push_back(create_tool_schema(
@@ -214,7 +214,7 @@ json Query_Tool_Handler::get_tool_list() {
 		"catalog_delete",
 		"Delete an entry from the catalog",
 		{"kind", "key"},
-		{}
+		{{"schema", "string"}}
 	));
 
 	json result;
@@ -358,31 +358,35 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		}
 		// Catalog tools
 		else if (tool_name == "catalog_upsert") {
+			std::string schema = get_json_string(arguments, "schema");
 			std::string kind = get_json_string(arguments, "kind");
 			std::string key = get_json_string(arguments, "key");
 			std::string document = get_json_string(arguments, "document");
 			std::string tags = get_json_string(arguments, "tags");
 			std::string links = get_json_string(arguments, "links");
-			result_str = mysql_handler->catalog_upsert(kind, key, document, tags, links);
+			result_str = mysql_handler->catalog_upsert(schema, kind, key, document, tags, links);
 		}
 		else if (tool_name == "catalog_get") {
+			std::string schema = get_json_string(arguments, "schema");
 			std::string kind = get_json_string(arguments, "kind");
 			std::string key = get_json_string(arguments, "key");
-			result_str = mysql_handler->catalog_get(kind, key);
+			result_str = mysql_handler->catalog_get(schema, kind, key);
 		}
 		else if (tool_name == "catalog_search") {
+			std::string schema = get_json_string(arguments, "schema");
 			std::string query = get_json_string(arguments, "query");
 			std::string kind = get_json_string(arguments, "kind");
 			std::string tags = get_json_string(arguments, "tags");
 			int limit = get_json_int(arguments, "limit", 20);
 			int offset = get_json_int(arguments, "offset", 0);
-			result_str = mysql_handler->catalog_search(query, kind, tags, limit, offset);
+			result_str = mysql_handler->catalog_search(schema, query, kind, tags, limit, offset);
 		}
 		else if (tool_name == "catalog_list") {
+			std::string schema = get_json_string(arguments, "schema");
 			std::string kind = get_json_string(arguments, "kind");
 			int limit = get_json_int(arguments, "limit", 50);
 			int offset = get_json_int(arguments, "offset", 0);
-			result_str = mysql_handler->catalog_list(kind, limit, offset);
+			result_str = mysql_handler->catalog_list(schema, kind, limit, offset);
 		}
 		else if (tool_name == "catalog_merge") {
 			std::string keys = get_json_string(arguments, "keys");
@@ -392,9 +396,10 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			result_str = mysql_handler->catalog_merge(keys, target_key, kind, instructions);
 		}
 		else if (tool_name == "catalog_delete") {
+			std::string schema = get_json_string(arguments, "schema");
 			std::string kind = get_json_string(arguments, "kind");
 			std::string key = get_json_string(arguments, "key");
-			result_str = mysql_handler->catalog_delete(kind, key);
+			result_str = mysql_handler->catalog_delete(schema, kind, key);
 		}
 		else {
 			return create_error_response("Unknown tool: " + tool_name);

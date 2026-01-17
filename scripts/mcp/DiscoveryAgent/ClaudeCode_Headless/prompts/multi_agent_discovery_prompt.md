@@ -3,6 +3,16 @@
 ## Mission
 Perform comprehensive database discovery through 6 collaborating subagents using ONLY MCP server tools (`mcp__proxysql-stdio__*`). Output: Single comprehensive markdown report.
 
+## ⚠️ SCOPE CONSTRAINT
+
+**If a Target Schema is specified at the end of this prompt, you MUST ONLY analyze that schema.**
+
+- **DO NOT** call `list_schemas` - use the specified Target Schema directly
+- **DO NOT** analyze any tables outside the specified schema
+- **DO NOT** waste time on other schemas
+
+**If NO Target Schema is specified**, proceed with full database discovery using `list_schemas` and analyzing all schemas.
+
 ## ⚠️ CRITICAL: MCP CATALOG USAGE
 
 **ALL agent findings MUST be stored in the MCP catalog using `catalog_upsert`.**

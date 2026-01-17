@@ -52,18 +52,19 @@ int MySQL_Catalog::init_schema() {
 }
 
 int MySQL_Catalog::create_tables() {
-	// Main catalog table
+	// Main catalog table with schema column for isolation
 	const char* create_catalog_table =
 		"CREATE TABLE IF NOT EXISTS catalog ("
 		"  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+		"  schema TEXT NOT NULL,"         // schema name (e.g., "sales", "production")
 		"  kind TEXT NOT NULL,"           // table, view, domain, metric, note
-		"  key TEXT NOT NULL,"            // e.g., "db.sales.orders"
+		"  key TEXT NOT NULL,"            // e.g., "orders", "customer_summary"
 		"  document TEXT NOT NULL,"       // JSON content
 		"  tags TEXT,"                    // comma-separated tags
 		"  links TEXT,"                   // comma-separated related keys
 		"  created_at INTEGER DEFAULT (strftime('%s', 'now')),"
 		"  updated_at INTEGER DEFAULT (strftime('%s', 'now')),"
-		"  UNIQUE(kind, key)"
+		"  UNIQUE(schema, kind, key)"
 		");";
 
 	if (!db->execute(create_catalog_table)) {
@@ -72,13 +73,14 @@ int MySQL_Catalog::create_tables() {
 	}
 
 	// Indexes for search
+	db->execute("CREATE INDEX IF NOT EXISTS idx_catalog_schema ON catalog(schema)");
 	db->execute("CREATE INDEX IF NOT EXISTS idx_catalog_kind ON catalog(kind)");
 	db->execute("CREATE INDEX IF NOT EXISTS idx_catalog_tags ON catalog(tags)");
 	db->execute("CREATE INDEX IF NOT EXISTS idx_catalog_created ON catalog(created_at)");
 
 	// Full-text search table for better search (optional enhancement)
 	db->execute("CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5("
-		"  kind, key, document, tags, content='catalog', content_rowid='id'"
+		"  schema, kind, key, document, tags, content='catalog', content_rowid='id'"
 		");");
 
 	// Triggers to keep FTS in sync
@@ -86,13 +88,13 @@ int MySQL_Catalog::create_tables() {
 	db->execute("DROP TRIGGER IF EXISTS catalog_ad");
 
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ai AFTER INSERT ON catalog BEGIN"
-		"  INSERT INTO catalog_fts(rowid, kind, key, document, tags)"
-		"  VALUES (new.id, new.kind, new.key, new.document, new.tags);"
+		"  INSERT INTO catalog_fts(rowid, schema, kind, key, document, tags)"
+		"  VALUES (new.id, new.schema, new.kind, new.key, new.document, new.tags);"
 		"END;");
 
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ad AFTER DELETE ON catalog BEGIN"
-		"  INSERT INTO catalog_fts(catalog_fts, rowid, kind, key, document, tags)"
-		"  VALUES ('delete', old.id, old.kind, old.key, old.document, old.tags);"
+		"  INSERT INTO catalog_fts(catalog_fts, rowid, schema, kind, key, document, tags)"
+		"  VALUES ('delete', old.id, old.schema, old.kind, old.key, old.document, old.tags);"
 		"END;");
 
 	// Merge operations log
@@ -111,6 +113,7 @@ int MySQL_Catalog::create_tables() {
 }
 
 int MySQL_Catalog::upsert(
+	const std::string& schema,
 	const std::string& kind,
 	const std::string& key,
 	const std::string& document,
@@ -120,12 +123,12 @@ int MySQL_Catalog::upsert(
 	sqlite3_stmt* stmt = NULL;
 
 	const char* upsert_sql =
-		"INSERT INTO catalog(kind, key, document, tags, links, updated_at) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, strftime('%s', 'now')) "
-		"ON CONFLICT(kind, key) DO UPDATE SET "
-		"  document = ?3,"
-		"  tags = ?4,"
-		"  links = ?5,"
+		"INSERT INTO catalog(schema, kind, key, document, tags, links, updated_at) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now')) "
+		"ON CONFLICT(schema, kind, key) DO UPDATE SET "
+		"  document = ?4,"
+		"  tags = ?5,"
+		"  links = ?6,"
 		"  updated_at = strftime('%s', 'now')";
 
 	int rc = db->prepare_v2(upsert_sql, &stmt);
@@ -134,20 +137,22 @@ int MySQL_Catalog::upsert(
 		return -1;
 	}
 
-	(*proxy_sqlite3_bind_text)(stmt, 1, kind.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_text)(stmt, 2, key.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_text)(stmt, 3, document.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_text)(stmt, 4, tags.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_text)(stmt, 5, links.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 1, schema.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 2, kind.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, key.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, document.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, tags.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 6, links.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
 	(*proxy_sqlite3_finalize)(stmt);
 
-	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Catalog upsert: kind=%s, key=%s\n", kind.c_str(), key.c_str());
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Catalog upsert: schema=%s, kind=%s, key=%s\n", schema.c_str(), kind.c_str(), key.c_str());
 	return 0;
 }
 
 int MySQL_Catalog::get(
+	const std::string& schema,
 	const std::string& kind,
 	const std::string& key,
 	std::string& document
@@ -156,7 +161,7 @@ int MySQL_Catalog::get(
 
 	const char* get_sql =
 		"SELECT document FROM catalog "
-		"WHERE kind = ?1 AND key = ?2";
+		"WHERE schema = ?1 AND kind = ?2 AND key = ?3";
 
 	int rc = db->prepare_v2(get_sql, &stmt);
 	if (rc != SQLITE_OK) {
@@ -164,8 +169,9 @@ int MySQL_Catalog::get(
 		return -1;
 	}
 
-	(*proxy_sqlite3_bind_text)(stmt, 1, kind.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_text)(stmt, 2, key.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 1, schema.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 2, kind.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, key.c_str(), -1, SQLITE_TRANSIENT);
 
 	rc = (*proxy_sqlite3_step)(stmt);
 
@@ -183,6 +189,7 @@ int MySQL_Catalog::get(
 }
 
 std::string MySQL_Catalog::search(
+	const std::string& schema,
 	const std::string& query,
 	const std::string& kind,
 	const std::string& tags,
@@ -190,7 +197,12 @@ std::string MySQL_Catalog::search(
 	int offset
 ) {
 	std::ostringstream sql;
-	sql << "SELECT kind, key, document, tags, links FROM catalog WHERE 1=1";
+	sql << "SELECT schema, kind, key, document, tags, links FROM catalog WHERE 1=1";
+
+	// Add schema filter
+	if (!schema.empty()) {
+		sql << " AND schema = '" << schema << "'";
+	}
 
 	// Add kind filter
 	if (!kind.empty()) {
@@ -230,11 +242,12 @@ std::string MySQL_Catalog::search(
 			SQLite3_row* row = *it;
 
 			nlohmann::json entry;
-			entry["kind"] = std::string(row->fields[0] ? row->fields[0] : "");
-			entry["key"] = std::string(row->fields[1] ? row->fields[1] : "");
+			entry["schema"] = std::string(row->fields[0] ? row->fields[0] : "");
+			entry["kind"] = std::string(row->fields[1] ? row->fields[1] : "");
+			entry["key"] = std::string(row->fields[2] ? row->fields[2] : "");
 
 			// Parse the stored JSON document - nlohmann::json handles escaping
-			const char* doc_str = row->fields[2];
+			const char* doc_str = row->fields[3];
 			if (doc_str) {
 				try {
 					entry["document"] = nlohmann::json::parse(doc_str);
@@ -246,8 +259,8 @@ std::string MySQL_Catalog::search(
 				entry["document"] = nullptr;
 			}
 
-			entry["tags"] = std::string(row->fields[3] ? row->fields[3] : "");
-			entry["links"] = std::string(row->fields[4] ? row->fields[4] : "");
+			entry["tags"] = std::string(row->fields[4] ? row->fields[4] : "");
+			entry["links"] = std::string(row->fields[5] ? row->fields[5] : "");
 
 			results.push_back(entry);
 		}
@@ -258,24 +271,32 @@ std::string MySQL_Catalog::search(
 }
 
 std::string MySQL_Catalog::list(
+	const std::string& schema,
 	const std::string& kind,
 	int limit,
 	int offset
 ) {
 	std::ostringstream sql;
-	sql << "SELECT kind, key, document, tags, links FROM catalog";
+	sql << "SELECT schema, kind, key, document, tags, links FROM catalog WHERE 1=1";
 
-	if (!kind.empty()) {
-		sql << " WHERE kind = '" << kind << "'";
+	if (!schema.empty()) {
+		sql << " AND schema = '" << schema << "'";
 	}
 
-	sql << " ORDER BY kind, key ASC LIMIT " << limit << " OFFSET " << offset;
+	if (!kind.empty()) {
+		sql << " AND kind = '" << kind << "'";
+	}
+
+	sql << " ORDER BY schema, kind, key ASC LIMIT " << limit << " OFFSET " << offset;
 
 	// Get total count
 	std::ostringstream count_sql;
-	count_sql << "SELECT COUNT(*) FROM catalog";
+	count_sql << "SELECT COUNT(*) FROM catalog WHERE 1=1";
+	if (!schema.empty()) {
+		count_sql << " AND schema = '" << schema << "'";
+	}
 	if (!kind.empty()) {
-		count_sql << " WHERE kind = '" << kind << "'";
+		count_sql << " AND kind = '" << kind << "'";
 	}
 
 	char* error = NULL;
@@ -303,11 +324,12 @@ std::string MySQL_Catalog::list(
 			SQLite3_row* row = *it;
 
 			nlohmann::json entry;
-			entry["kind"] = std::string(row->fields[0] ? row->fields[0] : "");
-			entry["key"] = std::string(row->fields[1] ? row->fields[1] : "");
+			entry["schema"] = std::string(row->fields[0] ? row->fields[0] : "");
+			entry["kind"] = std::string(row->fields[1] ? row->fields[1] : "");
+			entry["key"] = std::string(row->fields[2] ? row->fields[2] : "");
 
 			// Parse the stored JSON document
-			const char* doc_str = row->fields[2];
+			const char* doc_str = row->fields[3];
 			if (doc_str) {
 				try {
 					entry["document"] = nlohmann::json::parse(doc_str);
@@ -318,8 +340,8 @@ std::string MySQL_Catalog::list(
 				entry["document"] = nullptr;
 			}
 
-			entry["tags"] = std::string(row->fields[3] ? row->fields[3] : "");
-			entry["links"] = std::string(row->fields[4] ? row->fields[4] : "");
+			entry["tags"] = std::string(row->fields[4] ? row->fields[4] : "");
+			entry["links"] = std::string(row->fields[5] ? row->fields[5] : "");
 
 			results.push_back(entry);
 		}
@@ -336,12 +358,12 @@ int MySQL_Catalog::merge(
 	const std::string& kind,
 	const std::string& instructions
 ) {
-	// Fetch all source entries
+	// Fetch all source entries (empty schema for backward compatibility)
 	std::string source_docs = "";
 	for (const auto& key : keys) {
 		std::string doc;
-		// Try different kinds for flexible merging
-		if (get("table", key, doc) == 0 || get("view", key, doc) == 0) {
+		// Try different kinds for flexible merging (empty schema searches all)
+		if (get("", "table", key, doc) == 0 || get("", "view", key, doc) == 0) {
 			source_docs += doc + "\n\n";
 		}
 	}
@@ -358,15 +380,22 @@ int MySQL_Catalog::merge(
 	merged_doc += "\"instructions\":" + std::string(instructions.empty() ? "\"\"" : "\"" + instructions + "\"");
 	merged_doc += "}";
 
-	return upsert(kind, target_key, merged_doc, "", "");
+	// Use empty schema for merged domain entries (backward compatibility)
+	return upsert("", kind, target_key, merged_doc, "", "");
 }
 
 int MySQL_Catalog::remove(
+	const std::string& schema,
 	const std::string& kind,
 	const std::string& key
 ) {
 	std::ostringstream sql;
-	sql << "DELETE FROM catalog WHERE kind = '" << kind << "' AND key = '" << key << "'";
+	sql << "DELETE FROM catalog WHERE 1=1";
+
+	if (!schema.empty()) {
+		sql << " AND schema = '" << schema << "'";
+	}
+	sql << " AND kind = '" << kind << "' AND key = '" << key << "'";
 
 	if (!db->execute(sql.str().c_str())) {
 		proxy_error("Catalog remove error\n");
