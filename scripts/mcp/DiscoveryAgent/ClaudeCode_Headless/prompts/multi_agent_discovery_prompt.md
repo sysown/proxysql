@@ -49,6 +49,8 @@ Write("database_discovery_report.md", content="...")
 ### Round 1: Blind Exploration (Parallel)
 - Launch all 5 analysis agents simultaneously (STRUCTURAL, STATISTICAL, SEMANTIC, QUERY, SECURITY)
 - Each explores independently using their tools
+- **QUERY Agent**: Execute baseline performance queries with actual timing measurements (see Performance Baseline Requirements below)
+- **STATISTICAL Agent**: Perform statistical significance tests on key findings (see Statistical Testing Requirements below)
 - **CRITICAL:** Write findings to MCP catalog using `catalog_upsert`:
   - Use `kind="structural"`, `key="round1_discovery"` for STRUCTURAL
   - Use `kind="statistical"`, `key="round1_discovery"` for STATISTICAL
@@ -201,6 +203,12 @@ The META agent should produce a separate meta-analysis document:
 - v1.0: Initial 4-agent system (STRUCTURAL, STATISTICAL, SEMANTIC, QUERY)
 - v1.1: Added SECURITY agent (5 analysis agents)
 - v1.1: Added META agent for prompt optimization (6 agents total, 5 rounds)
+- v1.2: Added Question Catalog generation with executable answer plans
+- v1.2: Added MCP catalog enforcement (prohibited Write tool for individual findings)
+- v1.3: **[CURRENT]** Added Performance Baseline Measurement (QUERY agent)
+- v1.3: **[CURRENT]** Added Statistical Significance Testing (STATISTICAL agent)
+- v1.3: **[CURRENT]** Enhanced Cross-Domain Question Synthesis (15 minimum questions)
+- v1.3: **[CURRENT]** Expected impact: +25% overall quality, +30% confidence in findings
 
 ## Overall Quality Score: X/10
 
@@ -262,6 +270,186 @@ The META agent must:
    - Explain WHY each improvement would help
 
 6. Rate overall quality and provide summary
+
+### QUERY Agent: Performance Baseline Requirements
+
+**CRITICAL:** The QUERY agent MUST execute actual performance queries with timing measurements, not just EXPLAIN analysis.
+
+#### Required Performance Baseline Tests
+
+For each table, execute and time these representative queries:
+
+1. **Primary Key Lookup**
+   ```sql
+   SELECT * FROM {table} WHERE {pk_column} = (SELECT MAX({pk_column}) FROM {table});
+   ```
+   - Record: Actual execution time in milliseconds
+   - Compare: EXPLAIN output vs actual time
+   - Document: Any discrepancies
+
+2. **Full Table Scan (for small tables)**
+   ```sql
+   SELECT COUNT(*) FROM {table};
+   ```
+   - Record: Actual execution time
+   - Compare: Against indexed scans
+
+3. **Index Range Scan (if applicable)**
+   ```sql
+   SELECT * FROM {table} WHERE {indexed_column} BETWEEN {min} AND {max} LIMIT 1000;
+   ```
+   - Record: Actual execution time
+   - Document: Index effectiveness
+
+4. **JOIN Performance (for related tables)**
+   ```sql
+   SELECT COUNT(*) FROM {table1} t1 JOIN {table2} t2 ON t1.{fk} = t2.{pk};
+   ```
+   - Record: Actual execution time
+   - Compare: EXPLAIN estimated cost vs actual time
+
+5. **Aggregation Query**
+   ```sql
+   SELECT {column}, COUNT(*) FROM {table} GROUP BY {column} ORDER BY COUNT(*) DESC LIMIT 10;
+   ```
+   - Record: Actual execution time
+   - Document: Sorting and grouping overhead
+
+#### Performance Baseline Output Format
+
+```markdown
+## Performance Baseline Measurements
+
+### {table_name}
+
+| Query Type | Actual Time (ms) | EXPLAIN Cost | Efficiency Score | Notes |
+|------------|------------------|--------------|------------------|-------|
+| PK Lookup | {ms} | {cost} | {score} | {observations} |
+| Table Scan | {ms} | {cost} | {score} | {observations} |
+| Range Scan | {ms} | {cost} | {score} | {observations} |
+| JOIN Query | {ms} | {cost} | {score} | {observations} |
+| Aggregation | {ms} | {cost} | {score} | {observations} |
+
+**Key Findings:**
+- {Most significant performance observation}
+- {Second most significant}
+- {etc.}
+
+**Performance Score:** {X}/10
+```
+
+#### Efficiency Score Calculation
+
+- **9-10**: Actual time matches EXPLAIN expectations (<10% variance)
+- **7-8**: Minor discrepancies (10-25% variance)
+- **5-6**: Moderate discrepancies (25-50% variance)
+- **3-4**: Major discrepancies (50-100% variance)
+- **1-2**: EXPLAIN completely inaccurate (>100% variance)
+
+### STATISTICAL Agent: Statistical Significance Testing Requirements
+
+**CRITICAL:** The STATISTICAL agent MUST perform statistical tests to validate all claims with quantitative evidence and p-values.
+
+#### Required Statistical Tests
+
+1. **Data Distribution Normality Test**
+   - For numeric columns with >30 samples
+   - Test: Shapiro-Wilk or Anderson-Darling
+   - Report: Test statistic, p-value, interpretation
+   - Template:
+     ```markdown
+     **Column:** {table}.{column}
+     **Test:** Shapiro-Wilk W={stat}, p={pvalue}
+     **Conclusion:** [NORMAL|NOT_NORMAL] (α=0.05)
+     **Implication:** {Which statistical methods are appropriate}
+     ```
+
+2. **Correlation Analysis** (for related numeric columns)
+   - Test: Pearson correlation (normal) or Spearman (non-normal)
+   - Report: Correlation coefficient, p-value, confidence interval
+   - Template:
+     ```markdown
+     **Variables:** {table}.{col1} vs {table}.{col2}
+     **Test:** [Pearson|Spearman] r={r}, p={pvalue}, 95% CI [{ci_lower}, {ci_upper}]
+     **Conclusion:** [SIGNIFICANT|NOT_SIGNIFICANT] correlation
+     **Strength:** [Very Strong|Strong|Moderate|Weak|Negligible]
+     **Direction:** [Positive|Negative]
+     ```
+
+3. **Categorical Association Test** (for related categorical columns)
+   - Test: Chi-square test of independence
+   - Report: χ² statistic, degrees of freedom, p-value, Cramer's V
+   - Template:
+     ```markdown
+     **Variables:** {table}.{col1} vs {table}.{col2}
+     **Test:** χ²={chi2}, df={df}, p={pvalue}
+     **Effect Size:** Cramer's V={v} [Negligible|Small|Medium|Large]
+     **Conclusion:** [SIGNIFICANT|NOT_SIGNIFICANT] association (α=0.05)
+     **Interpretation:** {Business meaning}
+     ```
+
+4. **Outlier Detection** (for numeric columns)
+   - Test: Modified Z-score (threshold ±3.5) or IQR method (1.5×IQR)
+   - Report: Number of outliers, percentage, values
+   - Template:
+     ```markdown
+     **Column:** {table}.{column}
+     **Method:** Modified Z-score | Threshold: ±3.5
+     **Outliers Found:** {count} ({percentage}%)
+     **Values:** {list or range}
+     **Impact:** {How outliers affect analysis}
+     ```
+
+5. **Group Comparison** (if applicable)
+   - Test: Student's t-test (normal) or Mann-Whitney U (non-normal)
+   - Report: Test statistic, p-value, effect size
+   - Template:
+     ```markdown
+     **Groups:** {group1} vs {group2} on {metric}
+     **Test:** [t-test|Mann-Whitney] {stat}={statvalue}, p={pvalue}
+     **Effect Size:** [Cohen's d|Rank-biserial]={effect}
+     **Conclusion:** [SIGNIFICANT|NOT_SIGNIFICANT] difference
+     **Practical Significance:** {Business impact}
+     ```
+
+#### Statistical Significance Summary
+
+```markdown
+## Statistical Significance Tests Summary
+
+### Tests Performed: {total_count}
+
+| Test Type | Count | Significant | Not Significant | Notes |
+|-----------|-------|-------------|-----------------|-------|
+| Normality | {n} | {sig} | {not_sig} | {notes} |
+| Correlation | {n} | {sig} | {not_sig} | {notes} |
+| Chi-Square | {n} | {sig} | {not_sig} | {notes} |
+| Outlier Detection | {n} | {sig} | {not_sig} | {notes} |
+| Group Comparison | {n} | {sig} | {not_sig} | {notes} |
+
+### Key Significant Findings
+
+1. **{Finding 1}**
+   - Test: {test_name}
+   - Evidence: {stat}, p={pvalue}
+   - Business Impact: {impact}
+
+2. **{Finding 2}**
+   - Test: {test_name}
+   - Evidence: {stat}, p={pvalue}
+   - Business Impact: {impact}
+
+**Statistical Confidence Score:** {X}/10
+**Data Quality Confidence:** {HIGH|MEDIUM|LOW} (based on test results)
+```
+
+#### Confidence Level Guidelines
+
+- **α = 0.05** for standard significance testing
+- **α = 0.01** for high-stakes claims (security, critical business logic)
+- Report exact p-values, not just "p < 0.05"
+- Interpret effect sizes, not just statistical significance
+- Distinguish between statistical significance and practical significance
 
 ## Question Catalog Generation
 
@@ -488,21 +676,151 @@ The META agent generates a **Cross-Domain Question Catalog** that:
 1. **Synthesizes questions from all agents** into cross-domain categories
 2. **Identifies questions that require multiple agents** to answer
 3. **Creates composite question plans** that combine tools from multiple agents
+4. **Prioritizes by business impact** (CRITICAL, HIGH, MEDIUM, LOW)
 
-Example cross-domain question:
+#### Cross-Domain Question Categories
+
+**1. Performance + Security (QUERY + SECURITY)**
+- "What are the security implications of query performance issues?"
+- "Which slow queries expose the most sensitive data?"
+- "Can query optimization create security vulnerabilities?"
+- "What is the performance impact of security measures (encryption, row-level security)?"
+
+**2. Structure + Semantics (STRUCTURAL + SEMANTIC)**
+- "How does the schema design support or hinder business workflows?"
+- "What business rules are enforced (or missing) in the schema constraints?"
+- "Which tables represent core business entities vs. supporting data?"
+- "How does table structure reflect the business domain model?"
+
+**3. Statistics + Query (STATISTICAL + QUERY)**
+- "Which data distributions are causing query performance issues?"
+- "How would data deduplication affect index efficiency?"
+- "What is the statistical significance of query performance variations?"
+- "Which outliers represent optimization opportunities?"
+
+**4. Security + Semantics (SECURITY + SEMANTIC)**
+- "What business processes involve sensitive data exposure risks?"
+- "Which business entities require enhanced security measures?"
+- "How do business rules affect data access patterns?"
+- "What is the business impact of current security gaps?"
+
+**5. All Agents (STRUCTURAL + STATISTICAL + SEMANTIC + QUERY + SECURITY)**
+- "What is the overall database health score across all dimensions?"
+- "Which business-critical workflows have the highest technical debt?"
+- "What are the top 5 priority improvements across all categories?"
+- "How would a comprehensive optimization affect business operations?"
+
+#### Cross-Domain Question Template
+
 ```markdown
-#### Q. "What are the security implications of the query performance issues?"
+#### Q{N}. "{Cross-domain question title}"
 
-**Agents Required:** QUERY + SECURITY
+**Agents Required:** {AGENT1} + {AGENT2} [+ {AGENT3}]
+
+**Question Type:** {analytical|recommendation|comparative}
+
+**Cross-Domain Category:** {Performance+Security|Structure+Semantics|Statistics+Query|Security+Semantics|AllAgents}
+
+**Business Context:**
+- {Why this question matters}
+- {Business impact}
+- {Stakeholders who care}
 
 **Answer Plan:**
-1. QUERY: Identify slow queries using `explain_sql` and `run_sql_readonly`
-2. SECURITY: Check if slow queries access sensitive data using `sample_rows`
-3. QUERY + SECURITY: Assess if performance optimizations might expose data
-4. SECURITY: Document risk level and mitigation strategies
 
-**Output:** Security assessment of query performance with risk ratings
+**Phase 1: {AGENT1} Analysis**
+1. **Step 1:** {Specific task}
+   - Tools: `{tool1}`, `{tool2}`
+   - Output: {What this produces}
+
+2. **Step 2:** {Specific task}
+   - Tools: `{tool3}`
+   - Output: {What this produces}
+
+**Phase 2: {AGENT2} Analysis**
+1. **Step 1:** {Specific task building on Phase 1}
+   - Tools: `{tool4}`
+   - Output: {What this produces}
+
+2. **Step 2:** {Specific task}
+   - Tools: `{tool5}`
+   - Output: {What this produces}
+
+**Phase 3: Cross-Agent Synthesis**
+1. **Step 1:** {How to combine findings}
+   - Tools: `{tool6}`, `{tool7}`
+   - Output: {Integrated analysis}
+
+2. **Step 2:** {Final synthesis}
+   - Tools: `analysis`
+   - Output: {Unified answer}
+
+**Answer Template:**
+```markdown
+## Cross-Domain Analysis: {Question Title}
+
+### {AGENT1} Perspective
+- {Finding from Agent 1}
+
+### {AGENT2} Perspective
+- {Finding from Agent 2}
+
+### Integrated Analysis
+- {Synthesis of both perspectives}
+
+### Business Impact
+- {Quantified impact}
+- {Affected stakeholders}
+- {Recommendations}
+
+### Priority: {URGENT|HIGH|MEDIUM|LOW}
+- {Rationale}
 ```
+
+**Data Sources:**
+- Tables: `{table1}`, `{table2}`
+- Columns: `{column1}`, `{column2}`
+- Key Constraints: {any relevant constraints}
+
+**Complexity:** HIGH (always high for cross-domain)
+**Estimated Time:** {45-90 minutes}
+**Business Value:** {HIGH|MEDIUM|LOW}
+**Confidence Level:** {HIGH|MEDIUM|LOW} (based on data availability)
+
+---
+
+**Prerequisites:**
+- {AGENT1} findings must be available in catalog
+- {AGENT2} findings must be available in catalog
+- {Any specific data or indexes required}
+
+**Dependencies:**
+- Requires: `{kind="agent1", key="finding1"}`
+- Requires: `{kind="agent2", key="finding2"}`
+```
+
+#### Minimum Cross-Domain Question Requirements
+
+The META agent must generate at least **15 cross-domain questions** distributed as:
+
+| Category | Minimum Questions | Priority Distribution |
+|----------|-------------------|----------------------|
+| Performance + Security | 4 | URGENT: 1, HIGH: 2, MEDIUM: 1 |
+| Structure + Semantics | 3 | HIGH: 2, MEDIUM: 1 |
+| Statistics + Query | 3 | HIGH: 1, MEDIUM: 2 |
+| Security + Semantics | 3 | URGENT: 1, HIGH: 1, MEDIUM: 1 |
+| All Agents | 2 | URGENT: 2 |
+
+#### Cross-Domain Question Quality Criteria
+
+Each cross-domain question must:
+1. **Require multiple agents** - Cannot be answered by a single agent
+2. **Have clear business relevance** - Answer matters to stakeholders
+3. **Include executable plan** - Each step specifies tools and outputs
+4. **Produce integrated answer** - Synthesis, not just separate findings
+5. **Assign priority** - URGENT/HIGH/MEDIUM/LOW with rationale
+6. **Estimate value** - Business value and confidence level
+7. **Document dependencies** - Catalog entries required to answer
 
 ### Question Catalog Quality Standards
 
