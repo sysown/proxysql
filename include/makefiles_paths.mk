@@ -74,10 +74,8 @@ COREDUMPER_PATH := $(DEPS_PATH)/coredumper/coredumper
 COREDUMPER_IDIR := $(COREDUMPER_PATH)/include
 COREDUMPER_LDIR := $(COREDUMPER_PATH)/src
 
-CURL_PATH := $(DEPS_PATH)/curl/curl
-CURL_ROOT := $(CURL_PATH)/local
-CURL_IDIR := $(CURL_ROOT)/include
-CURL_LDIR := $(CURL_ROOT)/lib
+CURL_IDIR := /usr/include
+CURL_LDIR := /usr/lib
 
 EV_PATH := $(DEPS_PATH)/libev/libev
 EV_IDIR := $(EV_PATH)
