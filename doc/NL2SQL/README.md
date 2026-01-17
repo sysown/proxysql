@@ -27,8 +27,8 @@ NL2SQL (Natural Language to SQL) is a ProxySQL feature that converts natural lan
 
 ```sql
 -- Via admin interface
-SET ai_nl2sql_enabled='true';
-LOAD MYSQL VARIABLES TO RUNTIME;
+SET genai-nl2sql_enabled='true';
+LOAD GENAI VARIABLES TO RUNTIME;
 ```
 
 ### 2. Configure LLM Provider
@@ -40,31 +40,31 @@ ProxySQL uses a **generic provider configuration** that supports any OpenAI-comp
 Ollama is used via its OpenAI-compatible endpoint:
 
 ```sql
-SET ai_nl2sql_provider='openai';
-SET ai_nl2sql_provider_url='http://localhost:11434/v1/chat/completions';
-SET ai_nl2sql_provider_model='llama3.2';
-SET ai_nl2sql_provider_key='';  -- Empty for local Ollama
-LOAD MYSQL VARIABLES TO RUNTIME;
+SET genai-nl2sql_provider='openai';
+SET genai-nl2sql_provider_url='http://localhost:11434/v1/chat/completions';
+SET genai-nl2sql_provider_model='llama3.2';
+SET genai-nl2sql_provider_key='';  -- Empty for local Ollama
+LOAD GENAI VARIABLES TO RUNTIME;
 ```
 
 **Using OpenAI:**
 
 ```sql
-SET ai_nl2sql_provider='openai';
-SET ai_nl2sql_provider_url='https://api.openai.com/v1/chat/completions';
-SET ai_nl2sql_provider_model='gpt-4o-mini';
-SET ai_nl2sql_provider_key='sk-...';
-LOAD MYSQL VARIABLES TO RUNTIME;
+SET genai-nl2sql_provider='openai';
+SET genai-nl2sql_provider_url='https://api.openai.com/v1/chat/completions';
+SET genai-nl2sql_provider_model='gpt-4o-mini';
+SET genai-nl2sql_provider_key='sk-...';
+LOAD GENAI VARIABLES TO RUNTIME;
 ```
 
 **Using Anthropic:**
 
 ```sql
-SET ai_nl2sql_provider='anthropic';
-SET ai_nl2sql_provider_url='https://api.anthropic.com/v1/messages';
-SET ai_nl2sql_provider_model='claude-3-haiku';
-SET ai_nl2sql_provider_key='sk-ant-...';
-LOAD MYSQL VARIABLES TO RUNTIME;
+SET genai-nl2sql_provider='anthropic';
+SET genai-nl2sql_provider_url='https://api.anthropic.com/v1/messages';
+SET genai-nl2sql_provider_model='claude-3-haiku';
+SET genai-nl2sql_provider_key='sk-ant-...';
+LOAD GENAI VARIABLES TO RUNTIME;
 ```
 
 **Using any OpenAI-compatible endpoint:**
@@ -72,22 +72,24 @@ LOAD MYSQL VARIABLES TO RUNTIME;
 This works with **any** OpenAI-compatible API (vLLM, LM Studio, Z.ai, etc.):
 
 ```sql
-SET ai_nl2sql_provider='openai';
-SET ai_nl2sql_provider_url='https://your-endpoint.com/v1/chat/completions';
-SET ai_nl2sql_provider_model='your-model-name';
-SET ai_nl2sql_provider_key='your-api-key';  -- Empty for local endpoints
-LOAD MYSQL VARIABLES TO RUNTIME;
+SET genai-nl2sql_provider='openai';
+SET genai-nl2sql_provider_url='https://your-endpoint.com/v1/chat/completions';
+SET genai-nl2sql_provider_model='your-model-name';
+SET genai-nl2sql_provider_key='your-api-key';  -- Empty for local endpoints
+LOAD GENAI VARIABLES TO RUNTIME;
 ```
 
 ### 3. Use NL2SQL
 
 ```sql
--- In your SQL client, prefix your query with "NL2SQL:"
-mysql> SELECT * FROM runtime_mysql_servers WHERE variable_name='ai_nl2sql_enabled';
+-- Verify NL2SQL is enabled (run this in the Admin interface)
+SHOW VARIABLES LIKE 'genai-nl2sql%';
 
--- Query converted to SQL
+-- Use NL2SQL in your MySQL client (MySQL module, not Admin)
 mysql> NL2SQL: Show top 10 customers by revenue;
 ```
+
+**Important**: NL2SQL queries are executed in the **MySQL module** (your regular SQL client), not in the ProxySQL Admin interface. The Admin interface is only for configuration.
 
 ## Configuration
 
@@ -95,14 +97,14 @@ mysql> NL2SQL: Show top 10 customers by revenue;
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ai_nl2sql_enabled` | true | Enable/disable NL2SQL |
-| `ai_nl2sql_query_prefix` | NL2SQL: | Prefix for NL2SQL queries |
-| `ai_nl2sql_provider` | openai | Provider format: `openai` or `anthropic` |
-| `ai_nl2sql_provider_url` | http://localhost:11434/v1/chat/completions | Endpoint URL |
-| `ai_nl2sql_provider_model` | llama3.2 | Model name |
-| `ai_nl2sql_provider_key` | (none) | API key (optional for local endpoints) |
-| `ai_nl2sql_cache_similarity_threshold` | 85 | Semantic similarity threshold (0-100) |
-| `ai_nl2sql_timeout_ms` | 30000 | LLM request timeout in milliseconds |
+| `genai-nl2sql_enabled` | false | Enable/disable NL2SQL |
+| `genai-nl2sql_query_prefix` | NL2SQL: | Prefix for NL2SQL queries |
+| `genai-nl2sql_provider` | openai | Provider format: `openai` or `anthropic` |
+| `genai-nl2sql_provider_url` | http://localhost:11434/v1/chat/completions | Endpoint URL |
+| `genai-nl2sql_provider_model` | llama3.2 | Model name |
+| `genai-nl2sql_provider_key` | (none) | API key (optional for local endpoints) |
+| `genai-nl2sql_cache_similarity_threshold` | 85 | Semantic similarity threshold (0-100) |
+| `genai-nl2sql_timeout_ms` | 30000 | LLM request timeout in milliseconds |
 
 ### Request Configuration (Advanced)
 
@@ -156,7 +158,7 @@ This allows tracing a single request through all log lines for debugging.
 
 The system automatically selects the best model based on:
 
-1. **Provider format**: Uses `ai_nl2sql_provider` setting (openai or anthropic)
+1. **Provider format**: Uses `genai-nl2sql_provider` setting (openai or anthropic)
 2. **API key availability**: For cloud endpoints, API key is required
 3. **Local endpoints**: API key is optional for local endpoints (localhost, 127.0.0.1)
 
@@ -285,12 +287,14 @@ NL2SQL [request-id]: Request succeeded after 1 retries
 
 1. **Try a different model:**
    ```sql
-   SET ai_nl2sql_provider_model='gpt-4o';
+   SET genai-nl2sql_provider_model='gpt-4o';
+   LOAD GENAI VARIABLES TO RUNTIME;
    ```
 
 2. **Increase timeout for complex queries:**
    ```sql
-   SET ai_nl2sql_timeout_ms=60000;
+   SET genai-nl2sql_timeout_ms=60000;
+   LOAD GENAI VARIABLES TO RUNTIME;
    ```
 
 3. **Check confidence score:**
@@ -305,7 +309,7 @@ NL2SQL [request-id]: Request succeeded after 1 retries
 -- TODO: Add cache clearing command
 
 -- Check cache stats
-SELECT * FROM stats_ai_nl2sql_cache;
+SHOW STATUS LIKE 'genai-nl2sql%';
 ```
 
 ## Performance
@@ -319,7 +323,7 @@ SELECT * FROM stats_ai_nl2sql_cache;
 **Tips for better performance:**
 - Use local Ollama for faster responses
 - Enable caching for repeated queries
-- Use `ai_nl2sql_timeout_ms` to limit wait time
+- Use `genai-nl2sql_timeout_ms` to limit wait time
 - Consider pre-warming cache with common queries
 
 ## Security

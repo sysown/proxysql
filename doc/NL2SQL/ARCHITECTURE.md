@@ -7,17 +7,46 @@ Client Query (NL2SQL: ...)
     ↓
 MySQL_Session (detects prefix)
     ↓
-AI_Features_Manager::get_nl2sql()
+Convert to JSON: {"type": "nl2sql", "query": "...", "schema": "..."}
     ↓
-NL2SQL_Converter::convert()
-    ├─ check_vector_cache()  ← sqlite-vec similarity search
-    ├─ build_prompt()         ← Schema context via MySQL_Tool_Handler
-    ├─ select_model()         ← Ollama/OpenAI/Anthropic selection
-    ├─ call_llm_api()         ← libcurl HTTP request
-    └─ validate_sql()         ← Keyword validation
+GenAI Module (async via socketpair)
+    ├─ GenAI worker thread processes request
+    └─ AI_Features_Manager::get_nl2sql()
+        ↓
+    NL2SQL_Converter::convert()
+        ├─ check_vector_cache()  ← sqlite-vec similarity search
+        ├─ build_prompt()         ← Schema context via MySQL_Tool_Handler
+        ├─ select_model()         ← Ollama/OpenAI/Anthropic selection
+        ├─ call_llm_api()         ← libcurl HTTP request
+        └─ validate_sql()         ← Keyword validation
+        ↓
+    Async response back to MySQL_Session
     ↓
 Return Resultset (sql_query, confidence, ...)
 ```
+
+**Important**: NL2SQL uses an **asynchronous, non-blocking architecture**. The MySQL thread is not blocked while waiting for the LLM response. The request is sent via socketpair to the GenAI module, which processes it in a worker thread and delivers the result asynchronously.
+
+## Async Flow Details
+
+1. **MySQL Thread** (non-blocking):
+   - Detects `NL2SQL:` prefix
+   - Constructs JSON: `{"type": "nl2sql", "query": "...", "schema": "..."}`
+   - Creates socketpair for async communication
+   - Sends request to GenAI module immediately
+   - Returns to handle other queries
+
+2. **GenAI Worker Thread**:
+   - Receives request via socketpair
+   - Calls `process_json_query()` with nl2sql operation type
+   - Invokes `NL2SQL_Converter::convert()`
+   - Processes LLM response (HTTP via libcurl)
+   - Sends result back via socketpair
+
+3. **Response Delivery**:
+   - MySQL thread receives notification via epoll
+   - Retrieves result from socketpair
+   - Builds resultset and sends to client
 
 ## Components
 
