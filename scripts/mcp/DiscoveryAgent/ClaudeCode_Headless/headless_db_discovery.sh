@@ -188,7 +188,7 @@ elif [ -n "$MCP_FILE" ]; then
 fi
 
 # Log the command being executed
-log_info "Running Claude Code in headless mode with 4-agent discovery..."
+log_info "Running Claude Code in headless mode with 6-agent discovery..."
 log_verbose "Timeout: ${TIMEOUT}s"
 
 # Build Claude command

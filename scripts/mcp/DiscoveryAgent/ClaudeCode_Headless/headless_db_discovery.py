@@ -156,7 +156,7 @@ def run_discovery(args):
         log_error(str(e))
         sys.exit(1)
 
-    log_info("Running Claude Code in headless mode with 4-agent discovery...")
+    log_info("Running Claude Code in headless mode with 6-agent discovery...")
     log_verbose(f"Timeout: {args.timeout}s", args.verbose)
     if args.database:
         log_verbose(f"Target database: {args.database}", args.verbose)
