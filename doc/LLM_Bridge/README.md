@@ -458,17 +458,6 @@ For system architecture details, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 For testing information, see [TESTING.md](TESTING.md).
 
-## Version History
-
-- **1.0.0** (2025-01-17): Converted from NL2SQL to generic LLM Bridge
-  - Renamed from NL2SQL_Converter to LLM_Bridge
-  - Changed prefix from `/* NL2SQL: */` to `/* LLM: */`
-  - Removed SQL-specific fields (sql_query, confidence, tables_used)
-  - Added generic text_response field
-  - Updated all genai_nl2sql_* variables to genai_llm_*
-- **0.2.0** (2025-01-16): NL2SQL with structured errors and retry logic
-- **0.1.0** (2025-01-16): Initial NL2SQL release
-
 ## License
 
 This feature is part of ProxySQL and follows the same license.
