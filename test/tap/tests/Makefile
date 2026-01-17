@@ -295,4 +295,3 @@ clean:
 	rm -f generate_set_session_csv set_testing-240.csv || true
 	rm -f setparser_test setparser_test2 setparser_test3  || true
 	rm -f reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper || true
-	rm -f *.gcda *.gcno || true

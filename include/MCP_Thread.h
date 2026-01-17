@@ -16,6 +16,7 @@ class Query_Tool_Handler;
 class Admin_Tool_Handler;
 class Cache_Tool_Handler;
 class Observe_Tool_Handler;
+class AI_Tool_Handler;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -100,6 +101,7 @@ public:
 	Admin_Tool_Handler* admin_tool_handler;
 	Cache_Tool_Handler* cache_tool_handler;
 	Observe_Tool_Handler* observe_tool_handler;
+	AI_Tool_Handler* ai_tool_handler;
 
 
 	/**
