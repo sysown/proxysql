@@ -143,6 +143,15 @@ python ./headless_db_discovery.py --verbose
 - Prompt improvement suggestions for future runs
 - Evolution history tracking
 
+### 7. Question Catalogs ✨
+- **90+ Answerable Questions** across all agents (minimum 15-20 per agent)
+- **Executable Answer Plans** for each question using MCP tools
+- **Question Templates** with structured answer formats
+- **Cross-Domain Questions** requiring multiple agents
+- **Complexity Ratings** (LOW/MEDIUM/HIGH) with time estimates
+
+Each agent generates a catalog of questions they can answer about the database, with step-by-step plans for how to answer each question using MCP tools. This creates a reusable knowledge base for future LLM interactions.
+
 ## Output Format
 
 The generated report includes:
@@ -209,6 +218,129 @@ Additionally, a separate **META ANALYSIS** document is generated with:
 - Specific prompt improvement suggestions
 - Gap identification
 - Evolution history
+
+## Question Catalogs
+
+In addition to the analysis reports, each agent generates a **Question Catalog** - a knowledge base of questions the agent can answer about the database, with executable plans for how to answer each question.
+
+### What Are Question Catalogs?
+
+A Question Catalog contains:
+- **90+ questions** across all agents (minimum 15-20 per agent)
+- **Executable answer plans** using specific MCP tools
+- **Answer templates** with structured output formats
+- **Complexity ratings** (LOW/MEDIUM/HIGH)
+- **Time estimates** for answering each question
+
+### Question Catalog Structure
+
+```markdown
+# {AGENT} QUESTION CATALOG
+
+## Metadata
+- Agent: {STRUCTURAL|STATISTICAL|SEMANTIC|QUERY|SECURITY}
+- Database: {database_name}
+- Questions Generated: {count}
+
+## Questions by Category
+
+### Category 1: {Category Name}
+
+#### Q1. {Question Template}
+**Question Type:** factual|analytical|comparative|predictive|recommendation
+
+**Example Questions:**
+- "What tables exist in the database?"
+- "What columns does table X have?"
+
+**Answer Plan:**
+1. Step 1: Use `list_tables` to get all tables
+2. Step 2: Use `describe_table` to get column details
+3. Output: Structured list with table names and column details
+
+**Answer Template:**
+Based on the schema analysis:
+- Table 1: {columns}
+- Table 2: {columns}
+```
+
+### Question Catalog Examples
+
+#### STRUCTURAL Agent Questions
+- "What tables exist in the database?"
+- "How are tables X and Y related?"
+- "What indexes exist on table X?"
+- "What constraints are defined on table X?"
+
+#### STATISTICAL Agent Questions
+- "How many rows does table X have?"
+- "What is the distribution of values in column X?"
+- "Are there any outliers in column X?"
+- "What percentage of values are null in column X?"
+
+#### SEMANTIC Agent Questions
+- "What type of system is this database for?"
+- "What does table X represent?"
+- "What business rules are enforced?"
+- "What does term X mean in this domain?"
+
+#### QUERY Agent Questions
+- "Why is query X slow?"
+- "What indexes would improve query X?"
+- "How can I optimize query X?"
+- "What is the most efficient join path?"
+
+#### SECURITY Agent Questions
+- "What sensitive data exists in table X?"
+- "Where is PII stored?"
+- "What security vulnerabilities exist?"
+- "Does this database comply with GDPR?"
+
+#### Cross-Domain Questions (META Agent)
+- "What are the security implications of query performance issues?"
+- "How does data quality affect business intelligence?"
+- "What is the cost-benefit of proposed optimizations?"
+
+### Using Question Catalogs
+
+Question catalogs enable:
+1. **Fast Answers:** Pre-validated plans skip analysis phase
+2. **Consistent Quality:** All answers follow proven templates
+3. **Tool Reuse:** Efficient MCP tool usage patterns
+4. **Comprehensive Coverage:** 90+ questions cover most user needs
+
+Example workflow:
+```bash
+# User asks: "What sensitive data exists in the customers table?"
+
+# System retrieves from SECURITY question catalog:
+# - Question template: "What sensitive data exists in table X?"
+# - Answer plan: sample_rows + column_profile on customers
+# - Answer template: Structured list with sensitivity classification
+
+# System executes plan and returns formatted answer
+```
+
+### Minimum Questions Per Agent
+
+| Agent | Minimum Questions | High-Complexity Target |
+|-------|-------------------|----------------------|
+| STRUCTURAL | 20 | 5 |
+| STATISTICAL | 20 | 5 |
+| SEMANTIC | 15 | 3 |
+| QUERY | 20 | 5 |
+| SECURITY | 15 | 5 |
+| **TOTAL** | **90+** | **23+** |
+
+### Stored In Catalog
+
+All question catalogs are stored in the MCP catalog for easy retrieval:
+- `kind="question_catalog"`, `key="structural_questions"`
+- `kind="question_catalog"`, `key="statistical_questions"`
+- `kind="question_catalog"`, `key="semantic_questions"`
+- `kind="question_catalog"`, `key="query_questions"`
+- `kind="question_catalog"`, `key="security_questions"`
+- `kind="question_catalog"`, `key="cross_domain_questions"`
 
 ## Command-Line Options
 

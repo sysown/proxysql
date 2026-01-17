@@ -36,16 +36,20 @@ Perform comprehensive database discovery through 6 collaborating subagents using
 
 ### Round 4: Final Synthesis
 - All 5 analysis agents collaborate to synthesize findings into comprehensive report
+- Each agent ALSO generates their QUESTION CATALOG (see below)
 - Write: `kind="final_report"`, `key="comprehensive_database_discovery_report"`
+- Write: `kind="question_catalog"`, `key="{agent}_questions"` for each agent
 - Also create local file: `database_discovery_report.md`
 - META agent does NOT participate in this round
 
 ### Round 5: Meta Analysis (META Agent Only)
 - META agent reads the complete final report from catalog
 - Analyzes each section for depth, completeness, and quality
+- Reads all question catalogs and synthesizes cross-domain questions
 - Identifies gaps, missed opportunities, or areas for improvement
 - Suggests specific prompt improvements for future discovery runs
 - Write: `kind="meta_analysis"`, `key="prompt_improvement_suggestions"`
+- Write: `kind="question_catalog"`, `key="cross_domain_questions"`
 
 ## Report Structure (Required)
 
@@ -211,6 +215,255 @@ The META agent must:
 
 6. Rate overall quality and provide summary
 
+## Question Catalog Generation
+
+**CRITICAL:** Each of the 5 analysis agents MUST generate a Question Catalog at the end of Round 4.
+
+### Purpose
+
+The Question Catalog is a knowledge base of:
+1. **What questions can be answered** about this database based on the agent's discovery
+2. **How to answer each question** - with executable plans using MCP tools
+
+This enables future LLM interactions to quickly provide accurate, evidence-based answers by following pre-validated question templates.
+
+### Question Catalog Format
+
+Each agent must write their catalog to `kind="question_catalog"` with their agent name as the key:
+
+```markdown
+# {AGENT} QUESTION CATALOG
+
+## Metadata
+- **Agent:** {STRUCTURAL|STATISTICAL|SEMANTIC|QUERY|SECURITY}
+- **Database:** {database_name}
+- **Schema:** {schema_name}
+- **Questions Generated:** {count}
+- **Date:** {discovery_date}
+
+## Questions by Category
+
+### Category 1: {Category Name}
+
+#### Q1. {Question Template}
+**Question Type:** {factual|analytical|comparative|predictive|recommendation}
+
+**Example Questions:**
+- "{specific question 1}"
+- "{specific question 2}"
+- "{specific question 3}"
+
+**Answer Plan:**
+1. **Step 1:** {what to do}
+   - Tools: `{tool1}`, `{tool2}`
+   - Output: {what this step produces}
+
+2. **Step 2:** {what to do}
+   - Tools: `{tool1}`
+   - Output: {what this step produces}
+
+3. **Step N:** {final step}
+   - Tools: `{toolN}`
+   - Output: {final answer format}
+
+**Answer Template:**
+```markdown
+{Provide a template for how the answer should be structured}
+
+Based on the analysis:
+- {Finding 1}: {value/evidence}
+- {Finding 2}: {value/evidence}
+- {Finding 3}: {value/evidence}
+
+Conclusion: {summary statement}
+```
+
+**Data Sources:**
+- Tables: `{table1}`, `{table2}`
+- Columns: `{column1}`, `{column2}`
+- Key Constraints: {any relevant constraints}
+
+**Complexity:** {LOW|MEDIUM|HIGH}
+**Estimated Time:** {approximate time to answer}
+
+---
+
+#### Q2. {Question Template}
+... (repeat format for each question)
+
+### Category 2: {Category Name}
+... (repeat for each category)
+
+## Cross-Reference to Other Agents
+
+**Collaboration with:**
+- **{OTHER_AGENT}**: For questions involving {cross-domain topic}
+  - Example: "{example cross-domain question}"
+  - Plan: Combine {my tools} with {their tools}
+
+## Question Statistics
+
+| Category | Question Count | Complexity Distribution |
+|----------|---------------|-------------------------|
+| {Cat1} | {count} | Low: {n}, Medium: {n}, High: {n} |
+| {Cat2} | {count} | Low: {n}, Medium: {n}, High: {n} |
+| **TOTAL** | **{total}** | **Low: {n}, Medium: {n}, High: {n}** |
+```
+
+### Agent-Specific Question Categories
+
+#### STRUCTURAL Agent Categories
+
+1. **Schema Inventory Questions**
+   - "What tables exist in the database?"
+   - "What columns does table X have?"
+   - "What are the data types used?"
+
+2. **Relationship Questions**
+   - "How are tables X and Y related?"
+   - "What are all foreign key relationships?"
+   - "What is the primary key of table X?"
+
+3. **Index Questions**
+   - "What indexes exist on table X?"
+   - "Is column Y indexed?"
+   - "What indexes are missing?"
+
+4. **Constraint Questions**
+   - "What constraints are defined on table X?"
+   - "Are there any unique constraints?"
+   - "What are the check constraints?"
+
+#### STATISTICAL Agent Categories
+
+1. **Volume Questions**
+   - "How many rows does table X have?"
+   - "What is the size of table X?"
+   - "Which tables are largest?"
+
+2. **Distribution Questions**
+   - "What are the distinct values in column X?"
+   - "What is the distribution of values in column X?"
+   - "Are there any outliers in column X?"
+
+3. **Quality Questions**
+   - "What percentage of values are null in column X?"
+   - "Are there any duplicate records?"
+   - "What is the data quality score?"
+
+4. **Aggregation Questions**
+   - "What is the average/sum/min/max of column X?"
+   - "How many records match condition Y?"
+   - "What are the top N values by metric Z?"
+
+#### SEMANTIC Agent Categories
+
+1. **Domain Questions**
+   - "What type of system is this database for?"
+   - "What business domain does this serve?"
+   - "What are the main business entities?"
+
+2. **Entity Questions**
+   - "What does table X represent?"
+   - "What is the business meaning of column Y?"
+   - "How is entity X used in the business?"
+
+3. **Rule Questions**
+   - "What business rules are enforced?"
+   - "What is the lifecycle of entity X?"
+   - "What states can entity X be in?"
+
+4. **Terminology Questions**
+   - "What does term X mean in this domain?"
+   - "How is term X different from term Y?"
+
+#### QUERY Agent Categories
+
+1. **Performance Questions**
+   - "Why is query X slow?"
+   - "What indexes would improve query X?"
+   - "What is the execution plan for query X?"
+
+2. **Optimization Questions**
+   - "How can I optimize query X?"
+   - "What composite indexes would help?"
+   - "What is the query performance score?"
+
+3. **Pattern Questions**
+   - "What are the common query patterns?"
+   - "What queries are run most frequently?"
+   - "What N+1 problems exist?"
+
+4. **Join Questions**
+   - "How do I join tables X and Y?"
+   - "What is the most efficient join path?"
+   - "What are the join opportunities?"
+
+#### SECURITY Agent Categories
+
+1. **Sensitive Data Questions**
+   - "What sensitive data exists in table X?"
+   - "Where is PII stored?"
+   - "What columns contain credentials?"
+
+2. **Access Questions**
+   - "Who has access to table X?"
+   - "What are the access control patterns?"
+   - "Is data properly restricted?"
+
+3. **Vulnerability Questions**
+   - "What security vulnerabilities exist?"
+   - "Are there SQL injection risks?"
+   - "Is sensitive data encrypted?"
+
+4. **Compliance Questions**
+   - "Does this database comply with GDPR?"
+   - "What PCI-DSS requirements are met?"
+   - "What audit trails exist?"
+
+### Minimum Question Requirements
+
+Each agent must generate at least:
+
+| Agent | Minimum Questions | Target High-Complexity |
+|-------|-------------------|----------------------|
+| STRUCTURAL | 20 | 5 |
+| STATISTICAL | 20 | 5 |
+| SEMANTIC | 15 | 3 |
+| QUERY | 20 | 5 |
+| SECURITY | 15 | 5 |
+
+### META Agent Question Catalog
+
+The META agent generates a **Cross-Domain Question Catalog** that:
+
+1. **Synthesizes questions from all agents** into cross-domain categories
+2. **Identifies questions that require multiple agents** to answer
+3. **Creates composite question plans** that combine tools from multiple agents
+
+Example cross-domain question:
+```markdown
+#### Q. "What are the security implications of the query performance issues?"
+
+**Agents Required:** QUERY + SECURITY
+
+**Answer Plan:**
+1. QUERY: Identify slow queries using `explain_sql` and `run_sql_readonly`
+2. SECURITY: Check if slow queries access sensitive data using `sample_rows`
+3. QUERY + SECURITY: Assess if performance optimizations might expose data
+4. SECURITY: Document risk level and mitigation strategies
+
+**Output:** Security assessment of query performance with risk ratings
+```
+
+### Question Catalog Quality Standards
+
+- **Specific:** Questions must be specific and answerable
+- **Actionable:** Plans must use actual MCP tools available
+- **Complete:** Plans must include all steps from tool use to final answer
+- **Evidence-Based:** Answers must reference actual database findings
+- **Templated:** Answers must follow a clear, repeatable format
+
 ## Quality Standards
 
 | Dimension | Score (0-10) |
@@ -257,12 +510,24 @@ TodoWrite([
 4. **QUANTIFIED IMPACT**: Include expected improvements with numbers
 5. **PRIORITIZED**: Always prioritize (URGENT → HIGH → MODERATE → LOW)
 6. **CONSTRUCTIVE META**: META agent provides actionable, specific improvements
+7. **QUESTION CATALOGS**: Each agent MUST generate a question catalog with executable answer plans
 
 ## Output Locations
 
+**Analysis Reports:**
 1. MCP Catalog: `kind="final_report"`, `key="comprehensive_database_discovery_report"`
-2. MCP Catalog: `kind="meta_analysis"`, `key="prompt_improvement_suggestions"`
-3. Local file: `database_discovery_report.md` (use Write tool)
+2. Local file: `database_discovery_report.md` (use Write tool)
+
+**Meta Analysis:**
+3. MCP Catalog: `kind="meta_analysis"`, `key="prompt_improvement_suggestions"`
+
+**Question Catalogs (NEW):**
+4. MCP Catalog: `kind="question_catalog"`, `key="structural_questions"`
+5. MCP Catalog: `kind="question_catalog"`, `key="statistical_questions"`
+6. MCP Catalog: `kind="question_catalog"`, `key="semantic_questions"`
+7. MCP Catalog: `kind="question_catalog"`, `key="query_questions"`
+8. MCP Catalog: `kind="question_catalog"`, `key="security_questions"`
+9. MCP Catalog: `kind="question_catalog"`, `key="cross_domain_questions"`
 
 ---
 
