@@ -3,6 +3,36 @@
 ## Mission
 Perform comprehensive database discovery through 6 collaborating subagents using ONLY MCP server tools (`mcp__proxysql-stdio__*`). Output: Single comprehensive markdown report.
 
+## ⚠️ CRITICAL: MCP CATALOG USAGE
+
+**ALL agent findings MUST be stored in the MCP catalog using `catalog_upsert`.**
+
+**DO NOT use the Write tool to create separate markdown files for individual agent discoveries.**
+
+- Round 1-3 findings: Use `catalog_upsert` ONLY
+- Round 4 final report: Use both `catalog_upsert` AND Write tool (for the single consolidated report)
+- Round 5 meta analysis: Use `catalog_upsert` ONLY
+
+**WRONG:** Using Write tool for each agent's findings creates multiple markdown files
+**RIGHT:** All findings go to MCP catalog, only final report is written to file
+
+Example correct usage:
+```python
+# After discovery, write to catalog
+catalog_upsert(
+    kind="structural",  # or statistical, semantic, query, security, meta_analysis, question_catalog
+    key="round1_discovery",
+    document="## Findings in markdown..."
+)
+```
+
+Only in Round 4 Final Synthesis:
+```python
+# Write the consolidated report to catalog AND file
+catalog_upsert(kind="final_report", key="comprehensive_database_discovery_report", document="...")
+Write("database_discovery_report.md", content="...")
+```
+
 ## Agent Roles
 
 | Agent | Focus | Key Tools |
@@ -19,27 +49,43 @@ Perform comprehensive database discovery through 6 collaborating subagents using
 ### Round 1: Blind Exploration (Parallel)
 - Launch all 5 analysis agents simultaneously (STRUCTURAL, STATISTICAL, SEMANTIC, QUERY, SECURITY)
 - Each explores independently using their tools
-- Write findings to catalog: `kind="structural|statistical|semantic|query|security"`, `key="round1_*"`
+- **CRITICAL:** Write findings to MCP catalog using `catalog_upsert`:
+  - Use `kind="structural"`, `key="round1_discovery"` for STRUCTURAL
+  - Use `kind="statistical"`, `key="round1_discovery"` for STATISTICAL
+  - Use `kind="semantic"`, `key="round1_discovery"` for SEMANTIC
+  - Use `kind="query"`, `key="round1_discovery"` for QUERY
+  - Use `kind="security"`, `key="round1_discovery"` for SECURITY
+- **DO NOT** use Write tool to create separate files
 - META agent does NOT participate in this round
 
 ### Round 2: Collaborative Analysis
 - All 5 analysis agents read each other's findings via `catalog_search`
 - Identify cross-cutting patterns and anomalies
-- Write collaborative findings: `kind="collaborative_round2"`
+- **CRITICAL:** Write collaborative findings to MCP catalog using `catalog_upsert`:
+  - Use `kind="collaborative_round2"` with appropriate keys
+- **DO NOT** use Write tool to create separate files
 - META agent does NOT participate in this round
 
 ### Round 3: Hypothesis Testing
 - Each of the 5 analysis agents validates 3-4 specific hypotheses
 - Document: hypothesis, test method, result (PASS/FAIL), evidence
-- Write: `kind="validation_round3"`
+- **CRITICAL:** Write validation results to MCP catalog using `catalog_upsert`:
+  - Use `kind="validation_round3"` with keys like `round3_{agent}_validation`
+- **DO NOT** use Write tool to create separate files
 - META agent does NOT participate in this round
 
 ### Round 4: Final Synthesis
 - All 5 analysis agents collaborate to synthesize findings into comprehensive report
 - Each agent ALSO generates their QUESTION CATALOG (see below)
-- Write: `kind="final_report"`, `key="comprehensive_database_discovery_report"`
-- Write: `kind="question_catalog"`, `key="{agent}_questions"` for each agent
-- Also create local file: `database_discovery_report.md`
+- **CRITICAL:** Write the following to MCP catalog using `catalog_upsert`:
+  - `kind="final_report"`, `key="comprehensive_database_discovery_report"` - the main report
+  - `kind="question_catalog"`, `key="structural_questions"` - STRUCTURAL questions
+  - `kind="question_catalog"`, `key="statistical_questions"` - STATISTICAL questions
+  - `kind="question_catalog"`, `key="semantic_questions"` - SEMANTIC questions
+  - `kind="question_catalog"`, `key="query_questions"` - QUERY questions
+  - `kind="question_catalog"`, `key="security_questions"` - SECURITY questions
+- **ONLY FOR THE FINAL REPORT:** Use Write tool to create local file: `database_discovery_report.md`
+- **DO NOT** use Write tool for individual agent findings or question catalogs
 - META agent does NOT participate in this round
 
 ### Round 5: Meta Analysis (META Agent Only)
@@ -48,8 +94,10 @@ Perform comprehensive database discovery through 6 collaborating subagents using
 - Reads all question catalogs and synthesizes cross-domain questions
 - Identifies gaps, missed opportunities, or areas for improvement
 - Suggests specific prompt improvements for future discovery runs
-- Write: `kind="meta_analysis"`, `key="prompt_improvement_suggestions"`
-- Write: `kind="question_catalog"`, `key="cross_domain_questions"`
+- **CRITICAL:** Write to MCP catalog using `catalog_upsert`:
+  - `kind="meta_analysis"`, `key="prompt_improvement_suggestions"` - meta analysis
+  - `kind="question_catalog"`, `key="cross_domain_questions"` - cross-domain questions
+- **DO NOT** use Write tool - meta analysis stays in catalog only
 
 ## Report Structure (Required)
 
@@ -505,12 +553,21 @@ TodoWrite([
 ## Critical Constraints
 
 1. **MCP-ONLY**: Use `mcp__proxysql-stdio__*` tools exclusively
-2. **EVIDENCE-BASED**: All claims backed by database evidence
-3. **SPECIFIC RECOMMENDATIONS**: Provide exact SQL for all changes
-4. **QUANTIFIED IMPACT**: Include expected improvements with numbers
-5. **PRIORITIZED**: Always prioritize (URGENT → HIGH → MODERATE → LOW)
-6. **CONSTRUCTIVE META**: META agent provides actionable, specific improvements
-7. **QUESTION CATALOGS**: Each agent MUST generate a question catalog with executable answer plans
+2. **CATALOG FOR FINDINGS**: ALL agent findings MUST be written to MCP catalog using `catalog_upsert` - NEVER use Write tool for individual agent discoveries
+3. **NO INTERMEDIATE FILES**: DO NOT create separate markdown files for each agent's findings - only the final synthesis should be written to a local file
+4. **EVIDENCE-BASED**: All claims backed by database evidence
+5. **SPECIFIC RECOMMENDATIONS**: Provide exact SQL for all changes
+6. **QUANTIFIED IMPACT**: Include expected improvements with numbers
+7. **PRIORITIZED**: Always prioritize (URGENT → HIGH → MODERATE → LOW)
+8. **CONSTRUCTIVE META**: META agent provides actionable, specific improvements
+9. **QUESTION CATALOGS**: Each agent MUST generate a question catalog with executable answer plans
+
+**IMPORTANT - Catalog Usage Rules:**
+- Use `catalog_upsert(kind="agent_type", key="specific_key", document="markdown")` for ALL findings
+- Use `catalog_search(kind="agent_type", query="terms")` to READ other agents' findings
+- Use `catalog_get(kind="agent_type", key="specific_key")` to retrieve specific findings
+- ONLY Round 4 Final Synthesis writes to local file using Write tool
+- DO NOT use Write tool for individual agent discoveries in Rounds 1-3
 
 ## Output Locations
 
