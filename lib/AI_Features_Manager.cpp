@@ -1,4 +1,5 @@
 #include "AI_Features_Manager.h"
+#include "GenAI_Thread.h"
 #include "NL2SQL_Converter.h"
 #include "Anomaly_Detector.h"
 #include "sqlite3db.h"
@@ -241,7 +242,7 @@ void AI_Features_Manager::close_anomaly_detector() {
 int AI_Features_Manager::init() {
 	proxy_info("AI: Initializing AI Features Manager v%s\n", AI_FEATURES_MANAGER_VERSION);
 
-	if (!variables.ai_features_enabled) {
+	if (!GloGATH || !GloGATH->variables.genai_enabled) {
 		proxy_info("AI: AI features disabled by configuration\n");
 		return 0;
 	}
