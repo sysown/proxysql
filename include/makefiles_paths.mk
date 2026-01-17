@@ -93,19 +93,15 @@ LIBSCRAM_PATH := $(DEPS_PATH)/libscram
 LIBSCRAM_IDIR := $(LIBSCRAM_PATH)/include
 LIBSCRAM_LDIR := $(LIBSCRAM_PATH)/lib
 
-ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp
-ABSL_ROOT := $(ABSL_PATH)/local
-ABSL_IDIR := $(ABSL_ROOT)/include
-ABSL_LDIR := $(ABSL_ROOT)/lib
+ABSL_IDIR := /usr/include
+ABSL_LDIR := /usr/lib
 
-PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf
-PROTOBUF_ROOT := $(PROTOBUF_PATH)/local
-PROTOBUF_IDIR := $(PROTOBUF_ROOT)/include
-PROTOBUF_LDIR := $(PROTOBUF_ROOT)/lib
+PROTOBUF_IDIR := /usr/include
+PROTOBUF_LDIR := /usr/lib
 
-OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp
-OTEL_ROOT := $(OTEL_PATH)/local
-OTEL_IDIR := $(OTEL_ROOT)/include
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp-1.21.0
+OTEL_ROOT := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp/local
+OTEL_IDIR := $(OTEL_PATH)/api/include:$(OTEL_PATH)/sdk/include:$(OTEL_PATH)/ext/include:$(OTEL_PATH)/exporters/otlp/include:$(OTEL_PATH)/exporters/ostream/include
 OTEL_LDIR := $(OTEL_ROOT)/lib
 
 OTEL_PROTO_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-proto

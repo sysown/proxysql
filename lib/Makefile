@@ -28,7 +28,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(ABSL_IDIR) \
 			-I$(PROTOBUF_IDIR) \
-			-I$(OTEL_IDIR) \
+			$(patsubst %,-I%,$(subst :, ,$(OTEL_IDIR))) \
 			-I$(SSL_IDIR) \
 
 ifeq ($(UNAME_S),Linux)
