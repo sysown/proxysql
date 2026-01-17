@@ -1047,43 +1047,39 @@ void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, 
 	free(varnames);
 }
 
-void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch) {
+void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d\n", replace);
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
-	char* q = (char*)"SELECT substr(variable_name,7) vn, variable_value FROM global_variables WHERE variable_name LIKE 'genai-%'";
+	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'genai-%'";
 	admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", q, error);
 		return;
 	}
 	if (resultset) {
-		// Set variables in GloGATH's internal state
-		GloGATH->wrlock();
+		if (lock) wrlock();
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
-			const char* value = r->fields[1];
-			bool rc = GloGATH->set_variable(r->fields[0], value);
-			if (rc == false) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0], value);
-			}
-			else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0], value);
-			}
+			char* name = r->fields[0];
+			char* val = r->fields[1];
+			// Skip the 'genai-' prefix
+			char* var_name = name + 6;
+			GloGATH->set_variable(var_name, val);
 		}
 
-		// Populate runtime_global_variables table
+		// Populate runtime_global_variables
 		{
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			GloGATH->wrunlock();  // Release outer lock before calling runtime_to_database
+			wrunlock();  // Release outer lock before calling runtime_to_database
 			flush_genai_variables___runtime_to_database(admindb, false, false, false, true, true);
-			GloGATH->wrlock();  // Re-acquire outer lock
+			wrlock();  // Re-acquire outer lock
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
 
-		GloGATH->wrunlock();
+		if (lock) wrunlock();
 	}
 	if (resultset) delete resultset;
 }
