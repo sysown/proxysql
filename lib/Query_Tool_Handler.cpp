@@ -643,9 +643,9 @@ json Query_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_schema(
 		"llm.search",
-		"Full-text search across LLM artifacts (summaries/domains/metrics/templates/notes) using fts_llm.",
-		{"run_id", "query"},
-		{{"limit", "integer"}}
+		"Full-text search across LLM artifacts (summaries/domains/metrics/templates/notes) using fts_llm. Use empty query string to list all artifacts.",
+		{"run_id"},
+		{{"query", "string"}, {"limit", "integer"}}
 	));
 
 	// ============================================================
@@ -1408,8 +1408,6 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 		if (run_id_or_schema.empty()) {
 			result = create_error_response("run_id is required");
-		} else if (query.empty()) {
-			result = create_error_response("query is required");
 		} else {
 			// Resolve schema name to run_id if needed
 			int run_id = catalog->resolve_run_id(run_id_or_schema);

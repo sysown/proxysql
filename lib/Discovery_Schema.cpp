@@ -1917,8 +1917,14 @@ std::string Discovery_Schema::fts_search_llm(
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT kind, key, title ,  bm25(fts_llm) AS score FROM fts_llm "
-	    << "WHERE fts_llm MATCH '" << query << "' ORDER BY score LIMIT " << limit << ";";
+	// Empty query returns all results (list mode), otherwise search
+	if (query.empty()) {
+		sql << "SELECT kind, key, title, body ,  0.0 AS score FROM fts_llm "
+		    << "ORDER BY kind, title LIMIT " << limit << ";";
+	} else {
+		sql << "SELECT kind, key, title, body ,  bm25(fts_llm) AS score FROM fts_llm "
+		    << "WHERE fts_llm MATCH '" << query << "' ORDER BY score LIMIT " << limit << ";";
+	}
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 
@@ -1932,7 +1938,8 @@ std::string Discovery_Schema::fts_search_llm(
 			item["kind"] = std::string(row->fields[0] ? row->fields[0] : "");
 			item["key"] = std::string(row->fields[1] ? row->fields[1] : "");
 			item["title"] = std::string(row->fields[2] ? row->fields[2] : "");
-			item["score"] = atof(row->fields[3] ? row->fields[3] : "0");
+			item["body"] = std::string(row->fields[3] ? row->fields[3] : "");
+			item["score"] = atof(row->fields[4] ? row->fields[4] : "0");
 
 			results.push_back(item);
 		}

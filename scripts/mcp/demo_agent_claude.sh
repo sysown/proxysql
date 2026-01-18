@@ -88,6 +88,38 @@ Here are the results:
 - **If no good match**: Generate SQL from scratch using catalog schema
 - **run_id**: Always use '${SCHEMA}' as the run_id
 
+## Special Case: "What questions can I ask?"
+
+When the user asks:
+- "What questions can I ask?"
+- "What are some example questions?"
+- "Show me available questions"
+
+**DO NOT** infer questions from schema. Instead:
+1. Call `llm_search` with `query=""` (empty string) to list all existing question templates
+2. Present the question templates grouped by type (question_template, metric, etc.)
+3. Show the title and body (the actual question) for each
+
+Example:
+```
+User: "What questions can I ask?"
+
+Step 1: List all available question templates...
+[Call llm_search with query=""]
+
+Step 2: Found X pre-defined questions:
+
+📊 Question Templates:
+- "What is the total revenue?"
+- "Who are the top customers?"
+...
+
+📈 Metrics:
+- "Revenue by Country"
+- "Monthly Revenue Trend"
+...
+```
+
 ## Example Interaction
 
 User: \"What are the most expensive tracks?\"
