@@ -27,6 +27,11 @@ using json = nlohmann::json;
 #include "proxysql_restapi.h"
 #include "MCP_Thread.h"
 #include "MySQL_Tool_Handler.h"
+#include "Query_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
+#include "Admin_Tool_Handler.h"
+#include "Cache_Tool_Handler.h"
+#include "Observe_Tool_Handler.h"
 #include "ProxySQL_MCP_Server.hpp"
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
@@ -1365,12 +1370,27 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 		if (enabled) {
 			// Start the server if not already running
 			if (GloMCPH->mcp_server == NULL) {
-				// Check if SSL certificates are available
-				if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
-					proxy_error("MCP: Cannot start server - SSL certificates not loaded. Please configure ssl_key_fp and ssl_cert_fp.\n");
+				// Only check SSL certificates if SSL mode is enabled
+				if (GloMCPH->variables.mcp_use_ssl) {
+					if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+						proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+							"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+					} else {
+						int port = GloMCPH->variables.mcp_port;
+						const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+						proxy_info("MCP: Starting %s server on port %d\n", mode, port);
+						GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+						if (GloMCPH->mcp_server) {
+							GloMCPH->mcp_server->start();
+							proxy_info("MCP: Server started successfully\n");
+						} else {
+							proxy_error("MCP: Failed to create server instance\n");
+						}
+					}
 				} else {
+					// HTTP mode - start without SSL certificates
 					int port = GloMCPH->variables.mcp_port;
-					proxy_info("MCP: Starting HTTPS server on port %d\n", port);
+					proxy_info("MCP: Starting HTTP server on port %d (unencrypted)\n", port);
 					GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
 					if (GloMCPH->mcp_server) {
 						GloMCPH->mcp_server->start();
@@ -1380,14 +1400,78 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 					}
 				}
 			} else {
-				proxy_info("MCP: Server already running, updating configuration...\n");
-				// Server is already running - we could update port/restart if needed
-				// For now, just log that it's running
+				proxy_info("MCP: Server already running, checking if configuration changed...\n");
+
+				// Check if restart is needed due to configuration changes
+				bool needs_restart = false;
+				std::string restart_reason;
+
+				// Check if port changed
+				int current_port = GloMCPH->variables.mcp_port;
+				int server_port = GloMCPH->mcp_server->get_port();
+				if (current_port != server_port) {
+					needs_restart = true;
+					restart_reason += "port (" + std::to_string(server_port) + " -> " + std::to_string(current_port) + ") ";
+				}
+
+				// Check if SSL mode changed
+				bool current_use_ssl = GloMCPH->variables.mcp_use_ssl;
+				bool server_use_ssl = GloMCPH->mcp_server->is_using_ssl();
+				if (current_use_ssl != server_use_ssl) {
+					needs_restart = true;
+					restart_reason += "SSL mode (" + std::string(server_use_ssl ? "HTTPS" : "HTTP") + " -> " + std::string(current_use_ssl ? "HTTPS" : "HTTP") + ") ";
+				}
+
+				if (needs_restart) {
+					proxy_info("MCP: Configuration changed (%s), restarting server...\n", restart_reason.c_str());
+
+					// Stop server with old configuration
+					const char* old_mode = server_use_ssl ? "HTTPS" : "HTTP";
+					proxy_info("MCP: Stopping %s server on port %d\n", old_mode, server_port);
+					delete GloMCPH->mcp_server;
+					GloMCPH->mcp_server = NULL;
+
+					// Start server with new configuration
+					int new_port = GloMCPH->variables.mcp_port;
+					bool new_use_ssl = GloMCPH->variables.mcp_use_ssl;
+					const char* new_mode = new_use_ssl ? "HTTPS" : "HTTP";
+
+					// Check SSL certificates if needed
+					if (new_use_ssl) {
+						if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+							proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+								"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+							// Leave server stopped
+						} else {
+							proxy_info("MCP: Starting %s server on port %d\n", new_mode, new_port);
+							GloMCPH->mcp_server = new ProxySQL_MCP_Server(new_port, GloMCPH);
+							if (GloMCPH->mcp_server) {
+								GloMCPH->mcp_server->start();
+								proxy_info("MCP: Server restarted successfully\n");
+							} else {
+								proxy_error("MCP: Failed to create server instance\n");
+							}
+						}
+					} else {
+						// HTTP mode - no SSL certificates needed
+						proxy_info("MCP: Starting %s server on port %d (unencrypted)\n", new_mode, new_port);
+						GloMCPH->mcp_server = new ProxySQL_MCP_Server(new_port, GloMCPH);
+						if (GloMCPH->mcp_server) {
+							GloMCPH->mcp_server->start();
+							proxy_info("MCP: Server restarted successfully\n");
+						} else {
+							proxy_error("MCP: Failed to create server instance\n");
+						}
+					}
+				} else {
+					proxy_info("MCP: Server already running, no configuration changes detected\n");
+				}
 			}
 		} else {
 			// Stop the server if running
 			if (GloMCPH->mcp_server != NULL) {
-				proxy_info("MCP: Stopping HTTPS server\n");
+				const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+				proxy_info("MCP: Stopping %s server\n", mode);
 				delete GloMCPH->mcp_server;
 				GloMCPH->mcp_server = NULL;
 				proxy_info("MCP: Server stopped successfully\n");
@@ -1497,12 +1581,27 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		if (enabled) {
 			// Start the server if not already running
 			if (GloMCPH->mcp_server == NULL) {
-				// Check if SSL certificates are available
-				if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
-					proxy_error("MCP: Cannot start server - SSL certificates not loaded. Please configure ssl_key_fp and ssl_cert_fp.\n");
+				// Only check SSL certificates if SSL mode is enabled
+				if (GloMCPH->variables.mcp_use_ssl) {
+					if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+						proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+							"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+					} else {
+						int port = GloMCPH->variables.mcp_port;
+						const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+						proxy_info("MCP: Starting %s server on port %d\n", mode, port);
+						GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+						if (GloMCPH->mcp_server) {
+							GloMCPH->mcp_server->start();
+							proxy_info("MCP: Server started successfully\n");
+						} else {
+							proxy_error("MCP: Failed to create server instance\n");
+						}
+					}
 				} else {
+					// HTTP mode - start without SSL certificates
 					int port = GloMCPH->variables.mcp_port;
-					proxy_info("MCP: Starting HTTPS server on port %d\n", port);
+					proxy_info("MCP: Starting HTTP server on port %d (unencrypted)\n", port);
 					GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
 					if (GloMCPH->mcp_server) {
 						GloMCPH->mcp_server->start();
@@ -1595,7 +1694,8 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		} else {
 			// Stop the server if running
 			if (GloMCPH->mcp_server != NULL) {
-				proxy_info("MCP: Stopping HTTPS server\n");
+				const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+				proxy_info("MCP: Stopping %s server\n", mode);
 				delete GloMCPH->mcp_server;
 				GloMCPH->mcp_server = NULL;
 				proxy_info("MCP: Server stopped successfully\n");

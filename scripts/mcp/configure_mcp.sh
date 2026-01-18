@@ -27,6 +27,7 @@ MYSQL_PASSWORD="${MYSQL_PASSWORD=test123}"  # Use = instead of :- to allow empty
 MYSQL_DATABASE="${TEST_DB_NAME:-testdb}"
 MCP_PORT="${MCP_PORT:-6071}"
 MCP_ENABLED="false"
+MCP_USE_SSL="true"  # Default to true for security
 
 # ProxySQL admin configuration
 PROXYSQL_ADMIN_HOST="${PROXYSQL_ADMIN_HOST:-127.0.0.1}"
@@ -115,6 +116,7 @@ configure_mcp() {
     exec_admin_silent "SET mcp-mysql_schema='${MYSQL_DATABASE}';" || { log_error "Failed to set mcp-mysql_schema"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-catalog_path='mcp_catalog.db';" || { log_error "Failed to set mcp-catalog_path"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-port='${MCP_PORT}';" || { log_error "Failed to set mcp-port"; errors=$((errors + 1)); }
+    exec_admin_silent "SET mcp-use_ssl='${MCP_USE_SSL}';" || { log_error "Failed to set mcp-use_ssl"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-enabled='${enable}';" || { log_error "Failed to set mcp-enabled"; errors=$((errors + 1)); }
 
     if [ $errors -gt 0 ]; then
@@ -130,6 +132,7 @@ configure_mcp() {
     echo "  mcp-mysql_schema    = ${MYSQL_DATABASE}"
     echo "  mcp-catalog_path    = mcp_catalog.db (relative to datadir)"
     echo "  mcp-port            = ${MCP_PORT}"
+    echo "  mcp-use_ssl         = ${MCP_USE_SSL}"
     echo "  mcp-enabled         = ${enable}"
 }
 
@@ -159,9 +162,15 @@ test_mcp_server() {
     # Wait a moment for server to start
     sleep 2
 
+    # Determine protocol based on SSL setting
+    local proto="https"
+    if [ "${MCP_USE_SSL}" = "false" ]; then
+        proto="http"
+    fi
+
     # Test ping endpoint
     local response
-    response=$(curl -k -s -X POST "https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/config" \
+    response=$(curl -s -X POST "${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/config" \
         -H "Content-Type: application/json" \
         -d '{"jsonrpc":"2.0","method":"ping","id":1}' 2>/dev/null || echo "")
 
@@ -201,6 +210,14 @@ parse_args() {
                 MCP_PORT="$2"
                 shift 2
                 ;;
+            --use-ssl)
+                MCP_USE_SSL="true"
+                shift
+                ;;
+            --no-ssl)
+                MCP_USE_SSL="false"
+                shift
+                ;;
             --enable)
                 MCP_ENABLED="true"
                 shift
@@ -234,6 +251,8 @@ Options:
   -p, --password PASS   MySQL password (default: test123)
   -d, --database DB     MySQL database (default: testdb)
   --mcp-port PORT       MCP server port (default: 6071)
+  --use-ssl             Enable SSL/TLS for MCP server (HTTPS mode)
+  --no-ssl              Disable SSL/TLS for MCP server (HTTP mode)
   --enable              Enable MCP server
   --disable             Disable MCP server
   --status              Show current MCP configuration
@@ -245,14 +264,18 @@ Environment Variables:
   MYSQL_PASSWORD        MySQL password (default: test123)
   TEST_DB_NAME          MySQL database (default: testdb)
   MCP_PORT              MCP server port (default: 6071)
+  MCP_USE_SSL           MCP SSL mode (default: true)
   PROXYSQL_ADMIN_HOST   ProxySQL admin host (default: 127.0.0.1)
   PROXYSQL_ADMIN_PORT   ProxySQL admin port (default: 6032)
   PROXYSQL_ADMIN_USER   ProxySQL admin user (default: admin)
   PROXYSQL_ADMIN_PASSWORD ProxySQL admin password (default: admin)
 
 Examples:
-  # Configure with test MySQL on port 3307 and enable MCP
+  # Configure with test MySQL on port 3307 and enable MCP (HTTPS mode)
   $0 --host 127.0.0.1 --port 3307 --enable
+
+  # Configure with HTTP mode (no SSL) for development
+  $0 --no-ssl --enable
 
   # Disable MCP server
   $0 --disable
@@ -266,6 +289,7 @@ Examples:
   export MYSQL_USER=myuser
   export MYSQL_PASSWORD=mypass
   export TEST_DB_NAME=production
+  export MCP_USE_SSL=false
   $0 --enable
 EOF
 }
@@ -285,7 +309,7 @@ main() {
     echo ""
 
     # Print environment variables if set
-    if [ -n "${MYSQL_HOST}" ] || [ -n "${MYSQL_PORT}" ] || [ -n "${MYSQL_USER}" ] || [ -n "${MYSQL_PASSWORD}" ] || [ -n "${TEST_DB_NAME}" ] || [ -n "${MCP_PORT}" ]; then
+    if [ -n "${MYSQL_HOST}" ] || [ -n "${MYSQL_PORT}" ] || [ -n "${MYSQL_USER}" ] || [ -n "${MYSQL_PASSWORD}" ] || [ -n "${TEST_DB_NAME}" ] || [ -n "${MCP_PORT}" ] || [ -n "${MCP_USE_SSL}" ]; then
         log_info "Environment Variables:"
         [ -n "${MYSQL_HOST}" ] && echo "  MYSQL_HOST=${MYSQL_HOST}"
         [ -n "${MYSQL_PORT}" ] && echo "  MYSQL_PORT=${MYSQL_PORT}"
@@ -293,6 +317,7 @@ main() {
         [ -n "${MYSQL_PASSWORD}" ] && echo "  MYSQL_PASSWORD=${MYSQL_PASSWORD}"
         [ -n "${TEST_DB_NAME}" ] && echo "  TEST_DB_NAME=${TEST_DB_NAME}"
         [ -n "${MCP_PORT}" ] && echo "  MCP_PORT=${MCP_PORT}"
+        [ -n "${MCP_USE_SSL}" ] && echo "  MCP_USE_SSL=${MCP_USE_SSL}"
         echo ""
     fi
 
@@ -334,12 +359,18 @@ main() {
     log_info "Configuration complete!"
     if [ "${MCP_ENABLED}" = "true" ]; then
         echo ""
-        echo "MCP server is now enabled and accessible at:"
-        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/config  (config endpoint)"
-        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/observe (observe endpoint)"
-        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/query  (query endpoint)"
-        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/admin  (admin endpoint)"
-        echo "  https://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/cache  (cache endpoint)"
+        if [ "${MCP_USE_SSL}" = "true" ]; then
+            local proto="https"
+            echo "MCP server is now enabled (HTTPS mode) and accessible at:"
+        else
+            local proto="http"
+            echo "MCP server is now enabled (HTTP mode - unencrypted) and accessible at:"
+        fi
+        echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/config  (config endpoint)"
+        echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/observe (observe endpoint)"
+        echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/query  (query endpoint)"
+        echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/admin  (admin endpoint)"
+        echo "  ${proto}://${PROXYSQL_ADMIN_HOST}:${MCP_PORT}/mcp/cache  (cache endpoint)"
         echo ""
         echo "Run './test_mcp_tools.sh' to test MCP tools"
     fi
