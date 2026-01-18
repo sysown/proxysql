@@ -148,21 +148,64 @@ The LLM agent (via Claude Code) performs semantic analysis using 18+ MCP tools:
 
 ## Usage
 
-### Starting Discovery
+The two-phase discovery provides two ways to discover your database schema:
+
+### Phase 1: Static Harvest (Direct curl)
+
+Phase 1 is a simple HTTP POST to trigger deterministic metadata extraction. No Claude Code required.
 
 ```bash
-# Using the orchestration script
+# Option A: Using the convenience script (recommended)
+cd scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/
+./static_harvest.sh --schema sales --notes "Production sales database discovery"
+
+# Option B: Using curl directly
+curl -k -X POST https://localhost:6071/mcp/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "discovery.run_static",
+      "arguments": {
+        "schema_filter": "sales",
+        "notes": "Production sales database discovery"
+      }
+    }
+  }'
+# Returns: { run_id: 1, started_at: "...", objects_count: 45, columns_count: 380 }
+```
+
+### Phase 2: LLM Agent Discovery (via two_phase_discovery.py)
+
+Phase 2 uses Claude Code for semantic analysis. Requires MCP configuration.
+
+```bash
+# Step 1: Copy example MCP config and customize
+cp scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/mcp_config.example.json mcp_config.json
+# Edit mcp_config.json to set your PROXYSQL_MCP_ENDPOINT if needed
+
+# Step 2: Run the two-phase discovery
 ./scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/two_phase_discovery.py \
     --mcp-config mcp_config.json \
     --schema sales \
     --model claude-3.5-sonnet
+
+# Dry-run mode (preview without executing)
+./scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/two_phase_discovery.py \
+    --mcp-config mcp_config.json \
+    --schema test \
+    --dry-run
 ```
 
 ### Direct MCP Tool Calls (via /mcp/query endpoint)
 
+You can also call discovery tools directly via the MCP endpoint:
+
 ```bash
 # All discovery tools are available via /mcp/query endpoint
-curl -X POST https://localhost:6071/mcp/query \
+curl -k -X POST https://localhost:6071/mcp/query \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -179,7 +222,8 @@ curl -X POST https://localhost:6071/mcp/query \
 # Returns: { run_id: 1, started_at: "...", objects_count: 45, columns_count: 380 }
 
 # Phase 2: LLM agent discovery
-curl -X POST https://localhost:6071/mcp/query \
+curl -k -X POST https://localhost:6071/mcp/query \
+  -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
     "id": 2,
@@ -265,11 +309,16 @@ grep -n "discovery.run_static" lib/Query_Tool_Handler.cpp
 grep -n "agent.run_start" lib/Query_Tool_Handler.cpp
 grep -n "llm.summary_upsert" lib/Query_Tool_Handler.cpp
 
-# Test the discovery script (dry-run mode)
-./scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/two_phase_discovery.py \
-    --dry-run \
-    --mcp-config mcp_config.json \
-    --schema test
+# Test Phase 1 (curl)
+curl -k -X POST https://localhost:6071/mcp/query \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"discovery.run_static","arguments":{"schema_filter":"test"}}}'
+# Should return: { run_id: 1, objects_count: X, columns_count: Y }
+
+# Test Phase 2 (two_phase_discovery.py)
+cd scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/
+cp mcp_config.example.json mcp_config.json
+./two_phase_discovery.py --dry-run --mcp-config mcp_config.json --schema test
 ```
 
 ## Next Steps

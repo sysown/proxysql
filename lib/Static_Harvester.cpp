@@ -902,7 +902,10 @@ std::string Static_Harvester::get_harvest_stats() {
 	if (current_run_id < 0) {
 		return "{\"error\": \"No active run\"}";
 	}
+	return get_harvest_stats(current_run_id);
+}
 
+std::string Static_Harvester::get_harvest_stats(int run_id) {
 	char* error = NULL;
 	int cols = 0, affected = 0;
 	SQLite3_result* resultset = NULL;
@@ -910,11 +913,11 @@ std::string Static_Harvester::get_harvest_stats() {
 	std::ostringstream sql;
 
 	json stats;
-	stats["run_id"] = current_run_id;
+	stats["run_id"] = run_id;
 
 	// Count objects
 	sql.str("");
-	sql << "SELECT object_type, COUNT(*) FROM objects WHERE run_id = " << current_run_id
+	sql << "SELECT object_type, COUNT(*) FROM objects WHERE run_id = " << run_id
 	    << " GROUP BY object_type;";
 	catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 
@@ -932,7 +935,7 @@ std::string Static_Harvester::get_harvest_stats() {
 	// Count columns
 	sql.str("");
 	sql << "SELECT COUNT(*) FROM columns c JOIN objects o ON c.object_id = o.object_id "
-	    << "WHERE o.run_id = " << current_run_id << ";";
+	    << "WHERE o.run_id = " << run_id << ";";
 	catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 
 	if (resultset && !resultset->rows.empty()) {
@@ -944,7 +947,7 @@ std::string Static_Harvester::get_harvest_stats() {
 	// Count indexes
 	sql.str("");
 	sql << "SELECT COUNT(*) FROM indexes i JOIN objects o ON i.object_id = o.object_id "
-	    << "WHERE o.run_id = " << current_run_id << ";";
+	    << "WHERE o.run_id = " << run_id << ";";
 	catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 
 	if (resultset && !resultset->rows.empty()) {
@@ -955,7 +958,7 @@ std::string Static_Harvester::get_harvest_stats() {
 
 	// Count foreign keys
 	sql.str("");
-	sql << "SELECT COUNT(*) FROM foreign_keys WHERE run_id = " << current_run_id << ";";
+	sql << "SELECT COUNT(*) FROM foreign_keys WHERE run_id = " << run_id << ";";
 	catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 
 	if (resultset && !resultset->rows.empty()) {

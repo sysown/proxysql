@@ -729,7 +729,8 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			return create_error_response("Static discovery failed");
 		}
 
-		std::string stats_str = harvester->get_harvest_stats();
+		// Get stats using the run_id (after finish_run() has reset current_run_id)
+		std::string stats_str = harvester->get_harvest_stats(run_id);
 		json stats;
 		try {
 			stats = json::parse(stats_str);

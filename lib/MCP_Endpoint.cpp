@@ -339,6 +339,7 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	std::string tool_name = req_json["params"]["name"].get<std::string>();
 	json arguments = req_json["params"].contains("arguments") ? req_json["params"]["arguments"] : json::object();
 
+	proxy_info("MCP TOOL CALL: endpoint='%s' tool='%s'\n", endpoint_name.c_str(), tool_name.c_str());
 	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP tool call: %s with args: %s\n", tool_name.c_str(), arguments.dump().c_str());
 
 	json response = tool_handler->execute_tool(tool_name, arguments);

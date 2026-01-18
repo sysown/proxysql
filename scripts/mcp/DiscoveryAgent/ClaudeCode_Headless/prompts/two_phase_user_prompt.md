@@ -4,14 +4,15 @@ Perform LLM-driven discovery using the MCP catalog and persist your findings bac
 
 ## Context
 
-- A deterministic harvest has already been populated in the SQLite catalog (objects/columns/indexes/FKs/profiles and fts_objects) via `discovery.run_static`
-- You must NOT connect to MySQL directly
+- **Phase 1 (Static Harvest) is ALREADY COMPLETE** - DO NOT call `discovery.run_static`
+- The catalog is already populated with objects/columns/indexes/FKs/profiles
+- You must ONLY use catalog/LLM/agent tools - NO MySQL query tools
 - The database size is unknown; work in stages and persist progress frequently
 
 ## Inputs
 
-- **run_id**: `<RUN_ID_HERE>` - The discovery run ID from the static harvest
-- **model_name**: `<MODEL_NAME_HERE>` - e.g., "claude-3.5-sonnet" or your local model
+- **run_id**: **use the provided run_id from the static harvest**
+- **model_name**: `<MODEL_NAME_HERE>` - e.g., "claude-3.5-sonnet"
 - **desired coverage**:
   - summarize at least 50 high-value objects (tables/views/routines)
   - create 3–10 domains with membership + roles
@@ -20,7 +21,7 @@ Perform LLM-driven discovery using the MCP catalog and persist your findings bac
 ## Required Outputs (persisted via MCP)
 
 ### 1) Agent Run Tracking
-- Start an agent run bound to `run_id` via `agent.run_start`
+- Start an agent run bound to the provided run_id via `agent.run_start`
 - Record discovery plan and budgets via `agent.event_append`
 - Finish the run via `agent.run_finish`
 
@@ -55,15 +56,15 @@ Perform LLM-driven discovery using the MCP catalog and persist your findings bac
 
 ## Discovery Procedure
 
-### Step 1: Trigger Static Harvest & Start Agent Run
+### Step 1: Start Agent Run (NOT discovery.run_static - already done!)
 
 ```python
-# Phase 1: Static Discovery
-call discovery.run_static(schema_filter="<SCHEMA_FILTER>", notes="<NOTES>")
-# → returns run_id, started_at, mysql_version, objects_count, columns_count
+# Phase 1: ALREADY DONE - DO NOT CALL
+# discovery.run_static(schema_filter="<SCHEMA_FILTER>", notes="<NOTES>")
 
-# Phase 2: LLM Agent Discovery
-call agent.run_start(run_id=<run_id>, model_name="<MODEL_NAME>")
+# Phase 2: LLM Agent Discovery - Start here
+run_id = <USE_THE_PROVIDED_RUN_ID>
+call agent.run_start(run_id=run_id, model_name="<MODEL_NAME_HERE>")
 # → returns agent_run_id
 ```
 
@@ -71,8 +72,8 @@ call agent.run_start(run_id=<run_id>, model_name="<MODEL_NAME>")
 
 ```python
 # Understand what was harvested
-call catalog.list_objects(run_id=<run_id>, order_by="name", page_size=100)
-call catalog.search(run_id=<run_id>, query="<KEYWORD>", limit=25)
+call catalog.list_objects(run_id=run_id, order_by="name", page_size=100)
+call catalog.search(run_id=run_id, query="<KEYWORD>", limit=25)
 ```
 
 ### Step 3: Execute Staged Discovery
@@ -118,8 +119,10 @@ call agent.event_append(agent_run_id, "decision", {"status": "complete", "summar
 call agent.run_finish(agent_run_id, "success")
 ```
 
-## Important Constraint
+## Important Constraints
 
+- **DO NOT call `discovery.run_static`** - Phase 1 is already complete
+- **DO NOT use MySQL query tools** - Use ONLY catalog/LLM/agent tools
 - **DO NOT write any files**
 - **DO NOT create artifacts on disk**
 - All progress and final outputs MUST be stored ONLY through MCP tool calls
@@ -130,8 +133,6 @@ call agent.run_finish(agent_run_id, "success")
 ## Begin Now
 
 Start with Stage 0:
-1. Call `discovery.run_static` to trigger ProxySQL's static harvest
-2. Receive `run_id` from the response
-3. Call `agent.run_start` with the returned `run_id`
-
-Then proceed with the discovery stages.
+1. Use the provided run_id from the static harvest (DO NOT call discovery.run_static)
+2. Call `agent.run_start` with that run_id
+3. Proceed with the discovery stages

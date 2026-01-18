@@ -82,7 +82,7 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
 		handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
 		handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
-		handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : "/var/lib/proxysql/discovery_catalog.db"
+		handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : "mcp_catalog.db"
 	);
 	if (handler->query_tool_handler->init() == 0) {
 		proxy_info("Query Tool Handler initialized successfully\n");

@@ -268,6 +268,16 @@ public:
 	 */
 	std::string get_harvest_stats();
 
+	/**
+	 * @brief Get harvest statistics for a specific run
+	 *
+	 * Returns counts of harvested objects for the specified run_id.
+	 *
+	 * @param run_id The run ID to get stats for
+	 * @return JSON string with statistics
+	 */
+	std::string get_harvest_stats(int run_id);
+
 	// ========== Data Structures for Query Results ==========
 
 	/**

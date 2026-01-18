@@ -430,26 +430,28 @@ int Discovery_Schema::create_llm_tables() {
 
 int Discovery_Schema::create_fts_tables() {
 	// FTS over objects (contentless)
-	db->execute(
-		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_objects"
-		"USING fts5("
+	if (!db->execute(
+		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_objects USING fts5("
 		"  object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql, tags,"
 		"  content='',"
 		"  tokenize='unicode61 remove_diacritics 2'"
 		");"
-	);
-
-	db->execute("CREATE INDEX IF NOT EXISTS idx_fts_objects_key ON fts_objects(object_key);");
+	)) {
+		proxy_error("Failed to create fts_objects FTS5 table - FTS5 may not be enabled\n");
+		return -1;
+	}
 
 	// FTS over LLM artifacts
-	db->execute(
-		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_llm"
-		"USING fts5("
+	if (!db->execute(
+		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_llm USING fts5("
 		"  kind, key, title, body, tags,"
 		"  content='',"
 		"  tokenize='unicode61 remove_diacritics 2'"
 		");"
-	);
+	)) {
+		proxy_error("Failed to create fts_llm FTS5 table - FTS5 may not be enabled\n");
+		return -1;
+	}
 
 	return 0;
 }
@@ -866,14 +868,35 @@ int Discovery_Schema::upsert_profile(
 }
 
 int Discovery_Schema::rebuild_fts_index(int run_id) {
-	// Clear existing FTS index
-	db->execute("DELETE FROM fts_objects;");
-
-	// Fetch all objects for the run
+	// Check if FTS table exists first
 	char* error = NULL;
 	int cols = 0, affected = 0;
 	SQLite3_result* resultset = NULL;
 
+	db->execute_statement(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='fts_objects';",
+		&error, &cols, &affected, &resultset
+	);
+
+	bool fts_exists = (resultset && !resultset->rows.empty());
+	if (resultset) delete resultset;
+
+	if (!fts_exists) {
+		proxy_warning("FTS table fts_objects does not exist - skipping FTS rebuild\n");
+		return 0;  // Non-fatal - harvest can continue without FTS
+	}
+
+	// Clear existing FTS index for this run only
+	std::ostringstream delete_sql;
+	delete_sql << "DELETE FROM fts_objects WHERE object_key IN ("
+	    << "SELECT schema_name || '.' || object_name FROM objects WHERE run_id = " << run_id
+	    << ");";
+	if (!db->execute(delete_sql.str().c_str())) {
+		proxy_warning("Failed to clear FTS index (non-critical)\n");
+		return 0;  // Non-fatal
+	}
+
+	// Fetch all objects for the run
 	std::ostringstream sql;
 	sql << "SELECT object_id, schema_name, object_name, object_type, object_comment, definition_sql "
 	    << "FROM objects WHERE run_id = " << run_id << ";";

@@ -1,8 +1,85 @@
 # Headless Database Discovery with Claude Code
 
+Database discovery systems for comprehensive analysis through MCP (Model Context Protocol).
+
+This directory contains **two separate discovery approaches**:
+
+| Approach | Description | When to Use |
+|----------|-------------|-------------|
+| **Two-Phase Discovery** | Static harvest + LLM semantic analysis (NEW) | Quick, efficient discovery with semantic insights |
+| **Multi-Agent Discovery** | 6-agent collaborative analysis | Deep, comprehensive analysis (legacy) |
+
+---
+
+## Two-Phase Discovery (Recommended)
+
+### Overview
+
+The two-phase discovery provides fast, efficient database schema discovery:
+
+**Phase 1: Static Harvest** (C++)
+- Deterministic metadata extraction from INFORMATION_SCHEMA
+- Simple curl command - no Claude Code required
+- Returns: run_id, objects_count, columns_count, indexes_count, etc.
+
+**Phase 2: LLM Agent Discovery** (Optional)
+- Semantic analysis using Claude Code
+- Generates summaries, domains, metrics, and question templates
+- Requires MCP configuration
+
+### Quick Start
+
+```bash
+cd scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/
+
+# Phase 1: Static harvest (no Claude Code needed)
+
+# Option A: Using the convenience script (recommended)
+./static_harvest.sh --schema test
+
+# Option B: Using curl directly
+curl -k -X POST https://localhost:6071/mcp/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "discovery.run_static",
+      "arguments": {
+        "schema_filter": "test"
+      }
+    }
+  }'
+
+# Phase 2: LLM agent discovery (requires Claude Code)
+cp mcp_config.example.json mcp_config.json
+./two_phase_discovery.py \
+    --mcp-config mcp_config.json \
+    --schema test \
+    --dry-run  # Preview without executing
+```
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `two_phase_discovery.py` | Orchestration script for Phase 2 |
+| `mcp_config.example.json` | Example MCP configuration for Claude Code |
+| `prompts/two_phase_discovery_prompt.md` | System prompt for LLM agent |
+| `prompts/two_phase_user_prompt.md` | User prompt template |
+
+### Documentation
+
+See [Two_Phase_Discovery_Implementation.md](../../../../doc/Two_Phase_Discovery_Implementation.md) for complete implementation details.
+
+---
+
+## Multi-Agent Discovery (Legacy)
+
 Multi-agent database discovery system for comprehensive analysis through MCP (Model Context Protocol).
 
-## Overview
+### Overview
 
 This directory contains scripts for running **6-agent collaborative database discovery** in headless (non-interactive) mode using Claude Code.
 
