@@ -666,9 +666,49 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	if (tool_name == "list_schemas") {
 		std::string page_token = json_string(arguments, "page_token");
 		int page_size = json_int(arguments, "page_size", 50);
-		// TODO: Implement using MySQL connection
-		std::string result = execute_query("SHOW DATABASES;");
-		return create_success_response(json::parse(result));
+
+		// Query catalog's schemas table instead of live database
+		char* error = NULL;
+		int cols = 0, affected = 0;
+		SQLite3_result* resultset = NULL;
+
+		std::ostringstream sql;
+		sql << "SELECT DISTINCT schema_name FROM schemas ORDER BY schema_name";
+		if (page_size > 0) {
+			sql << " LIMIT " << page_size;
+			if (!page_token.empty()) {
+				sql << " OFFSET " << page_token;
+			}
+		}
+		sql << ";";
+
+		catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+		if (error) {
+			std::string err_msg = std::string("Failed to query catalog: ") + error;
+			free(error);
+			return create_error_response(err_msg);
+		}
+
+		// Build results array (as array of arrays to match original format)
+		json results = json::array();
+		if (resultset && resultset->rows_count > 0) {
+			for (const auto& row : resultset->rows) {
+				if (row->fields_count > 0 && row->fields[0]) {
+					json schema_row = json::array();
+					schema_row.push_back(std::string(row->fields[0]));
+					results.push_back(schema_row);
+				}
+			}
+		}
+		delete resultset;
+
+		// Return in format matching original: {columns: 1, rows: [[schema], ...]}
+		json output;
+		output["columns"] = 1;
+		output["rows"] = results;
+		output["success"] = true;
+
+		return create_success_response(output);
 	}
 
 	if (tool_name == "list_tables") {
