@@ -449,13 +449,6 @@ json Query_Tool_Handler::get_tool_list() {
 	// STRUCTURE TOOLS
 	// ============================================================
 	tools.push_back(create_tool_schema(
-		"describe_table",
-		"[DEPRECATED] Use catalog.get_object with run_id=schema_name and include_definition=true instead. Get detailed table schema including columns, types, keys, and indexes",
-		{"schema", "table"},
-		{}
-	));
-
-	tools.push_back(create_tool_schema(
 		"get_constraints",
 		"[DEPRECATED] Use catalog.get_relationships with run_id=schema_name and object_key=schema.table instead. Get constraints (foreign keys, unique constraints, etc.) for a table",
 		{"schema"},
@@ -699,16 +692,6 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	// ============================================================
 	// STRUCTURE TOOLS
 	// ============================================================
-	if (tool_name == "describe_table") {
-		// Return deprecation warning with migration path
-		return create_error_response(
-			"DEPRECATED: The 'describe_table' tool is deprecated. "
-			"Use 'catalog.get_object' with run_id='<schema_name>' (or use the numeric run_id directly) "
-			"and include_definition=true instead. "
-			"Example: catalog.get_object(run_id='your_schema', object_key='schema.table', include_definition=true)"
-		);
-	}
-
 	if (tool_name == "get_constraints") {
 		// Return deprecation warning with migration path
 		return create_error_response(
