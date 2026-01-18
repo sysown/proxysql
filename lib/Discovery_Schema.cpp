@@ -4,6 +4,7 @@
 #include <sstream>
 #include <algorithm>
 #include <ctime>
+#include <functional>
 #include "../deps/json/json.hpp"
 
 using json = nlohmann::json;
@@ -471,7 +472,7 @@ int Discovery_Schema::create_llm_tables() {
 		"  log_id      INTEGER PRIMARY KEY , "
 		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
 		"  query       TEXT NOT NULL , "
-		"  \"limit\"       INTEGER NOT NULL DEFAULT 25 , "
+		"  lmt         INTEGER NOT NULL DEFAULT 25 , "
 		"  searched_at TEXT NOT NULL DEFAULT (datetime('now'))"
 		");"
 	);
@@ -517,11 +518,10 @@ int Discovery_Schema::create_fts_tables() {
 		return -1;
 	}
 
-	// FTS over LLM artifacts
+	// FTS over LLM artifacts - store content directly in FTS table
 	if (!db->execute(
 		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_llm USING fts5("
 		"  kind, key, title, body, tags , "
-		"  content='' , "
 		"  tokenize='unicode61 remove_diacritics 2'"
 		");"
 	)) {
@@ -1545,6 +1545,24 @@ int Discovery_Schema::upsert_llm_summary(
 	SAFE_SQLITE3_STEP2(stmt);
 	(*proxy_sqlite3_finalize)(stmt);
 
+	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
+	stmt = NULL;
+	sql = "INSERT OR REPLACE INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'summary', ?2, 'Object Summary', ?3, '');";
+	rc = db->prepare_v2(sql, &stmt);
+	if (rc == SQLITE_OK) {
+		// Create composite key for unique identification
+		char key_buf[64];
+		snprintf(key_buf, sizeof(key_buf), "summary_%d_%d", agent_run_id, object_id);
+		// Use hash of composite key as rowid
+		int rowid = agent_run_id * 100000 + object_id;
+
+		(*proxy_sqlite3_bind_int)(stmt, 1, rowid);
+		(*proxy_sqlite3_bind_text)(stmt, 2, key_buf, -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 3, summary_json.c_str(), -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(stmt);
+		(*proxy_sqlite3_finalize)(stmt);
+	}
+
 	return 0;
 }
 
@@ -1655,6 +1673,21 @@ int Discovery_Schema::upsert_llm_domain(
 	int domain_id = (int)sqlite3_last_insert_rowid(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
+	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
+	stmt = NULL;
+	sql = "INSERT OR REPLACE INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'domain', ?2, ?3, ?4, '');";
+	rc = db->prepare_v2(sql, &stmt);
+	if (rc == SQLITE_OK) {
+		// Use domain_id or a hash of domain_key as rowid
+		int rowid = domain_id > 0 ? domain_id : std::hash<std::string>{}(domain_key) % 1000000000;
+		(*proxy_sqlite3_bind_int)(stmt, 1, rowid);
+		(*proxy_sqlite3_bind_text)(stmt, 2, domain_key.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 4, description.c_str(), -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(stmt);
+		(*proxy_sqlite3_finalize)(stmt);
+	}
+
 	return domain_id;
 }
 
@@ -1756,6 +1789,22 @@ int Discovery_Schema::upsert_llm_metric(
 	int metric_id = (int)sqlite3_last_insert_rowid(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
+	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
+	stmt = NULL;
+	sql = "INSERT OR REPLACE INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'metric', ?2, ?3, ?4, ?5);";
+	rc = db->prepare_v2(sql, &stmt);
+	if (rc == SQLITE_OK) {
+		// Use metric_id or a hash of metric_key as rowid
+		int rowid = metric_id > 0 ? metric_id : std::hash<std::string>{}(metric_key) % 1000000000;
+		(*proxy_sqlite3_bind_int)(stmt, 1, rowid);
+		(*proxy_sqlite3_bind_text)(stmt, 2, metric_key.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 4, description.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 5, domain_key.c_str(), -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(stmt);
+		(*proxy_sqlite3_finalize)(stmt);
+	}
+
 	return metric_id;
 }
 
@@ -1787,6 +1836,20 @@ int Discovery_Schema::add_question_template(
 	SAFE_SQLITE3_STEP2(stmt);
 	int template_id = (int)sqlite3_last_insert_rowid(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
+
+	// Insert into FTS index
+	stmt = NULL;
+	sql = "INSERT INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'question_template', ?2, ?3, ?4, '');";
+	rc = db->prepare_v2(sql, &stmt);
+	if (rc == SQLITE_OK) {
+		std::string key_str = std::to_string(template_id);
+		(*proxy_sqlite3_bind_int)(stmt, 1, template_id);
+		(*proxy_sqlite3_bind_text)(stmt, 2, key_str.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 4, question_nl.c_str(), -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(stmt);
+		(*proxy_sqlite3_finalize)(stmt);
+	}
 
 	return template_id;
 }
@@ -1825,6 +1888,21 @@ int Discovery_Schema::add_llm_note(
 	SAFE_SQLITE3_STEP2(stmt);
 	int note_id = (int)sqlite3_last_insert_rowid(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
+
+	// Insert into FTS index
+	stmt = NULL;
+	sql = "INSERT INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'note', ?2, ?3, ?4, ?5);";
+	rc = db->prepare_v2(sql, &stmt);
+	if (rc == SQLITE_OK) {
+		std::string key_str = std::to_string(note_id);
+		(*proxy_sqlite3_bind_int)(stmt, 1, note_id);
+		(*proxy_sqlite3_bind_text)(stmt, 2, key_str.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 4, body.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 5, tags_json.c_str(), -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(stmt);
+		(*proxy_sqlite3_finalize)(stmt);
+	}
 
 	return note_id;
 }
@@ -1867,10 +1945,10 @@ std::string Discovery_Schema::fts_search_llm(
 int Discovery_Schema::log_llm_search(
 	int run_id,
 	const std::string& query,
-	int limit
+	int lmt
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "INSERT INTO llm_search_log(run_id, query, limit) VALUES(?1, ?2 ,  ?3);";
+	const char* sql = "INSERT INTO llm_search_log(run_id, query, lmt) VALUES(?1, ?2 ,  ?3);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK || !stmt) {
@@ -1880,7 +1958,7 @@ int Discovery_Schema::log_llm_search(
 
 	sqlite3_bind_int(stmt, 1, run_id);
 	sqlite3_bind_text(stmt, 2, query.c_str(), -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int(stmt, 3, limit);
+	sqlite3_bind_int(stmt, 3, lmt);
 
 	rc = sqlite3_step(stmt);
 	(*proxy_sqlite3_finalize)(stmt);

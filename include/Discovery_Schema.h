@@ -628,13 +628,13 @@ public:
 	 *
 	 * @param run_id Run ID
 	 * @param query Search query string
-	 * @param limit Result limit
+	 * @param lmt Result limit
 	 * @return 0 on success, -1 on error
 	 */
 	int log_llm_search(
 		int run_id,
 		const std::string& query,
-		int limit = 25
+		int lmt = 25
 	);
 
 	/**
