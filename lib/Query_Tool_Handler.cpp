@@ -110,6 +110,9 @@ Query_Tool_Handler::Query_Tool_Handler(
 	// Initialize pool mutex
 	pthread_mutex_init(&pool_lock, NULL);
 
+	// Initialize counters mutex
+	pthread_mutex_init(&counters_lock, NULL);
+
 	// Create discovery schema and harvester
 	catalog = new Discovery_Schema(catalog_path);
 	harvester = new Static_Harvester(
@@ -135,6 +138,7 @@ Query_Tool_Handler::~Query_Tool_Handler() {
 	}
 
 	pthread_mutex_destroy(&pool_lock);
+	pthread_mutex_destroy(&counters_lock);
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Query_Tool_Handler destroyed\n");
 }
 
@@ -644,6 +648,16 @@ json Query_Tool_Handler::get_tool_list() {
 		{{"limit", "integer"}}
 	));
 
+	// ============================================================
+	// STATISTICS TOOLS
+	// ============================================================
+	tools.push_back(create_tool_schema(
+		"stats.get_tool_usage",
+		"Get in-memory tool usage statistics grouped by tool name and schema.",
+		{},
+		{}
+	));
+
 	json result;
 	result["tools"] = tools;
 	return result;
@@ -659,7 +673,62 @@ json Query_Tool_Handler::get_tool_description(const std::string& tool_name) {
 	return create_error_response("Tool not found: " + tool_name);
 }
 
+/**
+ * @brief Extract schema name from tool arguments
+ * Returns "(no schema)" for tools without schema context
+ */
+static std::string extract_schema_name(const std::string& tool_name, const json& arguments, Discovery_Schema* catalog) {
+	// Tools that use run_id (can be resolved to schema)
+	if (arguments.contains("run_id")) {
+		std::string run_id_str = json_string(arguments, "run_id");
+		int run_id = catalog->resolve_run_id(run_id_str);
+		if (run_id > 0) {
+			// Look up schema name from catalog
+			char* error = NULL;
+			int cols = 0, affected = 0;
+			SQLite3_result* resultset = NULL;
+
+			std::ostringstream sql;
+			sql << "SELECT schema_name FROM schemas WHERE run_id = " << run_id << " LIMIT 1;";
+
+			catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+			if (resultset && resultset->rows_count > 0) {
+				SQLite3_row* row = resultset->rows[0];
+				std::string schema = std::string(row->fields[0] ? row->fields[0] : "");
+				free(resultset);
+				return schema;
+			}
+			if (resultset) free(resultset);
+		}
+		return std::to_string(run_id);
+	}
+
+	// Tools that use schema_name directly
+	if (arguments.contains("schema_name")) {
+		return json_string(arguments, "schema_name");
+	}
+
+	// Tools without schema context
+	return "(no schema)";
+}
+
+/**
+ * @brief Track tool invocation (thread-safe)
+ */
+void track_tool_invocation(
+	Query_Tool_Handler* handler,
+	const std::string& tool_name,
+	const std::string& schema_name
+) {
+	pthread_mutex_lock(&handler->counters_lock);
+	handler->tool_usage_counters[tool_name][schema_name]++;
+	pthread_mutex_unlock(&handler->counters_lock);
+}
+
 json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& arguments) {
+	// Track tool invocation
+	std::string schema = extract_schema_name(tool_name, arguments, catalog);
+	track_tool_invocation(this, tool_name, schema);
 	// ============================================================
 	// INVENTORY TOOLS
 	// ============================================================
@@ -1357,6 +1426,9 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
 		}
 
+		// Log the search query
+		catalog->log_llm_search(run_id, query, limit);
+
 		std::string results = catalog->fts_search_llm(run_id, query, limit);
 		try {
 			return create_success_response(json::parse(results));
@@ -1428,7 +1500,71 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	}
 
 	// ============================================================
+	// STATISTICS TOOLS
+	// ============================================================
+	if (tool_name == "stats.get_tool_usage") {
+		ToolUsageMap stats = get_tool_usage_stats();
+		json result = json::object();
+		for (ToolUsageMap::const_iterator it = stats.begin(); it != stats.end(); ++it) {
+			const std::string& tool_name = it->first;
+			const SchemaCountMap& schemas = it->second;
+			json schema_counts = json::object();
+			for (SchemaCountMap::const_iterator sit = schemas.begin(); sit != schemas.end(); ++sit) {
+				schema_counts[sit->first] = sit->second;
+			}
+			result[tool_name] = schema_counts;
+		}
+		return create_success_response(result);
+	}
+
+	// ============================================================
 	// FALLBACK - UNKNOWN TOOL
 	// ============================================================
 	return create_error_response("Unknown tool: " + tool_name);
+}
+
+Query_Tool_Handler::ToolUsageMap Query_Tool_Handler::get_tool_usage_stats() {
+	// Thread-safe copy of counters
+	pthread_mutex_lock(&counters_lock);
+	ToolUsageMap copy = tool_usage_counters;
+	pthread_mutex_unlock(&counters_lock);
+	return copy;
+}
+
+SQLite3_result* Query_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
+	SQLite3_result* result = new SQLite3_result(3);
+	result->add_column_definition(SQLITE_TEXT, "tool");
+	result->add_column_definition(SQLITE_TEXT, "schema");
+	result->add_column_definition(SQLITE_TEXT, "count");
+
+	pthread_mutex_lock(&counters_lock);
+
+	for (ToolUsageMap::const_iterator tool_it = tool_usage_counters.begin();
+	     tool_it != tool_usage_counters.end(); ++tool_it) {
+		const std::string& tool_name = tool_it->first;
+		const SchemaCountMap& schemas = tool_it->second;
+
+		for (SchemaCountMap::const_iterator schema_it = schemas.begin();
+		     schema_it != schemas.end(); ++schema_it) {
+			const std::string& schema_name = schema_it->first;
+			unsigned long long count = schema_it->second;
+
+			char** row = new char*[3];
+			row[0] = strdup(tool_name.c_str());
+			row[1] = strdup(schema_name.c_str());
+
+			char count_str[32];
+			snprintf(count_str, sizeof(count_str), "%llu", count);
+			row[2] = strdup(count_str);
+
+			result->add_row(row);
+		}
+	}
+
+	if (reset) {
+		tool_usage_counters.clear();
+	}
+
+	pthread_mutex_unlock(&counters_lock);
+	return result;
 }

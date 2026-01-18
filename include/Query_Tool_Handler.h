@@ -51,6 +51,12 @@ private:
 	int timeout_ms;
 	bool allow_select_star;
 
+	// Tool usage counters: tool_name -> schema_name -> count
+	typedef std::map<std::string, unsigned long long> SchemaCountMap;
+	typedef std::map<std::string, SchemaCountMap> ToolUsageMap;
+	ToolUsageMap tool_usage_counters;
+	pthread_mutex_t counters_lock;
+
 	/**
 	 * @brief Create tool list schema for a tool
 	 */
@@ -91,6 +97,9 @@ private:
 	 */
 	bool is_dangerous_query(const std::string& query);
 
+	// Friend function for tracking tool invocations
+	friend void track_tool_invocation(Query_Tool_Handler*, const std::string&, const std::string&);
+
 public:
 	/**
 	 * @brief Constructor (creates catalog and harvester)
@@ -126,6 +135,19 @@ public:
 	 * @brief Get the static harvester
 	 */
 	Static_Harvester* get_harvester() const { return harvester; }
+
+	/**
+	 * @brief Get tool usage statistics (thread-safe copy)
+	 * @return ToolUsageMap copy with tool_name -> schema_name -> count
+	 */
+	ToolUsageMap get_tool_usage_stats();
+
+	/**
+	 * @brief Get tool usage statistics as SQLite3_result* with optional reset
+	 * @param reset If true, resets internal counters after capturing data
+	 * @return SQLite3_result* with columns: tool, schema, count. Caller must delete.
+	 */
+	SQLite3_result* get_tool_usage_stats_resultset(bool reset = false);
 };
 
 #endif /* CLASS_QUERY_TOOL_HANDLER_H */

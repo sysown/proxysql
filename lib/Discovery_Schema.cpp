@@ -465,6 +465,21 @@ int Discovery_Schema::create_llm_tables() {
 
 	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_notes_scope ON llm_notes(run_id, scope);");
 
+	// LLM search log table - tracks all searches performed
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_search_log ("
+		"  log_id      INTEGER PRIMARY KEY,"
+		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  query       TEXT NOT NULL,"
+		"  limit       INTEGER NOT NULL DEFAULT 25,"
+		"  searched_at TEXT NOT NULL DEFAULT (datetime('now'))"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_run ON llm_search_log(run_id);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_query ON llm_search_log(query);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_time ON llm_search_log(searched_at);");
+
 	return 0;
 }
 
@@ -1826,4 +1841,33 @@ std::string Discovery_Schema::fts_search_llm(
 	}
 
 	return results.dump();
+}
+
+int Discovery_Schema::log_llm_search(
+	int run_id,
+	const std::string& query,
+	int limit
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "INSERT INTO llm_search_log(run_id, query, limit) VALUES(?1, ?2, ?3);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK || !stmt) {
+		proxy_error("Failed to prepare llm_search_log insert: %d\n", rc);
+		return -1;
+	}
+
+	sqlite3_bind_int(stmt, 1, run_id);
+	sqlite3_bind_text(stmt, 2, query.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, 3, limit);
+
+	rc = sqlite3_step(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	if (rc != SQLITE_DONE) {
+		proxy_error("Failed to insert llm_search_log: %d\n", rc);
+		return -1;
+	}
+
+	return 0;
 }

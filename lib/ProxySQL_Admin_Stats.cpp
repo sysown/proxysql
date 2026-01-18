@@ -18,6 +18,8 @@
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Logger.hpp"
+#include "MCP_Thread.h"
+#include "Query_Tool_Handler.h"
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -1577,6 +1579,37 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 	}
 	(*proxy_sqlite3_finalize)(statement1);
 	(*proxy_sqlite3_finalize)(statement32);
+
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
+	if (!GloMCPH) return;
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (!qth) return;
+
+	SQLite3_result* resultset = qth->get_tool_usage_stats_resultset(reset);
+	if (resultset == NULL) return;
+
+	statsdb->execute("BEGIN");
+
+	if (reset) {
+		statsdb->execute("DELETE FROM stats_mcp_query_tools_counters_reset");
+	} else {
+		statsdb->execute("DELETE FROM stats_mcp_query_tools_counters");
+	}
+
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+	     it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		char query[512];
+		snprintf(query, sizeof(query),
+			"INSERT INTO %smcp_query_tools_counters VALUES ('%s', '%s', %s)",
+			reset ? "stats_mcp_query_tools_counters_" : "stats_",
+			r->fields[0], r->fields[1], r->fields[2]);
+		statsdb->execute(query);
+	}
 
 	statsdb->execute("COMMIT");
 	delete resultset;

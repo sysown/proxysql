@@ -1153,6 +1153,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_memory_metrics=false;
 	bool stats_mysql_commands_counters=false;
 	bool stats_pgsql_commands_counters = false;
+	bool stats_mcp_query_tools_counters = false;
+	bool stats_mcp_query_tools_counters_reset = false;
 	bool stats_mysql_query_rules=false;
 	bool stats_pgsql_query_rules = false;
 	bool stats_mysql_users=false;
@@ -1342,6 +1344,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_proxysql_message_metrics=true; refresh=true; }
 	if (strstr(query_no_space,"stats_proxysql_message_metrics_reset"))
 		{ stats_proxysql_message_metrics_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_tools_counters"))
+		{ stats_mcp_query_tools_counters=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_tools_counters_reset"))
+		{ stats_mcp_query_tools_counters_reset=true; refresh=true; }
 
 	// temporary disabled because not implemented
 /*
@@ -1571,6 +1577,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_pgsql_client_host_cache_reset) {
 			stats___pgsql_client_host_cache(true);
+		}
+		if (stats_mcp_query_tools_counters) {
+			stats___mcp_query_tools_counters(false);
+		}
+		if (stats_mcp_query_tools_counters_reset) {
+			stats___mcp_query_tools_counters(true);
 		}
 
 		if (admin) {
