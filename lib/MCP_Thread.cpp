@@ -29,7 +29,6 @@ static const char* mcp_thread_variables_names[] = {
 	"mysql_user",
 	"mysql_password",
 	"mysql_schema",
-	"catalog_path",
 	NULL
 };
 
@@ -54,7 +53,6 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_mysql_user = strdup("");
 	variables.mcp_mysql_password = strdup("");
 	variables.mcp_mysql_schema = strdup("");
-	variables.mcp_catalog_path = strdup("mcp_catalog.db");
 
 	status_variables.total_requests = 0;
 	status_variables.failed_requests = 0;
@@ -93,8 +91,6 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		free(variables.mcp_mysql_password);
 	if (variables.mcp_mysql_schema)
 		free(variables.mcp_mysql_schema);
-	if (variables.mcp_catalog_path)
-		free(variables.mcp_catalog_path);
 
 	if (mcp_server) {
 		delete mcp_server;
@@ -216,10 +212,6 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%s", variables.mcp_mysql_schema ? variables.mcp_mysql_schema : "");
 		return 0;
 	}
-	if (!strcmp(name, "catalog_path")) {
-		sprintf(val, "%s", variables.mcp_catalog_path ? variables.mcp_catalog_path : "");
-		return 0;
-	}
 
 	return -1;
 }
@@ -314,12 +306,6 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		if (variables.mcp_mysql_schema)
 			free(variables.mcp_mysql_schema);
 		variables.mcp_mysql_schema = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "catalog_path")) {
-		if (variables.mcp_catalog_path)
-			free(variables.mcp_catalog_path);
-		variables.mcp_catalog_path = strdup(value);
 		return 0;
 	}
 

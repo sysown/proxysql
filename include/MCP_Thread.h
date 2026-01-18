@@ -55,7 +55,7 @@ public:
 		char* mcp_mysql_user;                   ///< MySQL username for tool connections
 		char* mcp_mysql_password;               ///< MySQL password for tool connections
 		char* mcp_mysql_schema;                 ///< Default schema/database
-		char* mcp_catalog_path;                 ///< Path to catalog SQLite database
+		// Catalog path is hardcoded to mcp_catalog.db in the datadir
 	} variables;
 
 	/**

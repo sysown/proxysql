@@ -175,16 +175,11 @@ The MySQL Tool Handler provides LLM-based tools for MySQL database exploration, 
 
 ### Catalog Configuration
 
-#### `mcp-catalog_path`
-- **Type:** String (file path)
-- **Default:** `"mcp_catalog.db"`
-- **Description:** Path to the SQLite catalog database (relative to ProxySQL datadir)
-- **Runtime:** Yes
-- **Example:**
-  ```sql
-  SET mcp-catalog_path='/path/to/mcp_catalog.db';
-  LOAD MCP VARIABLES TO RUNTIME;
-  ```
+The catalog database path is **hardcoded** to `mcp_catalog.db` in the ProxySQL datadir and cannot be changed at runtime. The catalog stores:
+- Database schemas discovered during two-phase discovery
+- LLM memories (summaries, domains, metrics)
+- Tool usage statistics
+- Search history
 
 ## Management Commands
 

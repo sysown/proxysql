@@ -113,7 +113,6 @@ configure_mcp() {
     exec_admin_silent "SET mcp-mysql_user='${MYSQL_USER}';" || { log_error "Failed to set mcp-mysql_user"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-mysql_password='${MYSQL_PASSWORD}';" || { log_error "Failed to set mcp-mysql_password"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-mysql_schema='${MYSQL_DATABASE}';" || { log_error "Failed to set mcp-mysql_schema"; errors=$((errors + 1)); }
-    exec_admin_silent "SET mcp-catalog_path='mcp_catalog.db';" || { log_error "Failed to set mcp-catalog_path"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-port='${MCP_PORT}';" || { log_error "Failed to set mcp-port"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-enabled='${enable}';" || { log_error "Failed to set mcp-enabled"; errors=$((errors + 1)); }
 
@@ -128,7 +127,6 @@ configure_mcp() {
     echo "  mcp-mysql_user      = ${MYSQL_USER}"
     echo "  mcp-mysql_password  = ${MYSQL_PASSWORD}"
     echo "  mcp-mysql_schema    = ${MYSQL_DATABASE}"
-    echo "  mcp-catalog_path    = mcp_catalog.db (relative to datadir)"
     echo "  mcp-port            = ${MCP_PORT}"
     echo "  mcp-enabled         = ${enable}"
 }

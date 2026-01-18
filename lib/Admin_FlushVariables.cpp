@@ -1538,13 +1538,17 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 
 				// Create new tool handler with current configuration
 				proxy_info("MCP: Reinitializing MySQL Tool Handler with current configuration\n");
+
+				// Hardcode catalog path to datadir/mcp_catalog.db for stability
+				std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
+
 				GloMCPH->mysql_tool_handler = new MySQL_Tool_Handler(
 					GloMCPH->variables.mcp_mysql_hosts ? GloMCPH->variables.mcp_mysql_hosts : "",
 					GloMCPH->variables.mcp_mysql_ports ? GloMCPH->variables.mcp_mysql_ports : "",
 					GloMCPH->variables.mcp_mysql_user ? GloMCPH->variables.mcp_mysql_user : "",
 					GloMCPH->variables.mcp_mysql_password ? GloMCPH->variables.mcp_mysql_password : "",
 					GloMCPH->variables.mcp_mysql_schema ? GloMCPH->variables.mcp_mysql_schema : "",
-					GloMCPH->variables.mcp_catalog_path ? GloMCPH->variables.mcp_catalog_path : ""
+					catalog_path.c_str()
 				);
 
 				if (GloMCPH->mysql_tool_handler->init() != 0) {

@@ -76,13 +76,17 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 
 	// 2. Query Tool Handler (uses Discovery_Schema directly for two-phase discovery)
 	proxy_info("Initializing Query Tool Handler...\n");
+
+	// Hardcode catalog path to datadir/mcp_catalog.db for stability
+	std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
+
 	handler->query_tool_handler = new Query_Tool_Handler(
 		handler->variables.mcp_mysql_hosts ? handler->variables.mcp_mysql_hosts : "",
 		handler->variables.mcp_mysql_ports ? handler->variables.mcp_mysql_ports : "",
 		handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
 		handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
 		handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
-		handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : "mcp_catalog.db"
+		catalog_path.c_str()
 	);
 	if (handler->query_tool_handler->init() == 0) {
 		proxy_info("Query Tool Handler initialized successfully\n");
