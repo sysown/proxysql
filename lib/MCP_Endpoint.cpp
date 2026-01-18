@@ -379,9 +379,8 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 
 	json response = tool_handler->execute_tool(tool_name, arguments);
 
-	// Unwrap ProxySQL's {"success": ..., "result": ...} format for MCP compliance
-	// Tool handlers use create_success_response() which adds this wrapper
-	if (response.is_object() && response.contains("success") && response.contains("result")) {
+	// Check if this is a ProxySQL tool response with success/result wrapper
+	if (response.is_object() && response.contains("success")) {
 		bool success = response["success"].get<bool>();
 		if (!success) {
 			// Tool execution failed - log the error with full context and return in MCP format
@@ -399,9 +398,11 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 			mcp_result["isError"] = true;
 			return mcp_result;
 		}
-		// Success - log and use the "result" field as the content to be wrapped
+		// Success - extract the result field if it exists, otherwise use the whole response
 		proxy_info("MCP TOOL CALL SUCCESS: endpoint='%s' tool='%s'\n", endpoint_name.c_str(), tool_name.c_str());
-		response = response["result"];
+		if (response.contains("result")) {
+			response = response["result"];
+		}
 	}
 
 	// Wrap the response (or the 'result' field) in MCP-compliant format

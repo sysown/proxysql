@@ -1126,19 +1126,30 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		std::string domain_key = json_string(arguments, "domain_key");
 
 		std::string members_json;
-		if (arguments.contains("members") && arguments["members"].is_array()) {
-			members_json = arguments["members"].dump();
+		if (arguments.contains("members")) {
+			const json& members = arguments["members"];
+			if (members.is_array()) {
+				// Array passed directly - serialize it
+				members_json = members.dump();
+			} else if (members.is_string()) {
+				// JSON string passed - use it directly
+				members_json = members.get<std::string>();
+			}
 		}
 
 		if (agent_run_id <= 0 || run_id <= 0 || domain_key.empty()) {
 			return create_error_response("agent_run_id, run_id, and domain_key are required");
 		}
 		if (members_json.empty()) {
+			proxy_error("llm.domain_set_members: members not provided or invalid type (got: %s)\n",
+				arguments.contains("members") ? arguments["members"].dump().c_str() : "missing");
 			return create_error_response("members array is required");
 		}
 
+		proxy_debug(PROXY_DEBUG_GENERIC, 3, "llm.domain_set_members: setting members='%s'\n", members_json.c_str());
 		int rc = catalog->set_domain_members(agent_run_id, run_id, domain_key, members_json);
 		if (rc) {
+			proxy_error("llm.domain_set_members: failed to set members (rc=%d)\n", rc);
 			return create_error_response("Failed to set domain members");
 		}
 
