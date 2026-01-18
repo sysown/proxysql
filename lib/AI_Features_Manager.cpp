@@ -72,14 +72,14 @@ int AI_Features_Manager::init_vector_db() {
 	// Create tables for LLM cache
 	const char* create_llm_cache =
 		"CREATE TABLE IF NOT EXISTS llm_cache ("
-		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"prompt TEXT NOT NULL,"
-		"response TEXT NOT NULL,"
-		"system_message TEXT,"
-		"embedding BLOB,"
-		"hit_count INTEGER DEFAULT 0,"
-		"last_hit INTEGER,"
-		"created_at INTEGER DEFAULT (strftime('%s', 'now'))"
+		"id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"prompt TEXT NOT NULL , "
+		"response TEXT NOT NULL , "
+		"system_message TEXT , "
+		"embedding BLOB , "
+		"hit_count INTEGER DEFAULT 0 , "
+		"last_hit INTEGER , "
+		"created_at INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
 	if (vector_db->execute(create_llm_cache) != 0) {
@@ -90,13 +90,13 @@ int AI_Features_Manager::init_vector_db() {
 	// Create table for anomaly patterns
 	const char* create_anomaly_patterns =
 		"CREATE TABLE IF NOT EXISTS anomaly_patterns ("
-		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"pattern_name TEXT,"
-		"pattern_type TEXT,"  // 'sql_injection', 'dos', 'privilege_escalation'
-		"query_example TEXT,"
-		"embedding BLOB,"
-		"severity INTEGER,"  // 1-10
-		"created_at INTEGER DEFAULT (strftime('%s', 'now'))"
+		"id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"pattern_name TEXT , "
+		"pattern_type TEXT , "  // 'sql_injection', 'dos', 'privilege_escalation'
+		"query_example TEXT , "
+		"embedding BLOB , "
+		"severity INTEGER , "  // 1-10
+		"created_at INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
 	if (vector_db->execute(create_anomaly_patterns) != 0) {
@@ -107,13 +107,13 @@ int AI_Features_Manager::init_vector_db() {
 	// Create table for query history
 	const char* create_query_history =
 		"CREATE TABLE IF NOT EXISTS query_history ("
-		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"prompt TEXT NOT NULL,"
-		"response TEXT,"
-		"embedding BLOB,"
-		"execution_time_ms INTEGER,"
-		"success BOOLEAN,"
-		"timestamp INTEGER DEFAULT (strftime('%s', 'now'))"
+		"id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"prompt TEXT NOT NULL , "
+		"response TEXT , "
+		"embedding BLOB , "
+		"execution_time_ms INTEGER , "
+		"success BOOLEAN , "
+		"timestamp INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
 	if (vector_db->execute(create_query_history) != 0) {
@@ -164,7 +164,7 @@ int AI_Features_Manager::init_vector_db() {
 
 int AI_Features_Manager::init_llm_bridge() {
 	if (!GloGATH->variables.genai_llm_enabled) {
-		proxy_info("AI: LLM bridge disabled, skipping initialization\n");
+		proxy_info("AI: LLM bridge disabled ,  skipping initialization\n");
 		return 0;
 	}
 
@@ -198,7 +198,7 @@ int AI_Features_Manager::init_llm_bridge() {
 
 int AI_Features_Manager::init_anomaly_detector() {
 	if (!GloGATH->variables.genai_anomaly_enabled) {
-		proxy_info("AI: Anomaly detection disabled, skipping initialization\n");
+		proxy_info("AI: Anomaly detection disabled ,  skipping initialization\n");
 		return 0;
 	}
 
@@ -298,24 +298,24 @@ std::string AI_Features_Manager::get_status_json() {
 	char buf[2048];
 	snprintf(buf, sizeof(buf),
 		"{"
-		"\"version\": \"%s\","
+		"\"version\": \"%s\" , "
 		"\"llm\": {"
-		"\"total_requests\": %llu,"
-		"\"cache_hits\": %llu,"
-		"\"local_calls\": %llu,"
-		"\"cloud_calls\": %llu,"
-		"\"total_response_time_ms\": %llu,"
-		"\"cache_total_lookup_time_ms\": %llu,"
-		"\"cache_total_store_time_ms\": %llu,"
-		"\"cache_lookups\": %llu,"
-		"\"cache_stores\": %llu,"
+		"\"total_requests\": %llu , "
+		"\"cache_hits\": %llu , "
+		"\"local_calls\": %llu , "
+		"\"cloud_calls\": %llu , "
+		"\"total_response_time_ms\": %llu , "
+		"\"cache_total_lookup_time_ms\": %llu , "
+		"\"cache_total_store_time_ms\": %llu , "
+		"\"cache_lookups\": %llu , "
+		"\"cache_stores\": %llu , "
 		"\"cache_misses\": %llu"
-		"},"
+		"} , "
 		"\"anomaly\": {"
-		"\"total_checks\": %llu,"
-		"\"blocked\": %llu,"
+		"\"total_checks\": %llu , "
+		"\"blocked\": %llu , "
 		"\"flagged\": %llu"
-		"},"
+		"} , "
 		"\"spend\": {"
 		"\"daily_usd\": %.2f"
 		"}"

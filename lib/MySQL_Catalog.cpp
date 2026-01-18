@@ -55,16 +55,16 @@ int MySQL_Catalog::create_tables() {
 	// Main catalog table with schema column for isolation
 	const char* create_catalog_table =
 		"CREATE TABLE IF NOT EXISTS catalog ("
-		"  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"  schema TEXT NOT NULL,"         // schema name (e.g., "sales", "production")
-		"  kind TEXT NOT NULL,"           // table, view, domain, metric, note
-		"  key TEXT NOT NULL,"            // e.g., "orders", "customer_summary"
-		"  document TEXT NOT NULL,"       // JSON content
-		"  tags TEXT,"                    // comma-separated tags
-		"  links TEXT,"                   // comma-separated related keys
-		"  created_at INTEGER DEFAULT (strftime('%s', 'now')),"
-		"  updated_at INTEGER DEFAULT (strftime('%s', 'now')),"
-		"  UNIQUE(schema, kind, key)"
+		"  id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"  schema TEXT NOT NULL , "         // schema name (e.g., "sales" ,  "production")
+		"  kind TEXT NOT NULL , "           // table, view, domain, metric, note
+		"  key TEXT NOT NULL , "            // e.g., "orders" ,  "customer_summary"
+		"  document TEXT NOT NULL , "       // JSON content
+		"  tags TEXT , "                    // comma-separated tags
+		"  links TEXT , "                   // comma-separated related keys
+		"  created_at INTEGER DEFAULT (strftime('%s', 'now')) , "
+		"  updated_at INTEGER DEFAULT (strftime('%s', 'now')) , "
+		"  UNIQUE(schema, kind ,  key)"
 		");";
 
 	if (!db->execute(create_catalog_table)) {
@@ -80,7 +80,7 @@ int MySQL_Catalog::create_tables() {
 
 	// Full-text search table for better search (optional enhancement)
 	db->execute("CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5("
-		"  schema, kind, key, document, tags, content='catalog', content_rowid='id'"
+		"  schema, kind, key, document, tags, content='catalog' ,  content_rowid='id'"
 		");");
 
 	// Triggers to keep FTS in sync
@@ -88,23 +88,23 @@ int MySQL_Catalog::create_tables() {
 	db->execute("DROP TRIGGER IF EXISTS catalog_ad");
 
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ai AFTER INSERT ON catalog BEGIN"
-		"  INSERT INTO catalog_fts(rowid, schema, kind, key, document, tags)"
-		"  VALUES (new.id, new.schema, new.kind, new.key, new.document, new.tags);"
+		"  INSERT INTO catalog_fts(rowid, schema, kind, key, document ,  tags)"
+		"  VALUES (new.id, new.schema, new.kind, new.key, new.document ,  new.tags);"
 		"END;");
 
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ad AFTER DELETE ON catalog BEGIN"
-		"  INSERT INTO catalog_fts(catalog_fts, rowid, schema, kind, key, document, tags)"
-		"  VALUES ('delete', old.id, old.schema, old.kind, old.key, old.document, old.tags);"
+		"  INSERT INTO catalog_fts(catalog_fts, rowid, schema, kind, key, document ,  tags)"
+		"  VALUES ('delete', old.id, old.schema, old.kind, old.key, old.document ,  old.tags);"
 		"END;");
 
 	// Merge operations log
 	const char* create_merge_log =
 		"CREATE TABLE IF NOT EXISTS merge_log ("
-		"  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"  target_key TEXT NOT NULL,"
-		"  source_keys TEXT NOT NULL,"  // JSON array
-		"  instructions TEXT,"
-		"  created_at INTEGER DEFAULT (strftime('%s', 'now'))"
+		"  id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"  target_key TEXT NOT NULL , "
+		"  source_keys TEXT NOT NULL , "  // JSON array
+		"  instructions TEXT , "
+		"  created_at INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
 	db->execute(create_merge_log);
@@ -123,13 +123,13 @@ int MySQL_Catalog::upsert(
 	sqlite3_stmt* stmt = NULL;
 
 	const char* upsert_sql =
-		"INSERT INTO catalog(schema, kind, key, document, tags, links, updated_at) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now')) "
-		"ON CONFLICT(schema, kind, key) DO UPDATE SET "
-		"  document = ?4,"
-		"  tags = ?5,"
-		"  links = ?6,"
-		"  updated_at = strftime('%s', 'now')";
+		"INSERT INTO catalog(schema, kind, key, document, tags, links ,  updated_at) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, strftime('%s' ,  'now')) "
+		"ON CONFLICT(schema, kind ,  key) DO UPDATE SET "
+		"  document = ?4 , "
+		"  tags = ?5 , "
+		"  links = ?6 , "
+		"  updated_at = strftime('%s' ,  'now')";
 
 	int rc = db->prepare_v2(upsert_sql, &stmt);
 	if (rc != SQLITE_OK) {
@@ -147,7 +147,7 @@ int MySQL_Catalog::upsert(
 	SAFE_SQLITE3_STEP2(stmt);
 	(*proxy_sqlite3_finalize)(stmt);
 
-	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Catalog upsert: schema=%s, kind=%s, key=%s\n", schema.c_str(), kind.c_str(), key.c_str());
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Catalog upsert: schema=%s, kind=%s ,  key=%s\n", schema.c_str(), kind.c_str(), key.c_str());
 	return 0;
 }
 
@@ -197,7 +197,7 @@ std::string MySQL_Catalog::search(
 	int offset
 ) {
 	std::ostringstream sql;
-	sql << "SELECT schema, kind, key, document, tags, links FROM catalog WHERE 1=1";
+	sql << "SELECT schema, kind, key, document, tags ,  links FROM catalog WHERE 1=1";
 
 	// Add schema filter
 	if (!schema.empty()) {
@@ -277,7 +277,7 @@ std::string MySQL_Catalog::list(
 	int offset
 ) {
 	std::ostringstream sql;
-	sql << "SELECT schema, kind, key, document, tags, links FROM catalog WHERE 1=1";
+	sql << "SELECT schema, kind, key, document, tags ,  links FROM catalog WHERE 1=1";
 
 	if (!schema.empty()) {
 		sql << " AND schema = '" << schema << "'";
@@ -287,7 +287,7 @@ std::string MySQL_Catalog::list(
 		sql << " AND kind = '" << kind << "'";
 	}
 
-	sql << " ORDER BY schema, kind, key ASC LIMIT " << limit << " OFFSET " << offset;
+	sql << " ORDER BY schema, kind ,  key ASC LIMIT " << limit << " OFFSET " << offset;
 
 	// Get total count
 	std::ostringstream count_sql;
@@ -363,7 +363,7 @@ int MySQL_Catalog::merge(
 	for (const auto& key : keys) {
 		std::string doc;
 		// Try different kinds for flexible merging (empty schema searches all)
-		if (get("", "table", key, doc) == 0 || get("", "view", key, doc) == 0) {
+		if (get("" ,  "table", key ,  doc) == 0 || get("" ,  "view", key, doc) == 0) {
 			source_docs += doc + "\n\n";
 		}
 	}
@@ -373,15 +373,15 @@ int MySQL_Catalog::merge(
 	merged_doc += "\"source_keys\":[";
 
 	for (size_t i = 0; i < keys.size(); i++) {
-		if (i > 0) merged_doc += ",";
+		if (i > 0) merged_doc += " , ";
 		merged_doc += "\"" + keys[i] + "\"";
 	}
-	merged_doc += "],";
+	merged_doc += "] , ";
 	merged_doc += "\"instructions\":" + std::string(instructions.empty() ? "\"\"" : "\"" + instructions + "\"");
 	merged_doc += "}";
 
 	// Use empty schema for merged domain entries (backward compatibility)
-	return upsert("", kind, target_key, merged_doc, "", "");
+	return upsert("", kind, target_key, merged_doc ,  "" ,  "");
 }
 
 int MySQL_Catalog::remove(

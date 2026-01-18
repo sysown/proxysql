@@ -119,9 +119,9 @@ int Discovery_Schema::create_deterministic_tables() {
 	// Documentation table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS schema_docs ("
-		"  doc_key     TEXT PRIMARY KEY,"
-		"  title       TEXT NOT NULL,"
-		"  body        TEXT NOT NULL,"
+		"  doc_key     TEXT PRIMARY KEY , "
+		"  title       TEXT NOT NULL , "
+		"  body        TEXT NOT NULL , "
 		"  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))"
 		");"
 	);
@@ -129,11 +129,11 @@ int Discovery_Schema::create_deterministic_tables() {
 	// Runs table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS runs ("
-		"  run_id        INTEGER PRIMARY KEY,"
-		"  started_at    TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  finished_at   TEXT,"
-		"  source_dsn    TEXT,"
-		"  mysql_version TEXT,"
+		"  run_id        INTEGER PRIMARY KEY , "
+		"  started_at    TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  finished_at   TEXT , "
+		"  source_dsn    TEXT , "
+		"  mysql_version TEXT , "
 		"  notes         TEXT"
 		");"
 	);
@@ -141,173 +141,173 @@ int Discovery_Schema::create_deterministic_tables() {
 	// Schemas table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS schemas ("
-		"  schema_id   INTEGER PRIMARY KEY,"
-		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  schema_name TEXT NOT NULL,"
-		"  charset     TEXT,"
-		"  collation   TEXT,"
-		"  UNIQUE(run_id, schema_name)"
+		"  schema_id   INTEGER PRIMARY KEY , "
+		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  schema_name TEXT NOT NULL , "
+		"  charset     TEXT , "
+		"  collation   TEXT , "
+		"  UNIQUE(run_id ,  schema_name)"
 		");"
 	);
 
 	// Objects table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS objects ("
-		"  object_id        INTEGER PRIMARY KEY,"
-		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  schema_name      TEXT NOT NULL,"
-		"  object_name      TEXT NOT NULL,"
-		"  object_type      TEXT NOT NULL CHECK(object_type IN ('table','view','routine','trigger')),"
-		"  engine           TEXT,"
-		"  table_rows_est   INTEGER,"
-		"  data_length      INTEGER,"
-		"  index_length     INTEGER,"
-		"  create_time      TEXT,"
-		"  update_time      TEXT,"
-		"  object_comment   TEXT,"
-		"  definition_sql   TEXT,"
-		"  has_primary_key  INTEGER NOT NULL DEFAULT 0,"
-		"  has_foreign_keys INTEGER NOT NULL DEFAULT 0,"
-		"  has_time_column  INTEGER NOT NULL DEFAULT 0,"
-		"  UNIQUE(run_id, schema_name, object_type, object_name)"
+		"  object_id        INTEGER PRIMARY KEY , "
+		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  schema_name      TEXT NOT NULL , "
+		"  object_name      TEXT NOT NULL , "
+		"  object_type      TEXT NOT NULL CHECK(object_type IN ('table','view','routine','trigger')) , "
+		"  engine           TEXT , "
+		"  table_rows_est   INTEGER , "
+		"  data_length      INTEGER , "
+		"  index_length     INTEGER , "
+		"  create_time      TEXT , "
+		"  update_time      TEXT , "
+		"  object_comment   TEXT , "
+		"  definition_sql   TEXT , "
+		"  has_primary_key  INTEGER NOT NULL DEFAULT 0 , "
+		"  has_foreign_keys INTEGER NOT NULL DEFAULT 0 , "
+		"  has_time_column  INTEGER NOT NULL DEFAULT 0 , "
+		"  UNIQUE(run_id, schema_name, object_type ,  object_name)"
 		");"
 	);
 
 	// Indexes for objects
-	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_run_schema ON objects(run_id, schema_name);");
-	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_run_type ON objects(run_id, object_type);");
-	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_rows_est ON objects(run_id, table_rows_est);");
-	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_name ON objects(run_id, schema_name, object_name);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_run_schema ON objects(run_id ,  schema_name);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_run_type ON objects(run_id ,  object_type);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_rows_est ON objects(run_id ,  table_rows_est);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_name ON objects(run_id, schema_name ,  object_name);");
 
 	// Columns table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS columns ("
-		"  column_id       INTEGER PRIMARY KEY,"
-		"  object_id       INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  ordinal_pos     INTEGER NOT NULL,"
-		"  column_name     TEXT NOT NULL,"
-		"  data_type       TEXT NOT NULL,"
-		"  column_type     TEXT,"
-		"  is_nullable     INTEGER NOT NULL CHECK(is_nullable IN (0,1)),"
-		"  column_default  TEXT,"
-		"  extra           TEXT,"
-		"  charset         TEXT,"
-		"  collation       TEXT,"
-		"  column_comment  TEXT,"
-		"  is_pk           INTEGER NOT NULL DEFAULT 0,"
-		"  is_unique       INTEGER NOT NULL DEFAULT 0,"
-		"  is_indexed      INTEGER NOT NULL DEFAULT 0,"
-		"  is_time         INTEGER NOT NULL DEFAULT 0,"
-		"  is_id_like      INTEGER NOT NULL DEFAULT 0,"
-		"  UNIQUE(object_id, column_name),"
-		"  UNIQUE(object_id, ordinal_pos)"
+		"  column_id       INTEGER PRIMARY KEY , "
+		"  object_id       INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  ordinal_pos     INTEGER NOT NULL , "
+		"  column_name     TEXT NOT NULL , "
+		"  data_type       TEXT NOT NULL , "
+		"  column_type     TEXT , "
+		"  is_nullable     INTEGER NOT NULL CHECK(is_nullable IN (0,1)) , "
+		"  column_default  TEXT , "
+		"  extra           TEXT , "
+		"  charset         TEXT , "
+		"  collation       TEXT , "
+		"  column_comment  TEXT , "
+		"  is_pk           INTEGER NOT NULL DEFAULT 0 , "
+		"  is_unique       INTEGER NOT NULL DEFAULT 0 , "
+		"  is_indexed      INTEGER NOT NULL DEFAULT 0 , "
+		"  is_time         INTEGER NOT NULL DEFAULT 0 , "
+		"  is_id_like      INTEGER NOT NULL DEFAULT 0 , "
+		"  UNIQUE(object_id, column_name) , "
+		"  UNIQUE(object_id ,  ordinal_pos)"
 		");"
 	);
 
 	db->execute("CREATE INDEX IF NOT EXISTS idx_columns_object ON columns(object_id);");
 	db->execute("CREATE INDEX IF NOT EXISTS idx_columns_name ON columns(column_name);");
-	db->execute("CREATE INDEX IF NOT EXISTS idx_columns_obj_name ON columns(object_id, column_name);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_columns_obj_name ON columns(object_id ,  column_name);");
 
 	// Indexes table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS indexes ("
-		"  index_id      INTEGER PRIMARY KEY,"
-		"  object_id     INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  index_name    TEXT NOT NULL,"
-		"  is_unique     INTEGER NOT NULL CHECK(is_unique IN (0,1)),"
-		"  is_primary    INTEGER NOT NULL CHECK(is_primary IN (0,1)),"
-		"  index_type    TEXT,"
-		"  cardinality   INTEGER,"
-		"  UNIQUE(object_id, index_name)"
+		"  index_id      INTEGER PRIMARY KEY , "
+		"  object_id     INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  index_name    TEXT NOT NULL , "
+		"  is_unique     INTEGER NOT NULL CHECK(is_unique IN (0,1)) , "
+		"  is_primary    INTEGER NOT NULL CHECK(is_primary IN (0,1)) , "
+		"  index_type    TEXT , "
+		"  cardinality   INTEGER , "
+		"  UNIQUE(object_id ,  index_name)"
 		");"
 	);
 
 	// Index columns table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS index_columns ("
-		"  index_id      INTEGER NOT NULL REFERENCES indexes(index_id) ON DELETE CASCADE,"
-		"  seq_in_index  INTEGER NOT NULL,"
-		"  column_name   TEXT NOT NULL,"
-		"  sub_part      INTEGER,"
-		"  collation     TEXT,"
-		"  PRIMARY KEY(index_id, seq_in_index)"
+		"  index_id      INTEGER NOT NULL REFERENCES indexes(index_id) ON DELETE CASCADE , "
+		"  seq_in_index  INTEGER NOT NULL , "
+		"  column_name   TEXT NOT NULL , "
+		"  sub_part      INTEGER , "
+		"  collation     TEXT , "
+		"  PRIMARY KEY(index_id ,  seq_in_index)"
 		");"
 	);
 
 	// Foreign keys table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS foreign_keys ("
-		"  fk_id              INTEGER PRIMARY KEY,"
-		"  run_id             INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  child_object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  fk_name            TEXT,"
-		"  parent_schema_name TEXT NOT NULL,"
-		"  parent_object_name TEXT NOT NULL,"
-		"  on_update          TEXT,"
+		"  fk_id              INTEGER PRIMARY KEY , "
+		"  run_id             INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  child_object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  fk_name            TEXT , "
+		"  parent_schema_name TEXT NOT NULL , "
+		"  parent_object_name TEXT NOT NULL , "
+		"  on_update          TEXT , "
 		"  on_delete          TEXT"
 		");"
 	);
 
-	db->execute("CREATE INDEX IF NOT EXISTS idx_fk_child ON foreign_keys(run_id, child_object_id);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_fk_child ON foreign_keys(run_id ,  child_object_id);");
 
 	// Foreign key columns table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS foreign_key_columns ("
-		"  fk_id          INTEGER NOT NULL REFERENCES foreign_keys(fk_id) ON DELETE CASCADE,"
-		"  seq            INTEGER NOT NULL,"
-		"  child_column   TEXT NOT NULL,"
-		"  parent_column  TEXT NOT NULL,"
-		"  PRIMARY KEY(fk_id, seq)"
+		"  fk_id          INTEGER NOT NULL REFERENCES foreign_keys(fk_id) ON DELETE CASCADE , "
+		"  seq            INTEGER NOT NULL , "
+		"  child_column   TEXT NOT NULL , "
+		"  parent_column  TEXT NOT NULL , "
+		"  PRIMARY KEY(fk_id ,  seq)"
 		");"
 	);
 
 	// View dependencies table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS view_dependencies ("
-		"  view_object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  depends_on_schema TEXT NOT NULL,"
-		"  depends_on_name   TEXT NOT NULL,"
-		"  PRIMARY KEY(view_object_id, depends_on_schema, depends_on_name)"
+		"  view_object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  depends_on_schema TEXT NOT NULL , "
+		"  depends_on_name   TEXT NOT NULL , "
+		"  PRIMARY KEY(view_object_id, depends_on_schema ,  depends_on_name)"
 		");"
 	);
 
 	// Inferred relationships table (deterministic heuristics)
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS inferred_relationships ("
-		"  rel_id           INTEGER PRIMARY KEY,"
-		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  child_object_id  INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  child_column     TEXT NOT NULL,"
-		"  parent_object_id INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  parent_column    TEXT NOT NULL,"
-		"  confidence       REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),"
-		"  evidence_json    TEXT,"
-		"  UNIQUE(run_id, child_object_id, child_column, parent_object_id, parent_column)"
+		"  rel_id           INTEGER PRIMARY KEY , "
+		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  child_object_id  INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  child_column     TEXT NOT NULL , "
+		"  parent_object_id INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  parent_column    TEXT NOT NULL , "
+		"  confidence       REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
+		"  evidence_json    TEXT , "
+		"  UNIQUE(run_id, child_object_id, child_column, parent_object_id ,  parent_column)"
 		");"
 	);
 
-	db->execute("CREATE INDEX IF NOT EXISTS idx_inferred_conf ON inferred_relationships(run_id, confidence);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_inferred_conf ON inferred_relationships(run_id ,  confidence);");
 
 	// Profiles table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS profiles ("
-		"  profile_id    INTEGER PRIMARY KEY,"
-		"  run_id        INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  object_id     INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  profile_kind  TEXT NOT NULL,"
-		"  profile_json  TEXT NOT NULL,"
-		"  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  UNIQUE(run_id, object_id, profile_kind)"
+		"  profile_id    INTEGER PRIMARY KEY , "
+		"  run_id        INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  object_id     INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  profile_kind  TEXT NOT NULL , "
+		"  profile_json  TEXT NOT NULL , "
+		"  updated_at    TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  UNIQUE(run_id, object_id ,  profile_kind)"
 		");"
 	);
 
 	// Seed documentation
 	db->execute(
-		"INSERT OR IGNORE INTO schema_docs(doc_key, title, body) VALUES"
-		"('table:objects', 'Discovered Objects', 'Tables, views, routines, triggers from INFORMATION_SCHEMA'),"
-		"('table:columns', 'Column Metadata', 'Column details with derived hints (is_time, is_id_like, etc)'),"
-		"('table:llm_object_summaries', 'LLM Object Summaries', 'Structured JSON summaries produced by the LLM agent'),"
-		"('table:llm_domains', 'Domain Clusters', 'Semantic domain groupings (billing, sales, auth, etc)');"
+		"INSERT OR IGNORE INTO schema_docs(doc_key, title ,  body) VALUES"
+		"('table:objects', 'Discovered Objects', 'Tables, views, routines, triggers from INFORMATION_SCHEMA') , "
+		"('table:columns', 'Column Metadata', 'Column details with derived hints (is_time, is_id_like, etc)') , "
+		"('table:llm_object_summaries', 'LLM Object Summaries', 'Structured JSON summaries produced by the LLM agent') , "
+		"('table:llm_domains', 'Domain Clusters', 'Semantic domain groupings (billing, sales, auth ,  etc)');"
 	);
 
 	return 0;
@@ -317,14 +317,14 @@ int Discovery_Schema::create_llm_tables() {
 	// Agent runs table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS agent_runs ("
-		"  agent_run_id   INTEGER PRIMARY KEY,"
-		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  started_at     TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  finished_at    TEXT,"
-		"  model_name     TEXT,"
-		"  prompt_hash    TEXT,"
-		"  budget_json    TEXT,"
-		"  status         TEXT NOT NULL DEFAULT 'running',"
+		"  agent_run_id   INTEGER PRIMARY KEY , "
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  started_at     TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  finished_at    TEXT , "
+		"  model_name     TEXT , "
+		"  prompt_hash    TEXT , "
+		"  budget_json    TEXT , "
+		"  status         TEXT NOT NULL DEFAULT 'running' , "
 		"  error          TEXT"
 		");"
 	);
@@ -334,10 +334,10 @@ int Discovery_Schema::create_llm_tables() {
 	// Agent events table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS agent_events ("
-		"  event_id      INTEGER PRIMARY KEY,"
-		"  agent_run_id  INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
-		"  ts            TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  event_type    TEXT NOT NULL,"
+		"  event_id      INTEGER PRIMARY KEY , "
+		"  agent_run_id  INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE , "
+		"  ts            TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  event_type    TEXT NOT NULL , "
 		"  payload_json  TEXT NOT NULL"
 		");"
 	);
@@ -347,100 +347,100 @@ int Discovery_Schema::create_llm_tables() {
 	// LLM object summaries table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_object_summaries ("
-		"  summary_id     INTEGER PRIMARY KEY,"
-		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
-		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  object_id      INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  summary_json   TEXT NOT NULL,"
-		"  confidence     REAL NOT NULL DEFAULT 0.5 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
-		"  status         TEXT NOT NULL DEFAULT 'draft',"
-		"  sources_json   TEXT,"
-		"  created_at     TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  UNIQUE(agent_run_id, object_id)"
+		"  summary_id     INTEGER PRIMARY KEY , "
+		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE , "
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  object_id      INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  summary_json   TEXT NOT NULL , "
+		"  confidence     REAL NOT NULL DEFAULT 0.5 CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
+		"  status         TEXT NOT NULL DEFAULT 'draft' , "
+		"  sources_json   TEXT , "
+		"  created_at     TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  UNIQUE(agent_run_id ,  object_id)"
 		");"
 	);
 
-	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_summaries_obj ON llm_object_summaries(run_id, object_id);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_summaries_obj ON llm_object_summaries(run_id ,  object_id);");
 
 	// LLM relationships table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_relationships ("
-		"  llm_rel_id       INTEGER PRIMARY KEY,"
-		"  agent_run_id     INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
-		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  child_object_id  INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  child_column     TEXT NOT NULL,"
-		"  parent_object_id INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  parent_column    TEXT NOT NULL,"
-		"  rel_type         TEXT NOT NULL DEFAULT 'fk_like',"
-		"  confidence       REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),"
-		"  evidence_json    TEXT,"
-		"  created_at       TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  UNIQUE(agent_run_id, child_object_id, child_column, parent_object_id, parent_column, rel_type)"
+		"  llm_rel_id       INTEGER PRIMARY KEY , "
+		"  agent_run_id     INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE , "
+		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  child_object_id  INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  child_column     TEXT NOT NULL , "
+		"  parent_object_id INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  parent_column    TEXT NOT NULL , "
+		"  rel_type         TEXT NOT NULL DEFAULT 'fk_like' , "
+		"  confidence       REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
+		"  evidence_json    TEXT , "
+		"  created_at       TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  UNIQUE(agent_run_id, child_object_id, child_column, parent_object_id, parent_column ,  rel_type)"
 		");"
 	);
 
-	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_rel_conf ON llm_relationships(run_id, confidence);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_rel_conf ON llm_relationships(run_id ,  confidence);");
 
 	// LLM domains table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_domains ("
-		"  domain_id     INTEGER PRIMARY KEY,"
-		"  agent_run_id  INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
-		"  run_id        INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  domain_key    TEXT NOT NULL,"
-		"  title         TEXT,"
-		"  description   TEXT,"
-		"  confidence    REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
-		"  created_at    TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  UNIQUE(agent_run_id, domain_key)"
+		"  domain_id     INTEGER PRIMARY KEY , "
+		"  agent_run_id  INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE , "
+		"  run_id        INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  domain_key    TEXT NOT NULL , "
+		"  title         TEXT , "
+		"  description   TEXT , "
+		"  confidence    REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
+		"  created_at    TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  UNIQUE(agent_run_id ,  domain_key)"
 		");"
 	);
 
 	// LLM domain members table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_domain_members ("
-		"  domain_id    INTEGER NOT NULL REFERENCES llm_domains(domain_id) ON DELETE CASCADE,"
-		"  object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  role         TEXT,"
-		"  confidence   REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
-		"  PRIMARY KEY(domain_id, object_id)"
+		"  domain_id    INTEGER NOT NULL REFERENCES llm_domains(domain_id) ON DELETE CASCADE , "
+		"  object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  role         TEXT , "
+		"  confidence   REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
+		"  PRIMARY KEY(domain_id ,  object_id)"
 		");"
 	);
 
 	// LLM metrics table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_metrics ("
-		"  metric_id      INTEGER PRIMARY KEY,"
-		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
-		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  metric_key     TEXT NOT NULL,"
-		"  title          TEXT NOT NULL,"
-		"  description    TEXT,"
-		"  domain_key     TEXT,"
-		"  grain          TEXT,"
-		"  unit           TEXT,"
-		"  sql_template   TEXT,"
-		"  depends_json   TEXT,"
-		"  confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
-		"  created_at     TEXT NOT NULL DEFAULT (datetime('now')),"
-		"  UNIQUE(agent_run_id, metric_key)"
+		"  metric_id      INTEGER PRIMARY KEY , "
+		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE , "
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  metric_key     TEXT NOT NULL , "
+		"  title          TEXT NOT NULL , "
+		"  description    TEXT , "
+		"  domain_key     TEXT , "
+		"  grain          TEXT , "
+		"  unit           TEXT , "
+		"  sql_template   TEXT , "
+		"  depends_json   TEXT , "
+		"  confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
+		"  created_at     TEXT NOT NULL DEFAULT (datetime('now')) , "
+		"  UNIQUE(agent_run_id ,  metric_key)"
 		");"
 	);
 
-	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_domain ON llm_metrics(run_id, domain_key);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_domain ON llm_metrics(run_id ,  domain_key);");
 
 	// LLM question templates table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_question_templates ("
-		"  template_id    INTEGER PRIMARY KEY,"
-		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
-		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  title          TEXT NOT NULL,"
-		"  question_nl    TEXT NOT NULL,"
-		"  template_json  TEXT NOT NULL,"
-		"  example_sql    TEXT,"
-		"  confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  template_id    INTEGER PRIMARY KEY , "
+		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE , "
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  title          TEXT NOT NULL , "
+		"  question_nl    TEXT NOT NULL , "
+		"  template_json  TEXT NOT NULL , "
+		"  example_sql    TEXT , "
+		"  confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
 		"  created_at     TEXT NOT NULL DEFAULT (datetime('now'))"
 		");"
 	);
@@ -450,28 +450,28 @@ int Discovery_Schema::create_llm_tables() {
 	// LLM notes table
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_notes ("
-		"  note_id      INTEGER PRIMARY KEY,"
-		"  agent_run_id INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
-		"  run_id       INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  scope        TEXT NOT NULL,"
-		"  object_id    INTEGER REFERENCES objects(object_id) ON DELETE CASCADE,"
-		"  domain_key   TEXT,"
-		"  title        TEXT,"
-		"  body         TEXT NOT NULL,"
-		"  tags_json    TEXT,"
+		"  note_id      INTEGER PRIMARY KEY , "
+		"  agent_run_id INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE , "
+		"  run_id       INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  scope        TEXT NOT NULL , "
+		"  object_id    INTEGER REFERENCES objects(object_id) ON DELETE CASCADE , "
+		"  domain_key   TEXT , "
+		"  title        TEXT , "
+		"  body         TEXT NOT NULL , "
+		"  tags_json    TEXT , "
 		"  created_at   TEXT NOT NULL DEFAULT (datetime('now'))"
 		");"
 	);
 
-	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_notes_scope ON llm_notes(run_id, scope);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_notes_scope ON llm_notes(run_id ,  scope);");
 
 	// LLM search log table - tracks all searches performed
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS llm_search_log ("
-		"  log_id      INTEGER PRIMARY KEY,"
-		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
-		"  query       TEXT NOT NULL,"
-		"  \"limit\"       INTEGER NOT NULL DEFAULT 25,"
+		"  log_id      INTEGER PRIMARY KEY , "
+		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE , "
+		"  query       TEXT NOT NULL , "
+		"  \"limit\"       INTEGER NOT NULL DEFAULT 25 , "
 		"  searched_at TEXT NOT NULL DEFAULT (datetime('now'))"
 		");"
 	);
@@ -488,8 +488,8 @@ int Discovery_Schema::create_fts_tables() {
 	// FTS over objects (contentless)
 	if (!db->execute(
 		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_objects USING fts5("
-		"  object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql, tags,"
-		"  content='',"
+		"  object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql, tags , "
+		"  content='' , "
 		"  tokenize='unicode61 remove_diacritics 2'"
 		");"
 	)) {
@@ -500,8 +500,8 @@ int Discovery_Schema::create_fts_tables() {
 	// FTS over LLM artifacts
 	if (!db->execute(
 		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_llm USING fts5("
-		"  kind, key, title, body, tags,"
-		"  content='',"
+		"  kind, key, title, body, tags , "
+		"  content='' , "
 		"  tokenize='unicode61 remove_diacritics 2'"
 		");"
 	)) {
@@ -522,7 +522,7 @@ int Discovery_Schema::create_run(
 	const std::string& notes
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "INSERT INTO runs(source_dsn, mysql_version, notes) VALUES(?1, ?2, ?3);";
+	const char* sql = "INSERT INTO runs(source_dsn, mysql_version, notes) VALUES(?1, ?2 ,  ?3);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -540,7 +540,7 @@ int Discovery_Schema::create_run(
 
 int Discovery_Schema::finish_run(int run_id, const std::string& notes) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "UPDATE runs SET finished_at = datetime('now'), notes = ?1 WHERE run_id = ?2;";
+	const char* sql = "UPDATE runs SET finished_at = datetime('now') ,  notes = ?1 WHERE run_id = ?2;";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -560,7 +560,7 @@ std::string Discovery_Schema::get_run_info(int run_id) {
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT run_id, started_at, finished_at, source_dsn, mysql_version, notes "
+	sql << "SELECT run_id, started_at, finished_at, source_dsn, mysql_version ,  notes "
 	    << "FROM runs WHERE run_id = " << run_id << ";";
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
@@ -593,7 +593,7 @@ int Discovery_Schema::create_agent_run(
 	const std::string& budget_json
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "INSERT INTO agent_runs(run_id, model_name, prompt_hash, budget_json) VALUES(?1, ?2, ?3, ?4);";
+	const char* sql = "INSERT INTO agent_runs(run_id, model_name, prompt_hash, budget_json) VALUES(?1, ?2, ?3 ,  ?4);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) {
@@ -633,7 +633,7 @@ int Discovery_Schema::finish_agent_run(
 	const std::string& error
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "UPDATE agent_runs SET finished_at = datetime('now'), status = ?1, error = ?2 WHERE agent_run_id = ?3;";
+	const char* sql = "UPDATE agent_runs SET finished_at = datetime('now'), status = ?1 ,  error = ?2 WHERE agent_run_id = ?3;";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -659,7 +659,7 @@ int Discovery_Schema::insert_schema(
 	const std::string& collation
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "INSERT INTO schemas(run_id, schema_name, charset, collation) VALUES(?1, ?2, ?3, ?4);";
+	const char* sql = "INSERT INTO schemas(run_id, schema_name, charset, collation) VALUES(?1, ?2, ?3 ,  ?4);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -697,9 +697,9 @@ int Discovery_Schema::insert_object(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
 		"INSERT INTO objects("
-		"  run_id, schema_name, object_name, object_type, engine, table_rows_est,"
-		"  data_length, index_length, create_time, update_time, object_comment, definition_sql"
-		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);";
+		"  run_id, schema_name, object_name, object_type, engine, table_rows_est , "
+		"  data_length, index_length, create_time, update_time, object_comment ,  definition_sql"
+		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11 ,  ?12);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -745,10 +745,10 @@ int Discovery_Schema::insert_column(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
 		"INSERT INTO columns("
-		"  object_id, ordinal_pos, column_name, data_type, column_type, is_nullable,"
-		"  column_default, extra, charset, collation, column_comment, is_pk, is_unique,"
-		"  is_indexed, is_time, is_id_like"
-		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16);";
+		"  object_id, ordinal_pos, column_name, data_type, column_type, is_nullable , "
+		"  column_default, extra, charset, collation, column_comment, is_pk, is_unique , "
+		"  is_indexed, is_time ,  is_id_like"
+		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15 ,  ?16);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -787,8 +787,8 @@ int Discovery_Schema::insert_index(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO indexes(object_id, index_name, is_unique, is_primary, index_type, cardinality) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6);";
+		"INSERT INTO indexes(object_id, index_name, is_unique, is_primary, index_type ,  cardinality) "
+		"VALUES(?1, ?2, ?3, ?4, ?5 ,  ?6);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -816,8 +816,8 @@ int Discovery_Schema::insert_index_column(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO index_columns(index_id, seq_in_index, column_name, sub_part, collation) "
-		"VALUES(?1, ?2, ?3, ?4, ?5);";
+		"INSERT INTO index_columns(index_id, seq_in_index, column_name, sub_part ,  collation) "
+		"VALUES(?1, ?2, ?3, ?4 ,  ?5);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -845,8 +845,8 @@ int Discovery_Schema::insert_foreign_key(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO foreign_keys(run_id, child_object_id, fk_name, parent_schema_name, parent_object_name, on_update, on_delete) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7);";
+		"INSERT INTO foreign_keys(run_id, child_object_id, fk_name, parent_schema_name, parent_object_name, on_update ,  on_delete) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6 ,  ?7);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -874,8 +874,8 @@ int Discovery_Schema::insert_foreign_key_column(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO foreign_key_columns(fk_id, seq, child_column, parent_column) "
-		"VALUES(?1, ?2, ?3, ?4);";
+		"INSERT INTO foreign_key_columns(fk_id, seq, child_column ,  parent_column) "
+		"VALUES(?1, ?2, ?3 ,  ?4);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -921,10 +921,10 @@ int Discovery_Schema::upsert_profile(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO profiles(run_id, object_id, profile_kind, profile_json) "
-		"VALUES(?1, ?2, ?3, ?4) "
-		"ON CONFLICT(run_id, object_id, profile_kind) DO UPDATE SET "
-		"  profile_json = ?4, updated_at = datetime('now');";
+		"INSERT INTO profiles(run_id, object_id, profile_kind ,  profile_json) "
+		"VALUES(?1, ?2, ?3 ,  ?4) "
+		"ON CONFLICT(run_id, object_id ,  profile_kind) DO UPDATE SET "
+		"  profile_json = ?4 ,  updated_at = datetime('now');";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -971,7 +971,7 @@ int Discovery_Schema::rebuild_fts_index(int run_id) {
 
 	// Fetch all objects for the run
 	std::ostringstream sql;
-	sql << "SELECT object_id, schema_name, object_name, object_type, object_comment, definition_sql "
+	sql << "SELECT object_id, schema_name, object_name, object_type, object_comment ,  definition_sql "
 	    << "FROM objects WHERE run_id = " << run_id << ";";
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
@@ -1002,7 +1002,7 @@ int Discovery_Schema::rebuild_fts_index(int run_id) {
 			SQLite3_result* col_result = NULL;
 
 			std::ostringstream col_sql;
-			col_sql << "SELECT column_name, data_type, column_comment FROM columns "
+			col_sql << "SELECT column_name, data_type ,  column_comment FROM columns "
 			        << "WHERE object_id = " << object_id << " ORDER BY ordinal_pos;";
 
 			db->execute_statement(col_sql.str().c_str(), &error2, &cols2, &affected2, &col_result);
@@ -1048,8 +1048,8 @@ int Discovery_Schema::rebuild_fts_index(int run_id) {
 			int rc;
 			sqlite3_stmt* fts_stmt = NULL;
 			const char* fts_sql =
-				"INSERT INTO fts_objects(object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql, tags) "
-				"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+				"INSERT INTO fts_objects(object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql ,  tags) "
+				"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7 ,  ?8);";
 
 			rc = db->prepare_v2(fts_sql, &fts_stmt);
 			if (rc == SQLITE_OK) {
@@ -1084,7 +1084,7 @@ std::string Discovery_Schema::fts_search(
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT object_key, schema_name, object_name, object_type, tags, bm25(fts_objects) AS score "
+	sql << "SELECT object_key, schema_name, object_name, object_type, tags ,  bm25(fts_objects) AS score "
 	    << "FROM fts_objects WHERE fts_objects MATCH '" << query << "'";
 
 	if (!object_type.empty()) {
@@ -1133,9 +1133,9 @@ std::string Discovery_Schema::get_object(
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT o.object_id, o.schema_name, o.object_name, o.object_type, o.engine, "
-	    << "o.table_rows_est, o.data_length, o.index_length, o.create_time, o.update_time, "
-	    << "o.object_comment, o.has_primary_key, o.has_foreign_keys, o.has_time_column "
+	sql << "SELECT o.object_id, o.schema_name, o.object_name, o.object_type, o.engine ,  "
+	    << "o.table_rows_est, o.data_length, o.index_length, o.create_time, o.update_time ,  "
+	    << "o.object_comment, o.has_primary_key, o.has_foreign_keys ,  o.has_time_column "
 	    << "FROM objects o WHERE o.run_id = " << run_id;
 
 	if (object_id > 0) {
@@ -1179,8 +1179,8 @@ std::string Discovery_Schema::get_object(
 	int cols2 = 0, affected2 = 0;
 	SQLite3_result* col_result = NULL;
 	std::ostringstream col_sql;
-	col_sql << "SELECT column_name, data_type, column_type, is_nullable, column_default, extra, "
-	        << "charset, collation, column_comment, is_pk, is_unique, is_indexed, is_time, is_id_like "
+	col_sql << "SELECT column_name, data_type, column_type, is_nullable, column_default, extra ,  "
+	        << "charset, collation, column_comment, is_pk, is_unique, is_indexed, is_time ,  is_id_like "
 	        << "FROM columns WHERE object_id = " << obj_id << " ORDER BY ordinal_pos;";
 
 	db->execute_statement(col_sql.str().c_str(), &error, &cols2, &affected2, &col_result);
@@ -1212,10 +1212,10 @@ std::string Discovery_Schema::get_object(
 
 	// Get indexes
 	std::ostringstream idx_sql;
-	idx_sql << "SELECT i.index_name, i.is_unique, i.is_primary, i.index_type, i.cardinality, "
-	        << "ic.seq_in_index, ic.column_name, ic.sub_part, ic.collation "
+	idx_sql << "SELECT i.index_name, i.is_unique, i.is_primary, i.index_type, i.cardinality ,  "
+	        << "ic.seq_in_index, ic.column_name, ic.sub_part ,  ic.collation "
 	        << "FROM indexes i LEFT JOIN index_columns ic ON i.index_id = ic.index_id "
-	        << "WHERE i.object_id = " << obj_id << " ORDER BY i.index_name, ic.seq_in_index;";
+	        << "WHERE i.object_id = " << obj_id << " ORDER BY i.index_name ,  ic.seq_in_index;";
 
 	SQLite3_result* idx_result = NULL;
 	db->execute_statement(idx_sql.str().c_str(), &error, &cols, &affected, &idx_result);
@@ -1265,7 +1265,7 @@ std::string Discovery_Schema::get_object(
 	// Get profiles
 	if (include_profiles) {
 		std::ostringstream prof_sql;
-		prof_sql << "SELECT profile_kind, profile_json FROM profiles "
+		prof_sql << "SELECT profile_kind ,  profile_json FROM profiles "
 		         << "WHERE run_id = " << run_id << " AND object_id = " << obj_id << ";";
 
 		SQLite3_result* prof_result = NULL;
@@ -1304,8 +1304,8 @@ std::string Discovery_Schema::list_objects(
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT object_id, schema_name, object_name, object_type, engine, table_rows_est, "
-	    << "data_length, index_length, has_primary_key, has_foreign_keys, has_time_column "
+	sql << "SELECT object_id, schema_name, object_name, object_type, engine, table_rows_est ,  "
+	    << "data_length, index_length, has_primary_key, has_foreign_keys ,  has_time_column "
 	    << "FROM objects WHERE run_id = " << run_id;
 
 	if (!schema_name.empty()) {
@@ -1321,7 +1321,7 @@ std::string Discovery_Schema::list_objects(
 	} else if (order_by == "size_desc") {
 		sql << " ORDER BY (data_length + index_length) DESC";
 	} else {
-		sql << " ORDER BY schema_name, object_name";
+		sql << " ORDER BY schema_name ,  object_name";
 	}
 
 	// Pagination
@@ -1388,11 +1388,11 @@ std::string Discovery_Schema::get_relationships(
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream fk_sql;
-	fk_sql << "SELECT fk.fk_name, fk.parent_schema_name, fk.parent_object_name, fk.on_update, fk.on_delete, "
-	        << "fkc.seq, fkc.child_column, fkc.parent_column "
+	fk_sql << "SELECT fk.fk_name, fk.parent_schema_name, fk.parent_object_name, fk.on_update, fk.on_delete ,  "
+	        << "fkc.seq, fkc.child_column ,  fkc.parent_column "
 	        << "FROM foreign_keys fk JOIN foreign_key_columns fkc ON fk.fk_id = fkc.fk_id "
 	        << "WHERE fk.run_id = " << run_id << " AND fk.child_object_id = " << object_id << " "
-	        << "ORDER BY fk.fk_name, fkc.seq;";
+	        << "ORDER BY fk.fk_name ,  fkc.seq;";
 
 	db->execute_statement(fk_sql.str().c_str(), &error, &cols, &affected, &resultset);
 	if (resultset) {
@@ -1437,8 +1437,8 @@ std::string Discovery_Schema::get_relationships(
 	// Get inferred relationships if requested
 	if (include_inferred) {
 		std::ostringstream inf_sql;
-		inf_sql << "SELECT ir.child_column, o2.schema_name, o2.object_name, ir.parent_column, "
-		        << "ir.confidence, ir.evidence_json "
+		inf_sql << "SELECT ir.child_column, o2.schema_name, o2.object_name, ir.parent_column ,  "
+		        << "ir.confidence ,  ir.evidence_json "
 		        << "FROM inferred_relationships ir "
 		        << "JOIN objects o2 ON ir.parent_object_id = o2.object_id "
 		        << "WHERE ir.run_id = " << run_id << " AND ir.child_object_id = " << object_id
@@ -1479,7 +1479,7 @@ int Discovery_Schema::append_agent_event(
 	const std::string& payload_json
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "INSERT INTO agent_events(agent_run_id, event_type, payload_json) VALUES(?1, ?2, ?3);";
+	const char* sql = "INSERT INTO agent_events(agent_run_id, event_type, payload_json) VALUES(?1, ?2 ,  ?3);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1506,10 +1506,10 @@ int Discovery_Schema::upsert_llm_summary(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO llm_object_summaries(agent_run_id, run_id, object_id, summary_json, confidence, status, sources_json) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7) "
-		"ON CONFLICT(agent_run_id, object_id) DO UPDATE SET "
-		"  summary_json = ?4, confidence = ?5, status = ?6, sources_json = ?7;";
+		"INSERT INTO llm_object_summaries(agent_run_id, run_id, object_id, summary_json, confidence, status ,  sources_json) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6 ,  ?7) "
+		"ON CONFLICT(agent_run_id ,  object_id) DO UPDATE SET "
+		"  summary_json = ?4, confidence = ?5, status = ?6 ,  sources_json = ?7;";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1539,7 +1539,7 @@ std::string Discovery_Schema::get_llm_summary(
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT summary_json, confidence, status, sources_json FROM llm_object_summaries "
+	sql << "SELECT summary_json, confidence, status ,  sources_json FROM llm_object_summaries "
 	    << "WHERE run_id = " << run_id << " AND object_id = " << object_id;
 
 	if (agent_run_id > 0) {
@@ -1582,10 +1582,10 @@ int Discovery_Schema::upsert_llm_relationship(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO llm_relationships(agent_run_id, run_id, child_object_id, child_column, parent_object_id, parent_column, rel_type, confidence, evidence_json) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) "
-		"ON CONFLICT(agent_run_id, child_object_id, child_column, parent_object_id, parent_column, rel_type) "
-		"DO UPDATE SET confidence = ?8, evidence_json = ?9;";
+		"INSERT INTO llm_relationships(agent_run_id, run_id, child_object_id, child_column, parent_object_id, parent_column, rel_type, confidence ,  evidence_json) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 ,  ?9) "
+		"ON CONFLICT(agent_run_id, child_object_id, child_column, parent_object_id, parent_column ,  rel_type) "
+		"DO UPDATE SET confidence = ?8 ,  evidence_json = ?9;";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1616,10 +1616,10 @@ int Discovery_Schema::upsert_llm_domain(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO llm_domains(agent_run_id, run_id, domain_key, title, description, confidence) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6) "
-		"ON CONFLICT(agent_run_id, domain_key) DO UPDATE SET "
-		"  title = ?4, description = ?5, confidence = ?6;";
+		"INSERT INTO llm_domains(agent_run_id, run_id, domain_key, title, description ,  confidence) "
+		"VALUES(?1, ?2, ?3, ?4, ?5 ,  ?6) "
+		"ON CONFLICT(agent_run_id ,  domain_key) DO UPDATE SET "
+		"  title = ?4, description = ?5 ,  confidence = ?6;";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1673,11 +1673,11 @@ int Discovery_Schema::set_domain_members(
 		for (json::iterator it = members.begin(); it != members.end(); ++it) {
 			json member = *it;
 			int object_id = member["object_id"];
-			std::string role = member.value("role", "");
+			std::string role = member.value("role" ,  "");
 			double confidence = member.value("confidence", 0.6);
 
 			sqlite3_stmt* stmt = NULL;
-			const char* ins_sql = "INSERT INTO llm_domain_members(domain_id, object_id, role, confidence) VALUES(?1, ?2, ?3, ?4);";
+			const char* ins_sql = "INSERT INTO llm_domain_members(domain_id, object_id, role, confidence) VALUES(?1, ?2, ?3 ,  ?4);";
 
 			int rc = db->prepare_v2(ins_sql, &stmt);
 			if (rc == SQLITE_OK) {
@@ -1712,10 +1712,10 @@ int Discovery_Schema::upsert_llm_metric(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO llm_metrics(agent_run_id, run_id, metric_key, title, description, domain_key, grain, unit, sql_template, depends_json, confidence) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) "
-		"ON CONFLICT(agent_run_id, metric_key) DO UPDATE SET "
-		"  title = ?4, description = ?5, domain_key = ?6, grain = ?7, unit = ?8, sql_template = ?9, depends_json = ?10, confidence = ?11;";
+		"INSERT INTO llm_metrics(agent_run_id, run_id, metric_key, title, description, domain_key, grain, unit, sql_template, depends_json ,  confidence) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 ,  ?11) "
+		"ON CONFLICT(agent_run_id ,  metric_key) DO UPDATE SET "
+		"  title = ?4, description = ?5, domain_key = ?6, grain = ?7, unit = ?8, sql_template = ?9, depends_json = ?10 ,  confidence = ?11;";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1750,8 +1750,8 @@ int Discovery_Schema::add_question_template(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO llm_question_templates(agent_run_id, run_id, title, question_nl, template_json, example_sql, confidence) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7);";
+		"INSERT INTO llm_question_templates(agent_run_id, run_id, title, question_nl, template_json, example_sql ,  confidence) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6 ,  ?7);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1783,8 +1783,8 @@ int Discovery_Schema::add_llm_note(
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO llm_notes(agent_run_id, run_id, scope, object_id, domain_key, title, body, tags_json) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+		"INSERT INTO llm_notes(agent_run_id, run_id, scope, object_id, domain_key, title, body ,  tags_json) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7 ,  ?8);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1819,7 +1819,7 @@ std::string Discovery_Schema::fts_search_llm(
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT kind, key, title, bm25(fts_llm) AS score FROM fts_llm "
+	sql << "SELECT kind, key, title ,  bm25(fts_llm) AS score FROM fts_llm "
 	    << "WHERE fts_llm MATCH '" << query << "' ORDER BY score LIMIT " << limit << ";";
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
@@ -1850,7 +1850,7 @@ int Discovery_Schema::log_llm_search(
 	int limit
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "INSERT INTO llm_search_log(run_id, query, limit) VALUES(?1, ?2, ?3);";
+	const char* sql = "INSERT INTO llm_search_log(run_id, query, limit) VALUES(?1, ?2 ,  ?3);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK || !stmt) {
