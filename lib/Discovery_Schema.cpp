@@ -540,17 +540,34 @@ int Discovery_Schema::create_agent_run(
 	const char* sql = "INSERT INTO agent_runs(run_id, model_name, prompt_hash, budget_json) VALUES(?1, ?2, ?3, ?4);";
 
 	int rc = db->prepare_v2(sql, &stmt);
-	if (rc != SQLITE_OK) return -1;
+	if (rc != SQLITE_OK) {
+		proxy_error("Failed to prepare agent_runs insert: %s\n", sqlite3_errstr(rc));
+		return -1;
+	}
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
 	(*proxy_sqlite3_bind_text)(stmt, 2, model_name.c_str(), -1, SQLITE_TRANSIENT);
 	(*proxy_sqlite3_bind_text)(stmt, 3, prompt_hash.c_str(), -1, SQLITE_TRANSIENT);
 	(*proxy_sqlite3_bind_text)(stmt, 4, budget_json.c_str(), -1, SQLITE_TRANSIENT);
 
-	SAFE_SQLITE3_STEP2(stmt);
-	int agent_run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	// Execute with proper error checking
+	int step_rc = SQLITE_OK;
+	do {
+		step_rc = (*proxy_sqlite3_step)(stmt);
+		if (step_rc == SQLITE_LOCKED || step_rc == SQLITE_BUSY) {
+			usleep(100);
+		}
+	} while (step_rc == SQLITE_LOCKED || step_rc == SQLITE_BUSY);
+
 	(*proxy_sqlite3_finalize)(stmt);
 
+	if (step_rc != SQLITE_DONE) {
+		proxy_error("Failed to insert into agent_runs (run_id=%d): %s\n", run_id, sqlite3_errstr(step_rc));
+		return -1;
+	}
+
+	int agent_run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	proxy_info("Created agent_run_id=%d for run_id=%d\n", agent_run_id, run_id);
 	return agent_run_id;
 }
 

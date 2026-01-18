@@ -127,22 +127,24 @@ std::string MCP_JSONRPC_Resource::create_jsonrpc_error(
 std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 	const httpserver::http_request& req
 ) {
-	// Update statistics
-	if (handler) {
-		handler->status_variables.total_requests++;
-	}
-
-	// Get request body
-	std::string req_body = req.get_content();
-	std::string req_path = req.get_path();
-
-	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP request on %s: %s\n", req_path.c_str(), req_body.c_str());
-
-	// Validate JSON
-	json req_json;
+	// Wrap entire request handling in try-catch to catch any unexpected exceptions
 	try {
-		req_json = json::parse(req_body);
-	} catch (json::parse_error& e) {
+		// Update statistics
+		if (handler) {
+			handler->status_variables.total_requests++;
+		}
+
+		// Get request body
+		std::string req_body = req.get_content();
+		std::string req_path = req.get_path();
+
+		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP request on %s: %s\n", req_path.c_str(), req_body.c_str());
+
+		// Validate JSON
+		json req_json;
+		try {
+			req_json = json::parse(req_body);
+		} catch (json::parse_error& e) {
 		proxy_error("MCP request on %s: Invalid JSON - %s\n", req_path.c_str(), e.what());
 		if (handler) {
 			handler->status_variables.failed_requests++;
@@ -251,6 +253,34 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 	));
 	response->with_header("Content-Type", "application/json");
 	return response;
+
+	} catch (const std::exception& e) {
+		// Catch any unexpected exceptions and return a proper error response
+		std::string req_path = req.get_path();
+		proxy_error("MCP request on %s: Unexpected exception - %s\n", req_path.c_str(), e.what());
+		if (handler) {
+			handler->status_variables.failed_requests++;
+		}
+		auto response = std::shared_ptr<http_response>(new string_response(
+			create_jsonrpc_error(-32603, "Internal error: " + std::string(e.what()), ""),
+			http::http_utils::http_internal_server_error
+		));
+		response->with_header("Content-Type", "application/json");
+		return response;
+	} catch (...) {
+		// Catch any other exceptions
+		std::string req_path = req.get_path();
+		proxy_error("MCP request on %s: Unknown exception\n", req_path.c_str());
+		if (handler) {
+			handler->status_variables.failed_requests++;
+		}
+		auto response = std::shared_ptr<http_response>(new string_response(
+			create_jsonrpc_error(-32603, "Internal error: Unknown exception", ""),
+			http::http_utils::http_internal_server_error
+		));
+		response->with_header("Content-Type", "application/json");
+		return response;
+	}
 }
 
 const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_POST(
@@ -349,18 +379,21 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	if (response.is_object() && response.contains("success") && response.contains("result")) {
 		bool success = response["success"].get<bool>();
 		if (!success) {
-			// Tool execution failed - return error in MCP format
+			// Tool execution failed - log the error and return in MCP format
+			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
+			proxy_error("MCP TOOL CALL FAILED: endpoint='%s' tool='%s' error='%s'\n",
+				endpoint_name.c_str(), tool_name.c_str(), error_msg.c_str());
 			json mcp_result;
 			mcp_result["content"] = json::array();
 			json error_content;
 			error_content["type"] = "text";
-			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
 			error_content["text"] = error_msg;
 			mcp_result["content"].push_back(error_content);
 			mcp_result["isError"] = true;
 			return mcp_result;
 		}
-		// Success - use the "result" field as the content to be wrapped
+		// Success - log and use the "result" field as the content to be wrapped
+		proxy_info("MCP TOOL CALL SUCCESS: endpoint='%s' tool='%s'\n", endpoint_name.c_str(), tool_name.c_str());
 		response = response["result"];
 	}
 

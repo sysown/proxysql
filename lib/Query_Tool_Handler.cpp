@@ -24,17 +24,46 @@ static std::string json_string(const json& j, const std::string& key, const std:
 	return default_val;
 }
 
-// Helper to safely get int from JSON
+// Helper to safely get int from JSON - handles both numbers and numeric strings
 static int json_int(const json& j, const std::string& key, int default_val = 0) {
 	if (j.contains(key) && !j[key].is_null()) {
-		return j[key].get<int>();
+		const json& val = j[key];
+		// If it's already a number, return it
+		if (val.is_number()) {
+			return val.get<int>();
+		}
+		// If it's a string, try to parse it as an int
+		if (val.is_string()) {
+			std::string s = val.get<std::string>();
+			try {
+				return std::stoi(s);
+			} catch (...) {
+				// Parse failed, return default
+				return default_val;
+			}
+		}
 	}
 	return default_val;
 }
 
+// Helper to safely get double from JSON - handles both numbers and numeric strings
 static double json_double(const json& j, const std::string& key, double default_val = 0.0) {
 	if (j.contains(key) && !j[key].is_null()) {
-		return j[key].get<double>();
+		const json& val = j[key];
+		// If it's already a number, return it
+		if (val.is_number()) {
+			return val.get<double>();
+		}
+		// If it's a string, try to parse it as a double
+		if (val.is_string()) {
+			std::string s = val.get<std::string>();
+			try {
+				return std::stod(s);
+			} catch (...) {
+				// Parse failed, return default
+				return default_val;
+			}
+		}
 	}
 	return default_val;
 }
