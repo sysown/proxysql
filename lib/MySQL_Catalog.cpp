@@ -188,31 +188,35 @@ std::string MySQL_Catalog::search(
 	int limit,
 	int offset
 ) {
+	// FTS5 search requires a query
+	if (query.empty()) {
+		proxy_error("Catalog search requires a query parameter\n");
+		return "[]";
+	}
+
 	std::ostringstream sql;
-	sql << "SELECT kind, key, document, tags, links FROM catalog WHERE 1=1";
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	// FTS5 search with BM25 ranking
+	sql << "SELECT c.kind, c.key, c.document, c.tags, c.links "
+	    << "FROM catalog c "
+	    << "INNER JOIN catalog_fts f ON c.id = f.rowid "
+	    << "WHERE catalog_fts MATCH '" << query << "'";
 
 	// Add kind filter
 	if (!kind.empty()) {
-		sql << " AND kind = '" << kind << "'";
+		sql << " AND c.kind = '" << kind << "'";
 	}
 
 	// Add tags filter
 	if (!tags.empty()) {
-		sql << " AND tags LIKE '%" << tags << "%'";
+		sql << " AND c.tags LIKE '%" << tags << "%'";
 	}
 
-	// Add search query
-	if (!query.empty()) {
-		sql << " AND (key LIKE '%" << query << "%' "
-		     << "OR document LIKE '%" << query << "%' "
-		     << "OR tags LIKE '%" << query << "%')";
-	}
-
-	sql << " ORDER BY updated_at DESC LIMIT " << limit << " OFFSET " << offset;
-
-	char* error = NULL;
-	int cols = 0, affected = 0;
-	SQLite3_result* resultset = NULL;
+	// Order by relevance (BM25) and recency
+	sql << " ORDER BY bm25(f) ASC, c.updated_at DESC LIMIT " << limit << " OFFSET " << offset;
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 	if (error) {
