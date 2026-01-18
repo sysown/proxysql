@@ -2,47 +2,57 @@
 #define CLASS_QUERY_TOOL_HANDLER_H
 
 #include "MCP_Tool_Handler.h"
-#include "MySQL_Tool_Handler.h"
+#include "Discovery_Schema.h"
+#include "Static_Harvester.h"
 #include <pthread.h>
 
 /**
  * @brief Query Tool Handler for /mcp/query endpoint
  *
  * This handler provides tools for safe database exploration and query execution.
- * It wraps the existing MySQL_Tool_Handler to provide MCP protocol compliance.
+ * It now uses the comprehensive Discovery_Schema for catalog operations and includes
+ * the two-phase discovery tools.
  *
  * Tools provided:
- * - list_schemas: List databases
- * - list_tables: List tables in schema
- * - describe_table: Get table structure
- * - get_constraints: Get foreign keys and constraints
- * - table_profile: Get table statistics
- * - column_profile: Get column statistics
- * - sample_rows: Get sample data
- * - sample_distinct: Sample distinct values
- * - run_sql_readonly: Execute read-only SQL
- * - explain_sql: Explain query execution plan
- * - suggest_joins: Suggest table joins
- * - find_reference_candidates: Find foreign key references
- * - catalog_upsert: Store data in catalog
- * - catalog_get: Retrieve from catalog
- * - catalog_search: Search catalog
- * - catalog_list: List catalog entries
- * - catalog_merge: Merge catalog entries
- * - catalog_delete: Delete from catalog
+ * - Inventory: list_schemas, list_tables, describe_table, get_constraints
+ * - Profiling: table_profile, column_profile
+ * - Sampling: sample_rows, sample_distinct
+ * - Query: run_sql_readonly, explain_sql
+ * - Relationships: suggest_joins, find_reference_candidates
+ * - Discovery (NEW): discovery.run_static, agent.*, llm.*
+ * - Catalog (NEW): All catalog tools now use Discovery_Schema
  */
 class Query_Tool_Handler : public MCP_Tool_Handler {
 private:
-	MySQL_Tool_Handler* mysql_handler;  ///< Underlying MySQL tool handler
-	bool owns_handler;                  ///< Whether we created the handler
+	// MySQL connection configuration
+	std::string mysql_hosts;
+	std::string mysql_ports;
+	std::string mysql_user;
+	std::string mysql_password;
+	std::string mysql_schema;
+
+	// Discovery components (NEW - replaces MySQL_Tool_Handler wrapper)
+	Discovery_Schema* catalog;       ///< Discovery catalog (replaces old MySQL_Catalog)
+	Static_Harvester* harvester;       ///< Static harvester for Phase 1
+
+	// Connection pool for MySQL queries
+	struct MySQLConnection {
+		void* mysql;           ///< MySQL connection handle (MYSQL*)
+		std::string host;
+		int port;
+		bool in_use;
+	};
+	std::vector<MySQLConnection> connection_pool;
+	pthread_mutex_t pool_lock;
+	int pool_size;
+
+	// Query guardrails
+	int max_rows;
+	int timeout_ms;
+	bool allow_select_star;
 
 	/**
 	 * @brief Create tool list schema for a tool
-	 * @param tool_name Name of the tool
-	 * @param description Description of the tool
-	 * @param required_params Required parameter names
-	 * @param optional_params Optional parameter names with types
-	 * @return JSON schema object
 	 */
 	json create_tool_schema(
 		const std::string& tool_name,
@@ -51,21 +61,39 @@ private:
 		const std::map<std::string, std::string>& optional_params
 	);
 
-public:
 	/**
-	 * @brief Constructor with existing MySQL_Tool_Handler
-	 * @param handler Existing MySQL_Tool_Handler to wrap
+	 * @brief Initialize MySQL connection pool
 	 */
-	Query_Tool_Handler(MySQL_Tool_Handler* handler);
+	int init_connection_pool();
 
 	/**
-	 * @brief Constructor creating new MySQL_Tool_Handler
-	 * @param hosts Comma-separated list of MySQL hosts
-	 * @param ports Comma-separated list of MySQL ports
-	 * @param user MySQL username
-	 * @param password MySQL password
-	 * @param schema Default schema/database
-	 * @param catalog_path Path to catalog database
+	 * @brief Get a connection from the pool
+	 */
+	void* get_connection();
+
+	/**
+	 * @brief Return a connection to the pool
+	 */
+	void return_connection(void* mysql);
+
+	/**
+	 * @brief Execute a query and return results as JSON
+	 */
+	std::string execute_query(const std::string& query);
+
+	/**
+	 * @brief Validate SQL is read-only
+	 */
+	bool validate_readonly_query(const std::string& query);
+
+	/**
+	 * @brief Check if SQL contains dangerous keywords
+	 */
+	bool is_dangerous_query(const std::string& query);
+
+public:
+	/**
+	 * @brief Constructor (creates catalog and harvester)
 	 */
 	Query_Tool_Handler(
 		const std::string& hosts,
@@ -90,10 +118,14 @@ public:
 	std::string get_handler_name() const override { return "query"; }
 
 	/**
-	 * @brief Get the underlying MySQL_Tool_Handler
-	 * @return Pointer to MySQL_Tool_Handler
+	 * @brief Get the discovery catalog
 	 */
-	MySQL_Tool_Handler* get_mysql_handler() const { return mysql_handler; }
+	Discovery_Schema* get_catalog() const { return catalog; }
+
+	/**
+	 * @brief Get the static harvester
+	 */
+	Static_Harvester* get_harvester() const { return harvester; }
 };
 
 #endif /* CLASS_QUERY_TOOL_HANDLER_H */

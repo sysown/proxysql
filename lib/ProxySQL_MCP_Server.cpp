@@ -74,33 +74,22 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->config_tool_handler = NULL;
 	}
 
-	// 2. Query Tool Handler (wraps MySQL_Tool_Handler for backward compatibility)
-	if (!handler->mysql_tool_handler) {
-		proxy_info("Initializing MySQL Tool Handler...\n");
-		handler->mysql_tool_handler = new MySQL_Tool_Handler(
-			handler->variables.mcp_mysql_hosts ? handler->variables.mcp_mysql_hosts : "",
-			handler->variables.mcp_mysql_ports ? handler->variables.mcp_mysql_ports : "",
-			handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
-			handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
-			handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
-			handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : ""
-		);
-
-		if (handler->mysql_tool_handler->init() != 0) {
-			proxy_error("Failed to initialize MySQL Tool Handler\n");
-			delete handler->mysql_tool_handler;
-			handler->mysql_tool_handler = NULL;
-		} else {
-			proxy_info("MySQL Tool Handler initialized successfully\n");
-		}
-	}
-
-	// Create Query_Tool_Handler that wraps the MySQL_Tool_Handler
-	if (handler->mysql_tool_handler) {
-		handler->query_tool_handler = new Query_Tool_Handler(handler->mysql_tool_handler);
-		if (handler->query_tool_handler->init() == 0) {
-			proxy_info("Query Tool Handler initialized\n");
-		}
+	// 2. Query Tool Handler (uses Discovery_Schema directly for two-phase discovery)
+	proxy_info("Initializing Query Tool Handler...\n");
+	handler->query_tool_handler = new Query_Tool_Handler(
+		handler->variables.mcp_mysql_hosts ? handler->variables.mcp_mysql_hosts : "",
+		handler->variables.mcp_mysql_ports ? handler->variables.mcp_mysql_ports : "",
+		handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
+		handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
+		handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
+		handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : "/var/lib/proxysql/discovery_catalog.db"
+	);
+	if (handler->query_tool_handler->init() == 0) {
+		proxy_info("Query Tool Handler initialized successfully\n");
+	} else {
+		proxy_error("Failed to initialize Query Tool Handler\n");
+		delete handler->query_tool_handler;
+		handler->query_tool_handler = NULL;
 	}
 
 	// 3. Admin Tool Handler
@@ -173,7 +162,8 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	}
 
 	proxy_info("Registered %d MCP endpoints with dedicated tool handlers: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache%s/mcp/ai\n",
-	          handler->ai_tool_handler ? 6 : 5, handler->ai_tool_handler ? ", " : "");
+	          handler->ai_tool_handler ? 6 : 5,
+	          handler->ai_tool_handler ? ", " : "");
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
@@ -186,13 +176,6 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 			proxy_info("Cleaning up AI Tool Handler...\n");
 			delete handler->ai_tool_handler;
 			handler->ai_tool_handler = NULL;
-		}
-
-		// Clean up MySQL Tool Handler
-		if (handler->mysql_tool_handler) {
-			proxy_info("Cleaning up MySQL Tool Handler...\n");
-			delete handler->mysql_tool_handler;
-			handler->mysql_tool_handler = NULL;
 		}
 	}
 }

@@ -1,0 +1,1749 @@
+#include "Discovery_Schema.h"
+#include "cpp.h"
+#include "proxysql.h"
+#include <sstream>
+#include <algorithm>
+#include <ctime>
+#include "../deps/json/json.hpp"
+
+using json = nlohmann::json;
+
+// Helper function for current timestamp
+static std::string now_iso() {
+	char buf[64];
+	time_t now = time(NULL);
+	struct tm* tm_info = gmtime(&now);
+	strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", tm_info);
+	return std::string(buf);
+}
+
+Discovery_Schema::Discovery_Schema(const std::string& path)
+	: db(NULL), db_path(path)
+{
+}
+
+Discovery_Schema::~Discovery_Schema() {
+	close();
+}
+
+int Discovery_Schema::init() {
+	// Initialize database connection
+	db = new SQLite3DB();
+	char path_buf[db_path.size() + 1];
+	strcpy(path_buf, db_path.c_str());
+	int rc = db->open(path_buf, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	if (rc != SQLITE_OK) {
+		proxy_error("Failed to open discovery catalog database at %s: %d\n", db_path.c_str(), rc);
+		return -1;
+	}
+
+	// Initialize schema
+	return init_schema();
+}
+
+void Discovery_Schema::close() {
+	if (db) {
+		delete db;
+		db = NULL;
+	}
+}
+
+int Discovery_Schema::init_schema() {
+	// Enable foreign keys
+	db->execute("PRAGMA foreign_keys = ON");
+
+	// Create all tables
+	int rc = create_deterministic_tables();
+	if (rc) {
+		proxy_error("Failed to create deterministic tables\n");
+		return -1;
+	}
+
+	rc = create_llm_tables();
+	if (rc) {
+		proxy_error("Failed to create LLM tables\n");
+		return -1;
+	}
+
+	rc = create_fts_tables();
+	if (rc) {
+		proxy_error("Failed to create FTS tables\n");
+		return -1;
+	}
+
+	proxy_info("Discovery Schema database initialized at %s\n", db_path.c_str());
+	return 0;
+}
+
+int Discovery_Schema::create_deterministic_tables() {
+	// Documentation table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS schema_docs ("
+		"  doc_key     TEXT PRIMARY KEY,"
+		"  title       TEXT NOT NULL,"
+		"  body        TEXT NOT NULL,"
+		"  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))"
+		");"
+	);
+
+	// Runs table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS runs ("
+		"  run_id        INTEGER PRIMARY KEY,"
+		"  started_at    TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  finished_at   TEXT,"
+		"  source_dsn    TEXT,"
+		"  mysql_version TEXT,"
+		"  notes         TEXT"
+		");"
+	);
+
+	// Schemas table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS schemas ("
+		"  schema_id   INTEGER PRIMARY KEY,"
+		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  schema_name TEXT NOT NULL,"
+		"  charset     TEXT,"
+		"  collation   TEXT,"
+		"  UNIQUE(run_id, schema_name)"
+		");"
+	);
+
+	// Objects table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS objects ("
+		"  object_id        INTEGER PRIMARY KEY,"
+		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  schema_name      TEXT NOT NULL,"
+		"  object_name      TEXT NOT NULL,"
+		"  object_type      TEXT NOT NULL CHECK(object_type IN ('table','view','routine','trigger')),"
+		"  engine           TEXT,"
+		"  table_rows_est   INTEGER,"
+		"  data_length      INTEGER,"
+		"  index_length     INTEGER,"
+		"  create_time      TEXT,"
+		"  update_time      TEXT,"
+		"  object_comment   TEXT,"
+		"  definition_sql   TEXT,"
+		"  has_primary_key  INTEGER NOT NULL DEFAULT 0,"
+		"  has_foreign_keys INTEGER NOT NULL DEFAULT 0,"
+		"  has_time_column  INTEGER NOT NULL DEFAULT 0,"
+		"  UNIQUE(run_id, schema_name, object_type, object_name)"
+		");"
+	);
+
+	// Indexes for objects
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_run_schema ON objects(run_id, schema_name);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_run_type ON objects(run_id, object_type);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_rows_est ON objects(run_id, table_rows_est);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_objects_name ON objects(run_id, schema_name, object_name);");
+
+	// Columns table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS columns ("
+		"  column_id       INTEGER PRIMARY KEY,"
+		"  object_id       INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  ordinal_pos     INTEGER NOT NULL,"
+		"  column_name     TEXT NOT NULL,"
+		"  data_type       TEXT NOT NULL,"
+		"  column_type     TEXT,"
+		"  is_nullable     INTEGER NOT NULL CHECK(is_nullable IN (0,1)),"
+		"  column_default  TEXT,"
+		"  extra           TEXT,"
+		"  charset         TEXT,"
+		"  collation       TEXT,"
+		"  column_comment  TEXT,"
+		"  is_pk           INTEGER NOT NULL DEFAULT 0,"
+		"  is_unique       INTEGER NOT NULL DEFAULT 0,"
+		"  is_indexed      INTEGER NOT NULL DEFAULT 0,"
+		"  is_time         INTEGER NOT NULL DEFAULT 0,"
+		"  is_id_like      INTEGER NOT NULL DEFAULT 0,"
+		"  UNIQUE(object_id, column_name),"
+		"  UNIQUE(object_id, ordinal_pos)"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_columns_object ON columns(object_id);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_columns_name ON columns(column_name);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_columns_obj_name ON columns(object_id, column_name);");
+
+	// Indexes table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS indexes ("
+		"  index_id      INTEGER PRIMARY KEY,"
+		"  object_id     INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  index_name    TEXT NOT NULL,"
+		"  is_unique     INTEGER NOT NULL CHECK(is_unique IN (0,1)),"
+		"  is_primary    INTEGER NOT NULL CHECK(is_primary IN (0,1)),"
+		"  index_type    TEXT,"
+		"  cardinality   INTEGER,"
+		"  UNIQUE(object_id, index_name)"
+		");"
+	);
+
+	// Index columns table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS index_columns ("
+		"  index_id      INTEGER NOT NULL REFERENCES indexes(index_id) ON DELETE CASCADE,"
+		"  seq_in_index  INTEGER NOT NULL,"
+		"  column_name   TEXT NOT NULL,"
+		"  sub_part      INTEGER,"
+		"  collation     TEXT,"
+		"  PRIMARY KEY(index_id, seq_in_index)"
+		");"
+	);
+
+	// Foreign keys table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS foreign_keys ("
+		"  fk_id              INTEGER PRIMARY KEY,"
+		"  run_id             INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  child_object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  fk_name            TEXT,"
+		"  parent_schema_name TEXT NOT NULL,"
+		"  parent_object_name TEXT NOT NULL,"
+		"  on_update          TEXT,"
+		"  on_delete          TEXT"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_fk_child ON foreign_keys(run_id, child_object_id);");
+
+	// Foreign key columns table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS foreign_key_columns ("
+		"  fk_id          INTEGER NOT NULL REFERENCES foreign_keys(fk_id) ON DELETE CASCADE,"
+		"  seq            INTEGER NOT NULL,"
+		"  child_column   TEXT NOT NULL,"
+		"  parent_column  TEXT NOT NULL,"
+		"  PRIMARY KEY(fk_id, seq)"
+		");"
+	);
+
+	// View dependencies table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS view_dependencies ("
+		"  view_object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  depends_on_schema TEXT NOT NULL,"
+		"  depends_on_name   TEXT NOT NULL,"
+		"  PRIMARY KEY(view_object_id, depends_on_schema, depends_on_name)"
+		");"
+	);
+
+	// Inferred relationships table (deterministic heuristics)
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS inferred_relationships ("
+		"  rel_id           INTEGER PRIMARY KEY,"
+		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  child_object_id  INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  child_column     TEXT NOT NULL,"
+		"  parent_object_id INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  parent_column    TEXT NOT NULL,"
+		"  confidence       REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  evidence_json    TEXT,"
+		"  UNIQUE(run_id, child_object_id, child_column, parent_object_id, parent_column)"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_inferred_conf ON inferred_relationships(run_id, confidence);");
+
+	// Profiles table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS profiles ("
+		"  profile_id    INTEGER PRIMARY KEY,"
+		"  run_id        INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  object_id     INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  profile_kind  TEXT NOT NULL,"
+		"  profile_json  TEXT NOT NULL,"
+		"  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  UNIQUE(run_id, object_id, profile_kind)"
+		");"
+	);
+
+	// Seed documentation
+	db->execute(
+		"INSERT OR IGNORE INTO schema_docs(doc_key, title, body) VALUES"
+		"('table:objects', 'Discovered Objects', 'Tables, views, routines, triggers from INFORMATION_SCHEMA'),"
+		"('table:columns', 'Column Metadata', 'Column details with derived hints (is_time, is_id_like, etc)'),"
+		"('table:llm_object_summaries', 'LLM Object Summaries', 'Structured JSON summaries produced by the LLM agent'),"
+		"('table:llm_domains', 'Domain Clusters', 'Semantic domain groupings (billing, sales, auth, etc)');"
+	);
+
+	return 0;
+}
+
+int Discovery_Schema::create_llm_tables() {
+	// Agent runs table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS agent_runs ("
+		"  agent_run_id   INTEGER PRIMARY KEY,"
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  started_at     TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  finished_at    TEXT,"
+		"  model_name     TEXT,"
+		"  prompt_hash    TEXT,"
+		"  budget_json    TEXT,"
+		"  status         TEXT NOT NULL DEFAULT 'running',"
+		"  error          TEXT"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_run ON agent_runs(run_id);");
+
+	// Agent events table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS agent_events ("
+		"  event_id      INTEGER PRIMARY KEY,"
+		"  agent_run_id  INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
+		"  ts            TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  event_type    TEXT NOT NULL,"
+		"  payload_json  TEXT NOT NULL"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_agent_events_run ON agent_events(agent_run_id);");
+
+	// LLM object summaries table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_object_summaries ("
+		"  summary_id     INTEGER PRIMARY KEY,"
+		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  object_id      INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  summary_json   TEXT NOT NULL,"
+		"  confidence     REAL NOT NULL DEFAULT 0.5 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  status         TEXT NOT NULL DEFAULT 'draft',"
+		"  sources_json   TEXT,"
+		"  created_at     TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  UNIQUE(agent_run_id, object_id)"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_summaries_obj ON llm_object_summaries(run_id, object_id);");
+
+	// LLM relationships table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_relationships ("
+		"  llm_rel_id       INTEGER PRIMARY KEY,"
+		"  agent_run_id     INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
+		"  run_id           INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  child_object_id  INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  child_column     TEXT NOT NULL,"
+		"  parent_object_id INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  parent_column    TEXT NOT NULL,"
+		"  rel_type         TEXT NOT NULL DEFAULT 'fk_like',"
+		"  confidence       REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  evidence_json    TEXT,"
+		"  created_at       TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  UNIQUE(agent_run_id, child_object_id, child_column, parent_object_id, parent_column, rel_type)"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_rel_conf ON llm_relationships(run_id, confidence);");
+
+	// LLM domains table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_domains ("
+		"  domain_id     INTEGER PRIMARY KEY,"
+		"  agent_run_id  INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
+		"  run_id        INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  domain_key    TEXT NOT NULL,"
+		"  title         TEXT,"
+		"  description   TEXT,"
+		"  confidence    REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  created_at    TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  UNIQUE(agent_run_id, domain_key)"
+		");"
+	);
+
+	// LLM domain members table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_domain_members ("
+		"  domain_id    INTEGER NOT NULL REFERENCES llm_domains(domain_id) ON DELETE CASCADE,"
+		"  object_id    INTEGER NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  role         TEXT,"
+		"  confidence   REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  PRIMARY KEY(domain_id, object_id)"
+		");"
+	);
+
+	// LLM metrics table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_metrics ("
+		"  metric_id      INTEGER PRIMARY KEY,"
+		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  metric_key     TEXT NOT NULL,"
+		"  title          TEXT NOT NULL,"
+		"  description    TEXT,"
+		"  domain_key     TEXT,"
+		"  grain          TEXT,"
+		"  unit           TEXT,"
+		"  sql_template   TEXT,"
+		"  depends_json   TEXT,"
+		"  confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  created_at     TEXT NOT NULL DEFAULT (datetime('now')),"
+		"  UNIQUE(agent_run_id, metric_key)"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_domain ON llm_metrics(run_id, domain_key);");
+
+	// LLM question templates table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_question_templates ("
+		"  template_id    INTEGER PRIMARY KEY,"
+		"  agent_run_id   INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
+		"  run_id         INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  title          TEXT NOT NULL,"
+		"  question_nl    TEXT NOT NULL,"
+		"  template_json  TEXT NOT NULL,"
+		"  example_sql    TEXT,"
+		"  confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),"
+		"  created_at     TEXT NOT NULL DEFAULT (datetime('now'))"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_qtpl_run ON llm_question_templates(run_id);");
+
+	// LLM notes table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS llm_notes ("
+		"  note_id      INTEGER PRIMARY KEY,"
+		"  agent_run_id INTEGER NOT NULL REFERENCES agent_runs(agent_run_id) ON DELETE CASCADE,"
+		"  run_id       INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
+		"  scope        TEXT NOT NULL,"
+		"  object_id    INTEGER REFERENCES objects(object_id) ON DELETE CASCADE,"
+		"  domain_key   TEXT,"
+		"  title        TEXT,"
+		"  body         TEXT NOT NULL,"
+		"  tags_json    TEXT,"
+		"  created_at   TEXT NOT NULL DEFAULT (datetime('now'))"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_notes_scope ON llm_notes(run_id, scope);");
+
+	return 0;
+}
+
+int Discovery_Schema::create_fts_tables() {
+	// FTS over objects (contentless)
+	db->execute(
+		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_objects"
+		"USING fts5("
+		"  object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql, tags,"
+		"  content='',"
+		"  tokenize='unicode61 remove_diacritics 2'"
+		");"
+	);
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_fts_objects_key ON fts_objects(object_key);");
+
+	// FTS over LLM artifacts
+	db->execute(
+		"CREATE VIRTUAL TABLE IF NOT EXISTS fts_llm"
+		"USING fts5("
+		"  kind, key, title, body, tags,"
+		"  content='',"
+		"  tokenize='unicode61 remove_diacritics 2'"
+		");"
+	);
+
+	return 0;
+}
+
+// ============================================================================
+// Run Management
+// ============================================================================
+
+int Discovery_Schema::create_run(
+	const std::string& source_dsn,
+	const std::string& mysql_version,
+	const std::string& notes
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "INSERT INTO runs(source_dsn, mysql_version, notes) VALUES(?1, ?2, ?3);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_text)(stmt, 1, source_dsn.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 2, mysql_version.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, notes.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return run_id;
+}
+
+int Discovery_Schema::finish_run(int run_id, const std::string& notes) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "UPDATE runs SET finished_at = datetime('now'), notes = ?1 WHERE run_id = ?2;";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_text)(stmt, 1, notes.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return 0;
+}
+
+std::string Discovery_Schema::get_run_info(int run_id) {
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT run_id, started_at, finished_at, source_dsn, mysql_version, notes "
+	    << "FROM runs WHERE run_id = " << run_id << ";";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+
+	json result = json::object();
+	if (resultset && !resultset->rows.empty()) {
+		SQLite3_row* row = resultset->rows[0];
+		result["run_id"] = run_id;
+		result["started_at"] = std::string(row->fields[0] ? row->fields[0] : "");
+		result["finished_at"] = std::string(row->fields[1] ? row->fields[1] : "");
+		result["source_dsn"] = std::string(row->fields[2] ? row->fields[2] : "");
+		result["mysql_version"] = std::string(row->fields[3] ? row->fields[3] : "");
+		result["notes"] = std::string(row->fields[4] ? row->fields[4] : "");
+	} else {
+		result["error"] = "Run not found";
+	}
+
+	delete resultset;
+	return result.dump();
+}
+
+// ============================================================================
+// Agent Run Management
+// ============================================================================
+
+int Discovery_Schema::create_agent_run(
+	int run_id,
+	const std::string& model_name,
+	const std::string& prompt_hash,
+	const std::string& budget_json
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "INSERT INTO agent_runs(run_id, model_name, prompt_hash, budget_json) VALUES(?1, ?2, ?3, ?4);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, model_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, prompt_hash.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, budget_json.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int agent_run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return agent_run_id;
+}
+
+int Discovery_Schema::finish_agent_run(
+	int agent_run_id,
+	const std::string& status,
+	const std::string& error
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "UPDATE agent_runs SET finished_at = datetime('now'), status = ?1, error = ?2 WHERE agent_run_id = ?3;";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_text)(stmt, 1, status.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 2, error.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 3, agent_run_id);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return 0;
+}
+
+// ============================================================================
+// Schema Management
+// ============================================================================
+
+int Discovery_Schema::insert_schema(
+	int run_id,
+	const std::string& schema_name,
+	const std::string& charset,
+	const std::string& collation
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "INSERT INTO schemas(run_id, schema_name, charset, collation) VALUES(?1, ?2, ?3, ?4);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, schema_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, charset.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, collation.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int schema_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return schema_id;
+}
+
+// ============================================================================
+// Object Management
+// ============================================================================
+
+int Discovery_Schema::insert_object(
+	int run_id,
+	const std::string& schema_name,
+	const std::string& object_name,
+	const std::string& object_type,
+	const std::string& engine,
+	long table_rows_est,
+	long data_length,
+	long index_length,
+	const std::string& create_time,
+	const std::string& update_time,
+	const std::string& object_comment,
+	const std::string& definition_sql
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO objects("
+		"  run_id, schema_name, object_name, object_type, engine, table_rows_est,"
+		"  data_length, index_length, create_time, update_time, object_comment, definition_sql"
+		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, schema_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, object_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, object_type.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, engine.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int64)(stmt, 6, (sqlite3_int64)table_rows_est);
+	(*proxy_sqlite3_bind_int64)(stmt, 7, (sqlite3_int64)data_length);
+	(*proxy_sqlite3_bind_int64)(stmt, 8, (sqlite3_int64)index_length);
+	(*proxy_sqlite3_bind_text)(stmt, 9, create_time.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 10, update_time.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 11, object_comment.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 12, definition_sql.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int object_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return object_id;
+}
+
+int Discovery_Schema::insert_column(
+	int object_id,
+	int ordinal_pos,
+	const std::string& column_name,
+	const std::string& data_type,
+	const std::string& column_type,
+	int is_nullable,
+	const std::string& column_default,
+	const std::string& extra,
+	const std::string& charset,
+	const std::string& collation,
+	const std::string& column_comment,
+	int is_pk,
+	int is_unique,
+	int is_indexed,
+	int is_time,
+	int is_id_like
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO columns("
+		"  object_id, ordinal_pos, column_name, data_type, column_type, is_nullable,"
+		"  column_default, extra, charset, collation, column_comment, is_pk, is_unique,"
+		"  is_indexed, is_time, is_id_like"
+		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, object_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, ordinal_pos);
+	(*proxy_sqlite3_bind_text)(stmt, 3, column_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, data_type.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, column_type.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 6, is_nullable);
+	(*proxy_sqlite3_bind_text)(stmt, 7, column_default.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 8, extra.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 9, charset.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 10, collation.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 11, column_comment.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 12, is_pk);
+	(*proxy_sqlite3_bind_int)(stmt, 13, is_unique);
+	(*proxy_sqlite3_bind_int)(stmt, 14, is_indexed);
+	(*proxy_sqlite3_bind_int)(stmt, 15, is_time);
+	(*proxy_sqlite3_bind_int)(stmt, 16, is_id_like);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int column_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return column_id;
+}
+
+int Discovery_Schema::insert_index(
+	int object_id,
+	const std::string& index_name,
+	int is_unique,
+	int is_primary,
+	const std::string& index_type,
+	long cardinality
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO indexes(object_id, index_name, is_unique, is_primary, index_type, cardinality) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, object_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, index_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 3, is_unique);
+	(*proxy_sqlite3_bind_int)(stmt, 4, is_primary);
+	(*proxy_sqlite3_bind_text)(stmt, 5, index_type.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int64)(stmt, 6, (sqlite3_int64)cardinality);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int index_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return index_id;
+}
+
+int Discovery_Schema::insert_index_column(
+	int index_id,
+	int seq_in_index,
+	const std::string& column_name,
+	int sub_part,
+	const std::string& collation
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO index_columns(index_id, seq_in_index, column_name, sub_part, collation) "
+		"VALUES(?1, ?2, ?3, ?4, ?5);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, index_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, seq_in_index);
+	(*proxy_sqlite3_bind_text)(stmt, 3, column_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 4, sub_part);
+	(*proxy_sqlite3_bind_text)(stmt, 5, collation.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return 0;
+}
+
+int Discovery_Schema::insert_foreign_key(
+	int run_id,
+	int child_object_id,
+	const std::string& fk_name,
+	const std::string& parent_schema_name,
+	const std::string& parent_object_name,
+	const std::string& on_update,
+	const std::string& on_delete
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO foreign_keys(run_id, child_object_id, fk_name, parent_schema_name, parent_object_name, on_update, on_delete) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, child_object_id);
+	(*proxy_sqlite3_bind_text)(stmt, 3, fk_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, parent_schema_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, parent_object_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 6, on_update.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 7, on_delete.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int fk_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return fk_id;
+}
+
+int Discovery_Schema::insert_foreign_key_column(
+	int fk_id,
+	int seq,
+	const std::string& child_column,
+	const std::string& parent_column
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO foreign_key_columns(fk_id, seq, child_column, parent_column) "
+		"VALUES(?1, ?2, ?3, ?4);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, fk_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, seq);
+	(*proxy_sqlite3_bind_text)(stmt, 3, child_column.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, parent_column.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return 0;
+}
+
+int Discovery_Schema::update_object_flags(int run_id) {
+	// Update has_primary_key
+	db->execute(
+		"UPDATE objects SET has_primary_key = 1 "
+		"WHERE run_id = ?1 AND object_id IN (SELECT DISTINCT object_id FROM indexes WHERE is_primary = 1);"
+	);
+
+	// Update has_foreign_keys
+	db->execute(
+		"UPDATE objects SET has_foreign_keys = 1 "
+		"WHERE run_id = ?1 AND object_id IN (SELECT DISTINCT child_object_id FROM foreign_keys WHERE run_id = ?1);"
+	);
+
+	// Update has_time_column
+	db->execute(
+		"UPDATE objects SET has_time_column = 1 "
+		"WHERE run_id = ?1 AND object_id IN (SELECT DISTINCT object_id FROM columns WHERE is_time = 1);"
+	);
+
+	return 0;
+}
+
+int Discovery_Schema::upsert_profile(
+	int run_id,
+	int object_id,
+	const std::string& profile_kind,
+	const std::string& profile_json
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO profiles(run_id, object_id, profile_kind, profile_json) "
+		"VALUES(?1, ?2, ?3, ?4) "
+		"ON CONFLICT(run_id, object_id, profile_kind) DO UPDATE SET "
+		"  profile_json = ?4, updated_at = datetime('now');";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, object_id);
+	(*proxy_sqlite3_bind_text)(stmt, 3, profile_kind.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, profile_json.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return 0;
+}
+
+int Discovery_Schema::rebuild_fts_index(int run_id) {
+	// Clear existing FTS index
+	db->execute("DELETE FROM fts_objects;");
+
+	// Fetch all objects for the run
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT object_id, schema_name, object_name, object_type, object_comment, definition_sql "
+	    << "FROM objects WHERE run_id = " << run_id << ";";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (error) {
+		proxy_error("FTS rebuild fetch error: %s\n", error);
+		return -1;
+	}
+
+	// Insert each object into FTS
+	if (resultset) {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+		     it != resultset->rows.end(); ++it) {
+			SQLite3_row* row = *it;
+
+			int object_id = atoi(row->fields[0]);
+			std::string schema_name = row->fields[1] ? row->fields[1] : "";
+			std::string object_name = row->fields[2] ? row->fields[2] : "";
+			std::string object_type = row->fields[3] ? row->fields[3] : "";
+			std::string comment = row->fields[4] ? row->fields[4] : "";
+			std::string definition = row->fields[5] ? row->fields[5] : "";
+
+			std::string object_key = schema_name + "." + object_name;
+
+			// Build columns blob
+			std::ostringstream cols_blob;
+			char* error2 = NULL;
+			int cols2 = 0, affected2 = 0;
+			SQLite3_result* col_result = NULL;
+
+			std::ostringstream col_sql;
+			col_sql << "SELECT column_name, data_type, column_comment FROM columns "
+			        << "WHERE object_id = " << object_id << " ORDER BY ordinal_pos;";
+
+			db->execute_statement(col_sql.str().c_str(), &error2, &cols2, &affected2, &col_result);
+
+			if (col_result) {
+				for (std::vector<SQLite3_row*>::iterator cit = col_result->rows.begin();
+				     cit != col_result->rows.end(); ++cit) {
+					SQLite3_row* col_row = *cit;
+					std::string cn = col_row->fields[0] ? col_row->fields[0] : "";
+					std::string dt = col_row->fields[1] ? col_row->fields[1] : "";
+					std::string cc = col_row->fields[2] ? col_row->fields[2] : "";
+					cols_blob << cn << ":" << dt;
+					if (!cc.empty()) {
+						cols_blob << " " << cc;
+					}
+					cols_blob << " ";
+				}
+				delete col_result;
+			}
+
+			// Get tags from profile if present
+			std::string tags = "";
+			std::ostringstream profile_sql;
+			profile_sql << "SELECT profile_json FROM profiles "
+			            << "WHERE run_id = " << run_id << " AND object_id = " << object_id
+			            << " AND profile_kind = 'table_quick';";
+
+			SQLite3_result* prof_result = NULL;
+			db->execute_statement(profile_sql.str().c_str(), &error2, &cols2, &affected2, &prof_result);
+			if (prof_result && !prof_result->rows.empty()) {
+				try {
+					json pj = json::parse(prof_result->rows[0]->fields[0]);
+					if (pj.contains("guessed_kind")) {
+						tags = pj["guessed_kind"].get<std::string>();
+					}
+				} catch (...) {
+					// Ignore parse errors
+				}
+				delete prof_result;
+			}
+
+			// Insert into FTS
+			int rc;
+			sqlite3_stmt* fts_stmt = NULL;
+			const char* fts_sql =
+				"INSERT INTO fts_objects(object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql, tags) "
+				"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+
+			rc = db->prepare_v2(fts_sql, &fts_stmt);
+			if (rc == SQLITE_OK) {
+				(*proxy_sqlite3_bind_text)(fts_stmt, 1, object_key.c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_text)(fts_stmt, 2, schema_name.c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_text)(fts_stmt, 3, object_name.c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_text)(fts_stmt, 4, object_type.c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_text)(fts_stmt, 5, comment.c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_text)(fts_stmt, 6, cols_blob.str().c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_text)(fts_stmt, 7, definition.c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_text)(fts_stmt, 8, tags.c_str(), -1, SQLITE_TRANSIENT);
+
+				SAFE_SQLITE3_STEP2(fts_stmt);
+				(*proxy_sqlite3_finalize)(fts_stmt);
+			}
+		}
+		delete resultset;
+	}
+
+	return 0;
+}
+
+std::string Discovery_Schema::fts_search(
+	int run_id,
+	const std::string& query,
+	int limit,
+	const std::string& object_type,
+	const std::string& schema_name
+) {
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT object_key, schema_name, object_name, object_type, tags, bm25(fts_objects) AS score "
+	    << "FROM fts_objects WHERE fts_objects MATCH '" << query << "'";
+
+	if (!object_type.empty()) {
+		sql << " AND object_type = '" << object_type << "'";
+	}
+	if (!schema_name.empty()) {
+		sql << " AND schema_name = '" << schema_name << "'";
+	}
+
+	sql << " ORDER BY score LIMIT " << limit << ";";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+
+	json results = json::array();
+	if (resultset) {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+		     it != resultset->rows.end(); ++it) {
+			SQLite3_row* row = *it;
+
+			json item;
+			item["object_key"] = std::string(row->fields[0] ? row->fields[0] : "");
+			item["schema_name"] = std::string(row->fields[1] ? row->fields[1] : "");
+			item["object_name"] = std::string(row->fields[2] ? row->fields[2] : "");
+			item["object_type"] = std::string(row->fields[3] ? row->fields[3] : "");
+			item["tags"] = std::string(row->fields[4] ? row->fields[4] : "");
+			item["score"] = atof(row->fields[5] ? row->fields[5] : "0");
+
+			results.push_back(item);
+		}
+		delete resultset;
+	}
+
+	return results.dump();
+}
+
+std::string Discovery_Schema::get_object(
+	int run_id,
+	int object_id,
+	const std::string& schema_name,
+	const std::string& object_name,
+	bool include_definition,
+	bool include_profiles
+) {
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT o.object_id, o.schema_name, o.object_name, o.object_type, o.engine, "
+	    << "o.table_rows_est, o.data_length, o.index_length, o.create_time, o.update_time, "
+	    << "o.object_comment, o.has_primary_key, o.has_foreign_keys, o.has_time_column "
+	    << "FROM objects o WHERE o.run_id = " << run_id;
+
+	if (object_id > 0) {
+		sql << " AND o.object_id = " << object_id;
+	} else {
+		sql << " AND o.schema_name = '" << schema_name << "' AND o.object_name = '" << object_name << "'";
+	}
+
+	sql << ";";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (!resultset || resultset->rows.empty()) {
+		delete resultset;
+		return "null";
+	}
+
+	SQLite3_row* row = resultset->rows[0];
+
+	json result;
+	result["object_id"] = atoi(row->fields[0]);
+	result["schema_name"] = std::string(row->fields[1] ? row->fields[1] : "");
+	result["object_name"] = std::string(row->fields[2] ? row->fields[2] : "");
+	result["object_type"] = std::string(row->fields[3] ? row->fields[3] : "");
+	result["engine"] = row->fields[4] ? std::string(row->fields[4]) : "";
+	result["table_rows_est"] = row->fields[5] ? atol(row->fields[5]) : 0;
+	result["data_length"] = row->fields[6] ? atol(row->fields[6]) : 0;
+	result["index_length"] = row->fields[7] ? atol(row->fields[7]) : 0;
+	result["create_time"] = row->fields[8] ? std::string(row->fields[8]) : "";
+	result["update_time"] = row->fields[9] ? std::string(row->fields[9]) : "";
+	result["object_comment"] = row->fields[10] ? std::string(row->fields[10]) : "";
+	result["has_primary_key"] = atoi(row->fields[11]);
+	result["has_foreign_keys"] = atoi(row->fields[12]);
+	result["has_time_column"] = atoi(row->fields[13]);
+
+	delete resultset;
+	resultset = NULL;
+
+	int obj_id = result["object_id"];
+
+	// Get columns
+	int cols2 = 0, affected2 = 0;
+	SQLite3_result* col_result = NULL;
+	std::ostringstream col_sql;
+	col_sql << "SELECT column_name, data_type, column_type, is_nullable, column_default, extra, "
+	        << "charset, collation, column_comment, is_pk, is_unique, is_indexed, is_time, is_id_like "
+	        << "FROM columns WHERE object_id = " << obj_id << " ORDER BY ordinal_pos;";
+
+	db->execute_statement(col_sql.str().c_str(), &error, &cols2, &affected2, &col_result);
+	if (col_result) {
+		json columns = json::array();
+		for (std::vector<SQLite3_row*>::iterator cit = col_result->rows.begin();
+		     cit != col_result->rows.end(); ++cit) {
+			SQLite3_row* col = *cit;
+			json c;
+			c["column_name"] = std::string(col->fields[0] ? col->fields[0] : "");
+			c["data_type"] = std::string(col->fields[1] ? col->fields[1] : "");
+			c["column_type"] = col->fields[2] ? std::string(col->fields[2]) : "";
+			c["is_nullable"] = atoi(col->fields[3]);
+			c["column_default"] = col->fields[4] ? std::string(col->fields[4]) : "";
+			c["extra"] = col->fields[5] ? std::string(col->fields[5]) : "";
+			c["charset"] = col->fields[6] ? std::string(col->fields[6]) : "";
+			c["collation"] = col->fields[7] ? std::string(col->fields[7]) : "";
+			c["column_comment"] = col->fields[8] ? std::string(col->fields[8]) : "";
+			c["is_pk"] = atoi(col->fields[9]);
+			c["is_unique"] = atoi(col->fields[10]);
+			c["is_indexed"] = atoi(col->fields[11]);
+			c["is_time"] = atoi(col->fields[12]);
+			c["is_id_like"] = atoi(col->fields[13]);
+			columns.push_back(c);
+		}
+		result["columns"] = columns;
+		delete col_result;
+	}
+
+	// Get indexes
+	std::ostringstream idx_sql;
+	idx_sql << "SELECT i.index_name, i.is_unique, i.is_primary, i.index_type, i.cardinality, "
+	        << "ic.seq_in_index, ic.column_name, ic.sub_part, ic.collation "
+	        << "FROM indexes i LEFT JOIN index_columns ic ON i.index_id = ic.index_id "
+	        << "WHERE i.object_id = " << obj_id << " ORDER BY i.index_name, ic.seq_in_index;";
+
+	SQLite3_result* idx_result = NULL;
+	db->execute_statement(idx_sql.str().c_str(), &error, &cols, &affected, &idx_result);
+	if (idx_result) {
+		json indexes = json::array();
+		std::string last_idx_name = "";
+		json current_idx;
+		json columns;
+
+		for (std::vector<SQLite3_row*>::iterator iit = idx_result->rows.begin();
+		     iit != idx_result->rows.end(); ++iit) {
+			SQLite3_row* idx_row = *iit;
+			std::string idx_name = std::string(idx_row->fields[0] ? idx_row->fields[0] : "");
+
+			if (idx_name != last_idx_name) {
+				if (!last_idx_name.empty()) {
+					current_idx["columns"] = columns;
+					indexes.push_back(current_idx);
+					columns = json::array();
+				}
+				current_idx = json::object();
+				current_idx["index_name"] = idx_name;
+				current_idx["is_unique"] = atoi(idx_row->fields[1]);
+				current_idx["is_primary"] = atoi(idx_row->fields[2]);
+				current_idx["index_type"] = std::string(idx_row->fields[3] ? idx_row->fields[3] : "");
+				current_idx["cardinality"] = atol(idx_row->fields[4] ? idx_row->fields[4] : "0");
+				last_idx_name = idx_name;
+			}
+
+			json col;
+			col["seq_in_index"] = atoi(idx_row->fields[5]);
+			col["column_name"] = std::string(idx_row->fields[6] ? idx_row->fields[6] : "");
+			col["sub_part"] = atoi(idx_row->fields[7] ? idx_row->fields[7] : "0");
+			col["collation"] = std::string(idx_row->fields[8] ? idx_row->fields[8] : "");
+			columns.push_back(col);
+		}
+
+		if (!last_idx_name.empty()) {
+			current_idx["columns"] = columns;
+			indexes.push_back(current_idx);
+		}
+
+		result["indexes"] = indexes;
+		delete idx_result;
+	}
+
+	// Get profiles
+	if (include_profiles) {
+		std::ostringstream prof_sql;
+		prof_sql << "SELECT profile_kind, profile_json FROM profiles "
+		         << "WHERE run_id = " << run_id << " AND object_id = " << obj_id << ";";
+
+		SQLite3_result* prof_result = NULL;
+		db->execute_statement(prof_sql.str().c_str(), &error, &cols, &affected, &prof_result);
+		if (prof_result) {
+			json profiles = json::object();
+			for (std::vector<SQLite3_row*>::iterator pit = prof_result->rows.begin();
+			     pit != prof_result->rows.end(); ++pit) {
+				SQLite3_row* prof = *pit;
+				std::string kind = std::string(prof->fields[0] ? prof->fields[0] : "");
+				std::string pj = std::string(prof->fields[1] ? prof->fields[1] : "");
+				try {
+					profiles[kind] = json::parse(pj);
+				} catch (...) {
+					profiles[kind] = pj;
+				}
+			}
+			result["profiles"] = profiles;
+			delete prof_result;
+		}
+	}
+
+	return result.dump();
+}
+
+std::string Discovery_Schema::list_objects(
+	int run_id,
+	const std::string& schema_name,
+	const std::string& object_type,
+	const std::string& order_by,
+	int page_size,
+	const std::string& page_token
+) {
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT object_id, schema_name, object_name, object_type, engine, table_rows_est, "
+	    << "data_length, index_length, has_primary_key, has_foreign_keys, has_time_column "
+	    << "FROM objects WHERE run_id = " << run_id;
+
+	if (!schema_name.empty()) {
+		sql << " AND schema_name = '" << schema_name << "'";
+	}
+	if (!object_type.empty()) {
+		sql << " AND object_type = '" << object_type << "'";
+	}
+
+	// Order by
+	if (order_by == "rows_est_desc") {
+		sql << " ORDER BY table_rows_est DESC";
+	} else if (order_by == "size_desc") {
+		sql << " ORDER BY (data_length + index_length) DESC";
+	} else {
+		sql << " ORDER BY schema_name, object_name";
+	}
+
+	// Pagination
+	int offset = 0;
+	if (!page_token.empty()) {
+		offset = atoi(page_token.c_str());
+	}
+
+	sql << " LIMIT " << page_size << " OFFSET " << offset << ";";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+
+	json results = json::array();
+	if (resultset) {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+		     it != resultset->rows.end(); ++it) {
+			SQLite3_row* row = *it;
+
+			json item;
+			item["object_id"] = atoi(row->fields[0]);
+			item["schema_name"] = std::string(row->fields[1] ? row->fields[1] : "");
+			item["object_name"] = std::string(row->fields[2] ? row->fields[2] : "");
+			item["object_type"] = std::string(row->fields[3] ? row->fields[3] : "");
+			item["engine"] = row->fields[4] ? std::string(row->fields[4]) : "";
+			item["table_rows_est"] = row->fields[5] ? atol(row->fields[5]) : 0;
+			item["data_length"] = row->fields[6] ? atol(row->fields[6]) : 0;
+			item["index_length"] = row->fields[7] ? atol(row->fields[7]) : 0;
+			item["has_primary_key"] = atoi(row->fields[8]);
+			item["has_foreign_keys"] = atoi(row->fields[9]);
+			item["has_time_column"] = atoi(row->fields[10]);
+
+			results.push_back(item);
+		}
+		delete resultset;
+	}
+
+	json response;
+	response["results"] = results;
+
+	// Next page token
+	if ((int)results.size() >= page_size) {
+		response["next_page_token"] = std::to_string(offset + page_size);
+	} else {
+		response["next_page_token"] = "";
+	}
+
+	return response.dump();
+}
+
+std::string Discovery_Schema::get_relationships(
+	int run_id,
+	int object_id,
+	bool include_inferred,
+	double min_confidence
+) {
+	json result;
+	result["foreign_keys"] = json::array();
+	result["view_dependencies"] = json::array();
+	result["inferred_relationships"] = json::array();
+
+	// Get foreign keys (child FKs)
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream fk_sql;
+	fk_sql << "SELECT fk.fk_name, fk.parent_schema_name, fk.parent_object_name, fk.on_update, fk.on_delete, "
+	        << "fkc.seq, fkc.child_column, fkc.parent_column "
+	        << "FROM foreign_keys fk JOIN foreign_key_columns fkc ON fk.fk_id = fkc.fk_id "
+	        << "WHERE fk.run_id = " << run_id << " AND fk.child_object_id = " << object_id << " "
+	        << "ORDER BY fk.fk_name, fkc.seq;";
+
+	db->execute_statement(fk_sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (resultset) {
+		std::string last_fk_name = "";
+		json current_fk;
+		json columns;
+
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+		     it != resultset->rows.end(); ++it) {
+			SQLite3_row* row = *it;
+			std::string fk_name = std::string(row->fields[0] ? row->fields[0] : "");
+
+			if (fk_name != last_fk_name) {
+				if (!last_fk_name.empty()) {
+					current_fk["columns"] = columns;
+					result["foreign_keys"].push_back(current_fk);
+					columns = json::array();
+				}
+				current_fk = json::object();
+				current_fk["fk_name"] = fk_name;
+				current_fk["parent_schema_name"] = std::string(row->fields[1] ? row->fields[1] : "");
+				current_fk["parent_object_name"] = std::string(row->fields[2] ? row->fields[2] : "");
+				current_fk["on_update"] = row->fields[3] ? std::string(row->fields[3]) : "";
+				current_fk["on_delete"] = row->fields[4] ? std::string(row->fields[4]) : "";
+				last_fk_name = fk_name;
+			}
+
+			json col;
+			col["child_column"] = std::string(row->fields[6] ? row->fields[6] : "");
+			col["parent_column"] = std::string(row->fields[7] ? row->fields[7] : "");
+			columns.push_back(col);
+		}
+
+		if (!last_fk_name.empty()) {
+			current_fk["columns"] = columns;
+			result["foreign_keys"].push_back(current_fk);
+		}
+
+		delete resultset;
+	}
+
+	// Get inferred relationships if requested
+	if (include_inferred) {
+		std::ostringstream inf_sql;
+		inf_sql << "SELECT ir.child_column, o2.schema_name, o2.object_name, ir.parent_column, "
+		        << "ir.confidence, ir.evidence_json "
+		        << "FROM inferred_relationships ir "
+		        << "JOIN objects o2 ON ir.parent_object_id = o2.object_id "
+		        << "WHERE ir.run_id = " << run_id << " AND ir.child_object_id = " << object_id
+		        << " AND ir.confidence >= " << min_confidence << ";";
+
+		resultset = NULL;
+		db->execute_statement(inf_sql.str().c_str(), &error, &cols, &affected, &resultset);
+		if (resultset) {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+			     it != resultset->rows.end(); ++it) {
+				SQLite3_row* row = *it;
+
+				json rel;
+				rel["child_column"] = std::string(row->fields[0] ? row->fields[0] : "");
+				rel["parent_schema_name"] = std::string(row->fields[1] ? row->fields[1] : "");
+				rel["parent_object_name"] = std::string(row->fields[2] ? row->fields[2] : "");
+				rel["parent_column"] = std::string(row->fields[3] ? row->fields[3] : "");
+				rel["confidence"] = atof(row->fields[4] ? row->fields[4] : "0");
+
+				try {
+					rel["evidence"] = json::parse(row->fields[5] ? row->fields[5] : "{}");
+				} catch (...) {
+					rel["evidence"] = {};
+				}
+
+				result["inferred_relationships"].push_back(rel);
+			}
+			delete resultset;
+		}
+	}
+
+	return result.dump();
+}
+
+int Discovery_Schema::append_agent_event(
+	int agent_run_id,
+	const std::string& event_type,
+	const std::string& payload_json
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "INSERT INTO agent_events(agent_run_id, event_type, payload_json) VALUES(?1, ?2, ?3);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, event_type.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, payload_json.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int event_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return event_id;
+}
+
+int Discovery_Schema::upsert_llm_summary(
+	int agent_run_id,
+	int run_id,
+	int object_id,
+	const std::string& summary_json,
+	double confidence,
+	const std::string& status,
+	const std::string& sources_json
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO llm_object_summaries(agent_run_id, run_id, object_id, summary_json, confidence, status, sources_json) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7) "
+		"ON CONFLICT(agent_run_id, object_id) DO UPDATE SET "
+		"  summary_json = ?4, confidence = ?5, status = ?6, sources_json = ?7;";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 3, object_id);
+	(*proxy_sqlite3_bind_text)(stmt, 4, summary_json.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_double)(stmt, 5, confidence);
+	(*proxy_sqlite3_bind_text)(stmt, 6, status.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 7, sources_json.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return 0;
+}
+
+std::string Discovery_Schema::get_llm_summary(
+	int run_id,
+	int object_id,
+	int agent_run_id,
+	bool latest
+) {
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT summary_json, confidence, status, sources_json FROM llm_object_summaries "
+	    << "WHERE run_id = " << run_id << " AND object_id = " << object_id;
+
+	if (agent_run_id > 0) {
+		sql << " AND agent_run_id = " << agent_run_id;
+	} else if (latest) {
+		sql << " ORDER BY created_at DESC LIMIT 1";
+	}
+
+	sql << ";";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+
+	if (!resultset || resultset->rows.empty()) {
+		delete resultset;
+		return "null";
+	}
+
+	SQLite3_row* row = resultset->rows[0];
+
+	json result;
+	result["summary_json"] = std::string(row->fields[0] ? row->fields[0] : "");
+	result["confidence"] = atof(row->fields[1] ? row->fields[1] : "0");
+	result["status"] = std::string(row->fields[2] ? row->fields[2] : "");
+	result["sources_json"] = row->fields[3] ? std::string(row->fields[3]) : "";
+
+	delete resultset;
+	return result.dump();
+}
+
+int Discovery_Schema::upsert_llm_relationship(
+	int agent_run_id,
+	int run_id,
+	int child_object_id,
+	const std::string& child_column,
+	int parent_object_id,
+	const std::string& parent_column,
+	const std::string& rel_type,
+	double confidence,
+	const std::string& evidence_json
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO llm_relationships(agent_run_id, run_id, child_object_id, child_column, parent_object_id, parent_column, rel_type, confidence, evidence_json) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) "
+		"ON CONFLICT(agent_run_id, child_object_id, child_column, parent_object_id, parent_column, rel_type) "
+		"DO UPDATE SET confidence = ?8, evidence_json = ?9;";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 3, child_object_id);
+	(*proxy_sqlite3_bind_text)(stmt, 4, child_column.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 5, parent_object_id);
+	(*proxy_sqlite3_bind_text)(stmt, 6, parent_column.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 7, rel_type.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_double)(stmt, 8, confidence);
+	(*proxy_sqlite3_bind_text)(stmt, 9, evidence_json.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return 0;
+}
+
+int Discovery_Schema::upsert_llm_domain(
+	int agent_run_id,
+	int run_id,
+	const std::string& domain_key,
+	const std::string& title,
+	const std::string& description,
+	double confidence
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO llm_domains(agent_run_id, run_id, domain_key, title, description, confidence) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6) "
+		"ON CONFLICT(agent_run_id, domain_key) DO UPDATE SET "
+		"  title = ?4, description = ?5, confidence = ?6;";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 3, domain_key.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, title.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, description.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_double)(stmt, 6, confidence);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int domain_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return domain_id;
+}
+
+int Discovery_Schema::set_domain_members(
+	int agent_run_id,
+	int run_id,
+	const std::string& domain_key,
+	const std::string& members_json
+) {
+	// First, get the domain_id
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT domain_id FROM llm_domains "
+	    << "WHERE agent_run_id = " << agent_run_id << " AND domain_key = '" << domain_key << "';";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (!resultset || resultset->rows.empty()) {
+		delete resultset;
+		return -1;
+	}
+
+	int domain_id = atoi(resultset->rows[0]->fields[0]);
+	delete resultset;
+
+	// Delete existing members
+	std::ostringstream del_sql;
+	del_sql << "DELETE FROM llm_domain_members WHERE domain_id = " << domain_id << ";";
+	db->execute(del_sql.str().c_str());
+
+	// Insert new members
+	try {
+		json members = json::parse(members_json);
+		for (json::iterator it = members.begin(); it != members.end(); ++it) {
+			json member = *it;
+			int object_id = member["object_id"];
+			std::string role = member.value("role", "");
+			double confidence = member.value("confidence", 0.6);
+
+			sqlite3_stmt* stmt = NULL;
+			const char* ins_sql = "INSERT INTO llm_domain_members(domain_id, object_id, role, confidence) VALUES(?1, ?2, ?3, ?4);";
+
+			int rc = db->prepare_v2(ins_sql, &stmt);
+			if (rc == SQLITE_OK) {
+				(*proxy_sqlite3_bind_int)(stmt, 1, domain_id);
+				(*proxy_sqlite3_bind_int)(stmt, 2, object_id);
+				(*proxy_sqlite3_bind_text)(stmt, 3, role.c_str(), -1, SQLITE_TRANSIENT);
+				(*proxy_sqlite3_bind_double)(stmt, 4, confidence);
+
+				SAFE_SQLITE3_STEP2(stmt);
+				(*proxy_sqlite3_finalize)(stmt);
+			}
+		}
+	} catch (...) {
+		return -1;
+	}
+
+	return 0;
+}
+
+int Discovery_Schema::upsert_llm_metric(
+	int agent_run_id,
+	int run_id,
+	const std::string& metric_key,
+	const std::string& title,
+	const std::string& description,
+	const std::string& domain_key,
+	const std::string& grain,
+	const std::string& unit,
+	const std::string& sql_template,
+	const std::string& depends_json,
+	double confidence
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO llm_metrics(agent_run_id, run_id, metric_key, title, description, domain_key, grain, unit, sql_template, depends_json, confidence) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) "
+		"ON CONFLICT(agent_run_id, metric_key) DO UPDATE SET "
+		"  title = ?4, description = ?5, domain_key = ?6, grain = ?7, unit = ?8, sql_template = ?9, depends_json = ?10, confidence = ?11;";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 3, metric_key.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, title.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, description.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 6, domain_key.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 7, grain.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 8, unit.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 9, sql_template.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 10, depends_json.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_double)(stmt, 11, confidence);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int metric_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return metric_id;
+}
+
+int Discovery_Schema::add_question_template(
+	int agent_run_id,
+	int run_id,
+	const std::string& title,
+	const std::string& question_nl,
+	const std::string& template_json,
+	const std::string& example_sql,
+	double confidence
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO llm_question_templates(agent_run_id, run_id, title, question_nl, template_json, example_sql, confidence) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, question_nl.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, template_json.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 6, example_sql.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_double)(stmt, 7, confidence);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int template_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return template_id;
+}
+
+int Discovery_Schema::add_llm_note(
+	int agent_run_id,
+	int run_id,
+	const std::string& scope,
+	int object_id,
+	const std::string& domain_key,
+	const std::string& title,
+	const std::string& body,
+	const std::string& tags_json
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql =
+		"INSERT INTO llm_notes(agent_run_id, run_id, scope, object_id, domain_key, title, body, tags_json) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK) return -1;
+
+	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
+	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 3, scope.c_str(), -1, SQLITE_TRANSIENT);
+	if (object_id > 0) {
+		(*proxy_sqlite3_bind_int)(stmt, 4, object_id);
+	} else {
+		(*proxy_sqlite3_bind_null)(stmt, 4);
+	}
+	(*proxy_sqlite3_bind_text)(stmt, 5, domain_key.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 6, title.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 7, body.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 8, tags_json.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int note_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	(*proxy_sqlite3_finalize)(stmt);
+
+	return note_id;
+}
+
+std::string Discovery_Schema::fts_search_llm(
+	int run_id,
+	const std::string& query,
+	int limit
+) {
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT kind, key, title, bm25(fts_llm) AS score FROM fts_llm "
+	    << "WHERE fts_llm MATCH '" << query << "' ORDER BY score LIMIT " << limit << ";";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+
+	json results = json::array();
+	if (resultset) {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+		     it != resultset->rows.end(); ++it) {
+			SQLite3_row* row = *it;
+
+			json item;
+			item["kind"] = std::string(row->fields[0] ? row->fields[0] : "");
+			item["key"] = std::string(row->fields[1] ? row->fields[1] : "");
+			item["title"] = std::string(row->fields[2] ? row->fields[2] : "");
+			item["score"] = atof(row->fields[3] ? row->fields[3] : "0");
+
+			results.push_back(item);
+		}
+		delete resultset;
+	}
+
+	return results.dump();
+}

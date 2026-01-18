@@ -89,12 +89,13 @@ public:
 	/**
 	 * @brief Pointers to the new dedicated tool handlers for each endpoint
 	 *
-	 * Each endpoint now has its own dedicated tool handler:
+	 * Each endpoint has its own dedicated tool handler:
 	 * - config_tool_handler: /mcp/config endpoint
-	 * - query_tool_handler: /mcp/query endpoint
+	 * - query_tool_handler: /mcp/query endpoint (includes two-phase discovery tools)
 	 * - admin_tool_handler: /mcp/admin endpoint
 	 * - cache_tool_handler: /mcp/cache endpoint
 	 * - observe_tool_handler: /mcp/observe endpoint
+	 * - ai_tool_handler: /mcp/ai endpoint
 	 */
 	Config_Tool_Handler* config_tool_handler;
 	Query_Tool_Handler* query_tool_handler;
