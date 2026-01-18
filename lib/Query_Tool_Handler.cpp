@@ -1525,6 +1525,24 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	unsigned long long duration = monotonic_time() - start_time;
 	track_tool_invocation(this, tool_name, schema, duration);
 
+	// Log tool invocation to catalog
+	int run_id = 0;
+	std::string run_id_str = json_string(arguments, "run_id");
+	if (!run_id_str.empty()) {
+		run_id = catalog->resolve_run_id(run_id_str);
+	}
+
+	// Extract error message if present
+	std::string error_msg;
+	if (result.contains("error") && result.contains("message")) {
+		const json& err = result["error"];
+		if (err.contains("message") && err["message"].is_string()) {
+			error_msg = err["message"].get<std::string>();
+		}
+	}
+
+	catalog->log_query_tool_call(tool_name, schema, run_id, start_time, duration, error_msg);
+
 	return result;
 }
 

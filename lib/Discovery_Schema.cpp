@@ -481,6 +481,26 @@ int Discovery_Schema::create_llm_tables() {
 	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_query ON llm_search_log(query);");
 	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_time ON llm_search_log(searched_at);");
 
+	// Query endpoint tool invocation log - tracks all MCP tool calls via /mcp/query/
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS query_tool_calls ("
+		"  call_id        INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"  tool_name      TEXT NOT NULL , "
+		"  schema         TEXT , "
+		"  run_id         INTEGER , "
+		"  start_time     INTEGER NOT NULL , "
+		"  execution_time INTEGER NOT NULL , "
+		"  error          TEXT , "
+		"  called_at      TEXT NOT NULL DEFAULT (datetime('now'))"
+		");"
+	);
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Discovery_Schema: query_tool_calls table created/verified\n");
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_query_tool_calls_tool ON query_tool_calls(tool_name);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_query_tool_calls_schema ON query_tool_calls(schema);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_query_tool_calls_run ON query_tool_calls(run_id);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_query_tool_calls_time ON query_tool_calls(called_at);");
+
 	return 0;
 }
 
@@ -1867,6 +1887,53 @@ int Discovery_Schema::log_llm_search(
 
 	if (rc != SQLITE_DONE) {
 		proxy_error("Failed to insert llm_search_log: %d\n", rc);
+		return -1;
+	}
+
+	return 0;
+}
+
+int Discovery_Schema::log_query_tool_call(
+	const std::string& tool_name,
+	const std::string& schema,
+	int run_id,
+	unsigned long long start_time,
+	unsigned long long execution_time,
+	const std::string& error
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "INSERT INTO query_tool_calls(tool_name, schema, run_id, start_time, execution_time, error) VALUES(?1, ?2, ?3, ?4, ?5, ?6);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK || !stmt) {
+		proxy_error("Failed to prepare query_tool_calls insert: %d\n", rc);
+		return -1;
+	}
+
+	sqlite3_bind_text(stmt, 1, tool_name.c_str(), -1, SQLITE_TRANSIENT);
+	if (!schema.empty()) {
+		sqlite3_bind_text(stmt, 2, schema.c_str(), -1, SQLITE_TRANSIENT);
+	} else {
+		sqlite3_bind_null(stmt, 2);
+	}
+	if (run_id > 0) {
+		sqlite3_bind_int(stmt, 3, run_id);
+	} else {
+		sqlite3_bind_null(stmt, 3);
+	}
+	sqlite3_bind_int64(stmt, 4, start_time);
+	sqlite3_bind_int64(stmt, 5, execution_time);
+	if (!error.empty()) {
+		sqlite3_bind_text(stmt, 6, error.c_str(), -1, SQLITE_TRANSIENT);
+	} else {
+		sqlite3_bind_null(stmt, 6);
+	}
+
+	rc = sqlite3_step(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	if (rc != SQLITE_DONE) {
+		proxy_error("Failed to insert query_tool_calls: %d\n", rc);
 		return -1;
 	}
 

@@ -638,6 +638,25 @@ public:
 	);
 
 	/**
+	 * @brief Log MCP tool invocation via /mcp/query/ endpoint
+	 * @param tool_name Name of the tool that was called
+	 * @param schema Schema name (empty if not applicable)
+	 * @param run_id Run ID (0 or -1 if not applicable)
+	 * @param start_time Start monotonic time (microseconds)
+	 * @param execution_time Execution duration (microseconds)
+	 * @param error Error message (empty if success)
+	 * @return 0 on success, -1 on error
+	 */
+	int log_query_tool_call(
+		const std::string& tool_name,
+		const std::string& schema,
+		int run_id,
+		unsigned long long start_time,
+		unsigned long long execution_time,
+		const std::string& error
+	);
+
+	/**
 	 * @brief Get database handle for direct access
 	 * @return SQLite3DB pointer
 	 */
