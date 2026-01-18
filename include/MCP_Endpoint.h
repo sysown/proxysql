@@ -61,12 +61,12 @@ private:
 	 * @brief Create a JSON-RPC 2.0 success response
 	 *
 	 * @param result The result data to include
-	 * @param id The request ID
+	 * @param id The request ID (can be string, number, or null)
 	 * @return JSON string representing the response
 	 */
 	std::string create_jsonrpc_response(
 		const std::string& result,
-		const std::string& id = "1"
+		const json& id = nullptr
 	);
 
 	/**
@@ -74,13 +74,13 @@ private:
 	 *
 	 * @param code The error code (JSON-RPC standard or custom)
 	 * @param message The error message
-	 * @param id The request ID
+	 * @param id The request ID (can be string, number, or null)
 	 * @return JSON string representing the error response
 	 */
 	std::string create_jsonrpc_error(
 		int code,
 		const std::string& message,
-		const std::string& id = ""
+		const json& id = nullptr
 	);
 
 	/**
@@ -126,6 +126,35 @@ public:
 	 * @brief Destructor
 	 */
 	~MCP_JSONRPC_Resource();
+
+	/**
+	 * @brief Handle GET requests
+	 *
+	 * Returns HTTP 405 Method Not Allowed for GET requests.
+	 *
+	 * According to the MCP specification (Streamable HTTP transport):
+	 * "The server MUST either return Content-Type: text/event-stream in response to
+	 * this HTTP GET, or else return HTTP 405 Method Not Allowed, indicating that
+	 * the server does not offer an SSE stream at this endpoint."
+	 *
+	 * @param req The HTTP request
+	 * @return HTTP 405 response with Allow: POST header
+	 */
+	const std::shared_ptr<httpserver::http_response> render_GET(
+		const httpserver::http_request& req
+	) override;
+
+	/**
+	 * @brief Handle OPTIONS requests (CORS preflight)
+	 *
+	 * Returns CORS headers for OPTIONS preflight requests.
+	 *
+	 * @param req The HTTP request
+	 * @return HTTP response with CORS headers
+	 */
+	const std::shared_ptr<httpserver::http_response> render_OPTIONS(
+		const httpserver::http_request& req
+	) override;
 
 	/**
 	 * @brief Handle POST requests

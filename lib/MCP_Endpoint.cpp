@@ -98,6 +98,55 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 	return authenticated;
 }
 
+const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_GET(
+	const httpserver::http_request& req
+) {
+	std::string req_path = req.get_path();
+	proxy_debug(PROXY_DEBUG_GENERIC, 2, "Received MCP GET request on %s - returning 405 Method Not Allowed\n", req_path.c_str());
+
+	// According to the MCP specification (Streamable HTTP transport):
+	// "The server MUST either return Content-Type: text/event-stream in response to
+	// this HTTP GET, or else return HTTP 405 Method Not Allowed, indicating that
+	// the server does not offer an SSE stream at this endpoint."
+	//
+	// This server does not currently support SSE streaming, so we return 405.
+	auto response = std::shared_ptr<http_response>(new string_response(
+		"",
+		http::http_utils::http_method_not_allowed  // 405
+	));
+	response->with_header("Allow", "POST");  // Tell client what IS allowed
+
+	if (handler) {
+		handler->status_variables.total_requests++;
+	}
+
+	return response;
+}
+
+const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_OPTIONS(
+	const httpserver::http_request& req
+) {
+	std::string req_path = req.get_path();
+	proxy_debug(PROXY_DEBUG_GENERIC, 2, "Received MCP OPTIONS request on %s\n", req_path.c_str());
+
+	// Handle CORS preflight requests for MCP HTTP transport
+	// Return 200 OK with appropriate CORS headers
+	auto response = std::shared_ptr<http_response>(new string_response(
+		"",
+		http::http_utils::http_ok
+	));
+	response->with_header("Content-Type", "application/json");
+	response->with_header("Access-Control-Allow-Origin", "*");
+	response->with_header("Access-Control-Allow-Methods", "POST, OPTIONS");
+	response->with_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+	if (handler) {
+		handler->status_variables.total_requests++;
+	}
+
+	return response;
+}
+
 std::string MCP_JSONRPC_Resource::create_jsonrpc_response(
 	const std::string& result,
 	const std::string& id
