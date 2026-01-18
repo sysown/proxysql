@@ -127,6 +127,10 @@ std::string MCP_JSONRPC_Resource::create_jsonrpc_error(
 std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 	const httpserver::http_request& req
 ) {
+	// Declare these outside the try block so they're available in catch handlers
+	std::string req_body;
+	std::string req_path;
+
 	// Wrap entire request handling in try-catch to catch any unexpected exceptions
 	try {
 		// Update statistics
@@ -134,9 +138,9 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 			handler->status_variables.total_requests++;
 		}
 
-		// Get request body
-		std::string req_body = req.get_content();
-		std::string req_path = req.get_path();
+		// Get request body and path
+		req_body = req.get_content();
+		req_path = req.get_path();
 
 		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP request on %s: %s\n", req_path.c_str(), req_body.c_str());
 
@@ -146,6 +150,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 			req_json = json::parse(req_body);
 		} catch (json::parse_error& e) {
 		proxy_error("MCP request on %s: Invalid JSON - %s\n", req_path.c_str(), e.what());
+		proxy_error("MCP request payload that failed to parse: %s\n", req_body.c_str());
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
@@ -256,8 +261,8 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 
 	} catch (const std::exception& e) {
 		// Catch any unexpected exceptions and return a proper error response
-		std::string req_path = req.get_path();
 		proxy_error("MCP request on %s: Unexpected exception - %s\n", req_path.c_str(), e.what());
+		proxy_error("MCP request payload that caused exception: %s\n", req_body.c_str());
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
@@ -269,8 +274,8 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		return response;
 	} catch (...) {
 		// Catch any other exceptions
-		std::string req_path = req.get_path();
 		proxy_error("MCP request on %s: Unknown exception\n", req_path.c_str());
+		proxy_error("MCP request payload that caused exception: %s\n", req_body.c_str());
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
@@ -379,10 +384,12 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	if (response.is_object() && response.contains("success") && response.contains("result")) {
 		bool success = response["success"].get<bool>();
 		if (!success) {
-			// Tool execution failed - log the error and return in MCP format
+			// Tool execution failed - log the error with full context and return in MCP format
 			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
+			std::string args_str = arguments.dump();
 			proxy_error("MCP TOOL CALL FAILED: endpoint='%s' tool='%s' error='%s'\n",
 				endpoint_name.c_str(), tool_name.c_str(), error_msg.c_str());
+			proxy_error("MCP TOOL CALL FAILED: arguments='%s'\n", args_str.c_str());
 			json mcp_result;
 			mcp_result["content"] = json::array();
 			json error_content;
