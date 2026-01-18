@@ -244,6 +244,20 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 	// Handle different methods
 	json result;
 
+	// Check if this is a notification
+	if (method == "notifications/initialized") {
+		// MCP spec: notifications/initialized is sent by client after initialization
+		// This is a notification - return HTTP 200 OK with {} body per spec
+		// See: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
+		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP notification 'notifications/initialized' received on endpoint '%s'\n", endpoint_name.c_str());
+		auto response = std::shared_ptr<http_response>(new string_response(
+			"{}",
+			http::http_utils::http_accepted  // 202 Accepted
+			));
+		response->with_header("Content-Type", "application/json");
+		return response;
+	}
+
 	if (method == "tools/call" || method == "tools/list" || method == "tools/describe") {
 		// Route tool-related methods to the endpoint's tool handler
 		if (!tool_handler) {
