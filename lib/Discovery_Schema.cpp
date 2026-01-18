@@ -471,10 +471,11 @@ int Discovery_Schema::create_llm_tables() {
 		"  log_id      INTEGER PRIMARY KEY,"
 		"  run_id      INTEGER NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,"
 		"  query       TEXT NOT NULL,"
-		"  limit       INTEGER NOT NULL DEFAULT 25,"
+		"  \"limit\"       INTEGER NOT NULL DEFAULT 25,"
 		"  searched_at TEXT NOT NULL DEFAULT (datetime('now'))"
 		");"
 	);
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Discovery_Schema: llm_search_log table created/verified\n");
 
 	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_run ON llm_search_log(run_id);");
 	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_query ON llm_search_log(query);");
