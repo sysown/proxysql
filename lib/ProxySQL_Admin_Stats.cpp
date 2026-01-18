@@ -1603,11 +1603,12 @@ void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
 	     it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
-		char query[512];
+		char query[1024];
 		snprintf(query, sizeof(query),
-			"INSERT INTO %smcp_query_tools_counters VALUES ('%s', '%s', %s)",
+			"INSERT INTO %smcp_query_tools_counters VALUES ('%s', '%s', %s, %s, %s, %s, %s, %s)",
 			reset ? "stats_mcp_query_tools_counters_" : "stats_",
-			r->fields[0], r->fields[1], r->fields[2]);
+			r->fields[0], r->fields[1], r->fields[2], r->fields[3],
+			r->fields[4], r->fields[5], r->fields[6], r->fields[7]);
 		statsdb->execute(query);
 	}
 

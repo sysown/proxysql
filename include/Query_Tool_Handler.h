@@ -51,10 +51,38 @@ private:
 	int timeout_ms;
 	bool allow_select_star;
 
-	// Tool usage counters: tool_name -> schema_name -> count
-	typedef std::map<std::string, unsigned long long> SchemaCountMap;
-	typedef std::map<std::string, SchemaCountMap> ToolUsageMap;
-	ToolUsageMap tool_usage_counters;
+	// Statistics for a specific (tool, schema) pair
+	struct ToolUsageStats {
+		unsigned long long count;
+		unsigned long long first_seen;
+		unsigned long long last_seen;
+		unsigned long long sum_time;
+		unsigned long long min_time;
+		unsigned long long max_time;
+
+		ToolUsageStats() : count(0), first_seen(0), last_seen(0),
+		                   sum_time(0), min_time(0), max_time(0) {}
+
+		void add_timing(unsigned long long duration, unsigned long long timestamp) {
+			count++;
+			sum_time += duration;
+			if (duration < min_time || min_time == 0) {
+				if (duration) min_time = duration;
+			}
+			if (duration > max_time) {
+				max_time = duration;
+			}
+			if (first_seen == 0) {
+				first_seen = timestamp;
+			}
+			last_seen = timestamp;
+		}
+	};
+
+	// Tool usage counters: tool_name -> schema_name -> ToolUsageStats
+	typedef std::map<std::string, ToolUsageStats> SchemaStatsMap;
+	typedef std::map<std::string, SchemaStatsMap> ToolUsageStatsMap;
+	ToolUsageStatsMap tool_usage_stats;
 	pthread_mutex_t counters_lock;
 
 	/**
@@ -98,7 +126,7 @@ private:
 	bool is_dangerous_query(const std::string& query);
 
 	// Friend function for tracking tool invocations
-	friend void track_tool_invocation(Query_Tool_Handler*, const std::string&, const std::string&);
+	friend void track_tool_invocation(Query_Tool_Handler*, const std::string&, const std::string&, unsigned long long);
 
 public:
 	/**
@@ -138,14 +166,14 @@ public:
 
 	/**
 	 * @brief Get tool usage statistics (thread-safe copy)
-	 * @return ToolUsageMap copy with tool_name -> schema_name -> count
+	 * @return ToolUsageStatsMap copy with tool_name -> schema_name -> ToolUsageStats
 	 */
-	ToolUsageMap get_tool_usage_stats();
+	ToolUsageStatsMap get_tool_usage_stats();
 
 	/**
 	 * @brief Get tool usage statistics as SQLite3_result* with optional reset
 	 * @param reset If true, resets internal counters after capturing data
-	 * @return SQLite3_result* with columns: tool, schema, count. Caller must delete.
+	 * @return SQLite3_result* with columns: tool, schema, count, first_seen, last_seen, sum_time, min_time, max_time. Caller must delete.
 	 */
 	SQLite3_result* get_tool_usage_stats_resultset(bool reset = false);
 };

@@ -718,17 +718,21 @@ static std::string extract_schema_name(const std::string& tool_name, const json&
 void track_tool_invocation(
 	Query_Tool_Handler* handler,
 	const std::string& tool_name,
-	const std::string& schema_name
+	const std::string& schema_name,
+	unsigned long long duration_us
 ) {
 	pthread_mutex_lock(&handler->counters_lock);
-	handler->tool_usage_counters[tool_name][schema_name]++;
+	handler->tool_usage_stats[tool_name][schema_name].add_timing(duration_us, monotonic_time());
 	pthread_mutex_unlock(&handler->counters_lock);
 }
 
 json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& arguments) {
-	// Track tool invocation
+	// Start timing
+	unsigned long long start_time = monotonic_time();
+
 	std::string schema = extract_schema_name(tool_name, arguments, catalog);
-	track_tool_invocation(this, tool_name, schema);
+	json result;
+
 	// ============================================================
 	// INVENTORY TOOLS
 	// ============================================================
@@ -777,10 +781,10 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		output["rows"] = results;
 		output["success"] = true;
 
-		return create_success_response(output);
+		result = create_success_response(output);
 	}
 
-	if (tool_name == "list_tables") {
+	else if (tool_name == "list_tables") {
 		std::string schema = json_string(arguments, "schema");
 		std::string page_token = json_string(arguments, "page_token");
 		int page_size = json_int(arguments, "page_size", 50);
@@ -794,16 +798,16 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		if (!name_filter.empty()) {
 			sql << " LIKE '" << name_filter << "'";
 		}
-		std::string result = execute_query(sql.str());
-		return create_success_response(json::parse(result));
+		std::string query_result = execute_query(sql.str());
+		result = create_success_response(json::parse(query_result));
 	}
 
 	// ============================================================
 	// STRUCTURE TOOLS
 	// ============================================================
-	if (tool_name == "get_constraints") {
+	else if (tool_name == "get_constraints") {
 		// Return deprecation warning with migration path
-		return create_error_response(
+		result = create_error_response(
 			"DEPRECATED: The 'get_constraints' tool is deprecated. "
 			"Use 'catalog.get_relationships' with run_id='<schema_name>' (or numeric run_id) "
 			"and object_key='schema.table' instead. "
@@ -814,48 +818,49 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	// ============================================================
 	// DISCOVERY TOOLS
 	// ============================================================
-	if (tool_name == "discovery.run_static") {
+	else if (tool_name == "discovery.run_static") {
 		if (!harvester) {
-			return create_error_response("Static harvester not configured");
-		}
-		std::string schema_filter = json_string(arguments, "schema_filter");
-		std::string notes = json_string(arguments, "notes", "Static discovery harvest");
+			result = create_error_response("Static harvester not configured");
+		} else {
+			std::string schema_filter = json_string(arguments, "schema_filter");
+			std::string notes = json_string(arguments, "notes", "Static discovery harvest");
 
-		int run_id = harvester->run_full_harvest(schema_filter, notes);
-		if (run_id < 0) {
-			return create_error_response("Static discovery failed");
-		}
+			int run_id = harvester->run_full_harvest(schema_filter, notes);
+			if (run_id < 0) {
+				result = create_error_response("Static discovery failed");
+			} else {
+				// Get stats using the run_id (after finish_run() has reset current_run_id)
+				std::string stats_str = harvester->get_harvest_stats(run_id);
+				json stats;
+				try {
+					stats = json::parse(stats_str);
+				} catch (...) {
+					stats["run_id"] = run_id;
+				}
 
-		// Get stats using the run_id (after finish_run() has reset current_run_id)
-		std::string stats_str = harvester->get_harvest_stats(run_id);
-		json stats;
-		try {
-			stats = json::parse(stats_str);
-		} catch (...) {
-			stats["run_id"] = run_id;
+				stats["started_at"] = "";
+				stats["mysql_version"] = "";
+				result = create_success_response(stats);
+			}
 		}
-
-		stats["started_at"] = "";
-		stats["mysql_version"] = "";
-		return create_success_response(stats);
 	}
 
 	// ============================================================
 	// CATALOG TOOLS (Discovery_Schema)
 	// ============================================================
-	if (tool_name == "catalog.init") {
+	else if (tool_name == "catalog.init") {
 		std::string sqlite_path = json_string(arguments, "sqlite_path");
 		if (sqlite_path.empty()) {
 			sqlite_path = catalog->get_db_path();
 		}
 		// Catalog already initialized, just return success
-		json result;
-		result["sqlite_path"] = sqlite_path;
-		result["status"] = "initialized";
-		return create_success_response(result);
+		json init_result;
+		init_result["sqlite_path"] = sqlite_path;
+		init_result["status"] = "initialized";
+		result = create_success_response(init_result);
 	}
 
-	if (tool_name == "catalog.search") {
+	else if (tool_name == "catalog.search") {
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string query = json_string(arguments, "query");
 		int limit = json_int(arguments, "limit", 25);
@@ -863,27 +868,26 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		std::string schema_name = json_string(arguments, "schema_name");
 
 		if (run_id_or_schema.empty()) {
-			return create_error_response("run_id is required");
-		}
-		if (query.empty()) {
-			return create_error_response("query is required");
-		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		std::string results = catalog->fts_search(run_id, query, limit, object_type, schema_name);
-		try {
-			return create_success_response(json::parse(results));
-		} catch (...) {
-			return create_error_response("Failed to parse search results");
+			result = create_error_response("run_id is required");
+		} else if (query.empty()) {
+			result = create_error_response("query is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				std::string search_results = catalog->fts_search(run_id, query, limit, object_type, schema_name);
+				try {
+					result = create_success_response(json::parse(search_results));
+				} catch (...) {
+					result = create_error_response("Failed to parse search results");
+				}
+			}
 		}
 	}
 
-	if (tool_name == "catalog.get_object") {
+	else if (tool_name == "catalog.get_object") {
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		int object_id = json_int(arguments, "object_id", -1);
 		std::string object_key = json_string(arguments, "object_key");
@@ -891,40 +895,41 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		bool include_profiles = json_int(arguments, "include_profiles", 1) != 0;
 
 		if (run_id_or_schema.empty()) {
-			return create_error_response("run_id is required");
-		}
+			result = create_error_response("run_id is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				std::string schema_name, object_name;
+				if (!object_key.empty()) {
+					size_t dot_pos = object_key.find('.');
+					if (dot_pos != std::string::npos) {
+						schema_name = object_key.substr(0, dot_pos);
+						object_name = object_key.substr(dot_pos + 1);
+					}
+				}
 
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		std::string schema_name, object_name;
-		if (!object_key.empty()) {
-			size_t dot_pos = object_key.find('.');
-			if (dot_pos != std::string::npos) {
-				schema_name = object_key.substr(0, dot_pos);
-				object_name = object_key.substr(dot_pos + 1);
+				std::string obj_result = catalog->get_object(
+					run_id, object_id, schema_name, object_name,
+					include_definition, include_profiles
+				);
+				try {
+					json parsed = json::parse(obj_result);
+					if (parsed.is_null()) {
+						result = create_error_response("Object not found");
+					} else {
+						result = create_success_response(parsed);
+					}
+				} catch (...) {
+					result = create_error_response("Failed to parse object data");
+				}
 			}
-		}
-
-		std::string result = catalog->get_object(
-			run_id, object_id, schema_name, object_name,
-			include_definition, include_profiles
-		);
-		try {
-			json parsed = json::parse(result);
-			if (parsed.is_null()) {
-				return create_error_response("Object not found");
-			}
-			return create_success_response(parsed);
-		} catch (...) {
-			return create_error_response("Failed to parse object data");
 		}
 	}
 
-	if (tool_name == "catalog.list_objects") {
+	else if (tool_name == "catalog.list_objects") {
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string schema_name = json_string(arguments, "schema_name");
 		std::string object_type = json_string(arguments, "object_type");
@@ -933,26 +938,26 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		std::string page_token = json_string(arguments, "page_token");
 
 		if (run_id_or_schema.empty()) {
-			return create_error_response("run_id is required");
-		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		std::string result = catalog->list_objects(
-			run_id, schema_name, object_type, order_by, page_size, page_token
-		);
-		try {
-			return create_success_response(json::parse(result));
-		} catch (...) {
-			return create_error_response("Failed to parse objects list");
+			result = create_error_response("run_id is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				std::string list_result = catalog->list_objects(
+					run_id, schema_name, object_type, order_by, page_size, page_token
+				);
+				try {
+					result = create_success_response(json::parse(list_result));
+				} catch (...) {
+					result = create_error_response("Failed to parse objects list");
+				}
+			}
 		}
 	}
 
-	if (tool_name == "catalog.get_relationships") {
+	else if (tool_name == "catalog.get_relationships") {
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		int object_id = json_int(arguments, "object_id", -1);
 		std::string object_key = json_string(arguments, "object_key");
@@ -960,53 +965,53 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		double min_confidence = json_double(arguments, "min_confidence", 0.0);
 
 		if (run_id_or_schema.empty()) {
-			return create_error_response("run_id is required");
-		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		// Resolve object_key to object_id if needed
-		if (object_id < 0 && !object_key.empty()) {
-			size_t dot_pos = object_key.find('.');
-			if (dot_pos != std::string::npos) {
-				std::string schema = object_key.substr(0, dot_pos);
-				std::string table = object_key.substr(dot_pos + 1);
-				// Quick query to get object_id
-				char* error = NULL;
-				int cols = 0, affected = 0;
-				SQLite3_result* resultset = NULL;
-				std::ostringstream sql;
-				sql << "SELECT object_id FROM objects WHERE run_id = " << run_id
-				    << " AND schema_name = '" << schema << "'"
-				    << " AND object_name = '" << table << "' LIMIT 1;";
-				catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
-				if (resultset && !resultset->rows.empty()) {
-					object_id = atoi(resultset->rows[0]->fields[0]);
+			result = create_error_response("run_id is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				// Resolve object_key to object_id if needed
+				if (object_id < 0 && !object_key.empty()) {
+					size_t dot_pos = object_key.find('.');
+					if (dot_pos != std::string::npos) {
+						std::string schema = object_key.substr(0, dot_pos);
+						std::string table = object_key.substr(dot_pos + 1);
+						// Quick query to get object_id
+						char* error = NULL;
+						int cols = 0, affected = 0;
+						SQLite3_result* resultset = NULL;
+						std::ostringstream sql;
+						sql << "SELECT object_id FROM objects WHERE run_id = " << run_id
+						    << " AND schema_name = '" << schema << "'"
+						    << " AND object_name = '" << table << "' LIMIT 1;";
+						catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+						if (resultset && !resultset->rows.empty()) {
+							object_id = atoi(resultset->rows[0]->fields[0]);
+						}
+						delete resultset;
+					}
 				}
-				delete resultset;
+
+				if (object_id < 0) {
+					result = create_error_response("Valid object_id or object_key is required");
+				} else {
+					std::string rel_result = catalog->get_relationships(run_id, object_id, include_inferred, min_confidence);
+					try {
+						result = create_success_response(json::parse(rel_result));
+					} catch (...) {
+						result = create_error_response("Failed to parse relationships");
+					}
+				}
 			}
-		}
-
-		if (object_id < 0) {
-			return create_error_response("Valid object_id or object_key is required");
-		}
-
-		std::string result = catalog->get_relationships(run_id, object_id, include_inferred, min_confidence);
-		try {
-			return create_success_response(json::parse(result));
-		} catch (...) {
-			return create_error_response("Failed to parse relationships");
 		}
 	}
 
 	// ============================================================
 	// AGENT TOOLS
 	// ============================================================
-	if (tool_name == "agent.run_start") {
+	else if (tool_name == "agent.run_start") {
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string model_name = json_string(arguments, "model_name");
 		std::string prompt_hash = json_string(arguments, "prompt_hash");
@@ -1017,55 +1022,53 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		}
 
 		if (run_id_or_schema.empty()) {
-			return create_error_response("run_id is required");
+			result = create_error_response("run_id is required");
+		} else if (model_name.empty()) {
+			result = create_error_response("model_name is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				int agent_run_id = catalog->create_agent_run(run_id, model_name, prompt_hash, budget_json);
+				if (agent_run_id < 0) {
+					result = create_error_response("Failed to create agent run");
+				} else {
+					json agent_result;
+					agent_result["agent_run_id"] = agent_run_id;
+					agent_result["run_id"] = run_id;
+					agent_result["model_name"] = model_name;
+					agent_result["status"] = "running";
+					result = create_success_response(agent_result);
+				}
+			}
 		}
-		if (model_name.empty()) {
-			return create_error_response("model_name is required");
-		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		int agent_run_id = catalog->create_agent_run(run_id, model_name, prompt_hash, budget_json);
-		if (agent_run_id < 0) {
-			return create_error_response("Failed to create agent run");
-		}
-
-		json result;
-		result["agent_run_id"] = agent_run_id;
-		result["run_id"] = run_id;
-		result["model_name"] = model_name;
-		result["status"] = "running";
-		return create_success_response(result);
 	}
 
-	if (tool_name == "agent.run_finish") {
+	else if (tool_name == "agent.run_finish") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string status = json_string(arguments, "status");
 		std::string error = json_string(arguments, "error");
 
 		if (agent_run_id <= 0) {
-			return create_error_response("agent_run_id is required");
+			result = create_error_response("agent_run_id is required");
+		} else if (status != "success" && status != "failed") {
+			result = create_error_response("status must be 'success' or 'failed'");
+		} else {
+			int rc = catalog->finish_agent_run(agent_run_id, status, error);
+			if (rc) {
+				result = create_error_response("Failed to finish agent run");
+			} else {
+				json finish_result;
+				finish_result["agent_run_id"] = agent_run_id;
+				finish_result["status"] = status;
+				result = create_success_response(finish_result);
+			}
 		}
-		if (status != "success" && status != "failed") {
-			return create_error_response("status must be 'success' or 'failed'");
-		}
-
-		int rc = catalog->finish_agent_run(agent_run_id, status, error);
-		if (rc) {
-			return create_error_response("Failed to finish agent run");
-		}
-
-		json result;
-		result["agent_run_id"] = agent_run_id;
-		result["status"] = status;
-		return create_success_response(result);
 	}
 
-	if (tool_name == "agent.event_append") {
+	else if (tool_name == "agent.event_append") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string event_type = json_string(arguments, "event_type");
 
@@ -1075,26 +1078,25 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		}
 
 		if (agent_run_id <= 0) {
-			return create_error_response("agent_run_id is required");
+			result = create_error_response("agent_run_id is required");
+		} else if (event_type.empty()) {
+			result = create_error_response("event_type is required");
+		} else {
+			int event_id = catalog->append_agent_event(agent_run_id, event_type, payload_json);
+			if (event_id < 0) {
+				result = create_error_response("Failed to append event");
+			} else {
+				json event_result;
+				event_result["event_id"] = event_id;
+				result = create_success_response(event_result);
+			}
 		}
-		if (event_type.empty()) {
-			return create_error_response("event_type is required");
-		}
-
-		int event_id = catalog->append_agent_event(agent_run_id, event_type, payload_json);
-		if (event_id < 0) {
-			return create_error_response("Failed to append event");
-		}
-
-		json result;
-		result["event_id"] = event_id;
-		return create_success_response(result);
 	}
 
 	// ============================================================
 	// LLM MEMORY TOOLS
 	// ============================================================
-	if (tool_name == "llm.summary_upsert") {
+	else if (tool_name == "llm.summary_upsert") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		int object_id = json_int(arguments, "object_id");
@@ -1113,62 +1115,61 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		}
 
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || object_id <= 0) {
-			return create_error_response("agent_run_id, run_id, and object_id are required");
+			result = create_error_response("agent_run_id, run_id, and object_id are required");
+		} else if (summary_json.empty()) {
+			result = create_error_response("summary is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				int rc = catalog->upsert_llm_summary(
+					agent_run_id, run_id, object_id, summary_json,
+					confidence, status, sources_json
+				);
+				if (rc) {
+					result = create_error_response("Failed to upsert summary");
+				} else {
+					json sum_result;
+					sum_result["object_id"] = object_id;
+					sum_result["status"] = "upserted";
+					result = create_success_response(sum_result);
+				}
+			}
 		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-		if (summary_json.empty()) {
-			return create_error_response("summary is required");
-		}
-
-		int rc = catalog->upsert_llm_summary(
-			agent_run_id, run_id, object_id, summary_json,
-			confidence, status, sources_json
-		);
-
-		if (rc) {
-			return create_error_response("Failed to upsert summary");
-		}
-
-		json result;
-		result["object_id"] = object_id;
-		result["status"] = "upserted";
-		return create_success_response(result);
 	}
 
-	if (tool_name == "llm.summary_get") {
+	else if (tool_name == "llm.summary_get") {
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		int object_id = json_int(arguments, "object_id");
 		int agent_run_id = json_int(arguments, "agent_run_id", -1);
 		bool latest = json_int(arguments, "latest", 1) != 0;
 
 		if (run_id_or_schema.empty() || object_id <= 0) {
-			return create_error_response("run_id and object_id are required");
-		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		std::string result = catalog->get_llm_summary(run_id, object_id, agent_run_id, latest);
-		try {
-			json parsed = json::parse(result);
-			if (parsed.is_null()) {
-				return create_error_response("Summary not found");
+			result = create_error_response("run_id and object_id are required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				std::string sum_result = catalog->get_llm_summary(run_id, object_id, agent_run_id, latest);
+				try {
+					json parsed = json::parse(sum_result);
+					if (parsed.is_null()) {
+						result = create_error_response("Summary not found");
+					} else {
+						result = create_success_response(parsed);
+					}
+				} catch (...) {
+					result = create_error_response("Failed to parse summary");
+				}
 			}
-			return create_success_response(parsed);
-		} catch (...) {
-			return create_error_response("Failed to parse summary");
 		}
 	}
 
-	if (tool_name == "llm.relationship_upsert") {
+	else if (tool_name == "llm.relationship_upsert") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		int child_object_id = json_int(arguments, "child_object_id");
@@ -1184,33 +1185,31 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		}
 
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || child_object_id <= 0 || parent_object_id <= 0) {
-			return create_error_response("agent_run_id, run_id, child_object_id, and parent_object_id are required");
+			result = create_error_response("agent_run_id, run_id, child_object_id, and parent_object_id are required");
+		} else if (child_column.empty() || parent_column.empty()) {
+			result = create_error_response("child_column and parent_column are required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				int rc = catalog->upsert_llm_relationship(
+					agent_run_id, run_id, child_object_id, child_column,
+					parent_object_id, parent_column, rel_type, confidence, evidence_json
+				);
+				if (rc) {
+					result = create_error_response("Failed to upsert relationship");
+				} else {
+					json rel_result;
+					rel_result["status"] = "upserted";
+					result = create_success_response(rel_result);
+				}
+			}
 		}
-		if (child_column.empty() || parent_column.empty()) {
-			return create_error_response("child_column and parent_column are required");
-		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		int rc = catalog->upsert_llm_relationship(
-			agent_run_id, run_id, child_object_id, child_column,
-			parent_object_id, parent_column, rel_type, confidence, evidence_json
-		);
-
-		if (rc) {
-			return create_error_response("Failed to upsert relationship");
-		}
-
-		json result;
-		result["status"] = "upserted";
-		return create_success_response(result);
 	}
 
-	if (tool_name == "llm.domain_upsert") {
+	else if (tool_name == "llm.domain_upsert") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string domain_key = json_string(arguments, "domain_key");
@@ -1219,30 +1218,29 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		double confidence = json_double(arguments, "confidence", 0.6);
 
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || domain_key.empty()) {
-			return create_error_response("agent_run_id, run_id, and domain_key are required");
+			result = create_error_response("agent_run_id, run_id, and domain_key are required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				int domain_id = catalog->upsert_llm_domain(
+					agent_run_id, run_id, domain_key, title, description, confidence
+				);
+				if (domain_id < 0) {
+					result = create_error_response("Failed to upsert domain");
+				} else {
+					json domain_result;
+					domain_result["domain_id"] = domain_id;
+					domain_result["domain_key"] = domain_key;
+					result = create_success_response(domain_result);
+				}
+			}
 		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		int domain_id = catalog->upsert_llm_domain(
-			agent_run_id, run_id, domain_key, title, description, confidence
-		);
-
-		if (domain_id < 0) {
-			return create_error_response("Failed to upsert domain");
-		}
-
-		json result;
-		result["domain_id"] = domain_id;
-		result["domain_key"] = domain_key;
-		return create_success_response(result);
 	}
 
-	if (tool_name == "llm.domain_set_members") {
+	else if (tool_name == "llm.domain_set_members") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string domain_key = json_string(arguments, "domain_key");
@@ -1260,34 +1258,33 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		}
 
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || domain_key.empty()) {
-			return create_error_response("agent_run_id, run_id, and domain_key are required");
-		}
-		if (members_json.empty()) {
+			result = create_error_response("agent_run_id, run_id, and domain_key are required");
+		} else if (members_json.empty()) {
 			proxy_error("llm.domain_set_members: members not provided or invalid type (got: %s)\n",
 				arguments.contains("members") ? arguments["members"].dump().c_str() : "missing");
-			return create_error_response("members array is required");
+			result = create_error_response("members array is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				proxy_debug(PROXY_DEBUG_GENERIC, 3, "llm.domain_set_members: setting members='%s'\n", members_json.c_str());
+				int rc = catalog->set_domain_members(agent_run_id, run_id, domain_key, members_json);
+				if (rc) {
+					proxy_error("llm.domain_set_members: failed to set members (rc=%d)\n", rc);
+					result = create_error_response("Failed to set domain members");
+				} else {
+					json members_result;
+					members_result["domain_key"] = domain_key;
+					members_result["status"] = "members_set";
+					result = create_success_response(members_result);
+				}
+			}
 		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		proxy_debug(PROXY_DEBUG_GENERIC, 3, "llm.domain_set_members: setting members='%s'\n", members_json.c_str());
-		int rc = catalog->set_domain_members(agent_run_id, run_id, domain_key, members_json);
-		if (rc) {
-			proxy_error("llm.domain_set_members: failed to set members (rc=%d)\n", rc);
-			return create_error_response("Failed to set domain members");
-		}
-
-		json result;
-		result["domain_key"] = domain_key;
-		result["status"] = "members_set";
-		return create_success_response(result);
 	}
 
-	if (tool_name == "llm.metric_upsert") {
+	else if (tool_name == "llm.metric_upsert") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string metric_key = json_string(arguments, "metric_key");
@@ -1306,31 +1303,30 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		double confidence = json_double(arguments, "confidence", 0.6);
 
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || metric_key.empty() || title.empty()) {
-			return create_error_response("agent_run_id, run_id, metric_key, and title are required");
+			result = create_error_response("agent_run_id, run_id, metric_key, and title are required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				int metric_id = catalog->upsert_llm_metric(
+					agent_run_id, run_id, metric_key, title, description, domain_key,
+					grain, unit, sql_template, depends_json, confidence
+				);
+				if (metric_id < 0) {
+					result = create_error_response("Failed to upsert metric");
+				} else {
+					json metric_result;
+					metric_result["metric_id"] = metric_id;
+					metric_result["metric_key"] = metric_key;
+					result = create_success_response(metric_result);
+				}
+			}
 		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		int metric_id = catalog->upsert_llm_metric(
-			agent_run_id, run_id, metric_key, title, description, domain_key,
-			grain, unit, sql_template, depends_json, confidence
-		);
-
-		if (metric_id < 0) {
-			return create_error_response("Failed to upsert metric");
-		}
-
-		json result;
-		result["metric_id"] = metric_id;
-		result["metric_key"] = metric_key;
-		return create_success_response(result);
 	}
 
-	if (tool_name == "llm.question_template_add") {
+	else if (tool_name == "llm.question_template_add") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string title = json_string(arguments, "title");
@@ -1345,33 +1341,31 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		double confidence = json_double(arguments, "confidence", 0.6);
 
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || title.empty() || question_nl.empty()) {
-			return create_error_response("agent_run_id, run_id, title, and question_nl are required");
+			result = create_error_response("agent_run_id, run_id, title, and question_nl are required");
+		} else if (template_json.empty()) {
+			result = create_error_response("template is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				int template_id = catalog->add_question_template(
+					agent_run_id, run_id, title, question_nl, template_json, example_sql, confidence
+				);
+				if (template_id < 0) {
+					result = create_error_response("Failed to add question template");
+				} else {
+					json tmpl_result;
+					tmpl_result["template_id"] = template_id;
+					tmpl_result["title"] = title;
+					result = create_success_response(tmpl_result);
+				}
+			}
 		}
-		if (template_json.empty()) {
-			return create_error_response("template is required");
-		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		int template_id = catalog->add_question_template(
-			agent_run_id, run_id, title, question_nl, template_json, example_sql, confidence
-		);
-
-		if (template_id < 0) {
-			return create_error_response("Failed to add question template");
-		}
-
-		json result;
-		result["template_id"] = template_id;
-		result["title"] = title;
-		return create_success_response(result);
 	}
 
-	if (tool_name == "llm.note_add") {
+	else if (tool_name == "llm.note_add") {
 		int agent_run_id = json_int(arguments, "agent_run_id");
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string scope = json_string(arguments, "scope");
@@ -1386,113 +1380,109 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		}
 
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || scope.empty() || body.empty()) {
-			return create_error_response("agent_run_id, run_id, scope, and body are required");
+			result = create_error_response("agent_run_id, run_id, scope, and body are required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				int note_id = catalog->add_llm_note(
+					agent_run_id, run_id, scope, object_id, domain_key, title, body, tags_json
+				);
+				if (note_id < 0) {
+					result = create_error_response("Failed to add note");
+				} else {
+					json note_result;
+					note_result["note_id"] = note_id;
+					result = create_success_response(note_result);
+				}
+			}
 		}
-
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		int note_id = catalog->add_llm_note(
-			agent_run_id, run_id, scope, object_id, domain_key, title, body, tags_json
-		);
-
-		if (note_id < 0) {
-			return create_error_response("Failed to add note");
-		}
-
-		json result;
-		result["note_id"] = note_id;
-		return create_success_response(result);
 	}
 
-	if (tool_name == "llm.search") {
+	else if (tool_name == "llm.search") {
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string query = json_string(arguments, "query");
 		int limit = json_int(arguments, "limit", 25);
 
 		if (run_id_or_schema.empty()) {
-			return create_error_response("run_id is required");
-		}
-		if (query.empty()) {
-			return create_error_response("query is required");
-		}
+			result = create_error_response("run_id is required");
+		} else if (query.empty()) {
+			result = create_error_response("query is required");
+		} else {
+			// Resolve schema name to run_id if needed
+			int run_id = catalog->resolve_run_id(run_id_or_schema);
+			if (run_id < 0) {
+				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
+			} else {
+				// Log the search query
+				catalog->log_llm_search(run_id, query, limit);
 
-		// Resolve schema name to run_id if needed
-		int run_id = catalog->resolve_run_id(run_id_or_schema);
-		if (run_id < 0) {
-			return create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
-		}
-
-		// Log the search query
-		catalog->log_llm_search(run_id, query, limit);
-
-		std::string results = catalog->fts_search_llm(run_id, query, limit);
-		try {
-			return create_success_response(json::parse(results));
-		} catch (...) {
-			return create_error_response("Failed to parse LLM search results");
+				std::string search_results = catalog->fts_search_llm(run_id, query, limit);
+				try {
+					result = create_success_response(json::parse(search_results));
+				} catch (...) {
+					result = create_error_response("Failed to parse LLM search results");
+				}
+			}
 		}
 	}
 
 	// ============================================================
 	// QUERY TOOLS
 	// ============================================================
-	if (tool_name == "run_sql_readonly") {
+	else if (tool_name == "run_sql_readonly") {
 		std::string sql = json_string(arguments, "sql");
 		int max_rows = json_int(arguments, "max_rows", 200);
 		int timeout_sec = json_int(arguments, "timeout_sec", 2);
 
 		if (sql.empty()) {
-			return create_error_response("sql is required");
-		}
-		if (!validate_readonly_query(sql)) {
-			return create_error_response("SQL is not read-only");
-		}
-		if (is_dangerous_query(sql)) {
-			return create_error_response("SQL contains dangerous operations");
-		}
-
-		std::string result = execute_query(sql);
-		try {
-			json result_json = json::parse(result);
-			return create_success_response(result_json);
-		} catch (...) {
-			return create_success_response(result);
+			result = create_error_response("sql is required");
+		} else if (!validate_readonly_query(sql)) {
+			result = create_error_response("SQL is not read-only");
+		} else if (is_dangerous_query(sql)) {
+			result = create_error_response("SQL contains dangerous operations");
+		} else {
+			std::string query_result = execute_query(sql);
+			try {
+				json result_json = json::parse(query_result);
+				result = create_success_response(result_json);
+			} catch (...) {
+				result = create_success_response(query_result);
+			}
 		}
 	}
 
-	if (tool_name == "explain_sql") {
+	else if (tool_name == "explain_sql") {
 		std::string sql = json_string(arguments, "sql");
 		if (sql.empty()) {
-			return create_error_response("sql is required");
-		}
-
-		std::string result = execute_query("EXPLAIN " + sql);
-		try {
-			return create_success_response(json::parse(result));
-		} catch (...) {
-			return create_success_response(result);
+			result = create_error_response("sql is required");
+		} else {
+			std::string query_result = execute_query("EXPLAIN " + sql);
+			try {
+				result = create_success_response(json::parse(query_result));
+			} catch (...) {
+				result = create_success_response(query_result);
+			}
 		}
 	}
 
 	// ============================================================
 	// RELATIONSHIP INFERENCE TOOLS (DEPRECATED)
 	// ============================================================
-	if (tool_name == "suggest_joins") {
+	else if (tool_name == "suggest_joins") {
 		// Return deprecation warning with migration path
-		return create_error_response(
+		result = create_error_response(
 			"DEPRECATED: The 'suggest_joins' tool is deprecated. "
 			"Use 'catalog.get_relationships' with run_id='<schema_name>' instead. "
 			"This provides foreign keys, view dependencies, and LLM-inferred relationships."
 		);
 	}
 
-	if (tool_name == "find_reference_candidates") {
+	else if (tool_name == "find_reference_candidates") {
 		// Return deprecation warning with migration path
-		return create_error_response(
+		result = create_error_response(
 			"DEPRECATED: The 'find_reference_candidates' tool is deprecated. "
 			"Use 'catalog.get_relationships' with run_id='<schema_name>' instead. "
 			"This provides foreign keys, view dependencies, and LLM-inferred relationships."
@@ -1502,67 +1492,97 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	// ============================================================
 	// STATISTICS TOOLS
 	// ============================================================
-	if (tool_name == "stats.get_tool_usage") {
-		ToolUsageMap stats = get_tool_usage_stats();
-		json result = json::object();
-		for (ToolUsageMap::const_iterator it = stats.begin(); it != stats.end(); ++it) {
+	else if (tool_name == "stats.get_tool_usage") {
+		ToolUsageStatsMap stats = get_tool_usage_stats();
+		json stats_result = json::object();
+		for (ToolUsageStatsMap::const_iterator it = stats.begin(); it != stats.end(); ++it) {
 			const std::string& tool_name = it->first;
-			const SchemaCountMap& schemas = it->second;
-			json schema_counts = json::object();
-			for (SchemaCountMap::const_iterator sit = schemas.begin(); sit != schemas.end(); ++sit) {
-				schema_counts[sit->first] = sit->second;
+			const SchemaStatsMap& schemas = it->second;
+			json schema_stats = json::object();
+			for (SchemaStatsMap::const_iterator sit = schemas.begin(); sit != schemas.end(); ++sit) {
+				json stats_obj = json::object();
+				stats_obj["count"] = sit->second.count;
+				stats_obj["first_seen"] = sit->second.first_seen;
+				stats_obj["last_seen"] = sit->second.last_seen;
+				stats_obj["sum_time"] = sit->second.sum_time;
+				stats_obj["min_time"] = sit->second.min_time;
+				stats_obj["max_time"] = sit->second.max_time;
+				schema_stats[sit->first] = stats_obj;
 			}
-			result[tool_name] = schema_counts;
+			stats_result[tool_name] = schema_stats;
 		}
-		return create_success_response(result);
+		result = create_success_response(stats_result);
 	}
 
 	// ============================================================
 	// FALLBACK - UNKNOWN TOOL
 	// ============================================================
-	return create_error_response("Unknown tool: " + tool_name);
+	else {
+		result = create_error_response("Unknown tool: " + tool_name);
+	}
+
+	// Track invocation with timing
+	unsigned long long duration = monotonic_time() - start_time;
+	track_tool_invocation(this, tool_name, schema, duration);
+
+	return result;
 }
 
-Query_Tool_Handler::ToolUsageMap Query_Tool_Handler::get_tool_usage_stats() {
+Query_Tool_Handler::ToolUsageStatsMap Query_Tool_Handler::get_tool_usage_stats() {
 	// Thread-safe copy of counters
 	pthread_mutex_lock(&counters_lock);
-	ToolUsageMap copy = tool_usage_counters;
+	ToolUsageStatsMap copy = tool_usage_stats;
 	pthread_mutex_unlock(&counters_lock);
 	return copy;
 }
 
 SQLite3_result* Query_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
-	SQLite3_result* result = new SQLite3_result(3);
+	SQLite3_result* result = new SQLite3_result(8);
 	result->add_column_definition(SQLITE_TEXT, "tool");
 	result->add_column_definition(SQLITE_TEXT, "schema");
 	result->add_column_definition(SQLITE_TEXT, "count");
+	result->add_column_definition(SQLITE_TEXT, "first_seen");
+	result->add_column_definition(SQLITE_TEXT, "last_seen");
+	result->add_column_definition(SQLITE_TEXT, "sum_time");
+	result->add_column_definition(SQLITE_TEXT, "min_time");
+	result->add_column_definition(SQLITE_TEXT, "max_time");
 
 	pthread_mutex_lock(&counters_lock);
 
-	for (ToolUsageMap::const_iterator tool_it = tool_usage_counters.begin();
-	     tool_it != tool_usage_counters.end(); ++tool_it) {
+	for (ToolUsageStatsMap::const_iterator tool_it = tool_usage_stats.begin();
+	     tool_it != tool_usage_stats.end(); ++tool_it) {
 		const std::string& tool_name = tool_it->first;
-		const SchemaCountMap& schemas = tool_it->second;
+		const SchemaStatsMap& schemas = tool_it->second;
 
-		for (SchemaCountMap::const_iterator schema_it = schemas.begin();
+		for (SchemaStatsMap::const_iterator schema_it = schemas.begin();
 		     schema_it != schemas.end(); ++schema_it) {
 			const std::string& schema_name = schema_it->first;
-			unsigned long long count = schema_it->second;
+			const ToolUsageStats& stats = schema_it->second;
 
-			char** row = new char*[3];
+			char** row = new char*[8];
 			row[0] = strdup(tool_name.c_str());
 			row[1] = strdup(schema_name.c_str());
 
-			char count_str[32];
-			snprintf(count_str, sizeof(count_str), "%llu", count);
-			row[2] = strdup(count_str);
+			char buf[32];
+			snprintf(buf, sizeof(buf), "%llu", stats.count);
+			row[2] = strdup(buf);
+			snprintf(buf, sizeof(buf), "%llu", stats.first_seen);
+			row[3] = strdup(buf);
+			snprintf(buf, sizeof(buf), "%llu", stats.last_seen);
+			row[4] = strdup(buf);
+			snprintf(buf, sizeof(buf), "%llu", stats.sum_time);
+			row[5] = strdup(buf);
+			snprintf(buf, sizeof(buf), "%llu", stats.min_time);
+			row[6] = strdup(buf);
+			snprintf(buf, sizeof(buf), "%llu", stats.max_time);
+			row[7] = strdup(buf);
 
 			result->add_row(row);
 		}
 	}
 
 	if (reset) {
-		tool_usage_counters.clear();
+		tool_usage_stats.clear();
 	}
 
 	pthread_mutex_unlock(&counters_lock);
