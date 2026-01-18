@@ -48,6 +48,46 @@ void Discovery_Schema::close() {
 	}
 }
 
+int Discovery_Schema::resolve_run_id(const std::string& run_id_or_schema) {
+	// If it's already a number (run_id), return it
+	if (!run_id_or_schema.empty() && std::isdigit(run_id_or_schema[0])) {
+		return std::stoi(run_id_or_schema);
+	}
+
+	// It's a schema name - find the latest run_id for this schema
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT r.run_id FROM runs r "
+	    << "INNER JOIN schemas s ON s.run_id = r.run_id "
+	    << "WHERE s.schema_name = '" << run_id_or_schema << "' "
+	    << "ORDER BY r.started_at DESC LIMIT 1;";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (error) {
+		proxy_error("Failed to resolve run_id for schema '%s': %s\n", run_id_or_schema.c_str(), error);
+		free(error);
+		return -1;
+	}
+
+	if (!resultset || resultset->rows_count == 0) {
+		proxy_warning("No run found for schema '%s'\n", run_id_or_schema.c_str());
+		if (resultset) {
+			free(resultset);
+			resultset = NULL;
+		}
+		return -1;
+	}
+
+	SQLite3_row* row = resultset->rows[0];
+	int run_id = atoi(row->fields[0]);
+
+	free(resultset);
+	return run_id;
+}
+
 int Discovery_Schema::init_schema() {
 	// Enable foreign keys
 	db->execute("PRAGMA foreign_keys = ON");

@@ -69,6 +69,17 @@ public:
 	void close();
 
 	/**
+	 * @brief Resolve schema name or run_id to a run_id
+	 *
+	 * If input is a numeric run_id, returns it as-is.
+	 * If input is a schema name, finds the latest run_id for that schema.
+	 *
+	 * @param run_id_or_schema Either a numeric run_id or a schema name
+	 * @return run_id on success, -1 if schema not found
+	 */
+	int resolve_run_id(const std::string& run_id_or_schema);
+
+	/**
 	 * @brief Create a new discovery run
 	 *
 	 * @param source_dsn Data source identifier (e.g., "mysql://host:port/")
