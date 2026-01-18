@@ -519,6 +519,7 @@ class ProxySQL_Admin {
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
 	SQLite3DB *statsdb_disk; // on disk
+	SQLite3DB *mcpdb; // MCP catalog database
 #ifdef DEBUG
 	SQLite3DB *debugdb_disk; // on disk for debug
 	int debug_output;
