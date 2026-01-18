@@ -149,7 +149,7 @@ const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_OPTIONS(
 
 std::string MCP_JSONRPC_Resource::create_jsonrpc_response(
 	const std::string& result,
-	const std::string& id
+	const json& id
 ) {
 	json j;
 	j["jsonrpc"] = "2.0";
@@ -161,7 +161,7 @@ std::string MCP_JSONRPC_Resource::create_jsonrpc_response(
 std::string MCP_JSONRPC_Resource::create_jsonrpc_error(
 	int code,
 	const std::string& message,
-	const std::string& id
+	const json& id
 ) {
 	json j;
 	j["jsonrpc"] = "2.0";
@@ -232,13 +232,9 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 	}
 
 	// Get request ID (optional but recommended)
-	std::string req_id = "";
+	json req_id = nullptr;
 	if (req_json.contains("id")) {
-		if (req_json["id"].is_string()) {
-			req_id = req_json["id"].get<std::string>();
-		} else if (req_json["id"].is_number()) {
-			req_id = std::to_string(req_json["id"].get<int>());
-		}
+		req_id = req_json["id"];
 	}
 
 	// Get method name
