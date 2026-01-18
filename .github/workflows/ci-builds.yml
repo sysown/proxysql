@@ -61,8 +61,9 @@ jobs:
           - dist: 'ubuntu22'
             type: '-tap'
           # ubuntu22 is needed for ASAN TAP testing
-          - dist: 'ubuntu22'
-            type: '-tap-asan'
+          # disabled to save cache space
+          #- dist: 'ubuntu22'
+          #  type: '-tap-asan'
 #          - dist: 'ubuntu22'
 #            type: '-clang'
 #          - dist: 'ubuntu22'
