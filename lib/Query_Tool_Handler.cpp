@@ -693,7 +693,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		json results = json::array();
 		if (resultset && resultset->rows_count > 0) {
 			for (const auto& row : resultset->rows) {
-				if (row->fields_count > 0 && row->fields[0]) {
+				if (row->cnt > 0 && row->fields[0]) {
 					json schema_row = json::array();
 					schema_row.push_back(std::string(row->fields[0]));
 					results.push_back(schema_row);
