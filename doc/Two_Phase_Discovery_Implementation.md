@@ -265,8 +265,11 @@ grep -n "discovery.run_static" lib/Query_Tool_Handler.cpp
 grep -n "agent.run_start" lib/Query_Tool_Handler.cpp
 grep -n "llm.summary_upsert" lib/Query_Tool_Handler.cpp
 
-# Test the discovery script
-./scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/two_phase_discovery.py --dry-run --schema test
+# Test the discovery script (dry-run mode)
+./scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/two_phase_discovery.py \
+    --dry-run \
+    --mcp-config mcp_config.json \
+    --schema test
 ```
 
 ## Next Steps
