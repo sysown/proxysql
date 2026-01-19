@@ -47,6 +47,11 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 │  │  │   /observe  │  │   /cache    │  │    /ai      │       │   │
 │  │  │   endpoint  │  │   endpoint  │  │   endpoint  │       │   │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘       │   │
+│  │         │                │               │                │   │
+│  │  ┌─────────────┐                                              │   │
+│  │  │   /rag      │                                              │   │
+│  │  │   endpoint  │                                              │   │
+│  │  └─────────────┘                                              │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │            │         │        │        │        │        │          │
 │  ┌─────────▼─────────▼────────▼────────▼────────▼────────▼─────────┐│
@@ -85,6 +90,24 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 │  │  │ anomaly.    │                                               ││
 │  │  │ detect      │                                               ││
 │  │  │ ...         │                                               ││
+│  │  └─────────────┘                                               ││
+│  │  ┌─────────────┐                                               ││
+│  │  │ RAG_TH      │                                               ││
+│  │  │             │                                               ││
+│  │  │ rag.search_ │                                               ││
+│  │  │ fts         │                                               ││
+│  │  │ rag.search_ │                                               ││
+│  │  │ vector      │                                               ││
+│  │  │ rag.search_ │                                               ││
+│  │  │ hybrid      │                                               ││
+│  │  │ rag.get_    │                                               ││
+│  │  │ chunks      │                                               ││
+│  │  │ rag.get_    │                                               ││
+│  │  │ docs        │                                               ││
+│  │  │ rag.fetch_  │                                               ││
+│  │  │ from_source │                                               ││
+│  │  │ rag.admin.  │                                               ││
+│  │  │ stats       │                                               ││
 │  │  └─────────────┘                                               ││
 │  └──────────────────────────────────────────────────────────────────┘│
 │            │         │        │        │        │        │          │
@@ -131,6 +154,7 @@ Where:
 | **Discovery** | `discovery.run_static` | Run Phase 1 of two-phase discovery |
 | **Agent Coordination** | `agent.run_start`, `agent.run_finish`, `agent.event_append` | Coordinate LLM agent discovery runs |
 | **LLM Interaction** | `llm.summary_upsert`, `llm.summary_get`, `llm.relationship_upsert`, `llm.domain_upsert`, `llm.domain_set_members`, `llm.metric_upsert`, `llm.question_template_add`, `llm.note_add`, `llm.search` | Store and retrieve LLM-generated insights |
+| **RAG** | `rag.search_fts`, `rag.search_vector`, `rag.search_hybrid`, `rag.get_chunks`, `rag.get_docs`, `rag.fetch_from_source`, `rag.admin.stats` | Retrieval-Augmented Generation tools |
 
 ---
 
@@ -161,9 +185,21 @@ Where:
 | `mcp-mysql_password` | (empty) | MySQL password for connections |
 | `mcp-mysql_schema` | (empty) | Default schema for connections |
 
+**RAG Configuration Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `genai-rag_enabled` | false | Enable RAG features |
+| `genai-rag_k_max` | 50 | Maximum k for search results |
+| `genai-rag_candidates_max` | 500 | Maximum candidates for hybrid search |
+| `genai-rag_query_max_bytes` | 8192 | Maximum query length in bytes |
+| `genai-rag_response_max_bytes` | 5000000 | Maximum response size in bytes |
+| `genai-rag_timeout_ms` | 2000 | RAG operation timeout in ms |
+
 **Endpoints:**
 - `POST https://localhost:6071/mcp/config` - Configuration tools
 - `POST https://localhost:6071/mcp/query` - Database exploration and discovery tools
+- `POST https://localhost:6071/mcp/rag` - Retrieval-Augmented Generation tools
 - `POST https://localhost:6071/mcp/admin` - Administrative tools
 - `POST https://localhost:6071/mcp/cache` - Cache management tools
 - `POST https://localhost:6071/mcp/observe` - Observability tools

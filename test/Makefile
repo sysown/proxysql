@@ -27,3 +27,6 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 
 sqlite_history_convert: sqlite_history_convert.cpp
 	g++ -ggdb ../lib/SpookyV2.cpp ../lib/debug.cpp ../deps/sqlite3/sqlite3/sqlite3.o sqlite_history_convert.cpp ../lib/sqlite3db.cpp -o sqlite_history_convert $(IDIRS) -pthread -ldl
+
+test_rag_schema: test_rag_schema.cpp
+	$(CXX) -ggdb $(PROXYSQL_OBJS) test_rag_schema.cpp -o test_rag_schema $(IDIRS) $(LDIRS) $(PROXYSQL_LIBS)

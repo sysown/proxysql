@@ -230,6 +230,14 @@ public:
 		// Vector storage configuration
 		char* genai_vector_db_path;            ///< Vector database file path (default: /var/lib/proxysql/ai_features.db)
 		int genai_vector_dimension;            ///< Embedding dimension (default: 1536)
+
+		// RAG configuration
+		bool genai_rag_enabled;                ///< Enable RAG features (default: false)
+		int genai_rag_k_max;                   ///< Maximum k for search results (default: 50)
+		int genai_rag_candidates_max;          ///< Maximum candidates for hybrid search (default: 500)
+		int genai_rag_query_max_bytes;         ///< Maximum query length in bytes (default: 8192)
+		int genai_rag_response_max_bytes;      ///< Maximum response size in bytes (default: 5000000)
+		int genai_rag_timeout_ms;              ///< RAG operation timeout in ms (default: 2000)
 	} variables;
 
 	struct {

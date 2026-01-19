@@ -73,6 +73,14 @@ static const char* genai_thread_variables_names[] = {
 	"vector_db_path",
 	"vector_dimension",
 
+	// RAG configuration
+	"rag_enabled",
+	"rag_k_max",
+	"rag_candidates_max",
+	"rag_query_max_bytes",
+	"rag_response_max_bytes",
+	"rag_timeout_ms",
+
 	NULL
 };
 
@@ -180,6 +188,14 @@ GenAI_Threads_Handler::GenAI_Threads_Handler() {
 	// Vector storage configuration
 	variables.genai_vector_db_path = strdup("/var/lib/proxysql/ai_features.db");
 	variables.genai_vector_dimension = 1536;  // OpenAI text-embedding-3-small
+
+	// RAG configuration
+	variables.genai_rag_enabled = false;
+	variables.genai_rag_k_max = 50;
+	variables.genai_rag_candidates_max = 500;
+	variables.genai_rag_query_max_bytes = 8192;
+	variables.genai_rag_response_max_bytes = 5000000;
+	variables.genai_rag_timeout_ms = 2000;
 
 	status_variables.threads_initialized = 0;
 	status_variables.active_requests = 0;
