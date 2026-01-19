@@ -714,9 +714,9 @@ json Query_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_schema(
 		"llm.question_template_add",
-		"Add a question template (NL) mapped to a structured query plan (and optional example SQL). Extract table/view names from example_sql or template_json and populate related_objects as JSON array.",
-		{"agent_run_id", "run_id", "title", "question_nl", "template"},
-		{{"example_sql", "string"}, {"related_objects", "array"}, {"confidence", "number"}}
+		"Add a question template (NL) mapped to a structured query plan. Extract table/view names from example_sql and populate related_objects. agent_run_id is optional - if not provided, uses the last agent run for the schema.",
+		{"run_id", "title", "question_nl", "template"},
+		{{"agent_run_id", "integer"}, {"example_sql", "string"}, {"related_objects", "array"}, {"confidence", "number"}}
 	));
 
 	tools.push_back(create_tool_schema(
@@ -1416,7 +1416,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	}
 
 	else if (tool_name == "llm.question_template_add") {
-		int agent_run_id = json_int(arguments, "agent_run_id");
+		int agent_run_id = json_int(arguments, "agent_run_id", 0);  // Optional, default 0
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string title = json_string(arguments, "title");
 		std::string question_nl = json_string(arguments, "question_nl");
@@ -1435,8 +1435,8 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			related_objects = arguments["related_objects"].dump();
 		}
 
-		if (agent_run_id <= 0 || run_id_or_schema.empty() || title.empty() || question_nl.empty()) {
-			result = create_error_response("agent_run_id, run_id, title, and question_nl are required");
+		if (run_id_or_schema.empty() || title.empty() || question_nl.empty()) {
+			result = create_error_response("run_id, title, and question_nl are required");
 		} else if (template_json.empty()) {
 			result = create_error_response("template is required");
 		} else {
@@ -1445,16 +1445,29 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			if (run_id < 0) {
 				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
 			} else {
-				int template_id = catalog->add_question_template(
-					agent_run_id, run_id, title, question_nl, template_json, example_sql, related_objects, confidence
-				);
-				if (template_id < 0) {
-					result = create_error_response("Failed to add question template");
-				} else {
-					json tmpl_result;
-					tmpl_result["template_id"] = template_id;
-					tmpl_result["title"] = title;
-					result = create_success_response(tmpl_result);
+				// If agent_run_id not provided, get the last one for this run_id
+				if (agent_run_id <= 0) {
+					agent_run_id = catalog->get_last_agent_run_id(run_id);
+					if (agent_run_id <= 0) {
+						result = create_error_response(
+							"No agent run found for schema. Please run discovery first, or provide agent_run_id."
+						);
+					}
+				}
+
+				if (agent_run_id > 0) {
+					int template_id = catalog->add_question_template(
+						agent_run_id, run_id, title, question_nl, template_json, example_sql, related_objects, confidence
+					);
+					if (template_id < 0) {
+						result = create_error_response("Failed to add question template");
+					} else {
+						json tmpl_result;
+						tmpl_result["template_id"] = template_id;
+						tmpl_result["agent_run_id"] = agent_run_id;
+						tmpl_result["title"] = title;
+						result = create_success_response(tmpl_result);
+					}
 				}
 			}
 		}

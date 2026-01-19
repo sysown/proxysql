@@ -669,6 +669,34 @@ int Discovery_Schema::finish_agent_run(
 	return 0;
 }
 
+int Discovery_Schema::get_last_agent_run_id(int run_id) {
+	char* error = NULL;
+	int cols = 0, affected = 0;
+	SQLite3_result* resultset = NULL;
+
+	std::ostringstream sql;
+	sql << "SELECT agent_run_id FROM agent_runs WHERE run_id = " << run_id
+	    << " ORDER BY agent_run_id DESC LIMIT 1;";
+
+	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (error) {
+		proxy_error("Failed to get last agent_run_id: %s\n", error);
+		free(error);
+		return 0;
+	}
+
+	if (!resultset || resultset->rows.empty()) {
+		delete resultset;
+		return 0;
+	}
+
+	SQLite3_row* row = resultset->rows[0];
+	int agent_run_id = atoi(row->fields[0] ? row->fields[0] : "0");
+	delete resultset;
+
+	return agent_run_id;
+}
+
 // ============================================================================
 // Schema Management
 // ============================================================================

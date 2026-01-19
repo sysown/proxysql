@@ -141,6 +141,14 @@ public:
 	);
 
 	/**
+	 * @brief Get the last (most recent) agent_run_id for a given run_id
+	 *
+	 * @param run_id Run ID
+	 * @return agent_run_id on success, 0 if no agent runs exist for this run_id
+	 */
+	int get_last_agent_run_id(int run_id);
+
+	/**
 	 * @brief Insert a schema
 	 *
 	 * @param run_id Run ID
