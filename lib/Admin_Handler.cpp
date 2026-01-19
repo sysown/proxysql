@@ -2327,14 +2327,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length == strlen("SAVE PGSQL QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE PGSQL QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
 			||
 			(query_no_space_length == strlen("SAVE PGSQL QUERY RULES FROM RUN") && !strncasecmp("SAVE PGSQL QUERY RULES FROM RUN", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEMORY") && !strncasecmp("SAVE MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEM") && !strncasecmp("SAVE MCP QUERY RULES TO MEM", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE MCP QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
-			||
-			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUN") && !strncasecmp("SAVE MCP QUERY RULES FROM RUN", query_no_space, query_no_space_length))
 
 			) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -2343,9 +2335,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->save_pgsql_query_rules_from_runtime(false);
 				SPA->save_pgsql_query_rules_fast_routing_from_runtime(false);
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql query rules from RUNTIME\n");
-			} else if (query_no_space[5] == 'M' || query_no_space[5] == 'm') {
-				SPA->save_mcp_query_rules_from_runtime();
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp query rules from RUNTIME\n");
 			} else {
 				SPA->save_mysql_query_rules_from_runtime(false);
 				SPA->save_mysql_query_rules_fast_routing_from_runtime(false);
@@ -2354,7 +2343,40 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			return false;
 		}
+	}
 
+	// MCP QUERY RULES commands - handled separately from MYSQL/PGSQL
+	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MCP QUERY RULES ", query_no_space, 21)) || (!strncasecmp("LOAD MCP QUERY RULES ", query_no_space, 21)) ) ) {
+
+		// SAVE MCP QUERY RULES TO DISK
+		if (
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
+			) {
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		// SAVE MCP QUERY RULES FROM RUNTIME / TO MEMORY
+		if (
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEMORY") && !strncasecmp("SAVE MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEM") && !strncasecmp("SAVE MCP QUERY RULES TO MEM", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE MCP QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUN") && !strncasecmp("SAVE MCP QUERY RULES FROM RUN", query_no_space, query_no_space_length))
+			) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			SPA->save_mcp_query_rules_from_runtime(false);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp query rules from RUNTIME\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// LOAD MCP QUERY RULES TO RUNTIME / FROM MEMORY
 		if (
 			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUNTIME") && !strncasecmp("LOAD MCP QUERY RULES TO RUNTIME", query_no_space, query_no_space_length))
 			||
