@@ -2348,6 +2348,18 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	// MCP QUERY RULES commands - handled separately from MYSQL/PGSQL
 	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MCP QUERY RULES ", query_no_space, 21)) || (!strncasecmp("LOAD MCP QUERY RULES ", query_no_space, 21)) ) ) {
 
+		// LOAD MCP QUERY RULES FROM DISK / TO MEMORY
+		if (
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP QUERY RULES FROM DISK", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO MEMORY") && !strncasecmp("LOAD MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			) {
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
 		// SAVE MCP QUERY RULES TO DISK
 		if (
 			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
