@@ -1,6 +1,6 @@
 # MCP Architecture
 
-This document describes the architecture of the MCP (Model Context Protocol) module in ProxySQL, including endpoint design, tool handler implementation, and future architectural direction.
+This document describes the architecture of the MCP (Model Context Protocol) module in ProxySQL, including endpoint design and tool handler implementation.
 
 ## Overview
 
@@ -14,7 +14,7 @@ The MCP module implements JSON-RPC 2.0 over HTTPS for LLM (Large Language Model)
 - **Endpoint Authentication**: Per-endpoint Bearer token authentication
 - **Connection Pooling**: MySQL connection pooling for efficient database access
 
-## Current Architecture
+## Implemented Architecture
 
 ### Component Diagram
 
@@ -27,7 +27,12 @@ The MCP module implements JSON-RPC 2.0 over HTTPS for LLM (Large Language Model)
 │  │  - Configuration variables (mcp-*)                                    │  │
 │  │  - Status variables                                                   │  │
 │  │  - mcp_server (ProxySQL_MCP_Server)                                   │  │
-│  │  - mysql_tool_handler (MySQL_Tool_Handler)                            │  │
+│  │  - config_tool_handler  (NEW)                                         │  │
+│  │  - query_tool_handler   (NEW)                                         │  │
+│  │  - admin_tool_handler   (NEW)                                         │  │
+│  │  - cache_tool_handler   (NEW)                                         │  │
+│  │  - observe_tool_handler (NEW)                                         │  │
+│  │  - ai_tool_handler      (NEW)                                         │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                    │                                        │
 │                                    ▼                                        │
@@ -39,119 +44,11 @@ The MCP module implements JSON-RPC 2.0 over HTTPS for LLM (Large Language Model)
 │  │  SSL: Uses ProxySQL's certificates                                    │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                    │                                        │
-│              ┌─────────────────────┼─────────────────────┐                 │
-│              ▼                     ▼                     ▼                 │
-│  ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐         │
-│  │   /mcp/config     │ │   /mcp/observe    │ │   /mcp/query      │         │
-│  │ MCP_JSONRPC_      │ │ MCP_JSONRPC_      │ │ MCP_JSONRPC_      │         │
-│  │ Resource          │ │ Resource          │ │ Resource          │         │
-│  └─────────┬─────────┘ └─────────┬─────────┘ └─────────┬─────────┘         │
-│            │                     │                     │                     │
-│            └─────────────────────┼─────────────────────┘                     │
-│                                  ▼                                         │
-│           ┌────────────────────────────────────────────┐                    │
-│           │      MySQL_Tool_Handler (Shared)           │                    │
-│           │                                            │                    │
-│           │  Tools:                                    │                    │
-│           │  - list_schemas                            │                    │
-│           │  - list_tables                             │                    │
-│           │  - describe_table                          │                    │
-│           │  - get_constraints                         │                    │
-│           │  - table_profile                           │                    │
-│           │  - column_profile                          │                    │
-│           │  - sample_rows                             │                    │
-│           │  - run_sql_readonly                        │                    │
-│           │  - catalog_* (6 tools)                     │                    │
-│           └────────────────────────────────────────────┘                    │
-│                                  │                                         │
-│                                  ▼                                         │
-│           ┌────────────────────────────────────────────┐                    │
-│           │         MySQL Backend                      │                    │
-│           │    (Connection Pool)                       │                    │
-│           └────────────────────────────────────────────┘                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Current Limitations
-
-1. **All endpoints share the same tool handler** - No differentiation between endpoints
-2. **Same tools available everywhere** - No specialized tools per endpoint
-3. **Single connection pool** - All queries use the same MySQL connections
-4. **No per-endpoint authentication in code** - Variables exist but not implemented
-
-### File Structure
-
-```
-include/
-├── MCP_Thread.h          # MCP_Threads_Handler class definition
-├── MCP_Endpoint.h        # MCP_JSONRPC_Resource class definition
-├── MySQL_Tool_Handler.h  # MySQL_Tool_Handler class definition
-├── MySQL_Catalog.h       # SQLite catalog for LLM memory
-└── ProxySQL_MCP_Server.hpp # ProxySQL_MCP_Server class definition
-
-lib/
-├── MCP_Thread.cpp        # MCP_Threads_Handler implementation
-├── MCP_Endpoint.cpp      # MCP_JSONRPC_Resource implementation
-├── MySQL_Tool_Handler.cpp # MySQL_Tool_Handler implementation
-├── MySQL_Catalog.cpp     # SQLite catalog implementation
-└── ProxySQL_MCP_Server.cpp # HTTPS server implementation
-```
-
-### Request Flow (Current)
-
-```
-1. LLM Client → POST /mcp/{endpoint} → HTTPS Server (port 6071)
-2. HTTPS Server → MCP_JSONRPC_Resource::render_POST()
-3. MCP_JSONRPC_Resource → handle_jsonrpc_request()
-4. Route based on JSON-RPC method:
-   - initialize/ping → Handled directly
-   - tools/list → handle_tools_list()
-   - tools/describe → handle_tools_describe()
-   - tools/call → handle_tools_call() → MySQL_Tool_Handler
-5. MySQL_Tool_Handler → MySQL Backend (via connection pool)
-6. Return JSON-RPC response
-```
-
-## Future Architecture: Multiple Tool Handlers
-
-### Goal
-
-Each MCP endpoint will have its own dedicated tool handler with specific tools designed for that endpoint's purpose. This allows for:
-
-- **Specialized tools** - Different tools for different purposes
-- **Isolated resources** - Separate connection pools per endpoint
-- **Independent authentication** - Per-endpoint credentials
-- **Clear separation of concerns** - Each endpoint has a well-defined purpose
-
-### Target Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              ProxySQL Process                               │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                     MCP_Threads_Handler                               │  │
-│  │  - Configuration variables                                            │  │
-│  │  - Status variables                                                   │  │
-│  │  - mcp_server                                                         │  │
-│  │  - config_tool_handler  (NEW)                                         │  │
-│  │  - query_tool_handler   (NEW)                                         │  │
-│  │  - admin_tool_handler   (NEW)                                         │  │
-│  │  - cache_tool_handler   (NEW)                                         │  │
-│  │  - observe_tool_handler (NEW)                                         │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                    │                                        │
-│                                    ▼                                        │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                     ProxySQL_MCP_Server                               │  │
-│  │                      (Single HTTPS Server)                            │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                    │                                        │
 │    ┌──────────────┬──────────────┼──────────────┬──────────────┬─────────┐  │
 │    ▼              ▼              ▼              ▼              ▼         ▼  │
 │ ┌────┐        ┌────┐         ┌────┐         ┌────┐         ┌────┐    ┌───┐│
-│ │conf│        │obs │         │qry │         │adm │         │cach│    │cat││
-│ │TH  │        │TH  │         │TH  │         │TH  │         │TH  │    │log│││
+│ │conf│        │obs │         │qry │         │adm │         │cach│    │ai ││
+│ │TH  │        │TH  │         │TH  │         │TH  │         │TH  │    │TH ││
 │ └─┬──┘        └─┬──┘         └─┬──┘         └─┬──┘         └─┬──┘    └─┬─┘│
 │   │             │               │               │               │        │  │
 │   │             │               │               │               │        │  │
@@ -162,11 +59,73 @@ Each MCP endpoint will have its own dedicated tool handler with specific tools d
 │                 metrics        tables                       - invalidate │  │
 │                               - query                                  │  │
 │                                                                         │  │
+│           ┌────────────────────────────────────────────┐                 │
+│           │         MySQL Backend                      │                 │
+│           │    (Connection Pool)                       │                 │
+│           └────────────────────────────────────────────┘                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Where:
 - `TH` = Tool Handler
+
+### File Structure
+
+```
+include/
+├── MCP_Thread.h          # MCP_Threads_Handler class definition
+├── MCP_Endpoint.h        # MCP_JSONRPC_Resource class definition
+├── MCP_Tool_Handler.h    # Base class for all tool handlers
+├── Config_Tool_Handler.h # Configuration endpoint tool handler
+├── Query_Tool_Handler.h  # Query endpoint tool handler (includes discovery tools)
+├── Admin_Tool_Handler.h  # Administration endpoint tool handler
+├── Cache_Tool_Handler.h  # Cache endpoint tool handler
+├── Observe_Tool_Handler.h # Observability endpoint tool handler
+├── AI_Tool_Handler.h     # AI endpoint tool handler
+├── Discovery_Schema.h    # Discovery catalog implementation
+├── Static_Harvester.h    # Static database harvester for discovery
+└── ProxySQL_MCP_Server.hpp # ProxySQL_MCP_Server class definition
+
+lib/
+├── MCP_Thread.cpp        # MCP_Threads_Handler implementation
+├── MCP_Endpoint.cpp      # MCP_JSONRPC_Resource implementation
+├── MCP_Tool_Handler.cpp  # Base class implementation
+├── Config_Tool_Handler.cpp # Configuration endpoint implementation
+├── Query_Tool_Handler.cpp # Query endpoint implementation
+├── Admin_Tool_Handler.cpp # Administration endpoint implementation
+├── Cache_Tool_Handler.cpp # Cache endpoint implementation
+├── Observe_Tool_Handler.cpp # Observability endpoint implementation
+├── AI_Tool_Handler.cpp   # AI endpoint implementation
+├── Discovery_Schema.cpp  # Discovery catalog implementation
+├── Static_Harvester.cpp  # Static database harvester implementation
+└── ProxySQL_MCP_Server.cpp # HTTPS server implementation
+```
+
+### Request Flow (Implemented)
+
+```
+1. LLM Client → POST /mcp/{endpoint} → HTTPS Server (port 6071)
+2. HTTPS Server → MCP_JSONRPC_Resource::render_POST()
+3. MCP_JSONRPC_Resource → handle_jsonrpc_request()
+4. Route based on JSON-RPC method:
+   - initialize/ping → Handled directly
+   - tools/list → handle_tools_list()
+   - tools/describe → handle_tools_describe()
+   - tools/call → handle_tools_call() → Dedicated Tool Handler
+5. Dedicated Tool Handler → MySQL Backend (via connection pool)
+6. Return JSON-RPC response
+```
+
+## Implemented Endpoint Specifications
+
+### Overview
+
+Each MCP endpoint has its own dedicated tool handler with specific tools designed for that endpoint's purpose. This allows for:
+
+- **Specialized tools** - Different tools for different purposes
+- **Isolated resources** - Separate connection pools per endpoint
+- **Independent authentication** - Per-endpoint credentials
+- **Clear separation of concerns** - Each endpoint has a well-defined purpose
 
 ### Endpoint Specifications
 
@@ -223,11 +182,26 @@ Where:
 - `sample_rows` - Get sample data
 - `run_sql_readonly` - Execute read-only SQL
 - `explain_sql` - Explain query execution plan
+- `suggest_joins` - Suggest join paths between tables
+- `find_reference_candidates` - Find potential foreign key relationships
+- `table_profile` - Get table statistics and data distribution
+- `column_profile` - Get column statistics and data distribution
+- `sample_distinct` - Get distinct values from a column
+- `catalog_get` - Get entry from discovery catalog
+- `catalog_upsert` - Insert or update entry in discovery catalog
+- `catalog_delete` - Delete entry from discovery catalog
+- `catalog_search` - Search entries in discovery catalog
+- `catalog_list` - List all entries in discovery catalog
+- `catalog_clear` - Clear all entries from discovery catalog
+- `discovery.run_static` - Run static database discovery (Phase 1)
+- `agent.*` - Agent coordination tools for discovery
+- `llm.*` - LLM interaction tools for discovery
 
 **Use Cases**:
 - LLM assistants for database exploration
 - Data analysis and discovery
 - Query optimization assistance
+- Two-phase discovery (static harvest + LLM analysis)
 
 **Authentication**: `mcp-query_endpoint_auth` (Bearer token)
 
@@ -275,6 +249,25 @@ Where:
 **Authentication**: `mcp-cache_endpoint_auth` (Bearer token)
 
 ---
+
+#### `/mcp/ai` - AI Endpoint
+
+**Purpose**: AI and LLM features
+
+**Tools**:
+- `llm.query` - Query LLM with database context
+- `llm.analyze` - Analyze data with LLM
+- `llm.generate` - Generate content with LLM
+- `anomaly.detect` - Detect anomalies in data
+- `anomaly.list` - List detected anomalies
+- `recommendation.get` - Get AI recommendations
+
+**Use Cases**:
+- LLM-powered data analysis
+- Anomaly detection
+- AI-driven recommendations
+
+**Authentication**: `mcp-ai_endpoint_auth` (Bearer token)
 
 ### Tool Discovery Flow
 
@@ -406,51 +399,53 @@ private:
 };
 ```
 
-## Implementation Roadmap
+## Implementation Status
 
-### Phase 1: Base Infrastructure
+### Phase 1: Base Infrastructure ✅ COMPLETED
 
-1. Create `MCP_Tool_Handler` base class
-2. Create stub implementations for all 5 tool handlers
-3. Update `MCP_Threads_Handler` to manage all handlers
-4. Update `ProxySQL_MCP_Server` to pass handlers to endpoints
+1. ✅ Create `MCP_Tool_Handler` base class
+2. ✅ Create implementations for all 6 tool handlers (config, query, admin, cache, observe, ai)
+3. ✅ Update `MCP_Threads_Handler` to manage all handlers
+4. ✅ Update `ProxySQL_MCP_Server` to pass handlers to endpoints
 
-### Phase 2: Tool Implementation
+### Phase 2: Tool Implementation ✅ COMPLETED
 
-1. Implement Config_Tool_Handler tools
-2. Implement Query_Tool_Handler tools (move from MySQL_Tool_Handler)
-3. Implement Admin_Tool_Handler tools
-4. Implement Cache_Tool_Handler tools
-5. Implement Observe_Tool_Handler tools
+1. ✅ Implement Config_Tool_Handler tools
+2. ✅ Implement Query_Tool_Handler tools (includes MySQL tools and discovery tools)
+3. ✅ Implement Admin_Tool_Handler tools
+4. ✅ Implement Cache_Tool_Handler tools
+5. ✅ Implement Observe_Tool_Handler tools
+6. ✅ Implement AI_Tool_Handler tools
 
-### Phase 3: Authentication & Testing
+### Phase 3: Authentication & Testing ✅ MOSTLY COMPLETED
 
 1. ✅ Implement per-endpoint authentication
 2. ⚠️ Update test scripts to use dynamic tool discovery
 3. ⚠️ Add integration tests for each endpoint
-4. ⚠️ Documentation updates
+4. ✅ Documentation updates (this document)
 
-## Migration Strategy
+## Migration Status ✅ COMPLETED
 
-### Backward Compatibility
+### Backward Compatibility Maintained
 
-The migration to multiple tool handlers will maintain backward compatibility:
+The migration to multiple tool handlers has been completed while maintaining backward compatibility:
 
-1. The existing `mysql_tool_handler` will be renamed to `query_tool_handler`
-2. Existing tools will continue to work on `/mcp/query`
-3. New endpoints will be added incrementally
-4. Deprecation warnings for accessing tools on wrong endpoints
+1. ✅ The existing `mysql_tool_handler` has been replaced by `query_tool_handler`
+2. ✅ Existing tools continue to work on `/mcp/query`
+3. ✅ New endpoints have been added incrementally
+4. ✅ Deprecation warnings are provided for accessing tools on wrong endpoints
 
-### Gradual Migration
+### Migration Steps Completed
 
 ```
-Step 1: Add new base class and stub handlers (no behavior change)
-Step 2: Implement /mcp/config endpoint (new functionality)
-Step 3: Move MySQL tools to /mcp/query (existing tools migrate)
-Step 4: Implement /mcp/admin (new functionality)
-Step 5: Implement /mcp/cache (new functionality)
-Step 6: Implement /mcp/observe (new functionality)
-Step 7: Enable per-endpoint auth
+✅ Step 1: Add new base class and stub handlers (no behavior change)
+✅ Step 2: Implement /mcp/config endpoint (new functionality)
+✅ Step 3: Move MySQL tools to /mcp/query (existing tools migrate)
+✅ Step 4: Implement /mcp/admin (new functionality)
+✅ Step 5: Implement /mcp/cache (new functionality)
+✅ Step 6: Implement /mcp/observe (new functionality)
+✅ Step 7: Enable per-endpoint auth
+✅ Step 8: Add /mcp/ai endpoint (new AI functionality)
 ```
 
 ## Related Documentation
@@ -462,4 +457,4 @@ Step 7: Enable per-endpoint auth
 
 - **MCP Thread Version:** 0.1.0
 - **Architecture Version:** 1.0 (design document)
-- **Last Updated:** 2025-01-12
+- **Last Updated:** 2026-01-19
