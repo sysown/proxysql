@@ -2380,7 +2380,7 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 		rule->tool_name = row->fields[4] ? strdup(row->fields[4]) : NULL;  // tool_name
 		rule->match_pattern = row->fields[5] ? strdup(row->fields[5]) : NULL;  // match_pattern
 		rule->negate_match_pattern = row->fields[6] ? atoi(row->fields[6]) != 0 : false;  // negate_match_pattern
-		rule->re_modifiers = 1;  // default CASELESS
+		rule->re_modifiers = row->fields[7] ? atoi(row->fields[7]) : 1;  // default CASELESS
 		rule->flagIN = row->fields[8] ? atoi(row->fields[8]) : 0;  // flagIN
 		rule->flagOUT = row->fields[9] ? atoi(row->fields[9]) : 0;  // flagOUT
 		rule->replace_pattern = row->fields[10] ? strdup(row->fields[10]) : NULL;  // replace_pattern
