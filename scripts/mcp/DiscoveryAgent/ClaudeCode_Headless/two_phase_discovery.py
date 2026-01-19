@@ -38,8 +38,11 @@ Examples:
   # Discovery specific schema
   %(prog)s --mcp-config mcp_config.json --schema sales
 
+  # Discovery specific schema (REQUIRED)
+  %(prog)s --mcp-config mcp_config.json --schema Chinook
+
   # With custom model
-  %(prog)s --mcp-config mcp_config.json --model claude-3-opus-20240229 --schema production
+  %(prog)s --mcp-config mcp_config.json --schema sales --model claude-3-opus-20240229
         """
     )
 
@@ -50,7 +53,8 @@ Examples:
     )
     parser.add_argument(
         "--schema",
-        help="Restrict discovery to one MySQL schema/database (optional)"
+        required=True,
+        help="MySQL schema/database to discover (REQUIRED)"
     )
     parser.add_argument(
         "--model",
@@ -108,7 +112,7 @@ Examples:
                 "params": {
                         "name": "discovery.run_static",
                         "arguments": {
-                            "schema_filter": args.schema if args.schema else ""
+                            "schema_filter": args.schema
                         }
                 }
             }

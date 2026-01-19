@@ -71,7 +71,9 @@ Build semantic understanding of an already-harvested MySQL schema by:
     - Arguments: `agent_run_id`, `run_id`, `metric_key`, `title`, `description`, `domain_key`, `grain`, `unit`, `sql_template`, `depends`, `confidence`
 
 14. **`llm.question_template_add`** - Add question template
-    - Arguments: `agent_run_id`, `run_id`, `title`, `question_nl`, `template`, `example_sql`, `confidence`
+    - Arguments: `agent_run_id`, `run_id`, `title`, `question_nl`, `template`, `example_sql`, `related_objects`, `confidence`
+    - **IMPORTANT**: Always extract table/view names from `example_sql` or `template_json` and pass them as `related_objects` (JSON array of object names)
+    - Example: If SQL is "SELECT * FROM Customer JOIN Invoice...", related_objects should be ["Customer", "Invoice"]
 
 15. **`llm.note_add`** - Add durable note
     - Arguments: `agent_run_id`, `run_id`, `scope`, `object_id`, `domain_key`, `title`, `body`, `tags`
@@ -145,6 +147,11 @@ For each domain:
 Create:
 1. 10–30 metrics (`llm.metric_upsert`) with metric_key, description, dependencies; add SQL templates only if confident
 2. 15–50 question templates (`llm.question_template_add`) mapping NL → structured plan; include example SQL only when confident
+
+**For question templates, ALWAYS populate `related_objects`:**
+- Extract table/view names from the `example_sql` or `template_json`
+- Pass as JSON array: `["Customer", "Invoice", "InvoiceLine"]`
+- This enables efficient fetching of object details when templates are retrieved
 
 Metrics/templates must reference the objects/columns you have summarized, not guesses.
 

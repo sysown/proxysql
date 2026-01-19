@@ -109,7 +109,9 @@ for each metric:
     call llm.metric_upsert(agent_run_id, run_id, metric_key, title, description, sql_template, depends, confidence=0.7)
 
 for each question template:
-    call llm.question_template_add(agent_run_id, run_id, title, question_nl, template, example_sql, confidence=0.7)
+    # Extract table/view names from example_sql or template_json
+    related_objects = ["Customer", "Invoice", "InvoiceLine"]  # JSON array of object names
+    call llm.question_template_add(agent_run_id, run_id, title, question_nl, template, example_sql, related_objects, confidence=0.7)
 
 # Final summary
 call llm.note_add(agent_run_id, run_id, "global", title="Database Summary", body="...", tags=["final"])
