@@ -1,8 +1,10 @@
-# Database Discovery Agent Architecture
+# Database Discovery Agent Architecture (Conceptual Design)
 
 ## Overview
 
-This document describes the architecture for an AI-powered database discovery agent that can autonomously explore, understand, and analyze any database schema regardless of complexity or domain. The agent uses a mixture-of-experts approach where specialized LLM agents collaborate to build comprehensive understanding of database structures, data patterns, and business semantics.
+This document describes a conceptual architecture for an AI-powered database discovery agent that could autonomously explore, understand, and analyze any database schema regardless of complexity or domain. The agent would use a mixture-of-experts approach where specialized LLM agents collaborate to build comprehensive understanding of database structures, data patterns, and business semantics.
+
+**Note:** This is a conceptual design document. The actual ProxySQL MCP implementation uses a different approach based on the two-phase discovery architecture described in `Two_Phase_Discovery_Implementation.md`.
 
 ## Core Principles
 
@@ -798,3 +800,12 @@ relationships = agent.catalog.get_kind("relationship")
 ## Version History
 
 - **1.0** (2025-01-12) - Initial architecture design
+
+## Implementation Status
+
+**Status:** Conceptual design - Not implemented
+**Actual Implementation:** See  for the actual ProxySQL MCP discovery implementation.
+
+## Version
+
+- **Last Updated:** 2026-01-19
