@@ -1,4 +1,5 @@
 #include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
 #include "proxysql_debug.h"
 #include <cstring>
 #include <sstream>
@@ -13,6 +14,9 @@
 #include "json.hpp"
 
 using json = nlohmann::json;
+
+// Global AI Features Manager - needed for NL2SQL operations
+extern AI_Features_Manager *GloAI;
 
 // Platform compatibility
 #ifndef EFD_CLOEXEC
@@ -32,11 +36,43 @@ using json = nlohmann::json;
 // Define the array of variable names for the GenAI module
 // Note: These do NOT include the "genai_" prefix - it's added by the flush functions
 static const char* genai_thread_variables_names[] = {
+	// Original GenAI variables
 	"threads",
 	"embedding_uri",
 	"rerank_uri",
 	"embedding_timeout_ms",
 	"rerank_timeout_ms",
+
+	// AI Features master switches
+	"enabled",
+	"llm_enabled",
+	"anomaly_enabled",
+
+	// LLM bridge configuration
+	"llm_provider",
+	"llm_provider_url",
+	"llm_provider_model",
+	"llm_provider_key",
+	"llm_cache_similarity_threshold",
+	"llm_cache_enabled",
+	"llm_timeout_ms",
+
+	// Anomaly detection configuration
+	"anomaly_risk_threshold",
+	"anomaly_similarity_threshold",
+	"anomaly_rate_limit",
+	"anomaly_auto_block",
+	"anomaly_log_only",
+
+	// Hybrid model routing
+	"prefer_local_models",
+	"daily_budget_usd",
+	"max_cloud_requests_per_hour",
+
+	// Vector storage configuration
+	"vector_db_path",
+	"vector_dimension",
+
 	NULL
 };
 
@@ -115,6 +151,36 @@ GenAI_Threads_Handler::GenAI_Threads_Handler() {
 	variables.genai_embedding_timeout_ms = 30000;
 	variables.genai_rerank_timeout_ms = 30000;
 
+	// AI Features master switches
+	variables.genai_enabled = false;
+	variables.genai_llm_enabled = false;
+	variables.genai_anomaly_enabled = false;
+
+	// LLM bridge configuration
+	variables.genai_llm_provider = strdup("openai");
+	variables.genai_llm_provider_url = strdup("http://localhost:11434/v1/chat/completions");
+	variables.genai_llm_provider_model = strdup("llama3.2");
+	variables.genai_llm_provider_key = NULL;
+	variables.genai_llm_cache_similarity_threshold = 85;
+	variables.genai_llm_cache_enabled = true;
+	variables.genai_llm_timeout_ms = 30000;
+
+	// Anomaly detection configuration
+	variables.genai_anomaly_risk_threshold = 70;
+	variables.genai_anomaly_similarity_threshold = 80;
+	variables.genai_anomaly_rate_limit = 100;
+	variables.genai_anomaly_auto_block = true;
+	variables.genai_anomaly_log_only = false;
+
+	// Hybrid model routing
+	variables.genai_prefer_local_models = true;
+	variables.genai_daily_budget_usd = 10.0;
+	variables.genai_max_cloud_requests_per_hour = 100;
+
+	// Vector storage configuration
+	variables.genai_vector_db_path = strdup("/var/lib/proxysql/ai_features.db");
+	variables.genai_vector_dimension = 1536;  // OpenAI text-embedding-3-small
+
 	status_variables.threads_initialized = 0;
 	status_variables.active_requests = 0;
 	status_variables.completed_requests = 0;
@@ -130,6 +196,20 @@ GenAI_Threads_Handler::~GenAI_Threads_Handler() {
 		free(variables.genai_embedding_uri);
 	if (variables.genai_rerank_uri)
 		free(variables.genai_rerank_uri);
+
+	// Free LLM bridge string variables
+	if (variables.genai_llm_provider)
+		free(variables.genai_llm_provider);
+	if (variables.genai_llm_provider_url)
+		free(variables.genai_llm_provider_url);
+	if (variables.genai_llm_provider_model)
+		free(variables.genai_llm_provider_model);
+	if (variables.genai_llm_provider_key)
+		free(variables.genai_llm_provider_key);
+
+	// Free vector storage string variables
+	if (variables.genai_vector_db_path)
+		free(variables.genai_vector_db_path);
 
 	pthread_rwlock_destroy(&rwlock);
 }
@@ -268,6 +348,7 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	if (!name)
 		return NULL;
 
+	// Original GenAI variables
 	if (!strcmp(name, "threads")) {
 		char buf[64];
 		sprintf(buf, "%d", variables.genai_threads);
@@ -290,6 +371,89 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 		return strdup(buf);
 	}
 
+	// AI Features master switches
+	if (!strcmp(name, "enabled")) {
+		return strdup(variables.genai_enabled ? "true" : "false");
+	}
+	if (!strcmp(name, "llm_enabled")) {
+		return strdup(variables.genai_llm_enabled ? "true" : "false");
+	}
+	if (!strcmp(name, "anomaly_enabled")) {
+		return strdup(variables.genai_anomaly_enabled ? "true" : "false");
+	}
+
+	// LLM configuration
+	if (!strcmp(name, "llm_provider")) {
+		return strdup(variables.genai_llm_provider ? variables.genai_llm_provider : "");
+	}
+	if (!strcmp(name, "llm_provider_url")) {
+		return strdup(variables.genai_llm_provider_url ? variables.genai_llm_provider_url : "");
+	}
+	if (!strcmp(name, "llm_provider_model")) {
+		return strdup(variables.genai_llm_provider_model ? variables.genai_llm_provider_model : "");
+	}
+	if (!strcmp(name, "llm_provider_key")) {
+		return strdup(variables.genai_llm_provider_key ? variables.genai_llm_provider_key : "");
+	}
+	if (!strcmp(name, "llm_cache_similarity_threshold")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_llm_cache_similarity_threshold);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "llm_timeout_ms")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_llm_timeout_ms);
+		return strdup(buf);
+	}
+
+	// Anomaly detection configuration
+	if (!strcmp(name, "anomaly_risk_threshold")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_anomaly_risk_threshold);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "anomaly_similarity_threshold")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_anomaly_similarity_threshold);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "anomaly_rate_limit")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_anomaly_rate_limit);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "anomaly_auto_block")) {
+		return strdup(variables.genai_anomaly_auto_block ? "true" : "false");
+	}
+	if (!strcmp(name, "anomaly_log_only")) {
+		return strdup(variables.genai_anomaly_log_only ? "true" : "false");
+	}
+
+	// Hybrid model routing
+	if (!strcmp(name, "prefer_local_models")) {
+		return strdup(variables.genai_prefer_local_models ? "true" : "false");
+	}
+	if (!strcmp(name, "daily_budget_usd")) {
+		char buf[64];
+		sprintf(buf, "%.2f", variables.genai_daily_budget_usd);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "max_cloud_requests_per_hour")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_max_cloud_requests_per_hour);
+		return strdup(buf);
+	}
+
+	// Vector storage configuration
+	if (!strcmp(name, "vector_db_path")) {
+		return strdup(variables.genai_vector_db_path ? variables.genai_vector_db_path : "");
+	}
+	if (!strcmp(name, "vector_dimension")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_vector_dimension);
+		return strdup(buf);
+	}
+
 	return NULL;
 }
 
@@ -297,6 +461,7 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 	if (!name || !value)
 		return false;
 
+	// Original GenAI variables
 	if (!strcmp(name, "threads")) {
 		int val = atoi(value);
 		if (val < 1 || val > 256) {
@@ -337,6 +502,142 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 		return true;
 	}
 
+	// AI Features master switches
+	if (!strcmp(name, "enabled")) {
+		variables.genai_enabled = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "llm_enabled")) {
+		variables.genai_llm_enabled = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "anomaly_enabled")) {
+		variables.genai_anomaly_enabled = (strcmp(value, "true") == 0);
+		return true;
+	}
+
+	// LLM configuration
+	if (!strcmp(name, "llm_provider")) {
+		if (variables.genai_llm_provider)
+			free(variables.genai_llm_provider);
+		variables.genai_llm_provider = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "llm_provider_url")) {
+		if (variables.genai_llm_provider_url)
+			free(variables.genai_llm_provider_url);
+		variables.genai_llm_provider_url = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "llm_provider_model")) {
+		if (variables.genai_llm_provider_model)
+			free(variables.genai_llm_provider_model);
+		variables.genai_llm_provider_model = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "llm_provider_key")) {
+		if (variables.genai_llm_provider_key)
+			free(variables.genai_llm_provider_key);
+		variables.genai_llm_provider_key = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "llm_cache_similarity_threshold")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100) {
+			proxy_error("Invalid value for genai_llm_cache_similarity_threshold: %d (must be 0-100)\n", val);
+			return false;
+		}
+		variables.genai_llm_cache_similarity_threshold = val;
+		return true;
+	}
+	if (!strcmp(name, "llm_timeout_ms")) {
+		int val = atoi(value);
+		if (val < 1000 || val > 600000) {
+			proxy_error("Invalid value for genai_llm_timeout_ms: %d (must be 1000-600000)\n", val);
+			return false;
+		}
+		variables.genai_llm_timeout_ms = val;
+		return true;
+	}
+
+	// Anomaly detection configuration
+	if (!strcmp(name, "anomaly_risk_threshold")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100) {
+			proxy_error("Invalid value for genai_anomaly_risk_threshold: %d (must be 0-100)\n", val);
+			return false;
+		}
+		variables.genai_anomaly_risk_threshold = val;
+		return true;
+	}
+	if (!strcmp(name, "anomaly_similarity_threshold")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100) {
+			proxy_error("Invalid value for genai_anomaly_similarity_threshold: %d (must be 0-100)\n", val);
+			return false;
+		}
+		variables.genai_anomaly_similarity_threshold = val;
+		return true;
+	}
+	if (!strcmp(name, "anomaly_rate_limit")) {
+		int val = atoi(value);
+		if (val < 1 || val > 10000) {
+			proxy_error("Invalid value for genai_anomaly_rate_limit: %d (must be 1-10000)\n", val);
+			return false;
+		}
+		variables.genai_anomaly_rate_limit = val;
+		return true;
+	}
+	if (!strcmp(name, "anomaly_auto_block")) {
+		variables.genai_anomaly_auto_block = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "anomaly_log_only")) {
+		variables.genai_anomaly_log_only = (strcmp(value, "true") == 0);
+		return true;
+	}
+
+	// Hybrid model routing
+	if (!strcmp(name, "prefer_local_models")) {
+		variables.genai_prefer_local_models = (strcmp(value, "true") == 0);
+		return true;
+	}
+	if (!strcmp(name, "daily_budget_usd")) {
+		double val = atof(value);
+		if (val < 0 || val > 10000) {
+			proxy_error("Invalid value for genai_daily_budget_usd: %.2f (must be 0-10000)\n", val);
+			return false;
+		}
+		variables.genai_daily_budget_usd = val;
+		return true;
+	}
+	if (!strcmp(name, "max_cloud_requests_per_hour")) {
+		int val = atoi(value);
+		if (val < 0 || val > 100000) {
+			proxy_error("Invalid value for genai_max_cloud_requests_per_hour: %d (must be 0-100000)\n", val);
+			return false;
+		}
+		variables.genai_max_cloud_requests_per_hour = val;
+		return true;
+	}
+
+	// Vector storage configuration
+	if (!strcmp(name, "vector_db_path")) {
+		if (variables.genai_vector_db_path)
+			free(variables.genai_vector_db_path);
+		variables.genai_vector_db_path = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "vector_dimension")) {
+		int val = atoi(value);
+		if (val < 1 || val > 100000) {
+			proxy_error("Invalid value for genai_vector_dimension: %d (must be 1-100000)\n", val);
+			return false;
+		}
+		variables.genai_vector_dimension = val;
+		return true;
+	}
+
 	return false;
 }
 
@@ -359,6 +660,19 @@ char** GenAI_Threads_Handler::get_variables_list() {
 	list[count] = NULL;
 
 	return list;
+}
+
+bool GenAI_Threads_Handler::has_variable(const char* name) {
+	if (!name)
+		return false;
+
+	// Check if name exists in genai_thread_variables_names
+	for (int i = 0; genai_thread_variables_names[i]; i++) {
+		if (!strcmp(name, genai_thread_variables_names[i]))
+			return true;
+	}
+
+	return false;
 }
 
 void GenAI_Threads_Handler::print_version() {
@@ -1384,8 +1698,78 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 			return result.dump();
 		}
 
+		// Handle llm operation
+		if (op_type == "llm") {
+			// Check if AI manager is available
+			if (!GloAI) {
+				result["error"] = "AI features manager is not initialized";
+				return result.dump();
+			}
+
+			// Extract prompt
+			if (!query_json.contains("prompt") || !query_json["prompt"].is_string()) {
+				result["error"] = "LLM operation requires a 'prompt' string";
+				return result.dump();
+			}
+			std::string prompt = query_json["prompt"].get<std::string>();
+
+			if (prompt.empty()) {
+				result["error"] = "LLM prompt cannot be empty";
+				return result.dump();
+			}
+
+			// Extract optional system message
+			std::string system_message;
+			if (query_json.contains("system_message") && query_json["system_message"].is_string()) {
+				system_message = query_json["system_message"].get<std::string>();
+			}
+
+			// Extract optional cache flag
+			bool allow_cache = true;
+			if (query_json.contains("allow_cache") && query_json["allow_cache"].is_boolean()) {
+				allow_cache = query_json["allow_cache"].get<bool>();
+			}
+
+			// Get LLM bridge
+			LLM_Bridge* llm_bridge = GloAI->get_llm_bridge();
+			if (!llm_bridge) {
+				result["error"] = "LLM bridge is not initialized";
+				return result.dump();
+			}
+
+			// Build LLM request
+			LLMRequest req;
+			req.prompt = prompt;
+			req.system_message = system_message;
+			req.allow_cache = allow_cache;
+			req.max_latency_ms = 0; // No specific latency requirement
+
+			// Process (this will use cache if available)
+			LLMResult llm_result = llm_bridge->process(req);
+
+			if (!llm_result.error_code.empty()) {
+				result["error"] = "LLM processing failed: " + llm_result.error_details;
+				return result.dump();
+			}
+
+			// Build result - return as single row with text_response
+			result["columns"] = json::array({"text_response", "explanation", "cached", "provider"});
+
+			json rows = json::array();
+			json row = json::array();
+			row.push_back(llm_result.text_response);
+			row.push_back(llm_result.explanation);
+			row.push_back(llm_result.cached ? "true" : "false");
+			row.push_back(llm_result.provider_used);
+
+			rows.push_back(row);
+			result["rows"] = rows;
+
+			return result.dump();
+		}
+
 		// Unknown operation type
-		result["error"] = "Unknown operation type: " + op_type + ". Use 'embed' or 'rerank'";
+		result["error"] = "Unknown operation type: " + op_type + ". Use 'embed', 'rerank', or 'llm'";
 		return result.dump();
 
 	} catch (const json::parse_error& e) {

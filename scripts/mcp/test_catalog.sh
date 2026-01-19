@@ -18,6 +18,7 @@ set -e
 MCP_HOST="${MCP_HOST:-127.0.0.1}"
 MCP_PORT="${MCP_PORT:-6071}"
 MCP_USE_SSL="${MCP_USE_SSL:-auto}"
+MCP_URL=""  # Will be set by setup_connection()
 
 # Test options
 VERBOSE=false
@@ -72,7 +73,7 @@ setup_connection() {
     fi
 }
 
-# Execute MCP request
+# Execute MCP request and unwrap response
 mcp_request() {
     local payload="$1"
 
@@ -87,7 +88,16 @@ mcp_request() {
             -d "${payload}" 2>/dev/null)
     fi
 
-    echo "${response}"
+    # Extract content from MCP protocol wrapper if present
+    # MCP format: {"result":{"content":[{"text":"..."}]}}
+    local extracted
+    extracted=$(echo "${response}" | jq -r 'if .result.content[0].text then .result.content[0].text else . end' 2>/dev/null)
+
+    if [ -n "${extracted}" ] && [ "${extracted}" != "null" ]; then
+        echo "${extracted}"
+    else
+        echo "${response}"
+    fi
 }
 
 # Test catalog operations
@@ -327,6 +337,72 @@ run_catalog_tests() {
 }'
 
     if test_catalog "CAT009" "FTS search with wildcard" "${payload9}" '"results"'; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+    fi
+
+    # Test 13: Special characters in document (JSON parsing bug test)
+    local payload13
+    payload13='{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "catalog_upsert",
+    "arguments": {
+      "kind": "test",
+      "key": "special_chars",
+      "document": "{\"description\": \"Test with \\\"quotes\\\" and \\\\backslashes\\\\\"}",
+      "tags": "test,special",
+      "links": ""
+    }
+  },
+  "id": 13
+}'
+
+    if test_catalog "CAT013" "Upsert special characters" "${payload13}" '"success"[[:space:]]*:[[:space:]]*true'; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+    fi
+
+    # Test 14: Verify special characters can be read back
+    local payload14
+    payload14='{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "catalog_get",
+    "arguments": {
+      "kind": "test",
+      "key": "special_chars"
+    }
+  },
+  "id": 14
+}'
+
+    if test_catalog "CAT014" "Get special chars entry" "${payload14}" 'quotes'; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+    fi
+
+    # Test 15: Cleanup special chars entry
+    local payload15
+    payload15='{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "catalog_delete",
+    "arguments": {
+      "kind": "test",
+      "key": "special_chars"
+    }
+  },
+  "id": 15
+}'
+
+    if test_catalog "CAT015" "Cleanup special chars" "${payload15}" '"success"[[:space:]]*:[[:space:]]*true'; then
         passed=$((passed + 1))
     else
         failed=$((failed + 1))

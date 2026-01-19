@@ -3,6 +3,7 @@
 #include "proxysql.h"
 #include <sstream>
 #include <algorithm>
+#include "../deps/json/json.hpp"
 
 MySQL_Catalog::MySQL_Catalog(const std::string& path)
 	: db(NULL), db_path(path)
@@ -253,14 +254,11 @@ std::string MySQL_Catalog::search(
 	(*proxy_sqlite3_bind_int)(stmt, param_count++, limit);
 	(*proxy_sqlite3_bind_int)(stmt, param_count, offset);
 
-	// Execute query and build JSON result
-	std::ostringstream json;
-	json << "[";
-	bool first = true;
+	// Build JSON result using nlohmann::json (consistent with list() function)
+	nlohmann::json results = nlohmann::json::array();
 
 	while ((rc = (*proxy_sqlite3_step)(stmt)) == SQLITE_ROW) {
-		if (!first) json << ",";
-		first = false;
+		nlohmann::json entry;
 
 		const char* kind_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 0);
 		const char* key_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 1);
@@ -268,13 +266,25 @@ std::string MySQL_Catalog::search(
 		const char* tags_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 3);
 		const char* links_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 4);
 
-		json << "{"
-		     << "\"kind\":\"" << (kind_val ? kind_val : "") << "\","
-		     << "\"key\":\"" << (key_val ? key_val : "") << "\","
-		     << "\"document\":" << (doc_val ? doc_val : "null") << ","
-		     << "\"tags\":\"" << (tags_val ? tags_val : "") << "\","
-		     << "\"links\":\"" << (links_val ? links_val : "") << "\""
-		     << "}";
+		entry["kind"] = std::string(kind_val ? kind_val : "");
+		entry["key"] = std::string(key_val ? key_val : "");
+
+		// Parse the stored JSON document - nlohmann::json handles escaping
+		if (doc_val) {
+			try {
+				entry["document"] = nlohmann::json::parse(doc_val);
+			} catch (const nlohmann::json::parse_error& e) {
+				// If document is not valid JSON, store as string
+				entry["document"] = std::string(doc_val);
+			}
+		} else {
+			entry["document"] = nullptr;
+		}
+
+		entry["tags"] = std::string(tags_val ? tags_val : "");
+		entry["links"] = std::string(links_val ? links_val : "");
+
+		results.push_back(entry);
 	}
 
 	(*proxy_sqlite3_finalize)(stmt);
@@ -283,8 +293,7 @@ std::string MySQL_Catalog::search(
 		proxy_error("Catalog search: Error executing query: %d\n", rc);
 	}
 
-	json << "]";
-	return json.str();
+	return results.dump();
 }
 
 std::string MySQL_Catalog::list(
@@ -322,31 +331,42 @@ std::string MySQL_Catalog::list(
 	resultset = NULL;
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 
-	// Build JSON result with total count
-	std::ostringstream json;
-	json << "{\"total\":" << total << ",\"results\":[";
+	// Build JSON result using nlohmann::json
+	nlohmann::json result;
+	result["total"] = total;
+	nlohmann::json results = nlohmann::json::array();
 
-	bool first = true;
 	if (resultset) {
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
 		     it != resultset->rows.end(); ++it) {
 			SQLite3_row* row = *it;
-			if (!first) json << ",";
-			first = false;
 
-			json << "{"
-			     << "\"kind\":\"" << (row->fields[0] ? row->fields[0] : "") << "\","
-			     << "\"key\":\"" << (row->fields[1] ? row->fields[1] : "") << "\","
-			     << "\"document\":" << (row->fields[2] ? row->fields[2] : "null") << ","
-			     << "\"tags\":\"" << (row->fields[3] ? row->fields[3] : "") << "\","
-			     << "\"links\":\"" << (row->fields[4] ? row->fields[4] : "") << "\""
-			     << "}";
+			nlohmann::json entry;
+			entry["kind"] = std::string(row->fields[0] ? row->fields[0] : "");
+			entry["key"] = std::string(row->fields[1] ? row->fields[1] : "");
+
+			// Parse the stored JSON document
+			const char* doc_str = row->fields[2];
+			if (doc_str) {
+				try {
+					entry["document"] = nlohmann::json::parse(doc_str);
+				} catch (const nlohmann::json::parse_error& e) {
+					entry["document"] = std::string(doc_str);
+				}
+			} else {
+				entry["document"] = nullptr;
+			}
+
+			entry["tags"] = std::string(row->fields[3] ? row->fields[3] : "");
+			entry["links"] = std::string(row->fields[4] ? row->fields[4] : "");
+
+			results.push_back(entry);
 		}
 		delete resultset;
 	}
 
-	json << "]}";
-	return json.str();
+	result["results"] = results;
+	return result.dump();
 }
 
 int MySQL_Catalog::merge(

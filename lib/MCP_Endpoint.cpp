@@ -400,5 +400,41 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP tool call: %s with args: %s\n", tool_name.c_str(), arguments.dump().c_str());
 
-	return tool_handler->execute_tool(tool_name, arguments);
+	json response = tool_handler->execute_tool(tool_name, arguments);
+
+	// Unwrap ProxySQL's {"success": ..., "result": ...} format for MCP compliance
+	// Tool handlers use create_success_response() which adds this wrapper
+	if (response.is_object() && response.contains("success") && response.contains("result")) {
+		bool success = response["success"].get<bool>();
+		if (!success) {
+			// Tool execution failed - return error in MCP format
+			json mcp_result;
+			mcp_result["content"] = json::array();
+			json error_content;
+			error_content["type"] = "text";
+			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
+			error_content["text"] = error_msg;
+			mcp_result["content"].push_back(error_content);
+			mcp_result["isError"] = true;
+			return mcp_result;
+		}
+		// Success - use the "result" field as the content to be wrapped
+		response = response["result"];
+	}
+
+	// Wrap the response (or the 'result' field) in MCP-compliant format
+	// Per MCP spec: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
+	json mcp_result;
+	json text_content;
+	text_content["type"] = "text";
+
+	if (response.is_string()) {
+		text_content["text"] = response.get<std::string>();
+	} else {
+		text_content["text"] = response.dump(2);  // Pretty-print JSON with 2-space indent
+	}
+
+	mcp_result["content"] = json::array({text_content});
+	mcp_result["isError"] = false;
+	return mcp_result;
 }

@@ -15,6 +15,9 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
+#include "LLM_Bridge.h"
+#include "Anomaly_Detector.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
 #include "MySQL_Authentication.hpp"
@@ -3610,6 +3613,86 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	return false;
 }
 
+/**
+ * @brief AI-based anomaly detection for queries
+ *
+ * Uses the Anomaly_Detector to perform multi-stage security analysis:
+ * - SQL injection pattern detection (regex-based)
+ * - Rate limiting per user/host
+ * - Statistical anomaly detection
+ * - Embedding-based threat similarity
+ *
+ * @return true if query should be blocked, false otherwise
+ */
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly() {
+	// Check if AI features are available
+	if (!GloAI) {
+		return false;
+	}
+
+	Anomaly_Detector* detector = GloAI->get_anomaly_detector();
+	if (!detector) {
+		return false;
+	}
+
+	// Get user and client information
+	char* username = NULL;
+	char* client_address = NULL;
+	if (client_myds && client_myds->myconn && client_myds->myconn->userinfo) {
+		username = client_myds->myconn->userinfo->username;
+	}
+	if (client_myds && client_myds->addr.addr) {
+		client_address = client_myds->addr.addr;
+	}
+
+	if (!username) username = (char*)"";
+	if (!client_address) client_address = (char*)"";
+
+	// Get schema name if available
+	std::string schema = "";
+	if (client_myds && client_myds->myconn && client_myds->myconn->userinfo && client_myds->myconn->userinfo->schemaname) {
+		schema = client_myds->myconn->userinfo->schemaname;
+	}
+
+	// Build query string
+	std::string query((char *)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+
+	// Run anomaly detection
+	AnomalyResult result = detector->analyze(query, username, client_address, schema);
+
+	// Handle anomaly detected
+	if (result.is_anomaly) {
+		thread->status_variables.stvar[st_var_ai_detected_anomalies]++;
+
+		// Log the anomaly with details
+		proxy_error("AI Anomaly detected from %s@%s (risk: %.2f, type: %s): %s\n",
+		           username, client_address, result.risk_score,
+		           result.anomaly_type.c_str(), result.explanation.c_str());
+		fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+		fprintf(stderr, "\n");
+
+		// Check if should block
+		if (result.should_block) {
+			thread->status_variables.stvar[st_var_ai_blocked_queries]++;
+
+			// Generate error message
+			char err_msg[512];
+			snprintf(err_msg, sizeof(err_msg),
+			        "AI Anomaly Detection: Query blocked due to %s (risk score: %.2f)",
+			        result.explanation.c_str(), result.risk_score);
+
+			// Send error to client
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1313,
+			                                       (char*)"HY000", err_msg, true);
+			RequestEnd(NULL, 1313, err_msg);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 // Handler for GENAI: queries - experimental GenAI integration
 // Query formats:
 //   GENAI: {"type": "embed", "documents": ["doc1", "doc2", ...]}
@@ -3787,6 +3870,197 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		status = WAITING_CLIENT_DATA;
 	}
 #endif  // epoll_create1 - fallback blocking path
+}
+
+// Handler for LLM: queries - Generic LLM bridge processing
+// Query format:
+//   LLM: Summarize the customer feedback
+//   LLM: Generate a Python function to validate emails
+//   LLM: Explain this SQL query: SELECT * FROM users
+// Returns: Resultset with the text response from LLM
+//
+// Note: This now uses the async GENAI path to avoid blocking MySQL threads.
+// The LLM query is converted to a JSON GENAI request and sent asynchronously.
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(const char* query, size_t query_len, PtrSize_t* pkt) {
+	// Skip leading space after "LLM:"
+	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
+		query++;
+		query_len--;
+	}
+
+	if (query_len == 0) {
+		// Empty query after LLM:
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1240, (char*)"HY000", "Empty LLM: query", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Check GenAI module is initialized (LLM now uses GenAI module)
+	if (!GloGATH) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1241, (char*)"HY000", "GenAI module is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Check AI manager is available for LLM bridge
+	if (!GloAI) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1242, (char*)"HY000", "AI features module is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Get LLM bridge from AI manager
+	LLM_Bridge* llm_bridge = GloAI->get_llm_bridge();
+	if (!llm_bridge) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1243, (char*)"HY000", "LLM bridge is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Increment total requests counter
+	GloAI->increment_llm_total_requests();
+
+#ifdef epoll_create1
+	// Build JSON query for LLM operation
+	json json_query;
+	json_query["type"] = "llm";
+	json_query["prompt"] = std::string(query, query_len);
+	json_query["allow_cache"] = true;
+
+	// Add schema if available (for context)
+	if (client_myds->myconn->userinfo->schemaname) {
+		json_query["schema"] = std::string(client_myds->myconn->userinfo->schemaname);
+	}
+
+	std::string json_str = json_query.dump();
+
+	// Use async GENAI path to avoid blocking
+	if (!handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(json_str.c_str(), json_str.length(), pkt)) {
+		// Async send failed - error already sent to client
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Request sent asynchronously - don't free pkt, will be freed in response handler
+	// Return immediately, session is now free to handle other queries
+	proxy_debug(PROXY_DEBUG_GENAI, 2, "LLM: Query sent asynchronously via GenAI: %s\n", std::string(query, query_len).c_str());
+#else
+	// Fallback to synchronous blocking path for systems without epoll
+	// Build LLM request
+	LLMRequest req;
+	req.prompt = std::string(query, query_len);
+	req.schema_name = client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "";
+	req.allow_cache = true;
+	req.max_latency_ms = 0; // No specific latency requirement
+
+	// Call LLM bridge (blocking fallback)
+	LLMResult result = llm_bridge->process(req);
+
+	// Update performance counters based on result
+	if (result.cache_hit) {
+		GloAI->increment_llm_cache_hits();
+	} else {
+		GloAI->increment_llm_cache_misses();
+	}
+
+	// Update timing counters
+	GloAI->add_llm_response_time_ms(result.total_time_ms);
+	GloAI->add_llm_cache_lookup_time_ms(result.cache_lookup_time_ms);
+	GloAI->increment_llm_cache_lookups();
+
+	if (result.cache_hit) {
+		// For cache hits, we're done
+	} else {
+		// For cache misses, also count LLM call time and cache store time
+		GloAI->add_llm_cache_store_time_ms(result.cache_store_time_ms);
+		if (result.cache_store_time_ms > 0) {
+			GloAI->increment_llm_cache_stores();
+		}
+
+		// Update model call counters
+		char* prefer_local = GloGATH->get_variable((char*)"prefer_local_models");
+		bool prefer_local_models = prefer_local && (strcmp(prefer_local, "true") == 0);
+		if (prefer_local) free(prefer_local);
+
+		if (result.provider_used == "openai") {
+			// Check if it's a local call (Ollama) or cloud call
+			if (prefer_local_models &&
+			    (result.explanation.find("localhost") != std::string::npos ||
+			     result.explanation.find("127.0.0.1") != std::string::npos)) {
+				GloAI->increment_llm_local_model_calls();
+			} else {
+				GloAI->increment_llm_cloud_model_calls();
+			}
+		} else if (result.provider_used == "anthropic") {
+			GloAI->increment_llm_cloud_model_calls();
+		}
+	}
+
+	if (result.text_response.empty() && !result.error_code.empty()) {
+		// LLM processing failed
+		std::string err_msg = "LLM processing failed: ";
+		err_msg += result.error_code;
+		if (!result.error_details.empty()) {
+			err_msg += " - ";
+			err_msg += result.error_details;
+		}
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1244, (char*)"HY000", (char*)err_msg.c_str(), true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Build resultset with the generated text response
+	std::vector<std::string> columns = {"text_response", "explanation", "cached", "provider"};
+	std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(columns.size()));
+
+	// Add column definitions
+	for (size_t i = 0; i < columns.size(); i++) {
+		resultset->add_column_definition(SQLITE_TEXT, (char*)columns[i].c_str());
+	}
+
+	// Add single row with the result
+	char** row_data = (char**)malloc(columns.size() * sizeof(char*));
+	row_data[0] = strdup(result.text_response.c_str());
+	row_data[1] = strdup(result.explanation.c_str());
+	row_data[2] = strdup(result.cached ? "true" : "false");
+	row_data[3] = strdup(result.provider_used.c_str());
+
+	resultset->add_row(row_data);
+
+	// Free row data
+	for (size_t i = 0; i < columns.size(); i++) {
+		free(row_data[i]);
+	}
+	free(row_data);
+
+	// Send resultset to client
+	SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+	                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+
+	l_free(pkt->size, pkt->ptr);
+	client_myds->DSS = STATE_SLEEP;
+	status = WAITING_CLIENT_DATA;
+
+	proxy_debug(PROXY_DEBUG_GENAI, 2, "LLM: Processed prompt '%s' [blocking fallback]\n",
+	            req.prompt.c_str());
+#endif
 }
 
 #ifdef epoll_create1
@@ -4958,6 +5232,13 @@ __get_pkts_from_client:
 									if (mirror==false && rc_break==false) {
 										if (mysql_thread___automatic_detect_sqli) {
 											if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi()) {
+												handler_ret = -1;
+												return handler_ret;
+											}
+										}
+										// AI-based anomaly detection
+										if (GloAI && GloAI->get_anomaly_detector()) {
+											if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly()) {
 												handler_ret = -1;
 												return handler_ret;
 											}
@@ -6757,6 +7038,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (query_len >= 7 && strncasecmp(query_ptr, "GENAI:", 6) == 0) {
 			// This is a GENAI: query - handle with GenAI module
 			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(query_ptr + 6, query_len - 6, pkt);
+			return true;
+		}
+
+		// Check for LLM: queries - Generic LLM bridge processing
+		if (query_len >= 5 && strncasecmp(query_ptr, "LLM:", 4) == 0) {
+			// This is a LLM: query - handle with LLM bridge
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(query_ptr + 4, query_len - 4, pkt);
 			return true;
 		}
 	}

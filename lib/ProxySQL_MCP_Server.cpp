@@ -12,6 +12,8 @@ using json = nlohmann::json;
 #include "Admin_Tool_Handler.h"
 #include "Cache_Tool_Handler.h"
 #include "Observe_Tool_Handler.h"
+#include "AI_Tool_Handler.h"
+#include "AI_Features_Manager.h"
 #include "proxysql_utils.h"
 
 using namespace httpserver;
@@ -132,6 +134,22 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		proxy_info("Observe Tool Handler initialized\n");
 	}
 
+	// 6. AI Tool Handler (for LLM and other AI features)
+	extern AI_Features_Manager *GloAI;
+	if (GloAI) {
+		handler->ai_tool_handler = new AI_Tool_Handler(GloAI->get_llm_bridge(), GloAI->get_anomaly_detector());
+		if (handler->ai_tool_handler->init() == 0) {
+			proxy_info("AI Tool Handler initialized\n");
+		} else {
+			proxy_error("Failed to initialize AI Tool Handler\n");
+			delete handler->ai_tool_handler;
+			handler->ai_tool_handler = NULL;
+		}
+	} else {
+		proxy_warning("AI_Features_Manager not available, AI Tool Handler not initialized\n");
+		handler->ai_tool_handler = NULL;
+	}
+
 	// Register MCP endpoints
 	// Each endpoint gets its own dedicated tool handler
 	std::unique_ptr<httpserver::http_resource> config_resource =
@@ -159,7 +177,16 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	ws->register_resource("/mcp/cache", cache_resource.get(), true);
 	_endpoints.push_back({"/mcp/cache", std::move(cache_resource)});
 
-	proxy_info("Registered 5 MCP endpoints with dedicated tool handlers: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache\n");
+	// 6. AI endpoint (for LLM and other AI features)
+	if (handler->ai_tool_handler) {
+		std::unique_ptr<httpserver::http_resource> ai_resource =
+			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->ai_tool_handler, "ai"));
+		ws->register_resource("/mcp/ai", ai_resource.get(), true);
+		_endpoints.push_back({"/mcp/ai", std::move(ai_resource)});
+	}
+
+	proxy_info("Registered %d MCP endpoints with dedicated tool handlers: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache%s/mcp/ai\n",
+	          handler->ai_tool_handler ? 6 : 5, handler->ai_tool_handler ? ", " : "");
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
@@ -169,44 +196,51 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 	if (handler) {
 		// Clean up MySQL Tool Handler
 		if (handler->mysql_tool_handler) {
-			proxy_debug(PROXY_DEBUG_GENERIC, 4, "Cleaning up MySQL Tool Handler\n");
+			proxy_info("Cleaning up MySQL Tool Handler...\n");
 			delete handler->mysql_tool_handler;
 			handler->mysql_tool_handler = NULL;
 		}
 
 		// Clean up Config Tool Handler
 		if (handler->config_tool_handler) {
-			proxy_debug(PROXY_DEBUG_GENERIC, 4, "Cleaning up Config Tool Handler\n");
+			proxy_info("Cleaning up Config Tool Handler...\n");
 			delete handler->config_tool_handler;
 			handler->config_tool_handler = NULL;
 		}
 
 		// Clean up Query Tool Handler
 		if (handler->query_tool_handler) {
-			proxy_debug(PROXY_DEBUG_GENERIC, 4, "Cleaning up Query Tool Handler\n");
+			proxy_info("Cleaning up Query Tool Handler...\n");
 			delete handler->query_tool_handler;
 			handler->query_tool_handler = NULL;
 		}
 
 		// Clean up Admin Tool Handler
 		if (handler->admin_tool_handler) {
-			proxy_debug(PROXY_DEBUG_GENERIC, 4, "Cleaning up Admin Tool Handler\n");
+			proxy_info("Cleaning up Admin Tool Handler...\n");
 			delete handler->admin_tool_handler;
 			handler->admin_tool_handler = NULL;
 		}
 
 		// Clean up Cache Tool Handler
 		if (handler->cache_tool_handler) {
-			proxy_debug(PROXY_DEBUG_GENERIC, 4, "Cleaning up Cache Tool Handler\n");
+			proxy_info("Cleaning up Cache Tool Handler...\n");
 			delete handler->cache_tool_handler;
 			handler->cache_tool_handler = NULL;
 		}
 
 		// Clean up Observe Tool Handler
 		if (handler->observe_tool_handler) {
-			proxy_debug(PROXY_DEBUG_GENERIC, 4, "Cleaning up Observe Tool Handler\n");
+			proxy_info("Cleaning up Observe Tool Handler...\n");
 			delete handler->observe_tool_handler;
 			handler->observe_tool_handler = NULL;
+		}
+
+		// Clean up AI Tool Handler (uses shared components, don't delete them)
+		if (handler->ai_tool_handler) {
+			proxy_info("Cleaning up AI Tool Handler...\n");
+			delete handler->ai_tool_handler;
+			handler->ai_tool_handler = NULL;
 		}
 	}
 }
