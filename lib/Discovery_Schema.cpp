@@ -2339,6 +2339,27 @@ int Discovery_Schema::log_query_tool_call(
 // ============================================================
 // MCP QUERY RULES
 // ============================================================
+// Load MCP query rules from database into memory
+//
+// This function replaces all in-memory MCP query rules with the rules
+// from the provided resultset. It compiles regex patterns for each rule
+// and initializes all rule properties.
+//
+// Args:
+//   resultset: SQLite result set containing rule definitions from the database
+//               Must contain 17 columns in the correct order:
+//               rule_id, active, username, schemaname, tool_name, match_pattern,
+//               negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern,
+//               timeout_ms, error_msg, OK_msg, log, apply, comment
+//
+// Thread Safety:
+//   Uses write lock on mcp_rules_lock during update
+//
+// Side Effects:
+//   - Increments mcp_rules_version (triggers runtime cache invalidation)
+//   - Clears and rebuilds mcp_query_rules vector
+//   - Compiles regex engines for all match_pattern fields
+// ============================================================
 
 void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 	if (!resultset || resultset->rows_count == 0) {
@@ -2417,6 +2438,46 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 	proxy_info("Loaded %zu MCP query rules\n", mcp_query_rules.size());
 }
 
+// Evaluate MCP query rules against an incoming query
+//
+// This function processes the query through all active MCP query rules in order,
+// applying matching rules and collecting their actions. Multiple actions from
+// different rules can be combined.
+//
+// Rule Actions (not mutually exclusive):
+//   - error_msg: Block the query with the specified error message
+//   - replace_pattern: Rewrite the query using regex substitution
+//   - timeout_ms: Set a timeout for query execution
+//   - OK_msg: Return success immediately with the specified message
+//   - log: Enable logging for this query
+//
+// Rule Processing Flow:
+//   1. Skip inactive rules
+//   2. Check flagIN match
+//   3. Check username match (currently skipped as username not available in MCP context)
+//   4. Check schemaname match
+//   5. Check tool_name match
+//   6. Check match_pattern against the query (regex)
+//   7. If match: increment hits, apply actions, set flagOUT, and stop if apply=true
+//
+// Args:
+//   tool_name: The name of the MCP tool being called
+//   schemaname: The schema/database context for the query
+//   arguments: The JSON arguments passed to the tool
+//   original_query: The original SQL query string
+//
+// Returns:
+//   MCP_Query_Processor_Output*: Output object containing all actions to apply
+//   - error_msg: If set, query should be blocked
+//   - OK_msg: If set, return success immediately
+//   - new_query: Rewritten query if replace_pattern was applied
+//   - timeout_ms: Timeout in milliseconds if set
+//   - log: Whether to log this query
+//   - next_query_flagIN: The flagOUT value for chaining rules
+//
+// Thread Safety:
+//   Uses read lock on mcp_rules_lock during evaluation
+//
 MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 	const std::string& tool_name,
 	const std::string& schemaname,
@@ -2553,6 +2614,18 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 	return qpo;
 }
 
+// Get all MCP query rules from memory
+//
+// Returns all MCP query rules currently loaded in memory.
+// This is used to populate both mcp_query_rules and runtime_mcp_query_rules tables.
+// Note: The hits counter is NOT included (use get_stats_mcp_query_rules() for that).
+//
+// Returns:
+//   SQLite3_result*: Result set with 17 columns (no hits column)
+//
+// Thread Safety:
+//   Uses read lock on mcp_rules_lock
+//
 SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
 	SQLite3_result* result = new SQLite3_result();
 
@@ -2614,6 +2687,18 @@ SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
 	return result;
 }
 
+// Get MCP query rules statistics (hit counters)
+//
+// Returns the hit counter for each MCP query rule.
+// The hit counter increments each time a rule matches during query processing.
+// This is used to populate the stats_mcp_query_rules table.
+//
+// Returns:
+//   SQLite3_result*: Result set with 2 columns (rule_id, hits)
+//
+// Thread Safety:
+//   Uses read lock on mcp_rules_lock
+//
 SQLite3_result* Discovery_Schema::get_stats_mcp_query_rules() {
 	SQLite3_result* result = new SQLite3_result();
 
@@ -2649,6 +2734,35 @@ SQLite3_result* Discovery_Schema::get_stats_mcp_query_rules() {
 // MCP QUERY DIGEST
 // ============================================================
 
+// Update MCP query digest statistics after a tool call completes.
+//
+// This function is called after each successful MCP tool execution to
+// record performance and frequency statistics. Similar to MySQL's query
+// digest tracking, this aggregates statistics for "similar" queries
+// (queries with the same fingerprinted structure).
+//
+// Parameters:
+//   tool_name    - Name of the MCP tool that was called (e.g., "run_sql_readonly")
+//   run_id       - Discovery run identifier (0 if no schema context)
+//   digest       - Computed digest hash (lower 64 bits of SpookyHash)
+//   digest_text  - Fingerprinted JSON arguments with literals replaced by '?'
+//   duration_us  - Query execution time in microseconds
+//   timestamp    - Unix timestamp of when the query completed
+//
+// Statistics Updated:
+//   - count_star: Incremented for each execution
+//   - sum_time: Accumulates total execution time
+//   - min_time: Tracks minimum execution time
+//   - max_time: Tracks maximum execution time
+//   - first_seen: Set once on first occurrence (not updated)
+//   - last_seen: Updated to current timestamp on each execution
+//
+// Thread Safety:
+//   Acquires write lock on mcp_digest_rwlock for the entire operation.
+//   Nested map structure: mcp_digest_umap["tool_name|run_id"][digest]
+//
+// Note: Digest statistics are currently kept in memory only. Persistence
+// to SQLite is planned (TODO at line 2775).
 void Discovery_Schema::update_mcp_query_digest(
 	const std::string& tool_name,
 	int run_id,
@@ -2690,6 +2804,35 @@ void Discovery_Schema::update_mcp_query_digest(
 	}
 }
 
+// Get MCP query digest statistics from the in-memory digest map.
+//
+// Returns all accumulated digest statistics for MCP tool calls that have been
+// processed. This includes execution counts, timing information, and the
+// fingerprinted query text.
+//
+// Parameters:
+//   reset - If true, clears all in-memory digest statistics after returning them.
+//           This is used for the stats_mcp_query_digest_reset table.
+//           If false, statistics remain in memory (stats_mcp_query_digest table).
+//
+// Returns:
+//   SQLite3_result* - Result set containing digest statistics with columns:
+//     - tool_name: Name of the MCP tool that was called
+//     - run_id: Discovery run identifier
+//     - digest: 128-bit hash (lower 64 bits) identifying the query fingerprint
+//     - digest_text: Fingerprinted JSON with literals replaced by '?'
+//     - count_star: Number of times this digest was seen
+//     - first_seen: Unix timestamp of first occurrence
+//     - last_seen: Unix timestamp of most recent occurrence
+//     - sum_time: Total execution time in microseconds
+//     - min_time: Minimum execution time in microseconds
+//     - max_time: Maximum execution time in microseconds
+//
+// Thread Safety:
+//   Uses read-write lock (mcp_digest_rwlock) for concurrent access.
+//   Reset operation acquires write lock to clear the digest map.
+//
+// Note: The caller is responsible for freeing the returned SQLite3_result.
 SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
 	SQLite3_result* result = new SQLite3_result();
 
@@ -2754,6 +2897,37 @@ SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
 	return result;
 }
 
+// Compute a unique digest hash for an MCP tool call.
+//
+// Creates a deterministic hash value that identifies similar MCP queries
+// by normalizing the arguments (fingerprinting) and hashing the result.
+// Queries with the same tool name and argument structure (but different
+// literal values) will produce the same digest.
+//
+// This is analogous to MySQL query digest computation, which fingerprints
+// SQL queries by replacing literal values with placeholders.
+//
+// Parameters:
+//   tool_name - Name of the MCP tool being called (e.g., "run_sql_readonly")
+//   arguments - JSON object containing the tool's arguments
+//
+// Returns:
+//   uint64_t - Lower 64 bits of the 128-bit SpookyHash digest value
+//
+// Digest Computation:
+//   1. Arguments are fingerprinted (literals replaced with '?' placeholders)
+//   2. Tool name and fingerprint are combined: "tool_name:{fingerprint}"
+//   3. SpookyHash 128-bit hash is computed on the combined string
+//   4. Lower 64 bits (hash1) are returned as the digest
+//
+// Example:
+//   Input: tool_name="run_sql_readonly", arguments={"sql": "SELECT * FROM users WHERE id = 123"}
+//   Fingerprint: {"sql":"?"}
+//   Combined: "run_sql_readonly:{"sql":"?"}"
+//   Digest: (uint64_t hash value)
+//
+// Note: Uses SpookyHash for fast, non-cryptographic hashing with good
+// distribution properties. The same algorithm is used for MySQL query digests.
 uint64_t Discovery_Schema::compute_mcp_digest(
 	const std::string& tool_name,
 	const nlohmann::json& arguments
@@ -2770,6 +2944,37 @@ uint64_t Discovery_Schema::compute_mcp_digest(
 	return hash1;
 }
 
+// Generate a fingerprint of MCP tool arguments by replacing literals with placeholders.
+//
+// Converts a JSON arguments structure into a normalized form where all
+// literal values (strings, numbers, booleans) are replaced with '?' placeholders.
+// This allows similar queries to be grouped together for statistics and analysis.
+//
+// Parameters:
+//   arguments - JSON object/array containing the tool's arguments
+//
+// Returns:
+//   std::string - Fingerprinted JSON string with literals replaced by '?'
+//
+// Fingerprinting Rules:
+//   - String values: replaced with "?"
+//   - Number values: replaced with "?"
+//   - Boolean values: replaced with "?"
+//   - Objects: recursively fingerprinted (keys preserved, values replaced)
+//   - Arrays: replaced with "[?]" (entire array is a placeholder)
+//   - Null values: preserved as "null"
+//
+// Example:
+//   Input: {"sql": "SELECT * FROM users WHERE id = 123", "timeout": 5000}
+//   Output: {"sql":"?","timeout":"?"}
+//
+//   Input: {"filters": {"status": "active", "age": 25}}
+//   Output: {"filters":{"?":"?","?":"?"}}
+//
+// Note: Object keys (field names) are preserved as-is, only values are replaced.
+// This ensures that queries with different parameter structures produce different
+// fingerprints, while queries with the same structure but different values produce
+// the same fingerprint.
 std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& arguments) {
 	// Serialize JSON with literals replaced by placeholders
 	std::string result;

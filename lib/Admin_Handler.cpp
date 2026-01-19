@@ -2345,10 +2345,22 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 
-	// MCP QUERY RULES commands - handled separately from MYSQL/PGSQL
+	// ============================================================
+	// MCP QUERY RULES COMMAND HANDLERS
+	// ============================================================
+	// Supported commands:
+	//   LOAD MCP QUERY RULES FROM DISK  - Copy from disk to memory
+	//   LOAD MCP QUERY RULES TO MEMORY  - Copy from disk to memory (alias)
+	//   LOAD MCP QUERY RULES TO RUNTIME - Load from memory to in-memory cache
+	//   LOAD MCP QUERY RULES FROM MEMORY - Load from memory to in-memory cache (alias)
+	//   SAVE MCP QUERY RULES TO DISK    - Copy from memory to disk
+	//   SAVE MCP QUERY RULES TO MEMORY   - Save from in-memory cache to memory
+	//   SAVE MCP QUERY RULES FROM RUNTIME - Save from in-memory cache to memory (alias)
+	// ============================================================
 	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MCP QUERY RULES ", query_no_space, 21)) || (!strncasecmp("LOAD MCP QUERY RULES ", query_no_space, 21)) ) ) {
 
 		// LOAD MCP QUERY RULES FROM DISK / TO MEMORY
+		// Copies rules from persistent storage (disk.mcp_query_rules) to working memory (main.mcp_query_rules)
 		if (
 			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP QUERY RULES FROM DISK", query_no_space, query_no_space_length))
 			||
@@ -2361,6 +2373,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		// SAVE MCP QUERY RULES TO DISK
+		// Copies rules from working memory (main.mcp_query_rules) to persistent storage (disk.mcp_query_rules)
 		if (
 			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
 			) {
@@ -2371,6 +2384,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		// SAVE MCP QUERY RULES FROM RUNTIME / TO MEMORY
+		// Saves rules from in-memory cache to working memory (main.mcp_query_rules)
+		// This persists the currently active rules (with their hit counters) to the database
 		if (
 			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEMORY") && !strncasecmp("SAVE MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
 			||
@@ -2389,6 +2404,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		// LOAD MCP QUERY RULES TO RUNTIME / FROM MEMORY
+		// Loads rules from working memory (main.mcp_query_rules) to in-memory cache
+		// This makes the rules active for query processing
 		if (
 			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUNTIME") && !strncasecmp("LOAD MCP QUERY RULES TO RUNTIME", query_no_space, query_no_space_length))
 			||

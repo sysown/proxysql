@@ -1,9 +1,34 @@
+// ============================================================
+// MySQL Catalog Implementation
+//
+// The MySQL Catalog provides a SQLite-based key-value store for
+// MCP tool results, with schema isolation for multi-tenancy.
+//
+// Schema Isolation:
+// All catalog entries are now scoped to a specific schema (database).
+// The catalog table has a composite unique constraint on (schema, kind, key)
+// to ensure entries from different schemas don't conflict.
+//
+// Functions accept a schema parameter to scope operations:
+// - upsert(schema, kind, key, document, tags, links)
+// - get(schema, kind, key, document)
+// - search(schema, query, kind, tags, limit, offset)
+// - list(schema, kind, limit, offset)
+// - remove(schema, kind, key)
+//
+// Use empty schema "" for global/shared entries.
+// ============================================================
+
 #include "MySQL_Catalog.h"
 #include "cpp.h"
 #include "proxysql.h"
 #include <sstream>
 #include <algorithm>
 #include "../deps/json/json.hpp"
+
+// ============================================================
+// Constructor / Destructor
+// ============================================================
 
 MySQL_Catalog::MySQL_Catalog(const std::string& path)
 	: db(NULL), db_path(path)
@@ -14,6 +39,17 @@ MySQL_Catalog::~MySQL_Catalog() {
 	close();
 }
 
+// ============================================================
+// Database Initialization
+// ============================================================
+
+// Initialize the catalog database connection and schema.
+//
+// Opens (or creates) the SQLite database at db_path and initializes
+// the catalog table with schema isolation support.
+//
+// Returns:
+//   0 on success, -1 on error
 int MySQL_Catalog::init() {
 	// Initialize database connection
 	db = new SQLite3DB();
@@ -29,6 +65,7 @@ int MySQL_Catalog::init() {
 	return init_schema();
 }
 
+// Close the catalog database connection.
 void MySQL_Catalog::close() {
 	if (db) {
 		delete db;
@@ -112,6 +149,26 @@ int MySQL_Catalog::create_tables() {
 	return 0;
 }
 
+// ============================================================
+// Catalog CRUD Operations
+// ============================================================
+
+// Insert or update a catalog entry with schema isolation.
+//
+// Uses INSERT OR REPLACE (UPSERT) semantics with schema scoping.
+// The unique constraint is (schema, kind, key), so entries from
+// different schemas won't conflict even if they have the same kind/key.
+//
+// Parameters:
+//   schema   - Schema name for isolation (use "" for global entries)
+//   kind     - Entry kind (table, view, domain, metric, note, etc.)
+//   key      - Unique key within the schema/kind
+//   document - JSON document content
+//   tags     - Comma-separated tags
+//   links    - Comma-separated related keys
+//
+// Returns:
+//   0 on success, -1 on error
 int MySQL_Catalog::upsert(
 	const std::string& schema,
 	const std::string& kind,
@@ -151,6 +208,16 @@ int MySQL_Catalog::upsert(
 	return 0;
 }
 
+// Retrieve a catalog entry by schema, kind, and key.
+//
+// Parameters:
+//   schema   - Schema name for isolation
+//   kind     - Entry kind
+//   key      - Unique key
+//   document - Output: JSON document content
+//
+// Returns:
+//   0 on success (entry found), -1 on error or not found
 int MySQL_Catalog::get(
 	const std::string& schema,
 	const std::string& kind,
@@ -188,6 +255,18 @@ int MySQL_Catalog::get(
 	return -1;
 }
 
+// Search catalog entries with optional filters.
+//
+// Parameters:
+//   schema - Schema filter (empty string for all schemas)
+//   query  - Full-text search query (matches key, document, tags)
+//   kind   - Kind filter (empty string for all kinds)
+//   tags   - Tag filter (partial match)
+//   limit  - Maximum results to return
+//   offset - Results offset for pagination
+//
+// Returns:
+//   JSON array of matching entries with schema, kind, key, document, tags, links
 std::string MySQL_Catalog::search(
 	const std::string& schema,
 	const std::string& query,
@@ -270,6 +349,17 @@ std::string MySQL_Catalog::search(
 	return results.dump();
 }
 
+// List catalog entries with optional filters and pagination.
+//
+// Parameters:
+//   schema - Schema filter (empty string for all schemas)
+//   kind   - Kind filter (empty string for all kinds)
+//   limit  - Maximum results to return
+//   offset - Results offset for pagination
+//
+// Returns:
+//   JSON object with "total" count and "results" array containing
+//   entries with schema, kind, key, document, tags, links
 std::string MySQL_Catalog::list(
 	const std::string& schema,
 	const std::string& kind,
@@ -352,6 +442,20 @@ std::string MySQL_Catalog::list(
 	return result.dump();
 }
 
+// Merge multiple catalog entries into a single target entry.
+//
+// Fetches documents for the source keys and creates a merged document
+// with source_keys and instructions fields. Uses empty schema for
+// merged domain entries (backward compatibility).
+//
+// Parameters:
+//   keys         - Vector of source keys to merge
+//   target_key   - Key for the merged entry
+//   kind         - Kind for the merged entry (e.g., "domain")
+//   instructions - Optional instructions for the merge
+//
+// Returns:
+//   0 on success, -1 on error
 int MySQL_Catalog::merge(
 	const std::vector<std::string>& keys,
 	const std::string& target_key,
@@ -384,6 +488,15 @@ int MySQL_Catalog::merge(
 	return upsert("", kind, target_key, merged_doc ,  "" ,  "");
 }
 
+// Delete a catalog entry by schema, kind, and key.
+//
+// Parameters:
+//   schema - Schema filter (empty string for all schemas)
+//   kind   - Entry kind
+//   key    - Unique key
+//
+// Returns:
+//   0 on success, -1 on error
 int MySQL_Catalog::remove(
 	const std::string& schema,
 	const std::string& kind,

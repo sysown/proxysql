@@ -7746,6 +7746,20 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 	return NULL;
 }
 
+// Load MCP query rules from memory (main database) to runtime
+//
+// This command loads MCP query rules from the admin database (main.mcp_query_rules)
+// into the Discovery Schema's in-memory rule cache. After loading, rules become
+// active for query processing.
+//
+// The command follows the ProxySQL pattern:
+//   1. Read rules from main.mcp_query_rules table
+//   2. Load into Discovery Schema's in-memory cache
+//   3. Compile regex patterns for matching
+//
+// Returns:
+//   NULL on success, error message string on failure (caller must free)
+//
 char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 	unsigned long long curtime1 = monotonic_time();
 	char* error = NULL;
@@ -7788,6 +7802,21 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 	return NULL;
 }
 
+// Save MCP query rules from runtime to database
+//
+// Saves the current in-memory MCP query rules to a database table.
+// This is used to persist rules that have been loaded and are active in runtime.
+//
+// Args:
+//   _runtime: If true, save to runtime_mcp_query_rules (same schema, no hits)
+//            If false, save to mcp_query_rules (no hits)
+//            Note: The hits counter is in-memory only and is NOT persisted.
+//
+// The function copies all rules from the Discovery Schema's in-memory cache
+// to the specified admin database table. This is typically called after:
+//   - Querying runtime_mcp_query_rules (to refresh the view with current data)
+//   - Manual runtime-to-memory save operation
+//
 void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
 	if (!GloMCPH) return;
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;

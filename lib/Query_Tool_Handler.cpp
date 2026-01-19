@@ -13,7 +13,28 @@ using json = nlohmann::json;
 // MySQL client library
 #include <mysql.h>
 
-// Helper to safely get string from JSON
+// ============================================================
+// JSON Helper Functions
+//
+// These helper functions provide safe extraction of values from
+// nlohmann::json objects with type coercion and default values.
+// They handle edge cases like null values, type mismatches, and
+// missing keys gracefully.
+// ============================================================
+
+// Safely extract a string value from JSON.
+//
+// Returns the value as a string if the key exists and is not null.
+// For non-string types, returns the JSON dump representation.
+// Returns the default value if the key is missing or null.
+//
+// Parameters:
+//   j           - JSON object to extract from
+//   key         - Key to look up
+//   default_val - Default value if key is missing or null
+//
+// Returns:
+//   String value, JSON dump, or default value
 static std::string json_string(const json& j, const std::string& key, const std::string& default_val = "") {
 	if (j.contains(key) && !j[key].is_null()) {
 		if (j[key].is_string()) {
@@ -24,7 +45,21 @@ static std::string json_string(const json& j, const std::string& key, const std:
 	return default_val;
 }
 
-// Helper to safely get int from JSON - handles numbers, booleans, and numeric strings
+// Safely extract an integer value from JSON with type coercion.
+//
+// Handles multiple input types:
+// - Numbers: Returns directly as int
+// - Booleans: Converts (true=1, false=0)
+// - Strings: Attempts numeric parsing
+// - Missing/null: Returns default value
+//
+// Parameters:
+//   j           - JSON object to extract from
+//   key         - Key to look up
+//   default_val - Default value if key is missing, null, or unparseable
+//
+// Returns:
+//   Integer value, or default value
 static int json_int(const json& j, const std::string& key, int default_val = 0) {
 	if (j.contains(key) && !j[key].is_null()) {
 		const json& val = j[key];
@@ -50,7 +85,20 @@ static int json_int(const json& j, const std::string& key, int default_val = 0) 
 	return default_val;
 }
 
-// Helper to safely get double from JSON - handles both numbers and numeric strings
+// Safely extract a double value from JSON with type coercion.
+//
+// Handles multiple input types:
+// - Numbers: Returns directly as double
+// - Strings: Attempts numeric parsing
+// - Missing/null: Returns default value
+//
+// Parameters:
+//   j           - JSON object to extract from
+//   key         - Key to look up
+//   default_val - Default value if key is missing, null, or unparseable
+//
+// Returns:
+//   Double value, or default value
 static double json_double(const json& j, const std::string& key, double default_val = 0.0) {
 	if (j.contains(key) && !j[key].is_null()) {
 		const json& val = j[key];
@@ -1611,6 +1659,21 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 						// ============================================================
 						// MCP QUERY DIGEST TRACKING (on success)
 						// ============================================================
+						// Track successful MCP tool calls for statistics aggregation.
+						// This computes a digest hash (similar to MySQL query digest) that
+						// groups similar queries together by replacing literal values with
+						// placeholders. Statistics are accumulated per digest and can be
+						// queried via the stats_mcp_query_digest table.
+						//
+						// Process:
+						//   1. Compute digest hash using fingerprinted arguments
+						//   2. Store/aggregate statistics in the digest map (count, timing)
+						//   3. Stats are available via stats_mcp_query_digest table
+						//
+						// Statistics tracked:
+						//   - count_star: Number of times this digest was executed
+						//   - sum_time, min_time, max_time: Execution timing metrics
+						//   - first_seen, last_seen: Timestamps for occurrence tracking
 						uint64_t digest = Discovery_Schema::compute_mcp_digest(tool_name, arguments);
 						std::string digest_text = Discovery_Schema::fingerprint_mcp_args(arguments);
 						unsigned long long duration = monotonic_time() - start_time;

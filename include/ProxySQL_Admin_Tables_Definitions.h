@@ -351,7 +351,10 @@
   "  comment VARCHAR" \
   ")"
 
-// MCP query rules runtime table (same schema as mcp_query_rules, no hits)
+// MCP query rules runtime table - shows in-memory state of active rules
+// This table has the same schema as mcp_query_rules (no hits column).
+// The hits counter is only available in stats_mcp_query_rules table.
+// When this table is queried, it is automatically refreshed from the in-memory rules.
 #define ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES "CREATE TABLE runtime_mcp_query_rules (" \
   "  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ," \
   "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ," \
@@ -402,7 +405,10 @@
   "  PRIMARY KEY(tool_name, run_id, digest)" \
   ")"
 
-// MCP query rules statistics table (only rule_id and hits)
+// MCP query rules statistics table - shows hit counters for each rule
+// This table contains only rule_id and hits count.
+// It is automatically populated when stats_mcp_query_rules is queried.
+// The hits counter increments each time a rule matches during query processing.
 #define STATS_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE stats_mcp_query_rules (" \
   "  rule_id INTEGER PRIMARY KEY NOT NULL ," \
   "  hits INTEGER NOT NULL" \
