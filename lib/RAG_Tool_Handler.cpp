@@ -276,6 +276,76 @@ json RAG_Tool_Handler::get_tool_list() {
 		{"type", "integer"},
 		{"description", "Offset for pagination (default: 0)"}
 	};
+
+	// Filters object
+	json filters_obj = json::object();
+	filters_obj["type"] = "object";
+	filters_obj["properties"] = json::object();
+	filters_obj["properties"]["source_ids"] = {
+		{"type", "array"},
+		{"items", {{"type", "integer"}}},
+		{"description", "Filter by source IDs"}
+	};
+	filters_obj["properties"]["source_names"] = {
+		{"type", "array"},
+		{"items", {{"type", "string"}}},
+		{"description", "Filter by source names"}
+	};
+	filters_obj["properties"]["doc_ids"] = {
+		{"type", "array"},
+		{"items", {{"type", "string"}}},
+		{"description", "Filter by document IDs"}
+	};
+	filters_obj["properties"]["min_score"] = {
+		{"type", "number"},
+		{"description", "Minimum score threshold"}
+	};
+	filters_obj["properties"]["post_type_ids"] = {
+		{"type", "array"},
+		{"items", {{"type", "integer"}}},
+		{"description", "Filter by post type IDs"}
+	};
+	filters_obj["properties"]["tags_any"] = {
+		{"type", "array"},
+		{"items", {{"type", "string"}}},
+		{"description", "Filter by any of these tags"}
+	};
+	filters_obj["properties"]["tags_all"] = {
+		{"type", "array"},
+		{"items", {{"type", "string"}}},
+		{"description", "Filter by all of these tags"}
+	};
+	filters_obj["properties"]["created_after"] = {
+		{"type", "string"},
+		{"format", "date-time"},
+		{"description", "Filter by creation date (after)"}
+	};
+	filters_obj["properties"]["created_before"] = {
+		{"type", "string"},
+		{"format", "date-time"},
+		{"description", "Filter by creation date (before)"}
+	};
+
+	fts_params["properties"]["filters"] = filters_obj;
+
+	// Return object
+	json return_obj = json::object();
+	return_obj["type"] = "object";
+	return_obj["properties"] = json::object();
+	return_obj["properties"]["include_title"] = {
+		{"type", "boolean"},
+		{"description", "Include title in results (default: true)"}
+	};
+	return_obj["properties"]["include_metadata"] = {
+		{"type", "boolean"},
+		{"description", "Include metadata in results (default: true)"}
+	};
+	return_obj["properties"]["include_snippets"] = {
+		{"type", "boolean"},
+		{"description", "Include snippets in results (default: false)"}
+	};
+
+	fts_params["properties"]["return"] = return_obj;
 	fts_params["required"] = json::array({"query"});
 
 	tools.push_back({
@@ -296,6 +366,38 @@ json RAG_Tool_Handler::get_tool_list() {
 		{"type", "integer"},
 		{"description", "Number of results to return (default: 10, max: 50)"}
 	};
+
+	// Filters object (same as FTS)
+	vec_params["properties"]["filters"] = filters_obj;
+
+	// Return object (same as FTS)
+	vec_params["properties"]["return"] = return_obj;
+
+	// Embedding object for precomputed vectors
+	json embedding_obj = json::object();
+	embedding_obj["type"] = "object";
+	embedding_obj["properties"] = json::object();
+	embedding_obj["properties"]["model"] = {
+		{"type", "string"},
+		{"description", "Embedding model to use"}
+	};
+
+	vec_params["properties"]["embedding"] = embedding_obj;
+
+	// Query embedding object for precomputed vectors
+	json query_embedding_obj = json::object();
+	query_embedding_obj["type"] = "object";
+	query_embedding_obj["properties"] = json::object();
+	query_embedding_obj["properties"]["dim"] = {
+		{"type", "integer"},
+		{"description", "Dimension of the embedding"}
+	};
+	query_embedding_obj["properties"]["values_b64"] = {
+		{"type", "string"},
+		{"description", "Base64 encoded float32 array"}
+	};
+
+	vec_params["properties"]["query_embedding"] = query_embedding_obj;
 	vec_params["required"] = json::array({"query_text"});
 
 	tools.push_back({
@@ -320,6 +422,56 @@ json RAG_Tool_Handler::get_tool_list() {
 		{"type", "string"},
 		{"description", "Search mode: 'fuse' or 'fts_then_vec'"}
 	};
+
+	// Filters object (same as FTS and vector)
+	hybrid_params["properties"]["filters"] = filters_obj;
+
+	// Fuse object for mode "fuse"
+	json fuse_obj = json::object();
+	fuse_obj["type"] = "object";
+	fuse_obj["properties"] = json::object();
+	fuse_obj["properties"]["fts_k"] = {
+		{"type", "integer"},
+		{"description", "Number of FTS results to retrieve for fusion (default: 50)"}
+	};
+	fuse_obj["properties"]["vec_k"] = {
+		{"type", "integer"},
+		{"description", "Number of vector results to retrieve for fusion (default: 50)"}
+	};
+	fuse_obj["properties"]["rrf_k0"] = {
+		{"type", "integer"},
+		{"description", "RRF smoothing parameter (default: 60)"}
+	};
+	fuse_obj["properties"]["w_fts"] = {
+		{"type", "number"},
+		{"description", "Weight for FTS scores in fusion (default: 1.0)"}
+	};
+	fuse_obj["properties"]["w_vec"] = {
+		{"type", "number"},
+		{"description", "Weight for vector scores in fusion (default: 1.0)"}
+	};
+
+	hybrid_params["properties"]["fuse"] = fuse_obj;
+
+	// Fts_then_vec object for mode "fts_then_vec"
+	json fts_then_vec_obj = json::object();
+	fts_then_vec_obj["type"] = "object";
+	fts_then_vec_obj["properties"] = json::object();
+	fts_then_vec_obj["properties"]["candidates_k"] = {
+		{"type", "integer"},
+		{"description", "Number of FTS candidates to generate (default: 200)"}
+	};
+	fts_then_vec_obj["properties"]["rerank_k"] = {
+		{"type", "integer"},
+		{"description", "Number of candidates to rerank with vector search (default: 50)"}
+	};
+	fts_then_vec_obj["properties"]["vec_metric"] = {
+		{"type", "string"},
+		{"description", "Vector similarity metric (default: 'cosine')"}
+	};
+
+	hybrid_params["properties"]["fts_then_vec"] = fts_then_vec_obj;
+
 	hybrid_params["required"] = json::array({"query"});
 
 	tools.push_back({
@@ -404,6 +556,21 @@ json RAG_Tool_Handler::get_tool_list() {
 		{"items", {{"type", "string"}}},
 		{"description", "List of columns to fetch"}
 	};
+
+	// Limits object
+	json limits_obj = json::object();
+	limits_obj["type"] = "object";
+	limits_obj["properties"] = json::object();
+	limits_obj["properties"]["max_rows"] = {
+		{"type", "integer"},
+		{"description", "Maximum number of rows to return (default: 10, max: 100)"}
+	};
+	limits_obj["properties"]["max_bytes"] = {
+		{"type", "integer"},
+		{"description", "Maximum number of bytes to return (default: 200000, max: 1000000)"}
+	};
+
+	fetch_params["properties"]["limits"] = limits_obj;
 	fetch_params["required"] = json::array({"doc_ids"});
 
 	tools.push_back({
@@ -463,18 +630,164 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			int k = validate_k(get_json_int(arguments, "k", 10));
 			int offset = get_json_int(arguments, "offset", 0);
 
+			// Get filters
+			json filters = json::object();
+			if (arguments.contains("filters") && arguments["filters"].is_object()) {
+				filters = arguments["filters"];
+
+				// Validate filter parameters
+				if (filters.contains("source_ids") && !filters["source_ids"].is_array()) {
+					return create_error_response("Invalid source_ids filter: must be an array of integers");
+				}
+
+				if (filters.contains("source_names") && !filters["source_names"].is_array()) {
+					return create_error_response("Invalid source_names filter: must be an array of strings");
+				}
+
+				if (filters.contains("doc_ids") && !filters["doc_ids"].is_array()) {
+					return create_error_response("Invalid doc_ids filter: must be an array of strings");
+				}
+
+				if (filters.contains("post_type_ids") && !filters["post_type_ids"].is_array()) {
+					return create_error_response("Invalid post_type_ids filter: must be an array of integers");
+				}
+
+				if (filters.contains("tags_any") && !filters["tags_any"].is_array()) {
+					return create_error_response("Invalid tags_any filter: must be an array of strings");
+				}
+
+				if (filters.contains("tags_all") && !filters["tags_all"].is_array()) {
+					return create_error_response("Invalid tags_all filter: must be an array of strings");
+				}
+
+				if (filters.contains("created_after") && !filters["created_after"].is_string()) {
+					return create_error_response("Invalid created_after filter: must be a string in ISO 8601 format");
+				}
+
+				if (filters.contains("created_before") && !filters["created_before"].is_string()) {
+					return create_error_response("Invalid created_before filter: must be a string in ISO 8601 format");
+				}
+
+				if (filters.contains("min_score") && !(filters["min_score"].is_number() || filters["min_score"].is_string())) {
+					return create_error_response("Invalid min_score filter: must be a number or numeric string");
+				}
+			}
+
+			// Get return parameters
+			bool include_title = true;
+			bool include_metadata = true;
+			bool include_snippets = false;
+			if (arguments.contains("return") && arguments["return"].is_object()) {
+				const json& return_params = arguments["return"];
+				include_title = get_json_bool(return_params, "include_title", true);
+				include_metadata = get_json_bool(return_params, "include_metadata", true);
+				include_snippets = get_json_bool(return_params, "include_snippets", false);
+			}
+
 			if (!validate_query_length(query)) {
 				return create_error_response("Query too long");
 			}
 
-			// Build FTS query
-			std::string sql = "SELECT chunk_id, doc_id, source_id, "
-				"(SELECT name FROM rag_sources WHERE source_id = rag_chunks.source_id) as source_name, "
-				"title, bm25(rag_fts_chunks) as score_fts "
-				"FROM rag_fts_chunks "
-				"JOIN rag_chunks ON rag_chunks.chunk_id = rag_fts_chunks.chunk_id "
-				"WHERE rag_fts_chunks MATCH '" + query + "' "
-				"ORDER BY score_fts "
+			// Build FTS query with filters
+			std::string sql = "SELECT c.chunk_id, c.doc_id, c.source_id, "
+				"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
+				"c.title, bm25(f) as score_fts_raw, "
+				"c.metadata_json, c.body "
+				"FROM rag_fts_chunks f "
+				"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
+				"JOIN rag_documents d ON d.doc_id = c.doc_id "
+				"WHERE f MATCH '" + query + "'";
+
+			// Apply filters
+			if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
+				std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
+				if (!source_ids.empty()) {
+					std::string source_list = "";
+					for (size_t i = 0; i < source_ids.size(); ++i) {
+						if (i > 0) source_list += ",";
+						source_list += std::to_string(source_ids[i]);
+					}
+					sql += " AND c.source_id IN (" + source_list + ")";
+				}
+			}
+
+			if (filters.contains("source_names") && filters["source_names"].is_array()) {
+				std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
+				if (!source_names.empty()) {
+					std::string source_list = "";
+					for (size_t i = 0; i < source_names.size(); ++i) {
+						if (i > 0) source_list += ",";
+						source_list += "'" + source_names[i] + "'";
+					}
+					sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
+				}
+			}
+
+			if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
+				std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
+				if (!doc_ids.empty()) {
+					std::string doc_list = "";
+					for (size_t i = 0; i < doc_ids.size(); ++i) {
+						if (i > 0) doc_list += ",";
+						doc_list += "'" + doc_ids[i] + "'";
+					}
+					sql += " AND c.doc_id IN (" + doc_list + ")";
+				}
+			}
+
+			// Metadata filters
+			if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
+				std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
+				if (!post_type_ids.empty()) {
+					// Filter by PostTypeId in metadata_json
+					std::string post_type_conditions = "";
+					for (size_t i = 0; i < post_type_ids.size(); ++i) {
+						if (i > 0) post_type_conditions += " OR ";
+						post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
+					}
+					sql += " AND (" + post_type_conditions + ")";
+				}
+			}
+
+			if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
+				std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
+				if (!tags_any.empty()) {
+					// Filter by any of the tags in metadata_json Tags field
+					std::string tag_conditions = "";
+					for (size_t i = 0; i < tags_any.size(); ++i) {
+						if (i > 0) tag_conditions += " OR ";
+						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
+					}
+					sql += " AND (" + tag_conditions + ")";
+				}
+			}
+
+			if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
+				std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
+				if (!tags_all.empty()) {
+					// Filter by all of the tags in metadata_json Tags field
+					std::string tag_conditions = "";
+					for (size_t i = 0; i < tags_all.size(); ++i) {
+						if (i > 0) tag_conditions += " AND ";
+						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
+					}
+					sql += " AND (" + tag_conditions + ")";
+				}
+			}
+
+			if (filters.contains("created_after") && filters["created_after"].is_string()) {
+				std::string created_after = filters["created_after"].get<std::string>();
+				// Filter by CreationDate in metadata_json
+				sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
+			}
+
+			if (filters.contains("created_before") && filters["created_before"].is_string()) {
+				std::string created_before = filters["created_before"].get<std::string>();
+				// Filter by CreationDate in metadata_json
+				sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+			}
+
+			sql += " ORDER BY score_fts_raw "
 				"LIMIT " + std::to_string(k) + " OFFSET " + std::to_string(offset);
 
 			SQLite3_result* db_result = execute_query(sql.c_str());
@@ -484,6 +797,15 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 			// Build result array
 			json results = json::array();
+			double min_score = 0.0;
+			bool has_min_score = false;
+			if (filters.contains("min_score") && (filters["min_score"].is_number() || filters["min_score"].is_string())) {
+				min_score = filters["min_score"].is_number() ?
+					filters["min_score"].get<double>() :
+					std::stod(filters["min_score"].get<std::string>());
+				has_min_score = true;
+			}
+
 			for (const auto& row : db_result->rows) {
 				if (row->fields) {
 					json item;
@@ -491,9 +813,41 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					item["doc_id"] = row->fields[1] ? row->fields[1] : "";
 					item["source_id"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
 					item["source_name"] = row->fields[3] ? row->fields[3] : "";
-					item["title"] = row->fields[4] ? row->fields[4] : "";
-					double score_fts = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
-					item["score_fts"] = normalize_score(score_fts, "fts");
+
+					// Normalize FTS score (bm25 - lower is better, so we invert it)
+					double score_fts_raw = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
+					// Convert to 0-1 scale where higher is better
+					double score_fts = 1.0 / (1.0 + std::abs(score_fts_raw));
+
+					// Apply min_score filter
+					if (has_min_score && score_fts < min_score) {
+						continue; // Skip this result
+					}
+
+					item["score_fts"] = score_fts;
+
+					if (include_title) {
+						item["title"] = row->fields[4] ? row->fields[4] : "";
+					}
+
+					if (include_metadata && row->fields[6]) {
+						try {
+							item["metadata"] = json::parse(row->fields[6]);
+						} catch (...) {
+							item["metadata"] = json::object();
+						}
+					}
+
+					if (include_snippets && row->fields[7]) {
+						// For now, just include the first 200 characters as a snippet
+						std::string body = row->fields[7];
+						if (body.length() > 200) {
+							item["snippet"] = body.substr(0, 200) + "...";
+						} else {
+							item["snippet"] = body;
+						}
+					}
+
 					results.push_back(item);
 				}
 			}
@@ -516,6 +870,60 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			// Vector search implementation
 			std::string query_text = get_json_string(arguments, "query_text");
 			int k = validate_k(get_json_int(arguments, "k", 10));
+
+			// Get filters
+			json filters = json::object();
+			if (arguments.contains("filters") && arguments["filters"].is_object()) {
+				filters = arguments["filters"];
+
+				// Validate filter parameters
+				if (filters.contains("source_ids") && !filters["source_ids"].is_array()) {
+					return create_error_response("Invalid source_ids filter: must be an array of integers");
+				}
+
+				if (filters.contains("source_names") && !filters["source_names"].is_array()) {
+					return create_error_response("Invalid source_names filter: must be an array of strings");
+				}
+
+				if (filters.contains("doc_ids") && !filters["doc_ids"].is_array()) {
+					return create_error_response("Invalid doc_ids filter: must be an array of strings");
+				}
+
+				if (filters.contains("post_type_ids") && !filters["post_type_ids"].is_array()) {
+					return create_error_response("Invalid post_type_ids filter: must be an array of integers");
+				}
+
+				if (filters.contains("tags_any") && !filters["tags_any"].is_array()) {
+					return create_error_response("Invalid tags_any filter: must be an array of strings");
+				}
+
+				if (filters.contains("tags_all") && !filters["tags_all"].is_array()) {
+					return create_error_response("Invalid tags_all filter: must be an array of strings");
+				}
+
+				if (filters.contains("created_after") && !filters["created_after"].is_string()) {
+					return create_error_response("Invalid created_after filter: must be a string in ISO 8601 format");
+				}
+
+				if (filters.contains("created_before") && !filters["created_before"].is_string()) {
+					return create_error_response("Invalid created_before filter: must be a string in ISO 8601 format");
+				}
+
+				if (filters.contains("min_score") && !(filters["min_score"].is_number() || filters["min_score"].is_string())) {
+					return create_error_response("Invalid min_score filter: must be a number or numeric string");
+				}
+			}
+
+			// Get return parameters
+			bool include_title = true;
+			bool include_metadata = true;
+			bool include_snippets = false;
+			if (arguments.contains("return") && arguments["return"].is_object()) {
+				const json& return_params = arguments["return"];
+				include_title = get_json_bool(return_params, "include_title", true);
+				include_metadata = get_json_bool(return_params, "include_metadata", true);
+				include_snippets = get_json_bool(return_params, "include_snippets", false);
+			}
 
 			if (!validate_query_length(query_text)) {
 				return create_error_response("Query text too long");
@@ -545,14 +953,106 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			}
 			embedding_json += "]";
 
-			// Build vector search query using sqlite-vec syntax
+			// Build vector search query using sqlite-vec syntax with filters
 			std::string sql = "SELECT v.chunk_id, c.doc_id, c.source_id, "
 				"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
-				"c.title, v.distance as score_vec "
+				"c.title, v.distance as score_vec_raw, "
+				"c.metadata_json, c.body "
 				"FROM rag_vec_chunks v "
 				"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
-				"WHERE v.embedding MATCH '" + embedding_json + "' "
-				"ORDER BY v.distance "
+				"JOIN rag_documents d ON d.doc_id = c.doc_id "
+				"WHERE v.embedding MATCH '" + embedding_json + "'";
+
+			// Apply filters
+			if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
+				std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
+				if (!source_ids.empty()) {
+					std::string source_list = "";
+					for (size_t i = 0; i < source_ids.size(); ++i) {
+						if (i > 0) source_list += ",";
+						source_list += std::to_string(source_ids[i]);
+					}
+					sql += " AND c.source_id IN (" + source_list + ")";
+				}
+			}
+
+			if (filters.contains("source_names") && filters["source_names"].is_array()) {
+				std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
+				if (!source_names.empty()) {
+					std::string source_list = "";
+					for (size_t i = 0; i < source_names.size(); ++i) {
+						if (i > 0) source_list += ",";
+						source_list += "'" + source_names[i] + "'";
+					}
+					sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
+				}
+			}
+
+			if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
+				std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
+				if (!doc_ids.empty()) {
+					std::string doc_list = "";
+					for (size_t i = 0; i < doc_ids.size(); ++i) {
+						if (i > 0) doc_list += ",";
+						doc_list += "'" + doc_ids[i] + "'";
+					}
+					sql += " AND c.doc_id IN (" + doc_list + ")";
+				}
+			}
+
+			// Metadata filters
+			if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
+				std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
+				if (!post_type_ids.empty()) {
+					// Filter by PostTypeId in metadata_json
+					std::string post_type_conditions = "";
+					for (size_t i = 0; i < post_type_ids.size(); ++i) {
+						if (i > 0) post_type_conditions += " OR ";
+						post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
+					}
+					sql += " AND (" + post_type_conditions + ")";
+				}
+			}
+
+			if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
+				std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
+				if (!tags_any.empty()) {
+					// Filter by any of the tags in metadata_json Tags field
+					std::string tag_conditions = "";
+					for (size_t i = 0; i < tags_any.size(); ++i) {
+						if (i > 0) tag_conditions += " OR ";
+						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
+					}
+					sql += " AND (" + tag_conditions + ")";
+				}
+			}
+
+			if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
+				std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
+				if (!tags_all.empty()) {
+					// Filter by all of the tags in metadata_json Tags field
+					std::string tag_conditions = "";
+					for (size_t i = 0; i < tags_all.size(); ++i) {
+						if (i > 0) tag_conditions += " AND ";
+						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
+					}
+					sql += " AND (" + tag_conditions + ")";
+				}
+			}
+
+			if (filters.contains("created_after") && filters["created_after"].is_string()) {
+				std::string created_after = filters["created_after"].get<std::string>();
+				// Filter by CreationDate in metadata_json
+				sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
+			}
+
+			if (filters.contains("created_before") && filters["created_before"].is_string()) {
+				std::string created_before = filters["created_before"].get<std::string>();
+				// Filter by CreationDate in metadata_json
+				sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+			}
+
+			sql += " ORDER BY v.distance "
 				"LIMIT " + std::to_string(k);
 
 			SQLite3_result* db_result = execute_query(sql.c_str());
@@ -562,6 +1062,15 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 			// Build result array
 			json results = json::array();
+			double min_score = 0.0;
+			bool has_min_score = false;
+			if (filters.contains("min_score") && (filters["min_score"].is_number() || filters["min_score"].is_string())) {
+				min_score = filters["min_score"].is_number() ?
+					filters["min_score"].get<double>() :
+					std::stod(filters["min_score"].get<std::string>());
+				has_min_score = true;
+			}
+
 			for (const auto& row : db_result->rows) {
 				if (row->fields) {
 					json item;
@@ -569,10 +1078,41 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					item["doc_id"] = row->fields[1] ? row->fields[1] : "";
 					item["source_id"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
 					item["source_name"] = row->fields[3] ? row->fields[3] : "";
-					item["title"] = row->fields[4] ? row->fields[4] : "";
-					double score_vec = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
-					// For vector search, lower distance is better, so we invert it for consistent scoring
-					item["score_vec"] = 1.0 / (1.0 + score_vec);  // Normalize to 0-1 range
+
+					// Normalize vector score (distance - lower is better, so we invert it)
+					double score_vec_raw = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
+					// Convert to 0-1 scale where higher is better
+					double score_vec = 1.0 / (1.0 + score_vec_raw);
+
+					// Apply min_score filter
+					if (has_min_score && score_vec < min_score) {
+						continue; // Skip this result
+					}
+
+					item["score_vec"] = score_vec;
+
+					if (include_title) {
+						item["title"] = row->fields[4] ? row->fields[4] : "";
+					}
+
+					if (include_metadata && row->fields[6]) {
+						try {
+							item["metadata"] = json::parse(row->fields[6]);
+						} catch (...) {
+							item["metadata"] = json::object();
+						}
+					}
+
+					if (include_snippets && row->fields[7]) {
+						// For now, just include the first 200 characters as a snippet
+						std::string body = row->fields[7];
+						if (body.length() > 200) {
+							item["snippet"] = body.substr(0, 200) + "...";
+						} else {
+							item["snippet"] = body;
+						}
+					}
+
 					results.push_back(item);
 				}
 			}
@@ -597,6 +1137,49 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			int k = validate_k(get_json_int(arguments, "k", 10));
 			std::string mode = get_json_string(arguments, "mode", "fuse");
 
+			// Get filters
+			json filters = json::object();
+			if (arguments.contains("filters") && arguments["filters"].is_object()) {
+				filters = arguments["filters"];
+
+				// Validate filter parameters
+				if (filters.contains("source_ids") && !filters["source_ids"].is_array()) {
+					return create_error_response("Invalid source_ids filter: must be an array of integers");
+				}
+
+				if (filters.contains("source_names") && !filters["source_names"].is_array()) {
+					return create_error_response("Invalid source_names filter: must be an array of strings");
+				}
+
+				if (filters.contains("doc_ids") && !filters["doc_ids"].is_array()) {
+					return create_error_response("Invalid doc_ids filter: must be an array of strings");
+				}
+
+				if (filters.contains("post_type_ids") && !filters["post_type_ids"].is_array()) {
+					return create_error_response("Invalid post_type_ids filter: must be an array of integers");
+				}
+
+				if (filters.contains("tags_any") && !filters["tags_any"].is_array()) {
+					return create_error_response("Invalid tags_any filter: must be an array of strings");
+				}
+
+				if (filters.contains("tags_all") && !filters["tags_all"].is_array()) {
+					return create_error_response("Invalid tags_all filter: must be an array of strings");
+				}
+
+				if (filters.contains("created_after") && !filters["created_after"].is_string()) {
+					return create_error_response("Invalid created_after filter: must be a string in ISO 8601 format");
+				}
+
+				if (filters.contains("created_before") && !filters["created_before"].is_string()) {
+					return create_error_response("Invalid created_before filter: must be a string in ISO 8601 format");
+				}
+
+				if (filters.contains("min_score") && !(filters["min_score"].is_number() || filters["min_score"].is_string())) {
+					return create_error_response("Invalid min_score filter: must be a number or numeric string");
+				}
+			}
+
 			if (!validate_query_length(query)) {
 				return create_error_response("Query too long");
 			}
@@ -606,21 +1189,129 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			if (mode == "fuse") {
 				// Mode A: parallel FTS + vector, fuse results (RRF recommended)
 
-				// Get FTS parameters
-				int fts_k = validate_k(get_json_int(arguments, "fts_k", 50));
-				int vec_k = validate_k(get_json_int(arguments, "vec_k", 50));
-				int rrf_k0 = get_json_int(arguments, "rrf_k0", 60);
-				double w_fts = get_json_int(arguments, "w_fts", 1.0);
-				double w_vec = get_json_int(arguments, "w_vec", 1.0);
+				// Get FTS parameters from fuse object
+				int fts_k = 50;
+				int vec_k = 50;
+				int rrf_k0 = 60;
+				double w_fts = 1.0;
+				double w_vec = 1.0;
 
-				// Run FTS search
-				std::string fts_sql = "SELECT chunk_id, doc_id, source_id, "
-					"(SELECT name FROM rag_sources WHERE source_id = rag_chunks.source_id) as source_name, "
-					"title, bm25(rag_fts_chunks) as score_fts "
-					"FROM rag_fts_chunks "
-					"JOIN rag_chunks ON rag_chunks.chunk_id = rag_fts_chunks.chunk_id "
-					"WHERE rag_fts_chunks MATCH '" + query + "' "
-					"ORDER BY score_fts "
+				if (arguments.contains("fuse") && arguments["fuse"].is_object()) {
+					const json& fuse_params = arguments["fuse"];
+					fts_k = validate_k(get_json_int(fuse_params, "fts_k", 50));
+					vec_k = validate_k(get_json_int(fuse_params, "vec_k", 50));
+					rrf_k0 = get_json_int(fuse_params, "rrf_k0", 60);
+					w_fts = get_json_int(fuse_params, "w_fts", 1.0);
+					w_vec = get_json_int(fuse_params, "w_vec", 1.0);
+				} else {
+					// Fallback to top-level parameters for backward compatibility
+					fts_k = validate_k(get_json_int(arguments, "fts_k", 50));
+					vec_k = validate_k(get_json_int(arguments, "vec_k", 50));
+					rrf_k0 = get_json_int(arguments, "rrf_k0", 60);
+					w_fts = get_json_int(arguments, "w_fts", 1.0);
+					w_vec = get_json_int(arguments, "w_vec", 1.0);
+				}
+
+				// Run FTS search with filters
+				std::string fts_sql = "SELECT c.chunk_id, c.doc_id, c.source_id, "
+					"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
+					"c.title, bm25(f) as score_fts_raw, "
+					"c.metadata_json "
+					"FROM rag_fts_chunks f "
+					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
+					"JOIN rag_documents d ON d.doc_id = c.doc_id "
+					"WHERE f MATCH '" + query + "'";
+
+				// Apply filters
+				if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
+					std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
+					if (!source_ids.empty()) {
+						std::string source_list = "";
+						for (size_t i = 0; i < source_ids.size(); ++i) {
+							if (i > 0) source_list += ",";
+							source_list += std::to_string(source_ids[i]);
+						}
+						fts_sql += " AND c.source_id IN (" + source_list + ")";
+					}
+				}
+
+				if (filters.contains("source_names") && filters["source_names"].is_array()) {
+					std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
+					if (!source_names.empty()) {
+						std::string source_list = "";
+						for (size_t i = 0; i < source_names.size(); ++i) {
+							if (i > 0) source_list += ",";
+							source_list += "'" + source_names[i] + "'";
+						}
+						fts_sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
+					}
+				}
+
+				if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
+					std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
+					if (!doc_ids.empty()) {
+						std::string doc_list = "";
+						for (size_t i = 0; i < doc_ids.size(); ++i) {
+							if (i > 0) doc_list += ",";
+							doc_list += "'" + doc_ids[i] + "'";
+						}
+						fts_sql += " AND c.doc_id IN (" + doc_list + ")";
+					}
+				}
+
+				// Metadata filters
+				if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
+					std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
+					if (!post_type_ids.empty()) {
+						// Filter by PostTypeId in metadata_json
+						std::string post_type_conditions = "";
+						for (size_t i = 0; i < post_type_ids.size(); ++i) {
+							if (i > 0) post_type_conditions += " OR ";
+							post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
+						}
+						fts_sql += " AND (" + post_type_conditions + ")";
+					}
+				}
+
+				if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
+					std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
+					if (!tags_any.empty()) {
+						// Filter by any of the tags in metadata_json Tags field
+						std::string tag_conditions = "";
+						for (size_t i = 0; i < tags_any.size(); ++i) {
+							if (i > 0) tag_conditions += " OR ";
+							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
+						}
+						fts_sql += " AND (" + tag_conditions + ")";
+					}
+				}
+
+				if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
+					std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
+					if (!tags_all.empty()) {
+						// Filter by all of the tags in metadata_json Tags field
+						std::string tag_conditions = "";
+						for (size_t i = 0; i < tags_all.size(); ++i) {
+							if (i > 0) tag_conditions += " AND ";
+							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
+						}
+						fts_sql += " AND (" + tag_conditions + ")";
+					}
+				}
+
+				if (filters.contains("created_after") && filters["created_after"].is_string()) {
+					std::string created_after = filters["created_after"].get<std::string>();
+					// Filter by CreationDate in metadata_json
+					fts_sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
+				}
+
+				if (filters.contains("created_before") && filters["created_before"].is_string()) {
+					std::string created_before = filters["created_before"].get<std::string>();
+					// Filter by CreationDate in metadata_json
+					fts_sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+				}
+
+				fts_sql += " ORDER BY score_fts_raw "
 					"LIMIT " + std::to_string(fts_k);
 
 				SQLite3_result* fts_result = execute_query(fts_sql.c_str());
@@ -628,7 +1319,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					return create_error_response("FTS database query failed");
 				}
 
-				// Run vector search
+				// Run vector search with filters
 				std::vector<float> query_embedding;
 				if (ai_manager && GloGATH) {
 					GenAI_EmbeddingResult result = GloGATH->embed_documents({query});
@@ -655,11 +1346,103 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 				std::string vec_sql = "SELECT v.chunk_id, c.doc_id, c.source_id, "
 					"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
-					"c.title, v.distance as score_vec "
+					"c.title, v.distance as score_vec_raw, "
+					"c.metadata_json "
 					"FROM rag_vec_chunks v "
 					"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
-					"WHERE v.embedding MATCH '" + embedding_json + "' "
-					"ORDER BY v.distance "
+					"JOIN rag_documents d ON d.doc_id = c.doc_id "
+					"WHERE v.embedding MATCH '" + embedding_json + "'";
+
+				// Apply filters
+				if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
+					std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
+					if (!source_ids.empty()) {
+						std::string source_list = "";
+						for (size_t i = 0; i < source_ids.size(); ++i) {
+							if (i > 0) source_list += ",";
+							source_list += std::to_string(source_ids[i]);
+						}
+						vec_sql += " AND c.source_id IN (" + source_list + ")";
+					}
+				}
+
+				if (filters.contains("source_names") && filters["source_names"].is_array()) {
+					std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
+					if (!source_names.empty()) {
+						std::string source_list = "";
+						for (size_t i = 0; i < source_names.size(); ++i) {
+							if (i > 0) source_list += ",";
+							source_list += "'" + source_names[i] + "'";
+						}
+						vec_sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
+					}
+				}
+
+				if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
+					std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
+					if (!doc_ids.empty()) {
+						std::string doc_list = "";
+						for (size_t i = 0; i < doc_ids.size(); ++i) {
+							if (i > 0) doc_list += ",";
+							doc_list += "'" + doc_ids[i] + "'";
+						}
+						vec_sql += " AND c.doc_id IN (" + doc_list + ")";
+					}
+				}
+
+				// Metadata filters
+				if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
+					std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
+					if (!post_type_ids.empty()) {
+						// Filter by PostTypeId in metadata_json
+						std::string post_type_conditions = "";
+						for (size_t i = 0; i < post_type_ids.size(); ++i) {
+							if (i > 0) post_type_conditions += " OR ";
+							post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
+						}
+						vec_sql += " AND (" + post_type_conditions + ")";
+					}
+				}
+
+				if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
+					std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
+					if (!tags_any.empty()) {
+						// Filter by any of the tags in metadata_json Tags field
+						std::string tag_conditions = "";
+						for (size_t i = 0; i < tags_any.size(); ++i) {
+							if (i > 0) tag_conditions += " OR ";
+							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
+						}
+						vec_sql += " AND (" + tag_conditions + ")";
+					}
+				}
+
+				if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
+					std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
+					if (!tags_all.empty()) {
+						// Filter by all of the tags in metadata_json Tags field
+						std::string tag_conditions = "";
+						for (size_t i = 0; i < tags_all.size(); ++i) {
+							if (i > 0) tag_conditions += " AND ";
+							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
+						}
+						vec_sql += " AND (" + tag_conditions + ")";
+					}
+				}
+
+				if (filters.contains("created_after") && filters["created_after"].is_string()) {
+					std::string created_after = filters["created_after"].get<std::string>();
+					// Filter by CreationDate in metadata_json
+					vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
+				}
+
+				if (filters.contains("created_before") && filters["created_before"].is_string()) {
+					std::string created_before = filters["created_before"].get<std::string>();
+					// Filter by CreationDate in metadata_json
+					vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+				}
+
+				vec_sql += " ORDER BY v.distance "
 					"LIMIT " + std::to_string(vec_k);
 
 				SQLite3_result* vec_result = execute_query(vec_sql.c_str());
@@ -683,11 +1466,23 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 							item["source_id"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
 							item["source_name"] = row->fields[3] ? row->fields[3] : "";
 							item["title"] = row->fields[4] ? row->fields[4] : "";
-							double score_fts = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
-							item["score_fts"] = normalize_score(score_fts, "fts");
+							double score_fts_raw = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
+							// Normalize FTS score (bm25 - lower is better, so we invert it)
+							double score_fts = 1.0 / (1.0 + std::abs(score_fts_raw));
+							item["score_fts"] = score_fts;
 							item["rank_fts"] = fts_rank;
 							item["rank_vec"] = 0;  // Will be updated if found in vector results
 							item["score_vec"] = 0.0;
+
+							// Add metadata if available
+							if (row->fields[6]) {
+								try {
+									item["metadata"] = json::parse(row->fields[6]);
+								} catch (...) {
+									item["metadata"] = json::object();
+								}
+							}
+
 							fused_results[chunk_id] = item;
 							fts_rank++;
 						}
@@ -700,15 +1495,15 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					if (row->fields) {
 						std::string chunk_id = row->fields[0] ? row->fields[0] : "";
 						if (!chunk_id.empty()) {
-							double score_vec = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
+							double score_vec_raw = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
 							// For vector search, lower distance is better, so we invert it
-							double normalized_score_vec = 1.0 / (1.0 + score_vec);
+							double score_vec = 1.0 / (1.0 + score_vec_raw);
 
 							auto it = fused_results.find(chunk_id);
 							if (it != fused_results.end()) {
 								// Chunk already in FTS results, update vector info
 								it->second["rank_vec"] = vec_rank;
-								it->second["score_vec"] = normalized_score_vec;
+								it->second["score_vec"] = score_vec;
 							} else {
 								// New chunk from vector results
 								json item;
@@ -717,10 +1512,20 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 								item["source_id"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
 								item["source_name"] = row->fields[3] ? row->fields[3] : "";
 								item["title"] = row->fields[4] ? row->fields[4] : "";
-								item["score_vec"] = normalized_score_vec;
+								item["score_vec"] = score_vec;
 								item["rank_vec"] = vec_rank;
 								item["rank_fts"] = 0;  // Not found in FTS
 								item["score_fts"] = 0.0;
+
+								// Add metadata if available
+								if (row->fields[6]) {
+									try {
+										item["metadata"] = json::parse(row->fields[6]);
+									} catch (...) {
+										item["metadata"] = json::object();
+									}
+								}
+
 								fused_results[chunk_id] = item;
 							}
 							vec_rank++;
@@ -730,6 +1535,15 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 				// Compute fused scores using RRF
 				std::vector<std::pair<double, json>> scored_results;
+				double min_score = 0.0;
+				bool has_min_score = false;
+				if (filters.contains("min_score") && (filters["min_score"].is_number() || filters["min_score"].is_string())) {
+					min_score = filters["min_score"].is_number() ?
+						filters["min_score"].get<double>() :
+						std::stod(filters["min_score"].get<std::string>());
+					has_min_score = true;
+				}
+
 				for (auto& pair : fused_results) {
 					json& item = pair.second;
 					int rank_fts = item["rank_fts"].get<int>();
@@ -746,9 +1560,21 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 						fused_score += w_vec / (rrf_k0 + rank_vec);
 					}
 
+					// Apply min_score filter
+					if (has_min_score && fused_score < min_score) {
+						continue; // Skip this result
+					}
+
 					item["score"] = fused_score;
 					item["score_fts"] = score_fts;
 					item["score_vec"] = score_vec;
+
+					// Add debug info
+					json debug;
+					debug["rank_fts"] = rank_fts;
+					debug["rank_vec"] = rank_vec;
+					item["debug"] = debug;
+
 					scored_results.push_back({fused_score, item});
 				}
 
@@ -769,15 +1595,117 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			} else if (mode == "fts_then_vec") {
 				// Mode B: broad FTS candidate generation, then vector rerank
 
-				// Get parameters
-				int candidates_k = validate_candidates(get_json_int(arguments, "candidates_k", 200));
-				int rerank_k = validate_k(get_json_int(arguments, "rerank_k", 50));
+				// Get parameters from fts_then_vec object
+				int candidates_k = 200;
+				int rerank_k = 50;
 
-				// Run FTS search to get candidates
-				std::string fts_sql = "SELECT chunk_id "
-					"FROM rag_fts_chunks "
-					"WHERE rag_fts_chunks MATCH '" + query + "' "
-					"ORDER BY bm25(rag_fts_chunks) "
+				if (arguments.contains("fts_then_vec") && arguments["fts_then_vec"].is_object()) {
+					const json& fts_then_vec_params = arguments["fts_then_vec"];
+					candidates_k = validate_candidates(get_json_int(fts_then_vec_params, "candidates_k", 200));
+					rerank_k = validate_k(get_json_int(fts_then_vec_params, "rerank_k", 50));
+				} else {
+					// Fallback to top-level parameters for backward compatibility
+					candidates_k = validate_candidates(get_json_int(arguments, "candidates_k", 200));
+					rerank_k = validate_k(get_json_int(arguments, "rerank_k", 50));
+				}
+
+				// Run FTS search to get candidates with filters
+				std::string fts_sql = "SELECT c.chunk_id "
+					"FROM rag_fts_chunks f "
+					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
+					"JOIN rag_documents d ON d.doc_id = c.doc_id "
+					"WHERE f MATCH '" + query + "'";
+
+				// Apply filters
+				if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
+					std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
+					if (!source_ids.empty()) {
+						std::string source_list = "";
+						for (size_t i = 0; i < source_ids.size(); ++i) {
+							if (i > 0) source_list += ",";
+							source_list += std::to_string(source_ids[i]);
+						}
+						fts_sql += " AND c.source_id IN (" + source_list + ")";
+					}
+				}
+
+				if (filters.contains("source_names") && filters["source_names"].is_array()) {
+					std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
+					if (!source_names.empty()) {
+						std::string source_list = "";
+						for (size_t i = 0; i < source_names.size(); ++i) {
+							if (i > 0) source_list += ",";
+							source_list += "'" + source_names[i] + "'";
+						}
+						fts_sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
+					}
+				}
+
+				if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
+					std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
+					if (!doc_ids.empty()) {
+						std::string doc_list = "";
+						for (size_t i = 0; i < doc_ids.size(); ++i) {
+							if (i > 0) doc_list += ",";
+							doc_list += "'" + doc_ids[i] + "'";
+						}
+						fts_sql += " AND c.doc_id IN (" + doc_list + ")";
+					}
+				}
+
+				// Metadata filters
+				if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
+					std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
+					if (!post_type_ids.empty()) {
+						// Filter by PostTypeId in metadata_json
+						std::string post_type_conditions = "";
+						for (size_t i = 0; i < post_type_ids.size(); ++i) {
+							if (i > 0) post_type_conditions += " OR ";
+							post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
+						}
+						fts_sql += " AND (" + post_type_conditions + ")";
+					}
+				}
+
+				if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
+					std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
+					if (!tags_any.empty()) {
+						// Filter by any of the tags in metadata_json Tags field
+						std::string tag_conditions = "";
+						for (size_t i = 0; i < tags_any.size(); ++i) {
+							if (i > 0) tag_conditions += " OR ";
+							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
+						}
+						fts_sql += " AND (" + tag_conditions + ")";
+					}
+				}
+
+				if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
+					std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
+					if (!tags_all.empty()) {
+						// Filter by all of the tags in metadata_json Tags field
+						std::string tag_conditions = "";
+						for (size_t i = 0; i < tags_all.size(); ++i) {
+							if (i > 0) tag_conditions += " AND ";
+							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
+						}
+						fts_sql += " AND (" + tag_conditions + ")";
+					}
+				}
+
+				if (filters.contains("created_after") && filters["created_after"].is_string()) {
+					std::string created_after = filters["created_after"].get<std::string>();
+					// Filter by CreationDate in metadata_json
+					fts_sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
+				}
+
+				if (filters.contains("created_before") && filters["created_before"].is_string()) {
+					std::string created_before = filters["created_before"].get<std::string>();
+					// Filter by CreationDate in metadata_json
+					fts_sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+				}
+
+				fts_sql += " ORDER BY bm25(f) "
 					"LIMIT " + std::to_string(candidates_k);
 
 				SQLite3_result* fts_result = execute_query(fts_sql.c_str());
@@ -798,7 +1726,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				if (candidate_ids.empty()) {
 					// No candidates found
 				} else {
-					// Run vector search on candidates
+					// Run vector search on candidates with filters
 					std::vector<float> query_embedding;
 					if (ai_manager && GloGATH) {
 						GenAI_EmbeddingResult result = GloGATH->embed_documents({query});
@@ -832,12 +1760,104 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 					std::string vec_sql = "SELECT v.chunk_id, c.doc_id, c.source_id, "
 						"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
-						"c.title, v.distance as score_vec "
+						"c.title, v.distance as score_vec_raw, "
+						"c.metadata_json "
 						"FROM rag_vec_chunks v "
 						"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
+						"JOIN rag_documents d ON d.doc_id = c.doc_id "
 						"WHERE v.embedding MATCH '" + embedding_json + "' "
-						"AND v.chunk_id IN (" + candidate_list + ") "
-						"ORDER BY v.distance "
+						"AND v.chunk_id IN (" + candidate_list + ")";
+
+					// Apply filters
+					if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
+						std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
+						if (!source_ids.empty()) {
+							std::string source_list = "";
+							for (size_t i = 0; i < source_ids.size(); ++i) {
+								if (i > 0) source_list += ",";
+								source_list += std::to_string(source_ids[i]);
+							}
+							vec_sql += " AND c.source_id IN (" + source_list + ")";
+						}
+					}
+
+					if (filters.contains("source_names") && filters["source_names"].is_array()) {
+						std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
+						if (!source_names.empty()) {
+							std::string source_list = "";
+							for (size_t i = 0; i < source_names.size(); ++i) {
+								if (i > 0) source_list += ",";
+								source_list += "'" + source_names[i] + "'";
+							}
+							vec_sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
+						}
+					}
+
+					if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
+						std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
+						if (!doc_ids.empty()) {
+							std::string doc_list = "";
+							for (size_t i = 0; i < doc_ids.size(); ++i) {
+								if (i > 0) doc_list += ",";
+								doc_list += "'" + doc_ids[i] + "'";
+							}
+							vec_sql += " AND c.doc_id IN (" + doc_list + ")";
+						}
+					}
+
+					// Metadata filters
+					if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
+						std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
+						if (!post_type_ids.empty()) {
+							// Filter by PostTypeId in metadata_json
+							std::string post_type_conditions = "";
+							for (size_t i = 0; i < post_type_ids.size(); ++i) {
+								if (i > 0) post_type_conditions += " OR ";
+								post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
+							}
+							vec_sql += " AND (" + post_type_conditions + ")";
+						}
+					}
+
+					if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
+						std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
+						if (!tags_any.empty()) {
+							// Filter by any of the tags in metadata_json Tags field
+							std::string tag_conditions = "";
+							for (size_t i = 0; i < tags_any.size(); ++i) {
+								if (i > 0) tag_conditions += " OR ";
+								tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
+							}
+							vec_sql += " AND (" + tag_conditions + ")";
+						}
+					}
+
+					if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
+						std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
+						if (!tags_all.empty()) {
+							// Filter by all of the tags in metadata_json Tags field
+							std::string tag_conditions = "";
+							for (size_t i = 0; i < tags_all.size(); ++i) {
+								if (i > 0) tag_conditions += " AND ";
+								tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
+							}
+							vec_sql += " AND (" + tag_conditions + ")";
+						}
+					}
+
+					if (filters.contains("created_after") && filters["created_after"].is_string()) {
+						std::string created_after = filters["created_after"].get<std::string>();
+						// Filter by CreationDate in metadata_json
+						vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
+					}
+
+					if (filters.contains("created_before") && filters["created_before"].is_string()) {
+						std::string created_before = filters["created_before"].get<std::string>();
+						// Filter by CreationDate in metadata_json
+						vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+					}
+
+					vec_sql += " ORDER BY v.distance "
 						"LIMIT " + std::to_string(rerank_k);
 
 					SQLite3_result* vec_result = execute_query(vec_sql.c_str());
@@ -845,21 +1865,47 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 						return create_error_response("Vector database query failed");
 					}
 
-					// Build results
+					// Build results with min_score filtering
 					int rank = 1;
+					double min_score = 0.0;
+					bool has_min_score = false;
+					if (filters.contains("min_score") && (filters["min_score"].is_number() || filters["min_score"].is_string())) {
+						min_score = filters["min_score"].is_number() ?
+							filters["min_score"].get<double>() :
+							std::stod(filters["min_score"].get<std::string>());
+						has_min_score = true;
+					}
+
 					for (const auto& row : vec_result->rows) {
 						if (row->fields) {
+							double score_vec_raw = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
+							// For vector search, lower distance is better, so we invert it
+							double score_vec = 1.0 / (1.0 + score_vec_raw);
+
+							// Apply min_score filter
+							if (has_min_score && score_vec < min_score) {
+								continue; // Skip this result
+							}
+
 							json item;
 							item["chunk_id"] = row->fields[0] ? row->fields[0] : "";
 							item["doc_id"] = row->fields[1] ? row->fields[1] : "";
 							item["source_id"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
 							item["source_name"] = row->fields[3] ? row->fields[3] : "";
 							item["title"] = row->fields[4] ? row->fields[4] : "";
-							double score_vec = row->fields[5] ? std::stod(row->fields[5]) : 0.0;
-							// For vector search, lower distance is better, so we invert it
-							item["score"] = 1.0 / (1.0 + score_vec);
-							item["score_vec"] = 1.0 / (1.0 + score_vec);
+							item["score"] = score_vec;
+							item["score_vec"] = score_vec;
 							item["rank"] = rank;
+
+							// Add metadata if available
+							if (row->fields[6]) {
+								try {
+									item["metadata"] = json::parse(row->fields[6]);
+								} catch (...) {
+									item["metadata"] = json::object();
+								}
+							}
+
 							results.push_back(item);
 							rank++;
 						}
