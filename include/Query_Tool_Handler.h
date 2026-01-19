@@ -41,6 +41,7 @@ private:
 		std::string host;
 		int port;
 		bool in_use;
+		std::string current_schema;  ///< Track current schema for this connection
 	};
 	std::vector<MySQLConnection> connection_pool;
 	pthread_mutex_t pool_lock;
@@ -111,9 +112,28 @@ private:
 	void return_connection(void* mysql);
 
 	/**
+	 * @brief Find connection wrapper by mysql pointer (for internal use)
+	 * @param mysql_ptr MySQL connection pointer
+	 * @return Pointer to connection wrapper, or nullptr if not found
+	 * @note Caller should NOT hold pool_lock when calling this
+	 */
+	MySQLConnection* find_connection(void* mysql_ptr);
+
+	/**
 	 * @brief Execute a query and return results as JSON
 	 */
 	std::string execute_query(const std::string& query);
+
+	/**
+	 * @brief Execute a query with optional schema switching
+	 * @param query SQL query to execute
+	 * @param schema Schema name to switch to (empty = use default)
+	 * @return JSON result with success flag and rows/error
+	 */
+	std::string execute_query_with_schema(
+		const std::string& query,
+		const std::string& schema
+	);
 
 	/**
 	 * @brief Validate SQL is read-only

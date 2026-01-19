@@ -301,6 +301,16 @@ void Query_Tool_Handler::return_connection(void* mysql_ptr) {
 	pthread_mutex_unlock(&pool_lock);
 }
 
+// Helper to find connection wrapper by mysql pointer (caller should NOT hold pool_lock)
+Query_Tool_Handler::MySQLConnection* Query_Tool_Handler::find_connection(void* mysql_ptr) {
+	for (auto& conn : connection_pool) {
+		if (conn.mysql == mysql_ptr) {
+			return &conn;
+		}
+	}
+	return nullptr;
+}
+
 std::string Query_Tool_Handler::execute_query(const std::string& query) {
 	void* mysql = get_connection();
 	if (!mysql) {
@@ -322,6 +332,77 @@ std::string Query_Tool_Handler::execute_query(const std::string& query) {
 		json j;
 		j["success"] = true;
 		j["affected_rows"] = static_cast<long>(mysql_affected_rows(static_cast<MYSQL*>(mysql)));
+		return j.dump();
+	}
+
+	int num_fields = mysql_num_fields(res);
+	MYSQL_ROW row;
+
+	json results = json::array();
+	while ((row = mysql_fetch_row(res))) {
+		json row_data = json::array();
+		for (int i = 0; i < num_fields; i++) {
+			row_data.push_back(row[i] ? row[i] : "");
+		}
+		results.push_back(row_data);
+	}
+
+	mysql_free_result(res);
+
+	json j;
+	j["success"] = true;
+	j["columns"] = num_fields;
+	j["rows"] = results;
+	return j.dump();
+}
+
+// Execute query with optional schema switching
+std::string Query_Tool_Handler::execute_query_with_schema(
+	const std::string& query,
+	const std::string& schema
+) {
+	void* mysql = get_connection();
+	if (!mysql) {
+		return "{\"error\": \"No available connection\"}";
+	}
+
+	MYSQL* mysql_ptr = static_cast<MYSQL*>(mysql);
+	MySQLConnection* conn_wrapper = find_connection(mysql);
+
+	// If schema is provided and differs from current, switch to it
+	if (!schema.empty() && conn_wrapper && conn_wrapper->current_schema != schema) {
+		if (mysql_select_db(mysql_ptr, schema.c_str()) != 0) {
+			proxy_error("Query_Tool_Handler: Failed to select database '%s': %s\n",
+				schema.c_str(), mysql_error(mysql_ptr));
+			return_connection(mysql);
+			json j;
+			j["success"] = false;
+			j["error"] = std::string("Failed to select database: ") + schema;
+			return j.dump();
+		}
+		// Update current schema tracking
+		conn_wrapper->current_schema = schema;
+		proxy_info("Query_Tool_Handler: Switched to schema '%s'\n", schema.c_str());
+	}
+
+	// Execute the actual query
+	if (mysql_query(mysql_ptr, query.c_str())) {
+		proxy_error("Query_Tool_Handler: Query failed: %s\n", mysql_error(mysql_ptr));
+		return_connection(mysql);
+		json j;
+		j["success"] = false;
+		j["error"] = std::string(mysql_error(mysql_ptr));
+		return j.dump();
+	}
+
+	MYSQL_RES* res = mysql_store_result(mysql_ptr);
+	return_connection(mysql);
+
+	if (!res) {
+		// No result set (e.g., INSERT/UPDATE)
+		json j;
+		j["success"] = true;
+		j["affected_rows"] = static_cast<long>(mysql_affected_rows(mysql_ptr));
 		return j.dump();
 	}
 
@@ -485,9 +566,9 @@ json Query_Tool_Handler::get_tool_list() {
 	// ============================================================
 	tools.push_back(create_tool_schema(
 		"run_sql_readonly",
-		"Execute a read-only SQL query with safety guardrails enforced",
+		"Execute a read-only SQL query with safety guardrails enforced. Optional schema parameter switches database context before query execution.",
 		{"sql"},
-		{{"max_rows", "integer"}, {"timeout_sec", "integer"}}
+		{{"schema", "string"}, {"max_rows", "integer"}, {"timeout_sec", "integer"}}
 	));
 
 	tools.push_back(create_tool_schema(
@@ -1447,6 +1528,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	// ============================================================
 	else if (tool_name == "run_sql_readonly") {
 		std::string sql = json_string(arguments, "sql");
+		std::string schema = json_string(arguments, "schema");
 		int max_rows = json_int(arguments, "max_rows", 200);
 		int timeout_sec = json_int(arguments, "timeout_sec", 2);
 
@@ -1457,10 +1539,15 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		} else if (is_dangerous_query(sql)) {
 			result = create_error_response("SQL contains dangerous operations");
 		} else {
-			std::string query_result = execute_query(sql);
+			std::string query_result = execute_query_with_schema(sql, schema);
 			try {
 				json result_json = json::parse(query_result);
-				result = create_success_response(result_json);
+				// Check if query actually failed
+				if (result_json.contains("success") && !result_json["success"]) {
+					result = create_error_response(result_json["error"]);
+				} else {
+					result = create_success_response(result_json);
+				}
 			} catch (...) {
 				result = create_success_response(query_result);
 			}
