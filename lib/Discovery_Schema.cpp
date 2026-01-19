@@ -2003,13 +2003,14 @@ std::string Discovery_Schema::fts_search_llm(
 		}
 		delete resultset;
 
-		// If include_objects, fetch object details
-		if (include_objects) {
-			proxy_error("FTS search: include_objects=%d, objects_to_fetch size=%zu\n", include_objects ? 1 : 0, objects_to_fetch.size());
+		// If include_objects AND query is not empty (search mode), fetch object details
+		// For list mode (empty query), we don't include objects to avoid huge responses
+		if (include_objects && !query.empty()) {
+			proxy_info("FTS search: include_objects=true (search mode), objects_to_fetch size=%zu\n", objects_to_fetch.size());
 		}
 
-		if (include_objects && !objects_to_fetch.empty()) {
-			proxy_info("FTS search: include_objects=true, objects_to_fetch size=%zu\n", objects_to_fetch.size());
+		if (include_objects && !query.empty() && !objects_to_fetch.empty()) {
+			proxy_info("FTS search: Fetching object details for %zu objects\n", objects_to_fetch.size());
 
 			// First, build a map of object_name -> schema_name by querying the objects table
 			std::map<std::string, std::string> object_to_schema;

@@ -728,7 +728,7 @@ json Query_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_schema(
 		"llm.search",
-		"Full-text search across LLM artifacts. For question_templates, returns example_sql, related_objects, template_json, and confidence. Use include_objects=true to get full object schema details.",
+		"Full-text search across LLM artifacts. For question_templates, returns example_sql, related_objects, template_json, and confidence. Use include_objects=true with a non-empty query to get full object schema details (for search mode only). Empty query (list mode) returns only templates without objects to avoid huge responses.",
 		{"run_id"},
 		{{"query", "string"}, {"limit", "integer"}, {"include_objects", "boolean"}}
 	));
