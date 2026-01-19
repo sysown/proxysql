@@ -1547,22 +1547,87 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 		if (sql.empty()) {
 			result = create_error_response("sql is required");
-		} else if (!validate_readonly_query(sql)) {
-			result = create_error_response("SQL is not read-only");
-		} else if (is_dangerous_query(sql)) {
-			result = create_error_response("SQL contains dangerous operations");
 		} else {
-			std::string query_result = execute_query_with_schema(sql, schema);
-			try {
-				json result_json = json::parse(query_result);
-				// Check if query actually failed
-				if (result_json.contains("success") && !result_json["success"]) {
-					result = create_error_response(result_json["error"]);
-				} else {
-					result = create_success_response(result_json);
+			// ============================================================
+			// MCP QUERY RULES EVALUATION
+			// ============================================================
+			MCP_Query_Processor_Output* qpo = catalog->evaluate_mcp_query_rules(
+				tool_name,
+				schema,
+				arguments,
+				sql
+			);
+
+			// Check for OK_msg (return success without executing)
+			if (qpo->OK_msg) {
+				unsigned long long duration = monotonic_time() - start_time;
+				track_tool_invocation(this, tool_name, schema, duration);
+				catalog->log_query_tool_call(tool_name, schema, 0, start_time, duration, "OK message from query rule");
+				result = create_success_response(qpo->OK_msg);
+				delete qpo;
+				return result;
+			}
+
+			// Check for error_msg (block the query)
+			if (qpo->error_msg) {
+				unsigned long long duration = monotonic_time() - start_time;
+				track_tool_invocation(this, tool_name, schema, duration);
+				catalog->log_query_tool_call(tool_name, schema, 0, start_time, duration, "Blocked by query rule");
+				result = create_error_response(qpo->error_msg);
+				delete qpo;
+				return result;
+			}
+
+			// Apply rewritten query if provided
+			if (qpo->new_query) {
+				sql = *qpo->new_query;
+			}
+
+			// Apply timeout if provided
+			if (qpo->timeout_ms > 0) {
+				timeout_sec = qpo->timeout_ms / 1000;
+			}
+
+			// Apply log flag if set
+			if (qpo->log == 1) {
+				// TODO: Implement query logging if needed
+			}
+
+			delete qpo;
+
+			// Continue with validation and execution
+			if (!validate_readonly_query(sql)) {
+				result = create_error_response("SQL is not read-only");
+			} else if (is_dangerous_query(sql)) {
+				result = create_error_response("SQL contains dangerous operations");
+			} else {
+				std::string query_result = execute_query_with_schema(sql, schema);
+				try {
+					json result_json = json::parse(query_result);
+					// Check if query actually failed
+					if (result_json.contains("success") && !result_json["success"]) {
+						result = create_error_response(result_json["error"]);
+					} else {
+						// ============================================================
+						// MCP QUERY DIGEST TRACKING (on success)
+						// ============================================================
+						uint64_t digest = Discovery_Schema::compute_mcp_digest(tool_name, arguments);
+						std::string digest_text = Discovery_Schema::fingerprint_mcp_args(arguments);
+						unsigned long long duration = monotonic_time() - start_time;
+						int digest_run_id = schema.empty() ? 0 : catalog->resolve_run_id(schema);
+						catalog->update_mcp_query_digest(
+							tool_name,
+							digest_run_id,
+							digest,
+							digest_text,
+							duration,
+							time(NULL)
+						);
+						result = create_success_response(result_json);
+					}
+				} catch (...) {
+					result = create_success_response(query_result);
 				}
-			} catch (...) {
-				result = create_success_response(query_result);
 			}
 		}
 	}

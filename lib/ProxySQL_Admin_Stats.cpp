@@ -2544,3 +2544,62 @@ int ProxySQL_Admin::stats___save_pgsql_query_digest_to_sqlite(
 
 	return row_idx;
 }
+
+// ============================================================
+// MCP QUERY DIGEST STATS
+// ============================================================
+
+void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
+	if (!GloMCPH) return;
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (!qth) return;
+
+	// Get the discovery schema catalog
+	// Note: This is a simplified implementation that queries the catalog database
+	// In a full implementation, we would access the Discovery_Schema directly
+	statsdb->execute("BEGIN");
+
+	if (reset) {
+		statsdb->execute("DELETE FROM stats_mcp_query_digest_reset");
+	} else {
+		statsdb->execute("DELETE FROM stats_mcp_query_digest");
+	}
+
+	// For now, we'll leave the table empty since MCP digest stats are stored in memory
+	// in the Discovery_Schema and would need to be accessed differently
+	// TODO: Implement proper access to Discovery_Schema digest statistics
+
+	statsdb->execute("COMMIT");
+}
+
+void ProxySQL_Admin::stats___mcp_query_rules(bool reset) {
+	if (!GloMCPH) return;
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (!qth) return;
+
+	// Get the discovery schema catalog
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (!catalog) return;
+
+	// Get the stats from the catalog
+	SQLite3_result* resultset = catalog->get_stats_mcp_query_rules();
+	if (!resultset) return;
+
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mcp_query_rules");
+
+	char* a = (char*)"INSERT INTO stats_mcp_query_rules VALUES (\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int arg_len = 0;
+		for (int i = 0; i < 2; i++) {
+			arg_len += strlen(r->fields[i]);
+		}
+		char* query = (char*)malloc(strlen(a) + arg_len + 32);
+		sprintf(query, a, r->fields[0], r->fields[1]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}

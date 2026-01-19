@@ -20,6 +20,8 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
+#include "Discovery_Schema.h"
+#include "Query_Tool_Handler.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -1155,6 +1157,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_commands_counters = false;
 	bool stats_mcp_query_tools_counters = false;
 	bool stats_mcp_query_tools_counters_reset = false;
+	bool stats_mcp_query_digest = false;
+	bool stats_mcp_query_digest_reset = false;
+	bool stats_mcp_query_rules = false;
 	bool stats_mysql_query_rules=false;
 	bool stats_pgsql_query_rules = false;
 	bool stats_mysql_users=false;
@@ -1181,6 +1186,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_pgsql_servers = false;
 	bool runtime_pgsql_query_rules = false;
 	bool runtime_pgsql_query_rules_fast_routing = false;
+
+	bool runtime_mcp_query_rules = false;
 
 	bool stats_pgsql_global = false;
 	bool stats_pgsql_connection_pool = false;
@@ -1348,6 +1355,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mcp_query_tools_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mcp_query_tools_counters_reset"))
 		{ stats_mcp_query_tools_counters_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_digest"))
+		{ stats_mcp_query_digest=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_digest_reset"))
+		{ stats_mcp_query_digest_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_rules"))
+		{ stats_mcp_query_rules=true; refresh=true; }
 
 	// temporary disabled because not implemented
 /*
@@ -1433,6 +1446,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (strstr(query_no_space, "runtime_pgsql_query_rules_fast_routing")) {
 				runtime_pgsql_query_rules_fast_routing = true; refresh = true;
+			}
+			if (strstr(query_no_space, "runtime_mcp_query_rules")) {
+				runtime_mcp_query_rules = true; refresh = true;
 			}
 			if (strstr(query_no_space,"runtime_scheduler")) {
 				runtime_scheduler=true; refresh=true;
@@ -1584,6 +1600,15 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mcp_query_tools_counters_reset) {
 			stats___mcp_query_tools_counters(true);
 		}
+		if (stats_mcp_query_digest) {
+			stats___mcp_query_digest(false);
+		}
+		if (stats_mcp_query_digest_reset) {
+			stats___mcp_query_digest(true);
+		}
+		if (stats_mcp_query_rules) {
+			stats___mcp_query_rules(false);
+		}
 
 		if (admin) {
 			if (dump_global_variables) {
@@ -1657,6 +1682,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (runtime_pgsql_query_rules_fast_routing) {
 				save_pgsql_query_rules_fast_routing_from_runtime(true);
+			}
+			if (runtime_mcp_query_rules) {
+				save_mcp_query_rules_from_runtime(true);
 			}
 			if (runtime_scheduler) {
 				save_scheduler_runtime_to_database(true);
@@ -2622,6 +2650,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("pgsql_users",		  "PGSQL USERS");
 	generate_load_save_disk_commands("pgsql_servers",	  "PGSQL SERVERS");
 	generate_load_save_disk_commands("pgsql_variables",   "PGSQL VARIABLES");
+	generate_load_save_disk_commands("mcp_query_rules",   "MCP QUERY RULES");
 	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
 	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
@@ -7715,6 +7744,129 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 	}
 
 	return NULL;
+}
+
+char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
+	unsigned long long curtime1 = monotonic_time();
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	bool success = false;
+
+	if (!GloMCPH) return (char*)"MCP Handler not started: command impossible to run";
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (!qth) return (char*)"Query Tool Handler not initialized";
+
+	// Get the discovery schema catalog
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (!catalog) return (char*)"Discovery Schema catalog not initialized";
+
+	char* query = (char*)"SELECT rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment FROM main.mcp_query_rules ORDER BY rule_id";
+	SQLite3_result* resultset = NULL;
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		success = true;
+		catalog->load_mcp_query_rules(resultset);
+	}
+
+	if (success == false) {
+		if (resultset) {
+			free(resultset);
+		}
+	}
+
+	unsigned long long curtime2 = monotonic_time();
+	curtime1 = curtime1 / 1000;
+	curtime2 = curtime2 / 1000;
+	if (curtime2 - curtime1 > 1000) {
+		proxy_info("Locked for %llums\n", curtime2 - curtime1);
+	}
+
+	return NULL;
+}
+
+void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
+	if (!GloMCPH) return;
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (!qth) return;
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (!catalog) return;
+
+	if (_runtime) {
+		admindb->execute("DELETE FROM runtime_mcp_query_rules");
+	} else {
+		admindb->execute("DELETE FROM mcp_query_rules");
+	}
+
+	// Get current rules from Discovery_Schema (same 17 columns for both tables)
+	SQLite3_result* resultset = catalog->get_mcp_query_rules();
+	if (resultset) {
+		char *a = NULL;
+		if (_runtime) {
+			a = (char *)"INSERT INTO runtime_mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		} else {
+			a = (char *)"INSERT INTO mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		}
+		int num_fields = 17; // same for both tables
+
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+
+			// Build query with escaped values
+			int arg_len = 0;
+			char* buffs[17];
+			for (int i = 0; i < num_fields; i++) {
+				if (r->fields[i]) {
+					char* o = escape_string_single_quotes(r->fields[i], false);
+					int l = strlen(o) + 4;
+					arg_len += l;
+					buffs[i] = (char*)malloc(l);
+					sprintf(buffs[i], "'%s'", o);
+					if (o != r->fields[i]) { // there was a copy
+						free(o);
+					}
+				} else {
+					int l = 5;
+					arg_len += l;
+					buffs[i] = (char*)malloc(l);
+					sprintf(buffs[i], "NULL");
+				}
+			}
+
+			char* query = (char*)malloc(strlen(a) + arg_len + 32);
+
+			sprintf(query, a,
+				buffs[0],  // rule_id
+				buffs[1],  // active
+				buffs[2],  // username
+				buffs[3],  // schemaname
+				buffs[4],  // tool_name
+				buffs[5],  // match_pattern
+				buffs[6],  // negate_match_pattern
+				buffs[7],  // re_modifiers
+				buffs[8],  // flagIN
+				buffs[9],  // flagOUT
+				buffs[10], // replace_pattern
+				buffs[11], // timeout_ms
+				buffs[12], // error_msg
+				buffs[13], // OK_msg
+				buffs[14], // log
+				buffs[15], // apply
+				buffs[16]  // comment
+			);
+
+			admindb->execute(query);
+
+			for (int i = 0; i < num_fields; i++) {
+				free(buffs[i]);
+			}
+			free(query);
+		}
+		delete resultset;
+	}
 }
 
 char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {
