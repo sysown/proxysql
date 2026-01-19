@@ -17,6 +17,9 @@
 #include <algorithm>
 #include <chrono>
 
+// Forward declaration for GloGATH
+extern GenAI_Threads_Handler *GloGATH;
+
 // JSON library
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -204,7 +207,7 @@ int RAG_Tool_Handler::validate_candidates(int candidates) {
  * @brief Validate query length
  */
 bool RAG_Tool_Handler::validate_query_length(const std::string& query) {
-	return query.length() <= query_max_bytes;
+	return static_cast<int>(query.length()) <= query_max_bytes;
 }
 
 /**
@@ -520,8 +523,14 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 			// Get embedding for query text
 			std::vector<float> query_embedding;
-			if (ai_manager && ai_manager->get_llm_bridge()) {
-				query_embedding = ai_manager->get_llm_bridge()->get_text_embedding(query_text);
+			if (ai_manager && GloGATH) {
+				GenAI_EmbeddingResult result = GloGATH->embed_documents({query_text});
+				if (result.data && result.count > 0) {
+					// Convert to std::vector<float>
+					query_embedding.assign(result.data, result.data + result.embedding_size);
+					// Free the result data (GenAI allocates with malloc)
+					free(result.data);
+				}
 			}
 
 			if (query_embedding.empty()) {
@@ -621,8 +630,14 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 				// Run vector search
 				std::vector<float> query_embedding;
-				if (ai_manager && ai_manager->get_llm_bridge()) {
-					query_embedding = ai_manager->get_llm_bridge()->get_text_embedding(query);
+				if (ai_manager && GloGATH) {
+					GenAI_EmbeddingResult result = GloGATH->embed_documents({query});
+					if (result.data && result.count > 0) {
+						// Convert to std::vector<float>
+						query_embedding.assign(result.data, result.data + result.embedding_size);
+						// Free the result data (GenAI allocates with malloc)
+						free(result.data);
+					}
 				}
 
 				if (query_embedding.empty()) {
@@ -785,8 +800,14 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				} else {
 					// Run vector search on candidates
 					std::vector<float> query_embedding;
-					if (ai_manager && ai_manager->get_llm_bridge()) {
-						query_embedding = ai_manager->get_llm_bridge()->get_text_embedding(query);
+					if (ai_manager && GloGATH) {
+						GenAI_EmbeddingResult result = GloGATH->embed_documents({query});
+						if (result.data && result.count > 0) {
+							// Convert to std::vector<float>
+							query_embedding.assign(result.data, result.data + result.embedding_size);
+							// Free the result data (GenAI allocates with malloc)
+							free(result.data);
+						}
 					}
 
 					if (query_embedding.empty()) {
@@ -1077,16 +1098,16 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			for (const auto& row : doc_result->rows) {
 				if (row->fields && rows.size() < static_cast<size_t>(max_rows) && total_bytes < max_bytes) {
 					std::string doc_id = row->fields[0] ? row->fields[0] : "";
-					int source_id = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+					// int source_id = row->fields[1] ? std::stoi(row->fields[1]) : 0;
 					std::string pk_json = row->fields[2] ? row->fields[2] : "{}";
 					std::string source_name = row->fields[3] ? row->fields[3] : "";
-					std::string backend_type = row->fields[4] ? row->fields[4] : "";
-					std::string backend_host = row->fields[5] ? row->fields[5] : "";
-					int backend_port = row->fields[6] ? std::stoi(row->fields[6]) : 0;
-					std::string backend_user = row->fields[7] ? row->fields[7] : "";
-					std::string backend_pass = row->fields[8] ? row->fields[8] : "";
-					std::string backend_db = row->fields[9] ? row->fields[9] : "";
-					std::string table_name = row->fields[10] ? row->fields[10] : "";
+					// std::string backend_type = row->fields[4] ? row->fields[4] : "";
+					// std::string backend_host = row->fields[5] ? row->fields[5] : "";
+					// int backend_port = row->fields[6] ? std::stoi(row->fields[6]) : 0;
+					// std::string backend_user = row->fields[7] ? row->fields[7] : "";
+					// std::string backend_pass = row->fields[8] ? row->fields[8] : "";
+					// std::string backend_db = row->fields[9] ? row->fields[9] : "";
+					// std::string table_name = row->fields[10] ? row->fields[10] : "";
 					std::string pk_column = row->fields[11] ? row->fields[11] : "";
 
 					// For now, we'll return a simplified response since we can't actually connect to external databases
@@ -1116,7 +1137,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 							}
 						} else {
 							// If no columns specified, include basic info
-							row_data["Id"] = pk_data.contains("Id") ? pk_data["Id"] : 0;
+							row_data["Id"] = pk_data.contains("Id") ? pk_data["Id"] : json(0);
 							row_data[pk_column] = "mock_pk_value";
 						}
 
