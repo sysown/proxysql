@@ -24,13 +24,17 @@ static std::string json_string(const json& j, const std::string& key, const std:
 	return default_val;
 }
 
-// Helper to safely get int from JSON - handles both numbers and numeric strings
+// Helper to safely get int from JSON - handles numbers, booleans, and numeric strings
 static int json_int(const json& j, const std::string& key, int default_val = 0) {
 	if (j.contains(key) && !j[key].is_null()) {
 		const json& val = j[key];
 		// If it's already a number, return it
 		if (val.is_number()) {
 			return val.get<int>();
+		}
+		// If it's a boolean, convert to int (true=1, false=0)
+		if (val.is_boolean()) {
+			return val.get<bool>() ? 1 : 0;
 		}
 		// If it's a string, try to parse it as an int
 		if (val.is_string()) {
@@ -515,9 +519,9 @@ json Query_Tool_Handler::get_tool_list() {
 	// ============================================================
 	tools.push_back(create_tool_schema(
 		"discovery.run_static",
-		"Trigger ProxySQL to perform static metadata harvest from MySQL INFORMATION_SCHEMA. Returns the new run_id for subsequent LLM analysis.",
-		{},
-		{{"schema_filter", "string"}, {"notes", "string"}}
+		"Trigger ProxySQL to perform static metadata harvest from MySQL INFORMATION_SCHEMA for a single schema. Returns the new run_id for subsequent LLM analysis.",
+		{"schema_filter"},
+		{{"notes", "string"}}
 	));
 
 	// ============================================================
@@ -629,9 +633,9 @@ json Query_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_schema(
 		"llm.question_template_add",
-		"Add a question template (NL) mapped to a structured query plan (and optional example SQL).",
+		"Add a question template (NL) mapped to a structured query plan (and optional example SQL). Extract table/view names from example_sql or template_json and populate related_objects as JSON array.",
 		{"agent_run_id", "run_id", "title", "question_nl", "template"},
-		{{"example_sql", "string"}, {"confidence", "number"}}
+		{{"example_sql", "string"}, {"related_objects", "array"}, {"confidence", "number"}}
 	));
 
 	tools.push_back(create_tool_schema(
@@ -643,9 +647,9 @@ json Query_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_schema(
 		"llm.search",
-		"Full-text search across LLM artifacts (summaries/domains/metrics/templates/notes) using fts_llm. Use empty query string to list all artifacts.",
+		"Full-text search across LLM artifacts. For question_templates, returns example_sql, related_objects, template_json, and confidence. Use include_objects=true to get full object schema details.",
 		{"run_id"},
-		{{"query", "string"}, {"limit", "integer"}}
+		{{"query", "string"}, {"limit", "integer"}, {"include_objects", "boolean"}}
 	));
 
 	// ============================================================
@@ -823,24 +827,28 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			result = create_error_response("Static harvester not configured");
 		} else {
 			std::string schema_filter = json_string(arguments, "schema_filter");
-			std::string notes = json_string(arguments, "notes", "Static discovery harvest");
-
-			int run_id = harvester->run_full_harvest(schema_filter, notes);
-			if (run_id < 0) {
-				result = create_error_response("Static discovery failed");
+			if (schema_filter.empty()) {
+				result = create_error_response("schema_filter is required and must not be empty");
 			} else {
-				// Get stats using the run_id (after finish_run() has reset current_run_id)
-				std::string stats_str = harvester->get_harvest_stats(run_id);
-				json stats;
-				try {
-					stats = json::parse(stats_str);
-				} catch (...) {
-					stats["run_id"] = run_id;
-				}
+				std::string notes = json_string(arguments, "notes", "Static discovery harvest");
 
-				stats["started_at"] = "";
-				stats["mysql_version"] = "";
-				result = create_success_response(stats);
+				int run_id = harvester->run_full_harvest(schema_filter, notes);
+				if (run_id < 0) {
+					result = create_error_response("Static discovery failed");
+				} else {
+					// Get stats using the run_id (after finish_run() has reset current_run_id)
+					std::string stats_str = harvester->get_harvest_stats(run_id);
+					json stats;
+					try {
+						stats = json::parse(stats_str);
+					} catch (...) {
+						stats["run_id"] = run_id;
+					}
+
+					stats["started_at"] = "";
+					stats["mysql_version"] = "";
+					result = create_success_response(stats);
+				}
 			}
 		}
 	}
@@ -1340,6 +1348,12 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		std::string example_sql = json_string(arguments, "example_sql");
 		double confidence = json_double(arguments, "confidence", 0.6);
 
+		// Extract related_objects as JSON array string
+		std::string related_objects = "";
+		if (arguments.contains("related_objects") && arguments["related_objects"].is_array()) {
+			related_objects = arguments["related_objects"].dump();
+		}
+
 		if (agent_run_id <= 0 || run_id_or_schema.empty() || title.empty() || question_nl.empty()) {
 			result = create_error_response("agent_run_id, run_id, title, and question_nl are required");
 		} else if (template_json.empty()) {
@@ -1351,7 +1365,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				result = create_error_response("Invalid run_id or schema not found: " + run_id_or_schema);
 			} else {
 				int template_id = catalog->add_question_template(
-					agent_run_id, run_id, title, question_nl, template_json, example_sql, confidence
+					agent_run_id, run_id, title, question_nl, template_json, example_sql, related_objects, confidence
 				);
 				if (template_id < 0) {
 					result = create_error_response("Failed to add question template");
@@ -1405,6 +1419,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		std::string run_id_or_schema = json_string(arguments, "run_id");
 		std::string query = json_string(arguments, "query");
 		int limit = json_int(arguments, "limit", 25);
+		bool include_objects = json_int(arguments, "include_objects", 0) != 0;
 
 		if (run_id_or_schema.empty()) {
 			result = create_error_response("run_id is required");
@@ -1417,7 +1432,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				// Log the search query
 				catalog->log_llm_search(run_id, query, limit);
 
-				std::string search_results = catalog->fts_search_llm(run_id, query, limit);
+				std::string search_results = catalog->fts_search_llm(run_id, query, limit, include_objects);
 				try {
 					result = create_success_response(json::parse(search_results));
 				} catch (...) {

@@ -572,6 +572,7 @@ public:
 	 * @param question_nl Natural language question
 	 * @param template_json Query plan template JSON
 	 * @param example_sql Optional example SQL
+	 * @param related_objects JSON array of related object names (tables/views)
 	 * @param confidence Confidence score
 	 * @return template_id on success, -1 on error
 	 */
@@ -582,6 +583,7 @@ public:
 		const std::string& question_nl,
 		const std::string& template_json,
 		const std::string& example_sql = "",
+		const std::string& related_objects = "",
 		double confidence = 0.6
 	);
 
@@ -613,14 +615,16 @@ public:
 	 * @brief Full-text search over LLM artifacts
 	 *
 	 * @param run_id Run ID
-	 * @param query FTS query
+	 * @param query FTS query (empty to list all)
 	 * @param limit Max results
-	 * @return JSON array of matching LLM artifacts
+	 * @param include_objects Include full object details for question templates
+	 * @return JSON array of matching LLM artifacts with example_sql and related_objects
 	 */
 	std::string fts_search_llm(
 		int run_id,
 		const std::string& query,
-		int limit = 25
+		int limit = 25,
+		bool include_objects = false
 	);
 
 	/**

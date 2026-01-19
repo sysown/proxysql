@@ -441,6 +441,7 @@ int Discovery_Schema::create_llm_tables() {
 		"  question_nl    TEXT NOT NULL , "
 		"  template_json  TEXT NOT NULL , "
 		"  example_sql    TEXT , "
+		"  related_objects TEXT , "
 		"  confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0) , "
 		"  created_at     TEXT NOT NULL DEFAULT (datetime('now'))"
 		");"
@@ -1815,12 +1816,13 @@ int Discovery_Schema::add_question_template(
 	const std::string& question_nl,
 	const std::string& template_json,
 	const std::string& example_sql,
+	const std::string& related_objects,
 	double confidence
 ) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql =
-		"INSERT INTO llm_question_templates(agent_run_id, run_id, title, question_nl, template_json, example_sql ,  confidence) "
-		"VALUES(?1, ?2, ?3, ?4, ?5, ?6 ,  ?7);";
+		"INSERT INTO llm_question_templates(agent_run_id, run_id, title, question_nl, template_json, example_sql, related_objects, confidence) "
+		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) return -1;
@@ -1831,7 +1833,8 @@ int Discovery_Schema::add_question_template(
 	(*proxy_sqlite3_bind_text)(stmt, 4, question_nl.c_str(), -1, SQLITE_TRANSIENT);
 	(*proxy_sqlite3_bind_text)(stmt, 5, template_json.c_str(), -1, SQLITE_TRANSIENT);
 	(*proxy_sqlite3_bind_text)(stmt, 6, example_sql.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_double)(stmt, 7, confidence);
+	(*proxy_sqlite3_bind_text)(stmt, 7, related_objects.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_double)(stmt, 8, confidence);
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int template_id = (int)sqlite3_last_insert_rowid(db->get_db());
@@ -1910,7 +1913,8 @@ int Discovery_Schema::add_llm_note(
 std::string Discovery_Schema::fts_search_llm(
 	int run_id,
 	const std::string& query,
-	int limit
+	int limit,
+	bool include_objects
 ) {
 	char* error = NULL;
 	int cols = 0, affected = 0;
@@ -1918,18 +1922,33 @@ std::string Discovery_Schema::fts_search_llm(
 
 	std::ostringstream sql;
 	// Empty query returns all results (list mode), otherwise search
+	// LEFT JOIN with llm_question_templates to get complete question template data
 	if (query.empty()) {
-		sql << "SELECT kind, key, title, body ,  0.0 AS score FROM fts_llm "
-		    << "ORDER BY kind, title LIMIT " << limit << ";";
+		sql << "SELECT f.kind, f.key, f.title, f.body, 0.0 AS score, "
+		    << "qt.example_sql, qt.related_objects, qt.template_json, qt.confidence "
+		    << "FROM fts_llm f "
+		    << "LEFT JOIN llm_question_templates qt ON CAST(f.key AS INT) = qt.template_id "
+		    << "ORDER BY f.kind, f.title LIMIT " << limit << ";";
 	} else {
-		sql << "SELECT kind, key, title, body ,  bm25(fts_llm) AS score FROM fts_llm "
-		    << "WHERE fts_llm MATCH '" << query << "' ORDER BY score LIMIT " << limit << ";";
+		sql << "SELECT f.kind, f.key, f.title, f.body, bm25(fts_llm) AS score, "
+		    << "qt.example_sql, qt.related_objects, qt.template_json, qt.confidence "
+		    << "FROM fts_llm f "
+		    << "LEFT JOIN llm_question_templates qt ON CAST(f.key AS INT) = qt.template_id "
+		    << "WHERE f.fts_llm MATCH '" << query << "' ORDER BY score LIMIT " << limit << ";";
 	}
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (error) {
+		proxy_error("FTS search error: %s\n", error);
+		free(error);
+		return "[]";
+	}
 
 	json results = json::array();
 	if (resultset) {
+		// Collect unique object names for fetching details
+		std::set<std::string> objects_to_fetch;
+
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
 		     it != resultset->rows.end(); ++it) {
 			SQLite3_row* row = *it;
@@ -1941,9 +1960,151 @@ std::string Discovery_Schema::fts_search_llm(
 			item["body"] = std::string(row->fields[3] ? row->fields[3] : "");
 			item["score"] = atof(row->fields[4] ? row->fields[4] : "0");
 
+			// Question template fields (may be NULL for non-templates)
+			if (row->fields[5] && row->fields[5][0]) {
+				item["example_sql"] = std::string(row->fields[5]);
+			} else {
+				item["example_sql"] = json();
+			}
+
+			if (row->fields[6] && row->fields[6][0]) {
+				try {
+					item["related_objects"] = json::parse(row->fields[6]);
+				} catch (...) {
+					item["related_objects"] = json::array();
+				}
+			} else {
+				item["related_objects"] = json::array();
+			}
+
+			if (row->fields[7] && row->fields[7][0]) {
+				try {
+					item["template_json"] = json::parse(row->fields[7]);
+				} catch (...) {
+					item["template_json"] = json();
+				}
+			} else {
+				item["template_json"] = json();
+			}
+
+			item["confidence"] = (row->fields[8]) ? atof(row->fields[8]) : 0.0;
+
+			// Collect objects to fetch if include_objects
+			if (include_objects && item.contains("related_objects") &&
+			    item["related_objects"].is_array()) {
+				for (const auto& obj : item["related_objects"]) {
+					if (obj.is_string()) {
+						objects_to_fetch.insert(obj.get<std::string>());
+					}
+				}
+			}
+
 			results.push_back(item);
 		}
 		delete resultset;
+
+		// If include_objects, fetch object details
+		if (include_objects) {
+			proxy_error("FTS search: include_objects=%d, objects_to_fetch size=%zu\n", include_objects ? 1 : 0, objects_to_fetch.size());
+		}
+
+		if (include_objects && !objects_to_fetch.empty()) {
+			proxy_info("FTS search: include_objects=true, objects_to_fetch size=%zu\n", objects_to_fetch.size());
+
+			// First, build a map of object_name -> schema_name by querying the objects table
+			std::map<std::string, std::string> object_to_schema;
+			{
+				std::ostringstream obj_sql;
+				obj_sql << "SELECT DISTINCT object_name, schema_name FROM objects WHERE run_id = " << run_id << " AND object_name IN (";
+				bool first = true;
+				for (const auto& obj_name : objects_to_fetch) {
+					if (!first) obj_sql << ", ";
+					obj_sql << "'" << obj_name << "'";
+					first = false;
+				}
+				obj_sql << ");";
+
+				proxy_info("FTS search: object lookup SQL: %s\n", obj_sql.str().c_str());
+
+				SQLite3_result* obj_resultset = NULL;
+				char* obj_error = NULL;
+				db->execute_statement(obj_sql.str().c_str(), &obj_error, &cols, &affected, &obj_resultset);
+				if (obj_error) {
+					proxy_error("FTS search: object lookup query failed: %s\n", obj_error);
+					free(obj_error);
+				}
+				if (obj_resultset) {
+					proxy_info("FTS search: found %zu rows in objects table\n", obj_resultset->rows.size());
+					for (std::vector<SQLite3_row*>::iterator oit = obj_resultset->rows.begin();
+					     oit != obj_resultset->rows.end(); ++oit) {
+						SQLite3_row* obj_row = *oit;
+						if (obj_row->fields[0] && obj_row->fields[1]) {
+							object_to_schema[obj_row->fields[0]] = obj_row->fields[1];
+							proxy_info("FTS search: mapped '%s' -> '%s'\n", obj_row->fields[0], obj_row->fields[1]);
+						}
+					}
+					delete obj_resultset;
+				}
+			}
+
+			for (size_t i = 0; i < results.size(); i++) {
+				json& item = results[i];
+				json objects_details = json::array();
+				if (item.contains("related_objects") &&
+				    item["related_objects"].is_array()) {
+					proxy_info("FTS search: processing item '%s' with %zu related_objects\n",
+						item["title"].get<std::string>().c_str(), item["related_objects"].size());
+
+					for (const auto& obj_name : item["related_objects"]) {
+						if (obj_name.is_string()) {
+							std::string name = obj_name.get<std::string>();
+							// Look up schema_name from our map
+							std::string schema_name = "";
+							std::map<std::string, std::string>::iterator it = object_to_schema.find(name);
+							if (it != object_to_schema.end()) {
+								schema_name = it->second;
+							}
+
+							if (schema_name.empty()) {
+								proxy_warning("FTS search: no schema found for object '%s'\n", name.c_str());
+								continue;
+							}
+
+							proxy_info("FTS search: fetching object '%s.%s'\n", schema_name.c_str(), name.c_str());
+
+							// Fetch object schema - pass schema_name and object_name separately
+							std::string obj_details = get_object(
+								run_id, -1, schema_name, name,
+								true, false
+							);
+
+							proxy_info("FTS search: get_object returned %zu bytes\n", obj_details.length());
+
+							try {
+								json obj_json = json::parse(obj_details);
+								if (!obj_json.is_null()) {
+									objects_details.push_back(obj_json);
+									proxy_info("FTS search: successfully added object '%s' to details (size=%zu)\n",
+										name.c_str(), obj_json.dump().length());
+								} else {
+									proxy_warning("FTS search: object '%s' returned null\n", name.c_str());
+								}
+							} catch (const std::exception& e) {
+								proxy_warning("FTS search: failed to parse object details for '%s': %s\n",
+									name.c_str(), e.what());
+							} catch (...) {
+								proxy_warning("FTS search: failed to parse object details for '%s'\n", name.c_str());
+							}
+						}
+					}
+				}
+
+				proxy_info("FTS search: adding %zu objects to item '%s'\n",
+					objects_details.size(), item["title"].get<std::string>().c_str());
+
+				item["objects"] = objects_details;
+			}
+		}
 	}
 
 	return results.dump();
