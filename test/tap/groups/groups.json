@@ -100,7 +100,7 @@
   "reg_test_4399-stats_mysql_query_digest-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "reg_test_4402-mysql_fields-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "reg_test_4556-ssl_error_queue-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
-  "reg_test_5306-show_warnings_with_comment-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
+  "reg_test_5306-show_warnings_with_comment-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2" ],
   "reg_test_compression_split_packets-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "reg_test_fast_forward_split_packet-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
   "reg_test_mariadb_metadata_check-t" : [ "default-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2" ],
