@@ -10,19 +10,9 @@
  * - Refetch tool for authoritative source data
  * - Admin tools for operational visibility
  *
- * The RAG subsystem implements a complete retrieval system with:
- * - Full-text search using SQLite FTS5
- * - Semantic search using vector embeddings with sqlite3-vec
- * - Hybrid search combining both approaches
- * - Comprehensive filtering capabilities
- * - Security features including input validation and limits
- * - Performance optimizations
- *
  * @date 2026-01-19
  * @author ProxySQL Team
  * @copyright GNU GPL v3
- * @ingroup mcp
- * @ingroup rag
  */
 
 #ifndef CLASS_RAG_TOOL_HANDLER_H
@@ -31,9 +21,9 @@
 #include "MCP_Tool_Handler.h"
 #include "sqlite3db.h"
 #include "GenAI_Thread.h"
-#include <string>
-#include <vector>
-#include <map>
+#include &lt;string&gt;
+#include &lt;vector&gt;
+#include &lt;map&gt;
 
 // Forward declarations
 class AI_Features_Manager;
@@ -53,10 +43,10 @@ class AI_Features_Manager;
  * The RAG subsystem implements a complete retrieval system with:
  * - Full-text search using SQLite FTS5
  * - Semantic search using vector embeddings with sqlite3-vec
- * - Hybrid search combining both approaches with Reciprocal Rank Fusion
- * - Comprehensive filtering capabilities by source, document, tags, dates, etc.
- * - Security features including input validation, limits, and timeouts
- * - Performance optimizations with prepared statements and connection management
+ * - Hybrid search combining both approaches
+ * - Comprehensive filtering capabilities
+ * - Security features including input validation and limits
+ * - Performance optimizations
  *
  * @ingroup mcp
  * @ingroup rag
@@ -89,7 +79,6 @@ private:
 
 	/// @}
 
-	
 	/**
 	 * @brief Helper to extract string parameter from JSON
 	 *
@@ -107,8 +96,8 @@ private:
 	 * @see get_json_string_array()
 	 * @see get_json_int_array()
 	 */
-	static std::string get_json_string(const json& j, const std::string& key,
-	                                    const std::string& default_val = "");
+	static std::string get_json_string(const json&amp; j, const std::string&amp; key,
+	                                    const std::string&amp; default_val = "");
 
 	/**
 	 * @brief Helper to extract int parameter from JSON
@@ -127,7 +116,7 @@ private:
 	 * @see get_json_string_array()
 	 * @see get_json_int_array()
 	 */
-	static int get_json_int(const json& j, const std::string& key, int default_val = 0);
+	static int get_json_int(const json&amp; j, const std::string&amp; key, int default_val = 0);
 
 	/**
 	 * @brief Helper to extract bool parameter from JSON
@@ -146,7 +135,7 @@ private:
 	 * @see get_json_string_array()
 	 * @see get_json_int_array()
 	 */
-	static bool get_json_bool(const json& j, const std::string& key, bool default_val = false);
+	static bool get_json_bool(const json&amp; j, const std::string&amp; key, bool default_val = false);
 
 	/**
 	 * @brief Helper to extract string array from JSON
@@ -164,7 +153,7 @@ private:
 	 * @see get_json_bool()
 	 * @see get_json_int_array()
 	 */
-	static std::vector<std::string> get_json_string_array(const json& j, const std::string& key);
+	static std::vector&lt;std::string&gt; get_json_string_array(const json&amp; j, const std::string&amp; key);
 
 	/**
 	 * @brief Helper to extract int array from JSON
@@ -182,7 +171,7 @@ private:
 	 * @see get_json_bool()
 	 * @see get_json_string_array()
 	 */
-	static std::vector<int> get_json_int_array(const json& j, const std::string& key);
+	static std::vector&lt;int&gt; get_json_int_array(const json&amp; j, const std::string&amp; key);
 
 	/**
 	 * @brief Validate and limit k parameter
@@ -222,7 +211,7 @@ private:
 	 *
 	 * @see query_max_bytes
 	 */
-	bool validate_query_length(const std::string& query);
+	bool validate_query_length(const std::string&amp; query);
 
 	/**
 	 * @brief Execute database query and return results
@@ -264,7 +253,7 @@ private:
 	 * @param score_type Type of score being normalized
 	 * @return Normalized score in 0-1 range
 	 */
-	double normalize_score(double score, const std::string& score_type);
+	double normalize_score(double score, const std::string&amp; score_type);
 
 public:
 	/**
@@ -363,7 +352,7 @@ public:
 	 * @see get_tool_list()
 	 * @see execute_tool()
 	 */
-	json get_tool_description(const std::string& tool_name) override;
+	json get_tool_description(const std::string&amp; tool_name) override;
 
 	/**
 	 * @brief Execute a tool with arguments
@@ -388,7 +377,7 @@ public:
 	 * @see get_tool_list()
 	 * @see get_tool_description()
 	 */
-	json execute_tool(const std::string& tool_name, const json& arguments) override;
+	json execute_tool(const std::string&amp; tool_name, const json&amp; arguments) override;
 
 	/**
 	 * @brief Set the vector database
