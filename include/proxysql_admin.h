@@ -705,7 +705,7 @@ class ProxySQL_Admin {
 	void stats___mysql_client_host_cache(bool reset);
 	void stats___mcp_query_tools_counters(bool reset);
 	void stats___mcp_query_digest(bool reset);
-	void stats___mcp_query_rules(bool reset);
+	void stats___mcp_query_rules();
 
 	// Update prometheus metrics
 	void p_stats___memory_metrics();

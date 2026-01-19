@@ -1607,7 +1607,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mcp_query_digest(true);
 		}
 		if (stats_mcp_query_rules) {
-			stats___mcp_query_rules(false);
+			stats___mcp_query_rules();
 		}
 
 		if (admin) {

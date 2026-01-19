@@ -2572,7 +2572,7 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 	statsdb->execute("COMMIT");
 }
 
-void ProxySQL_Admin::stats___mcp_query_rules(bool reset) {
+void ProxySQL_Admin::stats___mcp_query_rules() {
 	if (!GloMCPH) return;
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
 	if (!qth) return;
