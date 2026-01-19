@@ -674,13 +674,39 @@ int Discovery_Schema::get_last_agent_run_id(int run_id) {
 	int cols = 0, affected = 0;
 	SQLite3_result* resultset = NULL;
 
+	// First, try to get the last agent_run_id for this specific run_id
 	std::ostringstream sql;
 	sql << "SELECT agent_run_id FROM agent_runs WHERE run_id = " << run_id
 	    << " ORDER BY agent_run_id DESC LIMIT 1;";
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
 	if (error) {
-		proxy_error("Failed to get last agent_run_id: %s\n", error);
+		proxy_error("Failed to get last agent_run_id for run_id %d: %s\n", run_id, error);
+		free(error);
+		return 0;
+	}
+
+	// If found for this run_id, return it
+	if (resultset && !resultset->rows.empty()) {
+		SQLite3_row* row = resultset->rows[0];
+		int agent_run_id = atoi(row->fields[0] ? row->fields[0] : "0");
+		delete resultset;
+		proxy_info("Found agent_run_id=%d for run_id=%d\n", agent_run_id, run_id);
+		return agent_run_id;
+	}
+
+	// Clean up first query result
+	delete resultset;
+	resultset = NULL;
+
+	// Fallback: Get the most recent agent_run_id across ALL runs
+	proxy_info("No agent_run found for run_id=%d, falling back to most recent across all runs\n", run_id);
+	std::ostringstream fallback_sql;
+	fallback_sql << "SELECT agent_run_id FROM agent_runs ORDER BY agent_run_id DESC LIMIT 1;";
+
+	db->execute_statement(fallback_sql.str().c_str(), &error, &cols, &affected, &resultset);
+	if (error) {
+		proxy_error("Failed to get last agent_run_id (fallback): %s\n", error);
 		free(error);
 		return 0;
 	}
@@ -694,6 +720,7 @@ int Discovery_Schema::get_last_agent_run_id(int run_id) {
 	int agent_run_id = atoi(row->fields[0] ? row->fields[0] : "0");
 	delete resultset;
 
+	proxy_info("Using fallback agent_run_id=%d (most recent across all runs)\n", agent_run_id);
 	return agent_run_id;
 }
 

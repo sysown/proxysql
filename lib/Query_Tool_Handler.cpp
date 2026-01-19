@@ -1647,10 +1647,10 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 	// Extract error message if present
 	std::string error_msg;
-	if (result.contains("error") && result.contains("message")) {
+	if (result.contains("error")) {
 		const json& err = result["error"];
-		if (err.contains("message") && err["message"].is_string()) {
-			error_msg = err["message"].get<std::string>();
+		if (err.is_string()) {
+			error_msg = err.get<std::string>();
 		}
 	}
 
