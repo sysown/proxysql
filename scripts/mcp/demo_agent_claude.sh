@@ -3,13 +3,57 @@
 # Interactive MCP Query Agent Demo using Claude Code
 #
 # Usage: ./demo_agent_claude.sh <schema_name>
+#        ./demo_agent_claude.sh --help
 #
 # Example: ./demo_agent_claude.sh Chinook
 #
 
 set -e
 
-SCHEMA="${1:-Chinook}"
+# Show help if requested
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat << EOF
+MCP Query Agent Demo - Interactive SQL Query Agent using Claude Code
+
+USAGE:
+    ./demo_agent_claude.sh <schema_name>
+    ./demo_agent_claude.sh --help
+
+ARGUMENTS:
+    schema_name    Name of the database schema to query (REQUIRED)
+
+OPTIONS:
+    --help, -h     Show this help message
+
+DESCRIPTION:
+    This script launches Claude Code with MCP tools enabled for database
+    discovery and query generation. The agent can answer natural language
+    questions about the specified schema by searching for pre-defined
+    question templates and executing SQL queries.
+
+    The schema must have been previously discovered using two-phase discovery.
+
+EXAMPLES:
+    ./demo_agent_claude.sh Chinook
+    ./demo_agent_claude.sh sales
+
+REQUIREMENTS:
+    - MCP catalog database must exist at: /home/rene/proxysql-vec/src/mcp_catalog.db
+    - Schema must have been discovered using two-phase discovery
+    - ProxySQL MCP server must be running on https://127.0.0.1:6071/mcp/query
+EOF
+    exit 0
+fi
+
+# Schema name is required
+SCHEMA="$1"
+if [ -z "$SCHEMA" ]; then
+    echo "Error: schema_name is required" >&2
+    echo "" >&2
+    echo "Usage: ./demo_agent_claude.sh <schema_name>" >&2
+    echo "  ./demo_agent_claude.sh --help    for more information" >&2
+    exit 1
+fi
 MCP_CATALOG_DB="/home/rene/proxysql-vec/src/mcp_catalog.db"
 
 # Check if catalog exists
@@ -50,19 +94,11 @@ You are an intelligent SQL Query Agent for the Chinook database schema. You have
 You have access to these MCP tools (use mcp__proxysql-stdio__ prefix):
 
 1. **llm_search** - Search for similar pre-defined queries and LLM artifacts
-   - Parameters: run_id (schema name), query (search terms - use empty string to list all), limit
-   - Returns: List of matching question templates, metrics, notes with scores
-   - Use this FIRST when user asks a question
+   - Parameters: run_id (schema name), query (search terms - use empty string to list all), limit, include_objects (ALWAYS use true!)
+   - Returns: Question templates with example_sql, AND complete object schemas (columns, indexes) when include_objects=true
+   - ALWAYS use include_objects=true to get object schemas in one call - avoids extra catalog_get_object calls!
 
-2. **catalog_list_objects** - List all tables/views in the schema
-   - Parameters: run_id, page_size
-   - Returns: Tables with row counts, sizes, etc.
-
-3. **catalog_get_object** - Get detailed schema for a specific table
-   - Parameters: run_id, schema_name, object_name
-   - Returns: Columns, indexes, foreign keys
-
-4. **run_sql_readonly** - Execute a read-only SQL query
+2. **run_sql_readonly** - Execute a read-only SQL query
    - Parameters: sql (the query to execute)
    - Returns: Query results
 
@@ -70,32 +106,34 @@ You have access to these MCP tools (use mcp__proxysql-stdio__ prefix):
 
 When a user asks a natural language question, follow these steps explicitly:
 
-Step 1: Search for Similar Queries
-- Call llm_search with the user's question keywords
-- Show the results you get
+Step 1: Search for Similar Queries (with object schemas included!)
+- Call llm_search with: run_id, query (keywords), include_objects=true
+- This returns BOTH matching question templates AND complete object schemas
+- Show the results: question templates found + their related objects' schemas
 
 Step 2: Analyze Results
-- If you found a close match (score < -3.0), explain you'll reuse it
-- If no good match, explain you'll generate a new query
+- If you found a close match (score < -3.0), explain you'll reuse the example_sql
+- The object schemas are already included - no extra calls needed!
+- If no good match, use the object schemas from search results to generate new query
 
-Step 3: Get Schema Details (if needed)
-- Call catalog_get_object for relevant tables
-- Show the table structure
-
-Step 4: Execute Query
-- Call run_sql_readonly with the SQL
+Step 3: Execute Query
+- Call run_sql_readonly with the SQL (either from example_sql or newly generated)
 - Show the results
 
-Step 5: Present Results
+Step 4: Present Results
 - Format the results nicely for the user
 
 ## Important Notes
 
+- ALWAYS use include_objects=true with llm_search - this is critical for efficiency!
 - Always show your work - Explain each step you're taking
-- Use llm_search first - Reuse existing queries when possible
+- Use llm_search first with include_objects=true - get everything in one call
 - Score interpretation: Lower scores = better match (< -3.0 is good)
-- If no good match: Generate SQL from scratch using catalog schema
-- run_id: Always use 'Chinook' as the run_id
+- run_id: Always use the schema name (e.g., 'Chinook') as the run_id
+- The llm_search response includes:
+  - question templates with example_sql
+  - related_objects (array of object names)
+  - objects (array of complete object schemas with columns, indexes, etc.)
 
 ## Special Case: "What questions can I ask?"
 
@@ -130,11 +168,16 @@ Metrics:
 User: "What are the most expensive tracks?"
 
 Your response:
-Step 1: Search for similar queries...
-[llm_search call]
-Step 2: Found match: "Most Expensive Tracks" (score: -0.66)
+Step 1: Search for similar queries with object schemas...
+[llm_search call with include_objects=true]
+Found: "Most Expensive Tracks" (score: -0.66)
+Related objects: Track schema (columns: TrackId, Name, UnitPrice, etc.)
+
+Step 2: Reusing the example_sql from the match...
+
 Step 3: Execute the query...
 [run_sql_readonly call]
+
 Step 4: Results: [table of tracks]
 
 ---
@@ -151,12 +194,12 @@ cat > "$APPEND_PROMPT_FILE" << 'ENDAPPEND'
 INITIAL REQUEST: Show me how you would answer the question: "What are the most expensive tracks?"
 
 Please walk through each step explicitly, showing:
-1. The llm_search call and results
-2. How you interpret the results
+1. The llm_search call (with include_objects=true) and what it returns
+2. How you interpret the results and use the included object schemas
 3. The final SQL execution
 4. The formatted results
 
-This is a demonstration, so be very verbose about your process.
+This is a demonstration, so be very verbose about your process. Remember to ALWAYS use include_objects=true to get object schemas in the same call - this avoids extra catalog_get_object calls!
 ENDAPPEND
 
 echo "=========================================="
