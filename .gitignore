@@ -179,3 +179,4 @@ GEMINI.md
 # Database discovery output files
 discovery_*.md
 database_discovery_report.md
+scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/tmp/
