@@ -1612,83 +1612,27 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 				}
 			} else {
 				// Server is already running - need to stop, delete server, and recreate everything
-				proxy_info("MCP: Server already running, reinitializing MySQL tool handler\n");
+				proxy_info("MCP: Server already running, reinitializing\n");
 
-				// 1. Delete Query_Tool_Handler first (server destructor doesn't delete this)
-				if (GloMCPH->query_tool_handler) {
-					proxy_info("MCP: Deleting old Query Tool Handler\n");
-					delete GloMCPH->query_tool_handler;
-					GloMCPH->query_tool_handler = NULL;
-				}
-
-				// 2. Stop and delete the server (server destructor also deletes MySQL_Tool_Handler)
+				// Delete the old server - its destructor will clean up all handlers
+				// (mysql_tool_handler, config_tool_handler, query_tool_handler,
+				//  admin_tool_handler, cache_tool_handler, observe_tool_handler)
 				proxy_info("MCP: Stopping and deleting old server\n");
 				delete GloMCPH->mcp_server;
 				GloMCPH->mcp_server = NULL;
-				// Note: mysql_tool_handler is already deleted by server destructor and set to NULL
+				// All handlers are now deleted and set to NULL by the destructor
 				proxy_info("MCP: Old server deleted\n");
 
-				// 3. Delete other handlers that were created by old server
-				// The server destructor doesn't clean these up, so we need to do it manually
-				if (GloMCPH->config_tool_handler) {
-					delete GloMCPH->config_tool_handler;
-					GloMCPH->config_tool_handler = NULL;
-				}
-				if (GloMCPH->admin_tool_handler) {
-					delete GloMCPH->admin_tool_handler;
-					GloMCPH->admin_tool_handler = NULL;
-				}
-				if (GloMCPH->cache_tool_handler) {
-					delete GloMCPH->cache_tool_handler;
-					GloMCPH->cache_tool_handler = NULL;
-				}
-				if (GloMCPH->observe_tool_handler) {
-					delete GloMCPH->observe_tool_handler;
-					GloMCPH->observe_tool_handler = NULL;
-				}
-
-				// 4. Create new MySQL_Tool_Handler with current configuration
-				proxy_info("MCP: Creating new MySQL Tool Handler with updated configuration\n");
-				GloMCPH->mysql_tool_handler = new MySQL_Tool_Handler(
-					GloMCPH->variables.mcp_mysql_hosts ? GloMCPH->variables.mcp_mysql_hosts : "",
-					GloMCPH->variables.mcp_mysql_ports ? GloMCPH->variables.mcp_mysql_ports : "",
-					GloMCPH->variables.mcp_mysql_user ? GloMCPH->variables.mcp_mysql_user : "",
-					GloMCPH->variables.mcp_mysql_password ? GloMCPH->variables.mcp_mysql_password : "",
-					GloMCPH->variables.mcp_mysql_schema ? GloMCPH->variables.mcp_mysql_schema : "",
-					GloMCPH->variables.mcp_catalog_path ? GloMCPH->variables.mcp_catalog_path : ""
-				);
-
-				if (GloMCPH->mysql_tool_handler->init() != 0) {
-					proxy_error("MCP: Failed to initialize new MySQL Tool Handler\n");
-					delete GloMCPH->mysql_tool_handler;
-					GloMCPH->mysql_tool_handler = NULL;
+				// Create and start new server with current configuration
+				// The server constructor will recreate all handlers with updated settings
+				proxy_info("MCP: Creating and starting new server\n");
+				int port = GloMCPH->variables.mcp_port;
+				GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+				if (GloMCPH->mcp_server) {
+					GloMCPH->mcp_server->start();
+					proxy_info("MCP: New server created and started successfully\n");
 				} else {
-					proxy_info("MCP: New MySQL Tool Handler initialized successfully\n");
-
-					// 5. Create new Query_Tool_Handler that wraps the new MySQL_Tool_Handler
-					GloMCPH->query_tool_handler = new Query_Tool_Handler(GloMCPH->mysql_tool_handler);
-					if (GloMCPH->query_tool_handler->init() != 0) {
-						proxy_error("MCP: Failed to initialize new Query Tool Handler\n");
-						delete GloMCPH->query_tool_handler;
-						GloMCPH->query_tool_handler = NULL;
-					} else {
-						proxy_info("MCP: New Query Tool Handler initialized successfully\n");
-					}
-				}
-
-				// 6. Create and start new server (which will recreate all handlers including config/admin/cache/observe)
-				if (GloMCPH->mysql_tool_handler && GloMCPH->query_tool_handler) {
-					proxy_info("MCP: Creating and starting new server\n");
-					int port = GloMCPH->variables.mcp_port;
-					GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
-					if (GloMCPH->mcp_server) {
-						GloMCPH->mcp_server->start();
-						proxy_info("MCP: New server created and started successfully\n");
-					} else {
-						proxy_error("MCP: Failed to create new server instance\n");
-					}
-				} else {
-					proxy_error("MCP: Server not created due to handler initialization failure\n");
+					proxy_error("MCP: Failed to create new server instance\n");
 				}
 			}
 		} else {

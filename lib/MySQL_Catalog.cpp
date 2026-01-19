@@ -194,57 +194,93 @@ std::string MySQL_Catalog::search(
 		return "[]";
 	}
 
-	std::ostringstream sql;
-	char* error = NULL;
-	int cols = 0, affected = 0;
-	SQLite3_result* resultset = NULL;
+	// Helper lambda to escape single quotes for SQLite SQL literals
+	auto escape_sql = [](const std::string& str) -> std::string {
+		std::string result;
+		result.reserve(str.length() * 2);  // Reserve space for potential escaping
+		for (char c : str) {
+			if (c == '\'') {
+				result += '\'';  // Escape single quote by doubling it
+			}
+			result += c;
+		}
+		return result;
+	};
 
-	// FTS5 search with BM25 ranking
+	// Escape query for use in FTS5 MATCH (MATCH doesn't support parameter binding)
+	std::string escaped_query = escape_sql(query);
+
+	// Build SQL query with placeholders for parameters
+	std::ostringstream sql;
 	sql << "SELECT c.kind, c.key, c.document, c.tags, c.links "
 	    << "FROM catalog c "
 	    << "INNER JOIN catalog_fts f ON c.id = f.rowid "
-	    << "WHERE catalog_fts MATCH '" << query << "'";
+	    << "WHERE catalog_fts MATCH '" << escaped_query << "'";
 
-	// Add kind filter
+	int param_count = 1;  // Track parameter binding position
+
+	// Add kind filter with parameter placeholder
 	if (!kind.empty()) {
-		sql << " AND c.kind = '" << kind << "'";
+		sql << " AND c.kind = ?";
 	}
 
-	// Add tags filter
+	// Add tags filter with parameter placeholder
 	if (!tags.empty()) {
-		sql << " AND c.tags LIKE '%" << tags << "%'";
+		sql << " AND c.tags LIKE ?";
 	}
 
 	// Order by relevance (BM25) and recency
-	sql << " ORDER BY bm25(f) ASC, c.updated_at DESC LIMIT " << limit << " OFFSET " << offset;
+	sql << " ORDER BY bm25(f) ASC, c.updated_at DESC LIMIT ? OFFSET ?";
 
-	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
-	if (error) {
-		proxy_error("Catalog search error: %s\n", error);
+	// Prepare the statement
+	sqlite3_stmt* stmt = NULL;
+	int rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	if (rc != SQLITE_OK) {
+		proxy_error("Catalog search: Failed to prepare statement: %d\n", rc);
 		return "[]";
 	}
 
-	// Build JSON result
+	// Bind parameters
+	param_count = 1;
+	if (!kind.empty()) {
+		(*proxy_sqlite3_bind_text)(stmt, param_count++, kind.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	if (!tags.empty()) {
+		// Add wildcards for LIKE search
+		std::string tags_pattern = "%" + tags + "%";
+		(*proxy_sqlite3_bind_text)(stmt, param_count++, tags_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	(*proxy_sqlite3_bind_int)(stmt, param_count++, limit);
+	(*proxy_sqlite3_bind_int)(stmt, param_count, offset);
+
+	// Execute query and build JSON result
 	std::ostringstream json;
 	json << "[";
 	bool first = true;
 
-	if (resultset) {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
-		     it != resultset->rows.end(); ++it) {
-			SQLite3_row* row = *it;
-			if (!first) json << ",";
-			first = false;
+	while ((rc = (*proxy_sqlite3_step)(stmt)) == SQLITE_ROW) {
+		if (!first) json << ",";
+		first = false;
 
-			json << "{"
-			     << "\"kind\":\"" << (row->fields[0] ? row->fields[0] : "") << "\","
-			     << "\"key\":\"" << (row->fields[1] ? row->fields[1] : "") << "\","
-			     << "\"document\":" << (row->fields[2] ? row->fields[2] : "null") << ","
-			     << "\"tags\":\"" << (row->fields[3] ? row->fields[3] : "") << "\","
-			     << "\"links\":\"" << (row->fields[4] ? row->fields[4] : "") << "\""
-			     << "}";
-		}
-		delete resultset;
+		const char* kind_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 0);
+		const char* key_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 1);
+		const char* doc_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 2);
+		const char* tags_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 3);
+		const char* links_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 4);
+
+		json << "{"
+		     << "\"kind\":\"" << (kind_val ? kind_val : "") << "\","
+		     << "\"key\":\"" << (key_val ? key_val : "") << "\","
+		     << "\"document\":" << (doc_val ? doc_val : "null") << ","
+		     << "\"tags\":\"" << (tags_val ? tags_val : "") << "\","
+		     << "\"links\":\"" << (links_val ? links_val : "") << "\""
+		     << "}";
+	}
+
+	(*proxy_sqlite3_finalize)(stmt);
+
+	if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+		proxy_error("Catalog search: Error executing query: %d\n", rc);
 	}
 
 	json << "]";
