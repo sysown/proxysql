@@ -98,29 +98,105 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 	return authenticated;
 }
 
+const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_GET(
+	const httpserver::http_request& req
+) {
+	std::string req_path = req.get_path();
+	proxy_debug(PROXY_DEBUG_GENERIC, 2, "Received MCP GET request on %s - returning 405 Method Not Allowed\n", req_path.c_str());
+
+	// According to the MCP specification (Streamable HTTP transport):
+	// "The server MUST either return Content-Type: text/event-stream in response to
+	// this HTTP GET, or else return HTTP 405 Method Not Allowed, indicating that
+	// the server does not offer an SSE stream at this endpoint."
+	//
+	// This server does not currently support SSE streaming, so we return 405.
+	auto response = std::shared_ptr<http_response>(new string_response(
+		"",
+		http::http_utils::http_method_not_allowed  // 405
+	));
+	response->with_header("Allow", "POST");  // Tell client what IS allowed
+
+	if (handler) {
+		handler->status_variables.total_requests++;
+	}
+
+	return response;
+}
+
+const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_OPTIONS(
+	const httpserver::http_request& req
+) {
+	std::string req_path = req.get_path();
+	proxy_debug(PROXY_DEBUG_GENERIC, 2, "Received MCP OPTIONS request on %s\n", req_path.c_str());
+
+	// Handle CORS preflight requests for MCP HTTP transport
+	// Return 200 OK with appropriate CORS headers
+	auto response = std::shared_ptr<http_response>(new string_response(
+		"",
+		http::http_utils::http_ok
+	));
+	response->with_header("Content-Type", "application/json");
+	response->with_header("Access-Control-Allow-Origin", "*");
+	response->with_header("Access-Control-Allow-Methods", "POST, OPTIONS");
+	response->with_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+	if (handler) {
+		handler->status_variables.total_requests++;
+	}
+
+	return response;
+}
+
+const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_DELETE(
+	const httpserver::http_request& req
+) {
+	std::string req_path = req.get_path();
+	proxy_debug(PROXY_DEBUG_GENERIC, 2, "Received MCP DELETE request on %s - returning 405 Method Not Allowed\n", req_path.c_str());
+
+	// ProxySQL doesn't support session termination
+	// Return 405 Method Not Allowed with Allow header indicating supported methods
+	auto response = std::shared_ptr<http_response>(new string_response(
+		"",
+		http::http_utils::http_method_not_allowed  // 405
+	));
+	response->with_header("Allow", "POST, OPTIONS");  // Tell client what IS allowed
+
+	if (handler) {
+		handler->status_variables.total_requests++;
+	}
+
+	return response;
+}
+
 std::string MCP_JSONRPC_Resource::create_jsonrpc_response(
 	const std::string& result,
-	const std::string& id
+	const json& id
 ) {
-	json j;
+	nlohmann::ordered_json j;  // Use ordered_json to preserve field order
 	j["jsonrpc"] = "2.0";
+	// Only include id if it's not null (per JSON-RPC 2.0 and MCP spec)
+	if (!id.is_null()) {
+		j["id"] = id;
+	}
 	j["result"] = json::parse(result);
-	j["id"] = id;
 	return j.dump();
 }
 
 std::string MCP_JSONRPC_Resource::create_jsonrpc_error(
 	int code,
 	const std::string& message,
-	const std::string& id
+	const json& id
 ) {
-	json j;
+	nlohmann::ordered_json j;  // Use ordered_json to preserve field order
 	j["jsonrpc"] = "2.0";
 	json error;
 	error["code"] = code;
 	error["message"] = message;
 	j["error"] = error;
-	j["id"] = id;
+	// Only include id if it's not null (per JSON-RPC 2.0 and MCP spec)
+	if (!id.is_null()) {
+		j["id"] = id;
+	}
 	return j.dump();
 }
 
@@ -148,11 +224,18 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 			handler->status_variables.failed_requests++;
 		}
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32700, "Parse error", ""),
+			create_jsonrpc_error(-32700, "Parse error", nullptr),
 			http::http_utils::http_bad_request
 		));
 		response->with_header("Content-Type", "application/json");
 		return response;
+	}
+
+	// Extract request ID immediately after parsing (JSON-RPC 2.0 spec)
+	// This must be done BEFORE validation so we can include the ID in error responses
+	json req_id = nullptr;
+	if (req_json.contains("id")) {
+		req_id = req_json["id"];
 	}
 
 	// Validate JSON-RPC 2.0 basic structure
@@ -162,7 +245,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 			handler->status_variables.failed_requests++;
 		}
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32600, "Invalid Request", ""),
+			create_jsonrpc_error(-32600, "Invalid Request", req_id),
 			http::http_utils::http_bad_request
 		));
 		response->with_header("Content-Type", "application/json");
@@ -174,22 +257,14 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
+		// Use -32601 "Method not found" for compatibility with MCP clients
+		// (even though -32600 "Invalid Request" is technically correct per JSON-RPC spec)
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32600, "Invalid Request", ""),
+			create_jsonrpc_error(-32601, "Method not found", req_id),
 			http::http_utils::http_bad_request
 		));
 		response->with_header("Content-Type", "application/json");
 		return response;
-	}
-
-	// Get request ID (optional but recommended)
-	std::string req_id = "";
-	if (req_json.contains("id")) {
-		if (req_json["id"].is_string()) {
-			req_id = req_json["id"].get<std::string>();
-		} else if (req_json["id"].is_number()) {
-			req_id = std::to_string(req_json["id"].get<int>());
-		}
 	}
 
 	// Get method name
@@ -211,7 +286,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 				http::http_utils::http_internal_server_error
 			));
 			response->with_header("Content-Type", "application/json");
-			return response;
+				return response;
 		}
 
 		// Route to appropriate tool handler method
@@ -222,24 +297,37 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		} else if (method == "tools/call") {
 			result = handle_tools_call(req_json);
 		}
-	} else if (method == "initialize" || method == "ping") {
+	} else if (method == "prompts/list") {
+		result = handle_prompts_list();
+	} else if (method == "resources/list") {
+		result = handle_resources_list();
+	} else if (method == "initialize") {
 		// Handle MCP protocol methods
-		if (method == "initialize") {
-			result["protocolVersion"] = "2024-11-05";
-			result["capabilities"] = json::object();
-			result["serverInfo"] = {
-				{"name", "proxysql-mcp-mysql-tools"},
-				{"version", MCP_THREAD_VERSION}
-			};
-		} else if (method == "ping") {
-			result["status"] = "ok";
-		}
+		result["protocolVersion"] = "2025-06-18";
+		result["capabilities"]["tools"] = json::object();  // Explicitly declare tools support
+		result["serverInfo"] = {
+			{"name", "proxysql-mcp-mcp-mysql-tools"},
+			{"version", MCP_THREAD_VERSION}
+		};
+	} else if (method == "ping") {
+		result["status"] = "ok";
+	} else if (method.compare(0, strlen("notifications/"), "notifications/") == 0) {
+		// Handle notifications sent by the client
+		// notifications/initialized
+		// - https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization
+		// notifications/cancelled
+		// - https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation#cancellation-flow
+
+		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP notification '%s' received on endpoint '%s'\n", method.c_str(), endpoint_name.c_str());
+		// simple acknowledgement with HTTP 202 Accepted (no response body)
+		return std::shared_ptr<http_response>(new string_response("",http::http_utils::http_accepted));
 	} else {
 		// Unknown method
 		proxy_info("MCP: Unknown method '%s' on endpoint '%s'\n", method.c_str(), endpoint_name.c_str());
+		// Return HTTP 200 OK with JSON-RPC error (not HTTP 404) for compatibility with MCP clients
 		auto response = std::shared_ptr<http_response>(new string_response(
 			create_jsonrpc_error(-32601, "Method not found", req_id),
-			http::http_utils::http_not_found
+			http::http_utils::http_ok
 		));
 		response->with_header("Content-Type", "application/json");
 		return response;
@@ -268,8 +356,9 @@ const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_POST(
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
+		// Use nullptr for ID since we haven't parsed JSON yet (JSON-RPC 2.0 spec)
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32600, "Invalid Request: Content-Type must be application/json", ""),
+			create_jsonrpc_error(-32600, "Invalid Request: Content-Type must be application/json", nullptr),
 			http::http_utils::http_unsupported_media_type
 		));
 		response->with_header("Content-Type", "application/json");
@@ -282,8 +371,9 @@ const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_POST(
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
+		// Use nullptr for ID since we haven't parsed JSON yet (JSON-RPC 2.0 spec)
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32001, "Unauthorized", ""),
+			create_jsonrpc_error(-32001, "Unauthorized", nullptr),
 			http::http_utils::http_unauthorized
 		));
 		response->with_header("Content-Type", "application/json");
@@ -376,6 +466,25 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	}
 
 	mcp_result["content"] = json::array({text_content});
-	mcp_result["isError"] = false;
+	// Note: Per MCP spec, only include isError when true (error case)
+	// For success responses, omit the isError field entirely
 	return mcp_result;
+}
+
+// Helper method to handle prompts/list
+json MCP_JSONRPC_Resource::handle_prompts_list() {
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "MCP: prompts/list called\n");
+	// Returns an empty prompts array since ProxySQL doesn't support prompts
+	json result;
+	result["prompts"] = json::array();
+	return result;
+}
+
+// Helper method to handle resources/list
+json MCP_JSONRPC_Resource::handle_resources_list() {
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "MCP: resources/list called\n");
+	// Returns an empty resources array since ProxySQL doesn't support resources
+	json result;
+	result["resources"] = json::array();
+	return result;
 }

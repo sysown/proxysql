@@ -17,6 +17,7 @@
 static const char* mcp_thread_variables_names[] = {
 	"enabled",
 	"port",
+	"use_ssl",
 	"config_endpoint_auth",
 	"observe_endpoint_auth",
 	"query_endpoint_auth",
@@ -43,6 +44,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	// Initialize variables with default values
 	variables.mcp_enabled = false;
 	variables.mcp_port = 6071;
+	variables.mcp_use_ssl = true;                      // Default to true for security
 	variables.mcp_config_endpoint_auth = strdup("");
 	variables.mcp_observe_endpoint_auth = strdup("");
 	variables.mcp_query_endpoint_auth = strdup("");
@@ -139,7 +141,7 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 void MCP_Threads_Handler::init() {
 	proxy_info("Initializing MCP Threads Handler\n");
 	// For now, this is a simple initialization
-	// The HTTPS server will be started when mcp_enabled is set to true
+	// The HTTP/HTTPS server will be started when mcp_enabled is set to true
 	// and will be managed through ProxySQL_Admin
 	print_version();
 }
@@ -148,7 +150,7 @@ void MCP_Threads_Handler::shutdown() {
 	proxy_info("Shutting down MCP Threads Handler\n");
 	shutdown_ = 1;
 
-	// Stop the HTTPS server if it's running
+	// Stop the HTTP/HTTPS server if it's running
 	if (mcp_server) {
 		delete mcp_server;
 		mcp_server = NULL;
@@ -173,6 +175,10 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 	}
 	if (!strcmp(name, "port")) {
 		sprintf(val, "%d", variables.mcp_port);
+		return 0;
+	}
+	if (!strcmp(name, "use_ssl")) {
+		sprintf(val, "%s", variables.mcp_use_ssl ? "true" : "false");
 		return 0;
 	}
 	if (!strcmp(name, "config_endpoint_auth")) {
@@ -251,6 +257,17 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		int port = atoi(value);
 		if (port > 0 && port < 65536) {
 			variables.mcp_port = port;
+			return 0;
+		}
+		return -1;
+	}
+	if (!strcmp(name, "use_ssl")) {
+		if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+			variables.mcp_use_ssl = true;
+			return 0;
+		}
+		if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+			variables.mcp_use_ssl = false;
 			return 0;
 		}
 		return -1;

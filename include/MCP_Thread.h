@@ -42,7 +42,8 @@ public:
 	 */
 	struct {
 		bool mcp_enabled;                      ///< Enable/disable MCP server
-		int mcp_port;                           ///< HTTPS port for MCP server (default: 6071)
+		int mcp_port;                           ///< HTTP/HTTPS port for MCP server (default: 6071)
+		bool mcp_use_ssl;                       ///< Enable/disable SSL/TLS (default: true)
 		char* mcp_config_endpoint_auth;         ///< Authentication for /mcp/config endpoint
 		char* mcp_observe_endpoint_auth;        ///< Authentication for /mcp/observe endpoint
 		char* mcp_query_endpoint_auth;          ///< Authentication for /mcp/query endpoint
@@ -69,9 +70,9 @@ public:
 	} status_variables;
 
 	/**
-	 * @brief Pointer to the HTTPS server instance
+	 * @brief Pointer to the HTTP/HTTPS server instance
 	 *
-	 * This is managed by the MCP_Thread module and provides HTTPS
+	 * This is managed by the MCP_Thread module and provides HTTP/HTTPS
 	 * endpoints for MCP protocol communication.
 	 */
 	ProxySQL_MCP_Server* mcp_server;
@@ -139,7 +140,7 @@ public:
 	 * @brief Initialize the MCP module
 	 *
 	 * Sets up the module with default configuration values and starts
-	 * the HTTPS server if enabled. Must be called before using any
+	 * the HTTP/HTTPS server if enabled. Must be called before using any
 	 * other methods.
 	 */
 	void init();
