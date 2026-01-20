@@ -1,0 +1,48 @@
+#include "sqlite3.h"
+
+/*
+ * This translation unit defines the storage for the proxy_sqlite3_*
+ * function pointers. Exactly one TU must define these symbols to
+ * avoid multiple-definition issues; other TUs should include
+ * include/sqlite3db.h which declares them as extern.
+ */
+
+int (*proxy_sqlite3_bind_double)(sqlite3_stmt*, int, double) = sqlite3_bind_double;
+int (*proxy_sqlite3_bind_int)(sqlite3_stmt*, int, int) = sqlite3_bind_int;
+int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64) = sqlite3_bind_int64;
+int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int) = sqlite3_bind_null;
+int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*)) = sqlite3_bind_text;
+int (*proxy_sqlite3_bind_blob)(sqlite3_stmt*, int, const void*, int, void(*)(void*)) = sqlite3_bind_blob;
+const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int) = sqlite3_column_name;
+const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int) = sqlite3_column_text;
+int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int) = sqlite3_column_bytes;
+int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int) = sqlite3_column_type;
+int (*proxy_sqlite3_column_count)(sqlite3_stmt*) = sqlite3_column_count;
+int (*proxy_sqlite3_column_int)(sqlite3_stmt*, int) = sqlite3_column_int;
+sqlite3_int64 (*proxy_sqlite3_column_int64)(sqlite3_stmt*, int) = sqlite3_column_int64;
+double (*proxy_sqlite3_column_double)(sqlite3_stmt*, int) = sqlite3_column_double;
+sqlite3_int64 (*proxy_sqlite3_last_insert_rowid)(sqlite3*) = sqlite3_last_insert_rowid;
+const char *(*proxy_sqlite3_errstr)(int) = sqlite3_errstr;
+sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*) = sqlite3_db_handle;
+int (*proxy_sqlite3_enable_load_extension)(sqlite3*, int) = sqlite3_enable_load_extension;
+/* Some platforms may expose sqlite3_enable_load_extension as a macro or different symbol; provide a weak alias to help the linker. */
+extern "C" int proxy_sqlite3_enable_load_extension_alias(sqlite3* db, int onoff) __attribute__((weak));
+int proxy_sqlite3_enable_load_extension_alias(sqlite3* db, int onoff) { return sqlite3_enable_load_extension(db, onoff); }
+int (*proxy_sqlite3_auto_extension)(void(*)(void)) = sqlite3_auto_extension;
+const char *(*proxy_sqlite3_errmsg)(sqlite3*) = sqlite3_errmsg;
+int (*proxy_sqlite3_finalize)(sqlite3_stmt *) = sqlite3_finalize;
+int (*proxy_sqlite3_reset)(sqlite3_stmt *) = sqlite3_reset;
+int (*proxy_sqlite3_clear_bindings)(sqlite3_stmt*) = sqlite3_clear_bindings;
+int (*proxy_sqlite3_close_v2)(sqlite3*) = sqlite3_close_v2;
+int (*proxy_sqlite3_get_autocommit)(sqlite3*) = sqlite3_get_autocommit;
+void (*proxy_sqlite3_free)(void*) = sqlite3_free;
+int (*proxy_sqlite3_status)(int, int*, int*, int) = sqlite3_status;
+int (*proxy_sqlite3_status64)(int, long long*, long long*, int) = sqlite3_status64;
+int (*proxy_sqlite3_changes)(sqlite3*) = sqlite3_changes;
+long long (*proxy_sqlite3_total_changes64)(sqlite3*) = sqlite3_total_changes64;
+int (*proxy_sqlite3_step)(sqlite3_stmt*) = sqlite3_step;
+int (*proxy_sqlite3_config)(int, ...) = sqlite3_config;
+int (*proxy_sqlite3_shutdown)(void) = sqlite3_shutdown;
+int (*proxy_sqlite3_prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, const char**) = sqlite3_prepare_v2;
+int (*proxy_sqlite3_open_v2)(const char*, sqlite3**, int, const char*) = sqlite3_open_v2;
+int (*proxy_sqlite3_exec)(sqlite3*, const char*, int (*)(void*,int,char**,char**), void*, char**) = sqlite3_exec;
