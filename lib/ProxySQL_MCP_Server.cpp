@@ -83,7 +83,8 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 			handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
 			handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
 			handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
-			handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : ""
+			handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : "",
+			handler->variables.mcp_fts_path ? handler->variables.mcp_fts_path : ""
 		);
 
 		if (handler->mysql_tool_handler->init() != 0) {
