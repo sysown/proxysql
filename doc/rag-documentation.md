@@ -123,7 +123,7 @@ You can test the RAG functionality using the provided test scripts:
 ./scripts/mcp/test_rag.sh
 
 # Test RAG database schema
-cd test
+cd test/rag
 make test_rag_schema
 ./test_rag_schema
 ```

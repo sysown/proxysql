@@ -1,11 +1,9 @@
 #!/bin/make -f
 
-
-PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ../..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
-
 
 IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JEMALLOC_IDIR) \
@@ -24,6 +22,10 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR)
 
+test_rag_schema: test_rag_schema.cpp
+	$(CXX) -ggdb $(PROXYSQL_OBJS) test_rag_schema.cpp -o test_rag_schema $(IDIRS) $(LDIRS) $(PROXYSQL_LIBS)
 
-sqlite_history_convert: sqlite_history_convert.cpp
-	g++ -ggdb ../lib/SpookyV2.cpp ../lib/debug.cpp ../deps/sqlite3/sqlite3/sqlite3.o sqlite_history_convert.cpp ../lib/sqlite3db.cpp -o sqlite_history_convert $(IDIRS) -pthread -ldl
+clean:
+	rm -f test_rag_schema
+
+.PHONY: clean
