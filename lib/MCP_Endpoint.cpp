@@ -151,10 +151,13 @@ std::string MCP_JSONRPC_Resource::create_jsonrpc_response(
 	const std::string& result,
 	const json& id
 ) {
-	json j;
+	nlohmann::ordered_json j;  // Use ordered_json to preserve field order
 	j["jsonrpc"] = "2.0";
+	// Only include id if it's not null (per JSON-RPC 2.0 and MCP spec)
+	if (!id.is_null()) {
+		j["id"] = id;
+	}
 	j["result"] = json::parse(result);
-	j["id"] = id;
 	return j.dump();
 }
 
@@ -163,13 +166,16 @@ std::string MCP_JSONRPC_Resource::create_jsonrpc_error(
 	const std::string& message,
 	const json& id
 ) {
-	json j;
+	nlohmann::ordered_json j;  // Use ordered_json to preserve field order
 	j["jsonrpc"] = "2.0";
 	json error;
 	error["code"] = code;
 	error["message"] = message;
 	j["error"] = error;
-	j["id"] = id;
+	// Only include id if it's not null (per JSON-RPC 2.0 and MCP spec)
+	if (!id.is_null()) {
+		j["id"] = id;
+	}
 	return j.dump();
 }
 
@@ -197,11 +203,18 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 			handler->status_variables.failed_requests++;
 		}
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32700, "Parse error", ""),
+			create_jsonrpc_error(-32700, "Parse error", nullptr),
 			http::http_utils::http_bad_request
 		));
 		response->with_header("Content-Type", "application/json");
 		return response;
+	}
+
+	// Extract request ID immediately after parsing (JSON-RPC 2.0 spec)
+	// This must be done BEFORE validation so we can include the ID in error responses
+	json req_id = nullptr;
+	if (req_json.contains("id")) {
+		req_id = req_json["id"];
 	}
 
 	// Validate JSON-RPC 2.0 basic structure
@@ -211,7 +224,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 			handler->status_variables.failed_requests++;
 		}
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32600, "Invalid Request", ""),
+			create_jsonrpc_error(-32600, "Invalid Request", req_id),
 			http::http_utils::http_bad_request
 		));
 		response->with_header("Content-Type", "application/json");
@@ -223,18 +236,14 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
+		// Use -32601 "Method not found" for compatibility with MCP clients
+		// (even though -32600 "Invalid Request" is technically correct per JSON-RPC spec)
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32600, "Invalid Request", ""),
+			create_jsonrpc_error(-32601, "Method not found", req_id),
 			http::http_utils::http_bad_request
 		));
 		response->with_header("Content-Type", "application/json");
 		return response;
-	}
-
-	// Get request ID (optional but recommended)
-	json req_id = nullptr;
-	if (req_json.contains("id")) {
-		req_id = req_json["id"];
 	}
 
 	// Get method name
@@ -243,20 +252,6 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 
 	// Handle different methods
 	json result;
-
-	// Check if this is a notification
-	if (method == "notifications/initialized") {
-		// MCP spec: notifications/initialized is sent by client after initialization
-		// This is a notification - return HTTP 200 OK with {} body per spec
-		// See: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
-		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP notification 'notifications/initialized' received on endpoint '%s'\n", endpoint_name.c_str());
-		auto response = std::shared_ptr<http_response>(new string_response(
-			"{}",
-			http::http_utils::http_accepted  // 202 Accepted
-			));
-		response->with_header("Content-Type", "application/json");
-		return response;
-	}
 
 	if (method == "tools/call" || method == "tools/list" || method == "tools/describe") {
 		// Route tool-related methods to the endpoint's tool handler
@@ -270,7 +265,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 				http::http_utils::http_internal_server_error
 			));
 			response->with_header("Content-Type", "application/json");
-			return response;
+				return response;
 		}
 
 		// Route to appropriate tool handler method
@@ -281,24 +276,32 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		} else if (method == "tools/call") {
 			result = handle_tools_call(req_json);
 		}
-	} else if (method == "initialize" || method == "ping") {
+	} else if (method == "initialize") {
 		// Handle MCP protocol methods
-		if (method == "initialize") {
-			result["protocolVersion"] = "2024-11-05";
-			result["capabilities"] = json::object();
-			result["serverInfo"] = {
-				{"name", "proxysql-mcp-mysql-tools"},
-				{"version", MCP_THREAD_VERSION}
-			};
-		} else if (method == "ping") {
-			result["status"] = "ok";
-		}
+		result["protocolVersion"] = "2024-11-05";
+		result["capabilities"]["tools"] = json::object();  // Explicitly declare tools support
+		result["serverInfo"] = {
+			{"name", "proxysql-mcp-mcp-mysql-tools"},
+			{"version", MCP_THREAD_VERSION}
+		};
+	} else if (method == "ping") {
+		result["status"] = "ok";
+	} else if (method == "initialized") {
+		// MCP notification: "initialized" - Return HTTP 200 with empty body
+		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP notification 'initialized' received on endpoint '%s'\n", endpoint_name.c_str());
+		auto response = std::shared_ptr<http_response>(new string_response(
+			"",
+			http::http_utils::http_ok
+		));
+		response->with_header("Content-Type", "application/json");
+		return response;
 	} else {
 		// Unknown method
 		proxy_info("MCP: Unknown method '%s' on endpoint '%s'\n", method.c_str(), endpoint_name.c_str());
+		// Return HTTP 200 OK with JSON-RPC error (not HTTP 404) for compatibility with MCP clients
 		auto response = std::shared_ptr<http_response>(new string_response(
 			create_jsonrpc_error(-32601, "Method not found", req_id),
-			http::http_utils::http_not_found
+			http::http_utils::http_ok
 		));
 		response->with_header("Content-Type", "application/json");
 		return response;
@@ -327,8 +330,9 @@ const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_POST(
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
+		// Use nullptr for ID since we haven't parsed JSON yet (JSON-RPC 2.0 spec)
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32600, "Invalid Request: Content-Type must be application/json", ""),
+			create_jsonrpc_error(-32600, "Invalid Request: Content-Type must be application/json", nullptr),
 			http::http_utils::http_unsupported_media_type
 		));
 		response->with_header("Content-Type", "application/json");
@@ -341,8 +345,9 @@ const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_POST(
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
+		// Use nullptr for ID since we haven't parsed JSON yet (JSON-RPC 2.0 spec)
 		auto response = std::shared_ptr<http_response>(new string_response(
-			create_jsonrpc_error(-32001, "Unauthorized", ""),
+			create_jsonrpc_error(-32001, "Unauthorized", nullptr),
 			http::http_utils::http_unauthorized
 		));
 		response->with_header("Content-Type", "application/json");
@@ -435,6 +440,7 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	}
 
 	mcp_result["content"] = json::array({text_content});
-	mcp_result["isError"] = false;
+	// Note: Per MCP spec, only include isError when true (error case)
+	// For success responses, omit the isError field entirely
 	return mcp_result;
 }
