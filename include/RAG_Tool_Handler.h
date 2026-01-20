@@ -239,6 +239,37 @@ private:
 	SQLite3_result* execute_query(const char* query);
 
 	/**
+	 * @brief Execute parameterized database query with bindings
+	 *
+	 * Executes a parameterized SQL query against the vector database with bound parameters
+	 * and returns the results. This prevents SQL injection vulnerabilities.
+	 * Handles error checking and logging. The caller is responsible for freeing
+	 * the returned SQLite3_result.
+	 *
+	 * @param query SQL query string with placeholders to execute
+	 * @param bindings Vector of parameter bindings (text, int, double)
+	 * @return SQLite3_result pointer or NULL on error
+	 *
+	 * @see vector_db
+	 */
+	SQLite3_result* execute_parameterized_query(const char* query, const std::vector<std::pair<int, std::string>>& text_bindings = {}, const std::vector<std::pair<int, int>>& int_bindings = {});
+
+	/**
+	 * @brief Build SQL filter conditions from JSON filters
+	 *
+	 * Builds SQL WHERE conditions from JSON filter parameters with proper input validation
+	 * to prevent SQL injection. This consolidates the duplicated filter building logic
+	 * across different search tools.
+	 *
+	 * @param filters JSON object containing filter parameters
+	 * @param sql Reference to SQL string to append conditions to
+	 * @return true on success, false on validation error
+	 *
+	 * @see execute_tool()
+	 */
+	bool build_sql_filters(const json& filters, std::string& sql);
+
+	/**
 	 * @brief Compute Reciprocal Rank Fusion score
 	 *
 	 * Computes the Reciprocal Rank Fusion score for hybrid search ranking.

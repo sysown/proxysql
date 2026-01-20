@@ -298,14 +298,22 @@ int AI_Features_Manager::init_vector_db() {
 	}
 
 	// rag_vec_chunks: sqlite3-vec index
-	const char* create_rag_vec_chunks =
+	// Use configurable vector dimension from GenAI module
+	int vector_dimension = 1536; // Default value
+	if (GloGATH) {
+		vector_dimension = GloGATH->variables.genai_vector_dimension;
+	}
+
+	std::string create_rag_vec_chunks_sql =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS rag_vec_chunks USING vec0("
-		"embedding float(1536), "
+		"embedding float(" + std::to_string(vector_dimension) + "), "
 		"chunk_id TEXT, "
 		"doc_id TEXT, "
 		"source_id INTEGER, "
 		"updated_at INTEGER"
 		");";
+
+	const char* create_rag_vec_chunks = create_rag_vec_chunks_sql.c_str();
 
 	if (vector_db->execute(create_rag_vec_chunks) != 0) {
 		proxy_error("AI: Failed to create rag_vec_chunks virtual table\n");

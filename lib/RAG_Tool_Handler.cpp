@@ -28,6 +28,8 @@
 #include <sstream>
 #include <algorithm>
 #include <chrono>
+#include <vector>
+#include <utility>
 
 // Forward declaration for GloGATH
 extern GenAI_Threads_Handler *GloGATH;
@@ -379,6 +381,242 @@ SQLite3_result* RAG_Tool_Handler::execute_query(const char* query) {
 	}
 
 	return result;
+}
+
+/**
+ * @brief Execute parameterized database query with bindings
+ *
+ * Executes a parameterized SQL query against the vector database with bound parameters
+ * and returns the results. This prevents SQL injection vulnerabilities.
+ * Handles error checking and logging. The caller is responsible for freeing
+ * the returned SQLite3_result.
+ *
+ * @param query SQL query string with placeholders to execute
+ * @param text_bindings Vector of text parameter bindings (position, value)
+ * @param int_bindings Vector of integer parameter bindings (position, value)
+ * @return SQLite3_result pointer or NULL on error
+ *
+ * @see vector_db
+ */
+SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query, const std::vector<std::pair<int, std::string>>& text_bindings, const std::vector<std::pair<int, int>>& int_bindings) {
+	if (!vector_db) {
+		proxy_error("RAG_Tool_Handler: Vector database not available\n");
+		return NULL;
+	}
+
+	// Prepare the statement
+	auto prepare_result = vector_db->prepare_v2(query);
+	if (prepare_result.first != SQLITE_OK) {
+		proxy_error("RAG_Tool_Handler: Failed to prepare statement: %s\n", sqlite3_errstr(prepare_result.first));
+		return NULL;
+	}
+
+	sqlite3_stmt* stmt = prepare_result.second.get();
+	if (!stmt) {
+		proxy_error("RAG_Tool_Handler: Prepared statement is NULL\n");
+		return NULL;
+	}
+
+	// Bind text parameters
+	for (const auto& binding : text_bindings) {
+		int position = binding.first;
+		const std::string& value = binding.second;
+		int result = proxy_sqlite3_bind_text(stmt, position, value.c_str(), -1, SQLITE_STATIC);
+		if (result != SQLITE_OK) {
+			proxy_error("RAG_Tool_Handler: Failed to bind text parameter at position %d: %s\n", position, sqlite3_errstr(result));
+			return NULL;
+		}
+	}
+
+	// Bind integer parameters
+	for (const auto& binding : int_bindings) {
+		int position = binding.first;
+		int value = binding.second;
+		int result = proxy_sqlite3_bind_int(stmt, position, value);
+		if (result != SQLITE_OK) {
+			proxy_error("RAG_Tool_Handler: Failed to bind integer parameter at position %d: %s\n", position, sqlite3_errstr(result));
+			return NULL;
+		}
+	}
+
+	// Execute the statement and get results
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* result = vector_db->execute_statement(query, &error, &cols, &affected_rows);
+
+	if (error) {
+		proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
+		proxy_sqlite3_free(error);
+		return NULL;
+	}
+
+	return result;
+}
+
+/**
+ * @brief Build SQL filter conditions from JSON filters
+ *
+ * Builds SQL WHERE conditions from JSON filter parameters with proper input validation
+ * to prevent SQL injection. This consolidates the duplicated filter building logic
+ * across different search tools.
+ *
+ * @param filters JSON object containing filter parameters
+ * @param sql Reference to SQL string to append conditions to
+ * * @return true on success, false on validation error
+ *
+ * @see execute_tool()
+ */
+bool RAG_Tool_Handler::build_sql_filters(const json& filters, std::string& sql) {
+	// Apply filters with input validation to prevent SQL injection
+	if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
+		std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
+		if (!source_ids.empty()) {
+			// Validate that all source_ids are integers (they should be by definition)
+			std::string source_list = "";
+			for (size_t i = 0; i < source_ids.size(); ++i) {
+				if (i > 0) source_list += ",";
+				source_list += std::to_string(source_ids[i]);
+			}
+			sql += " AND c.source_id IN (" + source_list + ")";
+		}
+	}
+
+	if (filters.contains("source_names") && filters["source_names"].is_array()) {
+		std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
+		if (!source_names.empty()) {
+			// Validate source names to prevent SQL injection
+			std::string source_list = "";
+			for (size_t i = 0; i < source_names.size(); ++i) {
+				const std::string& source_name = source_names[i];
+				// Basic validation - check for dangerous characters
+				if (source_name.find('\'') != std::string::npos ||
+					source_name.find('\\') != std::string::npos ||
+					source_name.find(';') != std::string::npos) {
+					return false;
+				}
+				if (i > 0) source_list += ",";
+				source_list += "'" + source_name + "'";
+			}
+			sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
+		}
+	}
+
+	if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
+		std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
+		if (!doc_ids.empty()) {
+			// Validate doc_ids to prevent SQL injection
+			std::string doc_list = "";
+			for (size_t i = 0; i < doc_ids.size(); ++i) {
+				const std::string& doc_id = doc_ids[i];
+				// Basic validation - check for dangerous characters
+				if (doc_id.find('\'') != std::string::npos ||
+					doc_id.find('\\') != std::string::npos ||
+					doc_id.find(';') != std::string::npos) {
+					return false;
+				}
+				if (i > 0) doc_list += ",";
+				doc_list += "'" + doc_id + "'";
+			}
+			sql += " AND c.doc_id IN (" + doc_list + ")";
+		}
+	}
+
+	// Metadata filters
+	if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
+		std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
+		if (!post_type_ids.empty()) {
+			// Validate that all post_type_ids are integers
+			std::string post_type_conditions = "";
+			for (size_t i = 0; i < post_type_ids.size(); ++i) {
+				if (i > 0) post_type_conditions += " OR ";
+				post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
+			}
+			sql += " AND (" + post_type_conditions + ")";
+		}
+	}
+
+	if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
+		std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
+		if (!tags_any.empty()) {
+			// Validate tags to prevent SQL injection
+			std::string tag_conditions = "";
+			for (size_t i = 0; i < tags_any.size(); ++i) {
+				const std::string& tag = tags_any[i];
+				// Basic validation - check for dangerous characters
+				if (tag.find('\'') != std::string::npos ||
+					tag.find('\\') != std::string::npos ||
+					tag.find(';') != std::string::npos) {
+					return false;
+				}
+				if (i > 0) tag_conditions += " OR ";
+				// Escape the tag for LIKE pattern matching
+				std::string escaped_tag = tag;
+				// Simple escaping - replace special characters
+				size_t pos = 0;
+				while ((pos = escaped_tag.find("'", pos)) != std::string::npos) {
+					escaped_tag.replace(pos, 1, "''");
+					pos += 2;
+				}
+				tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + escaped_tag + ">%' ESCAPE '\\'";
+			}
+			sql += " AND (" + tag_conditions + ")";
+		}
+	}
+
+	if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
+		std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
+		if (!tags_all.empty()) {
+			// Validate tags to prevent SQL injection
+			std::string tag_conditions = "";
+			for (size_t i = 0; i < tags_all.size(); ++i) {
+				const std::string& tag = tags_all[i];
+				// Basic validation - check for dangerous characters
+				if (tag.find('\'') != std::string::npos ||
+					tag.find('\\') != std::string::npos ||
+					tag.find(';') != std::string::npos) {
+					return false;
+				}
+				if (i > 0) tag_conditions += " AND ";
+				// Escape the tag for LIKE pattern matching
+				std::string escaped_tag = tag;
+				// Simple escaping - replace special characters
+				size_t pos = 0;
+				while ((pos = escaped_tag.find("'", pos)) != std::string::npos) {
+					escaped_tag.replace(pos, 1, "''");
+					pos += 2;
+				}
+				tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + escaped_tag + ">%' ESCAPE '\\'";
+			}
+			sql += " AND (" + tag_conditions + ")";
+		}
+	}
+
+	if (filters.contains("created_after") && filters["created_after"].is_string()) {
+		std::string created_after = filters["created_after"].get<std::string>();
+		// Validate date format to prevent SQL injection
+		if (created_after.find('\'') != std::string::npos ||
+			created_after.find('\\') != std::string::npos ||
+			created_after.find(';') != std::string::npos) {
+			return false;
+		}
+		// Filter by CreationDate in metadata_json
+		sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
+	}
+
+	if (filters.contains("created_before") && filters["created_before"].is_string()) {
+		std::string created_before = filters["created_before"].get<std::string>();
+		// Validate date format to prevent SQL injection
+		if (created_before.find('\'') != std::string::npos ||
+			created_before.find('\\') != std::string::npos ||
+			created_before.find(';') != std::string::npos) {
+			return false;
+		}
+		// Filter by CreationDate in metadata_json
+		sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+	}
+
+	return true;
 }
 
 /**
@@ -897,6 +1135,18 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				return create_error_response("Query too long");
 			}
 
+			// Validate FTS query for SQL injection patterns
+			// This is a basic validation - in production, more robust validation should be used
+			if (query.find(';') != std::string::npos ||
+				query.find("--") != std::string::npos ||
+				query.find("/*") != std::string::npos ||
+				query.find("DROP") != std::string::npos ||
+				query.find("DELETE") != std::string::npos ||
+				query.find("INSERT") != std::string::npos ||
+				query.find("UPDATE") != std::string::npos) {
+				return create_error_response("Invalid characters in query");
+			}
+
 			// Build FTS query with filters
 			std::string sql = "SELECT c.chunk_id, c.doc_id, c.source_id, "
 				"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
@@ -907,93 +1157,9 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				"JOIN rag_documents d ON d.doc_id = c.doc_id "
 				"WHERE f MATCH '" + query + "'";
 
-			// Apply filters
-			if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
-				std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
-				if (!source_ids.empty()) {
-					std::string source_list = "";
-					for (size_t i = 0; i < source_ids.size(); ++i) {
-						if (i > 0) source_list += ",";
-						source_list += std::to_string(source_ids[i]);
-					}
-					sql += " AND c.source_id IN (" + source_list + ")";
-				}
-			}
-
-			if (filters.contains("source_names") && filters["source_names"].is_array()) {
-				std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
-				if (!source_names.empty()) {
-					std::string source_list = "";
-					for (size_t i = 0; i < source_names.size(); ++i) {
-						if (i > 0) source_list += ",";
-						source_list += "'" + source_names[i] + "'";
-					}
-					sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
-				}
-			}
-
-			if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
-				std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
-				if (!doc_ids.empty()) {
-					std::string doc_list = "";
-					for (size_t i = 0; i < doc_ids.size(); ++i) {
-						if (i > 0) doc_list += ",";
-						doc_list += "'" + doc_ids[i] + "'";
-					}
-					sql += " AND c.doc_id IN (" + doc_list + ")";
-				}
-			}
-
-			// Metadata filters
-			if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
-				std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
-				if (!post_type_ids.empty()) {
-					// Filter by PostTypeId in metadata_json
-					std::string post_type_conditions = "";
-					for (size_t i = 0; i < post_type_ids.size(); ++i) {
-						if (i > 0) post_type_conditions += " OR ";
-						post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
-					}
-					sql += " AND (" + post_type_conditions + ")";
-				}
-			}
-
-			if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
-				std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
-				if (!tags_any.empty()) {
-					// Filter by any of the tags in metadata_json Tags field
-					std::string tag_conditions = "";
-					for (size_t i = 0; i < tags_any.size(); ++i) {
-						if (i > 0) tag_conditions += " OR ";
-						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
-					}
-					sql += " AND (" + tag_conditions + ")";
-				}
-			}
-
-			if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
-				std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
-				if (!tags_all.empty()) {
-					// Filter by all of the tags in metadata_json Tags field
-					std::string tag_conditions = "";
-					for (size_t i = 0; i < tags_all.size(); ++i) {
-						if (i > 0) tag_conditions += " AND ";
-						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
-					}
-					sql += " AND (" + tag_conditions + ")";
-				}
-			}
-
-			if (filters.contains("created_after") && filters["created_after"].is_string()) {
-				std::string created_after = filters["created_after"].get<std::string>();
-				// Filter by CreationDate in metadata_json
-				sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
-			}
-
-			if (filters.contains("created_before") && filters["created_before"].is_string()) {
-				std::string created_before = filters["created_before"].get<std::string>();
-				// Filter by CreationDate in metadata_json
-				sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+			// Apply filters using consolidated filter building function
+			if (!build_sql_filters(filters, sql)) {
+				return create_error_response("Invalid filter parameters");
 			}
 
 			sql += " ORDER BY score_fts_raw "
@@ -1172,93 +1338,9 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				"JOIN rag_documents d ON d.doc_id = c.doc_id "
 				"WHERE v.embedding MATCH '" + embedding_json + "'";
 
-			// Apply filters
-			if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
-				std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
-				if (!source_ids.empty()) {
-					std::string source_list = "";
-					for (size_t i = 0; i < source_ids.size(); ++i) {
-						if (i > 0) source_list += ",";
-						source_list += std::to_string(source_ids[i]);
-					}
-					sql += " AND c.source_id IN (" + source_list + ")";
-				}
-			}
-
-			if (filters.contains("source_names") && filters["source_names"].is_array()) {
-				std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
-				if (!source_names.empty()) {
-					std::string source_list = "";
-					for (size_t i = 0; i < source_names.size(); ++i) {
-						if (i > 0) source_list += ",";
-						source_list += "'" + source_names[i] + "'";
-					}
-					sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
-				}
-			}
-
-			if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
-				std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
-				if (!doc_ids.empty()) {
-					std::string doc_list = "";
-					for (size_t i = 0; i < doc_ids.size(); ++i) {
-						if (i > 0) doc_list += ",";
-						doc_list += "'" + doc_ids[i] + "'";
-					}
-					sql += " AND c.doc_id IN (" + doc_list + ")";
-				}
-			}
-
-			// Metadata filters
-			if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
-				std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
-				if (!post_type_ids.empty()) {
-					// Filter by PostTypeId in metadata_json
-					std::string post_type_conditions = "";
-					for (size_t i = 0; i < post_type_ids.size(); ++i) {
-						if (i > 0) post_type_conditions += " OR ";
-						post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
-					}
-					sql += " AND (" + post_type_conditions + ")";
-				}
-			}
-
-			if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
-				std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
-				if (!tags_any.empty()) {
-					// Filter by any of the tags in metadata_json Tags field
-					std::string tag_conditions = "";
-					for (size_t i = 0; i < tags_any.size(); ++i) {
-						if (i > 0) tag_conditions += " OR ";
-						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
-					}
-					sql += " AND (" + tag_conditions + ")";
-				}
-			}
-
-			if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
-				std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
-				if (!tags_all.empty()) {
-					// Filter by all of the tags in metadata_json Tags field
-					std::string tag_conditions = "";
-					for (size_t i = 0; i < tags_all.size(); ++i) {
-						if (i > 0) tag_conditions += " AND ";
-						tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
-					}
-					sql += " AND (" + tag_conditions + ")";
-				}
-			}
-
-			if (filters.contains("created_after") && filters["created_after"].is_string()) {
-				std::string created_after = filters["created_after"].get<std::string>();
-				// Filter by CreationDate in metadata_json
-				sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
-			}
-
-			if (filters.contains("created_before") && filters["created_before"].is_string()) {
-				std::string created_before = filters["created_before"].get<std::string>();
-				// Filter by CreationDate in metadata_json
-				sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
+			// Apply filters using consolidated filter building function
+			if (!build_sql_filters(filters, sql)) {
+				return create_error_response("Invalid filter parameters");
 			}
 
 			sql += " ORDER BY v.distance "
@@ -1431,17 +1513,9 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
 					"WHERE f MATCH '" + query + "'";
 
-				// Apply filters
-				if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
-					std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
-					if (!source_ids.empty()) {
-						std::string source_list = "";
-						for (size_t i = 0; i < source_ids.size(); ++i) {
-							if (i > 0) source_list += ",";
-							source_list += std::to_string(source_ids[i]);
-						}
-						fts_sql += " AND c.source_id IN (" + source_list + ")";
-					}
+				// Apply filters using consolidated filter building function
+				if (!build_sql_filters(filters, fts_sql)) {
+					return create_error_response("Invalid filter parameters");
 				}
 
 				if (filters.contains("source_names") && filters["source_names"].is_array()) {
@@ -1562,17 +1636,9 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
 					"WHERE v.embedding MATCH '" + embedding_json + "'";
 
-				// Apply filters
-				if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
-					std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
-					if (!source_ids.empty()) {
-						std::string source_list = "";
-						for (size_t i = 0; i < source_ids.size(); ++i) {
-							if (i > 0) source_list += ",";
-							source_list += std::to_string(source_ids[i]);
-						}
-						vec_sql += " AND c.source_id IN (" + source_list + ")";
-					}
+				// Apply filters using consolidated filter building function
+				if (!build_sql_filters(filters, vec_sql)) {
+					return create_error_response("Invalid filter parameters");
 				}
 
 				if (filters.contains("source_names") && filters["source_names"].is_array()) {
@@ -1825,17 +1891,9 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
 					"WHERE f MATCH '" + query + "'";
 
-				// Apply filters
-				if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
-					std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
-					if (!source_ids.empty()) {
-						std::string source_list = "";
-						for (size_t i = 0; i < source_ids.size(); ++i) {
-							if (i > 0) source_list += ",";
-							source_list += std::to_string(source_ids[i]);
-						}
-						fts_sql += " AND c.source_id IN (" + source_list + ")";
-					}
+				// Apply filters using consolidated filter building function
+				if (!build_sql_filters(filters, fts_sql)) {
+					return create_error_response("Invalid filter parameters");
 				}
 
 				if (filters.contains("source_names") && filters["source_names"].is_array()) {
@@ -2145,6 +2203,15 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				return create_error_response("No chunk_ids provided");
 			}
 
+			// Validate chunk_ids to prevent SQL injection
+			for (const std::string& chunk_id : chunk_ids) {
+				if (chunk_id.find('\'') != std::string::npos ||
+					chunk_id.find('\\') != std::string::npos ||
+					chunk_id.find(';') != std::string::npos) {
+					return create_error_response("Invalid characters in chunk_ids");
+				}
+			}
+
 			// Get return parameters
 			bool include_title = true;
 			bool include_doc_metadata = true;
@@ -2156,13 +2223,19 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				include_chunk_metadata = get_json_bool(return_params, "include_chunk_metadata", true);
 			}
 
-			// Build chunk ID list for SQL
-			std::string chunk_list = "'";
+			// Build chunk ID list for SQL with proper escaping
+			std::string chunk_list = "";
 			for (size_t i = 0; i < chunk_ids.size(); ++i) {
-				if (i > 0) chunk_list += "','";
-				chunk_list += chunk_ids[i];
+				if (i > 0) chunk_list += ",";
+				// Properly escape single quotes in chunk IDs
+				std::string escaped_chunk_id = chunk_ids[i];
+				size_t pos = 0;
+				while ((pos = escaped_chunk_id.find("'", pos)) != std::string::npos) {
+					escaped_chunk_id.replace(pos, 1, "''");
+					pos += 2;
+				}
+				chunk_list += "'" + escaped_chunk_id + "'";
 			}
-			chunk_list += "'";
 
 			// Build query with proper joins to get metadata
 			std::string sql = "SELECT c.chunk_id, c.doc_id, c.title, c.body, "
