@@ -59,6 +59,10 @@ int main(int argc, char** argv) {
 	for (const char* show_query : show_warnings_queries) {
 		MYSQL_QUERY(proxysql, WARNING_QUERY);
 		MYSQL_RES* res = mysql_store_result(proxysql);
+		if (!res) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+			return exit_status();
+		}
 		mysql_free_result(res);
 
 		unsigned int warning_count_after_query = mysql_warning_count(proxysql);
@@ -66,6 +70,10 @@ int main(int argc, char** argv) {
 
 		MYSQL_QUERY(proxysql, show_query);
 		res = mysql_store_result(proxysql);
+		if (!res) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+			return exit_status();
+		}
 		unsigned int row_count = mysql_num_rows(res);
 		mysql_free_result(res);
 
