@@ -497,7 +497,7 @@ AnomalyResult Anomaly_Detector::check_embedding_similarity(const std::string& qu
 			pattern_name ? pattern_name : "unknown", result.risk_score);
 	}
 
-	sqlite3_finalize(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
 
 	proxy_debug(PROXY_DEBUG_ANOMALY, 3,
 	           "Anomaly: Embedding similarity check performed\n");
@@ -768,12 +768,12 @@ int Anomaly_Detector::add_threat_pattern(const std::string& pattern_name,
 	// Execute insert
 	rc = (*proxy_sqlite3_step)(stmt);
 	if (rc != SQLITE_DONE) {
-		proxy_error("Anomaly: Failed to insert pattern: %s\n", sqlite3_errmsg(db));
-		sqlite3_finalize(stmt);
+		proxy_error("Anomaly: Failed to insert pattern: %s\n", (*proxy_sqlite3_errmsg)(db));
+		(*proxy_sqlite3_finalize)(stmt);
 		return -1;
 	}
 
-	sqlite3_finalize(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
 
 	// Get the inserted rowid
 	sqlite3_int64 rowid = (*proxy_sqlite3_last_insert_rowid)(db);
@@ -784,10 +784,10 @@ int Anomaly_Detector::add_threat_pattern(const std::string& pattern_name,
 		"INSERT INTO anomaly_patterns_vec(rowid) VALUES (%lld)", rowid);
 
 	char* err = NULL;
-	rc = sqlite3_exec(db, update_vec, NULL, NULL, &err);
+	rc = (*proxy_sqlite3_exec)(db, update_vec, NULL, NULL, &err);
 	if (rc != SQLITE_OK) {
 		proxy_error("Anomaly: Failed to update vec table: %s\n", err ? err : "unknown");
-		if (err) sqlite3_free(err);
+		if (err) (*proxy_sqlite3_free)(err);
 		return -1;
 	}
 
@@ -812,10 +812,10 @@ std::string Anomaly_Detector::list_threat_patterns() {
 	                   "FROM anomaly_patterns ORDER BY severity DESC";
 
 	sqlite3_stmt* stmt = NULL;
-	int rc = sqlite3_prepare_v2(db, query, -1, &stmt, NULL);
+	int rc = (*proxy_sqlite3_prepare_v2)(db, query, -1, &stmt, NULL);
 
 	if (rc != SQLITE_OK) {
-		proxy_error("Anomaly: Failed to query threat patterns: %s\n", sqlite3_errmsg(db));
+		proxy_error("Anomaly: Failed to query threat patterns: %s\n", (*proxy_sqlite3_errmsg)(db));
 		return "[]";
 	}
 
@@ -833,7 +833,7 @@ std::string Anomaly_Detector::list_threat_patterns() {
 		patterns.push_back(pattern);
 	}
 
-	sqlite3_finalize(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
 
 	return patterns.dump();
 }
@@ -858,19 +858,19 @@ bool Anomaly_Detector::remove_threat_pattern(int pattern_id) {
 	char del_vec[256];
 	snprintf(del_vec, sizeof(del_vec), "DELETE FROM anomaly_patterns_vec WHERE rowid = %d", pattern_id);
 	char* err = NULL;
-	int rc = sqlite3_exec(db, del_vec, NULL, NULL, &err);
+	int rc = (*proxy_sqlite3_exec)(db, del_vec, NULL, NULL, &err);
 	if (rc != SQLITE_OK) {
 		proxy_error("Anomaly: Failed to delete from vec table: %s\n", err ? err : "unknown");
-		if (err) sqlite3_free(err);
+		if (err) (*proxy_sqlite3_free)(err);
 		return false;
 	}
 
 	// Then, remove from main table
 	snprintf(del_vec, sizeof(del_vec), "DELETE FROM anomaly_patterns WHERE id = %d", pattern_id);
-	rc = sqlite3_exec(db, del_vec, NULL, NULL, &err);
+	rc = (*proxy_sqlite3_exec)(db, del_vec, NULL, NULL, &err);
 	if (rc != SQLITE_OK) {
 		proxy_error("Anomaly: Failed to delete pattern: %s\n", err ? err : "unknown");
-		if (err) sqlite3_free(err);
+		if (err) (*proxy_sqlite3_free)(err);
 		return false;
 	}
 
@@ -912,30 +912,30 @@ std::string Anomaly_Detector::get_statistics() {
 		sqlite3* db = vector_db->get_db();
 		const char* count_query = "SELECT COUNT(*) FROM anomaly_patterns";
 		sqlite3_stmt* stmt = NULL;
-		int rc = sqlite3_prepare_v2(db, count_query, -1, &stmt, NULL);
+		int rc = (*proxy_sqlite3_prepare_v2)(db, count_query, -1, &stmt, NULL);
 
 		if (rc == SQLITE_OK) {
 			rc = (*proxy_sqlite3_step)(stmt);
 			if (rc == SQLITE_ROW) {
-				stats["threat_patterns_count"] = sqlite3_column_int(stmt, 0);
+				stats["threat_patterns_count"] = (*proxy_sqlite3_column_int)(stmt, 0);
 			}
-			sqlite3_finalize(stmt);
+			(*proxy_sqlite3_finalize)(stmt);
 		}
 
 		// Count by pattern type
 		const char* type_query = "SELECT pattern_type, COUNT(*) FROM anomaly_patterns GROUP BY pattern_type";
-		rc = sqlite3_prepare_v2(db, type_query, -1, &stmt, NULL);
+		rc = (*proxy_sqlite3_prepare_v2)(db, type_query, -1, &stmt, NULL);
 
 		if (rc == SQLITE_OK) {
 			json by_type = json::object();
 			while ((*proxy_sqlite3_step)(stmt) == SQLITE_ROW) {
-				const char* type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-				int count = sqlite3_column_int(stmt, 1);
+				const char* type = reinterpret_cast<const char*>((*proxy_sqlite3_column_text)(stmt, 0));
+				int count = (*proxy_sqlite3_column_int)(stmt, 1);
 				if (type) {
 					by_type[type] = count;
 				}
 			}
-			sqlite3_finalize(stmt);
+			(*proxy_sqlite3_finalize)(stmt);
 			stats["threat_patterns_by_type"] = by_type;
 		}
 	}
