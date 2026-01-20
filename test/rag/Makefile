@@ -1,29 +1,7 @@
 #!/bin/make -f
 
-PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ../..; done; pwd)
-
-include $(PROXYSQL_PATH)/include/makefiles_vars.mk
-include $(PROXYSQL_PATH)/include/makefiles_paths.mk
-
-IDIRS :=	-I$(PROXYSQL_IDIR) \
-			-I$(JEMALLOC_IDIR) \
-			-I$(MARIADB_IDIR) \
-			-I$(LIBCONFIG_IDIR) \
-			-I$(RE2_IDIR) \
-			-I$(SQLITE3_IDIR) \
-			-I$(PCRE_IDIR) \
-			-I$(SYS_LOC_IDIR) \
-			-I$(CLICKHOUSE_CPP_IDIR) \
-			-I$(MICROHTTPD_IDIR) \
-			-I$(LIBHTTPSERVER_IDIR) \
-			-I$(LIBINJECTION_IDIR) \
-			-I$(CURL_IDIR) \
-			-I$(EV_IDIR) \
-			-I$(JSON_IDIR) \
-			-I$(SSL_IDIR)
-
 test_rag_schema: test_rag_schema.cpp
-	$(CXX) -ggdb $(PROXYSQL_OBJS) test_rag_schema.cpp -o test_rag_schema $(IDIRS) $(LDIRS) $(PROXYSQL_LIBS)
+	g++ -ggdb test_rag_schema.cpp ../../deps/sqlite3/libsqlite_rembed.a ../../deps/sqlite3/sqlite3/libsqlite3.so  -o test_rag_schema -I../../deps/sqlite3/sqlite3 -lssl -lcrypto
 
 clean:
 	rm -f test_rag_schema

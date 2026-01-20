@@ -125,6 +125,7 @@ test/.vagrant
 .DS_Store
 proxysql-tests.ini
 test/sqlite_history_convert
+test/rag/test_rag_schema
 
 #heaptrack
 heaptrack.*
