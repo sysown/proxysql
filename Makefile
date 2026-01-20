@@ -69,6 +69,7 @@ endif
 ### multiprocessing
 NPROCS := 1
 OS := $(shell uname -s)
+UNAME_S := $(OS)
 ifeq ($(OS),Linux)
 	NPROCS := $(shell nproc)
 endif
@@ -87,8 +88,12 @@ ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 endif
 
 ### check user/group
+USERCHECK :=
+GROUPCHECK :=
+ifeq ($(OS),Linux)
 USERCHECK := $(shell getent passwd proxysql)
 GROUPCHECK := $(shell getent group proxysql)
+endif
 
 
 ### main targets
@@ -300,7 +305,11 @@ SYS_ARCH := $(shell uname -m)
 REL_ARCH = $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH = .$(SYS_ARCH)
 DEB_ARCH = _$(REL_ARCH)
+ifeq ($(UNAME_S),Darwin)
+REL_VERS := $(shell echo ${GIT_VERSION} | sed -E 's/^v//' | grep -Eo '^[0-9\.]+')
+else
 REL_VERS := $(shell echo ${GIT_VERSION} | grep -Po '(?<=^v|^)[\d\.]+')
+endif
 RPM_VERS := -$(REL_VERS)-1
 DEB_VERS := _$(REL_VERS)
 

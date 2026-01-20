@@ -8,27 +8,67 @@ ifeq ($(CENTOSVER),8)
 endif
 endif
 
-$(info OPENSSL_PACKAGE: $(OPENSSL_PACKAGE))
 
 # Use pkg-config to get the compiler and linker flags for OpenSSL if CUSTOM_OPENSSL_PATH is not set
 ifeq ($(CUSTOM_OPENSSL_PATH),)
-    $(info No custom path specified.)
     ifeq ($(OPENSSL_PACKAGE),openssl3)
+ifeq ($(UNAME_S),Darwin)
+        SSL_IDIR := $(shell pkg-config --cflags $(OPENSSL_PACKAGE) | sed -E 's/-I/ /g' | awk '{for(i=1;i<=NF;i++) if($$i ~ /^\//) print $$i}' | head -n 1)
+else
         SSL_IDIR := $(shell pkg-config --cflags $(OPENSSL_PACKAGE) | grep -oP "(?<=-I)[^ ]+")
+endif
         SSL_LDIR := $(shell pkg-config --variable=libdir $(OPENSSL_PACKAGE))
         LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.so.3" 2>/dev/null | head -n 1)
         LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.so.3" 2>/dev/null | head -n 1)
     else
+ifeq ($(UNAME_S),Darwin)
+        SSL_IDIR := $(shell export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1; export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1; pkg-config --cflags $(OPENSSL_PACKAGE) | sed -E 's/-I/ /g' | awk '{for(i=1;i<=NF;i++) if($$i ~ /^\//) print $$i}' | head -n 1)
+else
         SSL_IDIR := $(shell export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1; export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1; pkg-config --cflags $(OPENSSL_PACKAGE) | grep -oP "(?<=-I)[^ ]+")
+endif
         SSL_LDIR := $(shell pkg-config --variable=libdir $(OPENSSL_PACKAGE))
-        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.so" 2>/dev/null | head -n 1)
-        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.so" 2>/dev/null | head -n 1)
+ifeq ($(UNAME_S),Darwin)
+        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.dylib" 2>/dev/null | head -n 1)
+        ifeq ($(LIB_SSL_PATH),)
+            LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.a" 2>/dev/null | head -n 1)
+        endif
+        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.dylib" 2>/dev/null | head -n 1)
+        ifeq ($(LIB_CRYPTO_PATH),)
+            LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.a" 2>/dev/null | head -n 1)
+        endif
+else
+        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.so*" 2>/dev/null | head -n 1)
+        ifeq ($(LIB_SSL_PATH),)
+            LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.a" 2>/dev/null | head -n 1)
+        endif
+        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.so*" 2>/dev/null | head -n 1)
+        ifeq ($(LIB_CRYPTO_PATH),)
+            LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.a" 2>/dev/null | head -n 1)
+        endif
+endif
     endif
 else
     SSL_IDIR := $(CUSTOM_OPENSSL_PATH)/include
     SSL_LDIR := $(CUSTOM_OPENSSL_PATH)/lib64
+ifeq ($(UNAME_S),Darwin)
+    LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.dylib" 2>/dev/null | head -n 1)
+    ifeq ($(LIB_SSL_PATH),)
+        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.a" 2>/dev/null | head -n 1)
+    endif
+    LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.dylib" 2>/dev/null | head -n 1)
+    ifeq ($(LIB_CRYPTO_PATH),)
+        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.a" 2>/dev/null | head -n 1)
+    endif
+else
     LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.so" 2>/dev/null | head -n 1)
-    LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.so" 2>/dev/null | head -n 1)	
+    ifeq ($(LIB_SSL_PATH),)
+        LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.a" 2>/dev/null | head -n 1)
+    endif
+    LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.so" 2>/dev/null | head -n 1)
+    ifeq ($(LIB_CRYPTO_PATH),)
+        LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.a" 2>/dev/null | head -n 1)
+    endif
+endif
     $(info Using custom OpenSSL path: $(CUSTOM_OPENSSL_PATH))
 endif
 
