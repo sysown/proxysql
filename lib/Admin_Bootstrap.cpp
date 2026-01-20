@@ -92,8 +92,8 @@ using json = nlohmann::json;
  *
  * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
  */
-extern "C" int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
-extern "C" int sqlite3_rembed_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+extern "C" int (*proxy_sqlite3_vec_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+extern "C" int (*proxy_sqlite3_rembed_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 #include "microhttpd.h"
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
@@ -572,7 +572,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * SELECT rowid, distance FROM vec_data WHERE vector MATCH json('[0.1, 0.2, ...]');
 	 * @endcode
 	 *
-	 * @see sqlite3_vec_init() for extension initialization
+	 * @see (*proxy_sqlite3_vec_init)() for extension initialization
 	 * @see deps/sqlite3/README.md for integration documentation
 	 * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
 	 */
@@ -592,7 +592,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * Allows loading SQLite extensions at runtime. This is required for
 	 * sqlite-vec to be registered when the database is opened.
 	 */
-	sqlite3_enable_load_extension(admindb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(admindb->get_db(),1);
 
 	/**
 	 * @brief Register sqlite-vec extension for auto-loading
@@ -609,8 +609,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * @note The sqlite3_vec_init function is cast to a function pointer
 	 * for SQLite's auto-extension mechanism.
 	 */
-	sqlite3_auto_extension( (void(*)(void))sqlite3_vec_init);
-	sqlite3_auto_extension( (void(*)(void))sqlite3_rembed_init);
+	(*proxy_sqlite3_auto_extension)( (void(*)(void))sqlite3_vec_init);
+	(*proxy_sqlite3_auto_extension)( (void(*)(void))sqlite3_rembed_init);
 
 	/**
 	 * @brief Open the stats database with shared cache mode
@@ -627,7 +627,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
 	 * registered in the stats database for advanced analytics operations.
 	 */
-	sqlite3_enable_load_extension(statsdb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(statsdb->get_db(),1);
 
 	// check if file exists , see #617
 	bool admindb_file_exists=Proxy_file_exists(GloVars.admindb);
@@ -657,7 +657,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Configuration optimization with vector-based recommendations
 	 * - Intelligent grouping of similar configurations
 	 */
-	sqlite3_enable_load_extension(configdb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(configdb->get_db(),1);
 	// Fully synchronous is not required. See to #1055
 	// https://sqlite.org/pragma.html#pragma_synchronous
 	configdb->execute("PRAGMA synchronous=0");
@@ -682,7 +682,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Clustering similar server performance metrics
 	 * - Predictive monitoring based on historical vector patterns
 	 */
-	sqlite3_enable_load_extension(monitordb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(monitordb->get_db(),1);
 
 	statsdb_disk = new SQLite3DB();
 	/**
@@ -704,7 +704,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Clustering similar query digests for optimization insights
 	 * - Long-term performance monitoring with vector-based analytics
 	 */
-	sqlite3_enable_load_extension(statsdb_disk->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(statsdb_disk->get_db(),1);
 //	char *dbname = (char *)malloc(strlen(GloVars.statsdb_disk)+50);
 //	sprintf(dbname,"%s?mode=memory&cache=shared",GloVars.statsdb_disk);
 //	statsdb_disk->open(dbname, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_FULLMUTEX);
@@ -733,7 +733,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
 	 * registered for vector similarity searches in the catalog.
 	 */
-	sqlite3_enable_load_extension(mcpdb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(mcpdb->get_db(),1);
 
 	tables_defs_admin=new std::vector<table_def_t *>;
 	tables_defs_stats=new std::vector<table_def_t *>;

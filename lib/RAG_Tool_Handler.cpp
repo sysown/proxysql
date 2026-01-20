@@ -376,7 +376,7 @@ SQLite3_result* RAG_Tool_Handler::execute_query(const char* query) {
 
 	if (error) {
 		proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
-		proxy_sqlite3_free(error);
+		proxy_(*proxy_sqlite3_free)(error);
 		return NULL;
 	}
 
@@ -407,7 +407,7 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 	// Prepare the statement
 	auto prepare_result = vector_db->prepare_v2(query);
 	if (prepare_result.first != SQLITE_OK) {
-		proxy_error("RAG_Tool_Handler: Failed to prepare statement: %s\n", sqlite3_errstr(prepare_result.first));
+		proxy_error("RAG_Tool_Handler: Failed to prepare statement: %s\n", (*proxy_sqlite3_errstr)(prepare_result.first));
 		return NULL;
 	}
 
@@ -421,9 +421,9 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 	for (const auto& binding : text_bindings) {
 		int position = binding.first;
 		const std::string& value = binding.second;
-		int result = proxy_sqlite3_bind_text(stmt, position, value.c_str(), -1, SQLITE_STATIC);
+		int result = proxy_(*proxy_sqlite3_bind_text)(stmt, position, value.c_str(), -1, SQLITE_STATIC);
 		if (result != SQLITE_OK) {
-			proxy_error("RAG_Tool_Handler: Failed to bind text parameter at position %d: %s\n", position, sqlite3_errstr(result));
+			proxy_error("RAG_Tool_Handler: Failed to bind text parameter at position %d: %s\n", position, (*proxy_sqlite3_errstr)(result));
 			return NULL;
 		}
 	}
@@ -432,9 +432,9 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 	for (const auto& binding : int_bindings) {
 		int position = binding.first;
 		int value = binding.second;
-		int result = proxy_sqlite3_bind_int(stmt, position, value);
+		int result = proxy_(*proxy_sqlite3_bind_int)(stmt, position, value);
 		if (result != SQLITE_OK) {
-			proxy_error("RAG_Tool_Handler: Failed to bind integer parameter at position %d: %s\n", position, sqlite3_errstr(result));
+			proxy_error("RAG_Tool_Handler: Failed to bind integer parameter at position %d: %s\n", position, (*proxy_sqlite3_errstr)(result));
 			return NULL;
 		}
 	}
@@ -447,7 +447,7 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 
 	if (error) {
 		proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
-		proxy_sqlite3_free(error);
+		proxy_(*proxy_sqlite3_free)(error);
 		return NULL;
 	}
 

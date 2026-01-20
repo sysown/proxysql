@@ -553,7 +553,7 @@ int Discovery_Schema::create_run(
 	(*proxy_sqlite3_bind_text)(stmt, 3, notes.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int run_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return run_id;
@@ -618,7 +618,7 @@ int Discovery_Schema::create_agent_run(
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) {
-		proxy_error("Failed to prepare agent_runs insert: %s\n", sqlite3_errstr(rc));
+		proxy_error("Failed to prepare agent_runs insert: %s\n", (*proxy_sqlite3_errstr)(rc));
 		return -1;
 	}
 
@@ -639,11 +639,11 @@ int Discovery_Schema::create_agent_run(
 	(*proxy_sqlite3_finalize)(stmt);
 
 	if (step_rc != SQLITE_DONE) {
-		proxy_error("Failed to insert into agent_runs (run_id=%d): %s\n", run_id, sqlite3_errstr(step_rc));
+		proxy_error("Failed to insert into agent_runs (run_id=%d): %s\n", run_id, (*proxy_sqlite3_errstr)(step_rc));
 		return -1;
 	}
 
-	int agent_run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int agent_run_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	proxy_info("Created agent_run_id=%d for run_id=%d\n", agent_run_id, run_id);
 	return agent_run_id;
 }
@@ -746,7 +746,7 @@ int Discovery_Schema::insert_schema(
 	(*proxy_sqlite3_bind_text)(stmt, 4, collation.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int schema_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int schema_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return schema_id;
@@ -794,7 +794,7 @@ int Discovery_Schema::insert_object(
 	(*proxy_sqlite3_bind_text)(stmt, 12, definition_sql.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int object_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int object_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return object_id;
@@ -847,7 +847,7 @@ int Discovery_Schema::insert_column(
 	(*proxy_sqlite3_bind_int)(stmt, 16, is_id_like);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int column_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int column_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return column_id;
@@ -877,7 +877,7 @@ int Discovery_Schema::insert_index(
 	(*proxy_sqlite3_bind_int64)(stmt, 6, (sqlite3_int64)cardinality);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int index_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int index_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return index_id;
@@ -936,7 +936,7 @@ int Discovery_Schema::insert_foreign_key(
 	(*proxy_sqlite3_bind_text)(stmt, 7, on_delete.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int fk_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int fk_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return fk_id;
@@ -1565,7 +1565,7 @@ int Discovery_Schema::append_agent_event(
 	(*proxy_sqlite3_bind_text)(stmt, 3, payload_json.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int event_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int event_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return event_id;
@@ -1726,7 +1726,7 @@ int Discovery_Schema::upsert_llm_domain(
 	(*proxy_sqlite3_bind_double)(stmt, 6, confidence);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int domain_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int domain_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
@@ -1842,7 +1842,7 @@ int Discovery_Schema::upsert_llm_metric(
 	(*proxy_sqlite3_bind_double)(stmt, 11, confidence);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int metric_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int metric_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
@@ -1892,7 +1892,7 @@ int Discovery_Schema::add_question_template(
 	(*proxy_sqlite3_bind_double)(stmt, 8, confidence);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int template_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int template_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index
@@ -1944,7 +1944,7 @@ int Discovery_Schema::add_llm_note(
 	(*proxy_sqlite3_bind_text)(stmt, 8, tags_json.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int note_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int note_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index
@@ -2180,11 +2180,11 @@ int Discovery_Schema::log_llm_search(
 		return -1;
 	}
 
-	sqlite3_bind_int(stmt, 1, run_id);
-	sqlite3_bind_text(stmt, 2, query.c_str(), -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int(stmt, 3, lmt);
+	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, query.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 3, lmt);
 
-	rc = sqlite3_step(stmt);
+	rc = (*proxy_sqlite3_step)(stmt);
 	(*proxy_sqlite3_finalize)(stmt);
 
 	if (rc != SQLITE_DONE) {
@@ -2212,26 +2212,26 @@ int Discovery_Schema::log_query_tool_call(
 		return -1;
 	}
 
-	sqlite3_bind_text(stmt, 1, tool_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 1, tool_name.c_str(), -1, SQLITE_TRANSIENT);
 	if (!schema.empty()) {
-		sqlite3_bind_text(stmt, 2, schema.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 2, schema.c_str(), -1, SQLITE_TRANSIENT);
 	} else {
-		sqlite3_bind_null(stmt, 2);
+		(*proxy_sqlite3_bind_null)(stmt, 2);
 	}
 	if (run_id > 0) {
-		sqlite3_bind_int(stmt, 3, run_id);
+		(*proxy_sqlite3_bind_int)(stmt, 3, run_id);
 	} else {
-		sqlite3_bind_null(stmt, 3);
+		(*proxy_sqlite3_bind_null)(stmt, 3);
 	}
-	sqlite3_bind_int64(stmt, 4, start_time);
-	sqlite3_bind_int64(stmt, 5, execution_time);
+	(*proxy_sqlite3_bind_int64)(stmt, 4, start_time);
+	(*proxy_sqlite3_bind_int64)(stmt, 5, execution_time);
 	if (!error.empty()) {
-		sqlite3_bind_text(stmt, 6, error.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 6, error.c_str(), -1, SQLITE_TRANSIENT);
 	} else {
-		sqlite3_bind_null(stmt, 6);
+		(*proxy_sqlite3_bind_null)(stmt, 6);
 	}
 
-	rc = sqlite3_step(stmt);
+	rc = (*proxy_sqlite3_step)(stmt);
 	(*proxy_sqlite3_finalize)(stmt);
 
 	if (rc != SQLITE_DONE) {

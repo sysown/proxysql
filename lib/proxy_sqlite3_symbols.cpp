@@ -19,15 +19,15 @@ int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int) = sqlite3_column_bytes;
 int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int) = sqlite3_column_type;
 int (*proxy_sqlite3_column_count)(sqlite3_stmt*) = sqlite3_column_count;
 int (*proxy_sqlite3_column_int)(sqlite3_stmt*, int) = sqlite3_column_int;
-sqlite3_int64 (*proxy_sqlite3_column_int64)(sqlite3_stmt*, int) = sqlite3_column_int64;
+(*proxy_sqlite3_int64)(*proxy_sqlite3_column_int64)(sqlite3_stmt*, int) = sqlite3_column_int64;
 double (*proxy_sqlite3_column_double)(sqlite3_stmt*, int) = sqlite3_column_double;
-sqlite3_int64 (*proxy_sqlite3_last_insert_rowid)(sqlite3*) = sqlite3_last_insert_rowid;
+(*proxy_sqlite3_int64)(*proxy_sqlite3_last_insert_rowid)(sqlite3*) = sqlite3_last_insert_rowid;
 const char *(*proxy_sqlite3_errstr)(int) = sqlite3_errstr;
 sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*) = sqlite3_db_handle;
 int (*proxy_sqlite3_enable_load_extension)(sqlite3*, int) = sqlite3_enable_load_extension;
 /* Some platforms may expose sqlite3_enable_load_extension as a macro or different symbol; provide a weak alias to help the linker. */
-extern "C" int proxy_sqlite3_enable_load_extension_alias(sqlite3* db, int onoff) __attribute__((weak));
-int proxy_sqlite3_enable_load_extension_alias(sqlite3* db, int onoff) { return sqlite3_enable_load_extension(db, onoff); }
+extern "C" int proxy_(*proxy_sqlite3_enable_load_extension_alias)(sqlite3* db, int onoff) __attribute__((weak));
+int proxy_(*proxy_sqlite3_enable_load_extension_alias)(sqlite3* db, int onoff) { return (*proxy_sqlite3_enable_load_extension)(db, onoff); }
 int (*proxy_sqlite3_auto_extension)(void(*)(void)) = sqlite3_auto_extension;
 const char *(*proxy_sqlite3_errmsg)(sqlite3*) = sqlite3_errmsg;
 int (*proxy_sqlite3_finalize)(sqlite3_stmt *) = sqlite3_finalize;

@@ -263,7 +263,7 @@ int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 }
 
 void stmt_deleter_t::operator()(sqlite3_stmt* x) const {
-	proxy_sqlite3_finalize(x);
+	proxy_(*proxy_sqlite3_finalize)(x);
 }
 
 std::pair<int,stmt_unique_ptr> SQLite3DB::prepare_v2(const char* query) {
