@@ -2584,8 +2584,13 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 	if (!qth) return;
 
 	// Get the discovery schema catalog
-	// Note: This is a simplified implementation that queries the catalog database
-	// In a full implementation, we would access the Discovery_Schema directly
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (!catalog) return;
+
+	// Get the stats from the catalog (includes reset logic)
+	SQLite3_result* resultset = catalog->get_mcp_query_digest(reset);
+	if (!resultset) return;
+
 	statsdb->execute("BEGIN");
 
 	if (reset) {
@@ -2594,11 +2599,34 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 		statsdb->execute("DELETE FROM stats_mcp_query_digest");
 	}
 
-	// For now, we'll leave the table empty since MCP digest stats are stored in memory
-	// in the Discovery_Schema and would need to be accessed differently
-	// TODO: Implement proper access to Discovery_Schema digest statistics
-
+	// Insert digest statistics into the stats table
+	// Columns: tool_name, run_id, digest, digest_text, count_star,
+	//          first_seen, last_seen, sum_time, min_time, max_time
+	char* a = (char*)"INSERT INTO stats_mcp_query_digest VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row* r = *it;
+		int arg_len = 0;
+		for (int i = 0; i < 10; i++) {
+			arg_len += strlen(r->fields[i]);
+		}
+		char* query = (char*)malloc(strlen(a) + arg_len + 32);
+		sprintf(query, a,
+			r->fields[0],  // tool_name
+			r->fields[1],  // run_id
+			r->fields[2],  // digest
+			r->fields[3],  // digest_text
+			r->fields[4],  // count_star
+			r->fields[5],  // first_seen
+			r->fields[6],  // last_seen
+			r->fields[7],  // sum_time
+			r->fields[8],  // min_time
+			r->fields[9]   // max_time
+		);
+		statsdb->execute(query);
+		free(query);
+	}
 	statsdb->execute("COMMIT");
+	delete resultset;
 }
 
 // Collect MCP query rules statistics

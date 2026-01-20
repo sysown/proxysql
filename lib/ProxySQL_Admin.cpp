@@ -1355,10 +1355,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mcp_query_tools_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mcp_query_tools_counters_reset"))
 		{ stats_mcp_query_tools_counters_reset=true; refresh=true; }
-	if (strstr(query_no_space,"stats_mcp_query_digest"))
-		{ stats_mcp_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mcp_query_digest_reset"))
 		{ stats_mcp_query_digest_reset=true; refresh=true; }
+	else if (strstr(query_no_space,"stats_mcp_query_digest"))
+		{ stats_mcp_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mcp_query_rules"))
 		{ stats_mcp_query_rules=true; refresh=true; }
 

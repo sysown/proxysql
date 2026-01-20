@@ -2390,8 +2390,17 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 	// Column order: rule_id, active, username, schemaname, tool_name, match_pattern,
 	//               negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern,
 	//               timeout_ms, error_msg, OK_msg, log, apply, comment
+	// Expected: 17 columns (fields[0] through fields[16])
 	for (unsigned int i = 0; i < resultset->rows_count; i++) {
 		SQLite3_row* row = resultset->rows[i];
+
+		// Validate column count before accessing fields
+		if (row->cnt < 17) {
+			proxy_error("Invalid row format in mcp_query_rules: expected 17 columns, got %d. Skipping row %u.\n",
+				row->cnt, i);
+			continue;
+		}
+
 		MCP_Query_Rule* rule = new MCP_Query_Rule();
 
 		rule->rule_id = atoi(row->fields[0]);           // rule_id
@@ -2401,7 +2410,19 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 		rule->tool_name = row->fields[4] ? strdup(row->fields[4]) : NULL;  // tool_name
 		rule->match_pattern = row->fields[5] ? strdup(row->fields[5]) : NULL;  // match_pattern
 		rule->negate_match_pattern = row->fields[6] ? atoi(row->fields[6]) != 0 : false;  // negate_match_pattern
-		rule->re_modifiers = row->fields[7] ? atoi(row->fields[7]) : 1;  // default CASELESS
+		// re_modifiers: Parse VARCHAR value - "CASELESS" maps to 1, otherwise parse as int
+		if (row->fields[7]) {
+			std::string mod = row->fields[7];
+			if (mod == "CASELESS") {
+				rule->re_modifiers = 1;
+			} else if (mod == "0") {
+				rule->re_modifiers = 0;
+			} else {
+				rule->re_modifiers = atoi(mod.c_str());
+			}
+		} else {
+			rule->re_modifiers = 1;  // default CASELESS
+		}
 		rule->flagIN = row->fields[8] ? atoi(row->fields[8]) : 0;  // flagIN
 		rule->flagOUT = row->fields[9] ? atoi(row->fields[9]) : 0;  // flagOUT
 		rule->replace_pattern = row->fields[10] ? strdup(row->fields[10]) : NULL;  // replace_pattern
@@ -2477,6 +2498,11 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 //
 // Thread Safety:
 //   Uses read lock on mcp_rules_lock during evaluation
+//
+// Memory Ownership:
+//   Returns a newly allocated MCP_Query_Processor_Output object.
+//   The caller assumes ownership and MUST delete the returned pointer
+//   when done to avoid memory leaks.
 //
 MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 	const std::string& tool_name,
@@ -2848,7 +2874,14 @@ SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
 	result->add_column_definition(SQLITE_TEXT, "min_time");
 	result->add_column_definition(SQLITE_TEXT, "max_time");
 
-	pthread_rwlock_rdlock(&mcp_digest_rwlock);
+	// Use appropriate lock based on reset flag to prevent TOCTOU race condition
+	// If reset is true, we need a write lock from the start to prevent new data
+	// from being added between the read and write lock operations
+	if (reset) {
+		pthread_rwlock_wrlock(&mcp_digest_rwlock);
+	} else {
+		pthread_rwlock_rdlock(&mcp_digest_rwlock);
+	}
 
 	for (auto const& [key1, inner_map] : mcp_digest_umap) {
 		for (auto const& [digest, stats_ptr] : inner_map) {
@@ -2878,21 +2911,17 @@ SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
 		}
 	}
 
-	pthread_rwlock_unlock(&mcp_digest_rwlock);
-
 	if (reset) {
-		pthread_rwlock_wrlock(&mcp_digest_rwlock);
-
-		// Clear all digest stats
+		// Clear all digest stats (we already have write lock)
 		for (auto const& [key1, inner_map] : mcp_digest_umap) {
 			for (auto const& [key2, stats] : inner_map) {
 				delete (MCP_Query_Digest_Stats*)stats;
 			}
 		}
 		mcp_digest_umap.clear();
-
-		pthread_rwlock_unlock(&mcp_digest_rwlock);
 	}
+
+	pthread_rwlock_unlock(&mcp_digest_rwlock);
 
 	return result;
 }
