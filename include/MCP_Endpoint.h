@@ -112,6 +112,24 @@ private:
 	 */
 	json handle_tools_call(const json& req_json);
 
+	/**
+	 * @brief Handle prompts/list method
+	 *
+	 * Returns an empty prompts array since ProxySQL doesn't support prompts.
+	 *
+	 * @return JSON with empty prompts array
+	 */
+	json handle_prompts_list();
+
+	/**
+	 * @brief Handle resources/list method
+	 *
+	 * Returns an empty resources array since ProxySQL doesn't support resources.
+	 *
+	 * @return JSON with empty resources array
+	 */
+	json handle_resources_list();
+
 public:
 	/**
 	 * @brief Constructor for MCP_JSONRPC_Resource

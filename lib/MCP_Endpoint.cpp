@@ -276,6 +276,10 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		} else if (method == "tools/call") {
 			result = handle_tools_call(req_json);
 		}
+	} else if (method == "prompts/list") {
+		result = handle_prompts_list();
+	} else if (method == "resources/list") {
+		result = handle_resources_list();
 	} else if (method == "initialize") {
 		// Handle MCP protocol methods
 		result["protocolVersion"] = "2025-06-18";
@@ -444,4 +448,22 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	// Note: Per MCP spec, only include isError when true (error case)
 	// For success responses, omit the isError field entirely
 	return mcp_result;
+}
+
+// Helper method to handle prompts/list
+json MCP_JSONRPC_Resource::handle_prompts_list() {
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "MCP: prompts/list called\n");
+	// Returns an empty prompts array since ProxySQL doesn't support prompts
+	json result;
+	result["prompts"] = json::array();
+	return result;
+}
+
+// Helper method to handle resources/list
+json MCP_JSONRPC_Resource::handle_resources_list() {
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "MCP: resources/list called\n");
+	// Returns an empty resources array since ProxySQL doesn't support resources
+	json result;
+	result["resources"] = json::array();
+	return result;
 }
