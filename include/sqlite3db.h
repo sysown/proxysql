@@ -22,6 +22,12 @@
 } while (0)
 #endif // SAFE_SQLITE3_STEP2
 
+/* Forward-declare core proxy types that appear in function pointer prototypes */
+class SQLite3_row;
+class SQLite3_result;
+class SQLite3DB;
+
+
 #ifndef MAIN_PROXY_SQLITE3
 extern int (*proxy_sqlite3_bind_double)(sqlite3_stmt*, int, double);
 extern int (*proxy_sqlite3_bind_int)(sqlite3_stmt*, int, int);
@@ -42,6 +48,8 @@ extern const char *(*proxy_sqlite3_errstr)(int);
 extern sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*);
 extern int (*proxy_sqlite3_enable_load_extension)(sqlite3*, int);
 extern int (*proxy_sqlite3_auto_extension)(void(*)(void));
+extern int (*proxy_sqlite3_bulk_step)(SQLite3DB*, sqlite3_stmt*, sqlite3_stmt*, SQLite3_result*, void(*)(int, SQLite3DB*, sqlite3_stmt*, SQLite3_row*));
+extern void (*proxy_sqlite3_global_stats_row_step)(SQLite3DB*, sqlite3_stmt*, const char*, ...);
 extern const char *(*proxy_sqlite3_errmsg)(sqlite3*);
 extern int (*proxy_sqlite3_finalize)(sqlite3_stmt *pStmt);
 extern int (*proxy_sqlite3_reset)(sqlite3_stmt *pStmt);
@@ -137,7 +145,6 @@ int (*proxy_sqlite3_exec)(
   char **errmsg                              /* Error msg written here */
 );
 #endif //MAIN_PROXY_SQLITE3
-
 class SQLite3_row {
 	public:
 	int cnt;
