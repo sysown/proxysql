@@ -278,7 +278,7 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		}
 	} else if (method == "initialize") {
 		// Handle MCP protocol methods
-		result["protocolVersion"] = "2024-11-05";
+		result["protocolVersion"] = "2025-06-18";
 		result["capabilities"]["tools"] = json::object();  // Explicitly declare tools support
 		result["serverInfo"] = {
 			{"name", "proxysql-mcp-mcp-mysql-tools"},
