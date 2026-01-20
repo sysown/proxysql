@@ -147,6 +147,27 @@ const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_OPTIONS(
 	return response;
 }
 
+const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_DELETE(
+	const httpserver::http_request& req
+) {
+	std::string req_path = req.get_path();
+	proxy_debug(PROXY_DEBUG_GENERIC, 2, "Received MCP DELETE request on %s - returning 405 Method Not Allowed\n", req_path.c_str());
+
+	// ProxySQL doesn't support session termination
+	// Return 405 Method Not Allowed with Allow header indicating supported methods
+	auto response = std::shared_ptr<http_response>(new string_response(
+		"",
+		http::http_utils::http_method_not_allowed  // 405
+	));
+	response->with_header("Allow", "POST, OPTIONS");  // Tell client what IS allowed
+
+	if (handler) {
+		handler->status_variables.total_requests++;
+	}
+
+	return response;
+}
+
 std::string MCP_JSONRPC_Resource::create_jsonrpc_response(
 	const std::string& result,
 	const json& id

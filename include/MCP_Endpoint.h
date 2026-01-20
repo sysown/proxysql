@@ -150,7 +150,7 @@ public:
 	 *
 	 * Returns HTTP 405 Method Not Allowed for GET requests.
 	 *
-	 * According to the MCP specification (Streamable HTTP transport):
+	 * According to the MCP specification 2025-06-18 (Streamable HTTP transport):
 	 * "The server MUST either return Content-Type: text/event-stream in response to
 	 * this HTTP GET, or else return HTTP 405 Method Not Allowed, indicating that
 	 * the server does not offer an SSE stream at this endpoint."
@@ -171,6 +171,22 @@ public:
 	 * @return HTTP response with CORS headers
 	 */
 	const std::shared_ptr<httpserver::http_response> render_OPTIONS(
+		const httpserver::http_request& req
+	) override;
+
+	/**
+	 * @brief Handle DELETE requests
+	 *
+	 * Returns HTTP 405 Method Not Allowed for DELETE requests.
+	 *
+	 * According to the MCP specification 2025-06-18 (Streamable HTTP transport):
+	 * "The server MAY respond to this request with HTTP 405 Method Not Allowed,
+	 * indicating that the server does not allow clients to terminate sessions."
+	 *
+	 * @param req The HTTP request
+	 * @return HTTP 405 response with Allow header
+	 */
+	const std::shared_ptr<httpserver::http_response> render_DELETE(
 		const httpserver::http_request& req
 	) override;
 
