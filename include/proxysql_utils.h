@@ -26,17 +26,19 @@
 #define	ETIME	ETIMEDOUT
 #endif
 
-#ifdef CXX17
+#if defined(__APPLE__)
+using std::conjunction;
+#elif defined(CXX17)
 template<class...> struct conjunction : std::true_type { };
 template<class B1> struct std::conjunction<B1> : B1 { };
 template<class B1, class... Bn>
-struct std::conjunction<B1, Bn...> 
+struct std::conjunction<B1, Bn...>
     : std::conditional<bool(B1::value), std::conjunction<Bn...>, B1>::type {};
 #else
 template<class...> struct conjunction : std::true_type { };
 template<class B1> struct conjunction<B1> : B1 { };
 template<class B1, class... Bn>
-struct conjunction<B1, Bn...> 
+struct conjunction<B1, Bn...>
     : std::conditional<bool(B1::value), conjunction<Bn...>, B1>::type {};
 #endif // CXX17
 /**

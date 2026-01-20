@@ -491,6 +491,8 @@ const void sqlite3_global_stats_row_step(
 	if constexpr (std::is_same_v<T, int32_t>)  {
 		sprintf(buf, "%d", val);
 	} else if constexpr (std::is_same_v<T, uint64_t>) {
+		sprintf(buf, "%lu", (unsigned long)val);
+	} else if constexpr (std::is_same_v<T, unsigned long>) {
 		sprintf(buf, "%lu", val);
 	} else if constexpr (std::is_same_v<T, unsigned long long>) {
 		sprintf(buf, "%llu", val);

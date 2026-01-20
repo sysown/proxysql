@@ -114,7 +114,7 @@ endif
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS :=-lre2 -lmariadbclient -lpq -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
+	MYLIBS :=-lre2 -lmariadbclient -lssl -lcrypto -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include
@@ -144,6 +144,11 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(SQLITE3_LDIR)/sqlite3.o
 	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
 	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
+	LIBPROXYSQLAR += $(LIBSCRAM_LDIR)/libscram.a
+	LIBPROXYSQLAR += $(LIBUSUAL_LDIR)/libusual.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/common/libpgcommon.a
+	LIBPROXYSQLAR += $(POSTGRESQL_PATH)/port/libpgport.a
 endif
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
 

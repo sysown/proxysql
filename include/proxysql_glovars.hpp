@@ -11,6 +11,7 @@
 #include "configfile.hpp"
 #include "proxy_defines.h"
 #include "proxysql_utils.h"
+#include <openssl/ssl.h>
 
 namespace ez {
 class ezOptionParser;

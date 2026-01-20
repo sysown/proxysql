@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <queue>
+#include <climits>
 #include <stdint.h>
 #include <utility>
 #include <vector>
@@ -1820,7 +1821,7 @@ void* worker_thread(void* args) {
 			add_task(task_poll, POLLOUT, std::move(init_st));
 		}
 
-		uint64_t next_timeout_at = ULONG_LONG_MAX;
+		uint64_t next_timeout_at = ULLONG_MAX;
 		uint64_t tasks_start = monotonic_time();
 
 		// Continue processing tasks; Next async operation
