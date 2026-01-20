@@ -286,15 +286,16 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 		};
 	} else if (method == "ping") {
 		result["status"] = "ok";
-	} else if (method == "initialized") {
-		// MCP notification: "initialized" - Return HTTP 200 with empty body
-		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP notification 'initialized' received on endpoint '%s'\n", endpoint_name.c_str());
-		auto response = std::shared_ptr<http_response>(new string_response(
-			"",
-			http::http_utils::http_ok
-		));
-		response->with_header("Content-Type", "application/json");
-		return response;
+	} else if (method.compare(0, strlen("notifications/"), "notifications/") == 0) {
+		// Handle notifications sent by the client
+		// notifications/initialized
+		// - https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization
+		// notifications/cancelled
+		// - https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation#cancellation-flow
+
+		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP notification '%s' received on endpoint '%s'\n", method.c_str(), endpoint_name.c_str());
+		// simple acknowledgement with HTTP 202 Accepted (no response body)
+		return std::shared_ptr<http_response>(new string_response("",http::http_utils::http_accepted));
 	} else {
 		// Unknown method
 		proxy_info("MCP: Unknown method '%s' on endpoint '%s'\n", method.c_str(), endpoint_name.c_str());
