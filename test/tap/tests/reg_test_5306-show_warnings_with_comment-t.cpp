@@ -4,9 +4,6 @@
  */
 
 #include <stdio.h>
-#include <unistd.h>
-#include <string>
-#include <thread>
 #include "mysql.h"
 #include "mysqld_error.h"
 #include "tap.h"
