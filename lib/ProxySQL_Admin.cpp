@@ -1600,11 +1600,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mcp_query_tools_counters_reset) {
 			stats___mcp_query_tools_counters(true);
 		}
-		if (stats_mcp_query_digest) {
-			stats___mcp_query_digest(false);
-		}
 		if (stats_mcp_query_digest_reset) {
 			stats___mcp_query_digest(true);
+		} else {
+			if (stats_mcp_query_digest) {
+				stats___mcp_query_digest(false);
+			}
 		}
 		if (stats_mcp_query_rules) {
 			stats___mcp_query_rules();

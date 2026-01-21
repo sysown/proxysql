@@ -2367,7 +2367,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO MEMORY") && !strncasecmp("LOAD MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
 			) {
 			l_free(*ql,*q);
-			*q=l_strdup("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules");
+			// First clear target table, then insert to ensure deleted source rows are also removed
+			*q=l_strdup("DELETE FROM main.mcp_query_rules; INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules");
 			*ql=strlen(*q)+1;
 			return true;
 		}
@@ -2378,7 +2379,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
 			) {
 			l_free(*ql,*q);
-			*q=l_strdup("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules");
+			// First clear target table, then insert to ensure deleted source rows are also removed
+			*q=l_strdup("DELETE FROM disk.mcp_query_rules; INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules");
 			*ql=strlen(*q)+1;
 			return true;
 		}

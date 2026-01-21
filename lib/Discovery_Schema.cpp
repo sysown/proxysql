@@ -2862,7 +2862,7 @@ void Discovery_Schema::update_mcp_query_digest(
 SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
 	SQLite3_result* result = new SQLite3_result();
 
-	// Define columns (10 columns, not 11 - digest_text was duplicated)
+	// Define columns for MCP query digest statistics
 	result->add_column_definition(SQLITE_TEXT, "tool_name");
 	result->add_column_definition(SQLITE_TEXT, "run_id");
 	result->add_column_definition(SQLITE_TEXT, "digest");

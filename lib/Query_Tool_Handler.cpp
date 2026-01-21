@@ -1633,7 +1633,8 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 			// Apply timeout if provided
 			if (qpo->timeout_ms > 0) {
-				timeout_sec = qpo->timeout_ms / 1000;
+				// Use ceiling division to ensure sub-second timeouts are at least 1 second
+				timeout_sec = (qpo->timeout_ms + 999) / 1000;
 			}
 
 			// Apply log flag if set
