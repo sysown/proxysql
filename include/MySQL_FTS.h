@@ -89,6 +89,12 @@ public:
 	 */
 	MySQL_FTS(const std::string& path);
 
+	// Prevent copy and move (class owns raw pointer)
+	MySQL_FTS(const MySQL_FTS&) = delete;
+	MySQL_FTS& operator=(const MySQL_FTS&) = delete;
+	MySQL_FTS(MySQL_FTS&&) = delete;
+	MySQL_FTS& operator=(MySQL_FTS&&) = delete;
+
 	/**
 	 * @brief Destructor
 	 */

@@ -1,4 +1,4 @@
-# MCP Full Text Search (FTS) - User Guide
+# MCP Full-Text Search (FTS) - User Guide
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@
 
 ## Overview
 
-The MCP Full Text Search (FTS) module provides fast, indexed search capabilities for MySQL table data. It uses SQLite's FTS5 extension with BM25 ranking, allowing AI agents to quickly find relevant data before making targeted queries to the MySQL backend.
+The MCP Full-Text Search (FTS) module provides fast, indexed search capabilities for MySQL table data. It uses SQLite's FTS5 extension with BM25 ranking, allowing AI agents to quickly find relevant data before making targeted queries to the MySQL backend.
 
 ### Key Benefits
 

@@ -145,7 +145,7 @@ mcp_request() {
     local payload="$1"
 
     local response
-    response=$(curl -s -w "\n%{http_code}" -X POST "${MCP_ENDPOINT}" \
+    response=$(curl -s --connect-timeout 5 --max-time 30 -w "\n%{http_code}" -X POST "${MCP_ENDPOINT}" \
         -H "Content-Type: application/json" \
         -d "${payload}" 2>/dev/null)
 
@@ -350,8 +350,7 @@ teardown_test_schema() {
     log_info "Cleaning up test schema..."
 
     # Drop FTS index if exists
-    local delete_response
-    delete_response=$(fts_tool_call "fts_delete_index" "{\"schema\": \"${TEST_SCHEMA}\", \"table\": \"${TEST_TABLE}\"}")
+    fts_tool_call "fts_delete_index" "{\"schema\": \"${TEST_SCHEMA}\", \"table\": \"${TEST_TABLE}\"}" >/dev/null
 
     # Drop test table and schema
     mysql_exec "DROP TABLE IF EXISTS ${TEST_SCHEMA}.${TEST_SCHEMA}__${TEST_TABLE};" 2>/dev/null || true

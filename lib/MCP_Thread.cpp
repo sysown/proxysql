@@ -348,18 +348,28 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		return 0;
 	}
 	if (!strcmp(name, "fts_path")) {
-		if (variables.mcp_fts_path)
-			free(variables.mcp_fts_path);
-		variables.mcp_fts_path = strdup(value);
+		// Save old value to restore on failure
+		char* old_fts_path = variables.mcp_fts_path;
+		char* new_fts_path = strdup(value);
+		if (!new_fts_path) {
+			proxy_error("Failed to allocate memory for fts_path\n");
+			return -1;
+		}
+
 		// Apply at runtime by resetting FTS in the existing handler
 		if (mysql_tool_handler) {
 			proxy_info("MCP: Applying new fts_path at runtime: %s\n", value);
 			if (!mysql_tool_handler->reset_fts_path(value)) {
 				proxy_error("Failed to reset FTS path at runtime\n");
+				free(new_fts_path);
+				variables.mcp_fts_path = old_fts_path;
 				return -1;
 			}
 		}
 
+		// Success: commit the new path and free the old one
+		variables.mcp_fts_path = new_fts_path;
+		if (old_fts_path) free(old_fts_path);
 		return 0;
 	}
 

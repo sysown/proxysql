@@ -218,12 +218,25 @@ json Query_Tool_Handler::get_tool_list() {
 	));
 
 	// FTS tools (Full Text Search)
-	tools.push_back(create_tool_schema(
-		"fts_index_table",
-		"Create and populate a full-text search index for a MySQL table",
-		{"schema", "table", "columns", "primary_key"},
-		{{"where_clause", "string"}}
-	));
+	{
+		// Custom schema for fts_index_table with columns as array
+		json schema = {
+			{"type", "object"},
+			{"properties", {
+				{"schema", {{"type", "string"}, {"description", "Schema name"}}},
+				{"table", {{"type", "string"}, {"description", "Table name"}}},
+				{"columns", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Columns to index"}}},
+				{"primary_key", {{"type", "string"}, {"description", "Primary key column"}}},
+				{"where_clause", {{"type", "string"}, {"description", "Optional WHERE clause"}}}
+			}},
+			{"required", {"schema", "table", "columns", "primary_key"}}
+		};
+		tools.push_back(create_tool_description(
+			"fts_index_table",
+			"Create and populate a full-text search index for a MySQL table",
+			schema
+		));
+	}
 
 	tools.push_back(create_tool_schema(
 		"fts_search",

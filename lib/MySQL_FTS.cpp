@@ -99,8 +99,20 @@ std::string MySQL_FTS::sanitize_name(const std::string& name) {
 			sanitized.push_back(c);
 		}
 	}
+
+	// Return fallback with unique suffix if empty or would be too short
+	if (sanitized.empty()) {
+		// Create unique suffix from hash of original name
+		std::hash<std::string> hasher;
+		size_t hash_value = hasher(name);
+		char hash_suffix[16];
+		snprintf(hash_suffix, sizeof(hash_suffix), "%08zx", hash_value & 0xFFFFFFFF);
+		sanitized = "_unnamed_";
+		sanitized += hash_suffix;
+	}
+
 	// Prevent leading digit (SQLite identifiers can't start with digit)
-	if (!sanitized.empty() && sanitized[0] >= '0' && sanitized[0] <= '9') {
+	if (sanitized[0] >= '0' && sanitized[0] <= '9') {
 		sanitized.insert(sanitized.begin(), '_');
 	}
 	// Enforce maximum length
@@ -115,6 +127,19 @@ std::string MySQL_FTS::escape_identifier(const std::string& identifier) {
 	for (char c : identifier) {
 		escaped.push_back(c);
 		if (c == '`') escaped.push_back('`');  // Double backticks
+	}
+	escaped.push_back('`');
+	return escaped;
+}
+
+// Helper for escaping MySQL identifiers (double backticks)
+static std::string escape_mysql_identifier(const std::string& id) {
+	std::string escaped;
+	escaped.reserve(id.length() * 2 + 2);
+	escaped.push_back('`');
+	for (char c : id) {
+		escaped.push_back(c);
+		if (c == '`') escaped.push_back('`');
 	}
 	escaped.push_back('`');
 	return escaped;
@@ -328,12 +353,27 @@ std::string MySQL_FTS::index_table(
 	mysql_query << "SELECT ";
 	for (size_t i = 0; i < selected_cols.size(); i++) {
 		if (i > 0) mysql_query << ", ";
-		mysql_query << "`" << selected_cols[i] << "`";
+		mysql_query << escape_mysql_identifier(selected_cols[i]);
 	}
 
-	mysql_query << " FROM `" << schema << "`.`" << table << "`";
+	mysql_query << " FROM " << escape_mysql_identifier(schema) << "." << escape_mysql_identifier(table);
 
+	// Validate where_clause to prevent SQL injection
 	if (!where_clause.empty()) {
+		// Basic sanity check - reject obviously dangerous patterns
+		std::string upper_where = where_clause;
+		std::transform(upper_where.begin(), upper_where.end(), upper_where.begin(), ::toupper);
+		if (upper_where.find("INTO OUTFILE") != std::string::npos ||
+		    upper_where.find("LOAD_FILE") != std::string::npos ||
+		    upper_where.find("DROP TABLE") != std::string::npos ||
+		    upper_where.find("DROP DATABASE") != std::string::npos ||
+		    upper_where.find("TRUNCATE") != std::string::npos ||
+		    upper_where.find("DELETE FROM") != std::string::npos ||
+		    upper_where.find("INSERT INTO") != std::string::npos ||
+		    upper_where.find("UPDATE ") != std::string::npos) {
+			result["error"] = "Dangerous pattern in where_clause - not allowed for security";
+			return result.dump();
+		}
 		mysql_query << " WHERE " << where_clause;
 	}
 
@@ -485,6 +525,7 @@ std::string MySQL_FTS::search(
 
 	if (!indexes_result || indexes_result->rows.empty()) {
 		db->rdunlock();
+		if (indexes_result) delete indexes_result;
 		result["success"] = true;
 		result["query"] = query;
 		result["total_matches"] = 0;

@@ -249,14 +249,14 @@ echo "${rebuild_resp}" | jq -e '.success == true' >/dev/null
 echo "${rebuild_resp}" | jq -e '.total_indexes >= 0' >/dev/null
 
 if [ "${CLEANUP}" = "true" ]; then
-  log "Cleanup: deleting fts_test.customers and fts_test.orders indexes"
+  log "Cleanup: deleting fts_test indexes (ignore if not found)"
   delete_resp=$(tool_call "fts_delete_index" '{"schema":"fts_test","table":"customers"}')
   delete_resp=$(extract_tool_result "${delete_resp}")
-  echo "${delete_resp}" | jq -e '.success == true' >/dev/null
+  echo "${delete_resp}" | jq -e '.success == true' >/dev/null || log "Note: customers index may not exist"
 
   delete_resp=$(tool_call "fts_delete_index" '{"schema":"fts_test","table":"orders"}')
   delete_resp=$(extract_tool_result "${delete_resp}")
-  echo "${delete_resp}" | jq -e '.success == true' >/dev/null
+  echo "${delete_resp}" | jq -e '.success == true' >/dev/null || log "Note: orders index may not exist"
 fi
 
 cleanup_sample_data
