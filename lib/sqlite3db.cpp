@@ -1205,6 +1205,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_bind_int64);
 	assert(proxy_sqlite3_bind_null);
 	assert(proxy_sqlite3_bind_text);
+	assert(proxy_sqlite3_bind_blob);
 	assert(proxy_sqlite3_column_name);
 	assert(proxy_sqlite3_column_text);
 	assert(proxy_sqlite3_column_bytes);
