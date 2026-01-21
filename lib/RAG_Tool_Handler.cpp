@@ -466,15 +466,18 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 		}
 	}
 
-	// Execute the statement and get results
+	// Execute the prepared statement and get results
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
-	SQLite3_result* result = vector_db->execute_statement(query, &error, &cols, &affected_rows);
+	SQLite3_result* result = NULL;
 
-	if (error) {
-		proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
-		(*proxy_sqlite3_free)(error);
+	// Use execute_prepared to execute the bound statement, not the raw query
+	if (!vector_db->execute_prepared(stmt, &error, &cols, &affected_rows, &result)) {
+		if (error) {
+			proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
+			(*proxy_sqlite3_free)(error);
+		}
 		return NULL;
 	}
 
