@@ -14,9 +14,11 @@
  */
 
 #include "tap.h"
+#include <string>
 #include <string.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <vector>
 #include <chrono>
 #include <thread>
@@ -320,7 +322,7 @@ void test_large_dataset_handling() {
 	auto insert_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_insert - start_insert);
 
 	ok(db.size() == large_size, "Large dataset (%zu entries) inserted successfully", large_size);
-	diag("Time to insert %zu entries: %lld ms", large_size, insert_duration.count());
+	diag("Time to insert %zu entries: %ld ms", large_size, insert_duration.count());
 
 	// Test search performance in large dataset
 	auto search_result = db.lookup_entry("Large dataset query 5000");
@@ -376,7 +378,7 @@ void test_concurrent_access() {
 	long long avg_time = total_time / num_operations;
 
 	diag("Average time per concurrent operation: %lld microseconds", avg_time);
-	diag("Total time for %d operations: %lld microseconds", num_operations, total_duration.count());
+	diag("Total time for %d operations: %ld microseconds", num_operations, total_duration.count());
 
 	// Operations should be reasonably fast
 	ok(avg_time < 50000, "Average concurrent operation time reasonable (< 50ms)");
