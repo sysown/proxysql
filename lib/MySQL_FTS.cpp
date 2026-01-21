@@ -24,11 +24,13 @@ MySQL_FTS::~MySQL_FTS() {
 int MySQL_FTS::init() {
 	// Initialize database connection
 	db = new SQLite3DB();
-	char path_buf[db_path.size() + 1];
-	strcpy(path_buf, db_path.c_str());
-	int rc = db->open(path_buf, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	std::vector<char> path_buf(db_path.size() + 1);
+	strcpy(path_buf.data(), db_path.c_str());
+	int rc = db->open(path_buf.data(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to open FTS database at %s: %d\n", db_path.c_str(), rc);
+		delete db;
+		db = NULL;
 		return -1;
 	}
 
@@ -88,14 +90,34 @@ int MySQL_FTS::create_tables() {
 }
 
 std::string MySQL_FTS::sanitize_name(const std::string& name) {
-	std::string sanitized = name;
-	// Replace dots and special characters with underscores
-	for (size_t i = 0; i < sanitized.length(); i++) {
-		if (sanitized[i] == '.' || sanitized[i] == '-' || sanitized[i] == ' ') {
-			sanitized[i] = '_';
+	const size_t MAX_NAME_LEN = 100;
+	std::string sanitized;
+	// Allowlist: only ASCII letters, digits, underscore
+	for (char c : name) {
+		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		    (c >= '0' && c <= '9') || c == '_') {
+			sanitized.push_back(c);
 		}
 	}
+	// Prevent leading digit (SQLite identifiers can't start with digit)
+	if (!sanitized.empty() && sanitized[0] >= '0' && sanitized[0] <= '9') {
+		sanitized.insert(sanitized.begin(), '_');
+	}
+	// Enforce maximum length
+	if (sanitized.length() > MAX_NAME_LEN) sanitized = sanitized.substr(0, MAX_NAME_LEN);
 	return sanitized;
+}
+
+std::string MySQL_FTS::escape_identifier(const std::string& identifier) {
+	std::string escaped;
+	escaped.reserve(identifier.length() * 2 + 2);
+	escaped.push_back('`');
+	for (char c : identifier) {
+		escaped.push_back(c);
+		if (c == '`') escaped.push_back('`');  // Double backticks
+	}
+	escaped.push_back('`');
+	return escaped;
 }
 
 std::string MySQL_FTS::escape_sql(const std::string& str) {
@@ -148,12 +170,12 @@ bool MySQL_FTS::index_exists(const std::string& schema, const std::string& table
 int MySQL_FTS::create_index_tables(const std::string& schema, const std::string& table) {
 	std::string data_table = get_data_table_name(schema, table);
 	std::string fts_table = get_fts_table_name(schema, table);
-	std::string sanitized_data = data_table;
-	std::string sanitized_fts = fts_table;
+	std::string escaped_data = escape_identifier(data_table);
+	std::string escaped_fts = escape_identifier(fts_table);
 
 	// Create data table
 	std::ostringstream create_data_sql;
-	create_data_sql << "CREATE TABLE IF NOT EXISTS " << sanitized_data << " ("
+	create_data_sql << "CREATE TABLE IF NOT EXISTS " << escaped_data << " ("
 		"  rowid INTEGER PRIMARY KEY AUTOINCREMENT,"
 		"  schema_name TEXT NOT NULL,"
 		"  table_name TEXT NOT NULL,"
@@ -169,9 +191,9 @@ int MySQL_FTS::create_index_tables(const std::string& schema, const std::string&
 
 	// Create FTS5 virtual table with external content
 	std::ostringstream create_fts_sql;
-	create_fts_sql << "CREATE VIRTUAL TABLE IF NOT EXISTS " << sanitized_fts << " USING fts5("
+	create_fts_sql << "CREATE VIRTUAL TABLE IF NOT EXISTS " << escaped_fts << " USING fts5("
 		"  content, metadata,"
-		"  content='" << sanitized_data << "',"
+		"  content=" << escaped_data << ","
 		"  content_rowid='rowid',"
 		"  tokenize='porter unicode61'"
 		");";
@@ -183,37 +205,38 @@ int MySQL_FTS::create_index_tables(const std::string& schema, const std::string&
 
 	// Create triggers for automatic sync (populate the FTS table)
 	std::string base_name = sanitize_name(schema) + "_" + sanitize_name(table);
+	std::string escaped_base = escape_identifier(base_name);
 
 	// Drop existing triggers if any
-	db->execute(("DROP TRIGGER IF EXISTS fts_ai_" + base_name).c_str());
-	db->execute(("DROP TRIGGER IF EXISTS fts_ad_" + base_name).c_str());
-	db->execute(("DROP TRIGGER IF EXISTS fts_au_" + base_name).c_str());
+	db->execute(("DROP TRIGGER IF EXISTS " + escape_identifier("fts_ai_" + base_name)).c_str());
+	db->execute(("DROP TRIGGER IF EXISTS " + escape_identifier("fts_ad_" + base_name)).c_str());
+	db->execute(("DROP TRIGGER IF EXISTS " + escape_identifier("fts_au_" + base_name)).c_str());
 
 	// AFTER INSERT trigger
 	std::ostringstream ai_sql;
-	ai_sql << "CREATE TRIGGER IF NOT EXISTS fts_ai_" << base_name
-		<< " AFTER INSERT ON " << sanitized_data << " BEGIN"
-		<< "  INSERT INTO " << sanitized_fts << "(rowid, content, metadata)"
+	ai_sql << "CREATE TRIGGER IF NOT EXISTS " << escape_identifier("fts_ai_" + base_name)
+		<< " AFTER INSERT ON " << escaped_data << " BEGIN"
+		<< "  INSERT INTO " << escaped_fts << "(rowid, content, metadata)"
 		<< "  VALUES (new.rowid, new.content, new.metadata);"
 		<< "END;";
 	db->execute(ai_sql.str().c_str());
 
 	// AFTER DELETE trigger
 	std::ostringstream ad_sql;
-	ad_sql << "CREATE TRIGGER IF NOT EXISTS fts_ad_" << base_name
-		<< " AFTER DELETE ON " << sanitized_data << " BEGIN"
-		<< "  INSERT INTO " << sanitized_fts << "(" << sanitized_fts << ", rowid, content, metadata)"
+	ad_sql << "CREATE TRIGGER IF NOT EXISTS " << escape_identifier("fts_ad_" + base_name)
+		<< " AFTER DELETE ON " << escaped_data << " BEGIN"
+		<< "  INSERT INTO " << escaped_fts << "(" << escaped_fts << ", rowid, content, metadata)"
 		<< "  VALUES ('delete', old.rowid, old.content, old.metadata);"
 		<< "END;";
 	db->execute(ad_sql.str().c_str());
 
 	// AFTER UPDATE trigger
 	std::ostringstream au_sql;
-	au_sql << "CREATE TRIGGER IF NOT EXISTS fts_au_" << base_name
-		<< " AFTER UPDATE ON " << sanitized_data << " BEGIN"
-		<< "  INSERT INTO " << sanitized_fts << "(" << sanitized_fts << ", rowid, content, metadata)"
+	au_sql << "CREATE TRIGGER IF NOT EXISTS " << escape_identifier("fts_au_" + base_name)
+		<< " AFTER UPDATE ON " << escaped_data << " BEGIN"
+		<< "  INSERT INTO " << escaped_fts << "(" << escaped_fts << ", rowid, content, metadata)"
 		<< "  VALUES ('delete', old.rowid, old.content, old.metadata);"
-		<< "  INSERT INTO " << sanitized_fts << "(rowid, content, metadata)"
+		<< "  INSERT INTO " << escaped_fts << "(rowid, content, metadata)"
 		<< "  VALUES (new.rowid, new.content, new.metadata);"
 		<< "END;";
 	db->execute(au_sql.str().c_str());
@@ -327,7 +350,7 @@ std::string MySQL_FTS::index_table(
 
 	// Get data table name
 	std::string data_table = get_data_table_name(schema, table);
-	std::string sanitized_data = data_table;
+	std::string escaped_data = escape_identifier(data_table);
 
 	// Insert data in batches
 	int row_count = 0;
@@ -371,7 +394,7 @@ std::string MySQL_FTS::index_table(
 
 			// Insert into data table (triggers will sync to FTS)
 			std::ostringstream insert_sql;
-			insert_sql << "INSERT INTO " << sanitized_data
+			insert_sql << "INSERT INTO " << escaped_data
 				<< " (schema_name, table_name, primary_key_value, content, metadata) "
 				<< "VALUES ('" << escape_sql(schema) << "', '"
 				<< escape_sql(table) << "', '"
@@ -483,17 +506,26 @@ std::string MySQL_FTS::search(
 
 		std::string data_table = get_data_table_name(idx_schema, idx_table);
 		std::string fts_table = get_fts_table_name(idx_schema, idx_table);
-		std::string sanitized_data = data_table;
+		std::string escaped_data = escape_identifier(data_table);
+		std::string escaped_fts = escape_identifier(fts_table);
+
+		// Escape query for FTS5 MATCH clause (wrap in double quotes, escape embedded quotes)
+		std::string fts_literal = "\"";
+		for (char c : query) {
+			fts_literal.push_back(c);
+			if (c == '"') fts_literal.push_back('"');  // Double quotes
+		}
+		fts_literal.push_back('"');
 
 		// Search query for this index (use table name for MATCH/bm25)
 		std::ostringstream search_sql;
 		search_sql << "SELECT d.schema_name, d.table_name, d.primary_key_value, "
-		    << "snippet(" << fts_table << ", 0, '<mark>', '</mark>', '...', 30) AS snippet, "
+		    << "snippet(" << escaped_fts << ", 0, '<mark>', '</mark>', '...', 30) AS snippet, "
 		    << "d.metadata "
-		    << "FROM " << fts_table << " "
-		    << "JOIN " << sanitized_data << " d ON " << fts_table << ".rowid = d.rowid "
-		    << "WHERE " << fts_table << " MATCH '" << escape_sql(query) << "' "
-		    << "ORDER BY bm25(" << fts_table << ") ASC "
+		    << "FROM " << escaped_fts << " "
+		    << "JOIN " << escaped_data << " d ON " << escaped_fts << ".rowid = d.rowid "
+		    << "WHERE " << escaped_fts << " MATCH " << fts_literal << " "
+		    << "ORDER BY bm25(" << escaped_fts << ") ASC "
 		    << "LIMIT " << limit;
 
 		SQLite3_result* idx_resultset = NULL;
@@ -581,6 +613,7 @@ std::string MySQL_FTS::list_indexes() {
 
 	if (error) {
 		result["error"] = "Failed to list indexes: " + std::string(error);
+		(*proxy_sqlite3_free)(error);
 		return result.dump();
 	}
 
@@ -633,17 +666,17 @@ std::string MySQL_FTS::delete_index(const std::string& schema, const std::string
 	db->wrlock();
 
 	// Drop triggers
-	db->execute(("DROP TRIGGER IF EXISTS fts_ai_" + base_name).c_str());
-	db->execute(("DROP TRIGGER IF EXISTS fts_ad_" + base_name).c_str());
-	db->execute(("DROP TRIGGER IF EXISTS fts_au_" + base_name).c_str());
+	db->execute(("DROP TRIGGER IF EXISTS " + escape_identifier("fts_ai_" + base_name)).c_str());
+	db->execute(("DROP TRIGGER IF EXISTS " + escape_identifier("fts_ad_" + base_name)).c_str());
+	db->execute(("DROP TRIGGER IF EXISTS " + escape_identifier("fts_au_" + base_name)).c_str());
 
 	// Drop FTS table
 	std::string fts_table = get_fts_table_name(schema, table);
-	db->execute(("DROP TABLE IF EXISTS " + fts_table).c_str());
+	db->execute(("DROP TABLE IF EXISTS " + escape_identifier(fts_table)).c_str());
 
 	// Drop data table
 	std::string data_table = get_data_table_name(schema, table);
-	db->execute(("DROP TABLE IF EXISTS " + data_table).c_str());
+	db->execute(("DROP TABLE IF EXISTS " + escape_identifier(data_table)).c_str());
 
 	// Remove metadata
 	std::ostringstream metadata_sql;
@@ -751,7 +784,7 @@ std::string MySQL_FTS::rebuild_all(MySQL_Tool_Handler* mysql_handler) {
 			json failed_item;
 			failed_item["schema"] = schema;
 			failed_item["table"] = table;
-			failed_item["error"] = reindex_json["error"].get<std::string>();
+			failed_item["error"] = reindex_json.value("error", std::string("unknown error"));
 			failed.push_back(failed_item);
 		}
 	}

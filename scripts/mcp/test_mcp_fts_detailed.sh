@@ -100,14 +100,14 @@ cleanup_sample_data() {
 
 mcp_request() {
   local payload="$1"
-  curl ${CURL_OPTS} -s -X POST "${MCP_ENDPOINT}" \
+  curl ${CURL_OPTS:+"${CURL_OPTS}"} -s -X POST "${MCP_ENDPOINT}" \
     -H "Content-Type: application/json" \
     -d "${payload}"
 }
 
 config_request() {
   local payload="$1"
-  curl ${CURL_OPTS} -s -X POST "${MCP_CONFIG_ENDPOINT}" \
+  curl ${CURL_OPTS:+"${CURL_OPTS}"} -s -X POST "${MCP_CONFIG_ENDPOINT}" \
     -H "Content-Type: application/json" \
     -d "${payload}"
 }

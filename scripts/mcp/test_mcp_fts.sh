@@ -55,7 +55,6 @@ MYSQL_PASSWORD="${MYSQL_PASSWORD:-root}"
 # Test Configuration
 TEST_SCHEMA="${TEST_SCHEMA:-test_fts}"
 TEST_TABLE="${TEST_TABLE:-test_documents}"
-FTS_INDEX_NAME="${TEST_SCHEMA}.${TEST_TABLE}"
 
 # Test Data
 TEST_DOCUMENTS=(
@@ -69,14 +68,6 @@ TEST_DOCUMENTS=(
     ["8"]="Customer feedback: Excellent product quality but delivery was delayed by 3 days."
     ["9"]="System crash occurred at 2:30 AM UTC. Root cause: Out of memory error in cache service."
     ["10"]="New feature request: Add dark mode support for mobile applications. Priority: medium."
-)
-
-# Search Queries for Testing
-SEARCH_QUERIES=(
-    ["simple"]="urgent"
-    ["phrase"]="payment gateway"
-    ["multiple"]="customer feedback"
-    ["bm25_test"]="error issue"  # Test BM25 ranking
 )
 
 # Test Options
@@ -138,6 +129,11 @@ log_section() {
     echo -e "${MAGENTA}========================================${NC}"
     echo -e "${MAGENTA}$1${NC}"
     echo -e "${MAGENTA}========================================${NC}"
+}
+
+# Escape single quotes in SQL strings (prevent SQL injection)
+escape_sql() {
+    echo "$1" | sed "s/'/''/g"
 }
 
 # ============================================================================
@@ -278,7 +274,7 @@ extract_inner_field() {
 
 mysql_exec() {
     local sql="$1"
-    mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+    MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" \
         -e "${sql}" 2>/dev/null
 }
 
@@ -339,7 +335,7 @@ setup_test_schema() {
         fi
 
         mysql_exec "INSERT INTO ${TEST_SCHEMA}.${TEST_TABLE} (title, content, category, priority) \
-            VALUES ('${title}', '${doc}', '${category}', '${priority}');" 2>/dev/null || true
+            VALUES ('$(escape_sql "${title}")', '$(escape_sql "${doc}")', '$(escape_sql "${category}")', '$(escape_sql "${priority}")');" 2>/dev/null || true
     done
 
     log_info "Test data setup complete (10 documents inserted)"
@@ -989,7 +985,7 @@ test_fts_custom_database_path() {
 
     # Verify we can query the current FTS path setting
     local current_path
-    current_path=$(mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+    current_path=$(MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" \
         -e "SELECT @@mcp-fts_path" -s -N 2>/dev/null | tr -d '\r')
 
     if [ -z "${current_path}" ]; then
@@ -1002,7 +998,7 @@ test_fts_custom_database_path() {
     # Test 1: Verify we can set a custom path via admin interface
     log_verbose "Setting custom FTS path to: ${custom_path}"
     local set_result
-    set_result=$(mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+    set_result=$(MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" \
         -e "SET mcp-fts_path = '${custom_path}'" 2>&1)
 
     if [ $? -ne 0 ]; then
@@ -1015,7 +1011,7 @@ test_fts_custom_database_path() {
 
     # Verify the value was set
     local new_path
-    new_path=$(mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+    new_path=$(MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" \
         -e "SELECT @@mcp-fts_path" -s -N 2>/dev/null | tr -d '\r')
 
     if [ "${new_path}" != "${custom_path}" ]; then
@@ -1026,7 +1022,7 @@ test_fts_custom_database_path() {
     # Test 2: Load configuration to runtime - this is where the bug was
     log_verbose "Loading MCP variables to runtime..."
     local load_result
-    load_result=$(mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+    load_result=$(MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" \
         -e "LOAD MCP VARIABLES TO RUNTIME" 2>&1)
 
     if [ $? -ne 0 ]; then
@@ -1086,9 +1082,9 @@ test_fts_custom_database_path() {
 
     # Test 6: Restore original path
     log_verbose "Restoring original FTS path: ${current_path}"
-    mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+    MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" \
         -e "SET mcp-fts_path = '${current_path}'" 2>/dev/null
-    mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+    MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u "${MYSQL_USER}" \
         -e "LOAD MCP VARIABLES TO RUNTIME" 2>/dev/null
 
     log_info "  FTS custom path configuration test completed"

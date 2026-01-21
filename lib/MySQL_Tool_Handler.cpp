@@ -115,25 +115,25 @@ int MySQL_Tool_Handler::init() {
 }
 
 bool MySQL_Tool_Handler::reset_fts_path(const std::string& path) {
-	pthread_mutex_lock(&fts_lock);
+	MySQL_FTS* new_fts = NULL;
 
-	if (fts) {
-		delete fts;
-		fts = NULL;
-	}
-
+	// Initialize new FTS outside lock (blocking I/O)
 	if (!path.empty()) {
-		fts = new MySQL_FTS(path);
-		if (fts->init()) {
+		new_fts = new MySQL_FTS(path);
+		if (new_fts->init()) {
 			proxy_error("Failed to initialize FTS with new path: %s\n", path.c_str());
-			delete fts;
-			fts = NULL;
-			pthread_mutex_unlock(&fts_lock);
+			delete new_fts;
 			return false;
 		}
 	}
 
+	// Swap pointer under lock (non-blocking)
+	pthread_mutex_lock(&fts_lock);
+	MySQL_FTS* old_fts = fts;
+	fts = new_fts;
 	pthread_mutex_unlock(&fts_lock);
+	if (old_fts) delete old_fts;
+
 	return true;
 }
 
@@ -1154,7 +1154,7 @@ int MySQL_Tool_Handler::reinit_fts(const std::string& fts_path) {
 		}
 	}
 
-	// First, test if we can open the new database
+	// First, test if we can open the new database (outside lock)
 	MySQL_FTS* new_fts = new MySQL_FTS(fts_path);
 	if (!new_fts) {
 		proxy_error("MySQL_Tool_Handler: Failed to create new FTS handler\n");
@@ -1167,11 +1167,12 @@ int MySQL_Tool_Handler::reinit_fts(const std::string& fts_path) {
 		return -1;  // Return error WITHOUT closing old FTS
 	}
 
-	// Success! Now close old and replace with new
-	if (fts) {
-		delete fts;
-	}
+	// Success! Now swap the pointer under lock
+	pthread_mutex_lock(&fts_lock);
+	MySQL_FTS* old_fts = fts;
 	fts = new_fts;
+	pthread_mutex_unlock(&fts_lock);
+	if (old_fts) delete old_fts;
 
 	proxy_info("MySQL_Tool_Handler: FTS reinitialized successfully at %s\n", fts_path.c_str());
 	return 0;

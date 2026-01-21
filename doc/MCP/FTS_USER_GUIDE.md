@@ -29,7 +29,7 @@ The MCP Full Text Search (FTS) module provides fast, indexed search capabilities
 
 ### How It Works
 
-```
+```text
 Traditional Query Flow:
 LLM Agent → Full Table Scan → Millions of Rows → Slow Response
 
@@ -43,7 +43,7 @@ LLM Agent → FTS Search (ms) → Top N IDs → Targeted MySQL Query → Fast Re
 
 ### Components
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     MCP Query Endpoint                     │
 │                   (JSON-RPC 2.0 over HTTPS)                │
@@ -89,12 +89,12 @@ LLM Agent → FTS Search (ms) → Top N IDs → Targeted MySQL Query → Fast Re
 ### Data Flow
 
 1. **Index Creation**:
-   ```
+   ```text
    MySQL Table → SELECT → JSON Parse → SQLite Insert → FTS5 Index
    ```
 
 2. **Search**:
-   ```
+   ```text
    Query → FTS5 MATCH → BM25 Ranking → Results + Snippets → JSON Response
    ```
 
@@ -572,7 +572,7 @@ curl -k -X POST "https://127.0.0.1:6071/mcp/query" \
 ## API Endpoints
 
 ### Base URL
-```
+```text
 https://<host>:6071/mcp/query
 ```
 
@@ -770,13 +770,13 @@ tail -f /var/log/proxysql.log | grep FTS
 
 For a full end-to-end validation of the FTS stack (tools/list, indexing, search/snippet, list_indexes structure, empty query handling), run:
 
-```
+```bash
 scripts/mcp/test_mcp_fts_detailed.sh
 ```
 
 Optional cleanup of created indexes:
 
-```
+```bash
 scripts/mcp/test_mcp_fts_detailed.sh --cleanup
 ```
 
@@ -850,5 +850,5 @@ CREATE VIRTUAL TABLE fts_search_<schema>_<table> USING fts5(
 ## Support
 
 For issues, questions, or contributions:
-- GitHub: https://github.com/ProxySQL/proxysql-vec
+- GitHub: [ProxySQL/proxysql-vec](https://github.com/ProxySQL/proxysql-vec)
 - Documentation: `/doc/MCP/` directory

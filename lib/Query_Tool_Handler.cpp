@@ -278,24 +278,18 @@ json Query_Tool_Handler::get_tool_description(const std::string& tool_name) {
 // Helper function to safely extract string value from JSON
 // nlohmann::json value() handles missing keys, null values, and type conversion
 static std::string get_json_string(const json& j, const std::string& key, const std::string& default_val = "") {
-	fprintf(stderr, "DEBUG: get_json_string key=%s, default='%s'\n", key.c_str(), default_val.c_str());
 	if (j.contains(key)) {
 		const json& val = j[key];
-		fprintf(stderr, "DEBUG: key exists, is_null=%d, is_string=%d\n", val.is_null(), val.is_string());
 		if (!val.is_null()) {
 			if (val.is_string()) {
 				std::string result = val.get<std::string>();
-				fprintf(stderr, "DEBUG: returning string: '%s'\n", result.c_str());
 				return result;
 			} else {
-				fprintf(stderr, "DEBUG: value is not a string, trying dump\n");
 				std::string result = val.dump();
-				fprintf(stderr, "DEBUG: returning dumped: '%s'\n", result.c_str());
 				return result;
 			}
 		}
 	}
-	fprintf(stderr, "DEBUG: returning default: '%s'\n", default_val.c_str());
 	return default_val;
 }
 
@@ -308,8 +302,6 @@ static int get_json_int(const json& j, const std::string& key, int default_val =
 }
 
 json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& arguments) {
-	fprintf(stderr, "DEBUG: execute_tool tool_name=%s, arguments=%s\n", tool_name.c_str(), arguments.dump().c_str());
-
 	if (!mysql_handler) {
 		return create_error_response("MySQL handler not initialized");
 	}

@@ -4,7 +4,6 @@
 #include "sqlite3db.h"
 #include <string>
 #include <vector>
-#include <memory>
 
 // Forward declaration
 class MySQL_Tool_Handler;
@@ -75,6 +74,13 @@ private:
 	 * @return Escaped string
 	 */
 	std::string escape_sql(const std::string& str);
+
+	/**
+	 * @brief Escape identifier for SQLite (double backticks)
+	 * @param identifier Identifier to escape
+	 * @return Escaped identifier
+	 */
+	std::string escape_identifier(const std::string& identifier);
 
 public:
 	/**
