@@ -50,6 +50,17 @@ MYSQL* g_admin = NULL;
 class AI_Features_Manager;
 extern AI_Features_Manager *GloAI;
 
+// Forward declarations
+class MySQL_Session;
+typedef struct _PtrSize_t PtrSize_t;
+
+// Stub for SQLite3_Server_session_handler - required by SQLite3_Server.cpp
+// This test uses admin MySQL connection, so this is just a placeholder
+void SQLite3_Server_session_handler(MySQL_Session* sess, void* _pa, PtrSize_t* pkt) {
+	// This is a stub - the actual test uses MySQL admin connection
+	// The SQLite3_Server.cpp sets this as a handler but we don't use it
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================

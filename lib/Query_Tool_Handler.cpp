@@ -217,6 +217,62 @@ json Query_Tool_Handler::get_tool_list() {
 		{}
 	));
 
+	// FTS tools (Full Text Search)
+	{
+		// Custom schema for fts_index_table with columns as array
+		json schema = {
+			{"type", "object"},
+			{"properties", {
+				{"schema", {{"type", "string"}, {"description", "Schema name"}}},
+				{"table", {{"type", "string"}, {"description", "Table name"}}},
+				{"columns", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Columns to index"}}},
+				{"primary_key", {{"type", "string"}, {"description", "Primary key column"}}},
+				{"where_clause", {{"type", "string"}, {"description", "Optional WHERE clause"}}}
+			}},
+			{"required", {"schema", "table", "columns", "primary_key"}}
+		};
+		tools.push_back(create_tool_description(
+			"fts_index_table",
+			"Create and populate a full-text search index for a MySQL table",
+			schema
+		));
+	}
+
+	tools.push_back(create_tool_schema(
+		"fts_search",
+		"Search indexed data using full-text search with BM25 ranking",
+		{"query"},
+		{{"schema", "string"}, {"table", "string"}, {"limit", "integer"}, {"offset", "integer"}}
+	));
+
+	tools.push_back(create_tool_schema(
+		"fts_list_indexes",
+		"List all full-text search indexes with metadata",
+		{},
+		{}
+	));
+
+	tools.push_back(create_tool_schema(
+		"fts_delete_index",
+		"Remove a full-text search index",
+		{"schema", "table"},
+		{}
+	));
+
+	tools.push_back(create_tool_schema(
+		"fts_reindex",
+		"Refresh an index with fresh data (full rebuild)",
+		{"schema", "table"},
+		{}
+	));
+
+	tools.push_back(create_tool_schema(
+		"fts_rebuild_all",
+		"Rebuild all full-text search indexes with fresh data",
+		{},
+		{}
+	));
+
 	json result;
 	result["tools"] = tools;
 	return result;
@@ -235,24 +291,18 @@ json Query_Tool_Handler::get_tool_description(const std::string& tool_name) {
 // Helper function to safely extract string value from JSON
 // nlohmann::json value() handles missing keys, null values, and type conversion
 static std::string get_json_string(const json& j, const std::string& key, const std::string& default_val = "") {
-	fprintf(stderr, "DEBUG: get_json_string key=%s, default='%s'\n", key.c_str(), default_val.c_str());
 	if (j.contains(key)) {
 		const json& val = j[key];
-		fprintf(stderr, "DEBUG: key exists, is_null=%d, is_string=%d\n", val.is_null(), val.is_string());
 		if (!val.is_null()) {
 			if (val.is_string()) {
 				std::string result = val.get<std::string>();
-				fprintf(stderr, "DEBUG: returning string: '%s'\n", result.c_str());
 				return result;
 			} else {
-				fprintf(stderr, "DEBUG: value is not a string, trying dump\n");
 				std::string result = val.dump();
-				fprintf(stderr, "DEBUG: returning dumped: '%s'\n", result.c_str());
 				return result;
 			}
 		}
 	}
-	fprintf(stderr, "DEBUG: returning default: '%s'\n", default_val.c_str());
 	return default_val;
 }
 
@@ -265,8 +315,6 @@ static int get_json_int(const json& j, const std::string& key, int default_val =
 }
 
 json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& arguments) {
-	fprintf(stderr, "DEBUG: execute_tool tool_name=%s, arguments=%s\n", tool_name.c_str(), arguments.dump().c_str());
-
 	if (!mysql_handler) {
 		return create_error_response("MySQL handler not initialized");
 	}
@@ -395,6 +443,39 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			std::string kind = get_json_string(arguments, "kind");
 			std::string key = get_json_string(arguments, "key");
 			result_str = mysql_handler->catalog_delete(kind, key);
+		}
+		// FTS tools
+		else if (tool_name == "fts_index_table") {
+			std::string schema = get_json_string(arguments, "schema");
+			std::string table = get_json_string(arguments, "table");
+			std::string columns = get_json_string(arguments, "columns");
+			std::string primary_key = get_json_string(arguments, "primary_key");
+			std::string where_clause = get_json_string(arguments, "where_clause");
+			result_str = mysql_handler->fts_index_table(schema, table, columns, primary_key, where_clause);
+		}
+		else if (tool_name == "fts_search") {
+			std::string query = get_json_string(arguments, "query");
+			std::string schema = get_json_string(arguments, "schema");
+			std::string table = get_json_string(arguments, "table");
+			int limit = get_json_int(arguments, "limit", 100);
+			int offset = get_json_int(arguments, "offset", 0);
+			result_str = mysql_handler->fts_search(query, schema, table, limit, offset);
+		}
+		else if (tool_name == "fts_list_indexes") {
+			result_str = mysql_handler->fts_list_indexes();
+		}
+		else if (tool_name == "fts_delete_index") {
+			std::string schema = get_json_string(arguments, "schema");
+			std::string table = get_json_string(arguments, "table");
+			result_str = mysql_handler->fts_delete_index(schema, table);
+		}
+		else if (tool_name == "fts_reindex") {
+			std::string schema = get_json_string(arguments, "schema");
+			std::string table = get_json_string(arguments, "table");
+			result_str = mysql_handler->fts_reindex(schema, table);
+		}
+		else if (tool_name == "fts_rebuild_all") {
+			result_str = mysql_handler->fts_rebuild_all();
 		}
 		else {
 			return create_error_response("Unknown tool: " + tool_name);
