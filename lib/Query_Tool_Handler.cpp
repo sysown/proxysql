@@ -831,10 +831,10 @@ static std::string extract_schema_name(const std::string& tool_name, const json&
 			if (resultset && resultset->rows_count > 0) {
 				SQLite3_row* row = resultset->rows[0];
 				std::string schema = std::string(row->fields[0] ? row->fields[0] : "");
-				free(resultset);
+				delete resultset;
 				return schema;
 			}
-			if (resultset) free(resultset);
+			if (resultset) delete resultset;
 		}
 		return std::to_string(run_id);
 	}
