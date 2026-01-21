@@ -10,7 +10,7 @@ ifeq ($(UNAME_S),Darwin)
 			echo "OpenSSL header file not found at $$header_path"; \
 			exit 1; \
 		fi; \
-		version_number=$$(awk '/# define OPENSSL_VERSION_STR/ {print $$3}' $$header_path | tr -d '"'); \
+		version_number=$$(grep "# *define OPENSSL_VERSION_STR" $$header_path | sed -E 's/.*"([^"]+)".*/\1/'); \
 		if [ -z "$$version_number" ]; then \
 			echo "Failed to extract OPENSSL_VERSION_STR from $$header_path"; \
 			exit 1; \
@@ -49,7 +49,7 @@ else
 			echo "OpenSSL header file not found at $$header_path"; \
 			exit 1; \
 		fi; \
-		version_number=$$(awk '/# define OPENSSL_VERSION_STR/ {print $$3}' $$header_path | tr -d '"'); \
+		version_number=$$(grep "# *define OPENSSL_VERSION_STR" $$header_path | sed -E 's/.*"([^"]+)".*/\1/'); \
 		if [ -z "$$version_number" ]; then \
 			echo "Failed to extract OPENSSL_VERSION_STR from $$header_path"; \
 			exit 1; \

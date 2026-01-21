@@ -11,6 +11,14 @@ endif
 
 # Use pkg-config to get the compiler and linker flags for OpenSSL if CUSTOM_OPENSSL_PATH is not set
 ifeq ($(CUSTOM_OPENSSL_PATH),)
+    ifeq ($(UNAME_S),Darwin)
+        ifneq ($(OPENSSL_ROOT_DIR),)
+            CUSTOM_OPENSSL_PATH := $(OPENSSL_ROOT_DIR)
+        endif
+    endif
+endif
+
+ifeq ($(CUSTOM_OPENSSL_PATH),)
     ifeq ($(OPENSSL_PACKAGE),openssl3)
 ifeq ($(UNAME_S),Darwin)
         SSL_IDIR := $(shell pkg-config --cflags $(OPENSSL_PACKAGE) | sed -E 's/-I/ /g' | awk '{for(i=1;i<=NF;i++) if($$i ~ /^\//) print $$i}' | head -n 1)
@@ -49,7 +57,11 @@ endif
     endif
 else
     SSL_IDIR := $(CUSTOM_OPENSSL_PATH)/include
+ifeq ($(UNAME_S),Darwin)
+    SSL_LDIR := $(CUSTOM_OPENSSL_PATH)/lib
+else
     SSL_LDIR := $(CUSTOM_OPENSSL_PATH)/lib64
+endif
 ifeq ($(UNAME_S),Darwin)
     LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.dylib" 2>/dev/null | head -n 1)
     ifeq ($(LIB_SSL_PATH),)

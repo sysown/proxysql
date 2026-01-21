@@ -47,3 +47,17 @@ If the linker fails to find `libssl` or `libcrypto`, ensure that `OPENSSL_ROOT_D
 
 ### Missing ICU Headers
 The build system is configured to find `icu4c` via Homebrew. If you encounter errors related to ICU, ensure `icu4c` is installed and the Homebrew prefix is correct.
+
+### Building TAP Tests (Optional)
+
+If you wish to run the TAP tests, you need to build the test dependencies first:
+
+```bash
+export OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+make build_tap_test_debug
+```
+
+This will automatically:
+1. Build the main ProxySQL debug binary.
+2. Download and build MariaDB and MySQL connectors (patched for macOS compatibility).
+3. Build the TAP test framework.
