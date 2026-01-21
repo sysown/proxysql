@@ -48,7 +48,7 @@ extern const char *(*proxy_sqlite3_errstr)(int);
 extern sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*);
 extern int (*proxy_sqlite3_enable_load_extension)(sqlite3*, int);
 extern int (*proxy_sqlite3_auto_extension)(void(*)(void));
-extern int (*proxy_sqlite3_bulk_step)(SQLite3DB*, sqlite3_stmt*, sqlite3_stmt*, SQLite3_result*, void(*)(int, SQLite3DB*, sqlite3_stmt*, SQLite3_row*));
+
 extern void (*proxy_sqlite3_global_stats_row_step)(SQLite3DB*, sqlite3_stmt*, const char*, ...);
 extern const char *(*proxy_sqlite3_errmsg)(sqlite3*);
 extern int (*proxy_sqlite3_finalize)(sqlite3_stmt *pStmt);

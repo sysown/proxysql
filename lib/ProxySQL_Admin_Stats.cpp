@@ -437,7 +437,7 @@ void ProxySQL_Admin::p_update_stmt_metrics() {
 
 using row_bind_t = void (*)(int offset, SQLite3DB* db, sqlite3_stmt* stmt, SQLite3_row* row);
 
-void (*proxy_sqlite3_bulk_step)(
+void sqlite3_bulk_step(
 	SQLite3DB* db,
 	sqlite3_stmt* row_stmt,
 	sqlite3_stmt* bulk_stmt,
@@ -485,7 +485,7 @@ void stats_mysql_global___bind_row(
 template <class...> constexpr std::false_type always_false {};
 
 template <typename T>
-const void (*proxy_sqlite3_global_stats_row_step)(
+const void sqlite3_global_stats_row_step(
 	SQLite3DB* db, sqlite3_stmt* stmt, const char* name, T val
 ) {
 	char buf[32] = { 0 };
@@ -539,7 +539,7 @@ void ProxySQL_Admin::stats___mysql_global() {
 	ASSERT_SQLITE_OK(rc, statsdb);
 	sqlite3_stmt* const bulk_stmt { u_bulk_stmt.get() };
 
-	(*proxy_sqlite3_bulk_step)(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
+	sqlite3_bulk_step(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
 
 	delete resultset;
 	resultset=NULL;
@@ -547,7 +547,7 @@ void ProxySQL_Admin::stats___mysql_global() {
 	resultset=MyHGM->SQL3_Get_ConnPool_Stats();
 
 	if (resultset) {
-		(*proxy_sqlite3_bulk_step)(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
+		sqlite3_bulk_step(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
 		delete resultset;
 		resultset=NULL;
 	}
@@ -555,12 +555,12 @@ void ProxySQL_Admin::stats___mysql_global() {
 	{
 		long long highwater, current = 0;
 		(*proxy_sqlite3_status64)(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "SQLite3_memory_bytes", current);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "SQLite3_memory_bytes", current);
 	}
 
 	{
 		unsigned long long connpool_mem=MyHGM->Get_Memory_Stats();
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "ConnPool_memory_bytes", connpool_mem);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "ConnPool_memory_bytes", connpool_mem);
 	}
 
 	if (GloMyStmt) {
@@ -580,32 +580,32 @@ void ProxySQL_Admin::stats___mysql_global() {
 			&server_active_total
 		);
 
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "Stmt_Client_Active_Total", client_active_total);
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "Stmt_Client_Active_Unique", client_active_unique);
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "Stmt_Server_Active_Total", server_active_total);
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "Stmt_Server_Active_Unique", server_active_unique);
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "Stmt_Max_Stmt_id", max_stmt_id);
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "Stmt_Cached", cached);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "Stmt_Client_Active_Total", client_active_total);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "Stmt_Client_Active_Unique", client_active_unique);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "Stmt_Server_Active_Total", server_active_total);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "Stmt_Server_Active_Unique", server_active_unique);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "Stmt_Max_Stmt_id", max_stmt_id);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "Stmt_Cached", cached);
 	}
 
 	if (GloMyQC && (resultset= GloMyQC->SQL3_getStats())) {
-		(*proxy_sqlite3_bulk_step)(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
+		sqlite3_bulk_step(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
 		delete resultset;
 		resultset=NULL;
 	}
 
 	if (GloMyLdapAuth) {
 		resultset=GloMyLdapAuth->SQL3_getStats();
-		(*proxy_sqlite3_bulk_step)(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
+		sqlite3_bulk_step(statsdb, row_stmt, bulk_stmt, resultset, stats_mysql_global___bind_row);
 	}
 
 	if (GloMyQPro) {
 		unsigned long long mu = GloMyQPro->get_new_req_conns_count();
-		(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "new_req_conns_count", mu);
+		sqlite3_global_stats_row_step(statsdb, row_stmt, "new_req_conns_count", mu);
 	}
 
-	(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "mysql_listener_paused", admin_proxysql_mysql_paused);
-	(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, "OpenSSL_Version_Num", OpenSSL_version_num());
+	sqlite3_global_stats_row_step(statsdb, row_stmt, "mysql_listener_paused", admin_proxysql_mysql_paused);
+	sqlite3_global_stats_row_step(statsdb, row_stmt, "OpenSSL_Version_Num", OpenSSL_version_num());
 
 
 	if (GloMyLogger != nullptr) {
@@ -613,7 +613,7 @@ void ProxySQL_Admin::stats___mysql_global() {
 		std::unordered_map<std::string, unsigned long long> metrics = GloMyLogger->getAllMetrics();
 		for (std::unordered_map<std::string, unsigned long long>::iterator it = metrics.begin(); it != metrics.end(); it++) {
 			string var_name = prefix + it->first;
-			(*proxy_sqlite3_global_stats_row_step)(statsdb, row_stmt, var_name.c_str(), it->second);
+			sqlite3_global_stats_row_step(statsdb, row_stmt, var_name.c_str(), it->second);
 		}
 	}
 

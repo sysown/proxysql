@@ -609,8 +609,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * @note The sqlite3_vec_init function is cast to a function pointer
 	 * for SQLite's auto-extension mechanism.
 	 */
-	(*proxy_sqlite3_auto_extension)( (void(*)(void))sqlite3_vec_init);
-	(*proxy_sqlite3_auto_extension)( (void(*)(void))sqlite3_rembed_init);
+	if (proxy_sqlite3_vec_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_vec_init);
+	if (proxy_sqlite3_rembed_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_rembed_init);
 
 	/**
 	 * @brief Open the stats database with shared cache mode

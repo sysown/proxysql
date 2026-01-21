@@ -1,4 +1,10 @@
 #include "sqlite3.h"
+#include <cstddef>
+#include "sqlite3db.h"
+// Forward declarations for proxy types
+class SQLite3DB;
+class SQLite3_result;
+class SQLite3_row;
 
 /*
  * This translation unit defines the storage for the proxy_sqlite3_*
@@ -19,15 +25,12 @@ int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int) = sqlite3_column_bytes;
 int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int) = sqlite3_column_type;
 int (*proxy_sqlite3_column_count)(sqlite3_stmt*) = sqlite3_column_count;
 int (*proxy_sqlite3_column_int)(sqlite3_stmt*, int) = sqlite3_column_int;
-(*proxy_sqlite3_int64)(*proxy_sqlite3_column_int64)(sqlite3_stmt*, int) = sqlite3_column_int64;
+sqlite3_int64 (*proxy_sqlite3_column_int64)(sqlite3_stmt*, int) = sqlite3_column_int64;
 double (*proxy_sqlite3_column_double)(sqlite3_stmt*, int) = sqlite3_column_double;
-(*proxy_sqlite3_int64)(*proxy_sqlite3_last_insert_rowid)(sqlite3*) = sqlite3_last_insert_rowid;
+sqlite3_int64 (*proxy_sqlite3_last_insert_rowid)(sqlite3*) = sqlite3_last_insert_rowid;
 const char *(*proxy_sqlite3_errstr)(int) = sqlite3_errstr;
 sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*) = sqlite3_db_handle;
 int (*proxy_sqlite3_enable_load_extension)(sqlite3*, int) = sqlite3_enable_load_extension;
-/* Some platforms may expose sqlite3_enable_load_extension as a macro or different symbol; provide a weak alias to help the linker. */
-extern "C" int proxy_(*proxy_sqlite3_enable_load_extension_alias)(sqlite3* db, int onoff) __attribute__((weak));
-int proxy_(*proxy_sqlite3_enable_load_extension_alias)(sqlite3* db, int onoff) { return (*proxy_sqlite3_enable_load_extension)(db, onoff); }
 int (*proxy_sqlite3_auto_extension)(void(*)(void)) = sqlite3_auto_extension;
 const char *(*proxy_sqlite3_errmsg)(sqlite3*) = sqlite3_errmsg;
 int (*proxy_sqlite3_finalize)(sqlite3_stmt *) = sqlite3_finalize;
@@ -46,3 +49,11 @@ int (*proxy_sqlite3_shutdown)(void) = sqlite3_shutdown;
 int (*proxy_sqlite3_prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, const char**) = sqlite3_prepare_v2;
 int (*proxy_sqlite3_open_v2)(const char*, sqlite3**, int, const char*) = sqlite3_open_v2;
 int (*proxy_sqlite3_exec)(sqlite3*, const char*, int (*)(void*,int,char**,char**), void*, char**) = sqlite3_exec;
+
+// Optional hooks used by sqlite-vec (function pointers will be set by LoadPlugin or remain NULL)
+void (*proxy_sqlite3_vec_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
+void (*proxy_sqlite3_rembed_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
+
+// Internal helpers used by admin stats batching; keep defaults as NULL
+
+void (*proxy_sqlite3_global_stats_row_step)(SQLite3DB*, sqlite3_stmt*, const char*, ...) = NULL;
