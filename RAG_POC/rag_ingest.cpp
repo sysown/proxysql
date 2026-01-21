@@ -93,7 +93,8 @@
 // ------------------------------------------------------------
 
 #include <sqlite3.h>
-#include <mysql/mysql.h>
+#include <mysql.h>
+#include <crypt.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -108,6 +109,28 @@
 
 #include "json.hpp"
 using json = nlohmann::json;
+
+extern "C" __attribute__((weak)) char *sha256_crypt_r(
+    const char *key,
+    const char *salt,
+    char *buffer,
+    int buflen) {
+  if (!key || !salt || !buffer || buflen <= 0) {
+    return nullptr;
+  }
+  struct crypt_data data;
+  std::memset(&data, 0, sizeof(data));
+  char *res = crypt_r(key, salt, &data);
+  if (!res) {
+    return nullptr;
+  }
+  size_t len = std::strlen(res);
+  if (len + 1 > static_cast<size_t>(buflen)) {
+    return nullptr;
+  }
+  std::memcpy(buffer, res, len + 1);
+  return buffer;
+}
 
 // -------------------------
 // Small helpers
