@@ -13,6 +13,7 @@ using json = nlohmann::json;
 #include "Cache_Tool_Handler.h"
 #include "Observe_Tool_Handler.h"
 #include "AI_Tool_Handler.h"
+#include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
 #include "proxysql_utils.h"
 
@@ -165,9 +166,36 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		_endpoints.push_back({"/mcp/ai", std::move(ai_resource)});
 	}
 
-	proxy_info("Registered %d MCP endpoints with dedicated tool handlers: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache%s/mcp/ai\n",
-	          handler->ai_tool_handler ? 6 : 5,
-	          handler->ai_tool_handler ? ", " : "");
+	// 7. RAG endpoint (for Retrieval-Augmented Generation)
+	extern AI_Features_Manager *GloAI;
+	if (GloAI) {
+		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI);
+		if (handler->rag_tool_handler->init() == 0) {
+			std::unique_ptr<httpserver::http_resource> rag_resource =
+				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->rag_tool_handler, "rag"));
+			ws->register_resource("/mcp/rag", rag_resource.get(), true);
+			_endpoints.push_back({"/mcp/rag", std::move(rag_resource)});
+			proxy_info("RAG Tool Handler initialized\n");
+		} else {
+			proxy_error("Failed to initialize RAG Tool Handler\n");
+			delete handler->rag_tool_handler;
+			handler->rag_tool_handler = NULL;
+		}
+	} else {
+		proxy_warning("AI_Features_Manager not available, RAG Tool Handler not initialized\n");
+		handler->rag_tool_handler = NULL;
+	}
+
+	int endpoint_count = (handler->ai_tool_handler ? 1 : 0) + (handler->rag_tool_handler ? 1 : 0) + 5;
+	std::string endpoints_list = "/mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache";
+	if (handler->ai_tool_handler) {
+		endpoints_list += ", /mcp/ai";
+	}
+	if (handler->rag_tool_handler) {
+		endpoints_list += ", /mcp/rag";
+	}
+	proxy_info("Registered %d MCP endpoints with dedicated tool handlers: %s\n",
+	          endpoint_count, endpoints_list.c_str());
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {

@@ -67,6 +67,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	admin_tool_handler = NULL;
 	cache_tool_handler = NULL;
 	observe_tool_handler = NULL;
+	rag_tool_handler = NULL;
 }
 
 MCP_Threads_Handler::~MCP_Threads_Handler() {
@@ -122,6 +123,10 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 	if (observe_tool_handler) {
 		delete observe_tool_handler;
 		observe_tool_handler = NULL;
+	}
+	if (rag_tool_handler) {
+		delete rag_tool_handler;
+		rag_tool_handler = NULL;
 	}
 
 	// Destroy the rwlock

@@ -17,6 +17,7 @@ class Admin_Tool_Handler;
 class Cache_Tool_Handler;
 class Observe_Tool_Handler;
 class AI_Tool_Handler;
+class RAG_Tool_Handler;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -96,6 +97,7 @@ public:
 	 * - cache_tool_handler: /mcp/cache endpoint
 	 * - observe_tool_handler: /mcp/observe endpoint
 	 * - ai_tool_handler: /mcp/ai endpoint
+	 * - rag_tool_handler: /mcp/rag endpoint
 	 */
 	Config_Tool_Handler* config_tool_handler;
 	Query_Tool_Handler* query_tool_handler;
@@ -103,6 +105,7 @@ public:
 	Cache_Tool_Handler* cache_tool_handler;
 	Observe_Tool_Handler* observe_tool_handler;
 	AI_Tool_Handler* ai_tool_handler;
+	RAG_Tool_Handler* rag_tool_handler;
 
 
 	/**
