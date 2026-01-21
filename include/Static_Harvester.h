@@ -99,6 +99,17 @@ private:
 	 */
 	static bool is_valid_schema_name(const std::string& name);
 
+	/**
+	 * @brief Escape a string for safe use in SQL queries
+	 *
+	 * Escapes single quotes by doubling them to prevent SQL injection
+	 * when strings are used in string concatenation for SQL queries.
+	 *
+	 * @param str String to escape
+	 * @return Escaped string with single quotes doubled
+	 */
+	static std::string escape_sql_string(const std::string& str);
+
 public:
 	/**
 	 * @brief Constructor

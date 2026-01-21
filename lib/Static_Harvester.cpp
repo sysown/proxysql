@@ -341,6 +341,31 @@ bool Static_Harvester::is_valid_schema_name(const std::string& name) {
 	return true;
 }
 
+// Escape a string for safe use in SQL queries by doubling single quotes.
+//
+// This is a simple SQL escaping function that prevents SQL injection
+// when strings are used in string concatenation for SQL queries.
+//
+// Parameters:
+//   str - String to escape
+//
+// Returns:
+//   Escaped string with single quotes doubled
+std::string Static_Harvester::escape_sql_string(const std::string& str) {
+	std::string escaped;
+	escaped.reserve(str.length() * 2); // Reserve space for potential escaping
+
+	for (char c : str) {
+		if (c == '\'') {
+			escaped += "''"; // Escape single quote by doubling
+		} else {
+			escaped += c;
+		}
+	}
+
+	return escaped;
+}
+
 // ============================================================
 // Discovery Run Management
 // ============================================================
@@ -1098,10 +1123,10 @@ int Static_Harvester::harvest_view_definitions(const std::string& only_schema) {
 		char* error = NULL;
 		int cols = 0, affected = 0;
 		std::ostringstream update_sql;
-		update_sql << "UPDATE objects SET definition_sql = '" << view_def << "' "
+		update_sql << "UPDATE objects SET definition_sql = '" << escape_sql_string(view_def) << "' "
 		           << "WHERE run_id = " << current_run_id
-		           << " AND schema_name = '" << schema_name << "'"
-		           << " AND object_name = '" << view_name << "'"
+		           << " AND schema_name = '" << escape_sql_string(schema_name) << "'"
+		           << " AND object_name = '" << escape_sql_string(view_name) << "'"
 		           << " AND object_type = 'view';";
 
 		catalog->get_db()->execute_statement(update_sql.str().c_str(), &error, &cols, &affected);
