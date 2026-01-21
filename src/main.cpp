@@ -1386,7 +1386,15 @@ static void LoadPlugins() {
 +		} else {
 +			proxy_warning("SQLite3 plugin function replacement is disabled; no sqlite3 plugin specified\n");
 +		}
-+		/* Skipping SQLite3DB::LoadPlugin to avoid replacing proxy_sqlite3_* symbols */
++		/*
+	 * Temporarily disabled: do not replace proxy_sqlite3_* symbols from plugins because
+	 * this can change core sqlite3 behavior unexpectedly. The original call is kept
+	 * here for reference and to make re-enabling trivial in the future.
+	 * TODO: Revisit plugin function replacement and implement a safer mechanism
+	 * for plugin-provided sqlite3 capabilities (create a ticket/PR and reference it here).
+	 */
+	// SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
+
 +	}
 	if (GloVars.web_interface_plugin) {
 		dlerror();
