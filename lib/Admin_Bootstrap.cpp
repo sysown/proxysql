@@ -92,8 +92,8 @@ using json = nlohmann::json;
  *
  * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
  */
-extern "C" int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
-extern "C" int sqlite3_rembed_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+extern "C" int (*proxy_sqlite3_vec_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+extern "C" int (*proxy_sqlite3_rembed_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 #include "microhttpd.h"
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
@@ -572,7 +572,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * SELECT rowid, distance FROM vec_data WHERE vector MATCH json('[0.1, 0.2, ...]');
 	 * @endcode
 	 *
-	 * @see sqlite3_vec_init() for extension initialization
+	 * @see (*proxy_sqlite3_vec_init)() for extension initialization
 	 * @see deps/sqlite3/README.md for integration documentation
 	 * @see https://github.com/asg017/sqlite-vec for sqlite-vec documentation
 	 */
@@ -592,7 +592,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * Allows loading SQLite extensions at runtime. This is required for
 	 * sqlite-vec to be registered when the database is opened.
 	 */
-	sqlite3_enable_load_extension(admindb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(admindb->get_db(),1);
 
 	/**
 	 * @brief Register sqlite-vec extension for auto-loading
@@ -609,8 +609,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * @note The sqlite3_vec_init function is cast to a function pointer
 	 * for SQLite's auto-extension mechanism.
 	 */
-	sqlite3_auto_extension( (void(*)(void))sqlite3_vec_init);
-	sqlite3_auto_extension( (void(*)(void))sqlite3_rembed_init);
+	if (proxy_sqlite3_vec_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_vec_init);
+	if (proxy_sqlite3_rembed_init) (*proxy_sqlite3_auto_extension)( (void(*)(void))proxy_sqlite3_rembed_init);
 
 	/**
 	 * @brief Open the stats database with shared cache mode
@@ -627,7 +627,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
 	 * registered in the stats database for advanced analytics operations.
 	 */
-	sqlite3_enable_load_extension(statsdb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(statsdb->get_db(),1);
 
 	// check if file exists , see #617
 	bool admindb_file_exists=Proxy_file_exists(GloVars.admindb);
@@ -657,7 +657,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Configuration optimization with vector-based recommendations
 	 * - Intelligent grouping of similar configurations
 	 */
-	sqlite3_enable_load_extension(configdb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(configdb->get_db(),1);
 	// Fully synchronous is not required. See to #1055
 	// https://sqlite.org/pragma.html#pragma_synchronous
 	configdb->execute("PRAGMA synchronous=0");
@@ -682,7 +682,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Clustering similar server performance metrics
 	 * - Predictive monitoring based on historical vector patterns
 	 */
-	sqlite3_enable_load_extension(monitordb->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(monitordb->get_db(),1);
 
 	statsdb_disk = new SQLite3DB();
 	/**
@@ -704,7 +704,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Clustering similar query digests for optimization insights
 	 * - Long-term performance monitoring with vector-based analytics
 	 */
-	sqlite3_enable_load_extension(statsdb_disk->get_db(),1);
+	(*proxy_sqlite3_enable_load_extension)(statsdb_disk->get_db(),1);
 //	char *dbname = (char *)malloc(strlen(GloVars.statsdb_disk)+50);
 //	sprintf(dbname,"%s?mode=memory&cache=shared",GloVars.statsdb_disk);
 //	statsdb_disk->open(dbname, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_FULLMUTEX);
@@ -713,6 +713,27 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	statsdb_disk->execute("PRAGMA synchronous=0");
 //	GloProxyStats->statsdb_disk = configdb;
 	GloProxyStats->init();
+
+	/**
+	 * @brief Open the MCP catalog database
+	 *
+	 * The MCP catalog database stores:
+	 * - Discovered database schemas (runs, schemas, tables, columns)
+	 * - LLM memories (summaries, domains, metrics, notes)
+	 * - Tool usage statistics
+	 * - Search history
+	 */
+	mcpdb = new SQLite3DB();
+	std::string mcp_catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
+	mcpdb->open((char *)mcp_catalog_path.c_str(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+	/**
+	 * @brief Enable SQLite extension loading for MCP catalog database
+	 *
+	 * Allows loading SQLite extensions at runtime. This enables sqlite-vec to be
+	 * registered for vector similarity searches in the catalog.
+	 */
+	(*proxy_sqlite3_enable_load_extension)(mcpdb->get_db(),1);
 
 	tables_defs_admin=new std::vector<table_def_t *>;
 	tables_defs_stats=new std::vector<table_def_t *>;
@@ -788,6 +809,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_admin, "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
+
+	// MCP query rules
+	insert_into_tables_defs(tables_defs_admin, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
+	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES);
+
+	insert_into_tables_defs(tables_defs_config, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
 
 	insert_into_tables_defs(tables_defs_config, "pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_users", ADMIN_SQLITE_TABLE_PGSQL_USERS);
@@ -878,6 +905,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
+
+	// MCP query digest stats
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
 
 	// init ldap here
 	init_ldap();
@@ -910,6 +944,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	__attach_db(statsdb, monitordb, (char *)"monitor");
 	__attach_db(admindb, statsdb_disk, (char *)"stats_history");
 	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
+	__attach_db(admindb, mcpdb, (char *)"mcp_catalog");
 
 	dump_mysql_collations();
 

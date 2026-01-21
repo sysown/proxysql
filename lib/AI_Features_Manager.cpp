@@ -72,14 +72,14 @@ int AI_Features_Manager::init_vector_db() {
 	// Create tables for LLM cache
 	const char* create_llm_cache =
 		"CREATE TABLE IF NOT EXISTS llm_cache ("
-		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"prompt TEXT NOT NULL,"
-		"response TEXT NOT NULL,"
-		"system_message TEXT,"
-		"embedding BLOB,"
-		"hit_count INTEGER DEFAULT 0,"
-		"last_hit INTEGER,"
-		"created_at INTEGER DEFAULT (strftime('%s', 'now'))"
+		"id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"prompt TEXT NOT NULL , "
+		"response TEXT NOT NULL , "
+		"system_message TEXT , "
+		"embedding BLOB , "
+		"hit_count INTEGER DEFAULT 0 , "
+		"last_hit INTEGER , "
+		"created_at INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
 	if (vector_db->execute(create_llm_cache) != 0) {
@@ -90,13 +90,13 @@ int AI_Features_Manager::init_vector_db() {
 	// Create table for anomaly patterns
 	const char* create_anomaly_patterns =
 		"CREATE TABLE IF NOT EXISTS anomaly_patterns ("
-		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"pattern_name TEXT,"
-		"pattern_type TEXT,"  // 'sql_injection', 'dos', 'privilege_escalation'
-		"query_example TEXT,"
-		"embedding BLOB,"
-		"severity INTEGER,"  // 1-10
-		"created_at INTEGER DEFAULT (strftime('%s', 'now'))"
+		"id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"pattern_name TEXT , "
+		"pattern_type TEXT , "  // 'sql_injection', 'dos', 'privilege_escalation'
+		"query_example TEXT , "
+		"embedding BLOB , "
+		"severity INTEGER , "  // 1-10
+		"created_at INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
 	if (vector_db->execute(create_anomaly_patterns) != 0) {
@@ -107,13 +107,13 @@ int AI_Features_Manager::init_vector_db() {
 	// Create table for query history
 	const char* create_query_history =
 		"CREATE TABLE IF NOT EXISTS query_history ("
-		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
-		"prompt TEXT NOT NULL,"
-		"response TEXT,"
-		"embedding BLOB,"
-		"execution_time_ms INTEGER,"
-		"success BOOLEAN,"
-		"timestamp INTEGER DEFAULT (strftime('%s', 'now'))"
+		"id INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"prompt TEXT NOT NULL , "
+		"response TEXT , "
+		"embedding BLOB , "
+		"execution_time_ms INTEGER , "
+		"success BOOLEAN , "
+		"timestamp INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
 	if (vector_db->execute(create_query_history) != 0) {
@@ -158,13 +158,213 @@ int AI_Features_Manager::init_vector_db() {
 		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without query_history_vec");
 	}
 
+	// 4. RAG tables for Retrieval-Augmented Generation
+	// rag_sources: control plane for ingestion configuration
+	const char* create_rag_sources =
+		"CREATE TABLE IF NOT EXISTS rag_sources ("
+		"source_id INTEGER PRIMARY KEY, "
+		"name TEXT NOT NULL UNIQUE, "
+		"enabled INTEGER NOT NULL DEFAULT 1, "
+		"backend_type TEXT NOT NULL, "
+		"backend_host TEXT NOT NULL, "
+		"backend_port INTEGER NOT NULL, "
+		"backend_user TEXT NOT NULL, "
+		"backend_pass TEXT NOT NULL, "
+		"backend_db TEXT NOT NULL, "
+		"table_name TEXT NOT NULL, "
+		"pk_column TEXT NOT NULL, "
+		"where_sql TEXT, "
+		"doc_map_json TEXT NOT NULL, "
+		"chunking_json TEXT NOT NULL, "
+		"embedding_json TEXT, "
+		"created_at INTEGER NOT NULL DEFAULT (unixepoch()), "
+		"updated_at INTEGER NOT NULL DEFAULT (unixepoch())"
+		");";
+
+	if (vector_db->execute(create_rag_sources) != 0) {
+		proxy_error("AI: Failed to create rag_sources table\n");
+		return -1;
+	}
+
+	// Indexes for rag_sources
+	const char* create_rag_sources_enabled_idx =
+		"CREATE INDEX IF NOT EXISTS idx_rag_sources_enabled ON rag_sources(enabled);";
+
+	if (vector_db->execute(create_rag_sources_enabled_idx) != 0) {
+		proxy_error("AI: Failed to create idx_rag_sources_enabled index\n");
+		return -1;
+	}
+
+	const char* create_rag_sources_backend_idx =
+		"CREATE INDEX IF NOT EXISTS idx_rag_sources_backend ON rag_sources(backend_type, backend_host, backend_port, backend_db, table_name);";
+
+	if (vector_db->execute(create_rag_sources_backend_idx) != 0) {
+		proxy_error("AI: Failed to create idx_rag_sources_backend index\n");
+		return -1;
+	}
+
+	// rag_documents: canonical documents
+	const char* create_rag_documents =
+		"CREATE TABLE IF NOT EXISTS rag_documents ("
+		"doc_id TEXT PRIMARY KEY, "
+		"source_id INTEGER NOT NULL REFERENCES rag_sources(source_id), "
+		"source_name TEXT NOT NULL, "
+		"pk_json TEXT NOT NULL, "
+		"title TEXT, "
+		"body TEXT, "
+		"metadata_json TEXT NOT NULL DEFAULT '{}', "
+		"updated_at INTEGER NOT NULL DEFAULT (unixepoch()), "
+		"deleted INTEGER NOT NULL DEFAULT 0"
+		");";
+
+	if (vector_db->execute(create_rag_documents) != 0) {
+		proxy_error("AI: Failed to create rag_documents table\n");
+		return -1;
+	}
+
+	// Indexes for rag_documents
+	const char* create_rag_documents_source_updated_idx =
+		"CREATE INDEX IF NOT EXISTS idx_rag_documents_source_updated ON rag_documents(source_id, updated_at);";
+
+	if (vector_db->execute(create_rag_documents_source_updated_idx) != 0) {
+		proxy_error("AI: Failed to create idx_rag_documents_source_updated index\n");
+		return -1;
+	}
+
+	const char* create_rag_documents_source_deleted_idx =
+		"CREATE INDEX IF NOT EXISTS idx_rag_documents_source_deleted ON rag_documents(source_id, deleted);";
+
+	if (vector_db->execute(create_rag_documents_source_deleted_idx) != 0) {
+		proxy_error("AI: Failed to create idx_rag_documents_source_deleted index\n");
+		return -1;
+	}
+
+	// rag_chunks: chunked content
+	const char* create_rag_chunks =
+		"CREATE TABLE IF NOT EXISTS rag_chunks ("
+		"chunk_id TEXT PRIMARY KEY, "
+		"doc_id TEXT NOT NULL REFERENCES rag_documents(doc_id), "
+		"source_id INTEGER NOT NULL REFERENCES rag_sources(source_id), "
+		"chunk_index INTEGER NOT NULL, "
+		"title TEXT, "
+		"body TEXT NOT NULL, "
+		"metadata_json TEXT NOT NULL DEFAULT '{}', "
+		"updated_at INTEGER NOT NULL DEFAULT (unixepoch()), "
+		"deleted INTEGER NOT NULL DEFAULT 0"
+		");";
+
+	if (vector_db->execute(create_rag_chunks) != 0) {
+		proxy_error("AI: Failed to create rag_chunks table\n");
+		return -1;
+	}
+
+	// Indexes for rag_chunks
+	const char* create_rag_chunks_doc_idx =
+		"CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_chunks_doc_idx ON rag_chunks(doc_id, chunk_index);";
+
+	if (vector_db->execute(create_rag_chunks_doc_idx) != 0) {
+		proxy_error("AI: Failed to create uq_rag_chunks_doc_idx index\n");
+		return -1;
+	}
+
+	const char* create_rag_chunks_source_doc_idx =
+		"CREATE INDEX IF NOT EXISTS idx_rag_chunks_source_doc ON rag_chunks(source_id, doc_id);";
+
+	if (vector_db->execute(create_rag_chunks_source_doc_idx) != 0) {
+		proxy_error("AI: Failed to create idx_rag_chunks_source_doc index\n");
+		return -1;
+	}
+
+	const char* create_rag_chunks_deleted_idx =
+		"CREATE INDEX IF NOT EXISTS idx_rag_chunks_deleted ON rag_chunks(deleted);";
+
+	if (vector_db->execute(create_rag_chunks_deleted_idx) != 0) {
+		proxy_error("AI: Failed to create idx_rag_chunks_deleted index\n");
+		return -1;
+	}
+
+	// rag_fts_chunks: FTS5 index (contentless)
+	const char* create_rag_fts_chunks =
+		"CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts_chunks USING fts5("
+		"chunk_id UNINDEXED, "
+		"title, "
+		"body, "
+		"tokenize = 'unicode61'"
+		");";
+
+	if (vector_db->execute(create_rag_fts_chunks) != 0) {
+		proxy_error("AI: Failed to create rag_fts_chunks virtual table\n");
+		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without rag_fts_chunks");
+	}
+
+	// rag_vec_chunks: sqlite3-vec index
+	// Use configurable vector dimension from GenAI module
+	int vector_dimension = 1536; // Default value
+	if (GloGATH) {
+		vector_dimension = GloGATH->variables.genai_vector_dimension;
+	}
+
+	std::string create_rag_vec_chunks_sql =
+		"CREATE VIRTUAL TABLE IF NOT EXISTS rag_vec_chunks USING vec0("
+		"embedding float(" + std::to_string(vector_dimension) + "), "
+		"chunk_id TEXT, "
+		"doc_id TEXT, "
+		"source_id INTEGER, "
+		"updated_at INTEGER"
+		");";
+
+	const char* create_rag_vec_chunks = create_rag_vec_chunks_sql.c_str();
+
+	if (vector_db->execute(create_rag_vec_chunks) != 0) {
+		proxy_error("AI: Failed to create rag_vec_chunks virtual table\n");
+		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without rag_vec_chunks");
+	}
+
+	// rag_chunk_view: convenience view for debugging
+	const char* create_rag_chunk_view =
+		"CREATE VIEW IF NOT EXISTS rag_chunk_view AS "
+		"SELECT "
+		"c.chunk_id, "
+		"c.doc_id, "
+		"c.source_id, "
+		"d.source_name, "
+		"d.pk_json, "
+		"COALESCE(c.title, d.title) AS title, "
+		"c.body, "
+		"d.metadata_json AS doc_metadata_json, "
+		"c.metadata_json AS chunk_metadata_json, "
+		"c.updated_at "
+		"FROM rag_chunks c "
+		"JOIN rag_documents d ON d.doc_id = c.doc_id "
+		"WHERE c.deleted = 0 AND d.deleted = 0;";
+
+	if (vector_db->execute(create_rag_chunk_view) != 0) {
+		proxy_error("AI: Failed to create rag_chunk_view view\n");
+		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without rag_chunk_view");
+	}
+
+	// rag_sync_state: sync state placeholder for later incremental ingestion
+	const char* create_rag_sync_state =
+		"CREATE TABLE IF NOT EXISTS rag_sync_state ("
+		"source_id INTEGER PRIMARY KEY REFERENCES rag_sources(source_id), "
+		"mode TEXT NOT NULL DEFAULT 'poll', "
+		"cursor_json TEXT NOT NULL DEFAULT '{}', "
+		"last_ok_at INTEGER, "
+		"last_error TEXT"
+		");";
+
+	if (vector_db->execute(create_rag_sync_state) != 0) {
+		proxy_error("AI: Failed to create rag_sync_state table\n");
+		return -1;
+	}
+
 	proxy_info("AI: Vector storage initialized successfully with virtual tables\n");
 	return 0;
 }
 
 int AI_Features_Manager::init_llm_bridge() {
 	if (!GloGATH->variables.genai_llm_enabled) {
-		proxy_info("AI: LLM bridge disabled, skipping initialization\n");
+		proxy_info("AI: LLM bridge disabled ,  skipping initialization\n");
 		return 0;
 	}
 
@@ -198,7 +398,7 @@ int AI_Features_Manager::init_llm_bridge() {
 
 int AI_Features_Manager::init_anomaly_detector() {
 	if (!GloGATH->variables.genai_anomaly_enabled) {
-		proxy_info("AI: Anomaly detection disabled, skipping initialization\n");
+		proxy_info("AI: Anomaly detection disabled ,  skipping initialization\n");
 		return 0;
 	}
 
@@ -298,24 +498,24 @@ std::string AI_Features_Manager::get_status_json() {
 	char buf[2048];
 	snprintf(buf, sizeof(buf),
 		"{"
-		"\"version\": \"%s\","
+		"\"version\": \"%s\" , "
 		"\"llm\": {"
-		"\"total_requests\": %llu,"
-		"\"cache_hits\": %llu,"
-		"\"local_calls\": %llu,"
-		"\"cloud_calls\": %llu,"
-		"\"total_response_time_ms\": %llu,"
-		"\"cache_total_lookup_time_ms\": %llu,"
-		"\"cache_total_store_time_ms\": %llu,"
-		"\"cache_lookups\": %llu,"
-		"\"cache_stores\": %llu,"
+		"\"total_requests\": %llu , "
+		"\"cache_hits\": %llu , "
+		"\"local_calls\": %llu , "
+		"\"cloud_calls\": %llu , "
+		"\"total_response_time_ms\": %llu , "
+		"\"cache_total_lookup_time_ms\": %llu , "
+		"\"cache_total_store_time_ms\": %llu , "
+		"\"cache_lookups\": %llu , "
+		"\"cache_stores\": %llu , "
 		"\"cache_misses\": %llu"
-		"},"
+		"} , "
 		"\"anomaly\": {"
-		"\"total_checks\": %llu,"
-		"\"blocked\": %llu,"
+		"\"total_checks\": %llu , "
+		"\"blocked\": %llu , "
 		"\"flagged\": %llu"
-		"},"
+		"} , "
 		"\"spend\": {"
 		"\"daily_usd\": %.2f"
 		"}"

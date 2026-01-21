@@ -1,34 +1,29 @@
 #!/usr/bin/env python3
 """
-Headless Database Discovery using Claude Code
+Headless Database Discovery using Claude Code (Multi-Agent)
 
 This script runs Claude Code in non-interactive mode to perform
-comprehensive database discovery. It works with any database
-type that is accessible via MCP (Model Context Protocol).
+comprehensive database discovery using 4 collaborating agents:
+STRUCTURAL, STATISTICAL, SEMANTIC, and QUERY.
 
 Usage:
     python headless_db_discovery.py [options]
 
 Examples:
-    # Basic discovery (uses available MCP database connection)
+    # Basic discovery
     python headless_db_discovery.py
 
     # Discover specific database
     python headless_db_discovery.py --database mydb
 
-    # With custom MCP server
-    python headless_db_discovery.py --mcp-config '{"mcpServers": {...}}'
-
     # With output file
-    python headless_db_discovery.py --output my_discovery_report.md
+    python headless_db_discovery.py --output my_report.md
 """
 
 import argparse
-import json
 import os
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -90,156 +85,34 @@ def find_claude_executable() -> Optional[str]:
     return None
 
 
-def build_mcp_config(args) -> tuple[Optional[str], Optional[str]]:
-    """Build MCP configuration from command line arguments.
-
-    Returns:
-        (config_file_path, config_json_string) - exactly one will be non-None
-    """
-    if args.mcp_config:
-        # Write inline config to temp file
-        fd, path = tempfile.mkstemp(suffix='.json')
-        with os.fdopen(fd, 'w') as f:
-            f.write(args.mcp_config)
-        return path, None
-
-    if args.mcp_file:
-        if os.path.isfile(args.mcp_file):
-            return args.mcp_file, None
-        else:
-            log_error(f"MCP configuration file not found: {args.mcp_file}")
-            return None, None
-
-    # Check for ProxySQL MCP environment variables
-    proxysql_endpoint = os.environ.get('PROXYSQL_MCP_ENDPOINT')
-    if proxysql_endpoint:
-        script_dir = Path(__file__).resolve().parent
-        bridge_path = script_dir / '../mcp' / 'proxysql_mcp_stdio_bridge.py'
-
-        if not bridge_path.exists():
-            bridge_path = script_dir / 'mcp' / 'proxysql_mcp_stdio_bridge.py'
-
-        mcp_config = {
-            "mcpServers": {
-                "proxysql": {
-                    "command": "python3",
-                    "args": [str(bridge_path.resolve())],
-                    "env": {
-                        "PROXYSQL_MCP_ENDPOINT": proxysql_endpoint
-                    }
-                }
-            }
-        }
-
-        # Add optional parameters
-        if os.environ.get('PROXYSQL_MCP_TOKEN'):
-            mcp_config["mcpServers"]["proxysql"]["env"]["PROXYSQL_MCP_TOKEN"] = os.environ.get('PROXYSQL_MCP_TOKEN')
-
-        if os.environ.get('PROXYSQL_MCP_INSECURE_SSL') == '1':
-            mcp_config["mcpServers"]["proxysql"]["env"]["PROXYSQL_MCP_INSECURE_SSL"] = "1"
-
-        # Write to temp file
-        fd, path = tempfile.mkstemp(suffix='_mcp_config.json')
-        with os.fdopen(fd, 'w') as f:
-            json.dump(mcp_config, f, indent=2)
-        return path, None
-
-    return None, None
+def get_discovery_prompt_path() -> str:
+    """Get the path to the multi-agent discovery prompt."""
+    script_dir = Path(__file__).resolve().parent
+    prompt_path = script_dir / 'prompts' / 'multi_agent_discovery_prompt.md'
+    if not prompt_path.exists():
+        raise FileNotFoundError(
+            f"Multi-agent discovery prompt not found at: {prompt_path}\n"
+            "Ensure the prompts/ directory exists with multi_agent_discovery_prompt.md"
+        )
+    return str(prompt_path)
 
 
 def build_discovery_prompt(database: Optional[str], schema: Optional[str]) -> str:
-    """Build the comprehensive database discovery prompt."""
+    """Build the multi-agent database discovery prompt."""
 
+    # Read the base prompt from the file
+    prompt_path = get_discovery_prompt_path()
+    with open(prompt_path, 'r') as f:
+        base_prompt = f.read()
+
+    # Add database-specific context if provided
     if database:
-        database_target = f"database named '{database}'"
-    else:
-        database_target = "the first available database"
+        database_context = f"\n\n**Target Database:** {database}"
+        if schema:
+            database_context += f"\n**Target Schema:** {schema}"
+        base_prompt += database_context
 
-    schema_section = ""
-    if schema:
-        schema_section = f"""
-Focus on the schema '{schema}' within the database.
-"""
-
-    prompt = f"""You are a Database Discovery Agent. Your mission is to perform comprehensive analysis of {database_target}.
-
-{schema_section}
-Use the available MCP database tools to discover and document:
-
-## 1. STRUCTURAL ANALYSIS
-- List all tables in the database/schema
-- For each table, describe:
-  - Column names, data types, and nullability
-  - Primary keys and unique constraints
-  - Foreign key relationships
-  - Indexes and their purposes
-  - Any CHECK constraints or defaults
-
-- Create an Entity Relationship Diagram (ERD) showing:
-  - All tables and their relationships
-  - Cardinality (1:1, 1:N, M:N)
-  - Primary and foreign keys
-
-## 2. DATA PROFILING
-- For each table, analyze:
-  - Row count
-  - Data distributions for key columns
-  - Null value percentages
-  - Distinct value counts (cardinality)
-  - Min/max/average values for numeric columns
-  - Sample data (first few rows)
-
-- Identify patterns and anomalies:
-  - Duplicate records
-  - Data quality issues
-  - Unexpected distributions
-  - Outliers
-
-## 3. SEMANTIC ANALYSIS
-- Infer the business domain:
-  - What type of application/database is this?
-  - What are the main business entities?
-  - What are the business processes?
-
-- Document business rules:
-  - Entity lifecycles and state machines
-  - Validation rules implied by constraints
-  - Relationship patterns
-
-- Classify tables:
-  - Master/reference data (customers, products, etc.)
-  - Transactional data (orders, transactions, etc.)
-  - Junction/association tables
-  - Configuration/metadata
-
-## 4. PERFORMANCE & ACCESS PATTERNS
-- Identify:
-  - Missing indexes on foreign keys
-  - Missing indexes on frequently filtered columns
-  - Composite index opportunities
-  - Potential N+1 query patterns
-
-- Suggest optimizations:
-  - Indexes that should be added
-  - Query patterns that would benefit from optimization
-  - Denormalization opportunities
-
-## OUTPUT FORMAT
-
-Provide your findings as a comprehensive Markdown report with:
-
-1. **Executive Summary** - High-level overview
-2. **Database Schema** - Complete table definitions
-3. **Entity Relationship Diagram** - ASCII ERD
-4. **Data Quality Assessment** - Score (1-100) with issues
-5. **Business Domain Analysis** - Industry, use cases, entities
-6. **Performance Recommendations** - Prioritized optimization list
-7. **Anomalies & Issues** - All problems found with severity
-
-Be thorough. Discover everything about this database structure and data.
-Write the complete report to standard output."""
-
-    return prompt
+    return base_prompt
 
 
 def run_discovery(args):
@@ -255,31 +128,35 @@ def run_discovery(args):
     # Set default output file
     output_file = args.output or f"discovery_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
 
-    log_info("Starting Headless Database Discovery")
+    log_info("Starting Multi-Agent Database Discovery")
     log_info(f"Output will be saved to: {output_file}")
     log_verbose(f"Claude Code executable: {claude_cmd}", args.verbose)
-
-    # Build MCP configuration
-    mcp_config_file, _ = build_mcp_config(args)
-    if mcp_config_file:
-        log_verbose(f"Using MCP configuration: {mcp_config_file}", args.verbose)
+    log_verbose(f"Using discovery prompt: {get_discovery_prompt_path()}", args.verbose)
 
     # Build command arguments
     cmd_args = [
         claude_cmd,
         '--print',                          # Non-interactive mode
         '--no-session-persistence',         # Don't save session
-        '--permission-mode', 'bypassPermissions',  # Bypass permission checks in headless mode
+        '--permission-mode', 'bypassPermissions',  # Bypass permission checks
     ]
 
-    # Add MCP configuration if available
-    if mcp_config_file:
-        cmd_args.extend(['--mcp-config', mcp_config_file])
+    # Add MCP configuration if provided
+    if args.mcp_config:
+        cmd_args.extend(['--mcp-config', args.mcp_config])
+        log_verbose(f"Using MCP config: {args.mcp_config}", args.verbose)
+    elif args.mcp_file:
+        cmd_args.extend(['--mcp-config', args.mcp_file])
+        log_verbose(f"Using MCP config file: {args.mcp_file}", args.verbose)
 
     # Build discovery prompt
-    prompt = build_discovery_prompt(args.database, args.schema)
+    try:
+        prompt = build_discovery_prompt(args.database, args.schema)
+    except FileNotFoundError as e:
+        log_error(str(e))
+        sys.exit(1)
 
-    log_info("Running Claude Code in headless mode...")
+    log_info("Running Claude Code in headless mode with 6-agent discovery...")
     log_verbose(f"Timeout: {args.timeout}s", args.verbose)
     if args.database:
         log_verbose(f"Target database: {args.database}", args.verbose)
@@ -309,36 +186,49 @@ def run_discovery(args):
             words = len(result.stdout.split())
             log_info(f"Report size: {lines} lines, {words} words")
 
-            # Try to extract key sections
-            lines_list = result.stdout.split('\n')
-            sections = [line for line in lines_list if line.startswith('# ')]
-            if sections:
-                log_info("Report sections:")
-                for section in sections[:10]:
-                    print(f"  - {section}")
+            # Check if output is empty
+            if lines == 0 or not result.stdout.strip():
+                log_warn("Output file is empty - discovery may have failed silently")
+                log_info("Try running with --verbose to see more details")
+                log_info("Check that Claude Code is working: claude --version")
+            else:
+                # Try to extract key sections
+                lines_list = result.stdout.split('\n')
+                sections = [line for line in lines_list if line.startswith('# ')]
+                if sections:
+                    log_info("Report sections:")
+                    for section in sections[:10]:
+                        print(f"  - {section}")
         else:
             log_error(f"Discovery failed with exit code: {result.returncode}")
             log_info(f"Check {output_file} for error details")
 
+            # Check if output file is empty
+            if os.path.exists(output_file):
+                file_size = os.path.getsize(output_file)
+                if file_size == 0:
+                    log_warn("Output file is empty (0 bytes)")
+                    log_info("This usually means Claude Code failed to start or produced no output")
+                    log_info("Check that Claude Code is installed and working:")
+                    log_info(f"  {claude_cmd} --version")
+                    log_info("Or try with --verbose for more debugging information")
+
             if result.stderr:
                 log_verbose(f"Stderr: {result.stderr}", args.verbose)
+            else:
+                log_warn("No stderr output captured - check if Claude Code started correctly")
 
             sys.exit(result.returncode)
 
     except subprocess.TimeoutExpired:
-        log_error("Discovery timed out")
+        log_error(f"Discovery timed out after {args.timeout} seconds")
+        log_error("The multi-agent discovery process can take a long time for complex databases")
+        log_info(f"Try increasing timeout with: --timeout {args.timeout * 2}")
+        log_info(f"Example: {sys.argv[0]} --timeout {args.timeout * 2}")
         sys.exit(1)
     except Exception as e:
         log_error(f"Error running discovery: {e}")
         sys.exit(1)
-    finally:
-        # Cleanup temp MCP config file if we created one
-        if mcp_config_file and mcp_config_file.startswith('/tmp/'):
-            try:
-                os.unlink(mcp_config_file)
-                log_verbose(f"Cleaned up temp MCP config: {mcp_config_file}", args.verbose)
-            except Exception:
-                pass
 
     log_success("Done!")
 
@@ -346,27 +236,45 @@ def run_discovery(args):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Headless Database Discovery using Claude Code',
+        description='Multi-Agent Database Discovery using Claude Code',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic discovery (uses available MCP database connection)
+  # Basic discovery
   %(prog)s
 
   # Discover specific database
   %(prog)s --database mydb
 
-  # With custom MCP server
-  %(prog)s --mcp-config '{"mcpServers": {"mydb": {"command": "...", "args": [...]}}}'
+  # With specific schema
+  %(prog)s --database mydb --schema public
 
   # With output file
   %(prog)s --output my_discovery_report.md
 
+  # With custom timeout for large databases
+  %(prog)s --timeout 600
+
 Environment Variables:
-  CLAUDE_PATH                Path to claude executable
-  PROXYSQL_MCP_ENDPOINT      ProxySQL MCP endpoint URL
-  PROXYSQL_MCP_TOKEN         ProxySQL MCP auth token (optional)
-  PROXYSQL_MCP_INSECURE_SSL  Skip SSL verification (set to "1" to enable)
+  CLAUDE_PATH    Path to claude executable
+
+The discovery uses a 6-agent collaborative approach:
+  - STRUCTURAL: Schemas, tables, relationships, indexes, constraints
+  - STATISTICAL: Data distributions, quality, anomalies
+  - SEMANTIC: Business domain, entities, rules, terminology
+  - QUERY: Index efficiency, query patterns, optimization
+  - SECURITY: Sensitive data, access patterns, vulnerabilities
+  - META: Report quality analysis, prompt improvement suggestions
+
+Agents collaborate through 5 rounds:
+  1. Blind Exploration (5 analysis agents, independent discovery)
+  2. Pattern Recognition (cross-agent collaboration)
+  3. Hypothesis Testing (validation with evidence)
+  4. Final Synthesis (comprehensive report)
+  5. Meta Analysis (META agent analyzes report quality)
+
+Findings are shared via MCP catalog and output as a structured markdown report.
+The META agent also generates a separate meta-analysis document with prompt improvement suggestions.
         """
     )
 
@@ -393,8 +301,8 @@ Environment Variables:
     parser.add_argument(
         '-t', '--timeout',
         type=int,
-        default=300,
-        help='Timeout for discovery in seconds (default: 300)'
+        default=3600,
+        help='Timeout for discovery in seconds (default: 3600 = 1 hour)'
     )
     parser.add_argument(
         '-v', '--verbose',

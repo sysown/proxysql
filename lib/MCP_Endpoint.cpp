@@ -203,23 +203,30 @@ std::string MCP_JSONRPC_Resource::create_jsonrpc_error(
 std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 	const httpserver::http_request& req
 ) {
-	// Update statistics
-	if (handler) {
-		handler->status_variables.total_requests++;
-	}
+	// Declare these outside the try block so they're available in catch handlers
+	std::string req_body;
+	std::string req_path;
 
-	// Get request body
-	std::string req_body = req.get_content();
-	std::string req_path = req.get_path();
-
-	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP request on %s: %s\n", req_path.c_str(), req_body.c_str());
-
-	// Validate JSON
-	json req_json;
+	// Wrap entire request handling in try-catch to catch any unexpected exceptions
 	try {
-		req_json = json::parse(req_body);
-	} catch (json::parse_error& e) {
+		// Update statistics
+		if (handler) {
+			handler->status_variables.total_requests++;
+		}
+
+		// Get request body and path
+		req_body = req.get_content();
+		req_path = req.get_path();
+
+		proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP request on %s: %s\n", req_path.c_str(), req_body.c_str());
+
+		// Validate JSON
+		json req_json;
+		try {
+			req_json = json::parse(req_body);
+		} catch (json::parse_error& e) {
 		proxy_error("MCP request on %s: Invalid JSON - %s\n", req_path.c_str(), e.what());
+		proxy_error("MCP request payload that failed to parse: %s\n", req_body.c_str());
 		if (handler) {
 			handler->status_variables.failed_requests++;
 		}
@@ -339,6 +346,34 @@ std::shared_ptr<http_response> MCP_JSONRPC_Resource::handle_jsonrpc_request(
 	));
 	response->with_header("Content-Type", "application/json");
 	return response;
+
+	} catch (const std::exception& e) {
+		// Catch any unexpected exceptions and return a proper error response
+		proxy_error("MCP request on %s: Unexpected exception - %s\n", req_path.c_str(), e.what());
+		proxy_error("MCP request payload that caused exception: %s\n", req_body.c_str());
+		if (handler) {
+			handler->status_variables.failed_requests++;
+		}
+		auto response = std::shared_ptr<http_response>(new string_response(
+			create_jsonrpc_error(-32603, "Internal error: " + std::string(e.what()), ""),
+			http::http_utils::http_internal_server_error
+		));
+		response->with_header("Content-Type", "application/json");
+		return response;
+	} catch (...) {
+		// Catch any other exceptions
+		proxy_error("MCP request on %s: Unknown exception\n", req_path.c_str());
+		proxy_error("MCP request payload that caused exception: %s\n", req_body.c_str());
+		if (handler) {
+			handler->status_variables.failed_requests++;
+		}
+		auto response = std::shared_ptr<http_response>(new string_response(
+			create_jsonrpc_error(-32603, "Internal error: Unknown exception", ""),
+			http::http_utils::http_internal_server_error
+		));
+		response->with_header("Content-Type", "application/json");
+		return response;
+	}
 }
 
 const std::shared_ptr<http_response> MCP_JSONRPC_Resource::render_POST(
@@ -429,28 +464,35 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	std::string tool_name = req_json["params"]["name"].get<std::string>();
 	json arguments = req_json["params"].contains("arguments") ? req_json["params"]["arguments"] : json::object();
 
+	proxy_info("MCP TOOL CALL: endpoint='%s' tool='%s'\n", endpoint_name.c_str(), tool_name.c_str());
 	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP tool call: %s with args: %s\n", tool_name.c_str(), arguments.dump().c_str());
 
 	json response = tool_handler->execute_tool(tool_name, arguments);
 
-	// Unwrap ProxySQL's {"success": ..., "result": ...} format for MCP compliance
-	// Tool handlers use create_success_response() which adds this wrapper
-	if (response.is_object() && response.contains("success") && response.contains("result")) {
+	// Check if this is a ProxySQL tool response with success/result wrapper
+	if (response.is_object() && response.contains("success")) {
 		bool success = response["success"].get<bool>();
 		if (!success) {
-			// Tool execution failed - return error in MCP format
+			// Tool execution failed - log the error with full context and return in MCP format
+			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
+			std::string args_str = arguments.dump();
+			proxy_error("MCP TOOL CALL FAILED: endpoint='%s' tool='%s' error='%s'\n",
+				endpoint_name.c_str(), tool_name.c_str(), error_msg.c_str());
+			proxy_error("MCP TOOL CALL FAILED: arguments='%s'\n", args_str.c_str());
 			json mcp_result;
 			mcp_result["content"] = json::array();
 			json error_content;
 			error_content["type"] = "text";
-			std::string error_msg = response.contains("error") ? response["error"].get<std::string>() : "Tool execution failed";
 			error_content["text"] = error_msg;
 			mcp_result["content"].push_back(error_content);
 			mcp_result["isError"] = true;
 			return mcp_result;
 		}
-		// Success - use the "result" field as the content to be wrapped
-		response = response["result"];
+		// Success - extract the result field if it exists, otherwise use the whole response
+		proxy_info("MCP TOOL CALL SUCCESS: endpoint='%s' tool='%s'\n", endpoint_name.c_str(), tool_name.c_str());
+		if (response.contains("result")) {
+			response = response["result"];
+		}
 	}
 
 	// Wrap the response (or the 'result' field) in MCP-compliant format

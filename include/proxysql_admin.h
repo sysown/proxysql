@@ -538,6 +538,7 @@ class ProxySQL_Admin {
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
 	SQLite3DB *statsdb_disk; // on disk
+	SQLite3DB *mcpdb; // MCP catalog database
 #ifdef DEBUG
 	SQLite3DB *debugdb_disk; // on disk for debug
 	int debug_output;
@@ -661,6 +662,10 @@ class ProxySQL_Admin {
 	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result *);
 
+	// MCP query rules
+	char* load_mcp_query_rules_to_runtime();
+	void save_mcp_query_rules_from_runtime(bool _runtime = false);
+
 	char* load_pgsql_firewall_to_runtime();
 
 	void load_scheduler_to_runtime();
@@ -717,6 +722,9 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
+	void stats___mcp_query_tools_counters(bool reset);
+	void stats___mcp_query_digest(bool reset);
+	void stats___mcp_query_rules();
 
 	// Update prometheus metrics
 	void p_stats___memory_metrics();
