@@ -162,6 +162,26 @@ public:
         const std::vector<int16_t>& resultFormats = {},
 		bool sync = false
     );
+    // Extended bind with explicit format control
+    void bindStatementEx(
+        const std::string & stmtName,
+        const std::string & portalName,
+        const std::vector<Param>&params,
+        const std::vector<int16_t>&paramFormats,  // Explicit format array
+        const std::vector<int16_t>&resultFormats = {},
+        bool sync = false
+    );
+        
+    // Helper for single format case
+    void bindStatementSingleFormat(
+        const std::string & stmtName,
+        const std::string & portalName,
+        const std::vector<Param>&params,
+        int16_t singleFormat,  // Applied to all parameters
+        const std::vector<int16_t>&resultFormats = {},
+        bool sync = false
+    );
+
     void executePortal(
         const std::string& portalName,
         int maxRows = 0,  // 0 = all rows

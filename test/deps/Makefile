@@ -64,12 +64,7 @@ cleanall:
 
 .PHONY: clean
 .SILENT: clean
-clean:
-	cd mariadb-connector-c/mariadb-connector-c && $(MAKE) --no-print-directory clean || true
-	cd mariadb-connector-c/mariadb-connector-c && rm -f CMakeCache.txt || true
-	cd mysql-connector-c/mysql-connector-c && $(MAKE) --no-print-directory clean || true
-	cd mysql-connector-c/mysql-connector-c && rm -f CMakeCache.txt || true
-	cd mysql-connector-c/mysql-connector-c && rm -f libmysql/libmysqlclient.a || true
-	cd mysql-connector-c-8.4.0/mysql-connector-c && $(MAKE) --no-print-directory clean || true
-	cd mysql-connector-c-8.4.0/mysql-connector-c && rm -f CMakeCache.txt || true
-	cd mysql-connector-c-8.4.0/mysql-connector-c && rm -f libmysql/libmysqlclient.a || true
+clean: cleanall
+
+# NOTE: clean is now an alias of cleanall since the incremental clean
+# was practically redundant due to build targets forcing full rebuilds anyway

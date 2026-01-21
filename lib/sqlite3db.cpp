@@ -426,6 +426,81 @@ __exit_execute_statement:
 }
 
 /**
+ * @brief Executes a prepared SQL statement and returns the result set.
+ *
+ * @param statement The prepared SQL statement to execute.
+ * @param _error Pointer to a variable to store the error message.
+ * @param _cols Pointer to a variable to store the number of columns.
+ * @param _affected_rows Pointer to a variable to store the number of affected rows.
+ * @return A pointer to the SQLite3_result object representing the result set.
+ */
+SQLite3_result* SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows) {
+	SQLite3_result* resultset;
+
+	char* myerror;
+	char** _error = (error == NULL ? &myerror : error);
+
+	int mycols;
+	int* _cols = (cols == NULL ? &mycols : cols);
+
+	int my_affected_rows;
+	int* _affected_rows = (affected_rows == NULL ? &my_affected_rows : affected_rows);
+
+	if (execute_prepared(statement, _error, _cols, _affected_rows, &resultset))
+		return resultset;
+
+	return NULL;
+}
+
+/**
+ * @brief Executes a prepared SQL statement and returns the result set.
+ *
+ * @param statement The prepared SQLite statement to execute.
+ * @param error Pointer to a variable to store the error message.
+ * @param cols Pointer to a variable to store the number of columns.
+ * @param affected_rows Pointer to a variable to store the number of affected rows.
+ * @param resultset Pointer to a pointer to a SQLite3_result object representing the result set.
+ * @return True if the execution was successful, false otherwise.
+ */
+bool SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset) {
+	int rc;
+	*error = NULL;
+	bool ret = false;
+	*cols = (*proxy_sqlite3_column_count)(statement);
+	if (*cols == 0) { // not a SELECT
+		*resultset = NULL;
+		// Get total changes before executing the statement
+		long long total_changes_before = (*proxy_sqlite3_total_changes64)(db);
+		do {
+			rc = (*proxy_sqlite3_step)(statement);
+			if (rc == SQLITE_LOCKED || rc == SQLITE_BUSY) { // the execution of the prepared statement failed because locked
+				if ((*proxy_sqlite3_get_autocommit)(db) == 0) {
+					*error = strdup((*proxy_sqlite3_errmsg)(db));
+					goto __exit_execute_prepared;
+				}
+				usleep(USLEEP_SQLITE_LOCKED);
+			}
+		} while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+		if (rc == SQLITE_DONE) {
+			// Calculate affected rows as the difference in total changes
+			long long total_changes_after = (*proxy_sqlite3_total_changes64)(db);
+			*affected_rows = (int)(total_changes_after - total_changes_before);
+			ret = true;
+		} else {
+			*error = strdup((*proxy_sqlite3_errmsg)(db));
+			goto __exit_execute_prepared;
+		}
+	} else {
+		*affected_rows = 0;
+		*resultset = new SQLite3_result(statement);
+		ret = true;
+	}
+__exit_execute_prepared:
+	//(*proxy_sqlite3_reset)(statement);
+	return ret;
+}
+
+/**
  * @brief Executes a SQL statement and returns a single integer result.
  * 
  * @param str The SQL statement to execute.
