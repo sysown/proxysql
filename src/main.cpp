@@ -1381,8 +1381,13 @@ void ProxySQL_Main_init() {
 static void LoadPlugins() {
 	GloMyLdapAuth = NULL;
 	if (proxy_sqlite3_open_v2 == nullptr) {
-		SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
-	}
++		if (GloVars.sqlite3_plugin) {
++			proxy_warning("SQLite3 plugin loading disabled: function replacement is temporarily disabled for plugin: %s\n", GloVars.sqlite3_plugin);
++		} else {
++			proxy_warning("SQLite3 plugin function replacement is disabled; no sqlite3 plugin specified\n");
++		}
++		/* Skipping SQLite3DB::LoadPlugin to avoid replacing proxy_sqlite3_* symbols */
++	}
 	if (GloVars.web_interface_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;
