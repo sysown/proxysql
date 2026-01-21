@@ -123,6 +123,7 @@ int MySQL_Catalog::create_tables() {
 	// Triggers to keep FTS in sync
 	db->execute("DROP TRIGGER IF EXISTS catalog_ai");
 	db->execute("DROP TRIGGER IF EXISTS catalog_ad");
+	db->execute("DROP TRIGGER IF EXISTS catalog_au");
 
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ai AFTER INSERT ON catalog BEGIN"
 		"  INSERT INTO catalog_fts(rowid, schema, kind, key, document ,  tags)"
@@ -132,6 +133,17 @@ int MySQL_Catalog::create_tables() {
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ad AFTER DELETE ON catalog BEGIN"
 		"  INSERT INTO catalog_fts(catalog_fts, rowid, schema, kind, key, document ,  tags)"
 		"  VALUES ('delete', old.id, old.schema, old.kind, old.key, old.document ,  old.tags);"
+		"END;");
+
+	// AFTER UPDATE trigger to keep FTS in sync for upserts
+	// When an upsert occurs (INSERT OR REPLACE ... ON CONFLICT ... DO UPDATE),
+	// the UPDATE doesn't trigger INSERT/DELETE triggers, so we need to handle
+	// updates explicitly to keep the FTS index current
+	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_au AFTER UPDATE ON catalog BEGIN"
+		"  INSERT INTO catalog_fts(catalog_fts, rowid, schema, kind, key, document ,  tags)"
+		"  VALUES ('delete', old.id, old.schema, old.kind, old.key, old.document ,  old.tags);"
+		"  INSERT INTO catalog_fts(rowid, schema, kind, key, document ,  tags)"
+		"  VALUES (new.id, new.schema, new.kind, new.key, new.document ,  new.tags);"
 		"END;");
 
 	// Merge operations log
