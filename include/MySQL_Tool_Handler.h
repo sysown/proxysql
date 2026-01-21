@@ -2,6 +2,7 @@
 #define CLASS_MYSQL_TOOL_HANDLER_H
 
 #include "MySQL_Catalog.h"
+#include "MySQL_FTS.h"
 #include "cpp.h"
 #include <string>
 #include <memory>
@@ -51,6 +52,10 @@ private:
 	// Catalog for LLM memory
 	MySQL_Catalog* catalog;                     ///< SQLite catalog for LLM discoveries
 
+	// FTS for fast data discovery
+	MySQL_FTS* fts;                             ///< SQLite FTS for full-text search
+	pthread_mutex_t fts_lock;                  ///< Mutex protecting FTS lifecycle/usage
+
 	// Query guardrails
 	int max_rows;                               ///< Maximum rows to return (default 200)
 	int timeout_ms;                             ///< Query timeout in milliseconds (default 2000)
@@ -73,13 +78,6 @@ private:
 	 * @param mysql The MYSQL connection to return
 	 */
 	void return_connection(MYSQL* mysql);
-
-	/**
-	 * @brief Execute a query and return results as JSON
-	 * @param query SQL query to execute
-	 * @return JSON with results or error
-	 */
-	std::string execute_query(const std::string& query);
 
 	/**
 	 * @brief Validate SQL is read-only
@@ -111,6 +109,7 @@ public:
 	 * @param password MySQL password
 	 * @param schema Default schema/database
 	 * @param catalog_path Path to catalog database
+	 * @param fts_path Path to FTS database
 	 */
 	MySQL_Tool_Handler(
 		const std::string& hosts,
@@ -118,8 +117,16 @@ public:
 		const std::string& user,
 		const std::string& password,
 		const std::string& schema,
-		const std::string& catalog_path
+		const std::string& catalog_path,
+		const std::string& fts_path = ""
 	);
+
+	/**
+	 * @brief Reset FTS database path at runtime
+	 * @param path New SQLite FTS database path
+	 * @return true on success, false on error
+	 */
+	bool reset_fts_path(const std::string& path);
 
 	/**
 	 * @brief Destructor
@@ -136,6 +143,13 @@ public:
 	 * @brief Close connections and cleanup
 	 */
 	void close();
+
+	/**
+	 * @brief Execute a query and return results as JSON
+	 * @param query SQL query to execute
+	 * @return JSON with results or error
+	 */
+	std::string execute_query(const std::string& query);
 
 	// ========== Inventory Tools ==========
 
@@ -389,6 +403,77 @@ public:
 	 * @return JSON result
 	 */
 	std::string catalog_delete(const std::string& kind, const std::string& key);
+
+	// ========== FTS Tools (Full Text Search) ==========
+
+	/**
+	 * @brief Create and populate an FTS index for a MySQL table
+	 * @param schema Schema name
+	 * @param table Table name
+	 * @param columns JSON array of column names to index
+	 * @param primary_key Primary key column name
+	 * @param where_clause Optional WHERE clause for filtering
+	 * @return JSON result with success status and metadata
+	 */
+	std::string fts_index_table(
+		const std::string& schema,
+		const std::string& table,
+		const std::string& columns,
+		const std::string& primary_key,
+		const std::string& where_clause = ""
+	);
+
+	/**
+	 * @brief Search indexed data using FTS5
+	 * @param query FTS5 search query
+	 * @param schema Optional schema filter
+	 * @param table Optional table filter
+	 * @param limit Max results (default 100)
+	 * @param offset Pagination offset (default 0)
+	 * @return JSON result with matches and snippets
+	 */
+	std::string fts_search(
+		const std::string& query,
+		const std::string& schema = "",
+		const std::string& table = "",
+		int limit = 100,
+		int offset = 0
+	);
+
+	/**
+	 * @brief List all FTS indexes with metadata
+	 * @return JSON array of indexes
+	 */
+	std::string fts_list_indexes();
+
+	/**
+	 * @brief Remove an FTS index
+	 * @param schema Schema name
+	 * @param table Table name
+	 * @return JSON result
+	 */
+	std::string fts_delete_index(const std::string& schema, const std::string& table);
+
+	/**
+	 * @brief Refresh an index with fresh data (full rebuild)
+	 * @param schema Schema name
+	 * @param table Table name
+	 * @return JSON result
+	 */
+	std::string fts_reindex(const std::string& schema, const std::string& table);
+
+	/**
+	 * @brief Rebuild ALL FTS indexes with fresh data
+	 * @return JSON result with summary
+	 */
+	std::string fts_rebuild_all();
+
+	/**
+	 * @brief Reinitialize FTS handler with a new database path
+	 * @param fts_path New path to FTS database
+	 * @return 0 on success, -1 on error
+	 */
+	int reinit_fts(const std::string& fts_path);
 };
 
 #endif /* CLASS_MYSQL_TOOL_HANDLER_H */

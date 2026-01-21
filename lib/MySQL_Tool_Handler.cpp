@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <regex>
 #include <cstring>
+#include <sys/stat.h>
 
 // MySQL client library
 #include <mysql.h>
@@ -20,9 +21,11 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 	const std::string& user,
 	const std::string& password,
 	const std::string& schema,
-	const std::string& catalog_path
+	const std::string& catalog_path,
+	const std::string& fts_path
 )
 	: catalog(NULL),
+	  fts(NULL),
 	  max_rows(200),
 	  timeout_ms(2000),
 	  allow_select_star(false),
@@ -30,6 +33,8 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 {
 	// Initialize the pool mutex
 	pthread_mutex_init(&pool_lock, NULL);
+	// Initialize the FTS mutex
+	pthread_mutex_init(&fts_lock, NULL);
 
 	// Parse hosts
 	std::istringstream h(hosts);
@@ -65,6 +70,11 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 
 	// Create catalog
 	catalog = new MySQL_Catalog(catalog_path);
+
+	// Create FTS if path is provided
+	if (!fts_path.empty()) {
+		fts = new MySQL_FTS(fts_path);
+	}
 }
 
 MySQL_Tool_Handler::~MySQL_Tool_Handler() {
@@ -72,14 +82,27 @@ MySQL_Tool_Handler::~MySQL_Tool_Handler() {
 	if (catalog) {
 		delete catalog;
 	}
+	if (fts) {
+		delete fts;
+	}
 	// Destroy the pool mutex
 	pthread_mutex_destroy(&pool_lock);
+	// Destroy the FTS mutex
+	pthread_mutex_destroy(&fts_lock);
 }
 
 int MySQL_Tool_Handler::init() {
 	// Initialize catalog
 	if (catalog->init()) {
 		return -1;
+	}
+
+	// Initialize FTS if configured
+	if (fts && fts->init()) {
+		proxy_error("Failed to initialize FTS, continuing without FTS\n");
+		// Continue without FTS - it's optional
+		delete fts;
+		fts = NULL;
 	}
 
 	// Initialize connection pool
@@ -89,6 +112,29 @@ int MySQL_Tool_Handler::init() {
 
 	proxy_info("MySQL Tool Handler initialized for schema '%s'\n", mysql_schema.c_str());
 	return 0;
+}
+
+bool MySQL_Tool_Handler::reset_fts_path(const std::string& path) {
+	pthread_mutex_lock(&fts_lock);
+
+	if (fts) {
+		delete fts;
+		fts = NULL;
+	}
+
+	if (!path.empty()) {
+		fts = new MySQL_FTS(path);
+		if (fts->init()) {
+			proxy_error("Failed to initialize FTS with new path: %s\n", path.c_str());
+			delete fts;
+			fts = NULL;
+			pthread_mutex_unlock(&fts_lock);
+			return false;
+		}
+	}
+
+	pthread_mutex_unlock(&fts_lock);
+	return true;
 }
 
 /**
@@ -987,4 +1033,146 @@ std::string MySQL_Tool_Handler::catalog_delete(const std::string& kind, const st
 	result["key"] = key;
 
 	return result.dump();
+}
+
+// ========== FTS Tools (Full Text Search) ==========
+
+std::string MySQL_Tool_Handler::fts_index_table(
+	const std::string& schema,
+	const std::string& table,
+	const std::string& columns,
+	const std::string& primary_key,
+	const std::string& where_clause
+) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->index_table(schema, table, columns, primary_key, where_clause, this);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_search(
+	const std::string& query,
+	const std::string& schema,
+	const std::string& table,
+	int limit,
+	int offset
+) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->search(query, schema, table, limit, offset);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_list_indexes() {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->list_indexes();
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_delete_index(const std::string& schema, const std::string& table) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->delete_index(schema, table);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_reindex(const std::string& schema, const std::string& table) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->reindex(schema, table, this);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_rebuild_all() {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->rebuild_all(this);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+int MySQL_Tool_Handler::reinit_fts(const std::string& fts_path) {
+	proxy_info("MySQL_Tool_Handler: Reinitializing FTS with path: %s\n", fts_path.c_str());
+
+	// Check if directory exists (SQLite can't create directories)
+	std::string::size_type last_slash = fts_path.find_last_of("/");
+	if (last_slash != std::string::npos && last_slash > 0) {
+		std::string dir = fts_path.substr(0, last_slash);
+		struct stat st;
+		if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+			proxy_error("MySQL_Tool_Handler: Directory does not exist for path '%s' (directory: '%s')\n",
+				fts_path.c_str(), dir.c_str());
+			return -1;
+		}
+	}
+
+	// First, test if we can open the new database
+	MySQL_FTS* new_fts = new MySQL_FTS(fts_path);
+	if (!new_fts) {
+		proxy_error("MySQL_Tool_Handler: Failed to create new FTS handler\n");
+		return -1;
+	}
+
+	if (new_fts->init() != 0) {
+		proxy_error("MySQL_Tool_Handler: Failed to initialize FTS at %s\n", fts_path.c_str());
+		delete new_fts;
+		return -1;  // Return error WITHOUT closing old FTS
+	}
+
+	// Success! Now close old and replace with new
+	if (fts) {
+		delete fts;
+	}
+	fts = new_fts;
+
+	proxy_info("MySQL_Tool_Handler: FTS reinitialized successfully at %s\n", fts_path.c_str());
+	return 0;
 }

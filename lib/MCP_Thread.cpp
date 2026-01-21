@@ -31,6 +31,7 @@ static const char* mcp_thread_variables_names[] = {
 	"mysql_password",
 	"mysql_schema",
 	"catalog_path",
+	"fts_path",
 	NULL
 };
 
@@ -57,6 +58,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_mysql_password = strdup("");
 	variables.mcp_mysql_schema = strdup("");
 	variables.mcp_catalog_path = strdup("mcp_catalog.db");
+	variables.mcp_fts_path = strdup("mcp_fts.db");
 
 	status_variables.total_requests = 0;
 	status_variables.failed_requests = 0;
@@ -97,6 +99,8 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		free(variables.mcp_mysql_schema);
 	if (variables.mcp_catalog_path)
 		free(variables.mcp_catalog_path);
+	if (variables.mcp_fts_path)
+		free(variables.mcp_fts_path);
 
 	if (mcp_server) {
 		delete mcp_server;
@@ -226,6 +230,10 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%s", variables.mcp_catalog_path ? variables.mcp_catalog_path : "");
 		return 0;
 	}
+	if (!strcmp(name, "fts_path")) {
+		sprintf(val, "%s", variables.mcp_fts_path ? variables.mcp_fts_path : "");
+		return 0;
+	}
 
 	return -1;
 }
@@ -337,6 +345,21 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		if (variables.mcp_catalog_path)
 			free(variables.mcp_catalog_path);
 		variables.mcp_catalog_path = strdup(value);
+		return 0;
+	}
+	if (!strcmp(name, "fts_path")) {
+		if (variables.mcp_fts_path)
+			free(variables.mcp_fts_path);
+		variables.mcp_fts_path = strdup(value);
+		// Apply at runtime by resetting FTS in the existing handler
+		if (mysql_tool_handler) {
+			proxy_info("MCP: Applying new fts_path at runtime: %s\n", value);
+			if (!mysql_tool_handler->reset_fts_path(value)) {
+				proxy_error("Failed to reset FTS path at runtime\n");
+				return -1;
+			}
+		}
+
 		return 0;
 	}
 
