@@ -74,7 +74,7 @@ void sync_log_buffer_to_disk(SQLite3DB *db) {
 		rc=(*proxy_sqlite3_bind_text)(statement1, 11, entry.backtrace.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		SAFE_SQLITE3_STEP2(statement1);
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
-		// Note: no assert() in proxy_debug_func() after sqlite3_reset() because it is possible that we are in shutdown
+		// Note: no assert() in proxy_debug_func() after (*proxy_sqlite3_reset)() because it is possible that we are in shutdown
 		rc=(*proxy_sqlite3_reset)(statement1); // ASSERT_SQLITE_OK(rc, db);
 	}
 	db->execute("COMMIT");

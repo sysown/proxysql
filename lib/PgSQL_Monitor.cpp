@@ -143,24 +143,24 @@ unique_ptr<PgSQL_Thread> init_pgsql_thread_struct() {
 // Helper function for binding text
 void sqlite_bind_text(sqlite3_stmt* stmt, int index, const char* text) {
 	int rc = (*proxy_sqlite3_bind_text)(stmt, index, text, -1, SQLITE_TRANSIENT);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding integers
 void sqlite_bind_int(sqlite3_stmt* stmt, int index, int value) {
 	int rc = (*proxy_sqlite3_bind_int)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding 64-bit integers
 void sqlite_bind_int64(sqlite3_stmt* stmt, int index, long long value) {
 	int rc = (*proxy_sqlite3_bind_int64)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 void sqlite_bind_null(sqlite3_stmt* stmt, int index) {
 	int rc = (*proxy_sqlite3_bind_null)(stmt, index);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for executing a statement
@@ -180,13 +180,13 @@ int sqlite_execute_statement(sqlite3_stmt* stmt) {
 // Helper function for clearing bindings
 void sqlite_clear_bindings(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_clear_bindings)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for resetting a statement
 void sqlite_reset_statement(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_reset)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for finalizing a statement
