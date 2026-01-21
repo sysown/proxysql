@@ -1185,13 +1185,14 @@ int Static_Harvester::build_quick_profiles() {
 		// Build profile JSON
 		json profile;
 		profile["guessed_kind"] = guessed_kind;
-		profile["rows_est"] = row->fields[4] ? atol(row->fields[4]) : 0;
-		profile["size_bytes"] = (atol(row->fields[5] ? row->fields[5] : "0") +
-		                       atol(row->fields[6] ? row->fields[6] : "0"));
-		profile["engine"] = std::string(row->fields[3] ? row->fields[3] : "");
-		profile["has_primary_key"] = atoi(row->fields[7]) != 0;
-		profile["has_foreign_keys"] = atoi(row->fields[8]) != 0;
-		profile["has_time_column"] = atoi(row->fields[9]) != 0;
+		// SELECT: object_id(0), schema_name(1), object_name(2), object_type(3), engine(4), table_rows_est(5), data_length(6), index_length(7), has_primary_key(8), has_foreign_keys(9), has_time_column(10)
+		profile["rows_est"] = row->fields[5] ? atol(row->fields[5]) : 0;
+		profile["size_bytes"] = (atol(row->fields[6] ? row->fields[6] : "0") +
+		                       atol(row->fields[7] ? row->fields[7] : "0"));
+		profile["engine"] = std::string(row->fields[4] ? row->fields[4] : "");
+		profile["has_primary_key"] = atoi(row->fields[8]) != 0;
+		profile["has_foreign_keys"] = atoi(row->fields[9]) != 0;
+		profile["has_time_column"] = atoi(row->fields[10]) != 0;
 
 		if (catalog->upsert_profile(current_run_id, object_id, "table_quick", profile.dump()) == 0) {
 			count++;
