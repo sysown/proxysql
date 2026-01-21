@@ -196,75 +196,108 @@ std::string MySQL_Catalog::search(
 	int limit,
 	int offset
 ) {
-	std::ostringstream sql;
-	sql << "SELECT schema, kind, key, document, tags ,  links FROM catalog WHERE 1=1";
-
-	// Add schema filter
-	if (!schema.empty()) {
-		sql << " AND schema = '" << schema << "'";
-	}
-
-	// Add kind filter
-	if (!kind.empty()) {
-		sql << " AND kind = '" << kind << "'";
-	}
-
-	// Add tags filter
-	if (!tags.empty()) {
-		sql << " AND tags LIKE '%" << tags << "%'";
-	}
-
-	// Add search query
-	if (!query.empty()) {
-		sql << " AND (key LIKE '%" << query << "%' "
-		     << "OR document LIKE '%" << query << "%' "
-		     << "OR tags LIKE '%" << query << "%')";
-	}
-
-	sql << " ORDER BY updated_at DESC LIMIT " << limit << " OFFSET " << offset;
-
-	char* error = NULL;
-	int cols = 0, affected = 0;
-	SQLite3_result* resultset = NULL;
-
-	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
-	if (error) {
-		proxy_error("Catalog search error: %s\n", error);
+	// FTS5 search requires a query
+	if (query.empty()) {
+		proxy_error("Catalog search requires a query parameter\n");
 		return "[]";
 	}
 
-	// Build JSON result using nlohmann::json
+	// Helper lambda to escape single quotes for SQLite SQL literals
+	auto escape_sql = [](const std::string& str) -> std::string {
+		std::string result;
+		result.reserve(str.length() * 2);  // Reserve space for potential escaping
+		for (char c : str) {
+			if (c == '\'') {
+				result += '\'';  // Escape single quote by doubling it
+			}
+			result += c;
+		}
+		return result;
+	};
+
+	// Escape query for use in FTS5 MATCH (MATCH doesn't support parameter binding)
+	std::string escaped_query = escape_sql(query);
+
+	// Build SQL query with placeholders for parameters
+	std::ostringstream sql;
+	sql << "SELECT c.kind, c.key, c.document, c.tags, c.links "
+	    << "FROM catalog c "
+	    << "INNER JOIN catalog_fts f ON c.id = f.rowid "
+	    << "WHERE catalog_fts MATCH '" << escaped_query << "'";
+
+	int param_count = 1;  // Track parameter binding position
+
+	// Add kind filter with parameter placeholder
+	if (!kind.empty()) {
+		sql << " AND c.kind = ?";
+	}
+
+	// Add tags filter with parameter placeholder
+	if (!tags.empty()) {
+		sql << " AND c.tags LIKE ?";
+	}
+
+	// Order by relevance (BM25) and recency
+	sql << " ORDER BY bm25(f) ASC, c.updated_at DESC LIMIT ? OFFSET ?";
+
+	// Prepare the statement
+	sqlite3_stmt* stmt = NULL;
+	int rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	if (rc != SQLITE_OK) {
+		proxy_error("Catalog search: Failed to prepare statement: %d\n", rc);
+		return "[]";
+	}
+
+	// Bind parameters
+	param_count = 1;
+	if (!kind.empty()) {
+		(*proxy_sqlite3_bind_text)(stmt, param_count++, kind.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	if (!tags.empty()) {
+		// Add wildcards for LIKE search
+		std::string tags_pattern = "%" + tags + "%";
+		(*proxy_sqlite3_bind_text)(stmt, param_count++, tags_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	(*proxy_sqlite3_bind_int)(stmt, param_count++, limit);
+	(*proxy_sqlite3_bind_int)(stmt, param_count, offset);
+
+	// Build JSON result using nlohmann::json (consistent with list() function)
 	nlohmann::json results = nlohmann::json::array();
 
-	if (resultset) {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
-		     it != resultset->rows.end(); ++it) {
-			SQLite3_row* row = *it;
+	while ((rc = (*proxy_sqlite3_step)(stmt)) == SQLITE_ROW) {
+		nlohmann::json entry;
 
-			nlohmann::json entry;
-			entry["schema"] = std::string(row->fields[0] ? row->fields[0] : "");
-			entry["kind"] = std::string(row->fields[1] ? row->fields[1] : "");
-			entry["key"] = std::string(row->fields[2] ? row->fields[2] : "");
+		const char* kind_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 0);
+		const char* key_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 1);
+		const char* doc_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 2);
+		const char* tags_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 3);
+		const char* links_val = (const char*)(*proxy_sqlite3_column_text)(stmt, 4);
 
-			// Parse the stored JSON document - nlohmann::json handles escaping
-			const char* doc_str = row->fields[3];
-			if (doc_str) {
-				try {
-					entry["document"] = nlohmann::json::parse(doc_str);
-				} catch (const nlohmann::json::parse_error& e) {
-					// If document is not valid JSON, store as string
-					entry["document"] = std::string(doc_str);
-				}
-			} else {
-				entry["document"] = nullptr;
+		entry["kind"] = std::string(kind_val ? kind_val : "");
+		entry["key"] = std::string(key_val ? key_val : "");
+
+		// Parse the stored JSON document - nlohmann::json handles escaping
+		if (doc_val) {
+			try {
+				entry["document"] = nlohmann::json::parse(doc_val);
+			} catch (const nlohmann::json::parse_error& e) {
+				// If document is not valid JSON, store as string
+				entry["document"] = std::string(doc_val);
 			}
-
-			entry["tags"] = std::string(row->fields[4] ? row->fields[4] : "");
-			entry["links"] = std::string(row->fields[5] ? row->fields[5] : "");
-
-			results.push_back(entry);
+		} else {
+			entry["document"] = nullptr;
 		}
-		delete resultset;
+
+		entry["tags"] = std::string(tags_val ? tags_val : "");
+		entry["links"] = std::string(links_val ? links_val : "");
+
+		results.push_back(entry);
+	}
+
+	(*proxy_sqlite3_finalize)(stmt);
+
+	if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+		proxy_error("Catalog search: Error executing query: %d\n", rc);
 	}
 
 	return results.dump();

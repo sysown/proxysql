@@ -17,14 +17,16 @@ class MCP_Threads_Handler;
 /**
  * @brief ProxySQL MCP Server class
  *
- * This class wraps an HTTPS server using libhttpserver to provide
- * MCP (Model Context Protocol) endpoints. It supports multiple
+ * This class wraps an HTTP/HTTPS server using libhttpserver to provide
+ * MCP (Model Context Protocol) endpoints. Supports both HTTP and HTTPS
+ * modes based on mcp_use_ssl configuration. It supports multiple
  * MCP server endpoints with their own authentication.
  */
 class ProxySQL_MCP_Server {
 private:
 	std::unique_ptr<httpserver::webserver> ws;
 	int port;
+	bool use_ssl;  // SSL mode the server was started with
 	pthread_t thread_id;
 
 	// Endpoint resources
@@ -36,7 +38,8 @@ public:
 	/**
 	 * @brief Constructor for ProxySQL_MCP_Server
 	 *
-	 * Creates a new HTTPS server instance on the specified port.
+	 * Creates a new HTTP/HTTPS server instance on the specified port.
+	 * Uses HTTPS if mcp_use_ssl is true, otherwise uses HTTP.
 	 *
 	 * @param p The port number to listen on
 	 * @param h Pointer to the MCP_Threads_Handler instance
@@ -51,18 +54,32 @@ public:
 	~ProxySQL_MCP_Server();
 
 	/**
-	 * @brief Start the HTTPS server
+	 * @brief Start the HTTP/HTTPS server
 	 *
 	 * Starts the webserver in a dedicated thread.
 	 */
 	void start();
 
 	/**
-	 * @brief Stop the HTTPS server
+	 * @brief Stop the HTTP/HTTPS server
 	 *
 	 * Stops the webserver and waits for the thread to complete.
 	 */
 	void stop();
+
+	/**
+	 * @brief Get the port the server is listening on
+	 *
+	 * @return int The port number
+	 */
+	int get_port() const { return port; }
+
+	/**
+	 * @brief Check if the server is using SSL/TLS
+	 *
+	 * @return true if server is using HTTPS, false if using HTTP
+	 */
+	bool is_using_ssl() const { return use_ssl; }
 };
 
 #endif /* CLASS_PROXYSQL_MCP_SERVER_H */
