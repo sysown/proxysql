@@ -7789,7 +7789,7 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 
 	if (success == false) {
 		if (resultset) {
-			free(resultset);
+			delete resultset;
 		}
 	}
 
