@@ -365,21 +365,28 @@ std::string Query_Tool_Handler::execute_query(const std::string& query) {
 		return "{\"error\": \"No available connection\"}";
 	}
 
-	std::string result = "{\"error\": \"Query execution failed\"}";
+	MYSQL* mysql_ptr = static_cast<MYSQL*>(mysql);
 
-	if (mysql_query(static_cast<MYSQL*>(mysql), query.c_str())) {
-		proxy_error("Query_Tool_Handler: Query failed: %s\n", mysql_error(static_cast<MYSQL*>(mysql)));
+	if (mysql_query(mysql_ptr, query.c_str())) {
+		proxy_error("Query_Tool_Handler: Query failed: %s\n", mysql_error(mysql_ptr));
 		return_connection(mysql);
+		json j;
+		j["success"] = false;
+		j["error"] = std::string(mysql_error(mysql_ptr));
+		return j.dump();
 	}
 
-	MYSQL_RES* res = mysql_store_result(static_cast<MYSQL*>(mysql));
+	MYSQL_RES* res = mysql_store_result(mysql_ptr);
+
+	// Capture affected_rows BEFORE return_connection to avoid race condition
+	unsigned long affected_rows_val = mysql_affected_rows(mysql_ptr);
 	return_connection(mysql);
 
 	if (!res) {
 		// No result set (e.g., INSERT/UPDATE)
 		json j;
 		j["success"] = true;
-		j["affected_rows"] = static_cast<long>(mysql_affected_rows(static_cast<MYSQL*>(mysql)));
+		j["affected_rows"] = static_cast<long>(affected_rows_val);
 		return j.dump();
 	}
 
@@ -444,13 +451,16 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 	}
 
 	MYSQL_RES* res = mysql_store_result(mysql_ptr);
+
+	// Capture affected_rows BEFORE return_connection to avoid race condition
+	unsigned long affected_rows_val = mysql_affected_rows(mysql_ptr);
 	return_connection(mysql);
 
 	if (!res) {
 		// No result set (e.g., INSERT/UPDATE)
 		json j;
 		j["success"] = true;
-		j["affected_rows"] = static_cast<long>(mysql_affected_rows(mysql_ptr));
+		j["affected_rows"] = static_cast<long>(affected_rows_val);
 		return j.dump();
 	}
 
