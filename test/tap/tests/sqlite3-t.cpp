@@ -1,5 +1,5 @@
 #define PROXYSQL_EXTERN
-#define MAIN_PROXY_SQLITE3
+// #define MAIN_PROXY_SQLITE3  // Removed: conflicts with libproxysql.a
 #include <stdlib.h>
 #include "tap.h"
 #include <cstdint>
