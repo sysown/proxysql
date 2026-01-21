@@ -810,6 +810,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin, "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 
+	// MCP query rules
+	insert_into_tables_defs(tables_defs_admin, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
+	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES);
+
+	insert_into_tables_defs(tables_defs_config, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
+
 	insert_into_tables_defs(tables_defs_config, "pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_users", ADMIN_SQLITE_TABLE_PGSQL_USERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_ldap_mapping", ADMIN_SQLITE_TABLE_PGSQL_LDAP_MAPPING);
@@ -901,6 +907,11 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
+
+	// MCP query digest stats
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
 
 	// init ldap here
 	init_ldap();

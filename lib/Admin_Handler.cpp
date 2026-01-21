@@ -2345,6 +2345,92 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 
+	// ============================================================
+	// MCP QUERY RULES COMMAND HANDLERS
+	// ============================================================
+	// Supported commands:
+	//   LOAD MCP QUERY RULES FROM DISK  - Copy from disk to memory
+	//   LOAD MCP QUERY RULES TO MEMORY  - Copy from disk to memory (alias)
+	//   LOAD MCP QUERY RULES TO RUNTIME - Load from memory to in-memory cache
+	//   LOAD MCP QUERY RULES FROM MEMORY - Load from memory to in-memory cache (alias)
+	//   SAVE MCP QUERY RULES TO DISK    - Copy from memory to disk
+	//   SAVE MCP QUERY RULES TO MEMORY   - Save from in-memory cache to memory
+	//   SAVE MCP QUERY RULES FROM RUNTIME - Save from in-memory cache to memory (alias)
+	// ============================================================
+	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MCP QUERY RULES ", query_no_space, 21)) || (!strncasecmp("LOAD MCP QUERY RULES ", query_no_space, 21)) ) ) {
+
+		// LOAD MCP QUERY RULES FROM DISK / TO MEMORY
+		// Copies rules from persistent storage (disk.mcp_query_rules) to working memory (main.mcp_query_rules)
+		if (
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP QUERY RULES FROM DISK", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO MEMORY") && !strncasecmp("LOAD MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			) {
+			l_free(*ql,*q);
+			// First clear target table, then insert to ensure deleted source rows are also removed
+			*q=l_strdup("DELETE FROM main.mcp_query_rules; INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		// SAVE MCP QUERY RULES TO DISK
+		// Copies rules from working memory (main.mcp_query_rules) to persistent storage (disk.mcp_query_rules)
+		if (
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
+			) {
+			l_free(*ql,*q);
+			// First clear target table, then insert to ensure deleted source rows are also removed
+			*q=l_strdup("DELETE FROM disk.mcp_query_rules; INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		// SAVE MCP QUERY RULES FROM RUNTIME / TO MEMORY
+		// Saves rules from in-memory cache to working memory (main.mcp_query_rules)
+		// This persists the currently active rules (with their hit counters) to the database
+		if (
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEMORY") && !strncasecmp("SAVE MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEM") && !strncasecmp("SAVE MCP QUERY RULES TO MEM", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE MCP QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUN") && !strncasecmp("SAVE MCP QUERY RULES FROM RUN", query_no_space, query_no_space_length))
+			) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			SPA->save_mcp_query_rules_from_runtime(false);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp query rules from RUNTIME\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// LOAD MCP QUERY RULES TO RUNTIME / FROM MEMORY
+		// Loads rules from working memory (main.mcp_query_rules) to in-memory cache
+		// This makes the rules active for query processing
+		if (
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUNTIME") && !strncasecmp("LOAD MCP QUERY RULES TO RUNTIME", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUN") && !strncasecmp("LOAD MCP QUERY RULES TO RUN", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM MEMORY") && !strncasecmp("LOAD MCP QUERY RULES FROM MEMORY", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM MEM") && !strncasecmp("LOAD MCP QUERY RULES FROM MEM", query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			char* err = SPA->load_mcp_query_rules_to_runtime();
+
+			if (err==NULL) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp query rules to RUNTIME\n");
+				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			} else {
+				SPA->send_error_msg_to_client(sess, err);
+			}
+			return false;
+		}
+	}
+
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
 
 		if ( is_admin_command_or_alias(LOAD_ADMIN_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length) ) {
