@@ -315,6 +315,32 @@ bool Static_Harvester::is_id_like_name(const std::string& column_name) {
 	return false;
 }
 
+// Validate a schema/database name for safe use in SQL queries.
+//
+// MySQL schema names should only contain alphanumeric characters, underscores,
+// and dollar signs. This validation prevents SQL injection when the schema
+// name is used in string concatenation for INFORMATION_SCHEMA queries.
+//
+// Parameters:
+//   name - Schema name to validate
+//
+// Returns:
+//   true if the name is safe to use, false otherwise
+bool Static_Harvester::is_valid_schema_name(const std::string& name) {
+	if (name.empty()) {
+		return true; // Empty filter is valid (means "all schemas")
+	}
+
+	// Schema names should only contain alphanumeric, underscore, and dollar sign
+	for (char c : name) {
+		if (!isalnum(c) && c != '_' && c != '$') {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 // ============================================================
 // Discovery Run Management
 // ============================================================
@@ -398,6 +424,12 @@ int Static_Harvester::finish_run(const std::string& notes) {
 std::vector<Static_Harvester::SchemaRow> Static_Harvester::fetch_schemas(const std::string& filter) {
 	std::vector<SchemaRow> schemas;
 
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return schemas;
+	}
+
 	std::ostringstream sql;
 	sql << "SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME "
 	    << "FROM information_schema.SCHEMATA";
@@ -479,6 +511,12 @@ int Static_Harvester::harvest_schemas(const std::string& only_schema) {
 std::vector<Static_Harvester::ObjectRow> Static_Harvester::fetch_tables_views(const std::string& filter) {
 	std::vector<ObjectRow> objects;
 
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return objects;
+	}
+
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_ROWS, "
 	    << "DATA_LENGTH, INDEX_LENGTH, CREATE_TIME, UPDATE_TIME, TABLE_COMMENT "
@@ -524,6 +562,12 @@ std::vector<Static_Harvester::ObjectRow> Static_Harvester::fetch_tables_views(co
 //   Vector of ColumnRow structures containing column metadata
 std::vector<Static_Harvester::ColumnRow> Static_Harvester::fetch_columns(const std::string& filter) {
 	std::vector<ColumnRow> columns;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return columns;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, "
@@ -574,6 +618,12 @@ std::vector<Static_Harvester::ColumnRow> Static_Harvester::fetch_columns(const s
 std::vector<Static_Harvester::IndexRow> Static_Harvester::fetch_indexes(const std::string& filter) {
 	std::vector<IndexRow> indexes;
 
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return indexes;
+	}
+
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE, INDEX_TYPE, "
 	    << "SEQ_IN_INDEX, COLUMN_NAME, SUB_PART, COLLATION, CARDINALITY "
@@ -620,6 +670,12 @@ std::vector<Static_Harvester::IndexRow> Static_Harvester::fetch_indexes(const st
 //   Vector of FKRow structures containing foreign key metadata
 std::vector<Static_Harvester::FKRow> Static_Harvester::fetch_foreign_keys(const std::string& filter) {
 	std::vector<FKRow> fks;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return fks;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT kcu.CONSTRAINT_SCHEMA AS child_schema, "

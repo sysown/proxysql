@@ -479,7 +479,8 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 	std::string upper = query;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
-	// Check for dangerous keywords
+	// Quick exit: blacklist check for dangerous keywords
+	// This provides fast rejection of obviously dangerous queries
 	std::vector<std::string> dangerous = {
 		"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
 		"TRUNCATE", "REPLACE", "LOAD", "CALL", "EXECUTE"
@@ -491,7 +492,9 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 		}
 	}
 
-	// Must start with SELECT or WITH or EXPLAIN
+	// Whitelist validation: query must start with an allowed read-only keyword
+	// This ensures the query is of a known-safe type (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE)
+	// Only queries matching these specific patterns are allowed through
 	if (upper.find("SELECT") == 0 && upper.find("FROM") != std::string::npos) {
 		return true;
 	}

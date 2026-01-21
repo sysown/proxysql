@@ -352,6 +352,33 @@ bool RAG_Tool_Handler::validate_query_length(const std::string& query) {
 }
 
 /**
+ * @brief Escape FTS query string for safe use in MATCH clause
+ *
+ * Escapes single quotes in FTS query strings by doubling them,
+ * which is the standard escaping method for SQLite FTS5.
+ * This prevents FTS injection while allowing legitimate single quotes in queries.
+ *
+ * @param query Raw FTS query string from user input
+ * @return Escaped query string safe for use in MATCH clause
+ *
+ * @see execute_tool()
+ */
+std::string RAG_Tool_Handler::escape_fts_query(const std::string& query) {
+	std::string escaped;
+	escaped.reserve(query.length() * 2); // Reserve space for potential escaping
+
+	for (char c : query) {
+		if (c == '\'') {
+			escaped += "''"; // Escape single quote by doubling
+		} else {
+			escaped += c;
+		}
+	}
+
+	return escaped;
+}
+
+/**
  * @brief Execute database query and return results
  *
  * Executes a SQL query against the vector database and returns the results.
@@ -1155,7 +1182,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				"FROM rag_fts_chunks f "
 				"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 				"JOIN rag_documents d ON d.doc_id = c.doc_id "
-				"WHERE f MATCH '" + query + "'";
+				"WHERE f MATCH '" + escape_fts_query(query) + "'";
 
 			// Apply filters using consolidated filter building function
 			if (!build_sql_filters(filters, sql)) {
@@ -1336,7 +1363,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				"FROM rag_vec_chunks v "
 				"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
 				"JOIN rag_documents d ON d.doc_id = c.doc_id "
-				"WHERE v.embedding MATCH '" + embedding_json + "'";
+				"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "'";
 
 			// Apply filters using consolidated filter building function
 			if (!build_sql_filters(filters, sql)) {
@@ -1511,7 +1538,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"FROM rag_fts_chunks f "
 					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE f MATCH '" + query + "'";
+					"WHERE f MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, fts_sql)) {
@@ -1634,7 +1661,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"FROM rag_vec_chunks v "
 					"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE v.embedding MATCH '" + embedding_json + "'";
+					"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, vec_sql)) {
@@ -1889,7 +1916,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"FROM rag_fts_chunks f "
 					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE f MATCH '" + query + "'";
+					"WHERE f MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, fts_sql)) {
@@ -2032,7 +2059,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 						"FROM rag_vec_chunks v "
 						"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
 						"JOIN rag_documents d ON d.doc_id = c.doc_id "
-						"WHERE v.embedding MATCH '" + embedding_json + "' "
+						"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "' "
 						"AND v.chunk_id IN (" + candidate_list + ")";
 
 					// Apply filters
