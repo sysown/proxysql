@@ -7776,7 +7776,10 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 	Discovery_Schema* catalog = qth->get_catalog();
 	if (!catalog) return (char*)"Discovery Schema catalog not initialized";
 
-	char* query = (char*)"SELECT rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment FROM main.mcp_query_rules ORDER BY rule_id";
+	char* query = (char*)"SELECT rule_id, active, username, schemaname,"
+		" tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
+		" replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment FROM"
+		" main.mcp_query_rules WHERE active=1 ORDER BY rule_id";
 	SQLite3_result* resultset = NULL;
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 

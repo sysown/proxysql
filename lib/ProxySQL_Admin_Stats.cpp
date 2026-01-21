@@ -2593,38 +2593,106 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 
 	statsdb->execute("BEGIN");
 
-	if (reset) {
-		statsdb->execute("DELETE FROM stats_mcp_query_digest_reset");
-	} else {
-		statsdb->execute("DELETE FROM stats_mcp_query_digest");
-	}
+	const char* target_table = reset ? "stats_mcp_query_digest_reset" : "stats_mcp_query_digest";
+	string query_delete = "DELETE FROM ";
+	query_delete += target_table;
+	statsdb->execute(query_delete.c_str());
 
-	// Insert digest statistics into the stats table
+	// Prepare INSERT statement with placeholders
 	// Columns: tool_name, run_id, digest, digest_text, count_star,
 	//          first_seen, last_seen, sum_time, min_time, max_time
-	char* a = (char*)"INSERT INTO stats_mcp_query_digest VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	const string q_insert {
+		"INSERT INTO " + string(target_table) + " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+	};
+
+	int rc = 0;
+	stmt_unique_ptr u_stmt { nullptr };
+	std::tie(rc, u_stmt) = statsdb->prepare_v2(q_insert.c_str());
+	ASSERT_SQLITE_OK(rc, statsdb);
+	sqlite3_stmt* const stmt { u_stmt.get() };
+
+	// Insert each row from the resultset
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
-		int arg_len = 0;
-		for (int i = 0; i < 10; i++) {
-			arg_len += strlen(r->fields[i]);
+
+		// Bind text values
+		rc = (*proxy_sqlite3_bind_text)(stmt, 1, r->fields[0], -1, SQLITE_TRANSIENT); // tool_name
+		ASSERT_SQLITE_OK(rc, statsdb);
+
+		// Bind run_id (may be NULL)
+		if (r->fields[1]) {
+			rc = (*proxy_sqlite3_bind_int64)(stmt, 2, atoll(r->fields[1])); // run_id
+			ASSERT_SQLITE_OK(rc, statsdb);
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(stmt, 2); // run_id
+			ASSERT_SQLITE_OK(rc, statsdb);
 		}
-		char* query = (char*)malloc(strlen(a) + arg_len + 32);
-		sprintf(query, a,
-			r->fields[0],  // tool_name
-			r->fields[1],  // run_id
-			r->fields[2],  // digest
-			r->fields[3],  // digest_text
-			r->fields[4],  // count_star
-			r->fields[5],  // first_seen
-			r->fields[6],  // last_seen
-			r->fields[7],  // sum_time
-			r->fields[8],  // min_time
-			r->fields[9]   // max_time
-		);
-		statsdb->execute(query);
-		free(query);
+
+		rc = (*proxy_sqlite3_bind_text)(stmt, 3, r->fields[2], -1, SQLITE_TRANSIENT); // digest
+		ASSERT_SQLITE_OK(rc, statsdb);
+
+		rc = (*proxy_sqlite3_bind_text)(stmt, 4, r->fields[3], -1, SQLITE_TRANSIENT); // digest_text
+		ASSERT_SQLITE_OK(rc, statsdb);
+
+		// Bind count_star (may be NULL)
+		if (r->fields[4]) {
+			rc = (*proxy_sqlite3_bind_int64)(stmt, 5, atoll(r->fields[4])); // count_star
+			ASSERT_SQLITE_OK(rc, statsdb);
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(stmt, 5); // count_star
+			ASSERT_SQLITE_OK(rc, statsdb);
+		}
+
+		// Bind first_seen (may be NULL)
+		if (r->fields[5]) {
+			rc = (*proxy_sqlite3_bind_int64)(stmt, 6, atoll(r->fields[5])); // first_seen
+			ASSERT_SQLITE_OK(rc, statsdb);
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(stmt, 6); // first_seen
+			ASSERT_SQLITE_OK(rc, statsdb);
+		}
+
+		// Bind last_seen (may be NULL)
+		if (r->fields[6]) {
+			rc = (*proxy_sqlite3_bind_int64)(stmt, 7, atoll(r->fields[6])); // last_seen
+			ASSERT_SQLITE_OK(rc, statsdb);
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(stmt, 7); // last_seen
+			ASSERT_SQLITE_OK(rc, statsdb);
+		}
+
+		// Bind sum_time (may be NULL)
+		if (r->fields[7]) {
+			rc = (*proxy_sqlite3_bind_int64)(stmt, 8, atoll(r->fields[7])); // sum_time
+			ASSERT_SQLITE_OK(rc, statsdb);
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(stmt, 8); // sum_time
+			ASSERT_SQLITE_OK(rc, statsdb);
+		}
+
+		// Bind min_time (may be NULL)
+		if (r->fields[8]) {
+			rc = (*proxy_sqlite3_bind_int64)(stmt, 9, atoll(r->fields[8])); // min_time
+			ASSERT_SQLITE_OK(rc, statsdb);
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(stmt, 9); // min_time
+			ASSERT_SQLITE_OK(rc, statsdb);
+		}
+
+		// Bind max_time (may be NULL)
+		if (r->fields[9]) {
+			rc = (*proxy_sqlite3_bind_int64)(stmt, 10, atoll(r->fields[9])); // max_time
+			ASSERT_SQLITE_OK(rc, statsdb);
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(stmt, 10); // max_time
+			ASSERT_SQLITE_OK(rc, statsdb);
+		}
+
+		SAFE_SQLITE3_STEP2(stmt);
+		rc = (*proxy_sqlite3_clear_bindings)(stmt); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_reset)(stmt); ASSERT_SQLITE_OK(rc, statsdb);
 	}
+
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
