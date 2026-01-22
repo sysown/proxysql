@@ -3049,12 +3049,20 @@ std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& argumen
 					// Escape the digest for JSON and add it to result
 					result += "\"";
 					if (digest) {
-						// Simple JSON escaping - escape backslashes and quotes
+						// Full JSON escaping - handle all control characters
 						for (const char* p = digest; *p; p++) {
-							if (*p == '\\' || *p == '"') {
-								result += '\\';
+							unsigned char c = (unsigned char)*p;
+							if (c == '\\') result += "\\\\";
+							else if (c == '"') result += "\\\"";
+							else if (c == '\n') result += "\\n";
+							else if (c == '\r') result += "\\r";
+							else if (c == '\t') result += "\\t";
+							else if (c < 0x20) {
+								char buf[8];
+								snprintf(buf, sizeof(buf), "\\u%04x", c);
+								result += buf;
 							}
-							result += *p;
+							else result += *p;
 						}
 						free(digest);
 					}
