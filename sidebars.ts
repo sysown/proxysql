@@ -28,6 +28,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Configuration System',
       items: [
+        'main_runtime/multi_layer_configuration',
         'configuration_file/configuration_file',
         'startup_options/startup_options',
         'bootstrap_mode/bootstrap-mode',

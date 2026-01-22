@@ -5,41 +5,18 @@ ProxySQL uses a multi-layer configuration system consisting of the **Configurati
 ## Table of Contents
 - [Configuration Layers](#configuration-layers)
 - [MySQL Commands](#mysql-commands)
-  - [MySQL Servers & Hostgroups](#mysql-servers--hostgroups)
-  - [MySQL Users](#mysql-users)
-  - [MySQL Query Rules](#mysql-query-rules)
-  - [MySQL Variables](#mysql-variables)
 - [PostgreSQL Commands (v3.0+)](#postgresql-commands-v30)
-  - [PostgreSQL Servers](#postgresql-servers)
-  - [PostgreSQL Users](#postgresql-users)
-  - [PostgreSQL Query Rules](#postgresql-query-rules)
-  - [PostgreSQL Variables](#postgresql-variables)
 - [Generative AI & MCP Commands (v4.0+)](#generative-ai--mcp-commands-v40)
-  - [MCP Query Rules](#mcp-query-rules)
-  - [MCP Variables](#mcp-variables)
-  - [GENAI Variables](#genai-variables)
 - [Core Admin & System Commands](#core-admin--system-commands)
-  - [Admin Variables](#admin-variables)
-  - [ProxySQL Servers (Cluster Nodes)](#proxysql-servers-cluster-nodes)
-  - [Scheduler](#scheduler)
 - [Specialized Commands](#specialized-commands)
-  - [Firewall Management](#firewall-management)
-  - [Debugging & Coredump](#debugging--coredump)
-  - [System Commands](#system-commands)
-  - [Checksum Verification](#checksum-verification)
 
 ## Configuration Layers
 
-1. **RUNTIME**: The internal data structures used by ProxySQL threads to process traffic. This is the only layer that actively affects proxy behavior.
-2. **MEMORY (Main)**: The `main` SQLite database. This is where you make changes using standard SQL (`UPDATE`, `INSERT`, `DELETE`).
-3. **DISK**: The `disk` SQLite database. This is used for persistence across ProxySQL restarts.
-4. **CONFIG FILE**: The static `proxysql.cnf` file used for initial bootstrapping.
+ProxySQL employs a unique architecture to manage its configuration. For a detailed explanation of why this system exists and how the layers interact, see **[The Multi-Layer Configuration System](../main_runtime/multi_layer_configuration)**.
 
 ---
 
 ## MySQL Commands
-
-Commands for managing MySQL servers, users, and routing rules.
 
 ### MySQL Servers & Hostgroups
 - `LOAD MYSQL SERVERS TO RUNTIME` (or `TO RUN`)
@@ -49,6 +26,8 @@ Commands for managing MySQL servers, users, and routing rules.
 - `LOAD MYSQL SERVERS FROM MEMORY` (or `FROM MEM`)
 - `LOAD MYSQL SERVERS FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### MySQL Users
 - `LOAD MYSQL USERS TO RUNTIME` (or `TO RUN`)
 - `SAVE MYSQL USERS TO DISK`
@@ -56,6 +35,8 @@ Commands for managing MySQL servers, users, and routing rules.
 - `SAVE MYSQL USERS TO MEMORY` (or `TO MEM`)
 - `LOAD MYSQL USERS FROM MEMORY` (or `FROM MEM`)
 - `LOAD MYSQL USERS FROM CONFIG`
+
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
 
 ### MySQL Query Rules
 - `LOAD MYSQL QUERY RULES TO RUNTIME` (or `TO RUN`)
@@ -65,6 +46,8 @@ Commands for managing MySQL servers, users, and routing rules.
 - `LOAD MYSQL QUERY RULES FROM MEMORY` (or `FROM MEM`)
 - `LOAD MYSQL QUERY RULES FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### MySQL Variables
 - `LOAD MYSQL VARIABLES TO RUNTIME` (or `TO RUN`)
 - `SAVE MYSQL VARIABLES TO DISK`
@@ -73,11 +56,11 @@ Commands for managing MySQL servers, users, and routing rules.
 - `LOAD MYSQL VARIABLES FROM MEMORY` (or `FROM MEM`)
 - `LOAD MYSQL VARIABLES FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ---
 
 ## PostgreSQL Commands (v3.0+)
-
-Commands for managing PostgreSQL servers, users, and routing rules.
 
 ### PostgreSQL Servers
 - `LOAD PGSQL SERVERS TO RUNTIME` (or `TO RUN`)
@@ -87,6 +70,8 @@ Commands for managing PostgreSQL servers, users, and routing rules.
 - `LOAD PGSQL SERVERS FROM MEMORY` (or `FROM MEM`)
 - `LOAD PGSQL SERVERS FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### PostgreSQL Users
 - `LOAD PGSQL USERS TO RUNTIME` (or `TO RUN`)
 - `SAVE PGSQL USERS TO DISK`
@@ -94,6 +79,8 @@ Commands for managing PostgreSQL servers, users, and routing rules.
 - `SAVE PGSQL USERS TO MEMORY` (or `TO MEM`)
 - `LOAD PGSQL USERS FROM MEMORY` (or `FROM MEM`)
 - `LOAD PGSQL USERS FROM CONFIG`
+
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
 
 ### PostgreSQL Query Rules
 - `LOAD PGSQL QUERY RULES TO RUNTIME` (or `TO RUN`)
@@ -103,6 +90,8 @@ Commands for managing PostgreSQL servers, users, and routing rules.
 - `LOAD PGSQL QUERY RULES FROM MEMORY` (or `FROM MEM`)
 - `LOAD PGSQL QUERY RULES FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### PostgreSQL Variables
 - `LOAD PGSQL VARIABLES TO RUNTIME` (or `TO RUN`)
 - `SAVE PGSQL VARIABLES TO DISK`
@@ -111,11 +100,11 @@ Commands for managing PostgreSQL servers, users, and routing rules.
 - `LOAD PGSQL VARIABLES FROM MEMORY` (or `FROM MEM`)
 - `LOAD PGSQL VARIABLES FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ---
 
 ## Generative AI & MCP Commands (v4.0+)
-
-Commands for managing the Model Context Protocol (MCP) server and AI components.
 
 ### MCP Query Rules
 - `LOAD MCP QUERY RULES TO RUNTIME` (or `TO RUN`)
@@ -123,6 +112,8 @@ Commands for managing the Model Context Protocol (MCP) server and AI components.
 - `LOAD MCP QUERY RULES FROM DISK`
 - `SAVE MCP QUERY RULES TO MEMORY` (or `TO MEM`)
 - `LOAD MCP QUERY RULES FROM MEMORY` (or `FROM MEM`)
+
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
 
 ### MCP Variables
 - `LOAD MCP VARIABLES TO RUNTIME` (or `TO RUN`)
@@ -132,6 +123,8 @@ Commands for managing the Model Context Protocol (MCP) server and AI components.
 - `LOAD MCP VARIABLES FROM MEMORY` (or `FROM MEM`)
 - `LOAD MCP VARIABLES FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### GENAI Variables
 - `LOAD GENAI VARIABLES TO RUNTIME` (or `TO RUN`)
 - `SAVE GENAI VARIABLES TO DISK`
@@ -140,11 +133,11 @@ Commands for managing the Model Context Protocol (MCP) server and AI components.
 - `LOAD GENAI VARIABLES FROM MEMORY` (or `FROM MEM`)
 - `LOAD GENAI VARIABLES FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ---
 
 ## Core Admin & System Commands
-
-Commands for ProxySQL's internal administration and scheduling system.
 
 ### Admin Variables
 - `LOAD ADMIN VARIABLES TO RUNTIME` (or `TO RUN`)
@@ -154,6 +147,8 @@ Commands for ProxySQL's internal administration and scheduling system.
 - `LOAD ADMIN VARIABLES FROM MEMORY` (or `FROM MEM`)
 - `LOAD ADMIN VARIABLES FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### ProxySQL Servers (Cluster Nodes)
 - `LOAD PROXYSQL SERVERS TO RUNTIME` (or `TO RUN`)
 - `SAVE PROXYSQL SERVERS TO DISK`
@@ -162,6 +157,8 @@ Commands for ProxySQL's internal administration and scheduling system.
 - `LOAD PROXYSQL SERVERS FROM MEMORY` (or `FROM MEM`)
 - `LOAD PROXYSQL SERVERS FROM CONFIG`
 
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### Scheduler
 - `LOAD SCHEDULER TO RUNTIME` (or `TO RUN`)
 - `SAVE SCHEDULER TO DISK`
@@ -169,6 +166,8 @@ Commands for ProxySQL's internal administration and scheduling system.
 - `SAVE SCHEDULER TO MEMORY` (or `TO MEM`)
 - `LOAD SCHEDULER FROM MEMORY` (or `FROM MEM`)
 - `LOAD SCHEDULER FROM CONFIG`
+
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
 
 ---
 
