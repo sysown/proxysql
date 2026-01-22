@@ -382,68 +382,23 @@ Converts queries to lowercase before digest calculation.
 
 ### `pgsql-query_digests_replace_null`
 
-Replaces NULL values in queries with a placeholder during digest calculation.
-
-|                      |             |                                    |
-| -------------------- | ----------- | ---------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-query_digests_replace_null` |
-| **Dynamic**          | **Yes**     |                                    |
-| **Permitted Values** | **Type**    | Boolean                            |
-|                      | **Default** | `false`                            |
-
-**Description**: When enabled, `NULL` literals in queries are treated as parameters during the normalization process for digests.
+**Description**: Not supported.
 
 ### `pgsql-query_digests_no_digits`
 
-Removes digits from queries during digest calculation.
-
-|                      |             |                                 |
-| -------------------- | ----------- | ------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-query_digests_no_digits` |
-| **Dynamic**          | **Yes**     |                                 |
-| **Permitted Values** | **Type**    | Boolean                         |
-|                      | **Default** | `false`                         |
-
-**Description**: If enabled, all digits in the query are replaced with placeholders during normalization to group similar queries that only differ by numerical constants.
+**Description**: Not supported.
 
 ### `pgsql-query_digests_normalize_digest_text`
 
-Enables advanced normalization of query digest text.
-
-|                      |             |                                             |
-| -------------------- | ----------- | ------------------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-query_digests_normalize_digest_text` |
-| **Dynamic**          | **Yes**     |                                             |
-| **Permitted Values** | **Type**    | Boolean                                     |
-|                      | **Default** | `false`                                     |
-
-**Description**: Provides more aggressive normalization of the query text used for digest generation.
+**Description**: Not supported.
 
 ### `pgsql-query_digests_track_hostname`
 
-Includes client hostname in query digest statistics.
-
-|                      |             |                                  |
-| -------------------- | ----------- | -------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-query_digests_track_hostname` |
-| **Dynamic**          | **Yes**     |                                  |
-| **Permitted Values** | **Type**    | Boolean                          |
-|                      | **Default** | `false`                          |
-
-**Description**: When set to `true`, ProxySQL tracks query statistics per client hostname in the digest tables.
+**Description**: Not supported.
 
 ### `pgsql-query_digests_keep_comment`
 
-Preserves SQL comments in query digests.
-
-|                      |             |                                |
-| -------------------- | ----------- | ------------------------------ |
-| **System Variable**  | **Name**    | `pgsql-query_digests_keep_comment` |
-| **Dynamic**          | **Yes**     |                                |
-| **Permitted Values** | **Type**    | Boolean                        |
-|                      | **Default** | `false`                        |
-
-**Description**: If enabled, SQL comments are not stripped from the query during the normalization process.
+**Description**: Not supported.
 
 ### `pgsql-multiplexing`
 
@@ -460,42 +415,15 @@ Global switch for PostgreSQL connection multiplexing.
 
 ### `pgsql-enforce_autocommit_on_reads`
 
-Enforces autocommit mode for read-only PostgreSQL queries.
-
-|                      |             |                                     |
-| -------------------- | ----------- | ----------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-enforce_autocommit_on_reads` |
-| **Dynamic**          | **Yes**     |                                     |
-| **Permitted Values** | **Type**    | Boolean                             |
-|                      | **Default** | `false`                             |
-
-**Description**: If set to `true`, ProxySQL will ensure that read-only queries are executed in autocommit mode, which can improve connection reuse efficiency.
+**Description**: Not supported.
 
 ### `pgsql-autocommit_false_not_reusable`
 
-Disables connection reuse if autocommit is false.
-
-|                      |             |                                      |
-| -------------------- | ----------- | ------------------------------------ |
-| **System Variable**  | **Name**    | `pgsql-autocommit_false_not_reusable` |
-| **Dynamic**          | **Yes**     |                                      |
-| **Permitted Values** | **Type**    | Boolean                              |
-|                      | **Default** | `false`                              |
-
-**Description**: When enabled, backend connections where `autocommit` has been explicitly disabled will not be returned to the pool until the session ends or autocommit is re-enabled.
+**Description**: Not supported.
 
 ### `pgsql-autocommit_false_is_transaction`
 
-Treats autocommit=false as an active transaction.
-
-|                      |             |                                       |
-| -------------------- | ----------- | ------------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-autocommit_false_is_transaction` |
-| **Dynamic**          | **Yes**     |                                       |
-| **Permitted Values** | **Type**    | Boolean                               |
-|                      | **Default** | `false`                               |
-
-**Description**: When set to `true`, ProxySQL considers a session to be in an active transaction state simply because `autocommit` is set to `false`.
+**Description**: Not supported.
 
 ### `pgsql-kill_backend_connection_when_disconnect`
 
