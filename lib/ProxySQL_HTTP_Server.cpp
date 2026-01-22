@@ -7,8 +7,12 @@
 #include "cpp.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "ProxySQL_Statistics.hpp"
+#include "ProxySQL_TSDB.hpp"
 #include "SQLite3_Server.h"
 #include "MySQL_Authentication.hpp"
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
 
 #include <search.h>
 #include <stdlib.h>
@@ -32,7 +36,7 @@
 
 #include "platform.h"
 #include "microhttpd.h"
-#include "curl/curl.h"
+//#include "curl/curl.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -47,6 +51,7 @@ extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Authentication *GloMyAuth;
 extern SQLite3_Server *GloSQLite3Server;
+extern ProxySQL_TSDB *GloTSDB;
 #ifdef PROXYSQLCLICKHOUSE
 extern ClickHouse_Server *GloClickHouseServer;
 #endif
@@ -54,6 +59,7 @@ extern ClickHouse_Server *GloClickHouseServer;
 extern char * Chart_bundle_js_c;
 extern char * font_awesome;
 extern char * main_bundle_min_css_c;
+extern char * tsdb_ui_html;
 #define RATE_LIMIT_PAGE "<html><head><title>Rate Limit Page</title></head><body>Rate Limit Reached</body></html>"
 
 
@@ -77,6 +83,7 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 	return realsize;
 }
 
+/*
 static char * check_latest_version() {
 	CURL *curl_handle;
 	CURLcode res;
@@ -111,6 +118,7 @@ static char * check_latest_version() {
 	curl_global_cleanup();
 	return chunk.memory;
 }
+*/
 
 static char *div1= (char *)"<div style=\"margin-bottom: 1px;\"><a href=stats?metric=";
 static char *style1 = (char *)" style=\"color: #2969a5 ; background-color: white; font-weight: bold; font-size: 13px; font-family: Verdana, sans-serif; border: 0px; text-decoration: none; padding-left: 5px; padding-right: 5px;\">";
@@ -299,6 +307,7 @@ static char *generate_buttons(char *base) {
 }
 
 void ProxySQL_HTTP_Server::check_latest_version_http() {
+/*
 	pthread_mutex_lock(&check_version_mutex);
 	time_t now = time(NULL);
 	if (now > last_check_version + 300) {
@@ -314,6 +323,7 @@ void ProxySQL_HTTP_Server::check_latest_version_http() {
 		}
 	}
 	pthread_mutex_unlock(&check_version_mutex);
+*/
 }
 
 char * ProxySQL_HTTP_Server::extract_values(SQLite3_result *result, int idx, bool relative, double mult) {
@@ -436,6 +446,63 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 	if (0 != strcmp (method, "GET"))
 		return MHD_NO;              /* unexpected method */
+
+	if (strcmp(url,"/api/tsdb/status")==0) {
+		json j;
+		if (GloTSDB) {
+			ProxySQL_TSDB::status_t status = GloTSDB->get_status();
+			j["series_count"] = status.series_count;
+			j["disk_usage_bytes"] = status.disk_usage_bytes;
+			j["last_compaction_ts"] = status.last_compaction_ts;
+		}
+		string s = j.dump();
+		response = MHD_create_response_from_buffer(s.length(), (void *) s.c_str(), MHD_RESPMEM_MUST_COPY);
+		MHD_add_response_header(response, "Content-Type", "application/json");
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
+
+	if (strcmp(url,"/api/tsdb/query")==0) {
+		const char *metric = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "metric");
+		const char *from_s = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "from");
+		const char *to_s = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "to");
+		if (!metric || !from_s || !to_s) {
+			response = MHD_create_response_from_buffer(0, (void*)"", MHD_RESPMEM_PERSISTENT);
+			ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response(response);
+			return ret;
+		}
+		long long from = atoll(from_s);
+		long long to = atoll(to_s);
+		std::map<std::string, std::string> labels; // TODO: parse labels from query params
+		auto query_results = GloTSDB->query(metric, labels, from, to, 0, "");
+		json j;
+		for (const auto& res : query_results) {
+			json series;
+			series["labels"] = res.labels;
+			json points = json::array();
+			for (const auto& pt : res.points) {
+				points.push_back({pt.timestamp, pt.value});
+			}
+			series["points"] = points;
+			j["series"].push_back(series);
+		}
+		string s = j.dump();
+		response = MHD_create_response_from_buffer(s.length(), (void *) s.c_str(), MHD_RESPMEM_MUST_COPY);
+		MHD_add_response_header(response, "Content-Type", "application/json");
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
+
+	if (strcmp(url,"/ui/")==0 || strcmp(url,"/ui")==0) {
+		response = MHD_create_response_from_buffer(strlen(tsdb_ui_html), (void *) tsdb_ui_html, MHD_RESPMEM_PERSISTENT);
+		MHD_add_response_header(response, "Content-Type", "text/html");
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
 
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");

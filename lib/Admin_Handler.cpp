@@ -44,6 +44,7 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
+#include "ProxySQL_TSDB.hpp"
 
 #include <dirent.h>
 #include <search.h>
@@ -867,6 +868,8 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
 	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server && GloSQLite3Server->has_variable(var_name + 13)) {
+		return true;
+	} else if (strlen(var_name) > 5 && !strncmp(var_name, "tsdb-", 5) && GloTSDB && GloTSDB->has_variable(var_name + 5)) {
 		return true;
 #ifdef PROXYSQLCLICKHOUSE
 	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
@@ -2237,6 +2240,51 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_admin_variables_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved admin variables from RUNTIME\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+        // TSDB Variables
+		if ( !strncasecmp("LOAD TSDB VARIABLES TO MEMORY", query_no_space, strlen("LOAD TSDB VARIABLES TO MEMORY")) ||
+             !strncasecmp("LOAD TSDB VARIABLES TO MEM", query_no_space, strlen("LOAD TSDB VARIABLES TO MEM")) ||
+             !strncasecmp("LOAD TSDB VARIABLES FROM DISK", query_no_space, strlen("LOAD TSDB VARIABLES FROM DISK"))
+        ) {
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'tsdb-%' OR variable_name LIKE 'monitor-%' OR variable_name LIKE 'ui-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if ( !strncasecmp("SAVE TSDB VARIABLES FROM MEMORY", query_no_space, strlen("SAVE TSDB VARIABLES FROM MEMORY")) ||
+             !strncasecmp("SAVE TSDB VARIABLES FROM MEM", query_no_space, strlen("SAVE TSDB VARIABLES FROM MEM")) ||
+             !strncasecmp("SAVE TSDB VARIABLES TO DISK", query_no_space, strlen("SAVE TSDB VARIABLES TO DISK"))
+        ) {
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'tsdb-%' OR variable_name LIKE 'monitor-%' OR variable_name LIKE 'ui-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if ( !strncasecmp("LOAD TSDB VARIABLES FROM MEMORY", query_no_space, strlen("LOAD TSDB VARIABLES FROM MEMORY")) ||
+             !strncasecmp("LOAD TSDB VARIABLES FROM MEM", query_no_space, strlen("LOAD TSDB VARIABLES FROM MEM")) ||
+             !strncasecmp("LOAD TSDB VARIABLES TO RUNTIME", query_no_space, strlen("LOAD TSDB VARIABLES TO RUNTIME")) ||
+             !strncasecmp("LOAD TSDB VARIABLES TO RUN", query_no_space, strlen("LOAD TSDB VARIABLES TO RUN"))
+        ) {
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->load_tsdb_variables_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb variables to RUNTIME\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		if ( !strncasecmp("SAVE TSDB VARIABLES TO MEMORY", query_no_space, strlen("SAVE TSDB VARIABLES TO MEMORY")) ||
+             !strncasecmp("SAVE TSDB VARIABLES TO MEM", query_no_space, strlen("SAVE TSDB VARIABLES TO MEM")) ||
+             !strncasecmp("SAVE TSDB VARIABLES FROM RUNTIME", query_no_space, strlen("SAVE TSDB VARIABLES FROM RUNTIME")) ||
+             !strncasecmp("SAVE TSDB VARIABLES FROM RUN", query_no_space, strlen("SAVE TSDB VARIABLES FROM RUN"))
+        ) {
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->save_tsdb_variables_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved tsdb variables from RUNTIME\n");
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			return false;
 		}
@@ -3746,6 +3794,32 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			pta[0] = (char*)result.second.c_str();
 			resultset->add_row(pta);
 		} else {
+			resultset->add_row(pta);
+		}
+
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		delete resultset;
+		run_query = false;
+
+		goto __run_query;
+	}
+
+	if (!strncasecmp("TSDB STATUS", query_no_space, strlen("TSDB STATUS"))) {
+		SQLite3_result* resultset = new SQLite3_result(3);
+		resultset->add_column_definition(SQLITE_INTEGER,"Series_count");
+		resultset->add_column_definition(SQLITE_INTEGER,"Disk_usage_bytes");
+		resultset->add_column_definition(SQLITE_INTEGER,"Last_compaction_ts");
+
+		if (GloTSDB) {
+			ProxySQL_TSDB::status_t status = GloTSDB->get_status();
+			char* pta[3];
+			char buf1[32], buf2[32], buf3[32];
+			sprintf(buf1, "%zu", status.series_count);
+			sprintf(buf2, "%zu", status.disk_usage_bytes);
+			sprintf(buf3, "%lld", status.last_compaction_ts);
+			pta[0] = buf1;
+			pta[1] = buf2;
+			pta[2] = buf3;
 			resultset->add_row(pta);
 		}
 

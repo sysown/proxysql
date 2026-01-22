@@ -91,7 +91,6 @@ STATICMYLIBS := -Wl,-Bstatic \
 				-lhttpserver \
 				-lmicrohttpd \
 				-linjection \
-				-lcurl \
 				-lev \
 				-lscram \
 				-lusual \

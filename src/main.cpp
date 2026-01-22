@@ -21,6 +21,7 @@ using json = nlohmann::json;
 #include "mysqld_error.h"
 
 #include "ProxySQL_Statistics.hpp"
+#include "ProxySQL_TSDB.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
@@ -134,30 +135,16 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 char * know_latest_version = NULL;
 static unsigned int randID = 0;
 
-/**
- * @brief Checks for the latest version of ProxySQL by querying the specified URL.
- *
- * This function sends an HTTP GET request to the ProxySQL website to fetch the latest version information.
- * It sets a custom user-agent string containing the version, SHA1 hash of the binary (if available), and a random ID.
- * The response is stored in memory and returned as a character pointer.
- *
- * @return A character pointer containing the response data from the Proxysql website.
- *         If an error occurs during the HTTP request, NULL is returned.
- */
+/*
 static char * main_check_latest_version() {
-	CURL *curl_handle; // CURL handle for performing HTTP requests
-	CURLcode res; // Variable to store CURL operation result
-	struct MemoryStruct chunk; // // Struct to store memory chunk received from HTTP response
-
-	// Initialize memory struct to store response data
+	CURL *curl_handle;
+	CURLcode res;
+	struct MemoryStruct chunk;
 	chunk.memory = (char *)malloc(1);
 	chunk.size = 0;
-
-	// Initialize CURL library
 	curl_global_init(CURL_GLOBAL_ALL);
-	// Initialize CURL handle for HTTP request
+
 	curl_handle = curl_easy_init();
-	// Set CURL options for the HTTP request
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
 	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
 	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -166,49 +153,24 @@ static char * main_check_latest_version() {
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
 
-	// Set custom user-agent string including ProxySQL version, binary SHA1 hash, and a random ID
 	string s = "proxysql-agent/";
 	s += PROXYSQL_VERSION;
-	if (binary_sha1) {
-		s += " (" ;
-			s+= binary_sha1;
-		s += ")" ;
-	}
-	s += " " + std::to_string(randID);
 	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, s.c_str());
-
-	// Set timeout and connect timeout for the HTTP request
 	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 10);
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
 
-	// Perform the HTTP request
 	res = curl_easy_perform(curl_handle);
 
-	// Check if the request was successful
 	if (res != CURLE_OK) {
-		switch (res) {
-			// Handle common errors and free memory if necessary
-			case CURLE_COULDNT_RESOLVE_HOST:
-			case CURLE_COULDNT_CONNECT:
-			case CURLE_OPERATION_TIMEDOUT:
-				// These errors are expected in case of network issues or timeouts
-				break;
-			default:
-				// Log other errors using proxy_error and free memory
-				proxy_error("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-				break;
-		}
+		proxy_error("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
 		free(chunk.memory);
 		chunk.memory = NULL;
 	}
-
-	// Cleanup CURL handle and global resources
 	curl_easy_cleanup(curl_handle);
 	curl_global_cleanup();
-
-	// Return the response data from the ProxySQL website
 	return chunk.memory;
 }
+*/
 
 
 /**
@@ -225,7 +187,7 @@ static char * main_check_latest_version() {
 void * main_check_latest_version_thread(void *arg) {
 	set_thread_name("CheckLatestVers");
 	// Fetch the latest version information
-	char * latest_version = main_check_latest_version();
+	char * latest_version = NULL; // main_check_latest_version();
 	// we check for potential invalid data , see issue #4042
 	// Check for potential invalid data and update the known latest version if a new version is detected
 	if (latest_version != NULL && strlen(latest_version) < 32) {
@@ -940,6 +902,8 @@ void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	GloProxyStats = new ProxySQL_Statistics();
 	//GloProxyStats->init();
 	GloProxyStats->print_version();
+	GloTSDB = new ProxySQL_TSDB();
+	GloTSDB->init();
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->init(bootstrap_info);
 	GloAdmin->print_version();
@@ -1584,6 +1548,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 
 	// HTTP Server should be initialized after other modules. See #4510
 	GloAdmin->init_http_server();
+	GloTSDB->start();
 	GloAdmin->proxysql_restapi().load_restapi_to_runtime();
 
 	// Signal ProxySQL_Admin that all modules have been started

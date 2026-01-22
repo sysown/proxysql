@@ -44,6 +44,7 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
+#include "ProxySQL_TSDB.hpp"
 
 #include <dirent.h>
 #include <search.h>
@@ -8495,4 +8496,51 @@ void ProxySQL_Admin::enable_replicationlag_testing() {
 	mysql_servers_wrunlock();
 }
 #endif // TEST_REPLICATIONLAG
+
+void ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
+	char *err_msg = NULL;
+	int cols=0;
+	int rows=0;
+	SQLite3_result *resultset = NULL;
+	db->execute_statement("SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'tsdb-%' OR variable_name LIKE 'monitor-%' OR variable_name LIKE 'ui-%'", &err_msg, &cols, &rows, &resultset);
+	if (resultset) {
+		for (int i=0; i<rows; i++) {
+			char *name = resultset->rows[i]->fields[0];
+			char *value = resultset->rows[i]->fields[1];
+			if (GloTSDB) {
+				if (!strncmp(name, "tsdb-", 5)) {
+					GloTSDB->set_variable(name + 5, value);
+				} else {
+					GloTSDB->set_variable(name, value);
+				}
+			}
+		}
+		delete resultset;
+	}
+}
+
+void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
+	if (!GloTSDB) return;
+	const char* tsdb_vars[] = {
+		"enabled", "data_dir", "retention_hours", "sample_interval_seconds",
+		"raw_window_minutes", "rollup_interval_seconds", "max_series", "max_disk_mb",
+		"fsync_mode", "digest_mode", "digest_topk",
+		"monitor-enabled", "monitor-interval_seconds", "monitor-connect_timeout_ms",
+		"monitor-ping_enabled", "monitor-max_concurrent_probes",
+		"ui-enabled", "ui-read_only",
+		NULL
+	};
+	char *query = (char *)malloc(1024);
+	for (int i=0; tsdb_vars[i] != NULL; i++) {
+		char *val = GloTSDB->get_variable(tsdb_vars[i]);
+		if (val) {
+			const char *prefix = (i < 11) ? "tsdb-" : "";
+			sprintf(query, "INSERT OR REPLACE INTO global_variables (variable_name, variable_value) VALUES ('%s%s', '%s')", prefix, tsdb_vars[i], val);
+			db->execute(query);
+			free(val);
+		}
+	}
+	free(query);
+}
+
 
