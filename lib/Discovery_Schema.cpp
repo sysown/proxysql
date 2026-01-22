@@ -2972,7 +2972,7 @@ uint64_t Discovery_Schema::compute_mcp_digest(
 	return hash1;
 }
 
-options get_def_mysql_opts() {
+static options get_def_mysql_opts() {
 	options opts {};
 
 	opts.lowercase = false;
@@ -3019,7 +3019,7 @@ options get_def_mysql_opts() {
 // the same fingerprint.
 //
 // SQL Handling: For arguments where key is "sql", the value is replaced by a
-// digest generated using mysql_query_digest_and_first_comment_2 instead of "?".
+// digest generated using mysql_query_digest_and_first_comment instead of "?".
 // This normalizes SQL queries (removes comments, extra whitespace, etc.) so that
 // semantically equivalent queries produce the same fingerprint.
 std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& arguments) {
@@ -3039,13 +3039,17 @@ std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& argumen
 				if (it.key() == "sql") {
 					std::string sql_value = it.value().get<std::string>();
 					const options def_opts { get_def_mysql_opts() };
+					char* first_comment = nullptr;  // Will be allocated by the function if needed
 					char* digest = mysql_query_digest_and_first_comment(
 						sql_value.c_str(),
 						sql_value.length(),
-						NULL,  // first_comment - not needed
+						&first_comment,
 						NULL,  // buffer - not needed
 						&def_opts
 					);
+					if (first_comment) {
+						free(first_comment);
+					}
 					// Escape the digest for JSON and add it to result
 					result += "\"";
 					if (digest) {
