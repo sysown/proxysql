@@ -1065,14 +1065,15 @@ SQLite3_result::SQLite3_result() {
 
 /**
  * @brief Loads a SQLite3 plugin.
- * 
+ *
  * This function loads a SQLite3 plugin specified by the given plugin_name.
  * It initializes function pointers to SQLite3 API functions provided by the plugin.
  * If the plugin_name is NULL, it loads the built-in SQLite3 library and initializes function pointers to its API functions.
- * 
+ *
  * @param[in] plugin_name The name of the SQLite3 plugin library to load.
  */
 void SQLite3DB::LoadPlugin(const char *plugin_name) {
+	const bool allow_load_plugin = false; // TODO: Revisit plugin loading safety mechanism
 	proxy_sqlite3_config = NULL;
 	proxy_sqlite3_bind_double = NULL;
 	proxy_sqlite3_bind_int = NULL;
@@ -1109,7 +1110,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_prepare_v2 = NULL;
 	proxy_sqlite3_open_v2 = NULL;
 	proxy_sqlite3_exec = NULL;
-	if (plugin_name) {
+	if (plugin_name && allow_load_plugin == true) {
 		int fd = -1;
 		fd = ::open(plugin_name, O_RDONLY);
 		char binary_sha1_sqlite3[SHA_DIGEST_LENGTH*2+1];
