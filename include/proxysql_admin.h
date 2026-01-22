@@ -828,6 +828,12 @@ class ProxySQL_Admin {
 	template <enum SERVER_TYPE pt>
 	int FlushDigestTableToDisk(SQLite3DB *);
 
+    // TSDB
+    void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+    void flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+    void load_tsdb_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_tsdb_variables___database_to_runtime(admindb, true, checksum, epoch); }
+    void save_tsdb_variables_from_runtime() { flush_tsdb_variables___runtime_to_database(admindb, true, true, false); }
+
 	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
 	void map_test_mysql_firewall_whitelist_rules_cleanup();
 
