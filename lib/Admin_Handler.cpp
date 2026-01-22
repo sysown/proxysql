@@ -2362,18 +2362,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		// LOAD MCP QUERY RULES FROM DISK / TO MEMORY
 		// Copies rules from persistent storage (disk.mcp_query_rules) to working memory (main.mcp_query_rules)
 		if (
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP RULES FROM DISK", query_no_space, query_no_space_length))
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP QUERY RULES FROM DISK", query_no_space, query_no_space_length))
 			||
 			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO MEMORY") && !strncasecmp("LOAD MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
 			) {
-			l_free(*ql,*q);
-
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 
 			// Execute as transaction to ensure both statements run atomically
 			// Begin transaction
 			if (!SPA->admindb->execute("BEGIN")) {
 				proxy_error("Failed to BEGIN transaction for LOAD MCP QUERY RULES\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
 				return false;
 			}
 
@@ -2381,6 +2380,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (!SPA->admindb->execute("DELETE FROM main.mcp_query_rules")) {
 				proxy_error("Failed to DELETE from main.mcp_query_rules\n");
 				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to DELETE from main.mcp_query_rules");
 				return false;
 			}
 
@@ -2388,16 +2388,20 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (!SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules")) {
 				proxy_error("Failed to INSERT into main.mcp_query_rules\n");
 				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to INSERT into main.mcp_query_rules");
 				return false;
 			}
 
 			// Commit transaction
 			if (!SPA->admindb->execute("COMMIT")) {
 				proxy_error("Failed to COMMIT transaction for LOAD MCP QUERY RULES\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
 				return false;
 			}
 
-			return true;
+			proxy_info("Received %s command\n", query_no_space);
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
 		}
 
 		// SAVE MCP QUERY RULES TO DISK
@@ -2405,14 +2409,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (
 			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
 			) {
-			l_free(*ql,*q);
-
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 
 			// Execute as transaction to ensure both statements run atomically
 			// Begin transaction
 			if (!SPA->admindb->execute("BEGIN")) {
 				proxy_error("Failed to BEGIN transaction for SAVE MCP QUERY RULES TO DISK\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
 				return false;
 			}
 
@@ -2420,6 +2423,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (!SPA->admindb->execute("DELETE FROM disk.mcp_query_rules")) {
 				proxy_error("Failed to DELETE from disk.mcp_query_rules\n");
 				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to DELETE from disk.mcp_query_rules");
 				return false;
 			}
 
@@ -2427,16 +2431,20 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (!SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules")) {
 				proxy_error("Failed to INSERT into disk.mcp_query_rules\n");
 				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to INSERT into disk.mcp_query_rules");
 				return false;
 			}
 
 			// Commit transaction
 			if (!SPA->admindb->execute("COMMIT")) {
 				proxy_error("Failed to COMMIT transaction for SAVE MCP QUERY RULES TO DISK\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
 				return false;
 			}
 
-			return true;
+			proxy_info("Received %s command\n", query_no_space);
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
 		}
 
 		// SAVE MCP QUERY RULES FROM RUNTIME / TO MEMORY

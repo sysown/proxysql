@@ -2683,18 +2683,25 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mcp_query_rules");
 
-	char* a = (char*)"INSERT INTO stats_mcp_query_rules VALUES (\"%s\",\"%s\")";
+	// Use prepared statement to prevent SQL injection
+	const char* query_str = "INSERT INTO stats_mcp_query_rules VALUES (?1, ?2)";
+	sqlite3_stmt* statement = nullptr;
+	int rc = statsdb->prepare_v2(query_str, &statement);
+	ASSERT_SQLITE_OK(rc, statsdb);
+
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
-		int arg_len = 0;
-		for (int i = 0; i < 2; i++) {
-			arg_len += strlen(r->fields[i]);
-		}
-		char* query = (char*)malloc(strlen(a) + arg_len + 32);
-		sprintf(query, a, r->fields[0], r->fields[1]);
-		statsdb->execute(query);
-		free(query);
+
+		// Bind both columns using positional parameters
+		rc = (*proxy_sqlite3_bind_text)(statement, 1, r->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 2, r->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb);
 	}
+
+	(*proxy_sqlite3_finalize)(statement);
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
