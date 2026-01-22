@@ -29,7 +29,9 @@ const sidebars: SidebarsConfig = {
       label: 'ProxySQL Admin',
       items: [
         'the_admin_schemas/the_admin_schemas',
-        'main_runtime/main_runtime_tables',
+        'main_runtime/configuration_tables',
+        'main_runtime/mysql_tables',
+        'main_runtime/postgresql_tables',
       ],
     },
     {
