@@ -44,7 +44,7 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-query_cache_size_mb](#pgsql-query_cache_size_mb)               | 256           |
 | [pgsql-query_cache_soft_ttl_pct](#pgsql-query_cache_soft_ttl_pct)     | 0             |
 | [pgsql-query_cache_handle_warnings](#pgsql-query_cache_handle_warnings) | 0           |
-| [pgsql-query_cache_stores_empty_result](#pgsql-query_cache_stores_empty_result) | false |
+| [pgsql-query_cache_stores_empty_result](#pgsql-query_cache_stores_empty_result) | true |
 | [pgsql-stats_time_backend_query](#pgsql-stats_time_backend_query)     | false         |
 | [pgsql-stats_time_query_processor](#pgsql-stats_time_query_processor) | false         |
 | [pgsql-min_num_servers_lantency_awareness](#pgsql-min_num_servers_lantency_awareness) | 1000 |
@@ -52,6 +52,18 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-hostgroup_manager_verbose](#pgsql-hostgroup_manager_verbose)   | 1             |
 | [pgsql-binlog_reader_connect_retry_msec](#pgsql-binlog_reader_connect_retry_msec) | 3000 |
 | [pgsql-query_processor_iterations](#pgsql-query_processor_iterations) | 0             |
+| [pgsql-authentication_method](#pgsql-authentication_method)           | 3             |
+| [pgsql-ping_interval_server_msec](#pgsql-ping_interval_server_msec)   | 10000         |
+| [pgsql-ping_timeout_server](#pgsql-ping_timeout_server)               | 200           |
+| [pgsql-unshun_algorithm](#pgsql-unshun_algorithm)                     | 0             |
+| [pgsql-connection_warming](#pgsql-connection_warming)                 | false         |
+| [pgsql-client_host_cache_size](#pgsql-client_host_cache_size)         | 0             |
+| [pgsql-client_host_error_counts](#pgsql-client_host_error_counts)     | 0             |
+| [pgsql-connect_retries_on_failure](#pgsql-connect_retries_on_failure) | 10            |
+| [pgsql-connect_retries_delay](#pgsql-connect_retries_delay)           | 1             |
+| [pgsql-sessions_sort](#pgsql-sessions_sort)                           | false         |
+| [pgsql-default_schema](#pgsql-default_schema)                         | information_schema |
+| [pgsql-query_digests_grouping_limit](#pgsql-query_digests_grouping_limit) | 1000       |
 
 <!-- remark-ignore-end -->
 
@@ -548,5 +560,95 @@ Enables verbose logging for the PostgreSQL hostgroup manager.
 **Description**: Not supported.
 
 ### `pgsql-query_processor_iterations`
+
+**Description**: Not supported.
+
+### `pgsql-authentication_method`
+
+Defines the authentication method ProxySQL should use for backend connections.
+
+|                      |             |                               |
+| -------------------- | ----------- | ----------------------------- |
+| **System Variable**  | **Name**    | `pgsql-authentication_method` |
+| **Dynamic**          | **Yes**     |                               |
+| **Permitted Values** | **Type**    | Integer                       |
+|                      | **Default** | 3                             |
+|                      | **Minimum** | 1                             |
+|                      | **Maximum** | 3                             |
+
+**Description**: Configures the authentication protocol used between ProxySQL and backend PostgreSQL servers. Common values: `1` (No Password), `2` (Clear Text), `3` (SASL/SCRAM).
+
+### `pgsql-ping_interval_server_msec`
+
+**Description**: Not supported.
+
+### `pgsql-ping_timeout_server`
+
+**Description**: Not supported.
+
+### `pgsql-unshun_algorithm`
+
+Defines the algorithm used to decide when a shunned server should be moved back ONLINE.
+
+|                      |             |                          |
+| -------------------- | ----------- | ------------------------ |
+| **System Variable**  | **Name**    | `pgsql-unshun_algorithm` |
+| **Dynamic**          | **Yes**     |                          |
+| **Permitted Values** | **Type**    | Integer                  |
+|                      | **Default** | 0                        |
+|                      | **Minimum** | 0                        |
+|                      | **Maximum** | 1                        |
+
+**Description**: Determines the recovery logic for backend servers that were previously shunned due to errors.
+
+### `pgsql-connection_warming`
+
+Enables background connection establishment to keep the connection pool "warm".
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | `pgsql-connection_warming` |
+| **Dynamic**          | **Yes**     |                            |
+| **Permitted Values** | **Type**    | Boolean                    |
+|                      | **Default** | `false`                    |
+
+**Description**: When enabled, ProxySQL will proactively open connections to backend servers to ensure a minimum number of connections are always ready for incoming requests.
+
+### `pgsql-client_host_cache_size`
+
+**Description**: Not supported.
+
+### `pgsql-client_host_error_counts`
+
+**Description**: Not supported.
+
+### `pgsql-connect_retries_on_failure`
+
+The number of times ProxySQL will retry connecting to a backend server before giving up.
+
+|                      |             |                                   |
+| -------------------- | ----------- | --------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-connect_retries_on_failure` |
+| **Dynamic**          | **Yes**     |                                   |
+| **Permitted Values** | **Type**    | Integer                           |
+|                      | **Default** | 10                                |
+|                      | **Minimum** | 0                                 |
+|                      | **Maximum** | 1000                              |
+
+**Description**: Defines the maximum number of retry attempts for establishing a new connection to a backend server.
+
+### `pgsql-connect_retries_delay`
+
+**Description**: Not supported.
+
+### `pgsql-sessions_sort`
+
+**Description**: Not supported.
+
+### `pgsql-default_schema`
+
+**Description**: Not supported.
+
+### `pgsql-query_digests_grouping_limit`
 
 **Description**: Not supported.
