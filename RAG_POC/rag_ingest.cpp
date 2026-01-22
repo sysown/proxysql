@@ -95,6 +95,7 @@
 #include <sqlite3.h>
 #include <mysql.h>
 #include <crypt.h>
+#include <curl/curl.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -156,9 +157,46 @@ static int sqlite_exec(sqlite3* db, const std::string& sql) {
   return rc;
 }
 
+static bool is_integer_string(const std::string& s) {
+  if (s.empty()) return false;
+  size_t i = 0;
+  if (s[0] == '-') {
+    if (s.size() == 1) return false;
+    i = 1;
+  }
+  for (; i < s.size(); i++) {
+    if (s[i] < '0' || s[i] > '9') return false;
+  }
+  return true;
+}
+
+static std::string sql_escape_single_quotes(const std::string& s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (char c : s) {
+    if (c == '\'') out.push_back('\'');
+    out.push_back(c);
+  }
+  return out;
+}
+
 static std::string json_dump_compact(const json& j) {
   // Compact output (no pretty printing) to keep storage small.
   return j.dump();
+}
+
+static void sqlite_load_vec_extension(sqlite3* db) {
+  const char* ext = std::getenv("RAG_VEC0_EXT");
+  if (!ext || std::strlen(ext) == 0) return;
+
+  sqlite3_enable_load_extension(db, 1);
+  char* err = nullptr;
+  int rc = sqlite3_load_extension(db, ext, nullptr, &err);
+  if (rc != SQLITE_OK) {
+    std::string e = err ? err : "(unknown error)";
+    sqlite3_free(err);
+    fatal("Failed to load vec0 extension: " + e + " (" + std::string(ext) + ")");
+  }
 }
 
 // -------------------------
@@ -202,6 +240,19 @@ struct EmbeddingConfig {
   int dim = 1536;
   std::string model = "unknown";
   json input_spec; // expects {"concat":[...]}
+  std::string provider = "stub"; // stub | openai
+  std::string api_base;
+  std::string api_key;
+  int batch_size = 16;
+  int timeout_ms = 20000;
+};
+
+struct SyncCursor {
+  std::string column;
+  bool has_value = false;
+  bool numeric = false;
+  std::int64_t num_value = 0;
+  std::string str_value;
 };
 
 // A row fetched from MySQL, as a name->string map.
@@ -244,8 +295,15 @@ static EmbeddingConfig parse_embedding_json(const json& j) {
   if (j.contains("dim")) cfg.dim = j["dim"].get<int>();
   if (j.contains("model")) cfg.model = j["model"].get<std::string>();
   if (j.contains("input")) cfg.input_spec = j["input"];
+  if (j.contains("provider")) cfg.provider = j["provider"].get<std::string>();
+  if (j.contains("api_base")) cfg.api_base = j["api_base"].get<std::string>();
+  if (j.contains("api_key")) cfg.api_key = j["api_key"].get<std::string>();
+  if (j.contains("batch_size")) cfg.batch_size = j["batch_size"].get<int>();
+  if (j.contains("timeout_ms")) cfg.timeout_ms = j["timeout_ms"].get<int>();
 
   if (cfg.dim <= 0) cfg.dim = 1536;
+  if (cfg.batch_size <= 0) cfg.batch_size = 16;
+  if (cfg.timeout_ms <= 0) cfg.timeout_ms = 20000;
   return cfg;
 }
 
@@ -488,17 +546,108 @@ static std::vector<std::string> collect_needed_columns(const RagSource& s, const
   return cols;
 }
 
-static std::string build_select_sql(const RagSource& s, const std::vector<std::string>& cols) {
+static std::string build_select_sql(const RagSource& s,
+                                    const std::vector<std::string>& cols,
+                                    const std::string& extra_filter) {
   std::string sql = "SELECT ";
   for (size_t i = 0; i < cols.size(); i++) {
     if (i) sql += ", ";
     sql += "`" + cols[i] + "`";
   }
   sql += " FROM `" + s.table_name + "`";
-  if (!s.where_sql.empty()) {
-    sql += " WHERE " + s.where_sql;
+  if (!s.where_sql.empty() || !extra_filter.empty()) {
+    sql += " WHERE ";
+    if (!s.where_sql.empty()) {
+      sql += "(" + s.where_sql + ")";
+      if (!extra_filter.empty()) sql += " AND ";
+    }
+    if (!extra_filter.empty()) sql += "(" + extra_filter + ")";
   }
   return sql;
+}
+
+static void sqlite_prepare_or_die(sqlite3* db, sqlite3_stmt** st, const char* sql);
+static void sqlite_bind_text(sqlite3_stmt* st, int idx, const std::string& v);
+
+static json load_sync_cursor_json(sqlite3* db, int source_id) {
+  sqlite3_stmt* st = nullptr;
+  json out = json::object();
+  const char* sql = "SELECT cursor_json FROM rag_sync_state WHERE source_id=?";
+  if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+    return out;
+  }
+  sqlite3_bind_int(st, 1, source_id);
+  int rc = sqlite3_step(st);
+  if (rc == SQLITE_ROW) {
+    const unsigned char* txt = sqlite3_column_text(st, 0);
+    if (txt) {
+      try {
+        out = json::parse(reinterpret_cast<const char*>(txt));
+      } catch (...) {
+        out = json::object();
+      }
+    }
+  }
+  sqlite3_finalize(st);
+  if (!out.is_object()) out = json::object();
+  return out;
+}
+
+static SyncCursor parse_sync_cursor(const json& cursor_json, const std::string& default_col) {
+  SyncCursor c;
+  c.column = default_col;
+  if (cursor_json.is_object()) {
+    if (cursor_json.contains("column") && cursor_json["column"].is_string()) {
+      c.column = cursor_json["column"].get<std::string>();
+    }
+    if (cursor_json.contains("value")) {
+      const auto& v = cursor_json["value"];
+      if (v.is_number_integer()) {
+        c.has_value = true;
+        c.numeric = true;
+        c.num_value = v.get<std::int64_t>();
+      } else if (v.is_number_float()) {
+        c.has_value = true;
+        c.numeric = true;
+        c.num_value = static_cast<std::int64_t>(v.get<double>());
+      } else if (v.is_string()) {
+        c.has_value = true;
+        c.str_value = v.get<std::string>();
+        if (is_integer_string(c.str_value)) {
+          c.numeric = true;
+          c.num_value = std::stoll(c.str_value);
+        }
+      }
+    }
+  }
+  return c;
+}
+
+static std::string build_incremental_filter(const SyncCursor& c) {
+  if (!c.has_value || c.column.empty()) return "";
+  std::string col = "`" + c.column + "`";
+  if (c.numeric) {
+    return col + " > " + std::to_string(c.num_value);
+  }
+  return col + " > '" + sql_escape_single_quotes(c.str_value) + "'";
+}
+
+static void update_sync_state(sqlite3* db, int source_id, const json& cursor_json) {
+  const char* sql =
+    "INSERT INTO rag_sync_state(source_id, mode, cursor_json, last_ok_at, last_error) "
+    "VALUES(?, 'poll', ?, unixepoch(), NULL) "
+    "ON CONFLICT(source_id) DO UPDATE SET "
+    "cursor_json=excluded.cursor_json, last_ok_at=excluded.last_ok_at, last_error=NULL";
+  sqlite3_stmt* st = nullptr;
+  sqlite_prepare_or_die(db, &st, sql);
+  sqlite3_bind_int(st, 1, source_id);
+  std::string cursor_str = json_dump_compact(cursor_json);
+  sqlite_bind_text(st, 2, cursor_str);
+  int rc = sqlite3_step(st);
+  sqlite3_finalize(st);
+  if (rc != SQLITE_DONE) {
+    fatal(std::string("SQLite upsert rag_sync_state failed: ") + sqlite3_errmsg(db));
+  }
 }
 
 // -------------------------
@@ -684,6 +833,141 @@ static std::vector<float> pseudo_embedding(const std::string& text, int dim) {
     for (int i = 0; i < dim; i++) v[(size_t)i] = (float)(v[(size_t)i] / norm);
   }
   return v;
+}
+
+// -------------------------
+// Embedding providers
+// -------------------------
+
+struct EmbeddingProvider {
+  virtual ~EmbeddingProvider() = default;
+  virtual std::vector<std::vector<float>> embed(const std::vector<std::string>& inputs, int dim) = 0;
+};
+
+struct StubEmbeddingProvider : public EmbeddingProvider {
+  std::vector<std::vector<float>> embed(const std::vector<std::string>& inputs, int dim) override {
+    std::vector<std::vector<float>> out;
+    out.reserve(inputs.size());
+    for (const auto& s : inputs) out.push_back(pseudo_embedding(s, dim));
+    return out;
+  }
+};
+
+struct CurlBuffer {
+  std::string data;
+};
+
+static size_t curl_write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
+  size_t total = size * nmemb;
+  CurlBuffer* buf = static_cast<CurlBuffer*>(userp);
+  buf->data.append(static_cast<const char*>(contents), total);
+  return total;
+}
+
+struct OpenAIEmbeddingProvider : public EmbeddingProvider {
+  std::string api_base;
+  std::string api_key;
+  std::string model;
+  int timeout_ms = 20000;
+
+  OpenAIEmbeddingProvider(std::string base, std::string key, std::string mdl, int timeout)
+      : api_base(std::move(base)), api_key(std::move(key)), model(std::move(mdl)), timeout_ms(timeout) {}
+
+  std::vector<std::vector<float>> embed(const std::vector<std::string>& inputs, int dim) override {
+    if (api_base.empty()) {
+      throw std::runtime_error("embedding api_base is empty");
+    }
+    if (api_key.empty()) {
+      throw std::runtime_error("embedding api_key is empty");
+    }
+    if (model.empty()) {
+      throw std::runtime_error("embedding model is empty");
+    }
+    if (model.rfind("hf:", 0) != 0) {
+      std::cerr << "WARN: embedding model should be prefixed with 'hf:' per Synthetic docs\n";
+    }
+
+    json req;
+    req["model"] = model;
+    req["input"] = inputs;
+    if (dim > 0) {
+      req["dimensions"] = dim;
+    }
+    std::string body = req.dump();
+
+    std::string url = api_base;
+    if (!url.empty() && url.back() == '/') url.pop_back();
+    url += "/embeddings";
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+      throw std::runtime_error("curl_easy_init failed");
+    }
+
+    CurlBuffer buf;
+    struct curl_slist* headers = nullptr;
+    std::string auth = "Authorization: Bearer " + api_key;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, auth.c_str());
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body.size());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
+
+    CURLcode res = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+      throw std::runtime_error(std::string("curl error: ") + curl_easy_strerror(res));
+    }
+    if (status < 200 || status >= 300) {
+      throw std::runtime_error("embedding request failed with status " + std::to_string(status));
+    }
+
+    json resp = json::parse(buf.data);
+    if (!resp.contains("data") || !resp["data"].is_array()) {
+      throw std::runtime_error("embedding response missing data array");
+    }
+
+    std::vector<std::vector<float>> out;
+    out.reserve(resp["data"].size());
+    for (const auto& item : resp["data"]) {
+      if (!item.contains("embedding") || !item["embedding"].is_array()) {
+        throw std::runtime_error("embedding item missing embedding array");
+      }
+      std::vector<float> vec;
+      vec.reserve(item["embedding"].size());
+      for (const auto& v : item["embedding"]) {
+        vec.push_back(v.get<float>());
+      }
+      if ((int)vec.size() != dim) {
+        throw std::runtime_error("embedding dimension mismatch: expected " + std::to_string(dim)
+                                 + ", got " + std::to_string(vec.size()));
+      }
+      out.push_back(std::move(vec));
+    }
+
+    if (out.size() != inputs.size()) {
+      throw std::runtime_error("embedding response size mismatch");
+    }
+    return out;
+  }
+};
+
+static std::unique_ptr<EmbeddingProvider> build_embedding_provider(const EmbeddingConfig& cfg) {
+  if (cfg.provider == "openai") {
+    return std::make_unique<OpenAIEmbeddingProvider>(cfg.api_base, cfg.api_key, cfg.model, cfg.timeout_ms);
+  }
+  return std::make_unique<StubEmbeddingProvider>();
 }
 
 // -------------------------
@@ -873,6 +1157,14 @@ static void ingest_source(sqlite3* sdb, const RagSource& src) {
   // Parse chunking & embedding config
   ChunkingConfig ccfg = parse_chunking_json(src.chunking_json);
   EmbeddingConfig ecfg = parse_embedding_json(src.embedding_json);
+  std::unique_ptr<EmbeddingProvider> embedder;
+  if (ecfg.enabled) {
+    embedder = build_embedding_provider(ecfg);
+  }
+
+  // Load sync cursor (watermark)
+  json cursor_json = load_sync_cursor_json(sdb, src.source_id);
+  SyncCursor cursor = parse_sync_cursor(cursor_json, src.pk_column);
 
   // Prepare SQLite statements for this run
   SqliteStmts ss = prepare_sqlite_statements(sdb, ecfg.enabled);
@@ -880,9 +1172,11 @@ static void ingest_source(sqlite3* sdb, const RagSource& src) {
   // Connect MySQL
   MYSQL* mdb = mysql_connect_or_die(src);
 
-  // Build SELECT
+  // Build SELECT (include watermark column if needed)
   std::vector<std::string> cols = collect_needed_columns(src, ecfg);
-  std::string sel = build_select_sql(src, cols);
+  if (!cursor.column.empty()) add_unique(cols, cursor.column);
+  std::string extra_filter = build_incremental_filter(cursor);
+  std::string sel = build_select_sql(src, cols, extra_filter);
 
   if (mysql_query(mdb, sel.c_str()) != 0) {
     std::string err = mysql_error(mdb);
@@ -903,8 +1197,39 @@ static void ingest_source(sqlite3* sdb, const RagSource& src) {
   std::uint64_t skipped_docs = 0;
 
   MYSQL_ROW r;
+  bool max_set = false;
+  bool max_numeric = false;
+  std::int64_t max_num = 0;
+  std::string max_str;
   while ((r = mysql_fetch_row(res)) != nullptr) {
     RowMap row = mysql_row_to_map(res, r);
+
+    // Track max watermark value from source rows (even if doc is skipped)
+    if (!cursor.column.empty()) {
+      auto it = row.find(cursor.column);
+      if (it != row.end()) {
+        const std::string& v = it->second;
+        if (!v.empty()) {
+          if (!max_set) {
+            if (cursor.numeric || is_integer_string(v)) {
+              max_numeric = true;
+              max_num = std::stoll(v);
+            } else {
+              max_numeric = false;
+              max_str = v;
+            }
+            max_set = true;
+          } else if (max_numeric) {
+            if (is_integer_string(v)) {
+              std::int64_t nv = std::stoll(v);
+              if (nv > max_num) max_num = nv;
+            }
+          } else {
+            if (v > max_str) max_str = v;
+          }
+        }
+      }
+    }
 
     BuiltDoc doc = build_document_from_row(src, row);
 
@@ -943,13 +1268,10 @@ static void ingest_source(sqlite3* sdb, const RagSource& src) {
 
       // Optional vectors
       if (ecfg.enabled) {
-        // Build embedding input text, then generate pseudo embedding.
-        // Replace pseudo_embedding() with a real embedding provider in ProxySQL.
         std::string emb_input = build_embedding_input(ecfg, row, chunks[i]);
-        std::vector<float> emb = pseudo_embedding(emb_input, ecfg.dim);
-
-        // Insert into sqlite3-vec table
-        sqlite_insert_vec(ss, emb, chunk_id, doc.doc_id, src.source_id, now_epoch);
+        std::vector<std::string> batch_inputs = {emb_input};
+        std::vector<std::vector<float>> vecs = embedder->embed(batch_inputs, ecfg.dim);
+        sqlite_insert_vec(ss, vecs[0], chunk_id, doc.doc_id, src.source_id, now_epoch);
       }
     }
 
@@ -963,6 +1285,17 @@ static void ingest_source(sqlite3* sdb, const RagSource& src) {
   mysql_free_result(res);
   mysql_close(mdb);
   sqlite_finalize_all(ss);
+
+  if (!cursor_json.is_object()) cursor_json = json::object();
+  if (!cursor.column.empty()) cursor_json["column"] = cursor.column;
+  if (max_set) {
+    if (max_numeric) {
+      cursor_json["value"] = max_num;
+    } else {
+      cursor_json["value"] = max_str;
+    }
+  }
+  update_sync_state(sdb, src.source_id, cursor_json);
 
   std::cerr << "Done source " << src.name
             << " ingested_docs=" << ingested_docs
@@ -979,12 +1312,17 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+
   const char* sqlite_path = argv[1];
 
   sqlite3* db = nullptr;
   if (sqlite3_open(sqlite_path, &db) != SQLITE_OK) {
     fatal("Could not open SQLite DB: " + std::string(sqlite_path));
   }
+
+  // Load vec0 if configured (needed for rag_vec_chunks inserts)
+  sqlite_load_vec_extension(db);
 
   // Pragmas (safe defaults)
   sqlite_exec(db, "PRAGMA foreign_keys = ON;");
@@ -1027,6 +1365,7 @@ int main(int argc, char** argv) {
   }
 
   sqlite3_close(db);
+  curl_global_cleanup();
   return 0;
 }
 

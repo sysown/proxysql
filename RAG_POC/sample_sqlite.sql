@@ -1,11 +1,8 @@
 -- Sample SQLite setup for rag_ingest testing
--- 1) Load the RAG schema (schema.sql) into a new SQLite DB.
--- 2) Insert a sample rag_sources row that points to the MySQL sample.
+-- Inserts a sample rag_sources row that points to the MySQL sample.
+-- Note: schema.sql must be loaded separately before this script.
 
--- Step 1: apply schema
-.read ./schema.sql
-
--- Step 2: insert a sample source
+-- insert a sample source
 INSERT INTO rag_sources (
   source_id,
   name,
