@@ -22,22 +22,24 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-free_connections_pct](#pgsql-free_connections_pct)             | 10            |
 | [pgsql-connection_delay_multiplex_ms](#pgsql-connection_delay_multiplex_ms) | 0             |
 | [pgsql-connection_max_age_ms](#pgsql-connection_max_age_ms)           | 0             |
-| [pgsql-monitor_enabled](#pgsql-monitor_enabled)                       | true          |
-| [pgsql-monitor_history](#pgsql-monitor_history)                       | 7200000       |
-| [pgsql-monitor_connect_interval](#pgsql-monitor_connect_interval)     | 120000        |
-| [pgsql-monitor_ping_interval](#pgsql-monitor_ping_interval)           | 8000          |
-| [pgsql-monitor_read_only_interval](#pgsql-monitor_read_only_interval) | 1000          |
-| [pgsql-monitor_read_only_timeout](#pgsql-monitor_read_only_timeout)   | 800           |
-| [pgsql-monitor_threads](#pgsql-monitor_threads)                       | 2             |
-| [pgsql-monitor_local_dns_cache_ttl](#pgsql-monitor_local_dns_cache_ttl) | 300000       |
-| [pgsql-monitor_local_dns_cache_refresh_interval](#pgsql-monitor_local_dns_cache_refresh_interval) | 60000 |
-| [pgsql-monitor_local_dns_resolver_queue_maxsize](#pgsql-monitor_local_dns_resolver_queue_maxsize) | 128 |
 | [pgsql-mirror_max_concurrency](#pgsql-mirror_max_concurrency)         | 16            |
 | [pgsql-default_query_timeout](#pgsql-default_query_timeout)           | 86400000      |
 | [pgsql-query_digests_max_query_length](#pgsql-query_digests_max_query_length) | 65000 |
 | [pgsql-max_allowed_packet](#pgsql-max_allowed_packet)                 | 67108864      |
 | [pgsql-max_stmts_per_connection](#pgsql-max_stmts_per_connection)     | 20            |
 | [pgsql-wait_timeout](#pgsql-wait_timeout)                             | 28800000      |
+| [pgsql-query_digests](#pgsql-query_digests)                           | true          |
+| [pgsql-query_digests_lowercase](#pgsql-query_digests_lowercase)       | false         |
+| [pgsql-query_digests_replace_null](#pgsql-query_digests_replace_null) | false         |
+| [pgsql-query_digests_no_digits](#pgsql-query_digests_no_digits)       | false         |
+| [pgsql-query_digests_normalize_digest_text](#pgsql-query_digests_normalize_digest_text) | false |
+| [pgsql-query_digests_track_hostname](#pgsql-query_digests_track_hostname) | false       |
+| [pgsql-query_digests_keep_comment](#pgsql-query_digests_keep_comment) | false         |
+| [pgsql-multiplexing](#pgsql-multiplexing)                             | true          |
+| [pgsql-enforce_autocommit_on_reads](#pgsql-enforce_autocommit_on_reads) | false       |
+| [pgsql-autocommit_false_not_reusable](#pgsql-autocommit_false_not_reusable) | false   |
+| [pgsql-autocommit_false_is_transaction](#pgsql-autocommit_false_is_transaction) | false |
+| [pgsql-kill_backend_connection_when_disconnect](#pgsql-kill_backend_connection_when_disconnect) | false |
 
 <!-- remark-ignore-end -->
 
@@ -209,7 +211,7 @@ The number of times a query is retried upon failure.
 |                      |             |                                  |
 | -------------------- | ----------- | -------------------------------- |
 | **System Variable**  | **Name**    | `pgsql-query_retries_on_failure` |
-|                      | **Dynamic** | Yes                              |
+| **Dynamic**          | **Yes**     |                                  |
 | **Permitted Values** | **Type**    | Integer                          |
 |                      | **Default** | 1                                |
 |                      | **Minimum** | 0                                |
@@ -224,7 +226,7 @@ The percentage of open idle connections to keep in the connection pool.
 |                      |             |                              |
 | -------------------- | ----------- | ---------------------------- |
 | **System Variable**  | **Name**    | `pgsql-free_connections_pct` |
-|                      | **Dynamic** | Yes                          |
+| **Dynamic**          | **Yes**     |                              |
 | **Permitted Values** | **Type**    | Integer                      |
 |                      | **Default** | 10                           |
 |                      | **Minimum** | 0                            |
@@ -239,7 +241,7 @@ Delay in milliseconds before enabling multiplexing for a new connection.
 |                      |             |                                       |
 | -------------------- | ----------- | ------------------------------------- |
 | **System Variable**  | **Name**    | `pgsql-connection_delay_multiplex_ms` |
-|                      | **Dynamic** | Yes                                   |
+| **Dynamic**          | **Yes**     |                                       |
 | **Permitted Values** | **Type**    | Integer                               |
 |                      | **Default** | 0                                     |
 |                      | **Minimum** | 0                                     |
@@ -254,161 +256,13 @@ Maximum age in milliseconds for a backend connection.
 |                      |             |                               |
 | -------------------- | ----------- | ----------------------------- |
 | **System Variable**  | **Name**    | `pgsql-connection_max_age_ms` |
-|                      | **Dynamic** | Yes                           |
+| **Dynamic**          | **Yes**     |                               |
 | **Permitted Values** | **Type**    | Integer                       |
 |                      | **Default** | 0                             |
 |                      | **Minimum** | 0                             |
 |                      | **Maximum** | 86400000                      |
 
 **Description**: The maximum time (in milliseconds) a backend connection can stay open. Once this limit is reached, the connection is closed and a new one is established. A value of `0` disables this feature.
-
-### `pgsql-monitor_enabled`
-
-Enables or disables the PostgreSQL monitor module.
-
-|                      |             |                         |
-| -------------------- | ----------- | ----------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_enabled` |
-|                      | **Dynamic** | Yes                     |
-| **Permitted Values** | **Type**    | Boolean                 |
-|                      | **Default** | `true`                  |
-
-**Description**: Master switch to enable or disable monitoring for PostgreSQL backends. When set to `false`, all monitoring activities are suspended.
-
-### `pgsql-monitor_history`
-
-Duration in milliseconds to keep monitoring history.
-
-|                      |             |                         |
-| -------------------- | ----------- | ----------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_history` |
-|                      | **Dynamic** | Yes                     |
-| **Permitted Values** | **Type**    | Integer                 |
-|                      | **Default** | 7200000                 |
-|                      | **Minimum** | 1000                    |
-|                      | **Maximum** | 604800000               |
-
-**Description**: Time in milliseconds for which monitoring history is retained in the internal database. The default is 2 hours (7200000 ms).
-
-### `pgsql-monitor_connect_interval`
-
-Interval in milliseconds for checking backend connectivity.
-
-|                      |             |                                  |
-| -------------------- | ----------- | -------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_connect_interval` |
-|                      | **Dynamic** | Yes                              |
-| **Permitted Values** | **Type**    | Integer                          |
-|                      | **Default** | 120000                           |
-|                      | **Minimum** | 100                              |
-|                      | **Maximum** | 604800000                        |
-
-**Description**: How often (in milliseconds) the monitor checks connectivity to the backend servers. Default is 2 minutes.
-
-### `pgsql-monitor_ping_interval`
-
-Interval in milliseconds for sending ping checks to backends.
-
-|                      |             |                               |
-| -------------------- | ----------- | ----------------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_ping_interval` |
-|                      | **Dynamic** | Yes                           |
-| **Permitted Values** | **Type**    | Integer                       |
-|                      | **Default** | 8000                          |
-|                      | **Minimum** | 100                           |
-|                      | **Maximum** | 604800000                     |
-
-**Description**: The frequency (in milliseconds) at which ProxySQL sends a ping to backend servers to verify they are alive and responsive. Default is 8 seconds.
-
-### `pgsql-monitor_read_only_interval`
-
-Interval in milliseconds for checking the read-only status of backend servers.
-
-|                      |             |                                  |
-| -------------------- | ----------- | -------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_read_only_interval` |
-|                      | **Dynamic** | Yes                              |
-| **Permitted Values** | **Type**    | Integer                          |
-|                      | **Default** | 1000                             |
-|                      | **Minimum** | 100                              |
-|                      | **Maximum** | 604800000                        |
-
-**Description**: Defines how frequently (in milliseconds) the monitor check the read-only status of PostgreSQL backends.
-
-### `pgsql-monitor_read_only_timeout`
-
-Timeout in milliseconds for the read-only check.
-
-|                      |             |                                 |
-| -------------------- | ----------- | ------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_read_only_timeout` |
-|                      | **Dynamic** | Yes                             |
-| **Permitted Values** | **Type**    | Integer                         |
-|                      | **Default** | 800                             |
-|                      | **Minimum** | 100                             |
-|                      | **Maximum** | 600000                          |
-
-**Description**: The maximum time allowed for a single read-only check to complete.
-
-### `pgsql-monitor_threads`
-
-Number of threads used by the monitor module.
-
-|                      |             |                         |
-| -------------------- | ----------- | ----------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_threads` |
-|                      | **Dynamic** | Yes                     |
-| **Permitted Values** | **Type**    | Integer                 |
-|                      | **Default** | 2                       |
-|                      | **Minimum** | 2                       |
-|                      | **Maximum** | 256                     |
-
-**Description**: Specifies the number of background threads dedicated to monitoring PostgreSQL backend servers.
-
-### `pgsql-monitor_local_dns_cache_ttl`
-
-Time-to-live in milliseconds for cached DNS lookups in the monitor.
-
-|                      |             |                                   |
-| -------------------- | ----------- | --------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_local_dns_cache_ttl` |
-|                      | **Dynamic** | Yes                               |
-| **Permitted Values** | **Type**    | Integer                           |
-|                      | **Default** | 300000                            |
-|                      | **Minimum** | 0                                 |
-|                      | **Maximum** | 604800000                         |
-
-**Description**: Duration for which DNS resolution results are cached by the monitor.
-
-### `pgsql-monitor_local_dns_cache_refresh_interval`
-
-Interval in milliseconds to refresh the local DNS cache.
-
-|                      |             |                                               |
-| -------------------- | ----------- | --------------------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_local_dns_cache_refresh_interval` |
-|                      | **Dynamic** | Yes                                           |
-| **Permitted Values** | **Type**    | Integer                                       |
-|                      | **Default** | 60000                                         |
-|                      | **Minimum** | 0                                             |
-|                      | **Maximum** | 604800000                                     |
-
-**Description**: Frequency at which the monitor refreshes its internal DNS cache.
-
-### `pgsql-monitor_local_dns_resolver_queue_maxsize`
-
-Maximum size of the DNS resolver queue.
-
-|                      |             |                                               |
-| -------------------- | ----------- | --------------------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-monitor_local_dns_resolver_queue_maxsize` |
-|                      | **Dynamic** | Yes                                           |
-| **Permitted Values** | **Type**    | Integer                                       |
-|                      | **Default** | 128                                           |
-|                      | **Minimum** | 16                                            |
-|                      | **Maximum** | 1024                                          |
-
-**Description**: The maximum number of pending DNS resolution requests allowed in the monitor's queue.
 
 ### `pgsql-mirror_max_concurrency`
 
@@ -417,7 +271,7 @@ Maximum concurrent requests for mirrored sessions.
 |                      |             |                                |
 | -------------------- | ----------- | ------------------------------ |
 | **System Variable**  | **Name**    | `pgsql-mirror_max_concurrency` |
-|                      | **Dynamic** | Yes                            |
+| **Dynamic**          | **Yes**     |                                |
 | **Permitted Values** | **Type**    | Integer                        |
 |                      | **Default** | 16                             |
 |                      | **Minimum** | 1                              |
@@ -432,7 +286,7 @@ Default timeout in milliseconds for PostgreSQL queries.
 |                      |             |                              |
 | -------------------- | ----------- | ---------------------------- |
 | **System Variable**  | **Name**    | `pgsql-default_query_timeout` |
-|                      | **Dynamic** | Yes                          |
+| **Dynamic**          | **Yes**     |                              |
 | **Permitted Values** | **Type**    | Integer                      |
 |                      | **Default** | 86400000                     |
 |                      | **Minimum** | 1000                         |
@@ -447,7 +301,7 @@ Maximum query length to be considered for digest calculation.
 |                      |             |                                       |
 | -------------------- | ----------- | ------------------------------------- |
 | **System Variable**  | **Name**    | `pgsql-query_digests_max_query_length` |
-|                      | **Dynamic** | Yes                                   |
+| **Dynamic**          | **Yes**     |                                       |
 | **Permitted Values** | **Type**    | Integer                               |
 |                      | **Default** | 65000                                 |
 |                      | **Minimum** | 16                                    |
@@ -462,7 +316,7 @@ Maximum size of a single network packet for PostgreSQL.
 |                      |             |                            |
 | -------------------- | ----------- | -------------------------- |
 | **System Variable**  | **Name**    | `pgsql-max_allowed_packet` |
-|                      | **Dynamic** | Yes                        |
+| **Dynamic**          | **Yes**     |                            |
 | **Permitted Values** | **Type**    | Integer                    |
 |                      | **Default** | 67108864                   |
 |                      | **Minimum** | 8192                       |
@@ -476,8 +330,8 @@ Maximum number of prepared statements per backend connection.
 
 |                      |             |                                   |
 | -------------------- | ----------- | --------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-max_stmts_per_connection` |
-|                      | **Dynamic** | Yes                               |
+| **System Variable**  | **Name**    | `pgsql-max_stmts_per_connection`  |
+| **Dynamic**          | **Yes**     |                                   |
 | **Permitted Values** | **Type**    | Integer                           |
 |                      | **Default** | 20                                |
 |                      | **Minimum** | 1                                 |
@@ -492,10 +346,166 @@ Timeout in milliseconds for idle client connections.
 |                      |             |                      |
 | -------------------- | ----------- | -------------------- |
 | **System Variable**  | **Name**    | `pgsql-wait_timeout` |
-|                      | **Dynamic** | Yes                  |
+| **Dynamic**          | **Yes**     |                      |
 | **Permitted Values** | **Type**    | Integer              |
 |                      | **Default** | 28800000             |
 |                      | **Minimum** | 0                    |
 |                      | **Maximum** | 1728000000           |
 
 **Description**: The maximum time (in milliseconds) a PostgreSQL client connection can remain idle before ProxySQL closes it.
+
+### `pgsql-query_digests`
+
+Enables or disables PostgreSQL query digest collection.
+
+|                      |             |                       |
+| -------------------- | ----------- | --------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests` |
+| **Dynamic**          | **Yes**     |                       |
+| **Permitted Values** | **Type**    | Boolean               |
+|                      | **Default** | `true`                |
+
+**Description**: When enabled, ProxySQL collects query digests for PostgreSQL traffic, which are visible in the `stats_pgsql_query_digest` table.
+
+### `pgsql-query_digests_lowercase`
+
+Converts queries to lowercase before digest calculation.
+
+|                      |             |                                 |
+| -------------------- | ----------- | ------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests_lowercase` |
+| **Dynamic**          | **Yes**     |                                 |
+| **Permitted Values** | **Type**    | Boolean                         |
+|                      | **Default** | `false`                         |
+
+**Description**: If set to `true`, PostgreSQL queries are normalized to lowercase before generating their digest.
+
+### `pgsql-query_digests_replace_null`
+
+Replaces NULL values in queries with a placeholder during digest calculation.
+
+|                      |             |                                    |
+| -------------------- | ----------- | ---------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests_replace_null` |
+| **Dynamic**          | **Yes**     |                                    |
+| **Permitted Values** | **Type**    | Boolean                            |
+|                      | **Default** | `false`                            |
+
+**Description**: When enabled, `NULL` literals in queries are treated as parameters during the normalization process for digests.
+
+### `pgsql-query_digests_no_digits`
+
+Removes digits from queries during digest calculation.
+
+|                      |             |                                 |
+| -------------------- | ----------- | ------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests_no_digits` |
+| **Dynamic**          | **Yes**     |                                 |
+| **Permitted Values** | **Type**    | Boolean                         |
+|                      | **Default** | `false`                         |
+
+**Description**: If enabled, all digits in the query are replaced with placeholders during normalization to group similar queries that only differ by numerical constants.
+
+### `pgsql-query_digests_normalize_digest_text`
+
+Enables advanced normalization of query digest text.
+
+|                      |             |                                             |
+| -------------------- | ----------- | ------------------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests_normalize_digest_text` |
+| **Dynamic**          | **Yes**     |                                             |
+| **Permitted Values** | **Type**    | Boolean                                     |
+|                      | **Default** | `false`                                     |
+
+**Description**: Provides more aggressive normalization of the query text used for digest generation.
+
+### `pgsql-query_digests_track_hostname`
+
+Includes client hostname in query digest statistics.
+
+|                      |             |                                  |
+| -------------------- | ----------- | -------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests_track_hostname` |
+| **Dynamic**          | **Yes**     |                                  |
+| **Permitted Values** | **Type**    | Boolean                          |
+|                      | **Default** | `false`                          |
+
+**Description**: When set to `true`, ProxySQL tracks query statistics per client hostname in the digest tables.
+
+### `pgsql-query_digests_keep_comment`
+
+Preserves SQL comments in query digests.
+
+|                      |             |                                |
+| -------------------- | ----------- | ------------------------------ |
+| **System Variable**  | **Name**    | `pgsql-query_digests_keep_comment` |
+| **Dynamic**          | **Yes**     |                                |
+| **Permitted Values** | **Type**    | Boolean                        |
+|                      | **Default** | `false`                        |
+
+**Description**: If enabled, SQL comments are not stripped from the query during the normalization process.
+
+### `pgsql-multiplexing`
+
+Global switch for PostgreSQL connection multiplexing.
+
+|                      |             |                      |
+| -------------------- | ----------- | -------------------- |
+| **System Variable**  | **Name**    | `pgsql-multiplexing` |
+| **Dynamic**          | **Yes**     |                      |
+| **Permitted Values** | **Type**    | Boolean              |
+|                      | **Default** | `true`               |
+
+**Description**: Master toggle for PostgreSQL multiplexing. When enabled, ProxySQL can reuse backend connections for different client sessions when they are in an idle state.
+
+### `pgsql-enforce_autocommit_on_reads`
+
+Enforces autocommit mode for read-only PostgreSQL queries.
+
+|                      |             |                                     |
+| -------------------- | ----------- | ----------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-enforce_autocommit_on_reads` |
+| **Dynamic**          | **Yes**     |                                     |
+| **Permitted Values** | **Type**    | Boolean                             |
+|                      | **Default** | `false`                             |
+
+**Description**: If set to `true`, ProxySQL will ensure that read-only queries are executed in autocommit mode, which can improve connection reuse efficiency.
+
+### `pgsql-autocommit_false_not_reusable`
+
+Disables connection reuse if autocommit is false.
+
+|                      |             |                                      |
+| -------------------- | ----------- | ------------------------------------ |
+| **System Variable**  | **Name**    | `pgsql-autocommit_false_not_reusable` |
+| **Dynamic**          | **Yes**     |                                      |
+| **Permitted Values** | **Type**    | Boolean                              |
+|                      | **Default** | `false`                              |
+
+**Description**: When enabled, backend connections where `autocommit` has been explicitly disabled will not be returned to the pool until the session ends or autocommit is re-enabled.
+
+### `pgsql-autocommit_false_is_transaction`
+
+Treats autocommit=false as an active transaction.
+
+|                      |             |                                       |
+| -------------------- | ----------- | ------------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-autocommit_false_is_transaction` |
+| **Dynamic**          | **Yes**     |                                       |
+| **Permitted Values** | **Type**    | Boolean                               |
+|                      | **Default** | `false`                               |
+
+**Description**: When set to `true`, ProxySQL considers a session to be in an active transaction state simply because `autocommit` is set to `false`.
+
+### `pgsql-kill_backend_connection_when_disconnect`
+
+Kills the backend connection immediately upon client disconnect.
+
+|                      |             |                                               |
+| -------------------- | ----------- | --------------------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-kill_backend_connection_when_disconnect` |
+| **Dynamic**          | **Yes**     |                                               |
+| **Permitted Values** | **Type**    | Boolean                                       |
+|                      | **Default** | `false`                                       |
+
+**Description**: If enabled, ProxySQL will close the associated backend connection as soon as the client disconnects, rather than returning it to the pool.

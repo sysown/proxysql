@@ -8,11 +8,14 @@ NOTE: You can click on the variable name to jump to its definition
 
 | Variable Name                                                                           | Default Value |
 | --------------------------------------------------------------------------------------- | ------------- |
-| [pgsql-monitor_connect_interval](#pgsql-monitor_connect_interval)                       | 1200000       |
+| [pgsql-monitor_connect_interval](#pgsql-monitor_connect_interval)                       | 120000        |
 | [pgsql-monitor_connect_interval_window](#pgsql-monitor_connect_interval_window)         | 50            |
 | [pgsql-monitor_connect_timeout](#pgsql-monitor_connect_timeout)                         | 600           |
 | [pgsql-monitor_enabled](#pgsql-monitor_enabled)                                         | true          |
 | [pgsql-monitor_history](#pgsql-monitor_history)                                         | 7200000       |
+| [pgsql-monitor_local_dns_cache_refresh_interval](#pgsql-monitor_local_dns_cache_refresh_interval) | 60000 |
+| [pgsql-monitor_local_dns_cache_ttl](#pgsql-monitor_local_dns_cache_ttl)                 | 300000        |
+| [pgsql-monitor_local_dns_resolver_queue_maxsize](#pgsql-monitor_local_dns_resolver_queue_maxsize) | 128 |
 | [pgsql-monitor_password](#pgsql-monitor_password)                                       | monitor       |
 | [pgsql-monitor_ping_interval](#pgsql-monitor_ping_interval)                             | 8000          |
 | [pgsql-monitor_ping_interval_window](#pgsql-monitor_ping_interval_window)               | 10            |
@@ -38,7 +41,7 @@ order to check whether they are available or not.
 | **System Variable**  | **Name**    | pgsql-monitor_connect_interval |
 |                      | **Dynamic** | Yes                            |
 | **Permitted Values** | **Type**    | Integer (milliseconds)         |
-|                      | **Default** | 120000 (2 mins)                |
+|                      | **Default** | 120000                         |
 |                      | **Minimum** | 100                            |
 |                      | **Maximum** | 604800000                      |
 
@@ -164,7 +167,7 @@ How long the Monitor module will wait for a ping reply.
 | **System Variable**  | **Name**    | pgsql-monitor_ping_timeout |
 |                      | **Dynamic** | Yes                        |
 | **Permitted Values** | **Type**    | Integer (milliseconds)     |
-|                      | **Default** | 600                        |
+|                      | **Default** | 1000                       |
 |                      | **Minimum** | 100                        |
 |                      | **Maximum** | 600000                     |
 
@@ -177,7 +180,7 @@ Defines the frequency to perform the `read_only` check of a backend server (in m
 | **System Variable**  | **Name**    | pgsql-monitor_read_only_interval |
 |                      | **Dynamic** | Yes                              |
 | **Permitted Values** | **Type**    | Integer (milliseconds)           |
-|                      | **Default** | 1000 (1 sec)                     |
+|                      | **Default** | 1000                             |
 |                      | **Minimum** | 100                              |
 |                      | **Maximum** | 604800000                        |
 
@@ -232,14 +235,14 @@ control the module offers over the checks batching, a very small number of threa
 monitoring a very large number of backend servers, without any compromises. For more information refer to the
 module [general documentation][1].
 
-|                      |             |                           |
-| -------------------- | ----------- | ------------------------- |
-| **System Variable**  | **Name**    | pgsql-monitor_threads_min |
-|                      | **Dynamic** | No                        |
-| **Permitted Values** | **Type**    | Integer                   |
-|                      | **Default** | 2                         |
-|                      | **Minimum** | 2                         |
-|                      | **Maximum** | 256                       |
+|                      |             |                       |
+| -------------------- | ----------- | --------------------- |
+| **System Variable**  | **Name**    | pgsql-monitor_threads |
+|                      | **Dynamic** | No                    |
+| **Permitted Values** | **Type**    | Integer               |
+|                      | **Default** | 2                     |
+|                      | **Minimum** | 2                     |
+|                      | **Maximum** | 256                   |
 
 ### `pgsql-monitor_username`
 
@@ -270,5 +273,50 @@ present in both hostgroups or not:
 |                      | **Dynamic** | Yes                                 |
 | **Permitted Values** | **Type**    | Boolean                             |
 |                      | **Default** | true                                |
+
+### `pgsql-monitor_local_dns_cache_ttl`
+
+Time-to-live in milliseconds for cached DNS lookups in the monitor.
+
+|                      |             |                                   |
+| -------------------- | ----------- | --------------------------------- |
+| **System Variable**  | **Name**    | pgsql-monitor_local_dns_cache_ttl |
+|                      | **Dynamic** | Yes                               |
+| **Permitted Values** | **Type**    | Integer                           |
+|                      | **Default** | 300000                            |
+|                      | **Minimum** | 0                                 |
+|                      | **Maximum** | 604800000                         |
+
+**Description**: Duration for which DNS resolution results are cached by the monitor.
+
+### `pgsql-monitor_local_dns_cache_refresh_interval`
+
+Interval in milliseconds to refresh the local DNS cache.
+
+|                      |             |                                               |
+| -------------------- | ----------- | --------------------------------------------- |
+| **System Variable**  | **Name**    | pgsql-monitor_local_dns_cache_refresh_interval |
+|                      | **Dynamic** | Yes                                           |
+| **Permitted Values** | **Type**    | Integer                                       |
+|                      | **Default** | 60000                                         |
+|                      | **Minimum** | 0                                             |
+|                      | **Maximum** | 604800000                                     |
+
+**Description**: Frequency at which the monitor refreshes its internal DNS cache.
+
+### `pgsql-monitor_local_dns_resolver_queue_maxsize`
+
+Maximum size of the DNS resolver queue.
+
+|                      |             |                                               |
+| -------------------- | ----------- | --------------------------------------------- |
+| **System Variable**  | **Name**    | pgsql-monitor_local_dns_resolver_queue_maxsize |
+|                      | **Dynamic** | Yes                                           |
+| **Permitted Values** | **Type**    | Integer                                       |
+|                      | **Default** | 128                                           |
+|                      | **Minimum** | 16                                            |
+|                      | **Maximum** | 1024                                          |
+
+**Description**: The maximum number of pending DNS resolution requests allowed in the monitor's queue.
 
 [1]: https://proxysql.com/postgresql-backend-monitoring/
