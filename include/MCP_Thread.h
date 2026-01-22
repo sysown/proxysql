@@ -17,6 +17,7 @@ class Admin_Tool_Handler;
 class Cache_Tool_Handler;
 class Observe_Tool_Handler;
 class AI_Tool_Handler;
+class RAG_Tool_Handler;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -56,8 +57,7 @@ public:
 		char* mcp_mysql_user;                   ///< MySQL username for tool connections
 		char* mcp_mysql_password;               ///< MySQL password for tool connections
 		char* mcp_mysql_schema;                 ///< Default schema/database
-		char* mcp_catalog_path;                 ///< Path to catalog SQLite database
-		char* mcp_fts_path;                     ///< Path to FTS SQLite database
+		// Catalog path is hardcoded to mcp_catalog.db in the datadir
 	} variables;
 
 	/**
@@ -91,12 +91,14 @@ public:
 	/**
 	 * @brief Pointers to the new dedicated tool handlers for each endpoint
 	 *
-	 * Each endpoint now has its own dedicated tool handler:
+	 * Each endpoint has its own dedicated tool handler:
 	 * - config_tool_handler: /mcp/config endpoint
-	 * - query_tool_handler: /mcp/query endpoint
+	 * - query_tool_handler: /mcp/query endpoint (includes two-phase discovery tools)
 	 * - admin_tool_handler: /mcp/admin endpoint
 	 * - cache_tool_handler: /mcp/cache endpoint
 	 * - observe_tool_handler: /mcp/observe endpoint
+	 * - ai_tool_handler: /mcp/ai endpoint
+	 * - rag_tool_handler: /mcp/rag endpoint
 	 */
 	Config_Tool_Handler* config_tool_handler;
 	Query_Tool_Handler* query_tool_handler;
@@ -104,6 +106,7 @@ public:
 	Cache_Tool_Handler* cache_tool_handler;
 	Observe_Tool_Handler* observe_tool_handler;
 	AI_Tool_Handler* ai_tool_handler;
+	RAG_Tool_Handler* rag_tool_handler;
 
 
 	/**

@@ -60,14 +60,16 @@ public:
 	/**
 	 * @brief Catalog upsert - create or update a catalog entry
 	 *
+	 * @param schema Schema name (e.g., "sales", "production") - empty for all schemas
 	 * @param kind The kind of entry ("table", "view", "domain", "metric", "note")
-	 * @param key Unique key (e.g., "db.sales.orders")
+	 * @param key Unique key (e.g., "orders", "customer_summary")
 	 * @param document JSON document with summary/details
 	 * @param tags Optional comma-separated tags
 	 * @param links Optional comma-separated links to related keys
 	 * @return 0 on success, -1 on error
 	 */
 	int upsert(
+		const std::string& schema,
 		const std::string& kind,
 		const std::string& key,
 		const std::string& document,
@@ -76,14 +78,16 @@ public:
 	);
 
 	/**
-	 * @brief Get a catalog entry by kind and key
+	 * @brief Get a catalog entry by schema, kind and key
 	 *
+	 * @param schema Schema name (empty for all schemas)
 	 * @param kind The kind of entry
 	 * @param key The unique key
 	 * @param document Output: JSON document
 	 * @return 0 on success, -1 if not found
 	 */
 	int get(
+		const std::string& schema,
 		const std::string& kind,
 		const std::string& key,
 		std::string& document
@@ -92,6 +96,7 @@ public:
 	/**
 	 * @brief Search catalog entries
 	 *
+	 * @param schema Schema name to filter (empty for all schemas)
 	 * @param query Search query (searches in key, document, tags)
 	 * @param kind Optional filter by kind
 	 * @param tags Optional filter by tags (comma-separated)
@@ -100,6 +105,7 @@ public:
 	 * @return JSON array of matching entries
 	 */
 	std::string search(
+		const std::string& schema,
 		const std::string& query,
 		const std::string& kind = "",
 		const std::string& tags = "",
@@ -110,12 +116,14 @@ public:
 	/**
 	 * @brief List catalog entries with pagination
 	 *
+	 * @param schema Schema name to filter (empty for all schemas)
 	 * @param kind Optional filter by kind
 	 * @param limit Max results per page (default 50)
 	 * @param offset Pagination offset (default 0)
 	 * @return JSON array of entries with total count
 	 */
 	std::string list(
+		const std::string& schema = "",
 		const std::string& kind = "",
 		int limit = 50,
 		int offset = 0
@@ -140,11 +148,13 @@ public:
 	/**
 	 * @brief Delete a catalog entry
 	 *
+	 * @param schema Schema name (empty for all schemas)
 	 * @param kind The kind of entry
 	 * @param key The unique key
 	 * @return 0 on success, -1 if not found
 	 */
 	int remove(
+		const std::string& schema,
 		const std::string& kind,
 		const std::string& key
 	);

@@ -1,5 +1,8 @@
 #include "proxysql.h"
+#include "sqlite3.h"
 #include "cpp.h"
+
+
 //#include "SpookyV2.h"
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -260,7 +263,7 @@ int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 }
 
 void stmt_deleter_t::operator()(sqlite3_stmt* x) const {
-	proxy_sqlite3_finalize(x);
+	(*proxy_sqlite3_finalize)(x);
 }
 
 std::pair<int,stmt_unique_ptr> SQLite3DB::prepare_v2(const char* query) {
@@ -1076,12 +1079,20 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_bind_int64 = NULL;
 	proxy_sqlite3_bind_null = NULL;
 	proxy_sqlite3_bind_text = NULL;
+	proxy_sqlite3_bind_blob = NULL;
 	proxy_sqlite3_column_name = NULL;
 	proxy_sqlite3_column_text = NULL;
 	proxy_sqlite3_column_bytes = NULL;
 	proxy_sqlite3_column_type = NULL;
 	proxy_sqlite3_column_count = NULL;
 	proxy_sqlite3_column_int = NULL;
+	proxy_sqlite3_column_int64 = NULL;
+	proxy_sqlite3_column_double = NULL;
+	proxy_sqlite3_last_insert_rowid = NULL;
+	proxy_sqlite3_errstr = NULL;
+	proxy_sqlite3_db_handle = NULL;
+	proxy_sqlite3_enable_load_extension = NULL;
+	proxy_sqlite3_auto_extension = NULL;
 	proxy_sqlite3_errmsg = NULL;
 	proxy_sqlite3_finalize = NULL;
 	proxy_sqlite3_reset = NULL;
@@ -1156,12 +1167,20 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_bind_int64 = sqlite3_bind_int64;
 		proxy_sqlite3_bind_null = sqlite3_bind_null;
 		proxy_sqlite3_bind_text = sqlite3_bind_text;
+		proxy_sqlite3_bind_blob = sqlite3_bind_blob;
 		proxy_sqlite3_column_name = sqlite3_column_name;
 		proxy_sqlite3_column_text = sqlite3_column_text;
 		proxy_sqlite3_column_bytes = sqlite3_column_bytes;
-		proxy_sqlite3_column_type = sqlite3_column_type;
+		proxy_sqlite3_column_type = sqlite3_column_type; /* signature matches */
 		proxy_sqlite3_column_count = sqlite3_column_count;
 		proxy_sqlite3_column_int = sqlite3_column_int;
+	proxy_sqlite3_column_int64 = sqlite3_column_int64;
+	proxy_sqlite3_column_double = sqlite3_column_double;
+	proxy_sqlite3_last_insert_rowid = sqlite3_last_insert_rowid;
+	proxy_sqlite3_errstr = sqlite3_errstr;
+	proxy_sqlite3_db_handle = sqlite3_db_handle;
+	proxy_sqlite3_enable_load_extension = sqlite3_enable_load_extension;
+	proxy_sqlite3_auto_extension = sqlite3_auto_extension;
 		proxy_sqlite3_errmsg = sqlite3_errmsg;
 		proxy_sqlite3_finalize = sqlite3_finalize;
 		proxy_sqlite3_reset = sqlite3_reset;
@@ -1186,12 +1205,20 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_bind_int64);
 	assert(proxy_sqlite3_bind_null);
 	assert(proxy_sqlite3_bind_text);
+	assert(proxy_sqlite3_bind_blob);
 	assert(proxy_sqlite3_column_name);
 	assert(proxy_sqlite3_column_text);
 	assert(proxy_sqlite3_column_bytes);
 	assert(proxy_sqlite3_column_type);
 	assert(proxy_sqlite3_column_count);
 	assert(proxy_sqlite3_column_int);
+	assert(proxy_sqlite3_column_int64);
+	assert(proxy_sqlite3_column_double);
+	assert(proxy_sqlite3_last_insert_rowid);
+	assert(proxy_sqlite3_errstr);
+	assert(proxy_sqlite3_db_handle);
+	assert(proxy_sqlite3_enable_load_extension);
+	assert(proxy_sqlite3_auto_extension);
 	assert(proxy_sqlite3_errmsg);
 	assert(proxy_sqlite3_finalize);
 	assert(proxy_sqlite3_reset);

@@ -30,8 +30,6 @@ static const char* mcp_thread_variables_names[] = {
 	"mysql_user",
 	"mysql_password",
 	"mysql_schema",
-	"catalog_path",
-	"fts_path",
 	NULL
 };
 
@@ -57,8 +55,6 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_mysql_user = strdup("");
 	variables.mcp_mysql_password = strdup("");
 	variables.mcp_mysql_schema = strdup("");
-	variables.mcp_catalog_path = strdup("mcp_catalog.db");
-	variables.mcp_fts_path = strdup("mcp_fts.db");
 
 	status_variables.total_requests = 0;
 	status_variables.failed_requests = 0;
@@ -73,6 +69,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	admin_tool_handler = NULL;
 	cache_tool_handler = NULL;
 	observe_tool_handler = NULL;
+	rag_tool_handler = NULL;
 }
 
 MCP_Threads_Handler::~MCP_Threads_Handler() {
@@ -97,10 +94,6 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		free(variables.mcp_mysql_password);
 	if (variables.mcp_mysql_schema)
 		free(variables.mcp_mysql_schema);
-	if (variables.mcp_catalog_path)
-		free(variables.mcp_catalog_path);
-	if (variables.mcp_fts_path)
-		free(variables.mcp_fts_path);
 
 	if (mcp_server) {
 		delete mcp_server;
@@ -132,6 +125,10 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 	if (observe_tool_handler) {
 		delete observe_tool_handler;
 		observe_tool_handler = NULL;
+	}
+	if (rag_tool_handler) {
+		delete rag_tool_handler;
+		rag_tool_handler = NULL;
 	}
 
 	// Destroy the rwlock
@@ -224,14 +221,6 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 	}
 	if (!strcmp(name, "mysql_schema")) {
 		sprintf(val, "%s", variables.mcp_mysql_schema ? variables.mcp_mysql_schema : "");
-		return 0;
-	}
-	if (!strcmp(name, "catalog_path")) {
-		sprintf(val, "%s", variables.mcp_catalog_path ? variables.mcp_catalog_path : "");
-		return 0;
-	}
-	if (!strcmp(name, "fts_path")) {
-		sprintf(val, "%s", variables.mcp_fts_path ? variables.mcp_fts_path : "");
 		return 0;
 	}
 
@@ -339,37 +328,6 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		if (variables.mcp_mysql_schema)
 			free(variables.mcp_mysql_schema);
 		variables.mcp_mysql_schema = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "catalog_path")) {
-		if (variables.mcp_catalog_path)
-			free(variables.mcp_catalog_path);
-		variables.mcp_catalog_path = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "fts_path")) {
-		// Save old value to restore on failure
-		char* old_fts_path = variables.mcp_fts_path;
-		char* new_fts_path = strdup(value);
-		if (!new_fts_path) {
-			proxy_error("Failed to allocate memory for fts_path\n");
-			return -1;
-		}
-
-		// Apply at runtime by resetting FTS in the existing handler
-		if (mysql_tool_handler) {
-			proxy_info("MCP: Applying new fts_path at runtime: %s\n", value);
-			if (!mysql_tool_handler->reset_fts_path(value)) {
-				proxy_error("Failed to reset FTS path at runtime\n");
-				free(new_fts_path);
-				variables.mcp_fts_path = old_fts_path;
-				return -1;
-			}
-		}
-
-		// Success: commit the new path and free the old one
-		variables.mcp_fts_path = new_fts_path;
-		if (old_fts_path) free(old_fts_path);
 		return 0;
 	}
 

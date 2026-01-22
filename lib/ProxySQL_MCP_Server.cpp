@@ -13,6 +13,7 @@ using json = nlohmann::json;
 #include "Cache_Tool_Handler.h"
 #include "Observe_Tool_Handler.h"
 #include "AI_Tool_Handler.h"
+#include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
 #include "proxysql_utils.h"
 
@@ -87,34 +88,26 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->config_tool_handler = NULL;
 	}
 
-	// 2. Query Tool Handler (wraps MySQL_Tool_Handler for backward compatibility)
-	if (!handler->mysql_tool_handler) {
-		proxy_info("Initializing MySQL Tool Handler...\n");
-		handler->mysql_tool_handler = new MySQL_Tool_Handler(
-			handler->variables.mcp_mysql_hosts ? handler->variables.mcp_mysql_hosts : "",
-			handler->variables.mcp_mysql_ports ? handler->variables.mcp_mysql_ports : "",
-			handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
-			handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
-			handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
-			handler->variables.mcp_catalog_path ? handler->variables.mcp_catalog_path : "",
-			handler->variables.mcp_fts_path ? handler->variables.mcp_fts_path : ""
-		);
+	// 2. Query Tool Handler (uses Discovery_Schema directly for two-phase discovery)
+	proxy_info("Initializing Query Tool Handler...\n");
 
-		if (handler->mysql_tool_handler->init() != 0) {
-			proxy_error("Failed to initialize MySQL Tool Handler\n");
-			delete handler->mysql_tool_handler;
-			handler->mysql_tool_handler = NULL;
-		} else {
-			proxy_info("MySQL Tool Handler initialized successfully\n");
-		}
-	}
+	// Hardcode catalog path to datadir/mcp_catalog.db for stability
+	std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
 
-	// Create Query_Tool_Handler that wraps the MySQL_Tool_Handler
-	if (handler->mysql_tool_handler) {
-		handler->query_tool_handler = new Query_Tool_Handler(handler->mysql_tool_handler);
-		if (handler->query_tool_handler->init() == 0) {
-			proxy_info("Query Tool Handler initialized\n");
-		}
+	handler->query_tool_handler = new Query_Tool_Handler(
+		handler->variables.mcp_mysql_hosts ? handler->variables.mcp_mysql_hosts : "",
+		handler->variables.mcp_mysql_ports ? handler->variables.mcp_mysql_ports : "",
+		handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
+		handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
+		handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
+		catalog_path.c_str()
+	);
+	if (handler->query_tool_handler->init() == 0) {
+		proxy_info("Query Tool Handler initialized successfully\n");
+	} else {
+		proxy_error("Failed to initialize Query Tool Handler\n");
+		delete handler->query_tool_handler;
+		handler->query_tool_handler = NULL;
 	}
 
 	// 3. Admin Tool Handler
@@ -186,8 +179,36 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		_endpoints.push_back({"/mcp/ai", std::move(ai_resource)});
 	}
 
-	proxy_info("Registered %d MCP endpoints with dedicated tool handlers: /mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache%s/mcp/ai\n",
-	          handler->ai_tool_handler ? 6 : 5, handler->ai_tool_handler ? ", " : "");
+	// 7. RAG endpoint (for Retrieval-Augmented Generation)
+	extern AI_Features_Manager *GloAI;
+	if (GloAI) {
+		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI);
+		if (handler->rag_tool_handler->init() == 0) {
+			std::unique_ptr<httpserver::http_resource> rag_resource =
+				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->rag_tool_handler, "rag"));
+			ws->register_resource("/mcp/rag", rag_resource.get(), true);
+			_endpoints.push_back({"/mcp/rag", std::move(rag_resource)});
+			proxy_info("RAG Tool Handler initialized\n");
+		} else {
+			proxy_error("Failed to initialize RAG Tool Handler\n");
+			delete handler->rag_tool_handler;
+			handler->rag_tool_handler = NULL;
+		}
+	} else {
+		proxy_warning("AI_Features_Manager not available, RAG Tool Handler not initialized\n");
+		handler->rag_tool_handler = NULL;
+	}
+
+	int endpoint_count = (handler->ai_tool_handler ? 1 : 0) + (handler->rag_tool_handler ? 1 : 0) + 5;
+	std::string endpoints_list = "/mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache";
+	if (handler->ai_tool_handler) {
+		endpoints_list += ", /mcp/ai";
+	}
+	if (handler->rag_tool_handler) {
+		endpoints_list += ", /mcp/rag";
+	}
+	proxy_info("Registered %d MCP endpoints with dedicated tool handlers: %s\n",
+	          endpoint_count, endpoints_list.c_str());
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
@@ -195,13 +216,6 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 
 	// Clean up all tool handlers stored in the handler object
 	if (handler) {
-		// Clean up MySQL Tool Handler
-		if (handler->mysql_tool_handler) {
-			proxy_info("Cleaning up MySQL Tool Handler...\n");
-			delete handler->mysql_tool_handler;
-			handler->mysql_tool_handler = NULL;
-		}
-
 		// Clean up Config Tool Handler
 		if (handler->config_tool_handler) {
 			proxy_info("Cleaning up Config Tool Handler...\n");
@@ -242,6 +256,13 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 			proxy_info("Cleaning up AI Tool Handler...\n");
 			delete handler->ai_tool_handler;
 			handler->ai_tool_handler = NULL;
+		}
+
+		// Clean up RAG Tool Handler
+		if (handler->rag_tool_handler) {
+			proxy_info("Cleaning up RAG Tool Handler...\n");
+			delete handler->rag_tool_handler;
+			handler->rag_tool_handler = NULL;
 		}
 	}
 }
