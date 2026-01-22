@@ -271,4 +271,4 @@ present in both hostgroups or not:
 | **Permitted Values** | **Type**    | Boolean                             |
 |                      | **Default** | true                                |
 
-[1]: https://proxysql.com/documentation/postgresql-backend-monitoring/
+[1]: https://proxysql.com/postgresql-backend-monitoring/

@@ -244,11 +244,11 @@ runtime, the new values for the sync module are `saved to disk`.
 
 Prior to version `v2.5.2` module synchronization could be disabled via variables:
 
-- `admin-checksum_${module_name}`
-- `admin-cluster_${module_name}_diffs_before_sync`
+- `admin-checksum_$\{module_name\}`
+- `admin-cluster_$\{module_name\}_diffs_before_sync`
 
-Since version `v2.5.2`, variables `admin-checksum_${module_name}` got **deprecated**, the way to disable
-module synchronization is now via `admin-cluster_${module_name}_diffs_before_sync` variable.
+Since version `v2.5.2`, variables `admin-checksum_$\{module_name\}` got **deprecated**, the way to disable
+module synchronization is now via `admin-cluster_$\{module_name\}_diffs_before_sync` variable.
 
 ### Configuration Fetching Strategies
 
@@ -327,7 +327,7 @@ more details on how to disable modules sync check section [disabling modules syn
 
 The motivation for this deprecation is that the ability to disable checksum computation supposed a challenge
 for implementing new cluster resiliency features, while its main feature was duplicated by
-`admin-cluster_${module_name}_diffs_before_sync` variables.
+`admin-cluster_$\{module_name\}_diffs_before_sync` variables.
 
 ## Configuration tables
 
@@ -379,18 +379,18 @@ configure `proxysql_servers` from config file:
 ```
 proxysql_servers =
 (
-    {
+    \{
         hostname="172.16.0.101"
         port=6032
         weight=0
         comment="proxysql1"
-    },
-    {
+    \},
+    \{
         hostname="172.16.0.102"
         port=6032
         weight=0
         comment="proxysql2"
-    }
+    \}
 )
 ```
 
@@ -447,7 +447,7 @@ admin> SELECT * FROM runtime_checksums_values;
 - `LOAD MYSQL VARIABLES TO RUNTIME`
 
 All module commands promoting configuration to runtime generate a new checksum for the module. In versions
-older than `v2.5.2` this behavior was conditional to the `admin-checksum_${module_name}`.
+older than `v2.5.2` this behavior was conditional to the `admin-checksum_$\{module_name\}`.
 
 <!-- -->
 
@@ -704,36 +704,36 @@ cluster_sync_interfaces=false
 // - Admin interface.
 // - Cluster monitoring credentials.
 admin_variables=
-{
+\{
 	admin_credentials="radmin:radmin;cluster_user:cluster_pass"
 	mysql_ifaces="0.0.0.0:26001"
 	cluster_username="cluster_user"
 	cluster_password="cluster_pass"
-}
+\}
 
 mysql_variables=
-{
+\{
 	// Setup the local mysql-interface:
 	interfaces="0.0.0.0:36001"
 	// Different from default to experience 'version 1' warning
 	monitor_ping_timeout=999
-}
+\}
 
 // Setup the Core nodes of our cluster
 proxysql_servers =
 (
-	{
+	\{
 		hostname="127.0.0.1"
 		port=26001
 		weight=0
 		comment="proxysql01"
-	},
-	{
+	\},
+	\{
 		hostname="127.0.0.1"
 		port=26002
 		weight=0
 		comment="proxysql02"
-	}
+	\}
 )
 ```
 
@@ -745,17 +745,17 @@ should remain with the same values as in the previous template:
 ...
 
 admin_variables=
-{
+\{
 ...
 	mysql_ifaces="0.0.0.0:26002"
 	monitor_ping_timeout=1000 // Default value
 ...
-}
+\}
 
 mysql_variables=
-{
+\{
 	interfaces="0.0.0.0:36002"
-}
+\}
 
 ...
 ```
@@ -904,34 +904,34 @@ file will be just:
 cluster_sync_interfaces=false
 
 admin_variables=
-{
+\{
 	admin_credentials="radmin:radmin;cluster_user:cluster_pass"
 	mysql_ifaces="0.0.0.0:26001"
 	cluster_username="cluster_user"
 	cluster_password="cluster_pass"
-}
+\}
 
 mysql_variables=
-{
+\{
 	// Setup the local mysql-interface:
 	interfaces="0.0.0.0:36003"
-}
+\}
 
 // Setup the Core nodes of our cluster
 proxysql_servers =
 (
-	{
+	\{
 		hostname="127.0.0.1"
 		port=26001
 		weight=0
 		comment="proxysql01"
-	},
-	{
+	\},
+	\{
 		hostname="127.0.0.1"
 		port=26002
 		weight=0
 		comment="proxysql02"
-	}
+	\}
 )
 ```
 

@@ -161,11 +161,11 @@ These cases can be handled by the following commands:
 For a more detailed explanation on how to use the previously described ProxySQL features, for gracefully
 shutting down one running instance, please refer to [this blog entry][8].
 
-[1]: https://proxysql.com/documentation/configuring-proxysql
-[2]: https://proxysql.com/documentation/coredumper-support
-[3]: https://proxysql.com/documentation/query-cache
-[4]: https://proxysql.com/documentation/error-log
-[5]: https://proxysql.com/documentation/client-error-limit
+[1]: https://proxysql.com/configuring-proxysql
+[2]: https://proxysql.com/coredumper-support
+[3]: https://proxysql.com/query-cache
+[4]: https://proxysql.com/error-log
+[5]: https://proxysql.com/client-error-limit
 [6]: #operation-modes
 [7]: #graceful-shutdowns
 [8]: https://proxysql.com/blog/how-to-run-multiple-proxysql-instances/

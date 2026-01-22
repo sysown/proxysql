@@ -436,12 +436,12 @@ behaviour of Admin.
 These details are important because to apply changes in `admin-hash_passwords` you need to run
 `LOAD ADMIN VARIABLES TO RUNTIME` and **not** `LOAD MYSQL VARIABLES TO RUNTIME`
 
-[1]: /documentation/global-variables/mysql-variables/#mysql-have_ssl
-[2]: /documentation/global-variables/mysql-variables/#mysql-default_authentication_plugin
+[1]: /global-variables/mysql-variables/#mysql-have_ssl
+[2]: /global-variables/mysql-variables/#mysql-default_authentication_plugin
 [3]: https://dev.mysql.com/doc/refman/8.0/en/grant-tables.html
-[4]: https://proxysql.com/documentation/authentication-methods/#login-with-different-mysql-clients
+[4]: https://proxysql.com/authentication-methods/#login-with-different-mysql-clients
 [5]: #import-caching_sha2_passwords
 [5]: #dual-passwords
 [6]: #how-to-input-passwords
 [7]: https://dev.mysql.com/doc/refman/8.4/en/password-management.html#dual-passwords
-[8]: https://proxysql.com/documentation/prometheus-exporter/
+[8]: https://proxysql.com/prometheus-exporter/

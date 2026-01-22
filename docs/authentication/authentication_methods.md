@@ -182,9 +182,9 @@ For more information, please refer to the specific documentation for each of the
 - [SPIFFE][14]
 - [LDAP][15]
 
-[1]: /documentation/global-variables/mysql-variables/#mysql-default_authentication_plugin
-[2]: /documentation/global-variables/admin-variables/#admin-hash_passwords-deprecated
-[3]: /documentation/global-variables/mysql-variables/#mysql-have_ssl
+[1]: /global-variables/mysql-variables/#mysql-default_authentication_plugin
+[2]: /global-variables/admin-variables/#admin-hash_passwords-deprecated
+[3]: /global-variables/mysql-variables/#mysql-have_ssl
 [4]: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase.html/#sect_protocol_connection_phase_auth_method_mismatch
 [5]: https://github.com/sysown/proxysql/issues/1762
 [6]: https://dev.mysql.com/doc/refman/8.0/en/cleartext-pluggable-authentication.html
@@ -195,7 +195,7 @@ For more information, please refer to the specific documentation for each of the
 [11]: #mysql-authentication-methods-version---differences
 [12]: #limitations
 [13]: https://jira.mariadb.org/browse/CONC-312
-[14]: /documentation/spiffe-support
+[14]: /spiffe-support
 [15]: documentation/ldap-support
-[16]: /documentation/main-runtime/#mysql_users
+[16]: /main-runtime/#mysql_users
 [17]: #extra-authentication-methods

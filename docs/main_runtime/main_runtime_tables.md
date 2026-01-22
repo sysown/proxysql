@@ -96,7 +96,7 @@ In the following sections you will find a detailed description of all the config
 | [global_variables](#global_variables)                                       | All variables                                                 |
 | [scheduler](#scheduler)                                                     | Tasks that the Scheduler can executes                         |
 | [mysql_collations](#mysql_collations)                                       | Known MySQL charsets and collations                           |
-| [proxysql_servers](/documentation/proxysql-cluster/#table_proxysql_servers) | List of core nodes in ProxySQL Cluster                        |
+| [proxysql_servers](/proxysql-cluster/#table_proxysql_servers) | List of core nodes in ProxySQL Cluster                        |
 | [restapi_routes](#restapi_routes)                                           | RESTAPI endpoints                                             |
 | [pgsql_users](#pgsql_users)                                                 | Frontend and Backend PostgreSQL Users                         |
 | [pgsql_servers](#pgsql_servers)                                             | Backend PostgreSQL Servers                                    |
@@ -257,12 +257,12 @@ be used. If the above lookups do not return any result, then the default SSL par
 
 <!-- remark-ignore-start -->
 
-- [mysql-ssl_p2s_ca](/documentation/global-variables/mysql-variables/#mysql-ssl_p2s_ca)
-- [mysql-ssl_p2s_capath](/documentation/global-variables/mysql-variables/#mysql-ssl_p2s_capath)
-- [mysql-ssl_p2s_cert](/documentation/global-variables/mysql-variables/#mysql-ssl_p2s_cert)
-- [mysql-ssl_p2s_key](/documentation/global-variables/mysql-variables/#mysql-ssl_p2s_key)
-- [mysql-ssl_p2s_crl](/documentation/global-variables/mysql-variables/#mysql-ssl_p2s_crl)
-- [mysql-ssl_p2s_crlpath](/documentation/global-variables/mysql-variables/#mysql-ssl_p2s_crlpath)
+- [mysql-ssl_p2s_ca](/global-variables/mysql-variables/#mysql-ssl_p2s_ca)
+- [mysql-ssl_p2s_capath](/global-variables/mysql-variables/#mysql-ssl_p2s_capath)
+- [mysql-ssl_p2s_cert](/global-variables/mysql-variables/#mysql-ssl_p2s_cert)
+- [mysql-ssl_p2s_key](/global-variables/mysql-variables/#mysql-ssl_p2s_key)
+- [mysql-ssl_p2s_crl](/global-variables/mysql-variables/#mysql-ssl_p2s_crl)
+- [mysql-ssl_p2s_crlpath](/global-variables/mysql-variables/#mysql-ssl_p2s_crlpath)
 
 <!-- remark-ignore-end -->
 
@@ -1520,8 +1520,8 @@ All the configuration tables listed above have a matching `runtime_` table:
 - runtime_mysql_servers : runtime version of [mysql_servers](#mysql_servers)
 - runtime_mysql_users : runtime version of [mysql_users](#mysql_users)
 - runtime_proxysql_servers : runtime version of
-  [proxysql_servers](/documentation/proxysql-cluster#table_proxysql_servers)
-- runtime_scheduler : runtime version of [scheduler](/documentation/main-runtime#scheduler)
+  [proxysql_servers](/proxysql-cluster#table_proxysql_servers)
+- runtime_scheduler : runtime version of [scheduler](/main-runtime#scheduler)
 - runtime_pgsql_replication_hostgroups: runtime version of
   [pgsql_replication_hostgroups](#pgsql_replication_hostgroups)
 - runtime_pgsql_hostgroup_attributes:\*\* runtime version of
@@ -1650,23 +1650,23 @@ in-memory. Whenever ProxySQL is restarted, the in-memory "main" database will be
 database. Note that all the content of the in-memory tables (main database) are _lost_ when ProxySQL is
 restarted if their content wasn't saved on disk database.
 
-[1]: /documentation/global-variables/admin-variables/#admin-admin_credentials
-[2]: https://proxysql.com/documentation/global-variables/mysql-monitor-variables/#mysql-monitor_writer_is_also_reader
-[3]: https://proxysql.com/documentation/global-variables/mysql-monitor-variables/
-[4]: /documentation/global-variables/mysql-variables/#mysql-free_connections_pct
-[5]: /documentation/global-variables/mysql-variables/#mysql-init_connect
-[6]: /documentation/global-variables/mysql-variables/#mysql-multiplexing
-[7]: /documentation/global-variables/mysql-variables/#mysql-connection_warming
-[8]: /documentation/global-variables/mysql-variables/#mysql-throttle_connections_per_sec_to_hostgroup
+[1]: /global-variables/admin-variables/#admin-admin_credentials
+[2]: https://proxysql.com/global-variables/mysql-monitor-variables/#mysql-monitor_writer_is_also_reader
+[3]: https://proxysql.com/global-variables/mysql-monitor-variables/
+[4]: /global-variables/mysql-variables/#mysql-free_connections_pct
+[5]: /global-variables/mysql-variables/#mysql-init_connect
+[6]: /global-variables/mysql-variables/#mysql-multiplexing
+[7]: /global-variables/mysql-variables/#mysql-connection_warming
+[8]: /global-variables/mysql-variables/#mysql-throttle_connections_per_sec_to_hostgroup
 [9]: documentation/global-variables/mysql-variables/#mysql-handle_warnings
-[10]: /documentation/global-variables/mysql-monitor-variables/#mysql-monitor_slave_lag_when_null
+[10]: /global-variables/mysql-monitor-variables/#mysql-monitor_slave_lag_when_null
 [11]: #mysql_servers
-[12]: https://proxysql.com/documentation/galera-configuration/
-[13]: /documentation/Password-management
-[14]: https://proxysql.com/documentation/SSL-Support/
-[15]: https://proxysql.com/documentation/global-variables/mysql-variables/#mysql-query_processor_regex
+[12]: https://proxysql.com/galera-configuration/
+[13]: /Password-management
+[14]: https://proxysql.com/SSL-Support/
+[15]: https://proxysql.com/global-variables/mysql-variables/#mysql-query_processor_regex
 [16]: https://github.com/google/re2/blob/master/re2/re2.h#L378
-[17]: /documentation/mirroring
-[18]: /documentation/Multiplexing#ad-hoc-enabledisable-of-multiplexing
-[19]: /documentation/Global-variables
-[20]: /documentation/Scheduler
+[17]: /mirroring
+[18]: /Multiplexing#ad-hoc-enabledisable-of-multiplexing
+[19]: /Global-variables
+[20]: /Scheduler

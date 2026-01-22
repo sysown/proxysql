@@ -166,9 +166,9 @@ Interface][2].
 If you are new to `ProxySQL`, a good starting points for getting familiar with several core concepts that are
 shared for `MySQL` and `PostgreSQL` servers:
 
-- Multi-Layer Configuration System: [https://proxysql.com/documentation/configuring-proxysql/][1]
-- Admin CLI Interface: [https://proxysql.com/documentation/the-admin-schemas/][2]
-- Backend Server Configuration: [https://proxysql.com/documentation/backend-server-configuration/][3]
+- Multi-Layer Configuration System: [https://proxysql.com/configuring-proxysql/][1]
+- Admin CLI Interface: [https://proxysql.com/the-admin-schemas/][2]
+- Backend Server Configuration: [https://proxysql.com/backend-server-configuration/][3]
 
 Once familiar with these basic concepts, let's configure `ProxySQL` with a minimal setup making use of it's
 monitoring capabilities for `PostgreSQL`.
@@ -182,7 +182,7 @@ datadir="$PATH"
 # Administration variables
 admin_variables=
 {
-    # Credentials to logging to `ProxySQL` Admin CLI Interface - https://proxysql.com/documentation/the-admin-schemas/.
+    # Credentials to logging to `ProxySQL` Admin CLI Interface - https://proxysql.com/the-admin-schemas/.
     # IMPORTANT: Remember that default 'admin:admin' credentials can only be used from localhost. These are
     # sample defaults and should be changed for your configuration.
 	admin_credentials="admin:admin;radmin:radmin"
@@ -226,7 +226,7 @@ pgsql_variables=
 	monitor_read_only_interval=1000
     # Timeout used for Monitor read_only checks
 	monitor_read_only_timeout=800
-    # Create stats about the received commands - https://proxysql.com/documentation/stats-statistics/#stats_mysql_commands_counters
+    # Create stats about the received commands - https://proxysql.com/stats-statistics/#stats_mysql_commands_counters
 	commands_stats=true
 }
 ```
@@ -840,19 +840,19 @@ When thinking in the responsiveness of these operations, we must take into consi
 imposing a medium delay as big as the interval percentage we are specifying for the processing window. Which
 most of the time will be negligible over the interval itself.
 
-[1]: https://proxysql.com/documentation/configuring-proxysql/
-[2]: https://proxysql.com/documentation/the-admin-schemas/
-[3]: https://proxysql.com/documentation/backend-server-configuration/
-[4]: https://proxysql.com/documentation/configuring-proxysql/#lifecycle
-[5]: https://proxysql.com/documentation/configuring-proxysql/#initialstartup
-[6]: https://proxysql.com/documentation/configuring-proxysql/#reloadstartup
-[7]: https://proxysql.com/documentation/configuring-proxysql/#lifecycle
-[8]: https://proxysql.com/documentation/configuration-file/#configuration-file-vs-database-file
-[9]: https://proxysql.com/documentation/configuration-file/
-[10]: https://proxysql.com/documentation/proxysql-configuration-postgresql/
+[1]: https://proxysql.com/configuring-proxysql/
+[2]: https://proxysql.com/the-admin-schemas/
+[3]: https://proxysql.com/backend-server-configuration/
+[4]: https://proxysql.com/configuring-proxysql/#lifecycle
+[5]: https://proxysql.com/configuring-proxysql/#initialstartup
+[6]: https://proxysql.com/configuring-proxysql/#reloadstartup
+[7]: https://proxysql.com/configuring-proxysql/#lifecycle
+[8]: https://proxysql.com/configuration-file/#configuration-file-vs-database-file
+[9]: https://proxysql.com/configuration-file/
+[10]: https://proxysql.com/proxysql-configuration-postgresql/
 [11]: #user-guide
-[12]: https://proxysql.com/documentation/startup-options/
+[12]: https://proxysql.com/startup-options/
 [13]: https://github.com/ProxySQL/non-prod-demo-infras/postgres-primary-replica
-[14]: https://proxysql.com/documentation/global-variables/pgsql-monitor-variables/
-[15]: https://proxysql.com/documentation/global-variables/pgsql-monitor-variables/#pgsql-monitor_writer_is_also_reader
+[14]: https://proxysql.com/global-variables/pgsql-monitor-variables/
+[15]: https://proxysql.com/global-variables/pgsql-monitor-variables/#pgsql-monitor_writer_is_also_reader
 [16]: #feature-overview

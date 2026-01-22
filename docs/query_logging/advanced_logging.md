@@ -142,13 +142,13 @@ From `Promethus` exporter:
 
 | Metric Name                                          | Tags                 | Description                                                            |
 | ---------------------------------------------------- | -------------------- | ---------------------------------------------------------------------- |
-| `proxysql_mysql_logger_copy_total`                   | target=\{memory/disk\} | Number of times events were copied to the in-memory/on-disk databases. |
+| `proxysql_mysql_logger_copy_total`                   | `target={memory/disk}` | Number of times events were copied to the in-memory/on-disk databases. |
 | `proxysql_mysql_logger_get_all_events_calls_total`   |                      | Number of times the 'get_all_events' method was called.                |
 | `proxysql_mysql_logger_get_all_events_events_total`  |                      | Number of events retrieved by the `get_all_events` method.             |
 | `proxysql_mysql_logger_get_all_events_seconds_total` |                      | Total time spent in `get_all_events` method.                           |
-| `proxysql_mysql_logger_copy_seconds_total`           | target=\{memory/disk\} | Total time spent copying events to the in-memory/on-disk databases.    |
-| `proxysql_mysql_logger_events_copied_total`          | target=\{memory/disk\} | Total number of events copied to the in-memory/on-disk databases.      |
-| `proxysql_mysql_logger_circular_buffer_events_total` | type=\{added/dropped\} | The total number of events added/dropped to/from the circular buffer.  |
+| `proxysql_mysql_logger_copy_seconds_total`           | `target={memory/disk}` | Total time spent copying events to the in-memory/on-disk databases.    |
+| `proxysql_mysql_logger_events_copied_total`          | `target={memory/disk}` | Total number of events copied to the in-memory/on-disk databases.      |
+| `proxysql_mysql_logger_circular_buffer_events_total` | `type={added/dropped}` | The total number of events added/dropped to/from the circular buffer.  |
 | `proxysql_mysql_logger_circular_buffer_events`       |                      | Number of events currently present in the circular buffer.             |
 
 ---

@@ -127,4 +127,4 @@ psql -h 127.0.0.1 -p6133 -U appuser -d mydatabase
   environment.
 - **Implement high availability:** Use ProxySQL clustering to avoid single points of failure.
 
-[1]: https://proxysql.com/documentation/proxysql-configuration/
+[1]: https://proxysql.com/proxysql-configuration/

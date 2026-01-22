@@ -25,7 +25,7 @@ const config: Config = {
   organizationName: 'sysown', // Usually your GitHub org/user name.
   projectName: 'proxysql', // Usually your repo name.
 
-  onBrokenLinks: 'throw',
+  onBrokenLinks: 'warn',
 
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
@@ -109,7 +109,7 @@ const config: Config = {
             },
             {
               label: 'Reference',
-              to: '/reference/variables',
+              to: '/global_variables/quick-reference',
             },
           ],
         },

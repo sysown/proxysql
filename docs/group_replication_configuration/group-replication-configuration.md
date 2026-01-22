@@ -487,14 +487,14 @@ SELECT
 DELIMITER ;
 ```
 
-[1]: https://proxysql.com/documentation/global-variables/mysql-monitor-variables/#mysql-monitor_groupreplication_max_transactions_behind_count
-[2]: https://proxysql.com/documentation/global-variables/mysql-monitor-variables/#mysql-monitor_groupreplication_max_transactions_behind_for_read_only
+[1]: https://proxysql.com/global-variables/mysql-monitor-variables/#mysql-monitor_groupreplication_max_transactions_behind_count
+[2]: https://proxysql.com/global-variables/mysql-monitor-variables/#mysql-monitor_groupreplication_max_transactions_behind_for_read_only
 [3]: https://dev.mysql.com/doc/refman/8.0/en/performance-schema-replication-group-member-stats-table.html
-[4]: https://proxysql.com/documentation/global-variables/mysql-variables/#mysql-connect_retries_on_failure
-[5]: https://proxysql.com/documentation/global-variables/mysql-variables/#mysql-shun_on_failures
-[6]: https://proxysql.com/documentation/main-runtime/#mysql_query_rules
-[7]: https://proxysql.com/documentation/main-runtime/#mysql_hostgroup_attributes
-[8]: https://proxysql.com/documentation/main-runtime/#mysql_servers
+[4]: https://proxysql.com/global-variables/mysql-variables/#mysql-connect_retries_on_failure
+[5]: https://proxysql.com/global-variables/mysql-variables/#mysql-shun_on_failures
+[6]: https://proxysql.com/main-runtime/#mysql_query_rules
+[7]: https://proxysql.com/main-runtime/#mysql_hostgroup_attributes
+[8]: https://proxysql.com/main-runtime/#mysql_servers
 [9]: #servers-placement
 [10]: #max-transactions-behind
 [11]: #table-mysql_group_replication_hostgroups

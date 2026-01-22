@@ -15,10 +15,10 @@ version will fail. **IMPORTANT NOTES:**
 ## Configuration:
 
 This section uses the SSL
-[global_variables](https://proxysql.com/documentation/global-variables/mysql-variables/) to exemplify how to
+[global_variables](https://proxysql.com/global-variables/mysql-variables/) to exemplify how to
 configure SSL connections for backends. Since ProxySQL `v2.6.0` there is also the possibility of configuring
 this in a per MySQL backend basis, for more information about this please refer to [mysql_servers_ssl_params
-doc](https://proxysql.com/documentation/main-runtime/#mysql_servers_ssl_params).
+doc](https://proxysql.com/main-runtime/#mysql_servers_ssl_params).
 
 To enable SSL connections you need to:
 
@@ -155,10 +155,10 @@ ProxySQL also offers the following extra SSL related global configuration variab
 <!-- -->
 
 Which details can be check in
-[mysql_variables](https://proxysql.com/documentation/global-variables/mysql-variables/) documentation section.
+[mysql_variables](https://proxysql.com/global-variables/mysql-variables/) documentation section.
 
 Since `v2.6.0` all the previously mentioned variables can be configured in a per MySQL backend server basis,
-via the [mysql_servers_ssl_params](https://proxysql.com/documentation/main-runtime/#mysql_servers_ssl_params)
+via the [mysql_servers_ssl_params](https://proxysql.com/main-runtime/#mysql_servers_ssl_params)
 configuration table.
 
 ## Backend certificates renewal:
@@ -179,7 +179,7 @@ was previously **disabled** by default.
 
 Please take into account that having **SSL** enabled for frontend connections is not the same as **enforcing**
 it. Enforcing SSL connections is supported in a per-user basis via `mysql_users.use_ssl` configuration option.
-More information about `mysql_users` [here](https://proxysql.com/documentation/main-runtime/#mysql_users).
+More information about `mysql_users` [here](https://proxysql.com/main-runtime/#mysql_users).
 
 ## Configuration:
 
@@ -294,9 +294,9 @@ connections is:
    _LOAD MYSQL VARIABLES TO RUNTIME_.
 2. Replace the previously mentioned certificates files, with the new certificates files:
 
-   - _\${DATADIR_PATH}/proxysql-ca.pem_
-   - _\${DATADIR_PATH}/proxysql-cert.pem_
-   - _\${DATADIR_PATH}/proxysql-key.pem_
+   - `${DATADIR_PATH}/proxysql-ca.pem`
+   - `${DATADIR_PATH}/proxysql-cert.pem`
+   - `${DATADIR_PATH}/proxysql-key.pem`
 
    <!-- -->
 

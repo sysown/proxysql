@@ -1108,4 +1108,4 @@ CREATE TABLE stats_proxysql_servers_status (
 ```
 
 [1]: http://jemalloc.net/jemalloc.3.html
-[2]: https://proxysql.com/documentation/main-runtime/#mysql_servers
+[2]: https://proxysql.com/main-runtime/#mysql_servers

@@ -24,4 +24,4 @@ via `coredump_filters`. This feature is mostly used for development purposes, an
 builds that can assist with issues investigations.
 
 [1]: https://code.google.com/archive/p/google-coredumper/
-[2]: https://proxysql.com/documentation/the-admin-schemas/
+[2]: https://proxysql.com/the-admin-schemas/

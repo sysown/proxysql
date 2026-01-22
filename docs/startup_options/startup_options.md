@@ -23,6 +23,6 @@ information. The options are the following:
 - `--reload`: Merge the [configuration file][1] into the database file
 - `--sqlite3-server`: Enable [SQLite3 Server][3]
 
-[1]: /documentation/configuration-file/
-[2]: /documentation/clickhouse-configuration/
-[3]: /documentation/proxysql-threads/
+[1]: /configuration-file/
+[2]: /clickhouse-configuration/
+[3]: /proxysql-threads/

@@ -765,5 +765,5 @@ ProxySQL Admin> SELECT hits, mysql_query_rules.rule_id, match_digest, match_patt
 3 rows in set (0.01 sec)
 ```
 
-##### Feel confident to move on to more advanced configuration, here is a link on **[How to set up ProxySQL Read/Write Split](https://proxysql.com/documentation/proxysql-read-write-split-howto/)**
+##### Feel confident to move on to more advanced configuration, here is a link on **[How to set up ProxySQL Read/Write Split](https://proxysql.com/proxysql-read-write-split-howto/)**
 

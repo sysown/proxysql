@@ -40,7 +40,7 @@ It holds information about the whole current `MySQL_Session`, including:
 - **last_insert_id**: The last insert id of the last performed insert.
 - **locked_on_hostgroup**: Hostgroup in which the session has been locked, if this value is other than '-1',
   it means that multiplexing has been disabled for current session. For reasons on why multiplexing can be
-  disabled please check: [https://proxysql.com/documentation/Multiplexing/][1].
+  disabled please check: [https://proxysql.com/Multiplexing/][1].
 - **status**: The current internal status that ProxySQL holds for the session, the map for this values can be
   checked in `enum session_status`.
 - **thread**: Memory address of the current thread hadling the session. Used for debugging purposes.
@@ -236,7 +236,7 @@ For extra information about these values and their meaning please refer to: [que
 - **cache_ttl**: Specifies the `cache_ttl` derived from the query rules for the last query, or the
   **cache_ttl** imposed by a `query annotation` in the last query.
 
-[1]: https://proxysql.com/documentation/Multiplexing/
+[1]: https://proxysql.com/Multiplexing/
 [2]: https://github.com/sysown/proxysql/issues/1599
-[3]: https://proxysql.com/documentation/main-runtime/#mysql_query_rules
-[4]: https://proxysql.com/documentation/query-annotations
+[3]: https://proxysql.com/main-runtime/#mysql_query_rules
+[4]: https://proxysql.com/query-annotations

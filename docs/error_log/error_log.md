@@ -135,13 +135,13 @@ Standard Query Processor rev. 2.0.6.0805 -- Query_Processor.cpp -- Mon May 30 07
 In memory Standard Query Cache (SQC) rev. 1.2.0905 -- Query_Cache.cpp -- Mon May 30 07:00:09 2022
 Standard MySQL Monitor (StdMyMon) rev. 2.0.1226 -- MySQL_Monitor.cpp -- Mon May 30 07:00:09 2022
 2022-06-10 17:11:36 [INFO] For information about products and services visit: https://proxysql.com/
-2022-06-10 17:11:36 [INFO] For online documentation visit: https://proxysql.com/documentation/
+2022-06-10 17:11:36 [INFO] For online documentation visit: https://proxysql.com/
 2022-06-10 17:11:36 [INFO] For support visit: https://proxysql.com/services/support/
 2022-06-10 17:11:36 [INFO] For consultancy visit: https://proxysql.com/services/consulting/
 2022-06-10 17:11:36 MySQL_Monitor.cpp:968:monitor_connect_thread(): [ERROR] Server 127.0.0.1:3306 is returning "Access denied" for monitoring user
 2022-06-10 17:11:36 [INFO] Latest ProxySQL version available: 2.4.1-1-g1ea371d
 ```
 
-[1]: https://proxysql.com/documentation/configuration-file/#general-variables
-[2]: https://proxysql.com/documentation/configuration-file/
-[3]: https://proxysql.com/documentation/global-variables/mysql-variables/#mysql-verbose_query_error
+[1]: https://proxysql.com/configuration-file/#general-variables
+[2]: https://proxysql.com/configuration-file/
+[3]: https://proxysql.com/global-variables/mysql-variables/#mysql-verbose_query_error

@@ -33,4 +33,4 @@ These tables are the persistent equivalent of configuration of [in-memory tables
 Configuration on in-memory tables is lost across restarts, while the content of configuration on disk tables
 is persistent.
 
-[1]: https://proxysql.com/documentation/main-runtime/
+[1]: https://proxysql.com/main-runtime/

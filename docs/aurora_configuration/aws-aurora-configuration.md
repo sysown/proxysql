@@ -273,4 +273,4 @@ means that:
    user configuration. As usual, a subsequent `SAVE MYSQL SERVERS TO DISK` will make the configuration
    persistent.
 
-[1]: https://proxysql.com/documentation/main-runtime/#mysql_hostgroup_attributes
+[1]: https://proxysql.com/main-runtime/#mysql_hostgroup_attributes

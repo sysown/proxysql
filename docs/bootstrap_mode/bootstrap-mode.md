@@ -534,10 +534,10 @@ proxysql -f --bootstrap root:root@172.20.0.2:3306 \
 ```
 
 [1]: https://dev.mysql.com/doc/refman/8.0/en/connecting-using-uri-or-key-value-pairs.html#connecting-using-uri
-[2]: https://proxysql.com/documentation/main-runtime#mysql_hostgroup_attributes
+[2]: https://proxysql.com/main-runtime#mysql_hostgroup_attributes
 [3]: https://dev.mysql.com/doc/mysql-router/8.0/en/mysql-router-innodb-cluster.html
-[5]: https://proxysql.com/documentation/main-runtime/#mysql_query_rules
+[5]: https://proxysql.com/main-runtime/#mysql_query_rules
 [6]: https://dev.mysql.com/doc/mysql-router/8.0/en/mysql-router-conf-options.html#option_mysqlrouter_mode
-[7]: https://proxysql.com/documentation/group-replication-configuration/
+[7]: https://proxysql.com/group-replication-configuration/
 [4]: #command-line-options
 [8]: #configuration-precedence

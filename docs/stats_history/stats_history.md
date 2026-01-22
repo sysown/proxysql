@@ -79,5 +79,5 @@ The two options are:
 
 <!-- -->
 
-[1]: https://proxysql.com/documentation/http-web-server/
-[2]: https://proxysql.com/documentation/firewall-whitelist/
+[1]: https://proxysql.com/http-web-server/
+[2]: https://proxysql.com/firewall-whitelist/

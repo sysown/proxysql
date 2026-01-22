@@ -585,7 +585,7 @@ both hostgroups or not:
 | **Permitted Values** | **Type**    | Boolean                             |
 |                      | **Default** | true                                |
 
-[1]: /documentation/error-log
+[1]: /error-log
 [2]: #mysql-monitor_groupreplication_max_transaction_behind_for_read_only
 [3]: #mysql-monitor_groupreplication_max_transactions_behind_count
 [4]: #mysql-monitor_local_dns_cache_ttl

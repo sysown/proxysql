@@ -186,21 +186,21 @@ as complexity grows, leading to potential issues with data integrity, consistenc
 For all these previous reasons, the preferred way to configure and deploy ProxySQL configuration is through
 the _database file_.
 
-[1]: /documentation/configuring-proxysql/
-[2]: /documentation/configuring-proxysql/#lifecycle
-[3]: /documentation/configuring-proxysql/#initialstartup
-[4]: /documentation/configuring-proxysql/#reloadstartup
+[1]: /configuring-proxysql/
+[2]: /configuring-proxysql/#lifecycle
+[3]: /configuring-proxysql/#initialstartup
+[4]: /configuring-proxysql/#reloadstartup
 [5]: https://hyperrealm.github.io/libconfig/
 [6]: http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar
-[7]: /documentation/Watchdog
-[8]: https://proxysql.com/documentation/the-admin-schemas/
+[7]: /Watchdog
+[8]: https://proxysql.com/the-admin-schemas/
 [9]: #configuration-file-vs-database-file
-[10]: https://proxysql.com/documentation/proxysql-cluster/
-[11]: https://proxysql.com/documentation/admin_variables
-[12]: https://proxysql.com/documentation/global-variables/admin-variables/#admin-mysql_ifaces
-[13]: https://proxysql.com/documentation/global-variables/admin-variables/#admin-restapi_port
-[14]: https://proxysql.com/documentation/global-variables/admin-variables/#admin-telnet_admin_ifaces
-[15]: https://proxysql.com/documentation/global-variables/admin-variables/#admin-telnet_stats_ifaces
-[16]: https://proxysql.com/documentation/global-variables/admin-variables/#admin-web_port
-[17]: https://proxysql.com/documentation/global-variables/admin-variables/#admin-pgsql_ifaces
-[18]: https://proxysql.com/documentation/global-variables/mysql-variables/#mysql-interfaces
+[10]: https://proxysql.com/proxysql-cluster/
+[11]: https://proxysql.com/admin_variables
+[12]: https://proxysql.com/global-variables/admin-variables/#admin-mysql_ifaces
+[13]: https://proxysql.com/global-variables/admin-variables/#admin-restapi_port
+[14]: https://proxysql.com/global-variables/admin-variables/#admin-telnet_admin_ifaces
+[15]: https://proxysql.com/global-variables/admin-variables/#admin-telnet_stats_ifaces
+[16]: https://proxysql.com/global-variables/admin-variables/#admin-web_port
+[17]: https://proxysql.com/global-variables/admin-variables/#admin-pgsql_ifaces
+[18]: https://proxysql.com/global-variables/mysql-variables/#mysql-interfaces
