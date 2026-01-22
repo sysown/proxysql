@@ -2653,7 +2653,7 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 //   Uses read lock on mcp_rules_lock
 //
 SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
-	SQLite3_result* result = new SQLite3_result();
+	SQLite3_result* result = new SQLite3_result(17);
 
 	// Define columns (17 columns - same for mcp_query_rules and runtime_mcp_query_rules)
 	result->add_column_definition(SQLITE_TEXT, "rule_id");
@@ -2726,7 +2726,7 @@ SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
 //   Uses read lock on mcp_rules_lock
 //
 SQLite3_result* Discovery_Schema::get_stats_mcp_query_rules() {
-	SQLite3_result* result = new SQLite3_result();
+	SQLite3_result* result = new SQLite3_result(2);
 
 	// Define columns
 	result->add_column_definition(SQLITE_TEXT, "rule_id");
@@ -2860,7 +2860,7 @@ void Discovery_Schema::update_mcp_query_digest(
 //
 // Note: The caller is responsible for freeing the returned SQLite3_result.
 SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
-	SQLite3_result* result = new SQLite3_result();
+	SQLite3_result* result = new SQLite3_result(10);
 
 	// Define columns for MCP query digest statistics
 	result->add_column_definition(SQLITE_TEXT, "tool_name");
@@ -2967,10 +2967,23 @@ uint64_t Discovery_Schema::compute_mcp_digest(
 	std::string combined = tool_name + ":" + fingerprint;
 
 	// Use SpookyHash to compute digest
-	uint64_t hash1, hash2;
-	SpookyHash::Hash128(combined.data(), combined.length(), &hash1, &hash2);
+	uint64_t hash1 = SpookyHash::Hash64(combined.data(), combined.length(), 0);
 
 	return hash1;
+}
+
+static options get_def_mysql_opts() {
+	options opts {};
+
+	opts.lowercase = false;
+	opts.replace_null = true;
+	opts.replace_number = false;
+	opts.grouping_limit = 3;
+	opts.groups_grouping_limit = 1;
+	opts.keep_comment = false;
+	opts.max_query_length = 65000;
+
+	return opts;
 }
 
 // Generate a fingerprint of MCP tool arguments by replacing literals with placeholders.
@@ -2995,7 +3008,7 @@ uint64_t Discovery_Schema::compute_mcp_digest(
 //
 // Example:
 //   Input: {"sql": "SELECT * FROM users WHERE id = 123", "timeout": 5000}
-//   Output: {"sql":"?","timeout":"?"}
+//   Output: {"sql":"<digest_of_sql>","timeout":"?"}
 //
 //   Input: {"filters": {"status": "active", "age": 25}}
 //   Output: {"filters":{"?":"?","?":"?"}}
@@ -3004,6 +3017,11 @@ uint64_t Discovery_Schema::compute_mcp_digest(
 // This ensures that queries with different parameter structures produce different
 // fingerprints, while queries with the same structure but different values produce
 // the same fingerprint.
+//
+// SQL Handling: For arguments where key is "sql", the value is replaced by a
+// digest generated using mysql_query_digest_and_first_comment instead of "?".
+// This normalizes SQL queries (removes comments, extra whitespace, etc.) so that
+// semantically equivalent queries produce the same fingerprint.
 std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& arguments) {
 	// Serialize JSON with literals replaced by placeholders
 	std::string result;
@@ -3017,22 +3035,60 @@ std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& argumen
 			result += "\"" + it.key() + "\":";
 
 			if (it.value().is_string()) {
-				result += "\"?\"";
+				// Special handling for "sql" key - generate digest instead of "?"
+				if (it.key() == "sql") {
+					std::string sql_value = it.value().get<std::string>();
+					const options def_opts { get_def_mysql_opts() };
+					char* first_comment = nullptr;  // Will be allocated by the function if needed
+					char* digest = mysql_query_digest_and_first_comment(
+						sql_value.c_str(),
+						sql_value.length(),
+						&first_comment,
+						NULL,  // buffer - not needed
+						&def_opts
+					);
+					if (first_comment) {
+						free(first_comment);
+					}
+					// Escape the digest for JSON and add it to result
+					result += "\"";
+					if (digest) {
+						// Full JSON escaping - handle all control characters
+						for (const char* p = digest; *p; p++) {
+							unsigned char c = (unsigned char)*p;
+							if (c == '\\') result += "\\\\";
+							else if (c == '"') result += "\\\"";
+							else if (c == '\n') result += "\\n";
+							else if (c == '\r') result += "\\r";
+							else if (c == '\t') result += "\\t";
+							else if (c < 0x20) {
+								char buf[8];
+								snprintf(buf, sizeof(buf), "\\u%04x", c);
+								result += buf;
+							}
+							else result += *p;
+						}
+						free(digest);
+					}
+					result += "\"";
+				} else {
+					result += "\"?\"";
+				}
 			} else if (it.value().is_number() || it.value().is_boolean()) {
-				result += "?";
+				result += "\"?\"";
 			} else if (it.value().is_object()) {
 				result += fingerprint_mcp_args(it.value());
 			} else if (it.value().is_array()) {
-				result += "[?]";
+				result += "[\"?\"]";
 			} else {
 				result += "null";
 			}
 		}
 		result += "}";
 	} else if (arguments.is_array()) {
-		result += "[?]";
+		result += "[\"?\"]";
 	} else {
-		result += "?";
+		result += "\"?\"";
 	}
 
 	return result;
