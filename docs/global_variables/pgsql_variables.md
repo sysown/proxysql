@@ -40,6 +40,18 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-autocommit_false_not_reusable](#pgsql-autocommit_false_not_reusable) | false   |
 | [pgsql-autocommit_false_is_transaction](#pgsql-autocommit_false_is_transaction) | false |
 | [pgsql-kill_backend_connection_when_disconnect](#pgsql-kill_backend_connection_when_disconnect) | false |
+| [pgsql-long_query_time](#pgsql-long_query_time)                       | 1000          |
+| [pgsql-query_cache_size_mb](#pgsql-query_cache_size_mb)               | 256           |
+| [pgsql-query_cache_soft_ttl_pct](#pgsql-query_cache_soft_ttl_pct)     | 0             |
+| [pgsql-query_cache_handle_warnings](#pgsql-query_cache_handle_warnings) | 0           |
+| [pgsql-query_cache_stores_empty_result](#pgsql-query_cache_stores_empty_result) | false |
+| [pgsql-stats_time_backend_query](#pgsql-stats_time_backend_query)     | false         |
+| [pgsql-stats_time_query_processor](#pgsql-stats_time_query_processor) | false         |
+| [pgsql-min_num_servers_lantency_awareness](#pgsql-min_num_servers_lantency_awareness) | 1000 |
+| [pgsql-aurora_max_lag_ms_only_read_from_replicas](#pgsql-aurora_max_lag_ms_only_read_from_replicas) | 2 |
+| [pgsql-hostgroup_manager_verbose](#pgsql-hostgroup_manager_verbose)   | 1             |
+| [pgsql-binlog_reader_connect_retry_msec](#pgsql-binlog_reader_connect_retry_msec) | 3000 |
+| [pgsql-query_processor_iterations](#pgsql-query_processor_iterations) | 0             |
 
 <!-- remark-ignore-end -->
 
@@ -437,3 +449,104 @@ Kills the backend connection immediately upon client disconnect.
 |                      | **Default** | `false`                                       |
 
 **Description**: If enabled, ProxySQL will close the associated backend connection as soon as the client disconnects, rather than returning it to the pool.
+
+### `pgsql-long_query_time`
+
+Threshold in milliseconds for slow query logging.
+
+|                      |             |                        |
+| -------------------- | ----------- | ---------------------- |
+| **System Variable**  | **Name**    | `pgsql-long_query_time` |
+| **Dynamic**          | **Yes**     |                        |
+| **Permitted Values** | **Type**    | Integer (milliseconds) |
+|                      | **Default** | 1000                   |
+|                      | **Minimum** | 0                      |
+|                      | **Maximum** | 1728000000             |
+
+**Description**: If a query takes longer than this value to execute, it is considered a slow query and the slow query counter is incremented.
+
+### `pgsql-query_cache_size_mb`
+
+Size of the PostgreSQL query cache in megabytes.
+
+|                      |             |                           |
+| -------------------- | ----------- | ------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_cache_size_mb` |
+| **Dynamic**          | **Yes**     |                           |
+| **Permitted Values** | **Type**    | Integer (MB)              |
+|                      | **Default** | 256                       |
+|                      | **Minimum** | 0                         |
+|                      | **Maximum** | 10240                     |
+
+**Description**: Configures the total amount of memory allocated for caching PostgreSQL query results.
+
+### `pgsql-query_cache_soft_ttl_pct`
+
+**Description**: Not supported.
+
+### `pgsql-query_cache_handle_warnings`
+
+Controls whether queries that generate warnings are cached.
+
+|                      |             |                                   |
+| -------------------- | ----------- | --------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_cache_handle_warnings` |
+| **Dynamic**          | **Yes**     |                                   |
+| **Permitted Values** | **Type**    | Integer                           |
+|                      | **Default** | 0                                 |
+|                      | **Minimum** | 0                                 |
+|                      | **Maximum** | 1                                 |
+
+**Description**: When set to `1`, ProxySQL will cache query results even if they include warnings. If set to `0`, queries with warnings are not cached.
+
+### `pgsql-query_cache_stores_empty_result`
+
+Controls whether the PostgreSQL query cache should store empty resultsets.
+
+|                      |             |                                      |
+| -------------------- | ----------- | ------------------------------------ |
+| **System Variable**  | **Name**    | `pgsql-query_cache_stores_empty_result` |
+| **Dynamic**          | **Yes**     |                                      |
+| **Permitted Values** | **Type**    | Boolean                              |
+|                      | **Default** | `true`                               |
+
+**Description**: When enabled, ProxySQL will cache query results that return zero rows. This can be beneficial for reducing backend load for queries that frequently return no data.
+
+### `pgsql-stats_time_backend_query`
+
+**Description**: Not supported.
+
+### `pgsql-stats_time_query_processor`
+
+**Description**: Not supported.
+
+### `pgsql-min_num_servers_lantency_awareness`
+
+**Description**: Not supported.
+
+### `pgsql-aurora_max_lag_ms_only_read_from_replicas`
+
+**Description**: Not supported.
+
+### `pgsql-hostgroup_manager_verbose`
+
+Enables verbose logging for the PostgreSQL hostgroup manager.
+
+|                      |             |                                |
+| -------------------- | ----------- | ------------------------------ |
+| **System Variable**  | **Name**    | `pgsql-hostgroup_manager_verbose` |
+| **Dynamic**          | **Yes**     |                                |
+| **Permitted Values** | **Type**    | Integer                        |
+|                      | **Default** | 1                              |
+|                      | **Minimum** | 0                              |
+|                      | **Maximum** | 3                              |
+
+**Description**: Controls the verbosity of logs generated by the PostgreSQL hostgroup management module. Higher values provide more detailed information.
+
+### `pgsql-binlog_reader_connect_retry_msec`
+
+**Description**: Not supported.
+
+### `pgsql-query_processor_iterations`
+
+**Description**: Not supported.
