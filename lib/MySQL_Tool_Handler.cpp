@@ -231,6 +231,78 @@ int MySQL_Tool_Handler::init_connection_pool() {
 }
 
 /**
+ * @brief Validate SQL identifier (table name, column name, schema name)
+ *
+ * Checks that the identifier contains only valid characters (alphanumeric,
+ * underscore, dollar sign) and doesn't start with a digit. Also checks
+ * for SQL injection attempts.
+ *
+ * @param identifier The identifier to validate
+ * @return true if valid, false otherwise
+ */
+static bool validate_sql_identifier(const std::string& identifier) {
+	if (identifier.empty()) {
+		return false;
+	}
+
+	// Check length (MySQL identifiers max 64 characters for tables, 128 for some)
+	if (identifier.length() > 128) {
+		return false;
+	}
+
+	// First character must be letter or underscore
+	if (!isalpha(identifier[0]) && identifier[0] != '_') {
+		return false;
+	}
+
+	// All characters must be alphanumeric, underscore, or dollar sign
+	for (char c : identifier) {
+		if (!isalnum(c) && c != '_' && c != '$') {
+			return false;
+		}
+	}
+
+	// Check for SQL injection patterns (quoted identifiers, comments, etc.)
+	if (identifier.find('"') != std::string::npos ||
+		identifier.find('\'') != std::string::npos ||
+		identifier.find('`') != std::string::npos ||
+		identifier.find('-') != std::string::npos ||
+		identifier.find(';') != std::string::npos) {
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * @brief Escape a string value for use in SQL queries
+ *
+ * Uses mysql_real_escape_string which requires a valid MySQL connection.
+ * The caller must have a connection and return it after use.
+ *
+ * @param conn MySQL connection to use for escaping
+ * @param value The string value to escape
+ * @return Escaped string safe for use in SQL queries
+ */
+static std::string escape_string(MYSQL* conn, const std::string& value) {
+	if (!conn) {
+		return ""; // Return empty on error (caller should handle)
+	}
+
+	// Allocate buffer for escaped string (2 * input + 1 for null terminator)
+	unsigned long escaped_length = value.length() * 2 + 1;
+	char* escaped = new char[escaped_length];
+
+	// Escape the string
+	mysql_real_escape_string(conn, escaped, value.c_str(), value.length());
+
+	std::string result(escaped);
+	delete[] escaped;
+
+	return result;
+}
+
+/**
  * @brief Get an available connection from the pool
  *
  * Thread-safe method that searches for a connection not currently in use.
@@ -478,6 +550,22 @@ std::string MySQL_Tool_Handler::list_tables(
 	int page_size,
 	const std::string& name_filter
 ) {
+	json result;
+
+	// Validate schema identifier
+	std::string target_schema = schema.empty() ? mysql_schema : schema;
+	if (!validate_sql_identifier(target_schema)) {
+		result["error"] = "Invalid schema name: contains unsafe characters";
+		return result.dump();
+	}
+
+	// Get connection for escaping
+	MYSQL* conn = get_connection();
+	if (!conn) {
+		result["error"] = "Failed to get database connection";
+		return result.dump();
+	}
+
 	// Build query to list tables with metadata
 	std::string sql =
 		"SELECT "
@@ -488,28 +576,32 @@ std::string MySQL_Tool_Handler::list_tables(
 		"  t.create_time, "
 		"  t.update_time "
 		"FROM information_schema.tables t "
-		"WHERE t.table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' ";
+		"WHERE t.table_schema = '" + target_schema + "' ";
 
 	if (!name_filter.empty()) {
-		sql += " AND t.table_name LIKE '%" + name_filter + "%'";
+		// Escape the name_filter to prevent SQL injection
+		std::string escaped_filter = escape_string(conn, name_filter);
+		if (escaped_filter.empty() && !name_filter.empty()) {
+			return_connection(conn);
+			result["error"] = "Failed to escape filter string";
+			return result.dump();
+		}
+		sql += " AND t.table_name LIKE '%" + escaped_filter + "%'";
 	}
-
 
 	sql += " ORDER BY t.table_name LIMIT " + std::to_string(page_size);
 
+	return_connection(conn);
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "list_tables query: %s\n", sql.c_str());
 
-
 	// Execute the query
 	std::string response = execute_query(sql);
-
 
 	// Debug: print raw response
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "list_tables raw response: %s\n", response.c_str());
 
 	// Parse and format the response
-	json result;
 	try {
 		json query_result = json::parse(response);
 		if (query_result["success"] == true) {
@@ -539,6 +631,17 @@ std::string MySQL_Tool_Handler::describe_table(const std::string& schema, const 
 	result["schema"] = schema;
 	result["table"] = table;
 
+	// Validate schema and table identifiers
+	std::string target_schema = schema.empty() ? mysql_schema : schema;
+	if (!validate_sql_identifier(target_schema)) {
+		result["error"] = "Invalid schema name: contains unsafe characters";
+		return result.dump();
+	}
+	if (!validate_sql_identifier(table)) {
+		result["error"] = "Invalid table name: contains unsafe characters";
+		return result.dump();
+	}
+
 	// Query to get columns
 	std::string columns_query =
 		"SELECT "
@@ -551,7 +654,7 @@ std::string MySQL_Tool_Handler::describe_table(const std::string& schema, const 
 		"  character_set_name, "
 		"  collation_name "
 		"FROM information_schema.columns "
-		"WHERE table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' "
+		"WHERE table_schema = '" + target_schema + "' "
 		"AND table_name = '" + table + "' "
 		"ORDER BY ordinal_position";
 
@@ -581,7 +684,7 @@ std::string MySQL_Tool_Handler::describe_table(const std::string& schema, const 
 		"JOIN information_schema.key_column_usage k "
 		"  ON t.constraint_name = k.constraint_name "
 		"  AND t.table_schema = k.table_schema "
-		"WHERE t.table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' "
+		"WHERE t.table_schema = '" + target_schema + "' "
 		"AND t.table_name = '" + table + "' "
 		"AND t.constraint_type = 'PRIMARY KEY' "
 		"ORDER BY k.ordinal_position";
@@ -606,7 +709,7 @@ std::string MySQL_Tool_Handler::describe_table(const std::string& schema, const 
 		"  non_unique, "
 		"  nullable "
 		"FROM information_schema.statistics "
-		"WHERE table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' "
+		"WHERE table_schema = '" + target_schema + "' "
 		"AND table_name = '" + table + "' "
 		"ORDER BY index_name, seq_in_index";
 
@@ -706,12 +809,69 @@ std::string MySQL_Tool_Handler::sample_rows(
 	const std::string& order_by,
 	int limit
 ) {
+	json result;
+
+	// Validate schema and table identifiers
+	std::string target_schema = schema.empty() ? mysql_schema : schema;
+	if (!validate_sql_identifier(target_schema)) {
+		result["error"] = "Invalid schema name: contains unsafe characters";
+		return result.dump();
+	}
+	if (!validate_sql_identifier(table)) {
+		result["error"] = "Invalid table name: contains unsafe characters";
+		return result.dump();
+	}
+
+	// Validate columns parameter (if provided) - check for common SQL injection patterns
+	if (!columns.empty()) {
+		// Check for dangerous patterns in columns
+		std::string upper_columns = columns;
+		std::transform(upper_columns.begin(), upper_columns.end(), upper_columns.begin(), ::toupper);
+		if (upper_columns.find("--") != std::string::npos ||
+			upper_columns.find("/*") != std::string::npos ||
+			upper_columns.find(";") != std::string::npos ||
+			upper_columns.find("UNION") != std::string::npos ||
+			upper_columns.find("JOIN") != std::string::npos) {
+			result["error"] = "Invalid columns parameter: contains unsafe patterns";
+			return result.dump();
+		}
+	}
+
+	// Validate WHERE clause for dangerous patterns
+	if (!where.empty()) {
+		std::string upper_where = where;
+		std::transform(upper_where.begin(), upper_where.end(), upper_where.begin(), ::toupper);
+		if (upper_where.find("--") != std::string::npos ||
+			upper_where.find("/*") != std::string::npos ||
+			upper_where.find(";") != std::string::npos ||
+			upper_where.find("UNION") != std::string::npos ||
+			upper_where.find("DROP ") != std::string::npos ||
+			upper_where.find("DELETE ") != std::string::npos ||
+			upper_where.find("INSERT ") != std::string::npos ||
+			upper_where.find("UPDATE ") != std::string::npos) {
+			result["error"] = "Invalid WHERE clause: contains unsafe patterns";
+			return result.dump();
+		}
+	}
+
+	// Validate ORDER BY for dangerous patterns
+	if (!order_by.empty()) {
+		std::string upper_order = order_by;
+		std::transform(upper_order.begin(), upper_order.end(), upper_order.begin(), ::toupper);
+		if (upper_order.find("--") != std::string::npos ||
+			upper_order.find("/*") != std::string::npos ||
+			upper_order.find(";") != std::string::npos) {
+			result["error"] = "Invalid ORDER BY clause: contains unsafe patterns";
+			return result.dump();
+		}
+	}
+
 	// Build and execute sampling query with hard cap
 	int actual_limit = std::min(limit, 20); // Hard cap at 20 rows
 
 	std::string sql = "SELECT ";
 	sql += columns.empty() ? "*" : columns;
-	sql += " FROM " + (schema.empty() ? mysql_schema : schema) + "." + table;
+	sql += " FROM " + target_schema + "." + table;
 
 	if (!where.empty()) {
 		sql += " WHERE " + where;
@@ -729,7 +889,6 @@ std::string MySQL_Tool_Handler::sample_rows(
 	std::string response = execute_query(sql);
 
 	// Parse and return the results
-	json result;
 	try {
 		json query_result = json::parse(response);
 		if (query_result["success"] == true) {
@@ -751,11 +910,58 @@ std::string MySQL_Tool_Handler::sample_distinct(
 	const std::string& where,
 	int limit
 ) {
+	json result;
+
+	// Validate schema, table, and column identifiers
+	std::string target_schema = schema.empty() ? mysql_schema : schema;
+	if (!validate_sql_identifier(target_schema)) {
+		result["error"] = "Invalid schema name: contains unsafe characters";
+		return result.dump();
+	}
+	if (!validate_sql_identifier(table)) {
+		result["error"] = "Invalid table name: contains unsafe characters";
+		return result.dump();
+	}
+	// Column names can have dots (table.column) so handle that case
+	if (column.find('.') == std::string::npos) {
+		// Simple column name, validate directly
+		if (!validate_sql_identifier(column)) {
+			result["error"] = "Invalid column name: contains unsafe characters";
+			return result.dump();
+		}
+	} else {
+		// Compound identifier like "table.column", validate each part
+		size_t dot_pos = column.find('.');
+		std::string table_part = column.substr(0, dot_pos);
+		std::string col_part = column.substr(dot_pos + 1);
+		if (!validate_sql_identifier(table_part) || !validate_sql_identifier(col_part)) {
+			result["error"] = "Invalid column identifier: contains unsafe characters";
+			return result.dump();
+		}
+	}
+
+	// Validate WHERE clause for dangerous patterns
+	if (!where.empty()) {
+		std::string upper_where = where;
+		std::transform(upper_where.begin(), upper_where.end(), upper_where.begin(), ::toupper);
+		if (upper_where.find("--") != std::string::npos ||
+			upper_where.find("/*") != std::string::npos ||
+			upper_where.find(";") != std::string::npos ||
+			upper_where.find("UNION") != std::string::npos ||
+			upper_where.find("DROP ") != std::string::npos ||
+			upper_where.find("DELETE ") != std::string::npos ||
+			upper_where.find("INSERT ") != std::string::npos ||
+			upper_where.find("UPDATE ") != std::string::npos) {
+			result["error"] = "Invalid WHERE clause: contains unsafe patterns";
+			return result.dump();
+		}
+	}
+
 	// Build query to sample distinct values
 	int actual_limit = std::min(limit, 50);
 
 	std::string sql = "SELECT DISTINCT " + column + " as value, COUNT(*) as count ";
-	sql += " FROM " + (schema.empty() ? mysql_schema : schema) + "." + table;
+	sql += " FROM " + target_schema + "." + table;
 
 	if (!where.empty()) {
 		sql += " WHERE " + where;
@@ -769,7 +975,6 @@ std::string MySQL_Tool_Handler::sample_distinct(
 	std::string response = execute_query(sql);
 
 	// Parse and return the results
-	json result;
 	try {
 		json query_result = json::parse(response);
 		if (query_result["success"] == true) {

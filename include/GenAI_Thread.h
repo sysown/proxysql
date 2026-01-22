@@ -157,7 +157,7 @@ struct GenAI_ResponseHeader {
 class GenAI_Threads_Handler
 {
 private:
-	int shutdown_;
+	std::atomic<int> shutdown_;
 	pthread_rwlock_t rwlock;
 
 	// Threading components
