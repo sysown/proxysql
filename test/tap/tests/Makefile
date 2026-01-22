@@ -168,6 +168,9 @@ sh-%:
 	cp $(patsubst sh-%,%,$@) $(patsubst sh-%.sh,%,$@)
 	chmod +x $(patsubst sh-%.sh,%,$@)
 
+anomaly_detection-t: anomaly_detection-t.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) -DEXCLUDE_TRACKING_VARIABLES $< ../tap/SQLite3_Server.cpp -I$(CLICKHOUSE_CPP_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(SQLITE3_LDIR)/../libsqlite_rembed.a -lscram -lusual -Wl,--allow-multiple-definition -o $@
+
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
@@ -302,4 +305,3 @@ clean:
 	rm -f generate_set_session_csv set_testing-240.csv || true
 	rm -f setparser_test setparser_test2 setparser_test3  || true
 	rm -f reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper || true
-	rm -f *.gcda *.gcno || true

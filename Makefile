@@ -9,7 +9,7 @@
 ### export GIT_VERSION=3.x.y-dev
 ### ```
 
-GIT_VERSION ?= $(shell git describe --long --abbrev=7)
+GIT_VERSION ?= $(shell git describe --long --abbrev=7 2>/dev/null || git describe --long --abbrev=7 --always)
 ifndef GIT_VERSION
     $(error GIT_VERSION is not set)
 endif

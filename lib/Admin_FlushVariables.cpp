@@ -25,6 +25,14 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
+#include "MCP_Thread.h"
+#include "MySQL_Tool_Handler.h"
+#include "Query_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
+#include "Admin_Tool_Handler.h"
+#include "Cache_Tool_Handler.h"
+#include "Observe_Tool_Handler.h"
+#include "ProxySQL_MCP_Server.hpp"
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -42,6 +50,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -138,6 +147,8 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern MCP_Threads_Handler* GloMCPH;
+extern GenAI_Threads_Handler* GloGATH;
 
 extern void (*flush_logs_function)();
 
@@ -953,6 +964,139 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 	if (resultset) delete resultset;
 }
 
+// GenAI Variables Flush Functions
+void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (onlyifempty) {
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'genai-%'";
+		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		int matching_rows = 0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		}
+		else {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
+				matching_rows += atoi(r->fields[0]);
+			}
+		}
+		if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has GenAI variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting GenAI variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'genai-%'");
+	}
+	static char* a;
+	static char* b;
+	if (replace) {
+		a = (char*)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	else {
+		a = (char*)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	int rc;
+	sqlite3_stmt* statement1 = NULL;
+	sqlite3_stmt* statement2 = NULL;
+	rc = db->prepare_v2(a, &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'genai-%'");
+		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+		rc = db->prepare_v2(b, &statement2);
+		ASSERT_SQLITE_OK(rc, db);
+	}
+	if (use_lock) {
+		GloGATH->wrlock();
+		db->execute("BEGIN");
+	}
+	char** varnames = GloGATH->get_variables_list();
+	for (int i = 0; varnames[i]; i++) {
+		char* val = GloGATH->get_variable(varnames[i]);
+		char* qualified_name = (char*)malloc(strlen(varnames[i]) + 10);
+		sprintf(qualified_name, "genai-%s", varnames[i]);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+		if (runtime) {
+			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			SAFE_SQLITE3_STEP2(statement2);
+			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
+		}
+		if (val)
+			free(val);
+		free(qualified_name);
+	}
+	if (use_lock) {
+		db->execute("COMMIT");
+		GloGATH->wrunlock();
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	if (runtime)
+		(*proxy_sqlite3_finalize)(statement2);
+	for (int i = 0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+}
+
+void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d\n", replace);
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'genai-%'";
+	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	}
+	if (resultset) {
+		if (lock) wrlock();
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			char* name = r->fields[0];
+			char* val = r->fields[1];
+			// Skip the 'genai-' prefix
+			char* var_name = name + 6;
+			GloGATH->set_variable(var_name, val);
+		}
+
+		// Populate runtime_global_variables
+		{
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			wrunlock();  // Release outer lock before calling runtime_to_database
+			flush_genai_variables___runtime_to_database(admindb, false, false, false, true, true);
+			wrlock();  // Re-acquire outer lock
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		// Check if LLM bridge needs to be initialized
+		if (GloAI && GloGATH->variables.genai_llm_enabled && !GloAI->get_llm_bridge()) {
+			proxy_info("LLM bridge enabled but not initialized, initializing now\n");
+			if (GloAI->init_llm_bridge() != 0) {
+				proxy_error("Failed to initialize LLM bridge\n");
+			}
+		}
+
+		if (lock) wrunlock();
+	}
+	if (resultset) delete resultset;
+}
+
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
@@ -1194,5 +1338,337 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 		free(varnames[i]);
 	}
 	free(varnames);
+}
 
+// MCP (Model Context Protocol) VARIABLES
+void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d\n", replace);
+	if (GloMCPH == NULL) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
+		return;
+	}
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	}
+	if (resultset) {
+		if (lock) wrlock();
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			char* name = r->fields[0];
+			char* val = r->fields[1];
+			// Skip the 'mcp-' prefix
+			char* var_name = name + 4;
+			GloMCPH->set_variable(var_name, val);
+		}
+
+		// Populate runtime_global_variables
+		// Note: Checksum generation is skipped for MCP until the feature is complete
+		{
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			wrunlock();  // Release outer lock before calling runtime_to_database
+			flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, true);
+			wrlock();  // Re-acquire outer lock
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		// Handle server start/stop based on mcp_enabled
+		bool enabled = GloMCPH->variables.mcp_enabled;
+		proxy_info("MCP: mcp_enabled=%d after loading variables\n", enabled);
+
+		if (enabled) {
+			// Start the server if not already running
+			if (GloMCPH->mcp_server == NULL) {
+				// Only check SSL certificates if SSL mode is enabled
+				if (GloMCPH->variables.mcp_use_ssl) {
+					if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+						proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+							"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+					} else {
+						int port = GloMCPH->variables.mcp_port;
+						const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+						proxy_info("MCP: Starting %s server on port %d\n", mode, port);
+						GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+						if (GloMCPH->mcp_server) {
+							GloMCPH->mcp_server->start();
+							proxy_info("MCP: Server started successfully\n");
+						} else {
+							proxy_error("MCP: Failed to create server instance\n");
+						}
+					}
+				} else {
+					// HTTP mode - start without SSL certificates
+					int port = GloMCPH->variables.mcp_port;
+					proxy_info("MCP: Starting HTTP server on port %d (unencrypted)\n", port);
+					GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+					if (GloMCPH->mcp_server) {
+						GloMCPH->mcp_server->start();
+						proxy_info("MCP: Server started successfully\n");
+					} else {
+						proxy_error("MCP: Failed to create server instance\n");
+					}
+				}
+			} else {
+				proxy_info("MCP: Server already running, checking if configuration changed...\n");
+
+				// Check if restart is needed due to configuration changes
+				bool needs_restart = false;
+				std::string restart_reason;
+
+				// Check if port changed
+				int current_port = GloMCPH->variables.mcp_port;
+				int server_port = GloMCPH->mcp_server->get_port();
+				if (current_port != server_port) {
+					needs_restart = true;
+					restart_reason += "port (" + std::to_string(server_port) + " -> " + std::to_string(current_port) + ") ";
+				}
+
+				// Check if SSL mode changed
+				bool current_use_ssl = GloMCPH->variables.mcp_use_ssl;
+				bool server_use_ssl = GloMCPH->mcp_server->is_using_ssl();
+				if (current_use_ssl != server_use_ssl) {
+					needs_restart = true;
+					restart_reason += "SSL mode (" + std::string(server_use_ssl ? "HTTPS" : "HTTP") + " -> " + std::string(current_use_ssl ? "HTTPS" : "HTTP") + ") ";
+				}
+
+				if (needs_restart) {
+					proxy_info("MCP: Configuration changed (%s), restarting server...\n", restart_reason.c_str());
+
+					// Stop server with old configuration
+					const char* old_mode = server_use_ssl ? "HTTPS" : "HTTP";
+					proxy_info("MCP: Stopping %s server on port %d\n", old_mode, server_port);
+					delete GloMCPH->mcp_server;
+					GloMCPH->mcp_server = NULL;
+
+					// Start server with new configuration
+					int new_port = GloMCPH->variables.mcp_port;
+					bool new_use_ssl = GloMCPH->variables.mcp_use_ssl;
+					const char* new_mode = new_use_ssl ? "HTTPS" : "HTTP";
+
+					// Check SSL certificates if needed
+					if (new_use_ssl) {
+						if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+							proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+								"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+							// Leave server stopped
+						} else {
+							proxy_info("MCP: Starting %s server on port %d\n", new_mode, new_port);
+							GloMCPH->mcp_server = new ProxySQL_MCP_Server(new_port, GloMCPH);
+							if (GloMCPH->mcp_server) {
+								GloMCPH->mcp_server->start();
+								proxy_info("MCP: Server restarted successfully\n");
+							} else {
+								proxy_error("MCP: Failed to create server instance\n");
+							}
+						}
+					} else {
+						// HTTP mode - no SSL certificates needed
+						proxy_info("MCP: Starting %s server on port %d (unencrypted)\n", new_mode, new_port);
+						GloMCPH->mcp_server = new ProxySQL_MCP_Server(new_port, GloMCPH);
+						if (GloMCPH->mcp_server) {
+							GloMCPH->mcp_server->start();
+							proxy_info("MCP: Server restarted successfully\n");
+						} else {
+							proxy_error("MCP: Failed to create server instance\n");
+						}
+					}
+				} else {
+					proxy_info("MCP: Server already running, no configuration changes detected\n");
+				}
+			}
+		} else {
+			// Stop the server if running
+			if (GloMCPH->mcp_server != NULL) {
+				const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+				proxy_info("MCP: Stopping %s server\n", mode);
+				delete GloMCPH->mcp_server;
+				GloMCPH->mcp_server = NULL;
+				proxy_info("MCP: Server stopped successfully\n");
+			}
+		}
+
+		if (lock) wrunlock();
+		delete resultset;
+	}
+}
+
+void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	proxy_info("MCP: flush_mcp_variables___runtime_to_database called. runtime=%d, use_lock=%d\n", runtime, use_lock);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (GloMCPH == NULL) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
+		return;
+	}
+	if (onlyifempty) {
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		int matching_rows = 0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		}
+		else {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
+				matching_rows += atoi(r->fields[0]);
+			}
+		}
+		if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has MCP variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MCP variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mcp-%'");
+	}
+	static char* a;
+	static char* b;
+	if (replace) {
+		a = (char*)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"mcp-%s\",\"%s\")";
+	}
+	else {
+		a = (char*)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"mcp-%s\",\"%s\")";
+	}
+	b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"%s\",\"%s\")";
+	int rc;
+	sqlite3_stmt* statement1 = NULL;
+	rc = db->prepare_v2("REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)", &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+
+	if (use_lock) {
+		GloMCPH->wrlock();
+	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
+	}
+	char** varnames = GloMCPH->get_variables_list();
+	int var_count = 0;
+	for (int i = 0; varnames[i]; i++) {
+		var_count++;
+	}
+	proxy_info("MCP: Processing %d variables\n", var_count);
+	for (int i = 0; varnames[i]; i++) {
+		char val[256];
+		GloMCPH->get_variable(varnames[i], val);
+		char* qualified_name = (char*)malloc(strlen(varnames[i]) + 8);
+		sprintf(qualified_name, "mcp-%s", varnames[i]);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+		if (runtime) {
+			if (i < 3) {
+				proxy_info("MCP: Inserting variable %d: %s = %s\n", i, qualified_name, val);
+			}
+			// Use db->execute() for runtime_global_variables like admin version does
+			// qualified_name already contains the mcp- prefix, so we use %s without prefix
+			int l = strlen(qualified_name) + strlen(val) + 100;
+			char* query = (char*)malloc(l);
+			sprintf(query, b, qualified_name, val);
+			if (i < 3) {
+				proxy_info("MCP: Executing SQL: %s\n", query);
+			}
+			db->execute(query);
+			free(query);
+		}
+		free(qualified_name);
+	}
+	proxy_info("MCP: Finished processing %d variables\n", var_count);
+	// Handle server start/stop based on mcp_enabled when runtime=true
+	// This ensures the server state matches the enabled flag after loading to runtime
+	if (runtime) {
+		bool enabled = GloMCPH->variables.mcp_enabled;
+		proxy_info("MCP: mcp_enabled=%d, managing server state\n", enabled);
+
+		if (enabled) {
+			// Start the server if not already running
+			if (GloMCPH->mcp_server == NULL) {
+				// Only check SSL certificates if SSL mode is enabled
+				if (GloMCPH->variables.mcp_use_ssl) {
+					if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+						proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+							"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+					} else {
+						int port = GloMCPH->variables.mcp_port;
+						const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+						proxy_info("MCP: Starting %s server on port %d\n", mode, port);
+						GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+						if (GloMCPH->mcp_server) {
+							GloMCPH->mcp_server->start();
+							proxy_info("MCP: Server started successfully\n");
+						} else {
+							proxy_error("MCP: Failed to create server instance\n");
+						}
+					}
+				} else {
+					// HTTP mode - start without SSL certificates
+					int port = GloMCPH->variables.mcp_port;
+					proxy_info("MCP: Starting HTTP server on port %d (unencrypted)\n", port);
+					GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+					if (GloMCPH->mcp_server) {
+						GloMCPH->mcp_server->start();
+						proxy_info("MCP: Server started successfully\n");
+					} else {
+						proxy_error("MCP: Failed to create server instance\n");
+					}
+				}
+			} else {
+				// Server is already running - need to stop, delete server, and recreate everything
+				proxy_info("MCP: Server already running, reinitializing\n");
+
+				// Delete the old server - its destructor will clean up all handlers
+				// (mysql_tool_handler, config_tool_handler, query_tool_handler,
+				//  admin_tool_handler, cache_tool_handler, observe_tool_handler)
+				proxy_info("MCP: Stopping and deleting old server\n");
+				delete GloMCPH->mcp_server;
+				GloMCPH->mcp_server = NULL;
+				// All handlers are now deleted and set to NULL by the destructor
+				proxy_info("MCP: Old server deleted\n");
+
+				// Create and start new server with current configuration
+				// The server constructor will recreate all handlers with updated settings
+				proxy_info("MCP: Creating and starting new server\n");
+				int port = GloMCPH->variables.mcp_port;
+				GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+				if (GloMCPH->mcp_server) {
+					GloMCPH->mcp_server->start();
+					proxy_info("MCP: New server created and started successfully\n");
+				} else {
+					proxy_error("MCP: Failed to create new server instance\n");
+				}
+			}
+		} else {
+			// Stop the server if running
+			if (GloMCPH->mcp_server != NULL) {
+				const char* mode = GloMCPH->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
+				proxy_info("MCP: Stopping %s server\n", mode);
+				delete GloMCPH->mcp_server;
+				GloMCPH->mcp_server = NULL;
+				proxy_info("MCP: Server stopped successfully\n");
+			}
+		}
+	}
+
+	if (use_lock) {
+		proxy_info("MCP: Releasing lock\n");
+		GloMCPH->wrunlock();
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	for (int i = 0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
 }

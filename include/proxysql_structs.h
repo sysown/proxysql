@@ -159,6 +159,9 @@ enum debug_module {
 	PROXY_DEBUG_RESTAPI,
 	PROXY_DEBUG_MONITOR,
 	PROXY_DEBUG_CLUSTER,
+	PROXY_DEBUG_GENAI,
+	PROXY_DEBUG_NL2SQL,
+	PROXY_DEBUG_ANOMALY,
 	PROXY_DEBUG_UNKNOWN // this module doesn't exist. It is used only to define the last possible module
 };
 
@@ -178,6 +181,7 @@ enum MySQL_DS_type {
 //	MYDS_BACKEND_PAUSE_CONNECT,
 //	MYDS_BACKEND_FAILED_CONNECT,
 	MYDS_FRONTEND,
+	MYDS_INTERNAL_GENAI,  // Internal GenAI module connection
 };
 
 using PgSQL_DS_type = MySQL_DS_type;
