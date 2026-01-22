@@ -32,6 +32,27 @@ const sidebars: SidebarsConfig = {
         'main_runtime/configuration_tables',
         'main_runtime/mysql_tables',
         'main_runtime/postgresql_tables',
+        'main_runtime/mcp_tables',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Generative AI',
+      items: [
+        'genai/mcp_server',
+        'genai/mcp_endpoints',
+        'genai/mcp_autodiscovery',
+        {
+          type: 'category',
+          label: 'MCP Tools',
+          items: [
+            'genai/mcp_tools_query',
+            'genai/mcp_tools_rag',
+            'genai/mcp_tools_upcoming',
+          ],
+        },
+        'genai/mcp_catalog',
+        'genai/mcp_stats',
       ],
     },
     {
@@ -98,6 +119,7 @@ const sidebars: SidebarsConfig = {
         'global_variables/mysql_monitor_variables',
         'global_variables/pgsql_variables',
         'global_variables/pgsql_monitor_variables',
+        'global_variables/mcp_variables',
       ],
     },
     {
