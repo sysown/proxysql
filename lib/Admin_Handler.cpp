@@ -2368,32 +2368,31 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			) {
 			l_free(*ql,*q);
 
-			// Execute as transaction to ensure both statements run atomically
-			char* error = NULL;
-			bool success = true;
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 
+			// Execute as transaction to ensure both statements run atomically
 			// Begin transaction
-			if (!admindb->execute("BEGIN")) {
+			if (!SPA->admindb->execute("BEGIN")) {
 				proxy_error("Failed to BEGIN transaction for LOAD MCP QUERY RULES\n");
 				return false;
 			}
 
 			// Clear target table
-			if (!admindb->execute("DELETE FROM main.mcp_query_rules")) {
+			if (!SPA->admindb->execute("DELETE FROM main.mcp_query_rules")) {
 				proxy_error("Failed to DELETE from main.mcp_query_rules\n");
-				admindb->execute("ROLLBACK");
+				SPA->admindb->execute("ROLLBACK");
 				return false;
 			}
 
 			// Insert from source
-			if (!admindb->execute("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules")) {
+			if (!SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules")) {
 				proxy_error("Failed to INSERT into main.mcp_query_rules\n");
-				admindb->execute("ROLLBACK");
+				SPA->admindb->execute("ROLLBACK");
 				return false;
 			}
 
 			// Commit transaction
-			if (!admindb->execute("COMMIT")) {
+			if (!SPA->admindb->execute("COMMIT")) {
 				proxy_error("Failed to COMMIT transaction for LOAD MCP QUERY RULES\n");
 				return false;
 			}
@@ -2408,32 +2407,31 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			) {
 			l_free(*ql,*q);
 
-			// Execute as transaction to ensure both statements run atomically
-			char* error = NULL;
-			bool success = true;
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 
+			// Execute as transaction to ensure both statements run atomically
 			// Begin transaction
-			if (!admindb->execute("BEGIN")) {
+			if (!SPA->admindb->execute("BEGIN")) {
 				proxy_error("Failed to BEGIN transaction for SAVE MCP QUERY RULES TO DISK\n");
 				return false;
 			}
 
 			// Clear target table
-			if (!admindb->execute("DELETE FROM disk.mcp_query_rules")) {
+			if (!SPA->admindb->execute("DELETE FROM disk.mcp_query_rules")) {
 				proxy_error("Failed to DELETE from disk.mcp_query_rules\n");
-				admindb->execute("ROLLBACK");
+				SPA->admindb->execute("ROLLBACK");
 				return false;
 			}
 
 			// Insert from source
-			if (!admindb->execute("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules")) {
+			if (!SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules")) {
 				proxy_error("Failed to INSERT into disk.mcp_query_rules\n");
-				admindb->execute("ROLLBACK");
+				SPA->admindb->execute("ROLLBACK");
 				return false;
 			}
 
 			// Commit transaction
-			if (!admindb->execute("COMMIT")) {
+			if (!SPA->admindb->execute("COMMIT")) {
 				proxy_error("Failed to COMMIT transaction for SAVE MCP QUERY RULES TO DISK\n");
 				return false;
 			}

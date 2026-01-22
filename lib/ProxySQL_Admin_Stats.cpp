@@ -1601,7 +1601,7 @@ void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 		: "INSERT INTO stats_mcp_query_tools_counters VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
 	sqlite3_stmt* statement = NULL;
-	int rc = (*proxy_sqlite3_prepare_v2)(statsdb->db, query_str, -1, &statement, NULL);
+	int rc = statsdb->prepare_v2(query_str, &statement);
 	ASSERT_SQLITE_OK(rc, statsdb);
 
 	if (reset) {
@@ -2625,7 +2625,7 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 		: "INSERT INTO stats_mcp_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 
 	sqlite3_stmt* statement = NULL;
-	int rc = (*proxy_sqlite3_prepare_v2)(statsdb->db, query_str, -1, &statement, NULL);
+	int rc = statsdb->prepare_v2(query_str, &statement);
 	ASSERT_SQLITE_OK(rc, statsdb);
 
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
