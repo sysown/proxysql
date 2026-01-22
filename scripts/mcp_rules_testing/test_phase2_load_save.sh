@@ -71,7 +71,7 @@ main() {
 
     # Cleanup any existing test rules
     exec_admin_silent "DELETE FROM mcp_query_rules WHERE rule_id BETWEEN 100 AND 199;" >/dev/null 2>&1
-    exec_admin_silent "DELETE FROM runtime_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199;" >/dev/null 2>&1
+    exec_admin_silent "DELETE FROM runtime_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199;" >/dev/null 2>&1 || true
 
     # Create test rules
     exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES (100, 1, 'TEST1', 'Error1', 1);" >/dev/null 2>&1

@@ -198,8 +198,8 @@ EOF
         fi
     else
         log_verbose "Query did NOT time out (may have completed before timeout)"
-        # This is not necessarily a failure - query may have been fast enough
-        return 0
+        # For timeout tests, we expect the query to time out
+        return 1
     fi
 }
 
@@ -214,15 +214,6 @@ main() {
     echo "Phase 8: Rule Evaluation - Timeout Action"
     echo "======================================"
     echo ""
-
-	sql="SELECT * FROM (SELECT 0 AS ID) t1"
-    payload=$(cat <<EOF
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"${sql}"}},"id":1}
-EOF
-)
-    response=$(mcp_request "query" "${payload}")
-    log_verbose "Response: ${response}"
-	exit 1
 
     # Check ProxySQL admin connection
     if ! check_proxysql_admin; then

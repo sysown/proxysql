@@ -322,7 +322,6 @@ main() {
 
     # Test 5.17: Execute same query again and verify count_star increments
     log_info "Executing same query again to test count_star increment..."
-    DIGEST_TEXT_CHECK=$(exec_admin_silent "SELECT digest_text FROM stats_mcp_query_digest WHERE tool_name = 'run_sql_readonly' AND digest_text LIKE '%test_phase5_table%' ORDER BY last_seen DESC LIMIT 1;")
     COUNT_BEFORE=$(exec_admin_silent "SELECT count_star FROM stats_mcp_query_digest WHERE tool_name = 'run_sql_readonly' AND digest_text LIKE '%test_phase5_table%' ORDER BY last_seen DESC LIMIT 1;")
     log_verbose "count_star before repeat: ${COUNT_BEFORE}"
     mcp_request "query" "${PAYLOAD_1}" >/dev/null

@@ -3063,20 +3063,20 @@ std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& argumen
 					result += "\"?\"";
 				}
 			} else if (it.value().is_number() || it.value().is_boolean()) {
-				result += "?";
+				result += "\"?\"";
 			} else if (it.value().is_object()) {
 				result += fingerprint_mcp_args(it.value());
 			} else if (it.value().is_array()) {
-				result += "[?]";
+				result += "[\"?\"]";
 			} else {
 				result += "null";
 			}
 		}
 		result += "}";
 	} else if (arguments.is_array()) {
-		result += "[?]";
+		result += "[\"?\"]";
 	} else {
-		result += "?";
+		result += "\"?\"";
 	}
 
 	return result;

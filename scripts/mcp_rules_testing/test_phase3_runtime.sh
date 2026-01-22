@@ -81,9 +81,6 @@ main() {
     exec_admin_silent "DELETE FROM mcp_query_rules WHERE rule_id BETWEEN 100 AND 199;" >/dev/null 2>&1
     exec_admin_silent "LOAD MCP QUERY RULES TO RUNTIME;" >/dev/null 2>&1
 
-    # Initial count of runtime rules (excluding test rules)
-    INITIAL_COUNT=$(count_rules "runtime_mcp_query_rules")
-
     # Test 3.1: Query runtime_mcp_query_rules table
     run_test "T3.1: Query runtime_mcp_query_rules table" \
         exec_admin "SELECT * FROM runtime_mcp_query_rules LIMIT 5;"
@@ -121,10 +118,13 @@ main() {
     exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES (103, 1, 'TEST4', 'Error4', 1);" >/dev/null 2>&1
     exec_admin_silent "LOAD MCP QUERY RULES TO RUNTIME;" >/dev/null 2>&1
     IDS=$(exec_admin_silent "SELECT rule_id FROM runtime_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;")
-    if echo "${IDS}" | grep -q "101" && echo "${IDS}" | grep -q "102" && echo "${IDS}" | grep -q "103"; then
+    # Verify exact ordering: 101, 102, 103
+    if [ "${IDS}" = "101
+102
+103" ]; then
         run_test "T3.6: Rules ordered by rule_id in runtime" true
     else
-        run_test "T3.6: Rules ordered by rule_id in runtime" false
+        run_test "T3.6: Rules ordered by rule_id in runtime (got: ${IDS})" false
     fi
 
     # Test 3.7: Delete rule from main table and verify it disappears from runtime

@@ -93,7 +93,7 @@ exec_admin() {
 
 # Execute MySQL command via ProxySQL admin (silent mode)
 exec_admin_silent() {
-    mysql -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
+    mysql -B -N -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
           -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
           -e "$1" 2>/dev/null
 }

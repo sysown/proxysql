@@ -180,14 +180,14 @@ main() {
     fi
 
     # Test 4.9: Verify stats table is read-only (cannot directly insert)
-    exec_admin_silent "INSERT INTO stats_mcp_query_rules (rule_id, hits) VALUES (999, 100);" 2>/dev/null
+    exec_admin_silent "INSERT INTO stats_mcp_query_rules (rule_id, hits) VALUES (999, 100);" 2>/dev/null || true
     INSERT_CHECK=$(exec_admin_silent "SELECT COUNT(*) FROM stats_mcp_query_rules WHERE rule_id = 999;")
     if [ "${INSERT_CHECK:-0}" -eq 0 ]; then
         run_test "T4.9: Stats table is read-only (insert ignored)" true
     else
-        run_test "T4.9: Stats table is read-only (insert ignored)" true
+        run_test "T4.9: Stats table is read-only (insert ignored)" false
     fi
-    exec_admin_silent "DELETE FROM stats_mcp_query_rules WHERE rule_id = 999;" 2>/dev/null
+    exec_admin_silent "DELETE FROM stats_mcp_query_rules WHERE rule_id = 999;" 2>/dev/null || true
 
     # Test 4.10: Test ORDER BY on hits column
     run_test "T4.10: Query stats ordered by hits" \
