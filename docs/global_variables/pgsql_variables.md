@@ -514,7 +514,7 @@ Controls whether queries that generate warnings are cached.
 
 |                      |             |                                   |
 | -------------------- | ----------- | --------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-cache_handle_warnings` |
+| **System Variable**  | **Name**    | `pgsql-query_cache_handle_warnings` |
 | **Dynamic**          | **Yes**     |                                   |
 | **Permitted Values** | **Type**    | Integer                           |
 |                      | **Default** | 0                                 |
@@ -592,11 +592,33 @@ Defines the authentication method ProxySQL should use for backend connections.
 
 ### `pgsql-ping_interval_server_msec`
 
-**Description**: Not supported.
+Interval in milliseconds for sending ping checks to PostgreSQL backends.
+
+|                      |             |                                   |
+| -------------------- | ----------- | --------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-ping_interval_server_msec` |
+| **Dynamic**          | **Yes**     |                                   |
+| **Permitted Values** | **Type**    | Integer (milliseconds)            |
+|                      | **Default** | 10000                             |
+|                      | **Minimum** | 1000                              |
+|                      | **Maximum** | 604800000                         |
+
+**Description**: The frequency at which ProxySQL sends internal pings to PostgreSQL backend servers to maintain connection health.
 
 ### `pgsql-ping_timeout_server`
 
-**Description**: Not supported.
+Timeout in milliseconds for internal PostgreSQL backend pings.
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | `pgsql-ping_timeout_server` |
+| **Dynamic**          | **Yes**     |                            |
+| **Permitted Values** | **Type**    | Integer (milliseconds)     |
+|                      | **Default** | 200                        |
+|                      | **Minimum** | 10                         |
+|                      | **Maximum** | 600000                     |
+
+**Description**: The maximum time ProxySQL will wait for a response to an internal ping before considering the backend connection timed out.
 
 ### `pgsql-unshun_algorithm`
 
@@ -628,11 +650,33 @@ Enables background connection establishment to keep the connection pool "warm".
 
 ### `pgsql-client_host_cache_size`
 
-**Description**: Not supported.
+Size of the cache for PostgreSQL client host information.
+
+|                      |             |                              |
+| -------------------- | ----------- | ---------------------------- |
+| **System Variable**  | **Name**    | `pgsql-client_host_cache_size` |
+| **Dynamic**          | **Yes**     |                              |
+| **Permitted Values** | **Type**    | Integer                      |
+|                      | **Default** | 0                            |
+|                      | **Minimum** | 0                            |
+|                      | **Maximum** | 1048576                      |
+
+**Description**: Configures the maximum number of entries in the client host cache, used for tracking client-specific errors and connection attempts.
 
 ### `pgsql-client_host_error_counts`
 
-**Description**: Not supported.
+Threshold for consecutive errors from a client host before taking action.
+
+|                      |             |                               |
+| -------------------- | ----------- | ----------------------------- |
+| **System Variable**  | **Name**    | `pgsql-client_host_error_counts` |
+| **Dynamic**          | **Yes**     |                               |
+| **Permitted Values** | **Type**    | Integer                       |
+|                      | **Default** | 0                             |
+|                      | **Minimum** | 0                             |
+|                      | **Maximum** | 1048576                       |
+
+**Description**: Specifies the number of connection errors allowed from a specific client host before ProxySQL begins blocking or limiting further connections from that source.
 
 ### `pgsql-connect_retries_on_failure`
 
@@ -651,11 +695,31 @@ The number of times ProxySQL will retry connecting to a backend server before gi
 
 ### `pgsql-connect_retries_delay`
 
-**Description**: Not supported.
+Delay in milliseconds between connection retry attempts.
+
+|                      |             |                                |
+| -------------------- | ----------- | ------------------------------ |
+| **System Variable**  | **Name**    | `pgsql-connect_retries_delay` |
+| **Dynamic**          | **Yes**     |                                |
+| **Permitted Values** | **Type**    | Integer (milliseconds)         |
+|                      | **Default** | 1                              |
+|                      | **Minimum** | 0                              |
+|                      | **Maximum** | 10000                          |
+
+**Description**: Sets the pause time between consecutive attempts to connect to a PostgreSQL backend server.
 
 ### `pgsql-sessions_sort`
 
-**Description**: Not supported.
+Enables sorting of PostgreSQL sessions for processing.
+
+|                      |             |                      |
+| -------------------- | ----------- | -------------------- |
+| **System Variable**  | **Name**    | `pgsql-sessions_sort` |
+| **Dynamic**          | **Yes**     |                      |
+| **Permitted Values** | **Type**    | Boolean              |
+|                      | **Default** | `false`              |
+
+**Description**: When enabled, ProxySQL sorts active PostgreSQL sessions before processing them, which can optimize performance by improving CPU cache locality.
 
 ### `pgsql-default_schema`
 
@@ -663,7 +727,18 @@ The number of times ProxySQL will retry connecting to a backend server before gi
 
 ### `pgsql-query_digests_grouping_limit`
 
-**Description**: Not supported.
+Limit for the number of parameters to group in a single query digest.
+
+|                      |             |                                     |
+| -------------------- | ----------- | ----------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests_grouping_limit` |
+| **Dynamic**          | **Yes**     |                                     |
+| **Permitted Values** | **Type**    | Integer                             |
+|                      | **Default** | 1000                                |
+|                      | **Minimum** | 1                                   |
+|                      | **Maximum** | 2089                                |
+
+**Description**: Controls the maximum number of parameters ProxySQL will consolidate when generating a normalized query digest for PostgreSQL.
 
 ### `pgsql-automatic_detect_sqli`
 
