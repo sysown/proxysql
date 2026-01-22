@@ -26,6 +26,18 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-monitor_history](#pgsql-monitor_history)                       | 7200000       |
 | [pgsql-monitor_connect_interval](#pgsql-monitor_connect_interval)     | 120000        |
 | [pgsql-monitor_ping_interval](#pgsql-monitor_ping_interval)           | 8000          |
+| [pgsql-monitor_read_only_interval](#pgsql-monitor_read_only_interval) | 1000          |
+| [pgsql-monitor_read_only_timeout](#pgsql-monitor_read_only_timeout)   | 800           |
+| [pgsql-monitor_threads](#pgsql-monitor_threads)                       | 2             |
+| [pgsql-monitor_local_dns_cache_ttl](#pgsql-monitor_local_dns_cache_ttl) | 300000       |
+| [pgsql-monitor_local_dns_cache_refresh_interval](#pgsql-monitor_local_dns_cache_refresh_interval) | 60000 |
+| [pgsql-monitor_local_dns_resolver_queue_maxsize](#pgsql-monitor_local_dns_resolver_queue_maxsize) | 128 |
+| [pgsql-mirror_max_concurrency](#pgsql-mirror_max_concurrency)         | 16            |
+| [pgsql-default_query_timeout](#pgsql-default_query_timeout)           | 86400000      |
+| [pgsql-query_digests_max_query_length](#pgsql-query_digests_max_query_length) | 65000 |
+| [pgsql-max_allowed_packet](#pgsql-max_allowed_packet)                 | 67108864      |
+| [pgsql-max_stmts_per_connection](#pgsql-max_stmts_per_connection)     | 20            |
+| [pgsql-wait_timeout](#pgsql-wait_timeout)                             | 28800000      |
 
 <!-- remark-ignore-end -->
 
@@ -307,3 +319,183 @@ Interval in milliseconds for sending ping checks to backends.
 |                      | **Maximum** | 604800000                     |
 
 **Description**: The frequency (in milliseconds) at which ProxySQL sends a ping to backend servers to verify they are alive and responsive. Default is 8 seconds.
+
+### `pgsql-monitor_read_only_interval`
+
+Interval in milliseconds for checking the read-only status of backend servers.
+
+|                      |             |                                  |
+| -------------------- | ----------- | -------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-monitor_read_only_interval` |
+|                      | **Dynamic** | Yes                              |
+| **Permitted Values** | **Type**    | Integer                          |
+|                      | **Default** | 1000                             |
+|                      | **Minimum** | 100                              |
+|                      | **Maximum** | 604800000                        |
+
+**Description**: Defines how frequently (in milliseconds) the monitor check the read-only status of PostgreSQL backends.
+
+### `pgsql-monitor_read_only_timeout`
+
+Timeout in milliseconds for the read-only check.
+
+|                      |             |                                 |
+| -------------------- | ----------- | ------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-monitor_read_only_timeout` |
+|                      | **Dynamic** | Yes                             |
+| **Permitted Values** | **Type**    | Integer                         |
+|                      | **Default** | 800                             |
+|                      | **Minimum** | 100                             |
+|                      | **Maximum** | 600000                          |
+
+**Description**: The maximum time allowed for a single read-only check to complete.
+
+### `pgsql-monitor_threads`
+
+Number of threads used by the monitor module.
+
+|                      |             |                         |
+| -------------------- | ----------- | ----------------------- |
+| **System Variable**  | **Name**    | `pgsql-monitor_threads` |
+|                      | **Dynamic** | Yes                     |
+| **Permitted Values** | **Type**    | Integer                 |
+|                      | **Default** | 2                       |
+|                      | **Minimum** | 2                       |
+|                      | **Maximum** | 256                     |
+
+**Description**: Specifies the number of background threads dedicated to monitoring PostgreSQL backend servers.
+
+### `pgsql-monitor_local_dns_cache_ttl`
+
+Time-to-live in milliseconds for cached DNS lookups in the monitor.
+
+|                      |             |                                   |
+| -------------------- | ----------- | --------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-monitor_local_dns_cache_ttl` |
+|                      | **Dynamic** | Yes                               |
+| **Permitted Values** | **Type**    | Integer                           |
+|                      | **Default** | 300000                            |
+|                      | **Minimum** | 0                                 |
+|                      | **Maximum** | 604800000                         |
+
+**Description**: Duration for which DNS resolution results are cached by the monitor.
+
+### `pgsql-monitor_local_dns_cache_refresh_interval`
+
+Interval in milliseconds to refresh the local DNS cache.
+
+|                      |             |                                               |
+| -------------------- | ----------- | --------------------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-monitor_local_dns_cache_refresh_interval` |
+|                      | **Dynamic** | Yes                                           |
+| **Permitted Values** | **Type**    | Integer                                       |
+|                      | **Default** | 60000                                         |
+|                      | **Minimum** | 0                                             |
+|                      | **Maximum** | 604800000                                     |
+
+**Description**: Frequency at which the monitor refreshes its internal DNS cache.
+
+### `pgsql-monitor_local_dns_resolver_queue_maxsize`
+
+Maximum size of the DNS resolver queue.
+
+|                      |             |                                               |
+| -------------------- | ----------- | --------------------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-monitor_local_dns_resolver_queue_maxsize` |
+|                      | **Dynamic** | Yes                                           |
+| **Permitted Values** | **Type**    | Integer                                       |
+|                      | **Default** | 128                                           |
+|                      | **Minimum** | 16                                            |
+|                      | **Maximum** | 1024                                          |
+
+**Description**: The maximum number of pending DNS resolution requests allowed in the monitor's queue.
+
+### `pgsql-mirror_max_concurrency`
+
+Maximum concurrent requests for mirrored sessions.
+
+|                      |             |                                |
+| -------------------- | ----------- | ------------------------------ |
+| **System Variable**  | **Name**    | `pgsql-mirror_max_concurrency` |
+|                      | **Dynamic** | Yes                            |
+| **Permitted Values** | **Type**    | Integer                        |
+|                      | **Default** | 16                             |
+|                      | **Minimum** | 1                              |
+|                      | **Maximum** | 8192                           |
+
+**Description**: Limits the number of simultaneous mirrored sessions to prevent resource exhaustion during traffic mirroring.
+
+### `pgsql-default_query_timeout`
+
+Default timeout in milliseconds for PostgreSQL queries.
+
+|                      |             |                              |
+| -------------------- | ----------- | ---------------------------- |
+| **System Variable**  | **Name**    | `pgsql-default_query_timeout` |
+|                      | **Dynamic** | Yes                          |
+| **Permitted Values** | **Type**    | Integer                      |
+|                      | **Default** | 86400000                     |
+|                      | **Minimum** | 1000                         |
+|                      | **Maximum** | 1728000000                   |
+
+**Description**: The default maximum time ProxySQL will wait for a query to complete if no timeout is specified in the query rules.
+
+### `pgsql-query_digests_max_query_length`
+
+Maximum query length to be considered for digest calculation.
+
+|                      |             |                                       |
+| -------------------- | ----------- | ------------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-query_digests_max_query_length` |
+|                      | **Dynamic** | Yes                                   |
+| **Permitted Values** | **Type**    | Integer                               |
+|                      | **Default** | 65000                                 |
+|                      | **Minimum** | 16                                    |
+|                      | **Maximum** | 1048576                               |
+
+**Description**: Queries longer than this value will be truncated before being processed for digest generation.
+
+### `pgsql-max_allowed_packet`
+
+Maximum size of a single network packet for PostgreSQL.
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | `pgsql-max_allowed_packet` |
+|                      | **Dynamic** | Yes                        |
+| **Permitted Values** | **Type**    | Integer                    |
+|                      | **Default** | 67108864                   |
+|                      | **Minimum** | 8192                       |
+|                      | **Maximum** | 1073741824                 |
+
+**Description**: Sets the upper limit for the size of a single PostgreSQL protocol packet that ProxySQL will handle.
+
+### `pgsql-max_stmts_per_connection`
+
+Maximum number of prepared statements per backend connection.
+
+|                      |             |                                   |
+| -------------------- | ----------- | --------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-max_stmts_per_connection` |
+|                      | **Dynamic** | Yes                               |
+| **Permitted Values** | **Type**    | Integer                           |
+|                      | **Default** | 20                                |
+|                      | **Minimum** | 1                                 |
+|                      | **Maximum** | 1024                              |
+
+**Description**: Limits how many unique prepared statements a single backend connection can maintain simultaneously.
+
+### `pgsql-wait_timeout`
+
+Timeout in milliseconds for idle client connections.
+
+|                      |             |                      |
+| -------------------- | ----------- | -------------------- |
+| **System Variable**  | **Name**    | `pgsql-wait_timeout` |
+|                      | **Dynamic** | Yes                  |
+| **Permitted Values** | **Type**    | Integer              |
+|                      | **Default** | 28800000             |
+|                      | **Minimum** | 0                    |
+|                      | **Maximum** | 1728000000           |
+
+**Description**: The maximum time (in milliseconds) a PostgreSQL client connection can remain idle before ProxySQL closes it.
