@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/modern-docs
+  workflow_dispatch:
 
 permissions:
   contents: write
