@@ -26,13 +26,23 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'ProxySQL Admin',
+      label: 'MySQL',
       items: [
-        'the_admin_schemas/the_admin_schemas',
-        'main_runtime/configuration_tables',
         'main_runtime/mysql_tables',
+        'global_variables/mysql_variables',
+        'global_variables/mysql_monitor_variables',
+        'backend_monitoring/mysql_monitoring',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'PostgreSQL',
+      items: [
         'main_runtime/postgresql_tables',
-        'main_runtime/mcp_tables',
+        'global_variables/pgsql_variables',
+        'global_variables/pgsql_monitor_variables',
+        'backend_monitoring/postgresql_monitoring',
+        'proxysql_configuration_postgres/proxysql_configuration_postgres',
       ],
     },
     {
@@ -53,6 +63,19 @@ const sidebars: SidebarsConfig = {
         },
         'genai/mcp_catalog',
         'genai/mcp_stats',
+        'global_variables/mcp_variables',
+        'main_runtime/mcp_tables',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'ProxySQL Admin',
+      items: [
+        'the_admin_schemas/the_admin_schemas',
+        'main_runtime/configuration_tables',
+        'main_runtime/mysql_tables',
+        'main_runtime/postgresql_tables',
+        'main_runtime/mcp_tables',
       ],
     },
     {
