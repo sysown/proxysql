@@ -4,7 +4,7 @@ This document describes all configuration variables for the MCP (Model Context P
 
 ## Overview
 
-The MCP module provides JSON-RPC 2.0 over HTTPS for LLM integration with ProxySQL. It includes endpoints for configuration, observation, querying, administration, caching, and a MySQL Tool Handler for database exploration.
+The MCP module provides JSON-RPC 2.0 over HTTPS for LLM integration with ProxySQL. It includes endpoints for configuration, observation, querying, administration, caching, and AI features, each with dedicated tool handlers for database exploration and LLM integration.
 
 All variables are stored in the `global_variables` table with the `mcp-` prefix and can be modified at runtime through the admin interface.
 
@@ -106,9 +106,20 @@ The following variables control authentication (Bearer tokens) for specific MCP 
   LOAD MCP VARIABLES TO RUNTIME;
   ```
 
-### MySQL Tool Handler Configuration
+#### `mcp-ai_endpoint_auth`
+- **Type:** String
+- **Default:** `""` (empty)
+- **Description:** Bearer token for `/mcp/ai` endpoint
+- **Runtime:** Yes
+- **Example:**
+  ```sql
+  SET mcp-ai_endpoint_auth='ai-token';
+  LOAD MCP VARIABLES TO RUNTIME;
+  ```
 
-The MySQL Tool Handler provides LLM-based tools for MySQL database exploration, including:
+### Query Tool Handler Configuration
+
+The Query Tool Handler provides LLM-based tools for MySQL database exploration and two-phase discovery, including:
 - **inventory** - List databases and tables
 - **structure** - Get table schema
 - **profiling** - Analyze query performance
@@ -116,6 +127,9 @@ The MySQL Tool Handler provides LLM-based tools for MySQL database exploration, 
 - **query** - Execute SQL queries
 - **relationships** - Infer table relationships
 - **catalog** - Catalog operations
+- **discovery** - Two-phase discovery tools (static harvest + LLM analysis)
+- **agent** - Agent coordination tools
+- **llm** - LLM interaction tools
 
 #### `mcp-mysql_hosts`
 - **Type:** String (comma-separated)
@@ -266,9 +280,9 @@ SELECT * FROM stats_mysql_global WHERE variable_name LIKE 'mcp_%';
 
 - **MCP Thread Version:** 0.1.0
 - **Protocol:** JSON-RPC 2.0 over HTTPS
+- **Last Updated:** 2026-01-19
 
 ## Related Documentation
 
-- [MCP Module README](README.md) - Module overview and setup
-- [MCP Endpoints](ENDPOINTS.md) - API endpoint documentation
-- [MySQL Tool Handler](TOOL_HANDLER.md) - Tool-specific documentation
+- [MCP Architecture](Architecture.md) - Module architecture and endpoint specifications
+- [Tool Discovery Guide](Tool_Discovery_Guide.md) - Tool discovery and usage documentation

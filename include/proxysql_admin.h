@@ -343,6 +343,25 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 		int coredump_generation_interval_ms;
 		int coredump_generation_threshold;
+		/**
+		 * @brief Path to the SSL/TLS key log file for decrypting traffic
+		 *
+		 * When set, ProxySQL writes TLS secrets to this file in NSS Key Log Format.
+		 * This allows tools like Wireshark to decrypt SSL/TLS traffic for debugging.
+		 *
+		 * Format: "<Label> <ClientRandom> <Secret>\n"
+		 *
+		 * Path handling:
+		 * - Absolute path: used as-is (e.g., "/var/log/proxysql/keylog.txt")
+		 * - Relative path: resolved relative to ProxySQL data directory
+		 * - Empty string (""): disables key logging (default)
+		 *
+		 * Security: This file contains cryptographic secrets that can decrypt
+		 * all TLS traffic. Access must be tightly restricted. Only enable for debugging.
+		 *
+		 * @see https://wiki.wireshark.org/TLS#TLS_Decryption
+		 * @see https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
+		 */
 		char* ssl_keylog_file;
 		/**
 		 *   Processlist configurations are owned by MySQL/PgSQL Threads_Handlers.

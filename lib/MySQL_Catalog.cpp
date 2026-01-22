@@ -123,6 +123,7 @@ int MySQL_Catalog::create_tables() {
 	// Triggers to keep FTS in sync
 	db->execute("DROP TRIGGER IF EXISTS catalog_ai");
 	db->execute("DROP TRIGGER IF EXISTS catalog_ad");
+	db->execute("DROP TRIGGER IF EXISTS catalog_au");
 
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ai AFTER INSERT ON catalog BEGIN"
 		"  INSERT INTO catalog_fts(rowid, schema, kind, key, document ,  tags)"
@@ -132,6 +133,17 @@ int MySQL_Catalog::create_tables() {
 	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_ad AFTER DELETE ON catalog BEGIN"
 		"  INSERT INTO catalog_fts(catalog_fts, rowid, schema, kind, key, document ,  tags)"
 		"  VALUES ('delete', old.id, old.schema, old.kind, old.key, old.document ,  old.tags);"
+		"END;");
+
+	// AFTER UPDATE trigger to keep FTS in sync for upserts
+	// When an upsert occurs (INSERT OR REPLACE ... ON CONFLICT ... DO UPDATE),
+	// the UPDATE doesn't trigger INSERT/DELETE triggers, so we need to handle
+	// updates explicitly to keep the FTS index current
+	db->execute("CREATE TRIGGER IF NOT EXISTS catalog_au AFTER UPDATE ON catalog BEGIN"
+		"  INSERT INTO catalog_fts(catalog_fts, rowid, schema, kind, key, document ,  tags)"
+		"  VALUES ('delete', old.id, old.schema, old.kind, old.key, old.document ,  old.tags);"
+		"  INSERT INTO catalog_fts(rowid, schema, kind, key, document ,  tags)"
+		"  VALUES (new.id, new.schema, new.kind, new.key, new.document ,  new.tags);"
 		"END;");
 
 	// Merge operations log
@@ -275,75 +287,95 @@ std::string MySQL_Catalog::search(
 	int limit,
 	int offset
 ) {
+	// Build SQL query with parameterized conditions to prevent SQL injection
 	std::ostringstream sql;
 	sql << "SELECT schema, kind, key, document, tags ,  links FROM catalog WHERE 1=1";
 
-	// Add schema filter
-	if (!schema.empty()) {
-		sql << " AND schema = '" << schema << "'";
+	bool has_schema = !schema.empty();
+	bool has_kind = !kind.empty();
+	bool has_tags = !tags.empty();
+	bool has_query = !query.empty();
+
+	if (has_schema) {
+		sql << " AND schema = ?";
+	}
+	if (has_kind) {
+		sql << " AND kind = ?";
+	}
+	if (has_tags) {
+		sql << " AND tags LIKE ?";
+	}
+	if (has_query) {
+		sql << " AND (key LIKE ? OR document LIKE ? OR tags LIKE ?)";
 	}
 
-	// Add kind filter
-	if (!kind.empty()) {
-		sql << " AND kind = '" << kind << "'";
-	}
+	sql << " ORDER BY updated_at DESC LIMIT ? OFFSET ?";
 
-	// Add tags filter
-	if (!tags.empty()) {
-		sql << " AND tags LIKE '%" << tags << "%'";
-	}
-
-	// Add search query
-	if (!query.empty()) {
-		sql << " AND (key LIKE '%" << query << "%' "
-		     << "OR document LIKE '%" << query << "%' "
-		     << "OR tags LIKE '%" << query << "%')";
-	}
-
-	sql << " ORDER BY updated_at DESC LIMIT " << limit << " OFFSET " << offset;
-
-	char* error = NULL;
-	int cols = 0, affected = 0;
-	SQLite3_result* resultset = NULL;
-
-	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
-	if (error) {
-		proxy_error("Catalog search error: %s\n", error);
+	// Prepare statement
+	sqlite3_stmt* stmt = NULL;
+	int rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	if (rc != SQLITE_OK) {
+		proxy_error("Failed to prepare catalog search: %d\n", rc);
 		return "[]";
 	}
+
+	// Bind parameters
+	int param_idx = 1;
+	if (has_schema) {
+		std::string schema_pattern = schema;
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, schema_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	if (has_kind) {
+		std::string kind_pattern = kind;
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, kind_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	if (has_tags) {
+		std::string tags_pattern = "%" + tags + "%";
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, tags_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	if (has_query) {
+		std::string query_pattern = "%" + query + "%";
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, query_pattern.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, query_pattern.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, query_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	(*proxy_sqlite3_bind_int)(stmt, param_idx++, limit);
+	(*proxy_sqlite3_bind_int)(stmt, param_idx++, offset);
 
 	// Build JSON result using nlohmann::json
 	nlohmann::json results = nlohmann::json::array();
 
-	if (resultset) {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
-		     it != resultset->rows.end(); ++it) {
-			SQLite3_row* row = *it;
+	// Execute prepared statement and process results
+	int step_rc;
+	while ((step_rc = (*proxy_sqlite3_step)(stmt)) == SQLITE_ROW) {
+		nlohmann::json entry;
+		entry["schema"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 0));
+		entry["kind"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 1));
+		entry["key"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 2));
 
-			nlohmann::json entry;
-			entry["schema"] = std::string(row->fields[0] ? row->fields[0] : "");
-			entry["kind"] = std::string(row->fields[1] ? row->fields[1] : "");
-			entry["key"] = std::string(row->fields[2] ? row->fields[2] : "");
-
-			// Parse the stored JSON document - nlohmann::json handles escaping
-			const char* doc_str = row->fields[3];
-			if (doc_str) {
-				try {
-					entry["document"] = nlohmann::json::parse(doc_str);
-				} catch (const nlohmann::json::parse_error& e) {
-					// If document is not valid JSON, store as string
-					entry["document"] = std::string(doc_str);
-				}
-			} else {
-				entry["document"] = nullptr;
+		// Parse the stored JSON document - nlohmann::json handles escaping
+		const char* doc_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 3);
+		if (doc_str) {
+			try {
+				entry["document"] = nlohmann::json::parse(doc_str);
+			} catch (const nlohmann::json::parse_error& e) {
+				// If document is not valid JSON, store as string
+				entry["document"] = std::string(doc_str);
 			}
-
-			entry["tags"] = std::string(row->fields[4] ? row->fields[4] : "");
-			entry["links"] = std::string(row->fields[5] ? row->fields[5] : "");
-
-			results.push_back(entry);
+		} else {
+			entry["document"] = nullptr;
 		}
-		delete resultset;
+
+		entry["tags"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 4));
+		entry["links"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 5));
+
+		results.push_back(entry);
+	}
+
+	(*proxy_sqlite3_finalize)(stmt);
+
+	if (step_rc != SQLITE_DONE) {
+		proxy_error("Catalog search error: step_rc=%d\n", step_rc);
 	}
 
 	return results.dump();
@@ -366,76 +398,104 @@ std::string MySQL_Catalog::list(
 	int limit,
 	int offset
 ) {
-	std::ostringstream sql;
-	sql << "SELECT schema, kind, key, document, tags ,  links FROM catalog WHERE 1=1";
+	bool has_schema = !schema.empty();
+	bool has_kind = !kind.empty();
 
-	if (!schema.empty()) {
-		sql << " AND schema = '" << schema << "'";
-	}
-
-	if (!kind.empty()) {
-		sql << " AND kind = '" << kind << "'";
-	}
-
-	sql << " ORDER BY schema, kind ,  key ASC LIMIT " << limit << " OFFSET " << offset;
-
-	// Get total count
+	// Get total count using prepared statement to prevent SQL injection
 	std::ostringstream count_sql;
 	count_sql << "SELECT COUNT(*) FROM catalog WHERE 1=1";
-	if (!schema.empty()) {
-		count_sql << " AND schema = '" << schema << "'";
+	if (has_schema) {
+		count_sql << " AND schema = ?";
 	}
-	if (!kind.empty()) {
-		count_sql << " AND kind = '" << kind << "'";
+	if (has_kind) {
+		count_sql << " AND kind = ?";
 	}
 
-	char* error = NULL;
-	int cols = 0, affected = 0;
-	SQLite3_result* resultset = NULL;
+	sqlite3_stmt* count_stmt = NULL;
 	int total = 0;
+	int rc = db->prepare_v2(count_sql.str().c_str(), &count_stmt);
+	if (rc == SQLITE_OK) {
+		int param_idx = 1;
+		if (has_schema) {
+			(*proxy_sqlite3_bind_text)(count_stmt, param_idx++, schema.c_str(), -1, SQLITE_TRANSIENT);
+		}
+		if (has_kind) {
+			(*proxy_sqlite3_bind_text)(count_stmt, param_idx++, kind.c_str(), -1, SQLITE_TRANSIENT);
+		}
 
-	SQLite3_result* count_result = db->execute_statement(count_sql.str().c_str(), &error, &cols, &affected);
-	if (count_result && !count_result->rows.empty()) {
-		total = atoi(count_result->rows[0]->fields[0]);
+		if ((*proxy_sqlite3_step)(count_stmt) == SQLITE_ROW) {
+			total = (*proxy_sqlite3_column_int)(count_stmt, 0);
+		}
+		(*proxy_sqlite3_finalize)(count_stmt);
 	}
-	delete count_result;
 
-	resultset = NULL;
-	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+	// Build main query with prepared statement to prevent SQL injection
+	std::ostringstream sql;
+	sql << "SELECT schema, kind, key, document, tags ,  links FROM catalog WHERE 1=1";
+	if (has_schema) {
+		sql << " AND schema = ?";
+	}
+	if (has_kind) {
+		sql << " AND kind = ?";
+	}
+	sql << " ORDER BY schema, kind ,  key ASC LIMIT ? OFFSET ?";
+
+	sqlite3_stmt* stmt = NULL;
+	rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	if (rc != SQLITE_OK) {
+		proxy_error("Failed to prepare catalog list: %d\n", rc);
+		nlohmann::json result;
+		result["total"] = total;
+		result["results"] = nlohmann::json::array();
+		return result.dump();
+	}
+
+	// Bind parameters
+	int param_idx = 1;
+	if (has_schema) {
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, schema.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	if (has_kind) {
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, kind.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	(*proxy_sqlite3_bind_int)(stmt, param_idx++, limit);
+	(*proxy_sqlite3_bind_int)(stmt, param_idx++, offset);
 
 	// Build JSON result using nlohmann::json
 	nlohmann::json result;
 	result["total"] = total;
 	nlohmann::json results = nlohmann::json::array();
 
-	if (resultset) {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
-		     it != resultset->rows.end(); ++it) {
-			SQLite3_row* row = *it;
+	// Execute prepared statement and process results
+	int step_rc;
+	while ((step_rc = (*proxy_sqlite3_step)(stmt)) == SQLITE_ROW) {
+		nlohmann::json entry;
+		entry["schema"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 0));
+		entry["kind"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 1));
+		entry["key"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 2));
 
-			nlohmann::json entry;
-			entry["schema"] = std::string(row->fields[0] ? row->fields[0] : "");
-			entry["kind"] = std::string(row->fields[1] ? row->fields[1] : "");
-			entry["key"] = std::string(row->fields[2] ? row->fields[2] : "");
-
-			// Parse the stored JSON document
-			const char* doc_str = row->fields[3];
-			if (doc_str) {
-				try {
-					entry["document"] = nlohmann::json::parse(doc_str);
-				} catch (const nlohmann::json::parse_error& e) {
-					entry["document"] = std::string(doc_str);
-				}
-			} else {
-				entry["document"] = nullptr;
+		// Parse the stored JSON document
+		const char* doc_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 3);
+		if (doc_str) {
+			try {
+				entry["document"] = nlohmann::json::parse(doc_str);
+			} catch (const nlohmann::json::parse_error& e) {
+				entry["document"] = std::string(doc_str);
 			}
-
-			entry["tags"] = std::string(row->fields[4] ? row->fields[4] : "");
-			entry["links"] = std::string(row->fields[5] ? row->fields[5] : "");
-
-			results.push_back(entry);
+		} else {
+			entry["document"] = nullptr;
 		}
-		delete resultset;
+
+		entry["tags"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 4));
+		entry["links"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 5));
+
+		results.push_back(entry);
+	}
+
+	(*proxy_sqlite3_finalize)(stmt);
+
+	if (step_rc != SQLITE_DONE) {
+		proxy_error("Catalog list error: step_rc=%d\n", step_rc);
 	}
 
 	result["results"] = results;
@@ -502,18 +562,33 @@ int MySQL_Catalog::remove(
 	const std::string& kind,
 	const std::string& key
 ) {
+	// Use prepared statement to prevent SQL injection
 	std::ostringstream sql;
 	sql << "DELETE FROM catalog WHERE 1=1";
 
-	if (!schema.empty()) {
-		sql << " AND schema = '" << schema << "'";
+	bool has_schema = !schema.empty();
+	if (has_schema) {
+		sql << " AND schema = ?";
 	}
-	sql << " AND kind = '" << kind << "' AND key = '" << key << "'";
+	sql << " AND kind = ? AND key = ?";
 
-	if (!db->execute(sql.str().c_str())) {
-		proxy_error("Catalog remove error\n");
+	sqlite3_stmt* stmt = NULL;
+	int rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	if (rc != SQLITE_OK) {
+		proxy_error("Failed to prepare catalog remove: %d\n", rc);
 		return -1;
 	}
+
+	// Bind parameters
+	int param_idx = 1;
+	if (has_schema) {
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, schema.c_str(), -1, SQLITE_TRANSIENT);
+	}
+	(*proxy_sqlite3_bind_text)(stmt, param_idx++, kind.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, param_idx++, key.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }

@@ -365,21 +365,28 @@ std::string Query_Tool_Handler::execute_query(const std::string& query) {
 		return "{\"error\": \"No available connection\"}";
 	}
 
-	std::string result = "{\"error\": \"Query execution failed\"}";
+	MYSQL* mysql_ptr = static_cast<MYSQL*>(mysql);
 
-	if (mysql_query(static_cast<MYSQL*>(mysql), query.c_str())) {
-		proxy_error("Query_Tool_Handler: Query failed: %s\n", mysql_error(static_cast<MYSQL*>(mysql)));
+	if (mysql_query(mysql_ptr, query.c_str())) {
+		proxy_error("Query_Tool_Handler: Query failed: %s\n", mysql_error(mysql_ptr));
 		return_connection(mysql);
+		json j;
+		j["success"] = false;
+		j["error"] = std::string(mysql_error(mysql_ptr));
+		return j.dump();
 	}
 
-	MYSQL_RES* res = mysql_store_result(static_cast<MYSQL*>(mysql));
+	MYSQL_RES* res = mysql_store_result(mysql_ptr);
+
+	// Capture affected_rows BEFORE return_connection to avoid race condition
+	unsigned long affected_rows_val = mysql_affected_rows(mysql_ptr);
 	return_connection(mysql);
 
 	if (!res) {
 		// No result set (e.g., INSERT/UPDATE)
 		json j;
 		j["success"] = true;
-		j["affected_rows"] = static_cast<long>(mysql_affected_rows(static_cast<MYSQL*>(mysql)));
+		j["affected_rows"] = static_cast<long>(affected_rows_val);
 		return j.dump();
 	}
 
@@ -444,13 +451,16 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 	}
 
 	MYSQL_RES* res = mysql_store_result(mysql_ptr);
+
+	// Capture affected_rows BEFORE return_connection to avoid race condition
+	unsigned long affected_rows_val = mysql_affected_rows(mysql_ptr);
 	return_connection(mysql);
 
 	if (!res) {
 		// No result set (e.g., INSERT/UPDATE)
 		json j;
 		j["success"] = true;
-		j["affected_rows"] = static_cast<long>(mysql_affected_rows(mysql_ptr));
+		j["affected_rows"] = static_cast<long>(affected_rows_val);
 		return j.dump();
 	}
 
@@ -479,7 +489,8 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 	std::string upper = query;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
-	// Check for dangerous keywords
+	// Quick exit: blacklist check for dangerous keywords
+	// This provides fast rejection of obviously dangerous queries
 	std::vector<std::string> dangerous = {
 		"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
 		"TRUNCATE", "REPLACE", "LOAD", "CALL", "EXECUTE"
@@ -491,7 +502,9 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 		}
 	}
 
-	// Must start with SELECT or WITH or EXPLAIN
+	// Whitelist validation: query must start with an allowed read-only keyword
+	// This ensures the query is of a known-safe type (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE)
+	// Only queries matching these specific patterns are allowed through
 	if (upper.find("SELECT") == 0 && upper.find("FROM") != std::string::npos) {
 		return true;
 	}
@@ -828,10 +841,10 @@ static std::string extract_schema_name(const std::string& tool_name, const json&
 			if (resultset && resultset->rows_count > 0) {
 				SQLite3_row* row = resultset->rows[0];
 				std::string schema = std::string(row->fields[0] ? row->fields[0] : "");
-				free(resultset);
+				delete resultset;
 				return schema;
 			}
-			if (resultset) free(resultset);
+			if (resultset) delete resultset;
 		}
 		return std::to_string(run_id);
 	}

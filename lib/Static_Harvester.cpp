@@ -315,6 +315,57 @@ bool Static_Harvester::is_id_like_name(const std::string& column_name) {
 	return false;
 }
 
+// Validate a schema/database name for safe use in SQL queries.
+//
+// MySQL schema names should only contain alphanumeric characters, underscores,
+// and dollar signs. This validation prevents SQL injection when the schema
+// name is used in string concatenation for INFORMATION_SCHEMA queries.
+//
+// Parameters:
+//   name - Schema name to validate
+//
+// Returns:
+//   true if the name is safe to use, false otherwise
+bool Static_Harvester::is_valid_schema_name(const std::string& name) {
+	if (name.empty()) {
+		return true; // Empty filter is valid (means "all schemas")
+	}
+
+	// Schema names should only contain alphanumeric, underscore, and dollar sign
+	for (char c : name) {
+		if (!isalnum(c) && c != '_' && c != '$') {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// Escape a string for safe use in SQL queries by doubling single quotes.
+//
+// This is a simple SQL escaping function that prevents SQL injection
+// when strings are used in string concatenation for SQL queries.
+//
+// Parameters:
+//   str - String to escape
+//
+// Returns:
+//   Escaped string with single quotes doubled
+std::string Static_Harvester::escape_sql_string(const std::string& str) {
+	std::string escaped;
+	escaped.reserve(str.length() * 2); // Reserve space for potential escaping
+
+	for (char c : str) {
+		if (c == '\'') {
+			escaped += "''"; // Escape single quote by doubling
+		} else {
+			escaped += c;
+		}
+	}
+
+	return escaped;
+}
+
 // ============================================================
 // Discovery Run Management
 // ============================================================
@@ -398,6 +449,12 @@ int Static_Harvester::finish_run(const std::string& notes) {
 std::vector<Static_Harvester::SchemaRow> Static_Harvester::fetch_schemas(const std::string& filter) {
 	std::vector<SchemaRow> schemas;
 
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return schemas;
+	}
+
 	std::ostringstream sql;
 	sql << "SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME "
 	    << "FROM information_schema.SCHEMATA";
@@ -479,6 +536,12 @@ int Static_Harvester::harvest_schemas(const std::string& only_schema) {
 std::vector<Static_Harvester::ObjectRow> Static_Harvester::fetch_tables_views(const std::string& filter) {
 	std::vector<ObjectRow> objects;
 
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return objects;
+	}
+
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_ROWS, "
 	    << "DATA_LENGTH, INDEX_LENGTH, CREATE_TIME, UPDATE_TIME, TABLE_COMMENT "
@@ -524,6 +587,12 @@ std::vector<Static_Harvester::ObjectRow> Static_Harvester::fetch_tables_views(co
 //   Vector of ColumnRow structures containing column metadata
 std::vector<Static_Harvester::ColumnRow> Static_Harvester::fetch_columns(const std::string& filter) {
 	std::vector<ColumnRow> columns;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return columns;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, "
@@ -574,6 +643,12 @@ std::vector<Static_Harvester::ColumnRow> Static_Harvester::fetch_columns(const s
 std::vector<Static_Harvester::IndexRow> Static_Harvester::fetch_indexes(const std::string& filter) {
 	std::vector<IndexRow> indexes;
 
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return indexes;
+	}
+
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE, INDEX_TYPE, "
 	    << "SEQ_IN_INDEX, COLUMN_NAME, SUB_PART, COLLATION, CARDINALITY "
@@ -620,6 +695,12 @@ std::vector<Static_Harvester::IndexRow> Static_Harvester::fetch_indexes(const st
 //   Vector of FKRow structures containing foreign key metadata
 std::vector<Static_Harvester::FKRow> Static_Harvester::fetch_foreign_keys(const std::string& filter) {
 	std::vector<FKRow> fks;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return fks;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT kcu.CONSTRAINT_SCHEMA AS child_schema, "
@@ -1042,10 +1123,10 @@ int Static_Harvester::harvest_view_definitions(const std::string& only_schema) {
 		char* error = NULL;
 		int cols = 0, affected = 0;
 		std::ostringstream update_sql;
-		update_sql << "UPDATE objects SET definition_sql = '" << view_def << "' "
+		update_sql << "UPDATE objects SET definition_sql = '" << escape_sql_string(view_def) << "' "
 		           << "WHERE run_id = " << current_run_id
-		           << " AND schema_name = '" << schema_name << "'"
-		           << " AND object_name = '" << view_name << "'"
+		           << " AND schema_name = '" << escape_sql_string(schema_name) << "'"
+		           << " AND object_name = '" << escape_sql_string(view_name) << "'"
 		           << " AND object_type = 'view';";
 
 		catalog->get_db()->execute_statement(update_sql.str().c_str(), &error, &cols, &affected);
@@ -1129,13 +1210,14 @@ int Static_Harvester::build_quick_profiles() {
 		// Build profile JSON
 		json profile;
 		profile["guessed_kind"] = guessed_kind;
-		profile["rows_est"] = row->fields[4] ? atol(row->fields[4]) : 0;
-		profile["size_bytes"] = (atol(row->fields[5] ? row->fields[5] : "0") +
-		                       atol(row->fields[6] ? row->fields[6] : "0"));
-		profile["engine"] = std::string(row->fields[3] ? row->fields[3] : "");
-		profile["has_primary_key"] = atoi(row->fields[7]) != 0;
-		profile["has_foreign_keys"] = atoi(row->fields[8]) != 0;
-		profile["has_time_column"] = atoi(row->fields[9]) != 0;
+		// SELECT: object_id(0), schema_name(1), object_name(2), object_type(3), engine(4), table_rows_est(5), data_length(6), index_length(7), has_primary_key(8), has_foreign_keys(9), has_time_column(10)
+		profile["rows_est"] = row->fields[5] ? atol(row->fields[5]) : 0;
+		profile["size_bytes"] = (atol(row->fields[6] ? row->fields[6] : "0") +
+		                       atol(row->fields[7] ? row->fields[7] : "0"));
+		profile["engine"] = std::string(row->fields[4] ? row->fields[4] : "");
+		profile["has_primary_key"] = atoi(row->fields[8]) != 0;
+		profile["has_foreign_keys"] = atoi(row->fields[9]) != 0;
+		profile["has_time_column"] = atoi(row->fields[10]) != 0;
 
 		if (catalog->upsert_profile(current_run_id, object_id, "table_quick", profile.dump()) == 0) {
 			count++;

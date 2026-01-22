@@ -21,6 +21,7 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 - **Discover** database schemas (list tables, describe columns, view relationships)
 - **Explore** data safely (sample rows, run read-only queries with guardrails)
 - **Remember** discoveries in an external catalog (SQLite-based memory for LLM)
+- **Analyze** databases using two-phase discovery (static harvest + LLM analysis)
 
 ### Component Architecture
 
@@ -40,29 +41,90 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │   │
 │  │  │   /config   │  │   /query    │  │    /admin   │       │   │
 │  │  │   endpoint  │  │   endpoint  │  │   endpoint  │       │   │
-│  │  └──────┬──────┘  └──────┬──────┘  └─────────────┘       │   │
-│  └─────────┼─────────────────┼─────────────────────────────────┘   │
-│            │                 │                                       │
-│  ┌─────────▼─────────────────▼─────────────────────────────────┐   │
-│  │              MySQL_Tool_Handler                               │   │
-│  │   ┌─────────────────────────────────────────────────────┐   │   │
-│  │   │         MySQL Connection Pool                         │   │   │
-│  │   │   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                   │   │   │
-│  │   │   │Conn1│ │Conn2│ │Conn3│ │ ... │ (to MySQL)         │   │   │
-│  │   │   └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                   │   │   │
-│  │   │      └──────┴──────┴──────┴──────┘                    │   │   │
-│  │   └─────────────────────────────────────────────────────┘   │   │
-│  │                                                              │   │
-│  │   Tool Methods:                                             │   │
-│  │   • list_schemas, list_tables, describe_table              │   │
-│  │   • sample_rows, sample_distinct, run_sql_readonly         │   │
-│  │   • catalog_upsert, catalog_get, catalog_search            │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘       │   │
+│  │         │                │               │                │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │   │
+│  │  │   /observe  │  │   /cache    │  │    /ai      │       │   │
+│  │  │   endpoint  │  │   endpoint  │  │   endpoint  │       │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘       │   │
+│  │         │                │               │                │   │
+│  │  ┌─────────────┐                                              │   │
+│  │  │   /rag      │                                              │   │
+│  │  │   endpoint  │                                              │   │
+│  │  └─────────────┘                                              │   │
 │  └──────────────────────────────────────────────────────────────┘   │
+│            │         │        │        │        │        │          │
+│  ┌─────────▼─────────▼────────▼────────▼────────▼────────▼─────────┐│
+│  │              Dedicated Tool Handlers                            ││
+│  │  ┌─────────────┐┌─────────────┐┌─────────────┐┌─────────────┐  ││
+│  │  │ Config_TH   ││ Query_TH    ││ Admin_TH    ││ Cache_TH    │  ││
+│  │  │             ││             ││             ││             │  ││
+│  │  │ get_config  ││ list_schemas││ admin_list_ ││ get_cache_  │  ││
+│  │  │ set_config  ││ list_tables ││ users       ││ stats       │  ││
+│  │  │ reload      ││ describe_   ││ admin_kill_ ││ invalidate  │  ││
+│  │  └─────────────┘│ table       ││ query       ││ set_cache_  │  ││
+│  │                 │ sample_rows ││ ...         ││ ttl         │  ││
+│  │                 │ run_sql_    ││             ││ ...         │  ││
+│  │                 │ readonly    ││             ││             │  ││
+│  │                 │ catalog_    ││             ││             │  ││
+│  │                 │ upsert      ││             ││             │  ││
+│  │                 │ discovery.  ││             ││             │  ││
+│  │                 │ run_static  ││             ││             │  ││
+│  │                 │ llm.*       ││             ││             │  ││
+│  │                 │ agent.*     ││             ││             │  ││
+│  │                 └─────────────┘└─────────────┘└─────────────┘  ││
+│  │  ┌─────────────┐                                               ││
+│  │  │ Observe_TH  │                                               ││
+│  │  │             │                                               ││
+│  │  │ list_stats  │                                               ││
+│  │  │ get_stats   │                                               ││
+│  │  │ show_       │                                               ││
+│  │  │ connections │                                               ││
+│  │  │ ...         │                                               ││
+│  │  └─────────────┘                                               ││
+│  │  ┌─────────────┐                                               ││
+│  │  │ AI_TH       │                                               ││
+│  │  │             │                                               ││
+│  │  │ llm.query   │                                               ││
+│  │  │ llm.analyze │                                               ││
+│  │  │ anomaly.    │                                               ││
+│  │  │ detect      │                                               ││
+│  │  │ ...         │                                               ││
+│  │  └─────────────┘                                               ││
+│  │  ┌─────────────┐                                               ││
+│  │  │ RAG_TH      │                                               ││
+│  │  │             │                                               ││
+│  │  │ rag.search_ │                                               ││
+│  │  │ fts         │                                               ││
+│  │  │ rag.search_ │                                               ││
+│  │  │ vector      │                                               ││
+│  │  │ rag.search_ │                                               ││
+│  │  │ hybrid      │                                               ││
+│  │  │ rag.get_    │                                               ││
+│  │  │ chunks      │                                               ││
+│  │  │ rag.get_    │                                               ││
+│  │  │ docs        │                                               ││
+│  │  │ rag.fetch_  │                                               ││
+│  │  │ from_source │                                               ││
+│  │  │ rag.admin.  │                                               ││
+│  │  │ stats       │                                               ││
+│  │  └─────────────┘                                               ││
+│  └──────────────────────────────────────────────────────────────────┘│
+│            │         │        │        │        │        │          │
+│  ┌─────────▼─────────▼────────▼────────▼────────▼────────▼─────────┐│
+│  │              MySQL Connection Pools                             ││
+│  │  ┌─────────────┐┌─────────────┐┌─────────────┐┌─────────────┐  ││
+│  │  │ Config Pool ││ Query Pool  ││ Admin Pool  ││ Other Pools │  ││
+│  │  │             ││             ││             ││             │  ││
+│  │  │ 1-2 conns   ││ 2-4 conns   ││ 1 conn      ││ 1-2 conns   │  ││
+│  │  └─────────────┘└─────────────┘└─────────────┘└─────────────┘  ││
+│  └──────────────────────────────────────────────────────────────────┘│
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │              MySQL_Catalog (SQLite Memory)                  │   │
-│  │   • LLM discoveries catalog (FTS searchable)                │   │
-│  │   • Tables: catalog_entries, catalog_links                 │   │
+│  │              Discovery Schema (SQLite)                      │   │
+│  │   • Two-phase discovery catalog                             │   │
+│  │   • Tables: runs, objects, columns, indexes, FKs, profiles  │   │
+│  │   • LLM artifacts: summaries, relationships, domains        │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                      │
 └──────────────────────────────────────────────────────────────────────┘
@@ -75,6 +137,9 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+Where:
+- `TH` = Tool Handler
+
 ### MCP Tools Available
 
 | Category | Tools | Purpose |
@@ -83,7 +148,13 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 | **Structure** | `describe_table`, `get_constraints` | Get schema details (columns, keys, indexes) |
 | **Sampling** | `sample_rows`, `sample_distinct` | Sample data safely with row limits |
 | **Query** | `run_sql_readonly`, `explain_sql` | Execute SELECT queries with guardrails |
-| **Catalog** | `catalog_upsert`, `catalog_get`, `catalog_search` | Store/retrieve LLM discoveries |
+| **Relationships** | `suggest_joins`, `find_reference_candidates` | Infer table relationships |
+| **Profiling** | `table_profile`, `column_profile` | Analyze data distributions and statistics |
+| **Catalog** | `catalog_upsert`, `catalog_get`, `catalog_search`, `catalog_delete`, `catalog_list`, `catalog_merge` | Store/retrieve LLM discoveries |
+| **Discovery** | `discovery.run_static` | Run Phase 1 of two-phase discovery |
+| **Agent Coordination** | `agent.run_start`, `agent.run_finish`, `agent.event_append` | Coordinate LLM agent discovery runs |
+| **LLM Interaction** | `llm.summary_upsert`, `llm.summary_get`, `llm.relationship_upsert`, `llm.domain_upsert`, `llm.domain_set_members`, `llm.metric_upsert`, `llm.question_template_add`, `llm.note_add`, `llm.search` | Store and retrieve LLM-generated insights |
+| **RAG** | `rag.search_fts`, `rag.search_vector`, `rag.search_hybrid`, `rag.get_chunks`, `rag.get_docs`, `rag.fetch_from_source`, `rag.admin.stats` | Retrieval-Augmented Generation tools |
 
 ---
 
@@ -101,45 +172,90 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 |----------|---------|-------------|
 | `mcp-enabled` | false | Enable/disable MCP server |
 | `mcp-port` | 6071 | HTTPS port for MCP endpoints |
+| `mcp-config_endpoint_auth` | (empty) | Auth token for /config endpoint |
+| `mcp-observe_endpoint_auth` | (empty) | Auth token for /observe endpoint |
+| `mcp-query_endpoint_auth` | (empty) | Auth token for /query endpoint |
+| `mcp-admin_endpoint_auth` | (empty) | Auth token for /admin endpoint |
+| `mcp-cache_endpoint_auth` | (empty) | Auth token for /cache endpoint |
+| `mcp-ai_endpoint_auth` | (empty) | Auth token for /ai endpoint |
+| `mcp-timeout_ms` | 30000 | Query timeout in milliseconds |
 | `mcp-mysql_hosts` | 127.0.0.1 | MySQL server(s) for tool execution |
 | `mcp-mysql_ports` | 3306 | MySQL port(s) |
 | `mcp-mysql_user` | (empty) | MySQL username for connections |
-- `POST https://localhost:6071/config` - Initialize, ping, tools/list
-- `POST https://localhost:6071/query` - Execute tools (tools/call)
+| `mcp-mysql_password` | (empty) | MySQL password for connections |
+| `mcp-mysql_schema` | (empty) | Default schema for connections |
 
-### 2. MySQL Connection Pool
+**RAG Configuration Variables:**
 
-**Location:** `lib/MySQL_Tool_Handler.cpp`
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `genai-rag_enabled` | false | Enable RAG features |
+| `genai-rag_k_max` | 50 | Maximum k for search results |
+| `genai-rag_candidates_max` | 500 | Maximum candidates for hybrid search |
+| `genai-rag_query_max_bytes` | 8192 | Maximum query length in bytes |
+| `genai-rag_response_max_bytes` | 5000000 | Maximum response size in bytes |
+| `genai-rag_timeout_ms` | 2000 | RAG operation timeout in ms |
+
+**Endpoints:**
+- `POST https://localhost:6071/mcp/config` - Configuration tools
+- `POST https://localhost:6071/mcp/query` - Database exploration and discovery tools
+- `POST https://localhost:6071/mcp/rag` - Retrieval-Augmented Generation tools
+- `POST https://localhost:6071/mcp/admin` - Administrative tools
+- `POST https://localhost:6071/mcp/cache` - Cache management tools
+- `POST https://localhost:6071/mcp/observe` - Observability tools
+- `POST https://localhost:6071/mcp/ai` - AI and LLM tools
+
+### 2. Dedicated Tool Handlers
+
+**Location:** `lib/*_Tool_Handler.cpp`
+
+**Purpose:** Each endpoint has its own dedicated tool handler with specific tools and connection pools.
+
+**Tool Handlers:**
+- **Config_Tool_Handler** - Configuration management tools
+- **Query_Tool_Handler** - Database exploration and two-phase discovery tools
+- **Admin_Tool_Handler** - Administrative operations
+- **Cache_Tool_Handler** - Cache management
+- **Observe_Tool_Handler** - Monitoring and metrics
+- **AI_Tool_Handler** - AI and LLM features
+
+### 3. MySQL Connection Pools
+
+**Location:** Each Tool_Handler manages its own connection pool
 
 **Purpose:** Manages reusable connections to backend MySQL servers for tool execution.
 
 **Features:**
 - Thread-safe connection pooling with `pthread_mutex_t`
-- One connection per configured `host:port` pair
+- Separate pools per tool handler for resource isolation
 - Automatic connection on first use
-- 5-second timeouts for connect/read/write operations
+- Configurable timeouts for connect/read/write operations
 
-### 3. MySQL Catalog (LLM Memory)
+### 4. Discovery Schema (LLM Memory and Discovery Catalog)
 
-**Location:** `lib/MySQL_Catalog.cpp`
+**Location:** `lib/Discovery_Schema.cpp`
 
-**Purpose:** External memory for LLM to store discoveries with full-text search.
+**Purpose:** External memory for LLM to store discoveries and two-phase discovery results.
 
 **Features:**
 - SQLite-based storage (`mcp_catalog.db`)
 - Full-text search (FTS) on document content
-- Link tracking between related entries
-- Entry kinds: table, domain, column, relationship, pattern
+- Deterministic layer: runs, objects, columns, indexes, FKs, profiles
+- LLM layer: summaries, relationships, domains, metrics, question templates
+- Entry kinds: table, domain, column, relationship, pattern, summary, metric
 
-### 4. Test Scripts
+### 5. Test Scripts
 
 | Script | Purpose | What it Does |
 |--------|---------|--------------|
 | `setup_test_db.sh` | Database setup | Creates test MySQL database with sample data (customers, orders, products) |
 | `configure_mcp.sh` | ProxySQL configuration | Sets MCP variables and loads to runtime |
-| `test_mcp_tools.sh` | Tool testing | Tests all 15 MCP tools via JSON-RPC |
+| `test_mcp_tools.sh` | Tool testing | Tests all MCP tools via JSON-RPC |
 | `test_catalog.sh` | Catalog testing | Tests catalog CRUD and FTS search |
+| `test_nl2sql_tools.sh` | NL2SQL testing | Tests natural language to SQL conversion tools |
+| `test_nl2sql_e2e.sh` | NL2SQL end-to-end | End-to-end natural language to SQL testing |
 | `stress_test.sh` | Load testing | Concurrent connection stress test |
+| `demo_agent_claude.sh` | Demo agent | Demonstrates LLM agent interaction with MCP |
 
 ---
 
@@ -534,6 +650,7 @@ MySQL Tool Handler initialized for schema 'testdb'
 | `mcp-query_endpoint_auth` | (empty) | Auth token for /query endpoint |
 | `mcp-admin_endpoint_auth` | (empty) | Auth token for /admin endpoint |
 | `mcp-cache_endpoint_auth` | (empty) | Auth token for /cache endpoint |
+| `mcp-ai_endpoint_auth` | (empty) | Auth token for /ai endpoint |
 | `mcp-timeout_ms` | 30000 | Query timeout in milliseconds |
 | `mcp-mysql_hosts` | 127.0.0.1 | MySQL server host(s) |
 | `mcp-mysql_ports` | 3306 | MySQL server port(s) |
@@ -563,3 +680,9 @@ export TEST_DB_NAME=${TEST_DB_NAME:-testdb}
 export MCP_HOST=${MCP_HOST:-127.0.0.1}
 export MCP_PORT=${MCP_PORT:-6071}
 ```
+
+## Version
+
+- **Last Updated:** 2026-01-19
+- **MCP Protocol:** JSON-RPC 2.0 over HTTPS
+- **ProxySQL Version:** 2.6.0+

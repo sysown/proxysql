@@ -17,6 +17,7 @@ class Admin_Tool_Handler;
 class Cache_Tool_Handler;
 class Observe_Tool_Handler;
 class AI_Tool_Handler;
+class RAG_Tool_Handler;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -42,7 +43,8 @@ public:
 	 */
 	struct {
 		bool mcp_enabled;                      ///< Enable/disable MCP server
-		int mcp_port;                           ///< HTTPS port for MCP server (default: 6071)
+		int mcp_port;                           ///< HTTP/HTTPS port for MCP server (default: 6071)
+		bool mcp_use_ssl;                       ///< Enable/disable SSL/TLS (default: true)
 		char* mcp_config_endpoint_auth;         ///< Authentication for /mcp/config endpoint
 		char* mcp_observe_endpoint_auth;        ///< Authentication for /mcp/observe endpoint
 		char* mcp_query_endpoint_auth;          ///< Authentication for /mcp/query endpoint
@@ -68,9 +70,9 @@ public:
 	} status_variables;
 
 	/**
-	 * @brief Pointer to the HTTPS server instance
+	 * @brief Pointer to the HTTP/HTTPS server instance
 	 *
-	 * This is managed by the MCP_Thread module and provides HTTPS
+	 * This is managed by the MCP_Thread module and provides HTTP/HTTPS
 	 * endpoints for MCP protocol communication.
 	 */
 	ProxySQL_MCP_Server* mcp_server;
@@ -96,6 +98,7 @@ public:
 	 * - cache_tool_handler: /mcp/cache endpoint
 	 * - observe_tool_handler: /mcp/observe endpoint
 	 * - ai_tool_handler: /mcp/ai endpoint
+	 * - rag_tool_handler: /mcp/rag endpoint
 	 */
 	Config_Tool_Handler* config_tool_handler;
 	Query_Tool_Handler* query_tool_handler;
@@ -103,6 +106,7 @@ public:
 	Cache_Tool_Handler* cache_tool_handler;
 	Observe_Tool_Handler* observe_tool_handler;
 	AI_Tool_Handler* ai_tool_handler;
+	RAG_Tool_Handler* rag_tool_handler;
 
 
 	/**
@@ -139,7 +143,7 @@ public:
 	 * @brief Initialize the MCP module
 	 *
 	 * Sets up the module with default configuration values and starts
-	 * the HTTPS server if enabled. Must be called before using any
+	 * the HTTP/HTTPS server if enabled. Must be called before using any
 	 * other methods.
 	 */
 	void init();

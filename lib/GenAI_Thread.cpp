@@ -73,6 +73,14 @@ static const char* genai_thread_variables_names[] = {
 	"vector_db_path",
 	"vector_dimension",
 
+	// RAG configuration
+	"rag_enabled",
+	"rag_k_max",
+	"rag_candidates_max",
+	"rag_query_max_bytes",
+	"rag_response_max_bytes",
+	"rag_timeout_ms",
+
 	NULL
 };
 
@@ -180,6 +188,14 @@ GenAI_Threads_Handler::GenAI_Threads_Handler() {
 	// Vector storage configuration
 	variables.genai_vector_db_path = strdup("/var/lib/proxysql/ai_features.db");
 	variables.genai_vector_dimension = 1536;  // OpenAI text-embedding-3-small
+
+	// RAG configuration
+	variables.genai_rag_enabled = false;
+	variables.genai_rag_k_max = 50;
+	variables.genai_rag_candidates_max = 500;
+	variables.genai_rag_query_max_bytes = 8192;
+	variables.genai_rag_response_max_bytes = 5000000;
+	variables.genai_rag_timeout_ms = 2000;
 
 	status_variables.threads_initialized = 0;
 	status_variables.active_requests = 0;
@@ -454,6 +470,36 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 		return strdup(buf);
 	}
 
+	// RAG configuration
+	if (!strcmp(name, "rag_enabled")) {
+		return strdup(variables.genai_rag_enabled ? "true" : "false");
+	}
+	if (!strcmp(name, "rag_k_max")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_rag_k_max);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "rag_candidates_max")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_rag_candidates_max);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "rag_query_max_bytes")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_rag_query_max_bytes);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "rag_response_max_bytes")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_rag_response_max_bytes);
+		return strdup(buf);
+	}
+	if (!strcmp(name, "rag_timeout_ms")) {
+		char buf[64];
+		sprintf(buf, "%d", variables.genai_rag_timeout_ms);
+		return strdup(buf);
+	}
+
 	return NULL;
 }
 
@@ -635,6 +681,57 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 			return false;
 		}
 		variables.genai_vector_dimension = val;
+		return true;
+	}
+
+	// RAG configuration
+	if (!strcmp(name, "rag_enabled")) {
+		variables.genai_rag_enabled = (strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+		return true;
+	}
+	if (!strcmp(name, "rag_k_max")) {
+		int val = atoi(value);
+		if (val < 1 || val > 1000) {
+			proxy_error("Invalid value for rag_k_max: %d (must be 1-1000)\n", val);
+			return false;
+		}
+		variables.genai_rag_k_max = val;
+		return true;
+	}
+	if (!strcmp(name, "rag_candidates_max")) {
+		int val = atoi(value);
+		if (val < 1 || val > 5000) {
+			proxy_error("Invalid value for rag_candidates_max: %d (must be 1-5000)\n", val);
+			return false;
+		}
+		variables.genai_rag_candidates_max = val;
+		return true;
+	}
+	if (!strcmp(name, "rag_query_max_bytes")) {
+		int val = atoi(value);
+		if (val < 1 || val > 1000000) {
+			proxy_error("Invalid value for rag_query_max_bytes: %d (must be 1-1000000)\n", val);
+			return false;
+		}
+		variables.genai_rag_query_max_bytes = val;
+		return true;
+	}
+	if (!strcmp(name, "rag_response_max_bytes")) {
+		int val = atoi(value);
+		if (val < 1 || val > 10000000) {
+			proxy_error("Invalid value for rag_response_max_bytes: %d (must be 1-10000000)\n", val);
+			return false;
+		}
+		variables.genai_rag_response_max_bytes = val;
+		return true;
+	}
+	if (!strcmp(name, "rag_timeout_ms")) {
+		int val = atoi(value);
+		if (val < 1 || val > 60000) {
+			proxy_error("Invalid value for rag_timeout_ms: %d (must be 1-60000)\n", val);
+			return false;
+		}
+		variables.genai_rag_timeout_ms = val;
 		return true;
 	}
 

@@ -87,6 +87,29 @@ private:
 	 */
 	static bool is_id_like_name(const std::string& column_name);
 
+	/**
+	 * @brief Validate schema name for safe use in SQL queries
+	 *
+	 * Validates that a schema name contains only safe characters
+	 * (alphanumeric, underscore, dollar sign) to prevent SQL injection
+	 * when used in string concatenation for INFORMATION_SCHEMA queries.
+	 *
+	 * @param name Schema name to validate
+	 * @return true if safe to use, false otherwise
+	 */
+	static bool is_valid_schema_name(const std::string& name);
+
+	/**
+	 * @brief Escape a string for safe use in SQL queries
+	 *
+	 * Escapes single quotes by doubling them to prevent SQL injection
+	 * when strings are used in string concatenation for SQL queries.
+	 *
+	 * @param str String to escape
+	 * @return Escaped string with single quotes doubled
+	 */
+	static std::string escape_sql_string(const std::string& str);
+
 public:
 	/**
 	 * @brief Constructor

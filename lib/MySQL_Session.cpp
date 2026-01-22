@@ -8042,6 +8042,43 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	// handle case, about SELECT_MYSQL_VERSION or SELECT VERSION()
 	if ((pkt->size==SELECT_MYSQL_VERSION_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION,(char *)pkt->ptr+5,pkt->size-5)==0) ||
 		(pkt->size==SELECT_MYSQL_VERSION_FUNC_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION_FUNC,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+		char *version_to_return = NULL;
+		int mode = mysql_thread___select_version_forwarding;  // SelectVersionForwardingMode enum values
+
+		if (mode == SELECT_VERSION_ALWAYS) {
+			// always: proxy to backend, don't handle here
+			return false;
+		}
+		else if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL || mode == SELECT_VERSION_SMART_FALLBACK_PROXY) {
+			// smart modes: try to get version from backend connection, then fallback based on mode
+			int target_hg = (current_hostgroup >= 0) ? current_hostgroup : default_hostgroup;
+
+			if (target_hg >= 0) {
+				version_to_return = get_backend_version_for_hostgroup(target_hg);
+
+				// Check if backend is ProxySQL (to avoid recursion)
+				if (version_to_return && strstr(version_to_return, "ProxySQL")) {
+					version_to_return = NULL;
+				}
+			}
+
+			// Fallback behavior depends on mode
+			if (!version_to_return) {
+				if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL) {
+					// fallback to internal (ProxySQL) version
+					version_to_return = mysql_thread___server_version;
+				} else {
+					// SELECT_VERSION_SMART_FALLBACK_PROXY: fallback to proxying the query
+					return false;
+				}
+			}
+		}
+		else {
+			// SELECT_VERSION_NEVER (mode 0): use ProxySQL's version
+			version_to_return = mysql_thread___server_version;
+		}
+
+		// Generate response packet with version_to_return
 		char buf2[32];
 		int l0=0;
 		if (pkt->size == SELECT_MYSQL_VERSION_LEN+5)
@@ -8067,8 +8104,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 		char **p=(char **)malloc(sizeof(char*)*1);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
-		l[0]= strlen(mysql_thread___server_version);
-		p[0]=mysql_thread___server_version;
+		l[0]= strlen(version_to_return);
+		p[0]=version_to_return;
 		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 		myds->DSS=STATE_ROW;
 		if (deprecate_eof_active) {
@@ -8143,6 +8180,62 @@ __exit_set_destination_hostgroup:
 		}
 	}
 	return false;
+}
+
+char * MySQL_Session::get_backend_version_for_hostgroup(int hostgroup_id) {
+	// Step 1: Validate input
+	if (hostgroup_id < 0) {
+		return NULL;
+	}
+
+	// Step 2: Access the global MySQL_HostGroups_Manager
+	// MyHGM is the global instance
+	MySQL_HostGroups_Manager *myhgm = MyHGM;
+	if (!myhgm) {
+		return NULL;
+	}
+
+	// Step 3: Lock for reading
+	// We only have wrlock(), no rdlock() - use wrlock() for safety
+	myhgm->wrlock();
+
+	// Step 4: Find the hostgroup
+	MyHGC *myhgc = myhgm->MyHGC_lookup(hostgroup_id);
+	if (!myhgc) {
+		// Hostgroup doesn't exist
+		myhgm->wrunlock();
+		return NULL;
+	}
+
+	// Step 5: Check if the hostgroup has any servers
+	if (!myhgc->mysrvs || !myhgc->mysrvs->servers || myhgc->mysrvs->servers->len == 0) {
+		myhgm->wrunlock();
+		return NULL;
+	}
+
+	// Step 6: Iterate through servers in the hostgroup
+	for (unsigned int i = 0; i < myhgc->mysrvs->servers->len; i++) {
+		MySrvC *mysrvc = myhgc->mysrvs->idx(i);
+		if (!mysrvc) {
+			continue;
+		}
+
+		// Step 7: Check if this server has any free connections
+		if (mysrvc->ConnectionsFree && mysrvc->ConnectionsFree->conns_length() > 0) {
+			// Step 8: Peek at the first free connection WITHOUT removing it
+			// ConnectionsFree::index() only returns a pointer, doesn't remove from array
+			MySQL_Connection *myconn = mysrvc->ConnectionsFree->index(0);
+			if (myconn && myconn->options.server_version) {
+				// Found a connection with a version string
+				myhgm->wrunlock();
+				return myconn->options.server_version;
+			}
+		}
+	}
+
+	// Step 9: No free connections found in any server of this hostgroup
+	myhgm->wrunlock();
+	return NULL;
 }
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *pkt) {

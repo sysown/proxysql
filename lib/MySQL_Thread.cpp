@@ -468,6 +468,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+	(char *)"select_version_forwarding",
 	(char *)"keep_multiplexing_variables",
 	(char *)"default_authentication_plugin",
 	(char *)"kill_backend_connection_when_disconnect",
@@ -1120,6 +1121,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
 	variables.server_version=strdup((char *)"8.0.11"); // changed in 2.6.0 , was 5.5.30
+	variables.select_version_forwarding=3;  // 0=never, 1=always, 2=smart(fallback to 0), 3=smart(fallback to 1, default)
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
 	variables.eventslog_buffer_history_size=0;
@@ -2371,6 +2373,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
+		VariablesPointers_int["select_version_forwarding"] = make_tuple(&variables.select_version_forwarding, 0, 3, false);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
 
 	}
@@ -4273,6 +4276,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(connect_timeout_server_max);
 	REFRESH_VARIABLE_INT(free_connections_pct);
 	REFRESH_VARIABLE_INT(fast_forward_grace_close_ms);
+	REFRESH_VARIABLE_INT(select_version_forwarding);
 #ifdef IDLE_THREADS
 	REFRESH_VARIABLE_INT(session_idle_ms);
 #endif // IDLE_THREADS
@@ -4440,6 +4444,7 @@ MySQL_Thread::MySQL_Thread() {
 	last_processing_idles=0;
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___server_version=NULL;
+	mysql_thread___select_version_forwarding=3;  // default: smart (fallback to 1)
 	mysql_thread___init_connect=NULL;
 	mysql_thread___ldap_user_variable=NULL;
 	mysql_thread___add_ldap_user_comment=NULL;

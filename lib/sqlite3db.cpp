@@ -1,5 +1,8 @@
 #include "proxysql.h"
+#include "sqlite3.h"
 #include "cpp.h"
+
+
 //#include "SpookyV2.h"
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -260,7 +263,7 @@ int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 }
 
 void stmt_deleter_t::operator()(sqlite3_stmt* x) const {
-	proxy_sqlite3_finalize(x);
+	(*proxy_sqlite3_finalize)(x);
 }
 
 std::pair<int,stmt_unique_ptr> SQLite3DB::prepare_v2(const char* query) {
@@ -422,6 +425,81 @@ bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, 
 __exit_execute_statement:
 	// NOTE: the caller MUST call (*proxy_sqlite3_finalize)()
 	//(*proxy_sqlite3_finalize)(statement);
+	return ret;
+}
+
+/**
+ * @brief Executes a prepared SQL statement and returns the result set.
+ *
+ * @param statement The prepared SQL statement to execute.
+ * @param _error Pointer to a variable to store the error message.
+ * @param _cols Pointer to a variable to store the number of columns.
+ * @param _affected_rows Pointer to a variable to store the number of affected rows.
+ * @return A pointer to the SQLite3_result object representing the result set.
+ */
+SQLite3_result* SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows) {
+	SQLite3_result* resultset;
+
+	char* myerror;
+	char** _error = (error == NULL ? &myerror : error);
+
+	int mycols;
+	int* _cols = (cols == NULL ? &mycols : cols);
+
+	int my_affected_rows;
+	int* _affected_rows = (affected_rows == NULL ? &my_affected_rows : affected_rows);
+
+	if (execute_prepared(statement, _error, _cols, _affected_rows, &resultset))
+		return resultset;
+
+	return NULL;
+}
+
+/**
+ * @brief Executes a prepared SQL statement and returns the result set.
+ *
+ * @param statement The prepared SQLite statement to execute.
+ * @param error Pointer to a variable to store the error message.
+ * @param cols Pointer to a variable to store the number of columns.
+ * @param affected_rows Pointer to a variable to store the number of affected rows.
+ * @param resultset Pointer to a pointer to a SQLite3_result object representing the result set.
+ * @return True if the execution was successful, false otherwise.
+ */
+bool SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset) {
+	int rc;
+	*error = NULL;
+	bool ret = false;
+	*cols = (*proxy_sqlite3_column_count)(statement);
+	if (*cols == 0) { // not a SELECT
+		*resultset = NULL;
+		// Get total changes before executing the statement
+		long long total_changes_before = (*proxy_sqlite3_total_changes64)(db);
+		do {
+			rc = (*proxy_sqlite3_step)(statement);
+			if (rc == SQLITE_LOCKED || rc == SQLITE_BUSY) { // the execution of the prepared statement failed because locked
+				if ((*proxy_sqlite3_get_autocommit)(db) == 0) {
+					*error = strdup((*proxy_sqlite3_errmsg)(db));
+					goto __exit_execute_prepared;
+				}
+				usleep(USLEEP_SQLITE_LOCKED);
+			}
+		} while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+		if (rc == SQLITE_DONE) {
+			// Calculate affected rows as the difference in total changes
+			long long total_changes_after = (*proxy_sqlite3_total_changes64)(db);
+			*affected_rows = (int)(total_changes_after - total_changes_before);
+			ret = true;
+		} else {
+			*error = strdup((*proxy_sqlite3_errmsg)(db));
+			goto __exit_execute_prepared;
+		}
+	} else {
+		*affected_rows = 0;
+		*resultset = new SQLite3_result(statement);
+		ret = true;
+	}
+__exit_execute_prepared:
+	//(*proxy_sqlite3_reset)(statement);
 	return ret;
 }
 
@@ -1001,12 +1079,20 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_bind_int64 = NULL;
 	proxy_sqlite3_bind_null = NULL;
 	proxy_sqlite3_bind_text = NULL;
+	proxy_sqlite3_bind_blob = NULL;
 	proxy_sqlite3_column_name = NULL;
 	proxy_sqlite3_column_text = NULL;
 	proxy_sqlite3_column_bytes = NULL;
 	proxy_sqlite3_column_type = NULL;
 	proxy_sqlite3_column_count = NULL;
 	proxy_sqlite3_column_int = NULL;
+	proxy_sqlite3_column_int64 = NULL;
+	proxy_sqlite3_column_double = NULL;
+	proxy_sqlite3_last_insert_rowid = NULL;
+	proxy_sqlite3_errstr = NULL;
+	proxy_sqlite3_db_handle = NULL;
+	proxy_sqlite3_enable_load_extension = NULL;
+	proxy_sqlite3_auto_extension = NULL;
 	proxy_sqlite3_errmsg = NULL;
 	proxy_sqlite3_finalize = NULL;
 	proxy_sqlite3_reset = NULL;
@@ -1081,12 +1167,20 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_bind_int64 = sqlite3_bind_int64;
 		proxy_sqlite3_bind_null = sqlite3_bind_null;
 		proxy_sqlite3_bind_text = sqlite3_bind_text;
+		proxy_sqlite3_bind_blob = sqlite3_bind_blob;
 		proxy_sqlite3_column_name = sqlite3_column_name;
 		proxy_sqlite3_column_text = sqlite3_column_text;
 		proxy_sqlite3_column_bytes = sqlite3_column_bytes;
-		proxy_sqlite3_column_type = sqlite3_column_type;
+		proxy_sqlite3_column_type = sqlite3_column_type; /* signature matches */
 		proxy_sqlite3_column_count = sqlite3_column_count;
 		proxy_sqlite3_column_int = sqlite3_column_int;
+	proxy_sqlite3_column_int64 = sqlite3_column_int64;
+	proxy_sqlite3_column_double = sqlite3_column_double;
+	proxy_sqlite3_last_insert_rowid = sqlite3_last_insert_rowid;
+	proxy_sqlite3_errstr = sqlite3_errstr;
+	proxy_sqlite3_db_handle = sqlite3_db_handle;
+	proxy_sqlite3_enable_load_extension = sqlite3_enable_load_extension;
+	proxy_sqlite3_auto_extension = sqlite3_auto_extension;
 		proxy_sqlite3_errmsg = sqlite3_errmsg;
 		proxy_sqlite3_finalize = sqlite3_finalize;
 		proxy_sqlite3_reset = sqlite3_reset;
@@ -1111,12 +1205,20 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_bind_int64);
 	assert(proxy_sqlite3_bind_null);
 	assert(proxy_sqlite3_bind_text);
+	assert(proxy_sqlite3_bind_blob);
 	assert(proxy_sqlite3_column_name);
 	assert(proxy_sqlite3_column_text);
 	assert(proxy_sqlite3_column_bytes);
 	assert(proxy_sqlite3_column_type);
 	assert(proxy_sqlite3_column_count);
 	assert(proxy_sqlite3_column_int);
+	assert(proxy_sqlite3_column_int64);
+	assert(proxy_sqlite3_column_double);
+	assert(proxy_sqlite3_last_insert_rowid);
+	assert(proxy_sqlite3_errstr);
+	assert(proxy_sqlite3_db_handle);
+	assert(proxy_sqlite3_enable_load_extension);
+	assert(proxy_sqlite3_auto_extension);
 	assert(proxy_sqlite3_errmsg);
 	assert(proxy_sqlite3_finalize);
 	assert(proxy_sqlite3_reset);
