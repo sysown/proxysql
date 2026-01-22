@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?><?xml-stylesheet type="text/xsl" href="atom.xsl"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://sysown.github.io/proxysql/blog</id>
+    <title>ProxySQL Documentation Blog</title>
+    <updated>2026-01-22T00:00:00.000Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://sysown.github.io/proxysql/blog"/>
+    <subtitle>ProxySQL Documentation Blog</subtitle>
+    <icon>https://sysown.github.io/proxysql/img/favicon.ico</icon>
+    <entry>
+        <title type="html"><![CDATA[Blog Migration]]></title>
+        <id>https://sysown.github.io/proxysql/blog/migration</id>
+        <link href="https://sysown.github.io/proxysql/blog/migration"/>
+        <updated>2026-01-22T00:00:00.000Z</updated>
+        <summary type="html"><![CDATA[Blog posts may be migrated later.]]></summary>
+        <content type="html"><![CDATA[<p>Blog posts may be migrated later.</p>]]></content>
+    </entry>
+</feed>

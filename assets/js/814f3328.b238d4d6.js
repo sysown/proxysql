@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunkdocs_site=globalThis.webpackChunkdocs_site||[]).push([[7472],{5513(s){s.exports=JSON.parse('{"title":"Recent posts","items":[{"title":"Blog Migration","permalink":"/proxysql/blog/migration","unlisted":false,"date":"2026-01-22T00:00:00.000Z"}]}')}}]);

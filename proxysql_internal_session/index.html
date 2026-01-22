@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-proxysql_internal_session/proxysql_internal_session" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.9.2">
+<title data-rh="true">&#x27;PROXYSQL INTERNAL SESSION&#x27; | ProxySQL Documentation</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://sysown.github.io/proxysql/img/docusaurus-social-card.jpg"><meta data-rh="true" name="twitter:image" content="https://sysown.github.io/proxysql/img/docusaurus-social-card.jpg"><meta data-rh="true" property="og:url" content="https://sysown.github.io/proxysql/proxysql_internal_session/"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="&#x27;PROXYSQL INTERNAL SESSION&#x27; | ProxySQL Documentation"><meta data-rh="true" name="description" content="PROXYSQL INTERNAL SESSION is a command that is available for each MySQL connection connected to ProxySQL. It&#x27;s"><meta data-rh="true" property="og:description" content="PROXYSQL INTERNAL SESSION is a command that is available for each MySQL connection connected to ProxySQL. It&#x27;s"><link data-rh="true" rel="icon" href="/proxysql/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://sysown.github.io/proxysql/proxysql_internal_session/"><link data-rh="true" rel="alternate" href="https://sysown.github.io/proxysql/proxysql_internal_session/" hreflang="en"><link data-rh="true" rel="alternate" href="https://sysown.github.io/proxysql/proxysql_internal_session/" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"'PROXYSQL INTERNAL SESSION'","item":"https://sysown.github.io/proxysql/proxysql_internal_session/"}]}</script><link rel="alternate" type="application/rss+xml" href="/proxysql/blog/rss.xml" title="ProxySQL Documentation RSS Feed">
+<link rel="alternate" type="application/atom+xml" href="/proxysql/blog/atom.xml" title="ProxySQL Documentation Atom Feed"><link rel="stylesheet" href="/proxysql/assets/css/styles.dece39c9.css">
+<script src="/proxysql/assets/js/runtime~main.38b95352.js" defer="defer"></script>
+<script src="/proxysql/assets/js/main.d2b7ba15.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><link rel="preload" as="image" href="/proxysql/img/logo.svg"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/proxysql/"><div class="navbar__logo"><img src="/proxysql/img/logo.svg" alt="ProxySQL Logo" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/proxysql/img/logo.svg" alt="ProxySQL Logo" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate">ProxySQL</b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/proxysql/">Documentation</a><a class="navbar__item navbar__link" href="/proxysql/blog">Blog</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/sysown/proxysql" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/"><span title="Welcome to ProxySQL" class="linkLabel_WmDU">Welcome to ProxySQL</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/aurora_configuration/aws-aurora-configuration"><span title="aurora_configuration" class="categoryLinkLabel_W154">aurora_configuration</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/authentication/authentication_methods"><span title="authentication" class="categoryLinkLabel_W154">authentication</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/backend_monitoring/mysql_monitoring"><span title="backend_monitoring" class="categoryLinkLabel_W154">backend_monitoring</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/bootstrap_mode/bootstrap-mode"><span title="bootstrap_mode" class="categoryLinkLabel_W154">bootstrap_mode</span></a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/configuration_file/"><span title="The ProxySQL configuration file" class="linkLabel_WmDU">The ProxySQL configuration file</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/coredumper_support/"><span title="coredumper_support" class="linkLabel_WmDU">coredumper_support</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/disk/disk_disk"><span title="disk" class="categoryLinkLabel_W154">disk</span></a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/dns_cache/"><span title="dns_cache" class="linkLabel_WmDU">dns_cache</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/error_log/"><span title="error_log" class="linkLabel_WmDU">error_log</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/faq/detailed_answers_on_faq"><span title="faq" class="categoryLinkLabel_W154">faq</span></a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/galera_configuration/"><span title="ProxySQL support for Galera" class="linkLabel_WmDU">ProxySQL support for Galera</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist" href="/proxysql/global_variables/"><span title="Global Variables" class="categoryLinkLabel_W154">Global Variables</span></a><button aria-label="Expand sidebar category &#x27;Global Variables&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/group_replication_configuration/group-replication-configuration"><span title="group_replication_configuration" class="categoryLinkLabel_W154">group_replication_configuration</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/guides/proxysql_configuration"><span title="guides" class="categoryLinkLabel_W154">guides</span></a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/jemalloc/"><span title="jemalloc" class="linkLabel_WmDU">jemalloc</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/main_runtime/main_runtime_tables"><span title="main_runtime" class="categoryLinkLabel_W154">main_runtime</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/mysql_binlog_reader/mysql-binlog-reader"><span title="mysql_binlog_reader" class="categoryLinkLabel_W154">mysql_binlog_reader</span></a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/prepared_statements/"><span title="prepared_statements" class="linkLabel_WmDU">prepared_statements</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/prometheus_metrics/"><span title="prometheus_metrics" class="linkLabel_WmDU">prometheus_metrics</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/proxy_protocol/proxy-protocol"><span title="proxy_protocol" class="categoryLinkLabel_W154">proxy_protocol</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/proxysql/proxysql_cluster/proxysql-cluster"><span title="proxysql_cluster" class="categoryLinkLabel_W154">proxysql_cluster</span></a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/proxysql_configuration_postgres/"><span title="proxysql_configuration_postgres" class="linkLabel_WmDU">proxysql_configuration_postgres</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" href="/proxysql/proxysql_internal_session/"><span title="&#x27;PROXYSQL INTERNAL SESSION&#x27;" class="linkLabel_WmDU">&#x27;PROXYSQL INTERNAL SESSION&#x27;</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/query_annotations/"><span title="query_annotations" class="linkLabel_WmDU">query_annotations</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist" href="/proxysql/query_logging/"><span title="Query Logging" class="categoryLinkLabel_W154">Query Logging</span></a><button aria-label="Expand sidebar category &#x27;Query Logging&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/ssl_support/"><span title="SSL configuration for backends" class="linkLabel_WmDU">SSL configuration for backends</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/startup_options/"><span title="ProxySQL startup options" class="linkLabel_WmDU">ProxySQL startup options</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/stats_history/"><span title="stats_history" class="linkLabel_WmDU">stats_history</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/stats_statistics/"><span title="stats_statistics" class="linkLabel_WmDU">stats_statistics</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/proxysql/the_admin_schemas/"><span title="ProxySQL&#x27;s Configuration CLI" class="linkLabel_WmDU">ProxySQL&#x27;s Configuration CLI</span></a></li></ul></nav></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/proxysql/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">&#x27;PROXYSQL INTERNAL SESSION&#x27;</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>&#x27;PROXYSQL INTERNAL SESSION&#x27;</h1></header>
+<p>PROXYSQL INTERNAL SESSION is a command that is available for each MySQL connection connected to ProxySQL. It&#x27;s
+a powerfull tool that can be used while debugging a particular application flow for discovering how ProxySQL
+is interacting with a client or a particular workload. It exposes many details about the <code>MySQL</code> session
+within ProxySQL being queried, it&#x27;s also an internal tool used for testing and development.</p>
+<p>It holds information about the whole current <code>MySQL_Session</code>, including:</p>
+<ol>
+<li class="">Information about the session object itself.</li>
+<li class="">Information about the current backends connections the session is using.</li>
+<li class="">Information about the client in use of the session.</li>
+<li class="">Information about the client connection (&#x27;conn&#x27;).</li>
+<li class="">Information about the QPO (Query Processor Rules) output.</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="1-session_info-object">1. &#x27;session_info&#x27; object<a href="#1-session_info-object" class="hash-link" aria-label="Direct link to 1. &#x27;session_info&#x27; object" title="Direct link to 1. &#x27;session_info&#x27; object" translate="no">​</a></h3>
+<ul>
+<li class=""><strong>address</strong>: The address of the session object itself, useful for debugging purposes.</li>
+<li class=""><strong>age_ms</strong>: The age of the session in ms.</li>
+<li class=""><strong>autocommit</strong>: Boolean, report if &#x27;autocommit&#x27; is set in the session.</li>
+<li class=""><strong>autocommit_on_hostgroup</strong>: Reports in which hostgroup the transaction is currently active:<!-- -->
+<ul>
+<li class="">This information is obtained searching the backends hold by the &#x27;MySQL_Session&#x27;. Since only one active
+transaction should be happening at a time <code>MySQL_Session::FindOneActiveTransaction</code> performs the hostgroup
+search.</li>
+</ul>
+</li>
+<li class=""><strong>backends</strong>: An array with the information related with the server connections. This array is filled when
+the connections are actually created, the representation of the connection changes in case of being pulled
+and returned to the connection pull (multiplexing) or if the connection is fixed to the session because some
+condition has disabled multiplexing. For more information see &quot;backend connection&quot;.</li>
+<li class=""><strong>client</strong>: Information about the client that is using the session. It has the following fields. More
+informaction on section &quot;Object: client&quot;.</li>
+<li class=""><strong>conn</strong>: Information about the client connection. &quot;Object: conn&quot;.</li>
+<li class=""><strong>current_hostgroup</strong>: Current hostgroup to which the MySQL_Session is locked, if any.</li>
+<li class=""><strong>default_hostgroup</strong>: The default hostgroup for this session as configured in ProxySQL for the particular
+user.</li>
+<li class=""><strong>default_schema</strong>: The default schema for this session as configured in ProxySQL for the particular user.</li>
+<li class=""><strong>gtid</strong>: Object containing GTID information of the current session:<!-- -->
+<ul>
+<li class=""><strong>hdi</strong>: The hostgroup id in which the last GITD was processed for the current session.</li>
+<li class=""><strong>last</strong>: The last processed GITD for the current session.</li>
+</ul>
+</li>
+<li class=""><strong>last_HG_affected_rows</strong>: Last hostgroup in which rows were affected by a query.</li>
+<li class=""><strong>last_insert_id</strong>: The last insert id of the last performed insert.</li>
+<li class=""><strong>locked_on_hostgroup</strong>: Hostgroup in which the session has been locked, if this value is other than &#x27;-1&#x27;,
+it means that multiplexing has been disabled for current session. For reasons on why multiplexing can be
+disabled please check: <a href="https://proxysql.com/Multiplexing/" target="_blank" rel="noopener noreferrer" class="">https://proxysql.com/Multiplexing/</a>.</li>
+<li class=""><strong>status</strong>: The current internal status that ProxySQL holds for the session, the map for this values can be
+checked in <code>enum session_status</code>.</li>
+<li class=""><strong>thread</strong>: Memory address of the current thread hadling the session. Used for debugging purposes.</li>
+<li class=""><strong>thread_session_id</strong>: The internal id ProxySQL assings to the thread being used for the current session.</li>
+<li class=""><strong>transaction_persistence</strong>: The &#x27;transaction_persistence&#x27; setting for the current user.</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="2-backend-object">2. Backend object<a href="#2-backend-object" class="hash-link" aria-label="Direct link to 2. Backend object" title="Direct link to 2. Backend object" translate="no">​</a></h3>
+<p>Array holding information about each backend connection that this MySQL session is using. Many of the elements
+of this object are shared with the client &#x27;conn&#x27; object, this section only targets the elements specific to
+backend &#x27;conn&#x27; object:</p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="21-backend-conn-object">2.1 Backend &#x27;conn&#x27; object<a href="#21-backend-conn-object" class="hash-link" aria-label="Direct link to 2.1 Backend &#x27;conn&#x27; object" title="Direct link to 2.1 Backend &#x27;conn&#x27; object" translate="no">​</a></h4>
+<p>Many of the elements of this object are shared with the client &#x27;conn&#x27; object, this section only targets the
+elements specific to backend &#x27;conn&#x27; object:</p>
+<ul>
+<li class=""><strong>MultiplexDisabled</strong>: Boolean reporting if multiplexing has been disabled for the connection due to
+<code>status_flags</code> or <code>auto_increment_delay_token</code>.</li>
+<li class=""><strong>MultiplexDisabled_ext</strong>: Extension of the previous flag. It also takes into account if the connection
+meets the conditions for a &#x27;potential transaction&#x27;.</li>
+<li class=""><strong>address</strong>: The current address of the &#x27;MySQL_Connection&#x27; object handling this connection.</li>
+<li class=""><strong>auto_increment_delay_token</strong>: Number of queries in which <code>multiplexing</code> will be disabled due to a previous
+insertion using auto-increment.</li>
+<li class=""><strong>bytes_recv</strong>: Bytes received from the backend by the connection (<code>MySQL_Connection</code> object).</li>
+<li class=""><strong>bytes_recv</strong>: Bytes sent to the backend by the connection (<code>MySQL_Connection</code> object).</li>
+<li class=""><strong>init_connect</strong>: The &#x27;init_connect&#x27; query sent by ProxySQL whent he connection was started.</li>
+<li class=""><strong>init_connect_sent</strong>: True if &#x27;init_connect&#x27; was succesfully sent when the connection started.</li>
+<li class=""><strong>myconnpoll_get</strong>: Number of times the connection has been requested from the connection pool.</li>
+<li class=""><strong>myconnpoll_put</strong>: Number of times the connection has been returned to the connection pool.</li>
+</ul>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="211-mysql-connection-object">2.1.1 &#x27;mysql&#x27; connection object<a href="#211-mysql-connection-object" class="hash-link" aria-label="Direct link to 2.1.1 &#x27;mysql&#x27; connection object" title="Direct link to 2.1.1 &#x27;mysql&#x27; connection object" translate="no">​</a></h4>
+<ul>
+<li class=""><strong>address</strong>: The current address of the &#x27;MySQL*&#x27; object handling this connection.</li>
+<li class=""><strong>affected_rows</strong>: Number of rows affected by previous query, as reported by &#x27;MySQL&#x27;.</li>
+<li class=""><strong>charset</strong>: The MySQL connection charset id.</li>
+<li class=""><strong>charset_name</strong>: The MySQL connection charset name.</li>
+<li class=""><strong>db</strong>: The current select &#x27;db&#x27; in use for the MySQL connection.</li>
+<li class=""><strong>host</strong>: String representing the server hostname.</li>
+<li class=""><strong>host_info</strong>: String representing the server hostname and the connection type.</li>
+<li class=""><strong>insert_id</strong>: The last insert id returned by the last insert operation.</li>
+<li class=""><strong>net</strong>: Object exposing network information about the connection object &#x27;MySQL*-&gt;net&#x27; being used:<!-- -->
+<ul>
+<li class=""><strong>fd</strong>: Current &#x27;fd&#x27; used.</li>
+<li class=""><strong>last_errno</strong>: The last errno set.</li>
+<li class=""><strong>max_packet_size</strong>: The <code>max_packet_size</code> specified.</li>
+<li class=""><strong>sqlstate</strong>: The <code>sqlstate</code> reported.</li>
+</ul>
+</li>
+<li class=""><strong>options</strong>: Object exposing certain options present connection object &#x27;MySQL*-&gt;options&#x27; being used:<!-- -->
+<ul>
+<li class=""><strong>charset_name</strong>: The <code>charset_name</code> option.</li>
+<li class=""><strong>use_ssl</strong>: The <code>use_ssl</code> option.</li>
+</ul>
+</li>
+<li class=""><strong>port</strong>: The server port being used for this connection.</li>
+<li class=""><strong>server_status</strong>: The server status reported by the &#x27;MYSQL*&#x27; connection object.</li>
+<li class=""><strong>server_version</strong>: A string holding the server verion.</li>
+<li class=""><strong>thread_id</strong>: The thread ID of the current connection</li>
+<li class=""><strong>unix_socket</strong>: The unix socket being used for the connection, if any.</li>
+<li class=""><strong>user</strong>: The name of the user currently using the connection.</li>
+</ul>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="211-ps-connection-object">2.1.1 &#x27;ps&#x27; connection object<a href="#211-ps-connection-object" class="hash-link" aria-label="Direct link to 2.1.1 &#x27;ps&#x27; connection object" title="Direct link to 2.1.1 &#x27;ps&#x27; connection object" translate="no">​</a></h4>
+<p>Similar to the prepared statement object present in the &#x27;conn&#x27; object for the client connection, it holds:</p>
+<ul>
+<li class=""><strong>backend_stmt_to_global_ids</strong>: Map from the backend prepared statements to the globally registered prepared
+statements ids.</li>
+<li class=""><strong>global_stmt_to_backend_ids</strong>: Map from the globally registered prepared statements to the backend prepared
+statements.</li>
+</ul>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="211-status-connection-object">2.1.1 &#x27;status&#x27; connection object<a href="#211-status-connection-object" class="hash-link" aria-label="Direct link to 2.1.1 &#x27;status&#x27; connection object" title="Direct link to 2.1.1 &#x27;status&#x27; connection object" translate="no">​</a></h4>
+<p>Exposes the &#x27;status_flags&#x27; held in the current &#x27;MySQL_Connection*&#x27; object:</p>
+<ul>
+<li class=""><strong>found_rows</strong>: Boolean holding if flag STATUS_MYSQL_CONNECTION_FOUND_ROWS is set.</li>
+<li class=""><strong>get_lock</strong>: Boolean holding if flag STATUS_MYSQL_CONNECTION_GET_LOCK is set.</li>
+<li class=""><strong>has_savepoint</strong>: Boolean holding if flag STATUS_MYSQL_CONNECTION_FOUND_ROWS is set.</li>
+<li class=""><strong>lock_tables</strong>: Boolean holding if flag STATUS_MYSQL_CONNECTION_LOCK_TABLES is set.</li>
+<li class=""><strong>no_multiplex</strong>: Boolean holding if flag STATUS_MYSQL_CONNECTION_NO_MULTIPLEX is set.</li>
+<li class=""><strong>temporary_table</strong>: Boolean holding if flag STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE is set.</li>
+<li class=""><strong>user_variable</strong>: Boolean holding if flag SSTATUS_MYSQL_CONNECTION_USER_VARIABLE is set.</li>
+</ul>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="212-stream-connection-object">2.1.2 &#x27;stream&#x27; connection object<a href="#212-stream-connection-object" class="hash-link" aria-label="Direct link to 2.1.2 &#x27;stream&#x27; connection object" title="Direct link to 2.1.2 &#x27;stream&#x27; connection object" translate="no">​</a></h4>
+<p>Exposes several values from the internal &#x27;MySQL_Data_Stream&#x27; connection object:</p>
+<ul>
+<li class=""><strong>DSS</strong>: Internal MySQL datastream status (mysql_data_stream_status).</li>
+<li class=""><strong>address</strong>: Pointer address of the MySQL datastream. For debugging purposes.</li>
+<li class=""><strong>bytes_recv</strong>: Bytes received by this particular &#x27;MySQL_Data_Stream&#x27; from the backend.</li>
+<li class=""><strong>bytes_sent</strong>: Bytes sent by this particular &#x27;MySQL_Data_Stream&#x27; to the backend.</li>
+<li class=""><strong>myconnpoll_get</strong>: Number of times a connection has been attached to the datastream.</li>
+<li class=""><strong>myconnpoll_put</strong>: Number of times a connection has been detached from the datastream.</li>
+<li class=""><strong>questions</strong>: Number of queries that has been executed through this particular &#x27;MySQL_Data_Stream&#x27;.</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="3-client-object">3. Client Object<a href="#3-client-object" class="hash-link" aria-label="Direct link to 3. Client Object" title="Direct link to 3. Client Object" translate="no">​</a></h3>
+<p>This object holds information related to the MySQL session client:</p>
+<ul>
+<li class=""><strong>DSS</strong>: Stands for &#x27;Data Stream Status&#x27;. Describes in which state the connection <code>datastream</code> is found.
+Could be one of the status described in the enumeration <code>mysql_data_stream_status</code>.</li>
+<li class=""><strong>client_addr</strong>: Object describing the client address of the current session.<!-- -->
+<ul>
+<li class=""><strong>address</strong>: The client ip address.</li>
+<li class=""><strong>port</strong>: The client port.</li>
+</ul>
+</li>
+<li class=""><strong>encrypted</strong>: Boolean flag stating if the client connection is encrypted.</li>
+<li class=""><strong>proxy_addr</strong>: Object describing ProxySQL address.<!-- -->
+<ul>
+<li class=""><strong>address</strong>: ProxySQL current address.</li>
+<li class=""><strong>port</strong>: ProxySQL current port number.</li>
+</ul>
+</li>
+<li class=""><strong>stream</strong>: Object holding information about the information send and received to the client.<!-- -->
+<ul>
+<li class=""><strong>bytes_recv</strong>: The number of bytes received from the client connection.</li>
+<li class=""><strong>bytes_sent</strong>: THe number of bytes sent to the client.</li>
+<li class=""><strong>pkts_recv</strong>: The number of packets received from the client.</li>
+<li class=""><strong>pkts_sent</strong>: The number of packets sent to the client.</li>
+</ul>
+</li>
+<li class=""><strong>userinfo</strong>: Object holding session user info.<!-- -->
+<ul>
+<li class=""><strong>password</strong>: Best password it&#x27;s known, cleartext if possible.</li>
+<li class=""><strong>username</strong>: Username.</li>
+</ul>
+</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="4-connection-object-conn">4. Connection object (conn)<a href="#4-connection-object-conn" class="hash-link" aria-label="Direct link to 4. Connection object (conn)" title="Direct link to 4. Connection object (conn)" translate="no">​</a></h3>
+<p>This object holds information related to the MySQL session connection itself. Most of the elements present in
+this object are tracked <strong>per session</strong>, this means that it&#x27;s expected to see many of them either empty, or
+with default values if they haven&#x27;t explicitly set during the session:</p>
+<ul>
+<li class=""><strong>autocommit</strong>: Displays if autocommit is enabled for the connection. Either &quot;ON&quot; or &quot;OFF&quot;.</li>
+<li class=""><strong>client_flag</strong>: Holds information about different client flags used in the connection.<!-- -->
+<ul>
+<li class=""><strong>client_found_rows</strong>: Displays the contents of the <code>CLIENT_FOUND_ROWS</code> flag.</li>
+<li class=""><strong>client_multi_results</strong>: Display the contents of the <code>CLIENT_MULTI_RESULTS</code> flag.</li>
+<li class=""><strong>client_multi_statements</strong>: Display the contents of the <code>CLIENT_MULTI_STATEMENTS</code> flag.</li>
+<li class=""><strong>value</strong>: Total value of the <code>client_flag</code> parameter holding all the specifies flag for the connection.</li>
+</ul>
+</li>
+<li class=""><strong>names</strong>: Value of the internally tracked variable for <code>SET_NAMES</code>. IMPORTANT: This value is never updated,
+as ProxySQL never trackes this value directly, but instead with <code>character_*</code>, <code>COLLATION_CONNECTION</code> and
+related variables.</li>
+<li class=""><strong>ps</strong>: Object holding information about prepared statements.<!-- -->
+<ul>
+<li class=""><strong>client_stmt_to_global_ids</strong>: Map associating &#x27;client_stmt_ids&#x27; to &#x27;global_stmt_id&#x27; for this session.
+This map gets populated when clients request prepared statements.</li>
+</ul>
+</li>
+</ul>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="myqsl-session-variables">MyQSL session variables:<a href="#myqsl-session-variables" class="hash-link" aria-label="Direct link to MyQSL session variables:" title="Direct link to MyQSL session variables:" translate="no">​</a></h4>
+<ul>
+<li class=""><strong>action</strong>: The last performed action by ProxySQL setting the charset. Values can be:<!-- -->
+<ul>
+<li class="">0: UNKNOWN</li>
+<li class="">1: &#x27;SET NAMES&#x27;</li>
+<li class="">2: &#x27;SET CHARACETER SET&#x27;</li>
+<li class="">3: Charset set during connection start.</li>
+</ul>
+</li>
+<li class=""><strong>character_set_client</strong>: Displays <code>CHARACTER_SET_CLIENT</code> session variable.</li>
+<li class=""><strong>character_set_connection</strong>: Displays <code>CHARACTER_SET_CONNECTION</code> session variable.</li>
+<li class=""><strong>character_set_database</strong>: Displays <code>CHARACTER_SET_DATABASE</code> session variable.</li>
+<li class=""><strong>character_set_results</strong>: Displays <code>CHARACTER_SET_RESULTS</code> session variable.</li>
+<li class=""><strong>charset</strong>: Displays the currently setted <code>CHARACTER SET</code>.</li>
+<li class=""><strong>collation_connection</strong>: Displays the <code>COLLATION</code> selected for the connection.</li>
+<li class=""><strong>max_join_size</strong>: Displays the setted value for <code>MAX_JOIN_SIZE</code> session variable.</li>
+<li class=""><strong>no_backslash_escapes</strong>: Keeps track of if <code>SQL_MODE</code> <code>NO_BACKSLASH_ESCAPES</code> is being set or not.</li>
+<li class=""><strong>session_track_gtids</strong>: Displays the value of the <code>SESSION_TRACK_GTID</code> variable.</li>
+<li class=""><strong>sql_auto_is_null</strong>: Displays the <code>SQL_SQL_AUTO_IS_NULL</code> session variable.</li>
+<li class=""><strong>sql_log_bin</strong>: Displays the <code>SQL_LOG_BIN</code> session variable.</li>
+<li class=""><strong>sql_mode</strong>: Displays the <code>SQL_SQL_MODE</code> session variable.</li>
+<li class=""><strong>sql_safe_updates</strong>: Displays the <code>SQL_SAFE_UPDATES</code> session variable.</li>
+<li class=""><strong>sql_select_limit</strong>: Displays the <code>SQL_SELECT_LIMIT</code> session variable.</li>
+<li class=""><strong>status</strong>: Holds information about the status of the connection.<!-- -->
+<ul>
+<li class=""><strong>compression</strong>: Boolean flag. Displays if connection is compressed.</li>
+</ul>
+</li>
+<li class=""><strong>time_zone</strong>: Displays the <code>SQL_TIME_ZONE</code> session variable.</li>
+<li class=""><strong>transaction_read</strong>: Displays the <code>SQL_TRANSACTION_READ</code> session variable.</li>
+<li class=""><strong>wsrep_sync_wait</strong>: Displays the <code>SQL_WSREP_SYNC_WAIT</code> session variable.</li>
+<li class=""><strong>group_concat_max_len</strong>: Displays <code>GROUP_CONCAT_MAX_LEN</code> variable value.</li>
+<li class=""><strong>isolation_level</strong>: Displays the <code>TRANSACTION_ISOLATION</code> currently set.</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="5-qpo-query-processor-output-object">5. QPO (Query Processor Output) object<a href="#5-qpo-query-processor-output-object" class="hash-link" aria-label="Direct link to 5. QPO (Query Processor Output) object" title="Direct link to 5. QPO (Query Processor Output) object" translate="no">​</a></h3>
+<p>Holds the information extracted from last query after it has been processed by the &#x27;Query_Processor&#x27;:</p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="query-rules-related">Query rules related:<a href="#query-rules-related" class="hash-link" aria-label="Direct link to Query rules related:" title="Direct link to Query rules related:" translate="no">​</a></h4>
+<p>This are the values that derive directly from the application of the query rules <em>to last query</em>:</p>
+<ul>
+<li class=""><strong>cache_timeout</strong>: Time a query will wait up resulset to be avaiable in query cache before running on
+backend.</li>
+<li class=""><strong>firewall_whitelist_mode</strong>: Mode in which the firewall whitelist is operating.</li>
+<li class=""><strong>max_lag_ms</strong>: Specifies if the query annotation <code>query_delay</code> was used.</li>
+<li class=""><strong>multiplex</strong>: Specifies if <code>multiplex</code> has been set by a query rule.</li>
+<li class=""><strong>reconnect</strong>: Specifies if <code>reconnect</code> has been set by a query rule.</li>
+<li class=""><strong>retries</strong>: Specifies if <code>retries</code> has been set by a query rule.</li>
+<li class=""><strong>sticky_conn</strong>: Specifies if <code>sticky_conn</code> has been set by a query rule.</li>
+<li class=""><strong>timeout</strong>: Specifies if <code>timeout</code> has been set by a query rule.</li>
+</ul>
+<p>For extra information about these values and their meaning please refer to: <a href="https://proxysql.com/main-runtime/#mysql_query_rules" target="_blank" rel="noopener noreferrer" class="">mysql_query_rules</a></p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="query-annotations-related">Query annotations related:<a href="#query-annotations-related" class="hash-link" aria-label="Direct link to Query annotations related:" title="Direct link to Query annotations related:" translate="no">​</a></h4>
+<p>This are the values from &#x27;query annotations&#x27; extracted by the &#x27;Query_Processor&#x27; for the last query:</p>
+<ul>
+<li class=""><strong>create_new_connection</strong>: Query annotation <code>create_new_connection</code>.</li>
+<li class=""><strong>delay</strong>: Query annotation <code>query_delay</code>.</li>
+<li class=""><strong>destination_hostgroup</strong>: Query annotation <code>destination</code>.</li>
+<li class=""><strong>max_lag_ms</strong>: Query annotation <code>query_delay</code>.</li>
+</ul>
+<p>For extra information about these values and their meaning please refer to: <a href="https://proxysql.com/query-annotations" target="_blank" rel="noopener noreferrer" class="">query_annotations</a></p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="specials">Specials:<a href="#specials" class="hash-link" aria-label="Direct link to Specials:" title="Direct link to Specials:" translate="no">​</a></h4>
+<ul>
+<li class=""><strong>cache_ttl</strong>: Specifies the <code>cache_ttl</code> derived from the query rules for the last query, or the
+<strong>cache_ttl</strong> imposed by a <code>query annotation</code> in the last query.</li>
+</ul></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_WFHX"><a href="https://github.com/sysown/proxysql/tree/master/docs/proxysql_internal_session/proxysql_internal_session.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/proxysql/proxysql_configuration_postgres/"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">proxysql_configuration_postgres</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/proxysql/query_annotations/"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">query_annotations</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#1-session_info-object" class="table-of-contents__link toc-highlight">1. &#39;session_info&#39; object</a></li><li><a href="#2-backend-object" class="table-of-contents__link toc-highlight">2. Backend object</a></li><li><a href="#3-client-object" class="table-of-contents__link toc-highlight">3. Client Object</a></li><li><a href="#4-connection-object-conn" class="table-of-contents__link toc-highlight">4. Connection object (conn)</a></li><li><a href="#5-qpo-query-processor-output-object" class="table-of-contents__link toc-highlight">5. QPO (Query Processor Output) object</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/proxysql/">Introduction</a></li><li class="footer__item"><a class="footer__link-item" href="/proxysql/global_variables/quick-reference">Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://stackoverflow.com/questions/tagged/proxysql" target="_blank" rel="noopener noreferrer" class="footer__link-item">Stack Overflow<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://twitter.com/proxysql" target="_blank" rel="noopener noreferrer" class="footer__link-item">Twitter<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/proxysql/blog">Blog</a></li><li class="footer__item"><a href="https://github.com/sysown/proxysql" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 ProxySQL. Built with Docusaurus.</div></div></div></footer></div>
+</body>
+</html>
