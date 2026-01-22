@@ -15,6 +15,17 @@ const sidebars: SidebarsConfig = {
     'intro',
     {
       type: 'category',
+      label: 'Guides',
+      items: [
+        {
+          type: 'doc',
+          id: 'guides/proxysql_configuration',
+          label: 'Initial Configuration',
+        },
+      ],
+    },
+    {
+      type: 'category',
       label: 'Configuration System',
       items: [
         'configuration_file/configuration_file',
