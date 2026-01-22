@@ -1,5 +1,9 @@
 # PostgreSQL Variables
 
+:::info
+**Note**: Changes made to the configuration on this page must be explicitly loaded to the runtime to take effect. Please refer to the **[Admin Commands](../the_admin_schemas/admin_commands)** documentation for details on the `LOAD` and `SAVE` commands.
+:::
+
 ## List of PostgreSQL Variables
 
 NOTE: You can click on the variable name to jump to its definition
@@ -1175,3 +1179,6 @@ Timeout in milliseconds for idle client connections.
 |                      | **Maximum** | 1728000000           |
 
 **Description**: The maximum time (in milliseconds) a PostgreSQL client connection can remain idle before ProxySQL closes it.
+
+---
+**Apply your changes**: Remember to use the appropriate `LOAD` and `SAVE` commands to activate and persist your configuration. See the complete **[Admin Commands](../the_admin_schemas/admin_commands)** reference.

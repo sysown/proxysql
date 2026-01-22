@@ -1,5 +1,9 @@
 # MCP Variables
 
+:::info
+**Note**: Changes made to the configuration on this page must be explicitly loaded to the runtime to take effect. Please refer to the **[Admin Commands](../the_admin_schemas/admin_commands)** documentation for details on the `LOAD` and `SAVE` commands.
+:::
+
 ## List of MCP Variables
 
 NOTE: You can click on the variable name to jump to its definition
@@ -109,3 +113,6 @@ Configuration for the MySQL Tool Handler used by MCP.
 | **Permitted Values** | **Type** | String |
 
 **Description**: These variables configure how the MCP server connects to backend MySQL instances to perform autodiscovery and query execution.
+
+---
+**Apply your changes**: Remember to use the appropriate `LOAD` and `SAVE` commands to activate and persist your configuration. See the complete **[Admin Commands](../the_admin_schemas/admin_commands)** reference.

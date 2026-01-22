@@ -1,5 +1,9 @@
 # MCP Tables
 
+:::info
+**Note**: Changes made to the configuration on this page must be explicitly loaded to the runtime to take effect. Please refer to the **[Admin Commands](../the_admin_schemas/admin_commands)** documentation for details on the `LOAD` and `SAVE` commands.
+:::
+
 This section documents the tables used to configure and monitor the Model Context Protocol (MCP) server.
 
 ## List of MCP Tables
@@ -69,3 +73,6 @@ CREATE TABLE stats_mcp_query_rules (
     hits INT NOT NULL
 );
 ```
+
+---
+**Apply your changes**: Remember to use the appropriate `LOAD` and `SAVE` commands to activate and persist your configuration. See the complete **[Admin Commands](../the_admin_schemas/admin_commands)** reference.

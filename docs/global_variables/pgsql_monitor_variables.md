@@ -1,5 +1,9 @@
 # PostgreSQL Monitor Variables
 
+:::info
+**Note**: Changes made to the configuration on this page must be explicitly loaded to the runtime to take effect. Please refer to the **[Admin Commands](../the_admin_schemas/admin_commands)** documentation for details on the `LOAD` and `SAVE` commands.
+:::
+
 ## List of PostgreSQL Monitor Variables
 
 NOTE: You can click on the variable name to jump to its definition
@@ -318,5 +322,8 @@ Maximum size of the DNS resolver queue.
 |                      | **Maximum** | 1024                                          |
 
 **Description**: The maximum number of pending DNS resolution requests allowed in the monitor's queue.
+
+---
+**Apply your changes**: Remember to use the appropriate `LOAD` and `SAVE` commands to activate and persist your configuration. See the complete **[Admin Commands](../the_admin_schemas/admin_commands)** reference.
 
 [1]: https://proxysql.com/postgresql-backend-monitoring/
