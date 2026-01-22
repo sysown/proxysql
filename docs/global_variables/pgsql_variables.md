@@ -64,6 +64,18 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-sessions_sort](#pgsql-sessions_sort)                           | false         |
 | [pgsql-default_schema](#pgsql-default_schema)                         | information_schema |
 | [pgsql-query_digests_grouping_limit](#pgsql-query_digests_grouping_limit) | 1000       |
+| [pgsql-automatic_detect_sqli](#pgsql-automatic_detect_sqli)           | false         |
+| [pgsql-commands_stats](#pgsql-commands_stats)                         | true          |
+| [pgsql-default_reconnect](#pgsql-default_reconnect)                   | true          |
+| [pgsql-firewall_whitelist_enabled](#pgsql-firewall_whitelist_enabled) | false         |
+| [pgsql-log_unhealthy_connections](#pgsql-log_unhealthy_connections)   | true          |
+| [pgsql-use_tcp_keepalive](#pgsql-use_tcp_keepalive)                   | true          |
+| [pgsql-tcp_keepalive_time](#pgsql-tcp_keepalive_time)                 | 120           |
+| [pgsql-verbose_query_error](#pgsql-verbose_query_error)               | false         |
+| [pgsql-max_transaction_idle_time](#pgsql-max_transaction_idle_time)   | 14400000      |
+| [pgsql-max_transaction_time](#pgsql-max_transaction_time)             | 14400000      |
+| [pgsql-threshold_query_length](#pgsql-threshold_query_length)         | 524288        |
+| [pgsql-threshold_resultset_size](#pgsql-threshold_resultset_size)     | 4194304       |
 
 <!-- remark-ignore-end -->
 
@@ -220,7 +232,7 @@ The duration in seconds a backend server remains shunned.
 |                      |             |                                |
 | -------------------- | ----------- | ------------------------------ |
 | **System Variable**  | **Name**    | `pgsql-shun_recovery_time_sec` |
-|                      | **Dynamic** | Yes                            |
+| **Dynamic**          | **Yes**     |                                |
 | **Permitted Values** | **Type**    | Integer                        |
 |                      | **Default** | 10                             |
 |                      | **Minimum** | 0                              |
@@ -502,7 +514,7 @@ Controls whether queries that generate warnings are cached.
 
 |                      |             |                                   |
 | -------------------- | ----------- | --------------------------------- |
-| **System Variable**  | **Name**    | `pgsql-query_cache_handle_warnings` |
+| **System Variable**  | **Name**    | `pgsql-cache_handle_warnings` |
 | **Dynamic**          | **Yes**     |                                   |
 | **Permitted Values** | **Type**    | Integer                           |
 |                      | **Default** | 0                                 |
@@ -610,7 +622,7 @@ Enables background connection establishment to keep the connection pool "warm".
 | **System Variable**  | **Name**    | `pgsql-connection_warming` |
 | **Dynamic**          | **Yes**     |                            |
 | **Permitted Values** | **Type**    | Boolean                    |
-|                      | **Default** | `false`                    |
+| **Default**          | **false**   |                            |
 
 **Description**: When enabled, ProxySQL will proactively open connections to backend servers to ensure a minimum number of connections are always ready for incoming requests.
 
@@ -652,3 +664,149 @@ The number of times ProxySQL will retry connecting to a backend server before gi
 ### `pgsql-query_digests_grouping_limit`
 
 **Description**: Not supported.
+
+### `pgsql-automatic_detect_sqli`
+
+Enables automatic detection of SQL injection attempts for PostgreSQL.
+
+|                      |             |                               |
+| -------------------- | ----------- | ----------------------------- |
+| **System Variable**  | **Name**    | `pgsql-automatic_detect_sqli` |
+| **Dynamic**          | **Yes**     |                               |
+| **Permitted Values** | **Type**    | Boolean                       |
+|                      | **Default** | `false`                       |
+
+**Description**: When enabled, ProxySQL analyzes PostgreSQL queries for potential SQL injection patterns and takes action based on configured rules.
+
+### `pgsql-commands_stats`
+
+Enables collection of command-level statistics for PostgreSQL.
+
+|                      |             |                        |
+| -------------------- | ----------- | ---------------------- |
+| **System Variable**  | **Name**    | `pgsql-commands_stats` |
+| **Dynamic**          | **Yes**     |                        |
+| **Permitted Values** | **Type**    | Boolean                |
+|                      | **Default** | `true`                 |
+
+**Description**: Controls whether ProxySQL tracks performance metrics for individual PostgreSQL command types.
+
+### `pgsql-default_reconnect`
+
+**Description**: Not supported.
+
+### `pgsql-firewall_whitelist_enabled`
+
+Enables the firewall whitelist for PostgreSQL.
+
+|                      |             |                                     |
+| -------------------- | ----------- | ----------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-firewall_whitelist_enabled` |
+| **Dynamic**          | **Yes**     |                                     |
+| **Permitted Values** | **Type**    | Boolean                             |
+|                      | **Default** | `false`                             |
+
+**Description**: When enabled, ProxySQL enforces a whitelist of allowed PostgreSQL queries, blocking any that are not explicitly permitted.
+
+### `pgsql-log_unhealthy_connections`
+
+Controls whether ProxySQL logs unhealthy connections to PostgreSQL backends.
+
+|                      |             |                                    |
+| -------------------- | ----------- | ---------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-log_unhealthy_connections` |
+| **Dynamic**          | **Yes**     |                                    |
+| **Permitted Values** | **Type**    | Boolean                            |
+|                      | **Default** | `true`                             |
+
+**Description**: When enabled, ProxySQL logs details about connection attempts to backend servers that fail or are deemed unhealthy.
+
+### `pgsql-use_tcp_keepalive`
+
+Enables TCP keepalive for PostgreSQL client connections.
+
+|                      |             |                           |
+| -------------------- | ----------- | ------------------------- |
+| **System Variable**  | **Name**    | `pgsql-use_tcp_keepalive` |
+| **Dynamic**          | **Yes**     |                           |
+| **Permitted Values** | **Type**    | Boolean                   |
+|                      | **Default** | `true`                    |
+
+**Description**: Enables the SO_KEEPALIVE socket option for PostgreSQL frontend connections.
+
+### `pgsql-tcp_keepalive_time`
+
+Sets the TCP keepalive idle time for PostgreSQL client connections.
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | `pgsql-tcp_keepalive_time` |
+| **Dynamic**          | **Yes**     |                            |
+| **Permitted Values** | **Type**    | Integer (seconds)          |
+|                      | **Default** | 120                        |
+|                      | **Minimum** | 0                          |
+|                      | **Maximum** | 7200                       |
+
+**Description**: Defines the time (in seconds) the connection must be idle before TCP starts sending keepalive probes.
+
+### `pgsql-verbose_query_error`
+
+Provides detailed PostgreSQL error messages to the client.
+
+|                      |             |                             |
+| -------------------- | ----------- | --------------------------- |
+| **System Variable**  | **Name**    | `pgsql-verbose_query_error` |
+| **Dynamic**          | **Yes**     |                             |
+| **Permitted Values** | **Type**    | Boolean                     |
+|                      | **Default** | `false`                     |
+
+**Description**: When enabled, ProxySQL returns more descriptive error information to PostgreSQL clients when a query fails.
+
+### `pgsql-max_transaction_idle_time`
+
+Maximum time a transaction can be idle in PostgreSQL.
+
+|                      |             |                                  |
+| -------------------- | ----------- | -------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-max_transaction_idle_time` |
+| **Dynamic**          | **Yes**     |                                  |
+| **Permitted Values** | **Type**    | Integer (milliseconds)           |
+|                      | **Default** | 14400000                         |
+|                      | **Minimum** | 1000                             |
+|                      | **Maximum** | 1728000000                       |
+
+**Description**: Specifies the maximum duration (in milliseconds) a PostgreSQL transaction can remain idle before ProxySQL terminates the connection.
+
+### `pgsql-max_transaction_time`
+
+Maximum duration for a PostgreSQL transaction.
+
+|                      |             |                              |
+| -------------------- | ----------- | ---------------------------- |
+| **System Variable**  | **Name**    | `pgsql-max_transaction_time` |
+| **Dynamic**          | **Yes**     |                              |
+| **Permitted Values** | **Type**    | Integer (milliseconds)       |
+|                      | **Default** | 14400000                     |
+|                      | **Minimum** | 1000                         |
+|                      | **Maximum** | 1728000000                   |
+
+**Description**: Sets the absolute maximum time (in milliseconds) a PostgreSQL transaction is allowed to run before being terminated.
+
+### `pgsql-threshold_query_length`
+
+**Description**: Not supported.
+
+### `pgsql-threshold_resultset_size`
+
+Threshold in bytes for PostgreSQL resultset buffering.
+
+|                      |             |                                  |
+| -------------------- | ----------- | -------------------------------- |
+| **System Variable**  | **Name**    | `pgsql-threshold_resultset_size` |
+| **Dynamic**          | **Yes**     |                                  |
+| **Permitted Values** | **Type**    | Integer (bytes)                  |
+|                      | **Default** | 4194304                          |
+|                      | **Minimum** | 0                                |
+|                      | **Maximum** | 2147483647                       |
+
+**Description**: Determines the maximum amount of data (in bytes) that ProxySQL will buffer for a single PostgreSQL resultset before it begins streaming results to the client.
