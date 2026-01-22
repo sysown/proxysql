@@ -2,6 +2,32 @@
 
 ProxySQL uses a multi-layer configuration system consisting of the **Configuration File**, **Disk Database**, **Main (Memory) Database**, and the **Runtime** data structures. Moving configuration between these layers is handled via `LOAD` and `SAVE` commands.
 
+## Table of Contents
+- [Configuration Layers](#configuration-layers)
+- [MySQL Commands](#mysql-commands)
+  - [MySQL Servers & Hostgroups](#mysql-servers--hostgroups)
+  - [MySQL Users](#mysql-users)
+  - [MySQL Query Rules](#mysql-query-rules)
+  - [MySQL Variables](#mysql-variables)
+- [PostgreSQL Commands (v3.0+)](#postgresql-commands-v30)
+  - [PostgreSQL Servers](#postgresql-servers)
+  - [PostgreSQL Users](#postgresql-users)
+  - [PostgreSQL Query Rules](#postgresql-query-rules)
+  - [PostgreSQL Variables](#postgresql-variables)
+- [Generative AI & MCP Commands (v4.0+)](#generative-ai--mcp-commands-v40)
+  - [MCP Query Rules](#mcp-query-rules)
+  - [MCP Variables](#mcp-variables)
+  - [GENAI Variables](#genai-variables)
+- [Core Admin & System Commands](#core-admin--system-commands)
+  - [Admin Variables](#admin-variables)
+  - [ProxySQL Servers (Cluster Nodes)](#proxysql-servers-cluster-nodes)
+  - [Scheduler](#scheduler)
+- [Specialized Commands](#specialized-commands)
+  - [Firewall Management](#firewall-management)
+  - [Debugging & Coredump](#debugging--coredump)
+  - [System Commands](#system-commands)
+  - [Checksum Verification](#checksum-verification)
+
 ## Configuration Layers
 
 1. **RUNTIME**: The internal data structures used by ProxySQL threads to process traffic. This is the only layer that actively affects proxy behavior.
