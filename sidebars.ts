@@ -32,6 +32,21 @@ const sidebars: SidebarsConfig = {
         'global_variables/mysql_variables',
         'global_variables/mysql_monitor_variables',
         'backend_monitoring/mysql_monitoring',
+        {
+          type: 'doc',
+          id: 'galera_configuration/Galera_Configuration',
+          label: 'Galera',
+        },
+        {
+          type: 'doc',
+          id: 'group_replication_configuration/group-replication-configuration',
+          label: 'Group Replication',
+        },
+        {
+          type: 'doc',
+          id: 'aurora_configuration/aws-aurora-configuration',
+          label: 'AWS Aurora',
+        },
       ],
     },
     {
@@ -42,7 +57,11 @@ const sidebars: SidebarsConfig = {
         'global_variables/pgsql_variables',
         'global_variables/pgsql_monitor_variables',
         'backend_monitoring/postgresql_monitoring',
-        'proxysql_configuration_postgres/proxysql_configuration_postgres',
+        {
+          type: 'doc',
+          id: 'proxysql_configuration_postgres/proxysql_configuration_postgres',
+          label: 'PostgreSQL Configuration',
+        },
       ],
     },
     {
@@ -84,12 +103,31 @@ const sidebars: SidebarsConfig = {
       items: [
         'backend_monitoring/mysql_monitoring',
         'backend_monitoring/postgresql_monitoring',
-        'galera_configuration/Galera_Configuration',
-        'group_replication_configuration/group-replication-configuration',
-        'aurora_configuration/aws-aurora-configuration',
-        'proxysql_configuration_postgres/proxysql_configuration_postgres',
-        'dns_cache/dns_cache',
-        'proxy_protocol/proxy-protocol',
+        {
+          type: 'doc',
+          id: 'galera_configuration/Galera_Configuration',
+          label: 'Galera',
+        },
+        {
+          type: 'doc',
+          id: 'group_replication_configuration/group-replication-configuration',
+          label: 'Group Replication',
+        },
+        {
+          type: 'doc',
+          id: 'aurora_configuration/aws-aurora-configuration',
+          label: 'AWS Aurora',
+        },
+        {
+          type: 'doc',
+          id: 'proxysql_configuration_postgres/proxysql_configuration_postgres',
+          label: 'PostgreSQL Configuration',
+        },
+        {
+          type: 'doc',
+          id: 'dns_cache/dns_cache',
+          label: 'DNS Cache',
+        },
       ],
     },
     {
@@ -119,6 +157,16 @@ const sidebars: SidebarsConfig = {
         'mysql_binlog_reader/mysql-binlog-reader',
         'coredumper_support/coredumper_support',
         'jemalloc/jemalloc',
+        {
+          type: 'doc',
+          id: 'dns_cache/dns_cache',
+          label: 'DNS Cache',
+        },
+        {
+          type: 'doc',
+          id: 'proxy_protocol/proxy-protocol',
+          label: 'PROXY Protocol',
+        },
       ],
     },
     {
@@ -136,13 +184,36 @@ const sidebars: SidebarsConfig = {
       label: 'Reference (Global Variables)',
       items: [
         'global_variables/quick-reference',
-        'global_variables/global_variables',
-        'global_variables/admin_variables',
-        'global_variables/mysql_variables',
-        'global_variables/mysql_monitor_variables',
-        'global_variables/pgsql_variables',
-        'global_variables/pgsql_monitor_variables',
-        'global_variables/mcp_variables',
+        {
+          type: 'doc',
+          id: 'global_variables/admin_variables',
+          label: 'Admin Variables',
+        },
+        {
+          type: 'doc',
+          id: 'global_variables/mysql_variables',
+          label: 'MySQL Variables',
+        },
+        {
+          type: 'doc',
+          id: 'global_variables/mysql_monitor_variables',
+          label: 'MySQL Monitor Variables',
+        },
+        {
+          type: 'doc',
+          id: 'global_variables/pgsql_variables',
+          label: 'PostgreSQL Variables',
+        },
+        {
+          type: 'doc',
+          id: 'global_variables/pgsql_monitor_variables',
+          label: 'PostgreSQL Monitor Variables',
+        },
+        {
+          type: 'doc',
+          id: 'global_variables/mcp_variables',
+          label: 'MCP Variables',
+        },
       ],
     },
     {
