@@ -72,7 +72,7 @@ const config: Config = {
 
   themeConfig: {
     // Replace with your project's social card
-    image: 'img/docusaurus-social-card.jpg',
+    image: 'img/proxysql-logo.png',
     colorMode: {
       respectPrefersColorScheme: true,
     },
@@ -80,7 +80,7 @@ const config: Config = {
       title: 'ProxySQL',
       logo: {
         alt: 'ProxySQL Logo',
-        src: 'img/logo.svg',
+        src: 'img/proxysql-logo.png',
       },
       items: [
         {
