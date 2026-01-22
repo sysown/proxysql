@@ -6,58 +6,14 @@ This section documents all tables related to the PostgreSQL protocol in ProxySQL
 
 | Tablename | Description |
 | :--- | :--- |
-| [pgsql_users](#pgsql_users) | Frontend and Backend PostgreSQL Users |
-| [pgsql_servers](#pgsql_servers) | Backend PostgreSQL Servers |
-| [pgsql_replication_hostgroups](#pgsql_replication_hostgroups) | PostgreSQL replication clusters |
 | [pgsql_hostgroup_attributes](#pgsql_hostgroup_attributes) | Hostgroup-specific overrides |
 | [pgsql_query_rules](#pgsql_query_rules) | Query Rules for PostgreSQL traffic |
 | [pgsql_query_rules_fast_routing](#pgsql_query_rules_fast_routing) | Specialized fast routing rules |
+| [pgsql_replication_hostgroups](#pgsql_replication_hostgroups) | PostgreSQL replication clusters |
+| [pgsql_servers](#pgsql_servers) | Backend PostgreSQL Servers |
+| [pgsql_users](#pgsql_users) | Frontend and Backend PostgreSQL Users |
 
 ---
-
-### pgsql_users
-
-The `pgsql_users` table defines PostgreSQL users that clients can use to connect to ProxySQL.
-
-```sql
-CREATE TABLE pgsql_users (
-    username VARCHAR NOT NULL,
-    password VARCHAR,
-    active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,
-    use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0,
-    default_hostgroup INT NOT NULL DEFAULT 0,
-    transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1,
-    fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0,
-    backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1,
-    frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1,
-    max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000,
-    attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',
-    comment VARCHAR NOT NULL DEFAULT '',
-    PRIMARY KEY (username, backend),
-    UNIQUE (username, frontend)
-);
-```
-
-### pgsql_servers
-
-The `pgsql_servers` table defines all the backend PostgreSQL servers that ProxySQL manages.
-
-```sql
-CREATE TABLE pgsql_servers (
-    hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0,
-    hostname VARCHAR NOT NULL,
-    port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 5432,
-    status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE',
-    weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1,
-    compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0,
-    max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000,
-    max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0,
-    use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0,
-    max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0,
-    comment VARCHAR NOT NULL DEFAULT '',
-    PRIMARY KEY (hostgroup_id, hostname, port)
-);
-```
 
 ### pgsql_hostgroup_attributes
 
@@ -77,20 +33,6 @@ CREATE TABLE pgsql_hostgroup_attributes (
     hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '',
     servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '',
     comment VARCHAR NOT NULL DEFAULT ''
-);
-```
-
-### pgsql_replication_hostgroups
-
-Table `pgsql_replication_hostgroups` defines replication hostgroups for PostgreSQL.
-
-```sql
-CREATE TABLE pgsql_replication_hostgroups (
-    writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY,
-    reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0),
-    check_type VARCHAR NOT NULL DEFAULT 'read_only',
-    comment VARCHAR NOT NULL DEFAULT '',
-    UNIQUE (reader_hostgroup)
 );
 ```
 
@@ -149,6 +91,64 @@ CREATE TABLE pgsql_query_rules_fast_routing (
     destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL,
     comment VARCHAR NOT NULL,
     PRIMARY KEY (username, database, flagIN)
+);
+```
+
+### pgsql_replication_hostgroups
+
+Table `pgsql_replication_hostgroups` defines replication hostgroups for PostgreSQL.
+
+```sql
+CREATE TABLE pgsql_replication_hostgroups (
+    writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY,
+    reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0),
+    check_type VARCHAR NOT NULL DEFAULT 'read_only',
+    comment VARCHAR NOT NULL DEFAULT '',
+    UNIQUE (reader_hostgroup)
+);
+```
+
+### pgsql_servers
+
+The `pgsql_servers` table defines all the backend PostgreSQL servers that ProxySQL manages.
+
+```sql
+CREATE TABLE pgsql_servers (
+    hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0,
+    hostname VARCHAR NOT NULL,
+    port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 5432,
+    status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE',
+    weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1,
+    compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0,
+    max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000,
+    max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0,
+    use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0,
+    max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0,
+    comment VARCHAR NOT NULL DEFAULT '',
+    PRIMARY KEY (hostgroup_id, hostname, port)
+);
+```
+
+### pgsql_users
+
+The `pgsql_users` table defines PostgreSQL users that clients can use to connect to ProxySQL.
+
+```sql
+CREATE TABLE pgsql_users (
+    username VARCHAR NOT NULL,
+    password VARCHAR,
+    active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,
+    use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0,
+    default_hostgroup INT NOT NULL DEFAULT 0,
+    transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1,
+    fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0,
+    backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1,
+    frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1,
+    max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000,
+    attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '',
+    comment VARCHAR NOT NULL DEFAULT '',
+    PRIMARY KEY (username, backend),
+    UNIQUE (username, frontend)
 );
 ```
 
