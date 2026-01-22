@@ -2362,14 +2362,42 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		// LOAD MCP QUERY RULES FROM DISK / TO MEMORY
 		// Copies rules from persistent storage (disk.mcp_query_rules) to working memory (main.mcp_query_rules)
 		if (
-			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP QUERY RULES FROM DISK", query_no_space, query_no_space_length))
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP RULES FROM DISK", query_no_space, query_no_space_length))
 			||
 			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO MEMORY") && !strncasecmp("LOAD MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
 			) {
 			l_free(*ql,*q);
-			// First clear target table, then insert to ensure deleted source rows are also removed
-			*q=l_strdup("DELETE FROM main.mcp_query_rules; INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules");
-			*ql=strlen(*q)+1;
+
+			// Execute as transaction to ensure both statements run atomically
+			char* error = NULL;
+			bool success = true;
+
+			// Begin transaction
+			if (!admindb->execute("BEGIN")) {
+				proxy_error("Failed to BEGIN transaction for LOAD MCP QUERY RULES\n");
+				return false;
+			}
+
+			// Clear target table
+			if (!admindb->execute("DELETE FROM main.mcp_query_rules")) {
+				proxy_error("Failed to DELETE from main.mcp_query_rules\n");
+				admindb->execute("ROLLBACK");
+				return false;
+			}
+
+			// Insert from source
+			if (!admindb->execute("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules")) {
+				proxy_error("Failed to INSERT into main.mcp_query_rules\n");
+				admindb->execute("ROLLBACK");
+				return false;
+			}
+
+			// Commit transaction
+			if (!admindb->execute("COMMIT")) {
+				proxy_error("Failed to COMMIT transaction for LOAD MCP QUERY RULES\n");
+				return false;
+			}
+
 			return true;
 		}
 
@@ -2379,9 +2407,37 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
 			) {
 			l_free(*ql,*q);
-			// First clear target table, then insert to ensure deleted source rows are also removed
-			*q=l_strdup("DELETE FROM disk.mcp_query_rules; INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules");
-			*ql=strlen(*q)+1;
+
+			// Execute as transaction to ensure both statements run atomically
+			char* error = NULL;
+			bool success = true;
+
+			// Begin transaction
+			if (!admindb->execute("BEGIN")) {
+				proxy_error("Failed to BEGIN transaction for SAVE MCP QUERY RULES TO DISK\n");
+				return false;
+			}
+
+			// Clear target table
+			if (!admindb->execute("DELETE FROM disk.mcp_query_rules")) {
+				proxy_error("Failed to DELETE from disk.mcp_query_rules\n");
+				admindb->execute("ROLLBACK");
+				return false;
+			}
+
+			// Insert from source
+			if (!admindb->execute("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules")) {
+				proxy_error("Failed to INSERT into disk.mcp_query_rules\n");
+				admindb->execute("ROLLBACK");
+				return false;
+			}
+
+			// Commit transaction
+			if (!admindb->execute("COMMIT")) {
+				proxy_error("Failed to COMMIT transaction for SAVE MCP QUERY RULES TO DISK\n");
+				return false;
+			}
+
 			return true;
 		}
 
