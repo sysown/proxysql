@@ -45,6 +45,7 @@ using json = nlohmann::json;
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 #include "MCP_Thread.h"
+#include "ProxySQL_MCP_Server.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -3247,6 +3248,123 @@ void ProxySQL_Admin::load_restapi_server() {
 				);
 			}
 			variables.restapi_port_old = variables.restapi_port;
+		}
+	}
+}
+
+void ProxySQL_Admin::load_mcp_server() {
+	if (!all_modules_started) { return; }
+	if (GloMCPH == NULL) { return; }
+
+	// Helper lambda to check if MCP port is available
+	const auto check_mcp_port = [&](int port, bool& port_free) -> void {
+		int e_port_check = check_port_availability(port, &port_free);
+
+		if (port_free == false) {
+			if (e_port_check == -1) {
+				proxy_error("Unable to start MCP Server, failed to set 'SO_REUSEADDR' to check port availability.\n");
+			} else if (e_port_check == -2) {
+				proxy_error("Unable to start MCP Server, invalid port check parameters.\n");
+			} else {
+				proxy_error("Unable to start MCP Server, port '%d' already in use.\n", port);
+			}
+		}
+	};
+
+	// Check if MCP server is enabled and needs management
+	bool enabled = GloMCPH->variables.mcp_enabled;
+
+	if (enabled) {
+		if (GloMCPH->mcp_server == NULL) {
+			// Start the server if not running
+			int port = GloMCPH->variables.mcp_port;
+			bool use_ssl = GloMCPH->variables.mcp_use_ssl;
+
+			// Check SSL certificates if SSL mode is enabled
+			if (use_ssl) {
+				if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+					proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+						"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+					return;
+				}
+			}
+
+			// Check port availability
+			bool port_free = false;
+			check_mcp_port(port, port_free);
+
+			if (port_free) {
+				proxy_info("MCP: Starting server on port %d\n", port);
+				GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+				if (GloMCPH->mcp_server) {
+					GloMCPH->mcp_server->start();
+					proxy_info("MCP: Server started successfully\n");
+				} else {
+					proxy_error("MCP: Failed to create server instance\n");
+				}
+			}
+		} else {
+			// Server is already running, check if restart is needed
+			int current_port = GloMCPH->variables.mcp_port;
+			int server_port = GloMCPH->mcp_server->get_port();
+			bool current_use_ssl = GloMCPH->variables.mcp_use_ssl;
+			bool server_use_ssl = GloMCPH->mcp_server->is_using_ssl();
+
+			bool needs_restart = false;
+			std::string restart_reason;
+
+			if (current_port != server_port) {
+				needs_restart = true;
+				restart_reason += "port (" + std::to_string(server_port) + " -> " + std::to_string(current_port) + ") ";
+			}
+
+			if (current_use_ssl != server_use_ssl) {
+				needs_restart = true;
+				restart_reason += "SSL mode";
+			}
+
+			if (needs_restart) {
+				proxy_info("MCP: Configuration changed (%s), restarting server...\n", restart_reason.c_str());
+
+				proxy_info("MCP: Stopping server on port %d\n", server_port);
+				delete GloMCPH->mcp_server;
+				GloMCPH->mcp_server = NULL;
+				proxy_info("MCP: Old server deleted\n");
+
+				// Check SSL certificates if SSL mode is enabled
+				if (current_use_ssl) {
+					if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+						proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+							"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+						return;
+					}
+				}
+
+				// Check port availability before starting new server
+				bool port_free = false;
+				check_mcp_port(current_port, port_free);
+
+				if (port_free) {
+					proxy_info("MCP: Starting server on port %d\n", current_port);
+					GloMCPH->mcp_server = new ProxySQL_MCP_Server(current_port, GloMCPH);
+					if (GloMCPH->mcp_server) {
+						GloMCPH->mcp_server->start();
+						proxy_info("MCP: Server restarted successfully\n");
+					} else {
+						proxy_error("MCP: Failed to create server instance\n");
+					}
+				}
+			} else {
+				proxy_info("MCP: Server already running, no configuration changes detected\n");
+			}
+		}
+	} else {
+		// Stop the server if running and disabled
+		if (GloMCPH->mcp_server != NULL) {
+			proxy_info("MCP: Stopping server\n");
+			delete GloMCPH->mcp_server;
+			GloMCPH->mcp_server = NULL;
+			proxy_info("MCP: Server stopped successfully\n");
 		}
 	}
 }
