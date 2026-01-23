@@ -84,6 +84,7 @@ const sidebars: SidebarsConfig = {
         'genai/mcp_endpoints',
         'genai/mcp_autodiscovery',
         'genai/nl2sql',
+        'genai/mcp_fts',
         {
           type: 'category',
           label: 'MCP Tools',
