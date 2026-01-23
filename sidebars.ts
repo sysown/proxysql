@@ -170,6 +170,7 @@ const sidebars: SidebarsConfig = {
         'query_annotations/query_annotations',
         'prepared_statements/prepared_statements',
         'mysql_binlog_reader/mysql-binlog-reader',
+        'features/sqlite3_server',
         'coredumper_support/coredumper_support',
         'jemalloc/jemalloc',
         {
@@ -228,6 +229,11 @@ const sidebars: SidebarsConfig = {
           type: 'doc',
           id: 'global_variables/mcp_variables',
           label: 'MCP Variables',
+        },
+        {
+          type: 'doc',
+          id: 'global_variables/sqliteserver_variables',
+          label: 'SQLite3 Server Variables',
         },
       ],
     },

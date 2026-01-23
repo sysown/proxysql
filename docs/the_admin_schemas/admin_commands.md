@@ -169,6 +169,15 @@ ProxySQL employs a unique architecture to manage its configuration. For a detail
 
 *See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
 
+### SQLite3 Server
+- `LOAD SQLITESERVER VARIABLES TO RUNTIME` (or `TO RUN`)
+- `SAVE SQLITESERVER VARIABLES TO DISK`
+- `LOAD SQLITESERVER VARIABLES FROM DISK`
+- `SAVE SQLITESERVER VARIABLES TO MEMORY` (or `TO MEM`)
+- `LOAD SQLITESERVER VARIABLES FROM MEMORY` (or `FROM MEM`)
+
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ---
 
 ## Specialized Commands
