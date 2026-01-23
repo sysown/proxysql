@@ -45,6 +45,9 @@ const sidebars: SidebarsConfig = {
         'global_variables/mysql_variables',
         'global_variables/mysql_monitor_variables',
         'backend_monitoring/mysql_monitoring',
+        'users_management/mysql_users_management',
+        'users_management/mysql_password_management',
+        'users_management/mysql_authentication',
         {
           type: 'doc',
           id: 'galera_configuration/Galera_Configuration',
@@ -75,6 +78,8 @@ const sidebars: SidebarsConfig = {
         'global_variables/pgsql_variables',
         'global_variables/pgsql_monitor_variables',
         'backend_monitoring/postgresql_monitoring',
+        'users_management/postgresql_users_management',
+        'users_management/postgresql_authentication',
         {
           type: 'category',
           label: 'Extended Query Protocol',
