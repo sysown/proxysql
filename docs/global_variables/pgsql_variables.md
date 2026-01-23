@@ -320,12 +320,7 @@ absolute upper limit on connection attempts to prevent indefinite blocking.
 |                      | **Minimum** | 100                              |
 |                      | **Maximum** | 100000000                        |
 
-**Description**: The maximum timeout for connecting from ProxySQL to PostgreSQL backends in a hostgroup. When
-ProxySQL tries to establish a connection to a backend, individual attempts can timeout after
-`pgsql-connect_timeout_server` milliseconds, and ProxySQL will retry according to
-`pgsql-connect_retries_on_failure` and `pgsql-connect_retries_delay`. However, when the cumulative time
-reaches `pgsql-connect_timeout_server_max` milliseconds, all retry attempts cease and an error is returned to
-the client with code 9001 and message "Max connect timeout reached while reaching hostgroup...".
+**Description**: The maximum timeout for connecting from ProxySQL to PostgreSQL backends in a hostgroup. When ProxySQL tries to establish a connection to a backend, individual attempts can timeout after `pgsql-connect_timeout_server` milliseconds, and ProxySQL will retry according to `pgsql-connect_retries_on_failure` and `pgsql-connect_retries_delay`. However, when the cumulative time reaches `pgsql-connect_timeout_server_max` milliseconds, all retry attempts cease and an error is returned to the client with the message "Max connect timeout reached while reaching hostgroup...".
 
 ### `pgsql-connection_delay_multiplex_ms`
 
@@ -355,7 +350,7 @@ Maximum age in milliseconds for a backend connection.
 | **Minimum**          | **0**       |                               |
 | **Maximum**          | **86400000** |                               |
 
-**Description**: The maximum time (in milliseconds) a backend connection can stay open. Once this limit is reached, the connection is closed and a new one is established. A value of `0` disables this feature.
+**Description**: The maximum time (in milliseconds) a backend connection can stay open. Once this limit is reached, the connection is closed and a new one is established. A value of `0` disables this feature. Connections are only checked and removed when they become idle; active connections are not interrupted regardless of age.
 
 ### `pgsql-connection_warming`
 
@@ -402,7 +397,7 @@ Default timeout in milliseconds for PostgreSQL queries.
 |                      | **Minimum** | 1000                         |
 |                      | **Maximum** | 1728000000                   |
 
-**Description**: The default maximum time ProxySQL will wait for a query to complete if no timeout is specified in the query rules.
+**Description**: The default maximum time ProxySQL will wait for a query to complete if no timeout is specified in the query rules. When exceeded, the running query is terminated on the backend server and the client receives a query error. This limit applies per-query, measured from when the query is sent to the backend.
 
 ### `pgsql-default_reconnect`
 
@@ -489,7 +484,7 @@ The percentage of open idle connections to keep in the connection pool.
 |                      | **Minimum** | 0                            |
 |                      | **Maximum** | 100                          |
 
-**Description**: Controls the percentage of idle connections that ProxySQL maintains in the connection pool relative to `max_connections`. This helps in managing resource usage while keeping enough connections ready for new requests.
+**Description**: Controls the percentage of idle connections that ProxySQL maintains in the connection pool relative to `max_connections`. This helps in managing resource usage while keeping enough connections ready for new requests. ProxySQL will remove excess free connections when the idle pool exceeds this percentage threshold, ensuring that backend connections are available for reuse without consuming unnecessary resources.
 
 ### `pgsql-handle_unknown_charset`
 
@@ -570,7 +565,7 @@ Kills the backend connection immediately upon client disconnect.
 | **Permitted Values** | **Type**    | Boolean                                       |
 |                      | **Default** | `false`                                       |
 
-**Description**: If enabled, ProxySQL will close the associated backend connection as soon as the client disconnects, rather than returning it to the pool.
+**Description**: If enabled, ProxySQL will close the associated backend connection as soon as the client disconnects, rather than returning it to the pool. When disabled (default), backend connections remain available in the pool for reuse by other clients, which improves performance through connection reuse. When enabled, each client gets a fresh backend connection, which may increase connection overhead to the backend servers.
 
 ### `pgsql-log_unhealthy_connections`
 
@@ -598,7 +593,7 @@ Threshold in milliseconds for slow query logging.
 |                      | **Minimum** | 0                      |
 |                      | **Maximum** | 1728000000             |
 
-**Description**: If a query takes longer than this value to execute, it is considered a slow query and the slow query counter is incremented.
+**Description**: If a query takes longer than this value to execute, it is considered a slow query and the slow query counter is incremented. This only affects statistics collection visible in `stats_pgsql_query_digest`; queries are NOT terminated based on this threshold. Use `pgsql-default_query_timeout` or query rule timeouts to terminate long-running queries.
 
 ### `pgsql-max_allowed_packet`
 
@@ -675,7 +670,7 @@ Maximum time a transaction can be idle in PostgreSQL.
 |                      | **Minimum** | 1000                             |
 |                      | **Maximum** | 1728000000                       |
 
-**Description**: Specifies the maximum duration (in milliseconds) a PostgreSQL transaction can remain idle before ProxySQL terminates the connection.
+**Description**: Specifies the maximum duration (in milliseconds) a PostgreSQL transaction can remain idle before ProxySQL terminates the connection. When a transaction is idle longer than this threshold, the client connection is terminated to prevent resource leaks. Only applies to sessions with active transactions; sessions without active transactions are controlled by `pgsql-wait_timeout` instead.
 
 ### `pgsql-max_transaction_time`
 
@@ -690,7 +685,7 @@ Maximum duration for a PostgreSQL transaction.
 |                      | **Minimum** | 1000                         |
 |                      | **Maximum** | 1728000000           |
 
-**Description**: Sets the absolute maximum time (in milliseconds) a PostgreSQL transaction is allowed to run before being terminated.
+**Description**: Sets the absolute maximum time (in milliseconds) a PostgreSQL transaction is allowed to run before being terminated. This is a hard limit that applies to the total duration of a transaction, measured from when the first statement begins. When exceeded, the client connection is terminated regardless of whether the transaction is currently active or idle.
 
 ### `pgsql-min_num_servers_lantency_awareness`
 
@@ -771,7 +766,7 @@ Timeout in milliseconds for internal PostgreSQL backend pings.
 
 ### `pgsql-poll_timeout`
 
-**Description**: Not supported.
+**Description**: Controls how frequently the worker thread checks for network activity on client and backend connections. This is the maximum time the thread will wait for new events before processing queued tasks and performing maintenance. Lower values reduce latency at the cost of increased CPU usage; higher values improve CPU efficiency but may delay response to network events.
 
 ### `pgsql-poll_timeout_on_failure`
 
@@ -786,7 +781,7 @@ Wait time in milliseconds after a polling error.
 |                      | **Minimum** | 10                           |
 |                      | **Maximum** | 20000                        |
 
-**Description**: The duration ProxySQL will wait before re-polling after a connection or network failure occurs during PostgreSQL traffic handling.
+**Description**: The duration ProxySQL will wait before re-polling after a connection or network failure occurs during PostgreSQL traffic handling. When backend connections cannot be established, the poll timeout is temporarily reduced to this value to detect connection establishment or failure more quickly. Once connections are established, the normal `pgsql-poll_timeout` is restored.
 
 ### `pgsql-query_cache_handle_warnings`
 
@@ -947,7 +942,7 @@ The number of times a query is retried upon failure.
 |                      | **Minimum** | 0                                |
 |                      | **Maximum** | 1000                             |
 
-**Description**: Defines how many times ProxySQL will attempt to re-execute a query if it fails due to a connection error with the backend.
+**Description**: Defines how many times ProxySQL will attempt to re-execute a query if it fails due to a connection error with the backend. When a query fails on a connection error, ProxySQL automatically retries the query on a new backend connection up to this many times before returning an error to the client. Query rules can override this default value by specifying a custom retry count.
 
 ### `pgsql-server_encoding`
 
@@ -986,7 +981,7 @@ Enables sorting of PostgreSQL sessions for processing.
 | **Permitted Values** | **Type**    | Boolean              |
 |                      | **Default** | `false`              |
 
-**Description**: When enabled, ProxySQL sorts active PostgreSQL sessions before processing them, which can optimize performance by improving CPU cache locality.
+**Description**: When enabled, ProxySQL sorts active PostgreSQL sessions before processing them, which can optimize performance by improving CPU cache locality on systems with many concurrent connections. Sessions are sorted by their connection timeout status to prioritize sessions that are closer to their timeout limits. This does not affect routing behavior or query execution order.
 
 ### `pgsql-set_parser_algorithm`
 
@@ -1020,7 +1015,7 @@ The number of connection failures allowed before a backend server is shunned.
 |                      | **Minimum** | 0                        |
 |                      | **Maximum** | 10000000                 |
 
-**Description**: If a backend server fails to respond to connection attempts this many times consecutively, it will be temporarily shunned (marked as OFFLINE) to prevent further traffic from being sent to it.
+**Description**: If a backend server fails to respond to connection attempts this many times consecutively, it will be temporarily shunned (marked as OFFLINE) to prevent further traffic from being sent to it. During the shun period, new connections are automatically directed to other healthy backends in the same hostgroup. The server will be automatically returned to service after `pgsql-shun_recovery_time_sec` seconds.
 
 ### `pgsql-shun_recovery_time_sec`
 
@@ -1035,7 +1030,7 @@ The duration in seconds a backend server remains shunned.
 |                      | **Minimum** | 0                              |
 |                      | **Maximum** | 31536000                       |
 
-**Description**: The time in seconds that a backend server will remain in the shunned state before ProxySQL attempts to use it again.
+**Description**: The time in seconds that a backend server will remain in the shunned state before ProxySQL attempts to use it again. After this time elapses, the server is automatically returned to ONLINE status and new connections will be directed to it again. Existing connections to the server are allowed to complete naturally during the shun period.
 
 ### `pgsql-stats_time_backend_query`
 
@@ -1178,7 +1173,7 @@ Timeout in milliseconds for idle client connections.
 |                      | **Minimum** | 0                    |
 |                      | **Maximum** | 1728000000           |
 
-**Description**: The maximum time (in milliseconds) a PostgreSQL client connection can remain idle before ProxySQL closes it.
+**Description**: The maximum time (in milliseconds) a PostgreSQL client connection can remain idle before ProxySQL closes it. This limit only applies to connections with no active transaction. Connections with idle transactions are controlled by `pgsql-max_transaction_idle_time` instead.
 
 ---
 **Apply your changes**: Remember to use the appropriate `LOAD` and `SAVE` commands to activate and persist your configuration. See the complete **[Admin Commands](../the_admin_schemas/admin_commands)** reference.
