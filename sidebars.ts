@@ -65,15 +65,15 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'PostgreSQL',
       items: [
-        'main_runtime/postgresql_tables',
-        'global_variables/pgsql_variables',
-        'global_variables/pgsql_monitor_variables',
-        'backend_monitoring/postgresql_monitoring',
         {
           type: 'doc',
           id: 'proxysql_configuration_postgres/proxysql_configuration_postgres',
           label: 'PostgreSQL Configuration',
         },
+        'main_runtime/postgresql_tables',
+        'global_variables/pgsql_variables',
+        'global_variables/pgsql_monitor_variables',
+        'backend_monitoring/postgresql_monitoring',
       ],
     },
     {
