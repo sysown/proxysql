@@ -1465,7 +1465,7 @@ void GenAI_Threads_Handler::worker_loop(int worker_id) {
 			}
 			break;
 		}
-		lock.release();
+		lock.unlock();  // Release the lock (not release() which would detach without unlocking)
 
 		// Process request
 		auto start_time = std::chrono::steady_clock::now();

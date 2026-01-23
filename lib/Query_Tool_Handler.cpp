@@ -130,9 +130,8 @@ static double json_double(const json& j, const std::string& key, double default_
 /**
  * @brief Validate and escape a SQL identifier (table name, column name, etc.)
  *
- * For SQLite, we validate that the identifier contains only safe characters
- * and quote it with double quotes if needed. This prevents SQL injection
- * while allowing valid identifiers.
+ * For SQLite, we validate that the identifier contains only safe characters.
+ * This prevents SQL injection while allowing valid identifiers.
  *
  * @param identifier The identifier to validate/escape
  * @return Empty string if unsafe, otherwise the validated identifier
@@ -159,35 +158,27 @@ static std::string validate_sql_identifier_sqlite(const std::string& identifier)
 		}
 	}
 
-	// Check for SQL injection patterns
-	if (identifier.find('"') != std::string::npos ||
-		identifier.find('\'') != std::string::npos ||
-		identifier.find('`') != std::string::npos ||
-		identifier.find('-') != std::string::npos ||
-		identifier.find(';') != std::string::npos ||
-		identifier.find('/') != std::string::npos) {
-		return "";
-	}
-
 	return identifier;
 }
 
 /**
  * @brief Escape a SQL string literal for use in queries
  *
- * Doubles single quotes to escape them for SQL string literals.
- * This is the standard SQL escaping mechanism.
+ * Escapes single quotes by doubling them (standard SQL) and also escapes
+ * backslashes for defense-in-depth (important for MySQL with certain modes).
  *
  * @param value The string value to escape
  * @return Escaped string safe for use in SQL queries
  */
 static std::string escape_string_literal(const std::string& value) {
 	std::string escaped;
-	escaped.reserve(value.length() * 2);
+	escaped.reserve(value.length() * 2 + 1);
 
 	for (char c : value) {
 		if (c == '\'') {
-			escaped += "''";  // Double single quotes to escape
+			escaped += "''";  // Double single quotes to escape (SQL standard)
+		} else if (c == '\\') {
+			escaped += "\\\\";  // Escape backslash (defense-in-depth)
 		} else {
 			escaped += c;
 		}
@@ -1017,6 +1008,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			std::string validated = validate_sql_identifier_sqlite(schema);
 			if (validated.empty()) {
 				result = create_error_response("Invalid schema name: contains unsafe characters");
+				return result;  // Early return on validation failure
 			} else {
 				schema = validated;
 			}
