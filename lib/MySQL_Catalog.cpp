@@ -287,31 +287,55 @@ std::string MySQL_Catalog::search(
 	int limit,
 	int offset
 ) {
-	// Build SQL query with parameterized conditions to prevent SQL injection
+	// FTS5 search requires a query
+	if (query.empty()) {
+		proxy_error("Catalog search requires a query parameter\n");
+		nlohmann::json error_result = {{"error", "Catalog search requires a query parameter"}};
+		return error_result.dump();
+	}
+
+	// Helper lambda to escape single quotes for SQLite SQL literals
+	auto escape_sql = [](const std::string& str) -> std::string {
+		std::string result;
+		result.reserve(str.length() * 2);  // Reserve space for potential escaping
+		for (char c : str) {
+			if (c == '\'') {
+				result += '\'';  // Escape single quote by doubling it
+			}
+			result += c;
+		}
+		return result;
+	};
+
+	// Escape query for use in FTS5 MATCH (MATCH doesn't support parameter binding)
+	std::string escaped_query = escape_sql(query);
+
+	// Build SQL query with FTS5 - include schema column
 	std::ostringstream sql;
-	sql << "SELECT schema, kind, key, document, tags ,  links FROM catalog WHERE 1=1";
+	sql << "SELECT c.schema, c.kind, c.key, c.document, c.tags, c.links "
+	    << "FROM catalog c "
+	    << "INNER JOIN catalog_fts f ON c.id = f.rowid "
+	    << "WHERE catalog_fts MATCH '" << escaped_query << "'";
 
-	bool has_schema = !schema.empty();
-	bool has_kind = !kind.empty();
-	bool has_tags = !tags.empty();
-	bool has_query = !query.empty();
-
-	if (has_schema) {
-		sql << " AND schema = ?";
-	}
-	if (has_kind) {
-		sql << " AND kind = ?";
-	}
-	if (has_tags) {
-		sql << " AND tags LIKE ?";
-	}
-	if (has_query) {
-		sql << " AND (key LIKE ? OR document LIKE ? OR tags LIKE ?)";
+	// Add schema filter
+	if (!schema.empty()) {
+		sql << " AND c.schema = ?";
 	}
 
-	sql << " ORDER BY updated_at DESC LIMIT ? OFFSET ?";
+	// Add kind filter
+	if (!kind.empty()) {
+		sql << " AND c.kind = ?";
+	}
 
-	// Prepare statement
+	// Add tags filter
+	if (!tags.empty()) {
+		sql << " AND c.tags LIKE ?";
+	}
+
+	// Order by relevance (BM25) and recency
+	sql << " ORDER BY bm25(f) ASC, c.updated_at DESC LIMIT ? OFFSET ?";
+
+	// Prepare the statement
 	sqlite3_stmt* stmt = NULL;
 	int rc = db->prepare_v2(sql.str().c_str(), &stmt);
 	if (rc != SQLITE_OK) {
@@ -321,23 +345,15 @@ std::string MySQL_Catalog::search(
 
 	// Bind parameters
 	int param_idx = 1;
-	if (has_schema) {
-		std::string schema_pattern = schema;
-		(*proxy_sqlite3_bind_text)(stmt, param_idx++, schema_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	if (!schema.empty()) {
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, schema.c_str(), -1, SQLITE_TRANSIENT);
 	}
-	if (has_kind) {
-		std::string kind_pattern = kind;
-		(*proxy_sqlite3_bind_text)(stmt, param_idx++, kind_pattern.c_str(), -1, SQLITE_TRANSIENT);
+	if (!kind.empty()) {
+		(*proxy_sqlite3_bind_text)(stmt, param_idx++, kind.c_str(), -1, SQLITE_TRANSIENT);
 	}
-	if (has_tags) {
+	if (!tags.empty()) {
 		std::string tags_pattern = "%" + tags + "%";
 		(*proxy_sqlite3_bind_text)(stmt, param_idx++, tags_pattern.c_str(), -1, SQLITE_TRANSIENT);
-	}
-	if (has_query) {
-		std::string query_pattern = "%" + query + "%";
-		(*proxy_sqlite3_bind_text)(stmt, param_idx++, query_pattern.c_str(), -1, SQLITE_TRANSIENT);
-		(*proxy_sqlite3_bind_text)(stmt, param_idx++, query_pattern.c_str(), -1, SQLITE_TRANSIENT);
-		(*proxy_sqlite3_bind_text)(stmt, param_idx++, query_pattern.c_str(), -1, SQLITE_TRANSIENT);
 	}
 	(*proxy_sqlite3_bind_int)(stmt, param_idx++, limit);
 	(*proxy_sqlite3_bind_int)(stmt, param_idx++, offset);
@@ -349,6 +365,8 @@ std::string MySQL_Catalog::search(
 	int step_rc;
 	while ((step_rc = (*proxy_sqlite3_step)(stmt)) == SQLITE_ROW) {
 		nlohmann::json entry;
+
+		// Columns: 0=schema, 1=kind, 2=key, 3=document, 4=tags, 5=links
 		entry["schema"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 0));
 		entry["kind"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 1));
 		entry["key"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 2));
@@ -366,8 +384,10 @@ std::string MySQL_Catalog::search(
 			entry["document"] = nullptr;
 		}
 
-		entry["tags"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 4));
-		entry["links"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 5));
+		const char* tags_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 4);
+		entry["tags"] = tags_str ? std::string(tags_str) : nullptr;
+		const char* links_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 5);
+		entry["links"] = links_str ? std::string(links_str) : nullptr;
 
 		results.push_back(entry);
 	}
@@ -486,8 +506,10 @@ std::string MySQL_Catalog::list(
 			entry["document"] = nullptr;
 		}
 
-		entry["tags"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 4));
-		entry["links"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 5));
+		const char* tags_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 4);
+		entry["tags"] = tags_str ? std::string(tags_str) : nullptr;
+		const char* links_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 5);
+		entry["links"] = links_str ? std::string(links_str) : nullptr;
 
 		results.push_back(entry);
 	}
