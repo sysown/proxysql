@@ -384,8 +384,10 @@ std::string MySQL_Catalog::search(
 			entry["document"] = nullptr;
 		}
 
-		entry["tags"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 4));
-		entry["links"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 5));
+		const char* tags_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 4);
+		entry["tags"] = tags_str ? std::string(tags_str) : nullptr;
+		const char* links_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 5);
+		entry["links"] = links_str ? std::string(links_str) : nullptr;
 
 		results.push_back(entry);
 	}
@@ -504,8 +506,10 @@ std::string MySQL_Catalog::list(
 			entry["document"] = nullptr;
 		}
 
-		entry["tags"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 4));
-		entry["links"] = std::string((const char*)(*proxy_sqlite3_column_text)(stmt, 5));
+		const char* tags_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 4);
+		entry["tags"] = tags_str ? std::string(tags_str) : nullptr;
+		const char* links_str = (const char*)(*proxy_sqlite3_column_text)(stmt, 5);
+		entry["links"] = links_str ? std::string(links_str) : nullptr;
 
 		results.push_back(entry);
 	}

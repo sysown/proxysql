@@ -990,19 +990,19 @@ static std::vector<RagSource> load_sources(sqlite3* db) {
   while (sqlite3_step(st) == SQLITE_ROW) {
     RagSource s;
     s.source_id = sqlite3_column_int(st, 0);
-    s.name      = (const char*)sqlite3_column_text(st, 1);
+    s.name      = str_or_empty((const char*)sqlite3_column_text(st, 1));
     s.enabled   = sqlite3_column_int(st, 2);
 
-    s.backend_type = (const char*)sqlite3_column_text(st, 3);
-    s.host         = (const char*)sqlite3_column_text(st, 4);
+    s.backend_type = str_or_empty((const char*)sqlite3_column_text(st, 3));
+    s.host         = str_or_empty((const char*)sqlite3_column_text(st, 4));
     s.port         = sqlite3_column_int(st, 5);
-    s.user         = (const char*)sqlite3_column_text(st, 6);
-    s.pass         = (const char*)sqlite3_column_text(st, 7);
-    s.db           = (const char*)sqlite3_column_text(st, 8);
+    s.user         = str_or_empty((const char*)sqlite3_column_text(st, 6));
+    s.pass         = str_or_empty((const char*)sqlite3_column_text(st, 7));
+    s.db           = str_or_empty((const char*)sqlite3_column_text(st, 8));
 
-    s.table_name   = (const char*)sqlite3_column_text(st, 9);
-    s.pk_column    = (const char*)sqlite3_column_text(st, 10);
-    s.where_sql    = (const char*)sqlite3_column_text(st, 11);
+    s.table_name   = str_or_empty((const char*)sqlite3_column_text(st, 9));
+    s.pk_column    = str_or_empty((const char*)sqlite3_column_text(st, 10));
+    s.where_sql    = str_or_empty((const char*)sqlite3_column_text(st, 11));
 
     const char* doc_map = (const char*)sqlite3_column_text(st, 12);
     const char* chunk_j = (const char*)sqlite3_column_text(st, 13);
@@ -1212,8 +1212,18 @@ static void ingest_source(sqlite3* sdb, const RagSource& src) {
         if (!v.empty()) {
           if (!max_set) {
             if (cursor.numeric || is_integer_string(v)) {
-              max_numeric = true;
-              max_num = std::stoll(v);
+              try {
+                max_numeric = true;
+                max_num = std::stoll(v);
+              } catch (const std::out_of_range& e) {
+                // Huge integer - fall back to string comparison
+                max_numeric = false;
+                max_str = v;
+              } catch (const std::invalid_argument& e) {
+                // Not actually a number despite is_integer_string check
+                max_numeric = false;
+                max_str = v;
+              }
             } else {
               max_numeric = false;
               max_str = v;
@@ -1221,8 +1231,16 @@ static void ingest_source(sqlite3* sdb, const RagSource& src) {
             max_set = true;
           } else if (max_numeric) {
             if (is_integer_string(v)) {
-              std::int64_t nv = std::stoll(v);
-              if (nv > max_num) max_num = nv;
+              try {
+                std::int64_t nv = std::stoll(v);
+                if (nv > max_num) max_num = nv;
+              } catch (const std::out_of_range& e) {
+                // Huge integer - fall back to string comparison
+                max_numeric = false;
+                max_str = v;
+              } catch (const std::invalid_argument& e) {
+                // Not actually a number - skip this value
+              }
             }
           } else {
             if (v > max_str) max_str = v;
@@ -1361,6 +1379,7 @@ int main(int argc, char** argv) {
   } else {
     sqlite_exec(db, "ROLLBACK;");
     sqlite3_close(db);
+    curl_global_cleanup();
     return 1;
   }
 
