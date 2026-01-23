@@ -367,7 +367,7 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	// Original GenAI variables
 	if (!strcmp(name, "threads")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_threads);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_threads);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "embedding_uri")) {
@@ -378,12 +378,12 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	}
 	if (!strcmp(name, "embedding_timeout_ms")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_embedding_timeout_ms);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_embedding_timeout_ms);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "rerank_timeout_ms")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_rerank_timeout_ms);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_rerank_timeout_ms);
 		return strdup(buf);
 	}
 
@@ -413,29 +413,29 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	}
 	if (!strcmp(name, "llm_cache_similarity_threshold")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_llm_cache_similarity_threshold);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_llm_cache_similarity_threshold);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "llm_timeout_ms")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_llm_timeout_ms);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_llm_timeout_ms);
 		return strdup(buf);
 	}
 
 	// Anomaly detection configuration
 	if (!strcmp(name, "anomaly_risk_threshold")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_anomaly_risk_threshold);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_anomaly_risk_threshold);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "anomaly_similarity_threshold")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_anomaly_similarity_threshold);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_anomaly_similarity_threshold);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "anomaly_rate_limit")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_anomaly_rate_limit);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_anomaly_rate_limit);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "anomaly_auto_block")) {
@@ -451,12 +451,12 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	}
 	if (!strcmp(name, "daily_budget_usd")) {
 		char buf[64];
-		sprintf(buf, "%.2f", variables.genai_daily_budget_usd);
+		snprintf(buf, sizeof(buf), "%.2f", variables.genai_daily_budget_usd);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "max_cloud_requests_per_hour")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_max_cloud_requests_per_hour);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_max_cloud_requests_per_hour);
 		return strdup(buf);
 	}
 
@@ -466,7 +466,7 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	}
 	if (!strcmp(name, "vector_dimension")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_vector_dimension);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_vector_dimension);
 		return strdup(buf);
 	}
 
@@ -476,27 +476,27 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	}
 	if (!strcmp(name, "rag_k_max")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_rag_k_max);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_rag_k_max);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "rag_candidates_max")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_rag_candidates_max);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_rag_candidates_max);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "rag_query_max_bytes")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_rag_query_max_bytes);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_rag_query_max_bytes);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "rag_response_max_bytes")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_rag_response_max_bytes);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_rag_response_max_bytes);
 		return strdup(buf);
 	}
 	if (!strcmp(name, "rag_timeout_ms")) {
 		char buf[64];
-		sprintf(buf, "%d", variables.genai_rag_timeout_ms);
+		snprintf(buf, sizeof(buf), "%d", variables.genai_rag_timeout_ms);
 		return strdup(buf);
 	}
 
@@ -1455,7 +1455,17 @@ void GenAI_Threads_Handler::worker_loop(int worker_id) {
 
 		GenAI_Request req = std::move(request_queue_.front());
 		request_queue_.pop();
-		lock.release();
+		// Check shutdown again before processing (in case shutdown was signaled while we were waiting)
+		if (shutdown_) {
+			// Close client_fd to avoid leaking it
+			close(req.client_fd);
+			{
+				std::lock_guard<std::mutex> client_lock(clients_mutex_);
+				client_fds_.erase(req.client_fd);
+			}
+			break;
+		}
+		lock.unlock();  // Release the lock (not release() which would detach without unlocking)
 
 		// Process request
 		auto start_time = std::chrono::steady_clock::now();

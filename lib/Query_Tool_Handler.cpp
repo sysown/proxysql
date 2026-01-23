@@ -120,6 +120,73 @@ static double json_double(const json& j, const std::string& key, double default_
 	return default_val;
 }
 
+// ============================================================
+// SQL Escaping Helper Functions
+//
+// These functions provide safe SQL escaping to prevent
+// SQL injection vulnerabilities when building queries.
+// ============================================================
+
+/**
+ * @brief Validate and escape a SQL identifier (table name, column name, etc.)
+ *
+ * For SQLite, we validate that the identifier contains only safe characters.
+ * This prevents SQL injection while allowing valid identifiers.
+ *
+ * @param identifier The identifier to validate/escape
+ * @return Empty string if unsafe, otherwise the validated identifier
+ */
+static std::string validate_sql_identifier_sqlite(const std::string& identifier) {
+	if (identifier.empty()) {
+		return "";
+	}
+
+	// Check length (SQLite identifiers max 1000 characters, but we're more conservative)
+	if (identifier.length() > 128) {
+		return "";
+	}
+
+	// First character must be letter or underscore
+	if (!isalpha(identifier[0]) && identifier[0] != '_') {
+		return "";
+	}
+
+	// All characters must be alphanumeric, underscore, or dollar sign
+	for (char c : identifier) {
+		if (!isalnum(c) && c != '_' && c != '$') {
+			return "";
+		}
+	}
+
+	return identifier;
+}
+
+/**
+ * @brief Escape a SQL string literal for use in queries
+ *
+ * Escapes single quotes by doubling them (standard SQL) and also escapes
+ * backslashes for defense-in-depth (important for MySQL with certain modes).
+ *
+ * @param value The string value to escape
+ * @return Escaped string safe for use in SQL queries
+ */
+static std::string escape_string_literal(const std::string& value) {
+	std::string escaped;
+	escaped.reserve(value.length() * 2 + 1);
+
+	for (char c : value) {
+		if (c == '\'') {
+			escaped += "''";  // Double single quotes to escape (SQL standard)
+		} else if (c == '\\') {
+			escaped += "\\\\";  // Escape backslash (defense-in-depth)
+		} else {
+			escaped += c;
+		}
+	}
+
+	return escaped;
+}
+
 Query_Tool_Handler::Query_Tool_Handler(
 	const std::string& hosts,
 	const std::string& ports,
@@ -935,6 +1002,18 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 		std::string page_token = json_string(arguments, "page_token");
 		int page_size = json_int(arguments, "page_size", 50);
 		std::string name_filter = json_string(arguments, "name_filter");
+
+		// Validate schema identifier if provided
+		if (!schema.empty()) {
+			std::string validated = validate_sql_identifier_sqlite(schema);
+			if (validated.empty()) {
+				result = create_error_response("Invalid schema name: contains unsafe characters");
+				return result;  // Early return on validation failure
+			} else {
+				schema = validated;
+			}
+		}
+
 		// TODO: Implement using MySQL connection
 		std::ostringstream sql;
 		sql << "SHOW TABLES";
@@ -942,7 +1021,8 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			sql << " FROM " << schema;
 		}
 		if (!name_filter.empty()) {
-			sql << " LIKE '" << name_filter << "'";
+			// Escape the name_filter to prevent SQL injection
+			sql << " LIKE '" << escape_string_literal(name_filter) << "'";
 		}
 		std::string query_result = execute_query(sql.str());
 		result = create_success_response(json::parse(query_result));
@@ -1128,24 +1208,35 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 					if (dot_pos != std::string::npos) {
 						std::string schema = object_key.substr(0, dot_pos);
 						std::string table = object_key.substr(dot_pos + 1);
-						// Quick query to get object_id
-						char* error = NULL;
-						int cols = 0, affected = 0;
-						SQLite3_result* resultset = NULL;
-						std::ostringstream sql;
-						sql << "SELECT object_id FROM objects WHERE run_id = " << run_id
-						    << " AND schema_name = '" << schema << "'"
-						    << " AND object_name = '" << table << "' LIMIT 1;";
-						catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
-						if (resultset && !resultset->rows.empty()) {
-							object_id = atoi(resultset->rows[0]->fields[0]);
+
+						// Validate identifiers to prevent SQL injection
+						std::string validated_schema = validate_sql_identifier_sqlite(schema);
+						std::string validated_table = validate_sql_identifier_sqlite(table);
+
+						if (validated_schema.empty() || validated_table.empty()) {
+							result = create_error_response("Invalid object_key: contains unsafe characters");
+						} else {
+							// Quick query to get object_id
+							char* error = NULL;
+							int cols = 0, affected = 0;
+							SQLite3_result* resultset = NULL;
+							std::ostringstream sql;
+							sql << "SELECT object_id FROM objects WHERE run_id = " << run_id
+							    << " AND schema_name = '" << validated_schema << "'"
+							    << " AND object_name = '" << validated_table << "' LIMIT 1;";
+							catalog->get_db()->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
+							if (resultset && !resultset->rows.empty()) {
+								object_id = atoi(resultset->rows[0]->fields[0]);
+							}
+							delete resultset;
 						}
-						delete resultset;
 					}
 				}
 
-				if (object_id < 0) {
+				if (object_id < 0 && result.is_null()) {
 					result = create_error_response("Valid object_id or object_key is required");
+				} else if (!result.is_null()) {
+					// Already have an error result from validation
 				} else {
 					std::string rel_result = catalog->get_relationships(run_id, object_id, include_inferred, min_confidence);
 					try {

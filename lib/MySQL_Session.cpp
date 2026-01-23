@@ -319,13 +319,13 @@ void* kill_query_thread(void *arg) {
 	char buf[100];
 	switch (ka->kill_type) {
 		case KILL_QUERY:
-			sprintf(buf,"KILL QUERY %lu", ka->id);
+			snprintf(buf, sizeof(buf), "KILL QUERY %lu", ka->id);
 			break;
 		case KILL_CONNECTION:
-			sprintf(buf,"KILL CONNECTION %lu", ka->id);
+			snprintf(buf, sizeof(buf), "KILL CONNECTION %lu", ka->id);
 			break;
 		default:
-			sprintf(buf,"KILL %lu", ka->id);
+			snprintf(buf, sizeof(buf), "KILL %lu", ka->id);
 			break;
 	}
 	//! Executes the KILL command using mysql_query() on the established MySQL connection. Note that this call is blocking.
