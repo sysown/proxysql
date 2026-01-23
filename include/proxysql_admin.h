@@ -845,5 +845,12 @@ class ProxySQL_Admin {
 
 	// FLUSH LOGS
 	void flush_logs();
+
+#ifdef DEBUG
+	// FLUSH STATS
+	void flush_stats();           // Reset all statistics
+	void flush_mysql_stats();     // Reset MySQL statistics only
+	void flush_pgsql_stats();     // Reset PostgreSQL statistics only
+#endif // DEBUG
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
