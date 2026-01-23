@@ -169,6 +169,16 @@ ProxySQL employs a unique architecture to manage its configuration. For a detail
 
 *See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
 
+### REST API
+- `LOAD RESTAPI TO RUNTIME` (or `TO RUN`)
+- `SAVE RESTAPI TO DISK`
+- `LOAD RESTAPI FROM DISK`
+- `SAVE RESTAPI TO MEMORY` (or `TO MEM`)
+- `LOAD RESTAPI FROM MEMORY` (or `FROM MEM`)
+- `LOAD RESTAPI FROM CONFIG`
+
+*See [Multi-Layer Configuration](../main_runtime/multi_layer_configuration) for details on how configuration flows between layers.*
+
 ### SQLite3 Server
 - `LOAD SQLITESERVER VARIABLES TO RUNTIME` (or `TO RUN`)
 - `SAVE SQLITESERVER VARIABLES TO DISK`
