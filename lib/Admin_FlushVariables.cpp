@@ -1092,6 +1092,10 @@ void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, 
 			}
 		}
 
+		if (GloAI && GloGATH->variables.genai_enabled) {
+			GloAI->init();
+		}
+
 		if (lock) wrunlock();
 	}
 	if (resultset) delete resultset;
