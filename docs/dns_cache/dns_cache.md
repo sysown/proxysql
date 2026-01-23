@@ -1,3 +1,5 @@
+# DNS Cache
+
 ## Overview
 
 Since release 2.4.5 ProxySQL DNS caching is available. Historically, whenever client connection took

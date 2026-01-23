@@ -1,4 +1,6 @@
-## How to Configure ProxySQL for PostgreSQL for the First Time
+# PostgreSQL Configuration
+
+## Initial Configuration
 
 **Introduction:**
 
