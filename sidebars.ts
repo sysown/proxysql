@@ -157,10 +157,30 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Users Management',
+      items: [
+        'users_management/mysql_users_management',
+        'users_management/mysql_password_management',
+        'users_management/mysql_authentication',
+        'users_management/postgresql_users_management',
+        'users_management/postgresql_authentication',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Users Management',
+      items: [
+        'users_management/mysql_users_management',
+        'users_management/mysql_password_management',
+        'users_management/mysql_authentication',
+        'users_management/postgresql_users_management',
+        'users_management/postgresql_authentication',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Security',
       items: [
-        'authentication/authentication_methods',
-        'authentication/password_management',
         'ssl_support/ssl_support',
       ],
     },
