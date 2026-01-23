@@ -290,7 +290,8 @@ std::string MySQL_Catalog::search(
 	// FTS5 search requires a query
 	if (query.empty()) {
 		proxy_error("Catalog search requires a query parameter\n");
-		return "[]";
+		nlohmann::json error_result = {{"error", "Catalog search requires a query parameter"}};
+		return error_result.dump();
 	}
 
 	// Helper lambda to escape single quotes for SQLite SQL literals

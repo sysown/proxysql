@@ -155,7 +155,7 @@ build_src_debug: $(if $(LEGACY_BUILD),build_src_debug_legacy,build_src_debug_def
 # RAG ingester (PoC)
 .PHONY: rag_ingest
 rag_ingest: build_deps
-	cd RAG_POC && ${MAKE} CC=${CC} CXX=${CXX} OPTZ="${O2} -ggdb" CXXFLAGS="${O2} -ggdb"
+	cd RAG_POC && ${MAKE} CC=${CC} CXX=${CXX} CXXFLAGS="${CXXFLAGS}"
 
 .PHONY: rag_ingest_clean
 rag_ingest_clean:
