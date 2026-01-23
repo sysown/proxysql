@@ -96,6 +96,7 @@ const sidebars: SidebarsConfig = {
       label: 'Generative AI',
       items: [
         'genai/mcp_server',
+        'genai/mcp_integration',
         'genai/mcp_endpoints',
         'genai/mcp_autodiscovery',
         'genai/nl2sql',
