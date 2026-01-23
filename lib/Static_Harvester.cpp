@@ -1,3 +1,21 @@
+// ============================================================
+// Static_Harvester Implementation
+//
+// Static metadata harvester for MySQL databases. This class performs
+// deterministic metadata extraction from MySQL's INFORMATION_SCHEMA
+// and stores it in a Discovery_Schema catalog for use by MCP tools.
+//
+// Harvest stages (executed in order by run_full_harvest):
+// 1. Schemas/Databases - From information_schema.SCHEMATA
+// 2. Objects - Tables, views, routines from TABLES and ROUTINES
+// 3. Columns - From COLUMNS with derived hints (is_time, is_id_like)
+// 4. Indexes - From STATISTICS with is_pk, is_unique, is_indexed flags
+// 5. Foreign Keys - From KEY_COLUMN_USAGE and REFERENTIAL_CONSTRAINTS
+// 6. View Definitions - From VIEWS
+// 7. Quick Profiles - Metadata-based table kind inference (log/event, fact, entity)
+// 8. FTS Index Rebuild - Full-text search index for object discovery
+// ============================================================
+
 #include "Static_Harvester.h"
 #include "proxysql_debug.h"
 #include <sstream>
@@ -12,6 +30,25 @@
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 
+// ============================================================
+// Constructor / Destructor
+// ============================================================
+
+// Initialize Static_Harvester with MySQL connection parameters.
+//
+// Parameters:
+//   host         - MySQL server hostname or IP address
+//   port         - MySQL server port number
+//   user         - MySQL username for authentication
+//   password     - MySQL password for authentication
+//   schema       - Default schema (can be empty for all schemas)
+//   catalog_path - Filesystem path to the SQLite catalog database
+//
+// Notes:
+//   - Creates a new Discovery_Schema instance for catalog storage
+//   - Initializes the connection mutex but does NOT connect to MySQL yet
+//   - Call init() after construction to initialize the catalog
+//   - MySQL connection is established lazily on first harvest operation
 Static_Harvester::Static_Harvester(
 	const std::string& host,
 	int port,
@@ -33,6 +70,10 @@ Static_Harvester::Static_Harvester(
 	catalog = new Discovery_Schema(catalog_path);
 }
 
+// Destroy Static_Harvester and release resources.
+//
+// Ensures MySQL connection is closed and the Discovery_Schema catalog
+// is properly deleted. Connection mutex is destroyed.
 Static_Harvester::~Static_Harvester() {
 	close();
 	if (catalog) {
@@ -41,6 +82,18 @@ Static_Harvester::~Static_Harvester() {
 	pthread_mutex_destroy(&conn_lock);
 }
 
+// ============================================================
+// Lifecycle Methods
+// ============================================================
+
+// Initialize the harvester by initializing the catalog database.
+//
+// This must be called after construction before any harvest operations.
+// Initializes the Discovery_Schema SQLite database, creating tables
+// if they don't exist.
+//
+// Returns:
+//   0 on success, -1 on error
 int Static_Harvester::init() {
 	if (catalog->init()) {
 		proxy_error("Static_Harvester: Failed to initialize catalog\n");
@@ -49,10 +102,36 @@ int Static_Harvester::init() {
 	return 0;
 }
 
+// Close the MySQL connection and cleanup resources.
+//
+// Disconnects from MySQL if connected. The catalog is NOT destroyed,
+// allowing multiple harvest runs with the same harvester instance.
 void Static_Harvester::close() {
 	disconnect_mysql();
 }
 
+// ============================================================
+// MySQL Connection Methods
+// ============================================================
+
+// Establish connection to the MySQL server.
+//
+// Connects to MySQL using the credentials provided during construction.
+// If already connected, returns 0 immediately (idempotent).
+//
+// Connection settings:
+//   - 30 second connect/read/write timeouts
+//   - CLIENT_MULTI_STATEMENTS flag enabled
+//   - No default database selected (we query information_schema)
+//
+// On successful connection, also retrieves the MySQL server version
+// and builds the source DSN string for run tracking.
+//
+// Thread Safety:
+//   Uses mutex to ensure thread-safe connection establishment.
+//
+// Returns:
+//   0 on success (including already connected), -1 on error
 int Static_Harvester::connect_mysql() {
 	pthread_mutex_lock(&conn_lock);
 
@@ -103,6 +182,13 @@ int Static_Harvester::connect_mysql() {
 	return 0;
 }
 
+// Disconnect from the MySQL server.
+//
+// Closes the MySQL connection if connected. Safe to call when
+// not connected (idempotent).
+//
+// Thread Safety:
+//   Uses mutex to ensure thread-safe disconnection.
 void Static_Harvester::disconnect_mysql() {
 	pthread_mutex_lock(&conn_lock);
 	if (mysql_conn) {
@@ -112,6 +198,13 @@ void Static_Harvester::disconnect_mysql() {
 	pthread_mutex_unlock(&conn_lock);
 }
 
+// Get the MySQL server version string.
+//
+// Retrieves the version from the connected MySQL server.
+// Used for recording metadata in the discovery run.
+//
+// Returns:
+//   MySQL version string (e.g., "8.0.35"), or empty string if not connected
 std::string Static_Harvester::get_mysql_version() {
 	if (!mysql_conn) {
 		return "";
@@ -126,6 +219,20 @@ std::string Static_Harvester::get_mysql_version() {
 	return mysql_get_server_info(mysql_conn);
 }
 
+// Execute a SQL query on the MySQL server and return results.
+//
+// Executes the query and returns all result rows as a vector of string vectors.
+// NULL values are converted to empty strings.
+//
+// Parameters:
+//   query   - SQL query string to execute
+//   results - Output parameter populated with result rows
+//
+// Returns:
+//   0 on success (including queries with no result set), -1 on error
+//
+// Thread Safety:
+//   Uses mutex to ensure thread-safe query execution.
 int Static_Harvester::execute_query(const std::string& query, std::vector<std::vector<std::string>>& results) {
 	pthread_mutex_lock(&conn_lock);
 
@@ -166,6 +273,19 @@ int Static_Harvester::execute_query(const std::string& query, std::vector<std::v
 	return 0;
 }
 
+// ============================================================
+// Helper Methods
+// ============================================================
+
+// Check if a data type is a temporal/time type.
+//
+// Used to mark columns with is_time=1 for time-based analysis.
+//
+// Parameters:
+//   data_type - MySQL data type string (e.g., "DATETIME", "VARCHAR")
+//
+// Returns:
+//   true if the type is date, datetime, timestamp, time, or year; false otherwise
 bool Static_Harvester::is_time_type(const std::string& data_type) {
 	std::string dt = data_type;
 	std::transform(dt.begin(), dt.end(), dt.begin(), ::tolower);
@@ -174,6 +294,16 @@ bool Static_Harvester::is_time_type(const std::string& data_type) {
 	       dt == "time" || dt == "year";
 }
 
+// Check if a column name appears to be an identifier/ID column.
+//
+// Used to mark columns with is_id_like=1 for relationship inference.
+// Column names ending with "_id" or exactly "id" are considered ID-like.
+//
+// Parameters:
+//   column_name - Column name to check
+//
+// Returns:
+//   true if the column name ends with "_id" or is exactly "id"; false otherwise
 bool Static_Harvester::is_id_like_name(const std::string& column_name) {
 	std::string cn = column_name;
 	std::transform(cn.begin(), cn.end(), cn.begin(), ::tolower);
@@ -185,6 +315,76 @@ bool Static_Harvester::is_id_like_name(const std::string& column_name) {
 	return false;
 }
 
+// Validate a schema/database name for safe use in SQL queries.
+//
+// MySQL schema names should only contain alphanumeric characters, underscores,
+// and dollar signs. This validation prevents SQL injection when the schema
+// name is used in string concatenation for INFORMATION_SCHEMA queries.
+//
+// Parameters:
+//   name - Schema name to validate
+//
+// Returns:
+//   true if the name is safe to use, false otherwise
+bool Static_Harvester::is_valid_schema_name(const std::string& name) {
+	if (name.empty()) {
+		return true; // Empty filter is valid (means "all schemas")
+	}
+
+	// Schema names should only contain alphanumeric, underscore, and dollar sign
+	for (char c : name) {
+		if (!isalnum(c) && c != '_' && c != '$') {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// Escape a string for safe use in SQL queries by doubling single quotes.
+//
+// This is a simple SQL escaping function that prevents SQL injection
+// when strings are used in string concatenation for SQL queries.
+//
+// Parameters:
+//   str - String to escape
+//
+// Returns:
+//   Escaped string with single quotes doubled
+std::string Static_Harvester::escape_sql_string(const std::string& str) {
+	std::string escaped;
+	escaped.reserve(str.length() * 2); // Reserve space for potential escaping
+
+	for (char c : str) {
+		if (c == '\'') {
+			escaped += "''"; // Escape single quote by doubling
+		} else {
+			escaped += c;
+		}
+	}
+
+	return escaped;
+}
+
+// ============================================================
+// Discovery Run Management
+// ============================================================
+
+// Start a new discovery run.
+//
+// Creates a new run entry in the catalog and stores the run_id.
+// All subsequent harvest operations will be associated with this run.
+//
+// Parameters:
+//   notes - Optional notes/description for this run
+//
+// Returns:
+//   run_id on success, -1 on error (including if a run is already active)
+//
+// Notes:
+//   - Only one run can be active at a time per harvester instance
+//   - Automatically connects to MySQL if not already connected
+//   - Records source DSN and MySQL version in the run metadata
 int Static_Harvester::start_run(const std::string& notes) {
 	if (current_run_id >= 0) {
 		proxy_error("Static_Harvester: Run already active (run_id=%d)\n", current_run_id);
@@ -205,6 +405,16 @@ int Static_Harvester::start_run(const std::string& notes) {
 	return current_run_id;
 }
 
+// Finish the current discovery run.
+//
+// Marks the run as completed in the catalog with a finish timestamp
+// and optional completion notes. Resets current_run_id to -1.
+//
+// Parameters:
+//   notes - Optional completion notes (e.g., "Completed successfully", "Failed at stage X")
+//
+// Returns:
+//   0 on success, -1 on error (including if no run is active)
 int Static_Harvester::finish_run(const std::string& notes) {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -222,8 +432,28 @@ int Static_Harvester::finish_run(const std::string& notes) {
 	return 0;
 }
 
+// ============================================================
+// Fetch Methods (Query INFORMATION_SCHEMA)
+// ============================================================
+
+// Fetch schema/database metadata from information_schema.SCHEMATA.
+//
+// Queries MySQL for all schemas (databases) and their character set
+// and collation information.
+//
+// Parameters:
+//   filter - Optional schema name filter (empty for all schemas)
+//
+// Returns:
+//   Vector of SchemaRow structures containing schema metadata
 std::vector<Static_Harvester::SchemaRow> Static_Harvester::fetch_schemas(const std::string& filter) {
 	std::vector<SchemaRow> schemas;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return schemas;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME "
@@ -249,6 +479,25 @@ std::vector<Static_Harvester::SchemaRow> Static_Harvester::fetch_schemas(const s
 	return schemas;
 }
 
+// ============================================================
+// Harvest Stage Methods
+// ============================================================
+
+// Harvest schemas/databases to the catalog.
+//
+// Fetches schemas from information_schema.SCHEMATA and inserts them
+// into the catalog. System schemas (mysql, information_schema,
+// performance_schema, sys) are skipped.
+//
+// Parameters:
+//   only_schema - Optional filter to harvest only one schema
+//
+// Returns:
+//   Number of schemas harvested, or -1 on error
+//
+// Notes:
+//   - Requires an active run (start_run must be called first)
+//   - Skips system schemas automatically
 int Static_Harvester::harvest_schemas(const std::string& only_schema) {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -274,8 +523,24 @@ int Static_Harvester::harvest_schemas(const std::string& only_schema) {
 	return count;
 }
 
+// Fetch table and view metadata from information_schema.TABLES.
+//
+// Queries MySQL for all tables and views with their physical
+// characteristics (rows, size, engine, timestamps).
+//
+// Parameters:
+//   filter - Optional schema name filter
+//
+// Returns:
+//   Vector of ObjectRow structures containing table/view metadata
 std::vector<Static_Harvester::ObjectRow> Static_Harvester::fetch_tables_views(const std::string& filter) {
 	std::vector<ObjectRow> objects;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return objects;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_ROWS, "
@@ -310,8 +575,24 @@ std::vector<Static_Harvester::ObjectRow> Static_Harvester::fetch_tables_views(co
 	return objects;
 }
 
+// Fetch column metadata from information_schema.COLUMNS.
+//
+// Queries MySQL for all columns with their data types, nullability,
+// defaults, character set, and comments.
+//
+// Parameters:
+//   filter - Optional schema name filter
+//
+// Returns:
+//   Vector of ColumnRow structures containing column metadata
 std::vector<Static_Harvester::ColumnRow> Static_Harvester::fetch_columns(const std::string& filter) {
 	std::vector<ColumnRow> columns;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return columns;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION, COLUMN_NAME, "
@@ -349,8 +630,24 @@ std::vector<Static_Harvester::ColumnRow> Static_Harvester::fetch_columns(const s
 	return columns;
 }
 
+// Fetch index metadata from information_schema.STATISTICS.
+//
+// Queries MySQL for all indexes with their columns, sequence,
+// uniqueness, cardinality, and collation.
+//
+// Parameters:
+//   filter - Optional schema name filter
+//
+// Returns:
+//   Vector of IndexRow structures containing index metadata
 std::vector<Static_Harvester::IndexRow> Static_Harvester::fetch_indexes(const std::string& filter) {
 	std::vector<IndexRow> indexes;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return indexes;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE, INDEX_TYPE, "
@@ -385,8 +682,25 @@ std::vector<Static_Harvester::IndexRow> Static_Harvester::fetch_indexes(const st
 	return indexes;
 }
 
+// Fetch foreign key metadata from information_schema.
+//
+// Queries KEY_COLUMN_USAGE and REFERENTIAL_CONSTRAINTS to get
+// foreign key relationships including child/parent tables and columns,
+// and ON UPDATE/DELETE rules.
+//
+// Parameters:
+//   filter - Optional schema name filter
+//
+// Returns:
+//   Vector of FKRow structures containing foreign key metadata
 std::vector<Static_Harvester::FKRow> Static_Harvester::fetch_foreign_keys(const std::string& filter) {
 	std::vector<FKRow> fks;
+
+	// Validate schema name to prevent SQL injection
+	if (!is_valid_schema_name(filter)) {
+		proxy_error("Static_Harvester: Invalid schema name '%s'\n", filter.c_str());
+		return fks;
+	}
 
 	std::ostringstream sql;
 	sql << "SELECT kcu.CONSTRAINT_SCHEMA AS child_schema, "
@@ -428,6 +742,16 @@ std::vector<Static_Harvester::FKRow> Static_Harvester::fetch_foreign_keys(const 
 	return fks;
 }
 
+// Harvest objects (tables, views, routines) to the catalog.
+//
+// Fetches tables/views from information_schema.TABLES and routines
+// from information_schema.ROUTINES, inserting them all into the catalog.
+//
+// Parameters:
+//   only_schema - Optional filter to harvest only one schema
+//
+// Returns:
+//   Number of objects harvested, or -1 on error
 int Static_Harvester::harvest_objects(const std::string& only_schema) {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -479,6 +803,20 @@ int Static_Harvester::harvest_objects(const std::string& only_schema) {
 	return count;
 }
 
+// Harvest columns to the catalog with derived hints.
+//
+// Fetches columns from information_schema.COLUMNS and computes
+// derived flags: is_time (temporal types) and is_id_like (ID-like names).
+// Updates object flags after all columns are inserted.
+//
+// Parameters:
+//   only_schema - Optional filter to harvest only one schema
+//
+// Returns:
+//   Number of columns harvested, or -1 on error
+//
+// Notes:
+//   - Updates object flags (has_time_column) after harvest
 int Static_Harvester::harvest_columns(const std::string& only_schema) {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -535,6 +873,22 @@ int Static_Harvester::harvest_columns(const std::string& only_schema) {
 	return count;
 }
 
+// Harvest indexes to the catalog and update column flags.
+//
+// Fetches indexes from information_schema.STATISTICS and inserts
+// them with their columns. Updates column flags (is_pk, is_unique,
+// is_indexed) and object flags (has_primary_key) after harvest.
+//
+// Parameters:
+//   only_schema - Optional filter to harvest only one schema
+//
+// Returns:
+//   Number of indexes harvested, or -1 on error
+//
+// Notes:
+//   - Groups index columns by index name
+//   - Marks PRIMARY KEY indexes with is_primary=1
+//   - Updates column and object flags after harvest
 int Static_Harvester::harvest_indexes(const std::string& only_schema) {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -642,6 +996,21 @@ int Static_Harvester::harvest_indexes(const std::string& only_schema) {
 	return count;
 }
 
+// Harvest foreign keys to the catalog.
+//
+// Fetches foreign keys from information_schema and inserts them
+// with their child/parent column mappings. Updates object flags
+// (has_foreign_keys) after harvest.
+//
+// Parameters:
+//   only_schema - Optional filter to harvest only one schema
+//
+// Returns:
+//   Number of foreign keys harvested, or -1 on error
+//
+// Notes:
+//   - Groups FK columns by constraint name
+//   - Updates object flags after harvest
 int Static_Harvester::harvest_foreign_keys(const std::string& only_schema) {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -712,6 +1081,16 @@ int Static_Harvester::harvest_foreign_keys(const std::string& only_schema) {
 	return count;
 }
 
+// Harvest view definitions to the catalog.
+//
+// Fetches VIEW_DEFINITION from information_schema.VIEWS and stores
+// it in the object's definition_sql field.
+//
+// Parameters:
+//   only_schema - Optional filter to harvest only one schema
+//
+// Returns:
+//   Number of views updated, or -1 on error
 int Static_Harvester::harvest_view_definitions(const std::string& only_schema) {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -744,10 +1123,10 @@ int Static_Harvester::harvest_view_definitions(const std::string& only_schema) {
 		char* error = NULL;
 		int cols = 0, affected = 0;
 		std::ostringstream update_sql;
-		update_sql << "UPDATE objects SET definition_sql = '" << view_def << "' "
+		update_sql << "UPDATE objects SET definition_sql = '" << escape_sql_string(view_def) << "' "
 		           << "WHERE run_id = " << current_run_id
-		           << " AND schema_name = '" << schema_name << "'"
-		           << " AND object_name = '" << view_name << "'"
+		           << " AND schema_name = '" << escape_sql_string(schema_name) << "'"
+		           << " AND object_name = '" << escape_sql_string(view_name) << "'"
 		           << " AND object_type = 'view';";
 
 		catalog->get_db()->execute_statement(update_sql.str().c_str(), &error, &cols, &affected);
@@ -760,6 +1139,23 @@ int Static_Harvester::harvest_view_definitions(const std::string& only_schema) {
 	return count;
 }
 
+// Build quick profiles (metadata-only table analysis).
+//
+// Analyzes table metadata to derive:
+// - guessed_kind: log/event, fact, entity, or unknown (based on table name)
+// - rows_est, size_bytes, engine: from object metadata
+// - has_primary_key, has_foreign_keys, has_time_column: boolean flags
+//
+// Stores the profile as JSON with profile_kind='table_quick'.
+//
+// Returns:
+//   Number of profiles built, or -1 on error
+//
+// Table Kind Heuristics:
+// - log/event: name contains "log", "event", or "audit"
+// - fact: name contains "order", "invoice", "payment", or "transaction"
+// - entity: name contains "user", "customer", "account", or "product"
+// - unknown: none of the above patterns match
 int Static_Harvester::build_quick_profiles() {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -814,13 +1210,14 @@ int Static_Harvester::build_quick_profiles() {
 		// Build profile JSON
 		json profile;
 		profile["guessed_kind"] = guessed_kind;
-		profile["rows_est"] = row->fields[4] ? atol(row->fields[4]) : 0;
-		profile["size_bytes"] = (atol(row->fields[5] ? row->fields[5] : "0") +
-		                       atol(row->fields[6] ? row->fields[6] : "0"));
-		profile["engine"] = std::string(row->fields[3] ? row->fields[3] : "");
-		profile["has_primary_key"] = atoi(row->fields[7]) != 0;
-		profile["has_foreign_keys"] = atoi(row->fields[8]) != 0;
-		profile["has_time_column"] = atoi(row->fields[9]) != 0;
+		// SELECT: object_id(0), schema_name(1), object_name(2), object_type(3), engine(4), table_rows_est(5), data_length(6), index_length(7), has_primary_key(8), has_foreign_keys(9), has_time_column(10)
+		profile["rows_est"] = row->fields[5] ? atol(row->fields[5]) : 0;
+		profile["size_bytes"] = (atol(row->fields[6] ? row->fields[6] : "0") +
+		                       atol(row->fields[7] ? row->fields[7] : "0"));
+		profile["engine"] = std::string(row->fields[4] ? row->fields[4] : "");
+		profile["has_primary_key"] = atoi(row->fields[8]) != 0;
+		profile["has_foreign_keys"] = atoi(row->fields[9]) != 0;
+		profile["has_time_column"] = atoi(row->fields[10]) != 0;
 
 		if (catalog->upsert_profile(current_run_id, object_id, "table_quick", profile.dump()) == 0) {
 			count++;
@@ -832,6 +1229,13 @@ int Static_Harvester::build_quick_profiles() {
 	return count;
 }
 
+// Rebuild the full-text search index for the current run.
+//
+// Deletes and rebuilds the fts_objects FTS5 index, enabling fast
+// full-text search across object names, schemas, and comments.
+//
+// Returns:
+//   0 on success, -1 on error
 int Static_Harvester::rebuild_fts_index() {
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: No active run\n");
@@ -848,6 +1252,28 @@ int Static_Harvester::rebuild_fts_index() {
 	return 0;
 }
 
+// Run a complete harvest of all metadata stages.
+//
+// Executes all harvest stages in order:
+// 1. Start discovery run
+// 2. Harvest schemas/databases
+// 3. Harvest objects (tables, views, routines)
+// 4. Harvest columns with derived hints
+// 5. Harvest indexes and update column flags
+// 6. Harvest foreign keys
+// 7. Harvest view definitions
+// 8. Build quick profiles
+// 9. Rebuild FTS index
+// 10. Finish run
+//
+// If any stage fails, the run is finished with an error note.
+//
+// Parameters:
+//   only_schema - Optional filter to harvest only one schema
+//   notes       - Optional notes for the run
+//
+// Returns:
+//   run_id on success, -1 on error
 int Static_Harvester::run_full_harvest(const std::string& only_schema, const std::string& notes) {
 	if (start_run(notes) < 0) {
 		return -1;
@@ -898,6 +1324,18 @@ int Static_Harvester::run_full_harvest(const std::string& only_schema, const std
 	return final_run_id;
 }
 
+// ============================================================
+// Statistics Methods
+// ============================================================
+
+// Get harvest statistics for the current run.
+//
+// Returns statistics including counts of objects (by type),
+// columns, indexes, and foreign keys harvested in the
+// currently active run.
+//
+// Returns:
+//   JSON string with harvest statistics, or error if no active run
 std::string Static_Harvester::get_harvest_stats() {
 	if (current_run_id < 0) {
 		return "{\"error\": \"No active run\"}";
@@ -905,6 +1343,16 @@ std::string Static_Harvester::get_harvest_stats() {
 	return get_harvest_stats(current_run_id);
 }
 
+// Get harvest statistics for a specific run.
+//
+// Queries the catalog for counts of objects (by type), columns,
+// indexes, and foreign keys for the specified run_id.
+//
+// Parameters:
+//   run_id - The run ID to get statistics for
+//
+// Returns:
+//   JSON string with structure: {"run_id": N, "objects": {...}, "columns": N, "indexes": N, "foreign_keys": N}
 std::string Static_Harvester::get_harvest_stats(int run_id) {
 	char* error = NULL;
 	int cols = 0, affected = 0;

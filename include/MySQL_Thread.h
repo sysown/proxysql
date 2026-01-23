@@ -465,6 +465,7 @@ class MySQL_Threads_Handler
 		char *default_schema;
 		char *interfaces;
 		char *server_version;
+		int select_version_forwarding;
 		char *keep_multiplexing_variables;
 		char *default_authentication_plugin;
 		char *proxy_protocol_networks;

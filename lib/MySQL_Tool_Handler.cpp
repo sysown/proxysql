@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <regex>
 #include <cstring>
+#include <sys/stat.h>
 
 // MySQL client library
 #include <mysql.h>
@@ -20,9 +21,11 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 	const std::string& user,
 	const std::string& password,
 	const std::string& schema,
-	const std::string& catalog_path
+	const std::string& catalog_path,
+	const std::string& fts_path
 )
 	: catalog(NULL),
+	  fts(NULL),
 	  max_rows(200),
 	  timeout_ms(2000),
 	  allow_select_star(false),
@@ -30,6 +33,8 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 {
 	// Initialize the pool mutex
 	pthread_mutex_init(&pool_lock, NULL);
+	// Initialize the FTS mutex
+	pthread_mutex_init(&fts_lock, NULL);
 
 	// Parse hosts
 	std::istringstream h(hosts);
@@ -65,6 +70,11 @@ MySQL_Tool_Handler::MySQL_Tool_Handler(
 
 	// Create catalog
 	catalog = new MySQL_Catalog(catalog_path);
+
+	// Create FTS if path is provided
+	if (!fts_path.empty()) {
+		fts = new MySQL_FTS(fts_path);
+	}
 }
 
 MySQL_Tool_Handler::~MySQL_Tool_Handler() {
@@ -72,14 +82,27 @@ MySQL_Tool_Handler::~MySQL_Tool_Handler() {
 	if (catalog) {
 		delete catalog;
 	}
+	if (fts) {
+		delete fts;
+	}
 	// Destroy the pool mutex
 	pthread_mutex_destroy(&pool_lock);
+	// Destroy the FTS mutex
+	pthread_mutex_destroy(&fts_lock);
 }
 
 int MySQL_Tool_Handler::init() {
 	// Initialize catalog
 	if (catalog->init()) {
 		return -1;
+	}
+
+	// Initialize FTS if configured
+	if (fts && fts->init()) {
+		proxy_error("Failed to initialize FTS, continuing without FTS\n");
+		// Continue without FTS - it's optional
+		delete fts;
+		fts = NULL;
 	}
 
 	// Initialize connection pool
@@ -89,6 +112,29 @@ int MySQL_Tool_Handler::init() {
 
 	proxy_info("MySQL Tool Handler initialized for schema '%s'\n", mysql_schema.c_str());
 	return 0;
+}
+
+bool MySQL_Tool_Handler::reset_fts_path(const std::string& path) {
+	MySQL_FTS* new_fts = NULL;
+
+	// Initialize new FTS outside lock (blocking I/O)
+	if (!path.empty()) {
+		new_fts = new MySQL_FTS(path);
+		if (new_fts->init()) {
+			proxy_error("Failed to initialize FTS with new path: %s\n", path.c_str());
+			delete new_fts;
+			return false;
+		}
+	}
+
+	// Swap pointer under lock (non-blocking)
+	pthread_mutex_lock(&fts_lock);
+	MySQL_FTS* old_fts = fts;
+	fts = new_fts;
+	pthread_mutex_unlock(&fts_lock);
+	if (old_fts) delete old_fts;
+
+	return true;
 }
 
 /**
@@ -254,13 +300,11 @@ void MySQL_Tool_Handler::return_connection(MYSQL* mysql) {
  *         - Failure: {"success":false, "error":"...", "sql_error":code}
  */
 std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
-	fprintf(stderr, "DEBUG execute_query: Starting, query=%s\n", query.c_str());
 
 	json result;
 	result["success"] = false;
 
 	MYSQL* mysql = get_connection();
-	fprintf(stderr, "DEBUG execute_query: Got connection\n");
 
 	if (!mysql) {
 		result["error"] = "No available database connection";
@@ -268,19 +312,15 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 	}
 
 	// Execute query
-	fprintf(stderr, "DEBUG execute_query: About to call mysql_query\n");
 	if (mysql_query(mysql, query.c_str()) != 0) {
-		fprintf(stderr, "DEBUG execute_query: mysql_query failed\n");
 		result["error"] = mysql_error(mysql);
 		result["sql_error"] = mysql_errno(mysql);
 		return_connection(mysql);
 		return result.dump();
 	}
-	fprintf(stderr, "DEBUG execute_query: mysql_query succeeded\n");
 
 	// Store result
 	MYSQL_RES* res = mysql_store_result(mysql);
-	fprintf(stderr, "DEBUG execute_query: Got result set\n");
 
 	if (!res) {
 		// No result set (e.g., INSERT, UPDATE, etc.)
@@ -294,11 +334,9 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 	json columns = json::array();
 	std::vector<std::string> lowercase_columns;
 	MYSQL_FIELD* field;
-	fprintf(stderr, "DEBUG execute_query: About to fetch fields\n");
 	int field_count = 0;
 	while ((field = mysql_fetch_field(res))) {
 		field_count++;
-		fprintf(stderr, "DEBUG execute_query: Processing field %d, name=%p\n", field_count, (void*)field->name);
 		// Check if field name is null (can happen in edge cases)
 		// Use placeholder name to maintain column index alignment
 		std::string col_name = field->name ? field->name : "unknown_field";
@@ -307,7 +345,6 @@ std::string MySQL_Tool_Handler::execute_query(const std::string& query) {
 		columns.push_back(col_name);
 		lowercase_columns.push_back(col_name);
 	}
-	fprintf(stderr, "DEBUG execute_query: Processed %d fields\n", field_count);
 
 	// Get rows
 	json rows = json::array();
@@ -352,7 +389,6 @@ std::string MySQL_Tool_Handler::sanitize_query(const std::string& query) {
 bool MySQL_Tool_Handler::is_dangerous_query(const std::string& query) {
 	std::string upper = query;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-	fprintf(stderr, "DEBUG is_dangerous_query: Checking query '%s'\n", upper.c_str());
 
 	// List of dangerous keywords
 	static const char* dangerous[] = {
@@ -364,13 +400,11 @@ bool MySQL_Tool_Handler::is_dangerous_query(const std::string& query) {
 
 	for (const char* word : dangerous) {
 		if (upper.find(word) != std::string::npos) {
-			fprintf(stderr, "DEBUG is_dangerous_query: Found dangerous keyword '%s'\n", word);
 			proxy_debug(PROXY_DEBUG_GENERIC, 3, "Dangerous keyword found: %s\n", word);
 			return true;
 		}
 	}
 
-	fprintf(stderr, "DEBUG is_dangerous_query: No dangerous keywords found\n");
 	return false;
 }
 
@@ -444,10 +478,6 @@ std::string MySQL_Tool_Handler::list_tables(
 	int page_size,
 	const std::string& name_filter
 ) {
-	fprintf(stderr, "DEBUG: list_tables called with schema='%s', page_token='%s', page_size=%d, name_filter='%s'\n",
-		schema.c_str(), page_token.c_str(), page_size, name_filter.c_str());
-	fprintf(stderr, "DEBUG: mysql_schema='%s'\n", mysql_schema.c_str());
-
 	// Build query to list tables with metadata
 	std::string sql =
 		"SELECT "
@@ -460,64 +490,44 @@ std::string MySQL_Tool_Handler::list_tables(
 		"FROM information_schema.tables t "
 		"WHERE t.table_schema = '" + (schema.empty() ? mysql_schema : schema) + "' ";
 
-	fprintf(stderr, "DEBUG: Built WHERE clause\n");
-
 	if (!name_filter.empty()) {
 		sql += " AND t.table_name LIKE '%" + name_filter + "%'";
 	}
 
-	fprintf(stderr, "DEBUG: Built name_filter clause\n");
 
 	sql += " ORDER BY t.table_name LIMIT " + std::to_string(page_size);
 
-	fprintf(stderr, "DEBUG: Built SQL query: %s\n", sql.c_str());
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "list_tables query: %s\n", sql.c_str());
 
-	fprintf(stderr, "DEBUG: About to call execute_query\n");
 
 	// Execute the query
 	std::string response = execute_query(sql);
 
-	fprintf(stderr, "DEBUG: execute_query returned, response length=%zu\n", response.length());
 
 	// Debug: print raw response
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "list_tables raw response: %s\n", response.c_str());
-	fprintf(stderr, "DEBUG: list_tables raw response: %s\n", response.c_str());
 
 	// Parse and format the response
 	json result;
 	try {
-		fprintf(stderr, "DEBUG list_tables: About to parse response\n");
 		json query_result = json::parse(response);
-		fprintf(stderr, "DEBUG list_tables: Parsed response successfully\n");
 		if (query_result["success"] == true) {
-			fprintf(stderr, "DEBUG list_tables: Query successful, processing rows\n");
 			result = json::array();
 			for (const auto& row : query_result["rows"]) {
-				fprintf(stderr, "DEBUG list_tables: Processing row\n");
 				json table_entry;
-				fprintf(stderr, "DEBUG list_tables: About to access table_name\n");
 				table_entry["name"] = row["table_name"];
-				fprintf(stderr, "DEBUG list_tables: About to access table_type\n");
 				table_entry["type"] = row["table_type"];
-				fprintf(stderr, "DEBUG list_tables: About to access row_count\n");
 				table_entry["row_count"] = row["row_count"];
-				fprintf(stderr, "DEBUG list_tables: About to access total_size\n");
 				table_entry["total_size"] = row["total_size"];
-				fprintf(stderr, "DEBUG list_tables: About to access create_time\n");
 				table_entry["create_time"] = row["create_time"];
-				fprintf(stderr, "DEBUG list_tables: About to access update_time (may be null)\n");
 				table_entry["update_time"] = row["update_time"];
-				fprintf(stderr, "DEBUG list_tables: All fields accessed, pushing entry\n");
 				result.push_back(table_entry);
 			}
 		} else {
-			fprintf(stderr, "DEBUG list_tables: Query failed, extracting error\n");
 			result["error"] = query_result["error"];
 		}
 	} catch (const std::exception& e) {
-		fprintf(stderr, "DEBUG list_tables: Exception caught: %s\n", e.what());
 		result["error"] = std::string("Failed to parse query result: ") + e.what();
 	}
 
@@ -995,4 +1005,152 @@ std::string MySQL_Tool_Handler::catalog_delete(const std::string& schema, const 
 	result["key"] = key;
 
 	return result.dump();
+}
+
+// ========== FTS Tools (Full Text Search) ==========
+// NOTE: The fts_lock is intentionally held during the entire FTS operation
+// to serialize all FTS operations for correctness. This prevents race conditions
+// where reset_fts_path() or reinit_fts() could delete the MySQL_FTS instance
+// while an operation is in progress, which would cause use-after-free.
+// If performance becomes an issue, consider reference counting instead.
+
+std::string MySQL_Tool_Handler::fts_index_table(
+	const std::string& schema,
+	const std::string& table,
+	const std::string& columns,
+	const std::string& primary_key,
+	const std::string& where_clause
+) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->index_table(schema, table, columns, primary_key, where_clause, this);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_search(
+	const std::string& query,
+	const std::string& schema,
+	const std::string& table,
+	int limit,
+	int offset
+) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->search(query, schema, table, limit, offset);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_list_indexes() {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->list_indexes();
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_delete_index(const std::string& schema, const std::string& table) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->delete_index(schema, table);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_reindex(const std::string& schema, const std::string& table) {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->reindex(schema, table, this);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+std::string MySQL_Tool_Handler::fts_rebuild_all() {
+	pthread_mutex_lock(&fts_lock);
+	if (!fts) {
+		json result;
+		result["success"] = false;
+		result["error"] = "FTS not initialized";
+		pthread_mutex_unlock(&fts_lock);
+		return result.dump();
+	}
+
+	std::string out = fts->rebuild_all(this);
+	pthread_mutex_unlock(&fts_lock);
+	return out;
+}
+
+int MySQL_Tool_Handler::reinit_fts(const std::string& fts_path) {
+	proxy_info("MySQL_Tool_Handler: Reinitializing FTS with path: %s\n", fts_path.c_str());
+
+	// Check if directory exists (SQLite can't create directories)
+	std::string::size_type last_slash = fts_path.find_last_of("/");
+	if (last_slash != std::string::npos && last_slash > 0) {
+		std::string dir = fts_path.substr(0, last_slash);
+		struct stat st;
+		if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+			proxy_error("MySQL_Tool_Handler: Directory does not exist for path '%s' (directory: '%s')\n",
+				fts_path.c_str(), dir.c_str());
+			return -1;
+		}
+	}
+
+	// First, test if we can open the new database (outside lock)
+	MySQL_FTS* new_fts = new MySQL_FTS(fts_path);
+	if (!new_fts) {
+		proxy_error("MySQL_Tool_Handler: Failed to create new FTS handler\n");
+		return -1;
+	}
+
+	if (new_fts->init() != 0) {
+		proxy_error("MySQL_Tool_Handler: Failed to initialize FTS at %s\n", fts_path.c_str());
+		delete new_fts;
+		return -1;  // Return error WITHOUT closing old FTS
+	}
+
+	// Success! Now swap the pointer under lock
+	pthread_mutex_lock(&fts_lock);
+	MySQL_FTS* old_fts = fts;
+	fts = new_fts;
+	pthread_mutex_unlock(&fts_lock);
+	if (old_fts) delete old_fts;
+
+	proxy_info("MySQL_Tool_Handler: FTS reinitialized successfully at %s\n", fts_path.c_str());
+	return 0;
 }

@@ -860,6 +860,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			(*myds)->sess->session_fast_forward = fast_forward ? SESSION_FORWARD_TYPE_PERMANENT : SESSION_FORWARD_TYPE_NONE;
 		}
 		(*myds)->sess->user_max_connections = max_connections;
+		(*myds)->sess->use_ssl = _ret_use_ssl;
 	} else {
 
 		if (

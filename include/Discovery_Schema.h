@@ -5,6 +5,131 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <pthread.h>
+#include <unordered_map>
+#include "json.hpp"
+
+/**
+ * @brief MCP query rule structure
+ *
+ * Action is inferred from rule properties:
+ * - if error_msg != NULL    → block
+ * - if replace_pattern != NULL → rewrite
+ * - if timeout_ms > 0       → timeout
+ * - otherwise               → allow
+ *
+ * Note: 'hits' is only for in-memory tracking, not persisted to the table.
+ */
+struct MCP_Query_Rule {
+	int rule_id;
+	bool active;
+	char *username;
+	char *schemaname;
+	char *tool_name;
+	char *match_pattern;
+	bool negate_match_pattern;
+	int re_modifiers;         // bitmask: 1=CASELESS
+	int flagIN;
+	int flagOUT;
+	char *replace_pattern;
+	int timeout_ms;
+	char *error_msg;
+	char *ok_msg;
+	bool log;
+	bool apply;
+	char *comment;
+	uint64_t hits;            // in-memory only, not persisted to table
+	void* regex_engine;      // compiled regex (RE2)
+
+	MCP_Query_Rule() : rule_id(0), active(false), username(NULL), schemaname(NULL),
+	                   tool_name(NULL), match_pattern(NULL), negate_match_pattern(false),
+	                   re_modifiers(1), flagIN(0), flagOUT(0), replace_pattern(NULL),
+	                   timeout_ms(0), error_msg(NULL), ok_msg(NULL), log(false), apply(true),
+	                   comment(NULL), hits(0), regex_engine(NULL) {}
+};
+
+/**
+ * @brief MCP query digest statistics
+ */
+struct MCP_Query_Digest_Stats {
+	std::string tool_name;
+	int run_id;
+	uint64_t digest;
+	std::string digest_text;
+	unsigned int count_star;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned long long sum_time;
+	unsigned long long min_time;
+	unsigned long long max_time;
+
+	MCP_Query_Digest_Stats() : run_id(-1), digest(0), count_star(0),
+	                           first_seen(0), last_seen(0),
+	                           sum_time(0), min_time(0), max_time(0) {}
+
+	void add_timing(unsigned long long duration_us, time_t timestamp) {
+		count_star++;
+		sum_time += duration_us;
+		if (duration_us < min_time || min_time == 0) min_time = duration_us;
+		if (duration_us > max_time) max_time = duration_us;
+		if (first_seen == 0) first_seen = timestamp;
+		last_seen = timestamp;
+	}
+};
+
+/**
+ * @brief MCP query processor output
+ *
+ * This structure collects all possible actions from matching MCP query rules.
+ * A single rule can perform multiple actions simultaneously (rewrite + timeout + block).
+ * Actions are inferred from rule properties:
+ * - if error_msg != NULL    → block
+ * - if replace_pattern != NULL → rewrite
+ * - if timeout_ms > 0       → timeout
+ * - if OK_msg != NULL       → return OK message
+ *
+ * The calling code checks these fields and performs the appropriate actions.
+ */
+struct MCP_Query_Processor_Output {
+	std::string *new_query;   // Rewritten query (caller must delete)
+	int timeout_ms;           // Query timeout in milliseconds (-1 = not set)
+	char *error_msg;          // Error message to return (NULL = not set)
+	char *OK_msg;             // OK message to return (NULL = not set)
+	int log;                  // Whether to log this query (-1 = not set, 0 = no, 1 = yes)
+	int next_query_flagIN;    // Flag for next query (-1 = not set)
+
+	void init() {
+		new_query = NULL;
+		timeout_ms = -1;
+		error_msg = NULL;
+		OK_msg = NULL;
+		log = -1;
+		next_query_flagIN = -1;
+	}
+
+	void destroy() {
+		if (new_query) {
+			delete new_query;
+			new_query = NULL;
+		}
+		if (error_msg) {
+			free(error_msg);
+			error_msg = NULL;
+		}
+		if (OK_msg) {
+			free(OK_msg);
+			OK_msg = NULL;
+		}
+	}
+
+	MCP_Query_Processor_Output() {
+		init();
+	}
+
+	~MCP_Query_Processor_Output() {
+		destroy();
+	}
+};
 
 /**
  * @brief Two-Phase Discovery Catalog Schema Manager
@@ -20,6 +145,15 @@ class Discovery_Schema {
 private:
 	SQLite3DB* db;
 	std::string db_path;
+
+	// MCP query rules management
+	std::vector<MCP_Query_Rule*> mcp_query_rules;
+	pthread_rwlock_t mcp_rules_lock;
+	volatile unsigned int mcp_rules_version;
+
+	// MCP query digest statistics
+	std::unordered_map<std::string, std::unordered_map<uint64_t, void*>> mcp_digest_umap;
+	pthread_rwlock_t mcp_digest_rwlock;
 
 	/**
 	 * @brief Initialize catalog schema with all tables
@@ -679,6 +813,72 @@ public:
 	 * @return Database file path
 	 */
 	std::string get_db_path() const { return db_path; }
+
+	// ============================================================
+	// MCP QUERY RULES
+	// ============================================================
+
+	/**
+	 * @brief Load MCP query rules from SQLite
+	 */
+	void load_mcp_query_rules(SQLite3_result* resultset);
+
+	/**
+	 * @brief Evaluate MCP query rules for a tool invocation
+	 * @return MCP_Query_Processor_Output object populated with actions from matching rules
+	 *         Caller is responsible for destroying the returned object.
+	 */
+	MCP_Query_Processor_Output* evaluate_mcp_query_rules(
+		const std::string& tool_name,
+		const std::string& schemaname,
+		const nlohmann::json& arguments,
+		const std::string& original_query
+	);
+
+	/**
+	 * @brief Get current MCP query rules as resultset
+	 */
+	SQLite3_result* get_mcp_query_rules();
+
+	/**
+	 * @brief Get stats for MCP query rules (hits per rule)
+	 */
+	SQLite3_result* get_stats_mcp_query_rules();
+
+	// ============================================================
+	// MCP QUERY DIGEST
+	// ============================================================
+
+	/**
+	 * @brief Update MCP query digest statistics
+	 */
+	void update_mcp_query_digest(
+		const std::string& tool_name,
+		int run_id,
+		uint64_t digest,
+		const std::string& digest_text,
+		unsigned long long duration_us,
+		time_t timestamp
+	);
+
+	/**
+	 * @brief Get MCP query digest statistics
+	 * @param reset If true, reset stats after retrieval
+	 */
+	SQLite3_result* get_mcp_query_digest(bool reset = false);
+
+	/**
+	 * @brief Compute MCP query digest hash using SpookyHash
+	 */
+	static uint64_t compute_mcp_digest(
+		const std::string& tool_name,
+		const nlohmann::json& arguments
+	);
+
+	/**
+	 * @brief Fingerprint MCP query arguments (replace literals with ?)
+	 */
+	static std::string fingerprint_mcp_args(const nlohmann::json& arguments);
 };
 
 #endif /* CLASS_DISCOVERY_SCHEMA_H */

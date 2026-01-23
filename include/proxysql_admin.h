@@ -343,6 +343,25 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 		int coredump_generation_interval_ms;
 		int coredump_generation_threshold;
+		/**
+		 * @brief Path to the SSL/TLS key log file for decrypting traffic
+		 *
+		 * When set, ProxySQL writes TLS secrets to this file in NSS Key Log Format.
+		 * This allows tools like Wireshark to decrypt SSL/TLS traffic for debugging.
+		 *
+		 * Format: "<Label> <ClientRandom> <Secret>\n"
+		 *
+		 * Path handling:
+		 * - Absolute path: used as-is (e.g., "/var/log/proxysql/keylog.txt")
+		 * - Relative path: resolved relative to ProxySQL data directory
+		 * - Empty string (""): disables key logging (default)
+		 *
+		 * Security: This file contains cryptographic secrets that can decrypt
+		 * all TLS traffic. Access must be tightly restricted. Only enable for debugging.
+		 *
+		 * @see https://wiki.wireshark.org/TLS#TLS_Decryption
+		 * @see https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
+		 */
 		char* ssl_keylog_file;
 		/**
 		 *   Processlist configurations are owned by MySQL/PgSQL Threads_Handlers.
@@ -643,6 +662,10 @@ class ProxySQL_Admin {
 	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result *);
 
+	// MCP query rules
+	char* load_mcp_query_rules_to_runtime();
+	void save_mcp_query_rules_from_runtime(bool _runtime = false);
+
 	char* load_pgsql_firewall_to_runtime();
 
 	void load_scheduler_to_runtime();
@@ -700,6 +723,8 @@ class ProxySQL_Admin {
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
 	void stats___mcp_query_tools_counters(bool reset);
+	void stats___mcp_query_digest(bool reset);
+	void stats___mcp_query_rules();
 
 	// Update prometheus metrics
 	void p_stats___memory_metrics();

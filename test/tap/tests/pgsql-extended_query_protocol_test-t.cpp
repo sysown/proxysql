@@ -5048,6 +5048,9 @@ void test_empty_query_without_describe_portal() {
 }
 
 int main(int argc, char** argv) {
+
+	plan(1061); // Adjust based on number of tests
+
 	if (cl.getEnv())
 		return exit_status();
 
@@ -5056,8 +5059,6 @@ int main(int argc, char** argv) {
 	if (of_err != EXIT_SUCCESS) {
 		return exit_status();
 	}
-
-	plan(1061); // Adjust based on number of tests
 
 	auto admin_conn = createNewConnection(ConnType::ADMIN, "", false);
 

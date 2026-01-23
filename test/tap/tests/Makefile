@@ -168,6 +168,9 @@ sh-%:
 	cp $(patsubst sh-%,%,$@) $(patsubst sh-%.sh,%,$@)
 	chmod +x $(patsubst sh-%.sh,%,$@)
 
+anomaly_detection-t: anomaly_detection-t.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) -DEXCLUDE_TRACKING_VARIABLES $< ../tap/SQLite3_Server.cpp -I$(CLICKHOUSE_CPP_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(SQLITE3_LDIR)/../libsqlite_rembed.a -lscram -lusual -Wl,--allow-multiple-definition -o $@
+
 %-t: %-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
@@ -190,7 +193,7 @@ test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_L
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< -DEXCLUDE_TRACKING_VARAIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
@@ -205,19 +208,19 @@ create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libta
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap.so $(RE2_PATH)/util/test.cc $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-	$(CXX) $< -DEXCLUDE_TRACKING_VARAIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test2-t: setparser_test2
 	ln -fs setparser_test2 setparser_test2-t
 
 setparser_test2: setparser_test2.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-	$(CXX) $<  -DEXCLUDE_TRACKING_VARAIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test3-t: setparser_test3
 	ln -fs setparser_test3 setparser_test3-t
 
 setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp setparser_test_common.h $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-	$(CXX) $< -DEXCLUDE_TRACKING_VARAIABLES -DPARSERDEBUG $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES -DPARSERDEBUG $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
@@ -284,6 +287,13 @@ test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)
 
 pgsql-extended_query_protocol_test-t: pgsql-extended_query_protocol_test-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+pgsql-reg_test_5273_bind_parameter_format-t: pgsql-reg_test_5273_bind_parameter_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+pgsql-reg_test_5300_threshold_resultset_deadlock-t: pgsql-reg_test_5300_threshold_resultset_deadlock-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
 
 ### clean targets
 

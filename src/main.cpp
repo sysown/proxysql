@@ -1,6 +1,7 @@
-#define MAIN_PROXY_SQLITE3
 
 #include "../deps/json/json.hpp"
+
+
 using json = nlohmann::json;
 #define PROXYJSON
 

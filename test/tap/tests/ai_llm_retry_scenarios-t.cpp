@@ -14,6 +14,7 @@
  */
 
 #include "tap.h"
+#include <string>
 #include <string.h>
 #include <cstdio>
 #include <cstdlib>

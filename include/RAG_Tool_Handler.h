@@ -225,6 +225,20 @@ private:
 	bool validate_query_length(const std::string& query);
 
 	/**
+	 * @brief Escape FTS query string for safe use in MATCH clause
+	 *
+	 * Escapes single quotes in FTS query strings by doubling them,
+	 * which is the standard escaping method for SQLite FTS5.
+	 * This prevents FTS injection while allowing legitimate single quotes in queries.
+	 *
+	 * @param query Raw FTS query string from user input
+	 * @return Escaped query string safe for use in MATCH clause
+	 *
+	 * @see execute_tool()
+	 */
+	std::string escape_fts_query(const std::string& query);
+
+	/**
 	 * @brief Execute database query and return results
 	 *
 	 * Executes a SQL query against the vector database and returns the results.

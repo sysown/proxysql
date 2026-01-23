@@ -1,10 +1,12 @@
 #include "Discovery_Schema.h"
 #include "cpp.h"
 #include "proxysql.h"
+#include "re2/re2.h"
 #include <sstream>
 #include <algorithm>
 #include <ctime>
 #include <functional>
+#include <cstring>
 #include "../deps/json/json.hpp"
 
 using json = nlohmann::json;
@@ -19,12 +21,42 @@ static std::string now_iso() {
 }
 
 Discovery_Schema::Discovery_Schema(const std::string& path)
-	: db(NULL), db_path(path)
+	: db(NULL), db_path(path), mcp_rules_version(0)
 {
+	pthread_rwlock_init(&mcp_rules_lock, NULL);
+	pthread_rwlock_init(&mcp_digest_rwlock, NULL);
 }
 
 Discovery_Schema::~Discovery_Schema() {
 	close();
+
+	// Clean up MCP query rules
+	for (auto rule : mcp_query_rules) {
+		if (rule->regex_engine) {
+			delete (re2::RE2*)rule->regex_engine;
+		}
+		free(rule->username);
+		free(rule->schemaname);
+		free(rule->tool_name);
+		free(rule->match_pattern);
+		free(rule->replace_pattern);
+		free(rule->error_msg);
+		free(rule->ok_msg);
+		free(rule->comment);
+		delete rule;
+	}
+	mcp_query_rules.clear();
+
+	// Clean up MCP digest statistics
+	for (auto const& [key1, inner_map] : mcp_digest_umap) {
+		for (auto const& [key2, stats] : inner_map) {
+			delete (MCP_Query_Digest_Stats*)stats;
+		}
+	}
+	mcp_digest_umap.clear();
+
+	pthread_rwlock_destroy(&mcp_rules_lock);
+	pthread_rwlock_destroy(&mcp_digest_rwlock);
 }
 
 int Discovery_Schema::init() {
@@ -311,6 +343,68 @@ int Discovery_Schema::create_deterministic_tables() {
 		"('table:llm_domains', 'Domain Clusters', 'Semantic domain groupings (billing, sales, auth ,  etc)');"
 	);
 
+	// ============================================================
+	// MCP QUERY RULES AND DIGEST TABLES
+	// ============================================================
+
+	// MCP query rules table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS mcp_query_rules ("
+		"  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ,"
+		"  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ,"
+		"  tool_name VARCHAR ,"
+		"  run_id INT ,"
+		"  match_pattern VARCHAR ,"
+		"  negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 ,"
+		"  re_modifiers VARCHAR DEFAULT 'CASELESS' ,"
+		"  flagIN INT NOT NULL DEFAULT 0 ,"
+		"  flagOUT INT CHECK (flagOUT >= 0) ,"
+		"  action VARCHAR CHECK (action IN ('allow','block','rewrite','timeout')) NOT NULL DEFAULT 'allow' ,"
+		"  replace_pattern VARCHAR ,"
+		"  timeout_ms INT CHECK (timeout_ms >= 0) ,"
+		"  error_msg VARCHAR ,"
+		"  OK_msg VARCHAR ,"
+		"  log INT CHECK (log IN (0,1)) ,"
+		"  apply INT CHECK (apply IN (0,1)) NOT NULL DEFAULT 1 ,"
+		"  comment VARCHAR ,"
+		"  hits INTEGER NOT NULL DEFAULT 0"
+		");"
+	);
+
+	// MCP query digest statistics table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS stats_mcp_query_digest ("
+		"  tool_name VARCHAR NOT NULL ,"
+		"  run_id INT ,"
+		"  digest VARCHAR NOT NULL ,"
+		"  digest_text VARCHAR NOT NULL ,"
+		"  count_star INTEGER NOT NULL ,"
+		"  first_seen INTEGER NOT NULL ,"
+		"  last_seen INTEGER NOT NULL ,"
+		"  sum_time INTEGER NOT NULL ,"
+		"  min_time INTEGER NOT NULL ,"
+		"  max_time INTEGER NOT NULL ,"
+		"  PRIMARY KEY(tool_name, run_id, digest)"
+		");"
+	);
+
+	// MCP query digest reset table
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS stats_mcp_query_digest_reset ("
+		"  tool_name VARCHAR NOT NULL ,"
+		"  run_id INT ,"
+		"  digest VARCHAR NOT NULL ,"
+		"  digest_text VARCHAR NOT NULL ,"
+		"  count_star INTEGER NOT NULL ,"
+		"  first_seen INTEGER NOT NULL ,"
+		"  last_seen INTEGER NOT NULL ,"
+		"  sum_time INTEGER NOT NULL ,"
+		"  min_time INTEGER NOT NULL ,"
+		"  max_time INTEGER NOT NULL ,"
+		"  PRIMARY KEY(tool_name, run_id, digest)"
+		");"
+	);
+
 	return 0;
 }
 
@@ -553,7 +647,7 @@ int Discovery_Schema::create_run(
 	(*proxy_sqlite3_bind_text)(stmt, 3, notes.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int run_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return run_id;
@@ -618,7 +712,7 @@ int Discovery_Schema::create_agent_run(
 
 	int rc = db->prepare_v2(sql, &stmt);
 	if (rc != SQLITE_OK) {
-		proxy_error("Failed to prepare agent_runs insert: %s\n", sqlite3_errstr(rc));
+		proxy_error("Failed to prepare agent_runs insert: %s\n", (*proxy_sqlite3_errstr)(rc));
 		return -1;
 	}
 
@@ -639,11 +733,11 @@ int Discovery_Schema::create_agent_run(
 	(*proxy_sqlite3_finalize)(stmt);
 
 	if (step_rc != SQLITE_DONE) {
-		proxy_error("Failed to insert into agent_runs (run_id=%d): %s\n", run_id, sqlite3_errstr(step_rc));
+		proxy_error("Failed to insert into agent_runs (run_id=%d): %s\n", run_id, (*proxy_sqlite3_errstr)(step_rc));
 		return -1;
 	}
 
-	int agent_run_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int agent_run_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	proxy_info("Created agent_run_id=%d for run_id=%d\n", agent_run_id, run_id);
 	return agent_run_id;
 }
@@ -746,7 +840,7 @@ int Discovery_Schema::insert_schema(
 	(*proxy_sqlite3_bind_text)(stmt, 4, collation.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int schema_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int schema_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return schema_id;
@@ -794,7 +888,7 @@ int Discovery_Schema::insert_object(
 	(*proxy_sqlite3_bind_text)(stmt, 12, definition_sql.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int object_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int object_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return object_id;
@@ -847,7 +941,7 @@ int Discovery_Schema::insert_column(
 	(*proxy_sqlite3_bind_int)(stmt, 16, is_id_like);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int column_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int column_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return column_id;
@@ -877,7 +971,7 @@ int Discovery_Schema::insert_index(
 	(*proxy_sqlite3_bind_int64)(stmt, 6, (sqlite3_int64)cardinality);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int index_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int index_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return index_id;
@@ -936,7 +1030,7 @@ int Discovery_Schema::insert_foreign_key(
 	(*proxy_sqlite3_bind_text)(stmt, 7, on_delete.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int fk_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int fk_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return fk_id;
@@ -1565,7 +1659,7 @@ int Discovery_Schema::append_agent_event(
 	(*proxy_sqlite3_bind_text)(stmt, 3, payload_json.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int event_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int event_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	return event_id;
@@ -1726,7 +1820,7 @@ int Discovery_Schema::upsert_llm_domain(
 	(*proxy_sqlite3_bind_double)(stmt, 6, confidence);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int domain_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int domain_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
@@ -1842,7 +1936,7 @@ int Discovery_Schema::upsert_llm_metric(
 	(*proxy_sqlite3_bind_double)(stmt, 11, confidence);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int metric_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int metric_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
@@ -1892,7 +1986,7 @@ int Discovery_Schema::add_question_template(
 	(*proxy_sqlite3_bind_double)(stmt, 8, confidence);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int template_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int template_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index
@@ -1944,7 +2038,7 @@ int Discovery_Schema::add_llm_note(
 	(*proxy_sqlite3_bind_text)(stmt, 8, tags_json.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	int note_id = (int)sqlite3_last_insert_rowid(db->get_db());
+	int note_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
 	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index
@@ -2180,11 +2274,11 @@ int Discovery_Schema::log_llm_search(
 		return -1;
 	}
 
-	sqlite3_bind_int(stmt, 1, run_id);
-	sqlite3_bind_text(stmt, 2, query.c_str(), -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int(stmt, 3, lmt);
+	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, query.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 3, lmt);
 
-	rc = sqlite3_step(stmt);
+	rc = (*proxy_sqlite3_step)(stmt);
 	(*proxy_sqlite3_finalize)(stmt);
 
 	if (rc != SQLITE_DONE) {
@@ -2212,26 +2306,26 @@ int Discovery_Schema::log_query_tool_call(
 		return -1;
 	}
 
-	sqlite3_bind_text(stmt, 1, tool_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 1, tool_name.c_str(), -1, SQLITE_TRANSIENT);
 	if (!schema.empty()) {
-		sqlite3_bind_text(stmt, 2, schema.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 2, schema.c_str(), -1, SQLITE_TRANSIENT);
 	} else {
-		sqlite3_bind_null(stmt, 2);
+		(*proxy_sqlite3_bind_null)(stmt, 2);
 	}
 	if (run_id > 0) {
-		sqlite3_bind_int(stmt, 3, run_id);
+		(*proxy_sqlite3_bind_int)(stmt, 3, run_id);
 	} else {
-		sqlite3_bind_null(stmt, 3);
+		(*proxy_sqlite3_bind_null)(stmt, 3);
 	}
-	sqlite3_bind_int64(stmt, 4, start_time);
-	sqlite3_bind_int64(stmt, 5, execution_time);
+	(*proxy_sqlite3_bind_int64)(stmt, 4, start_time);
+	(*proxy_sqlite3_bind_int64)(stmt, 5, execution_time);
 	if (!error.empty()) {
-		sqlite3_bind_text(stmt, 6, error.c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 6, error.c_str(), -1, SQLITE_TRANSIENT);
 	} else {
-		sqlite3_bind_null(stmt, 6);
+		(*proxy_sqlite3_bind_null)(stmt, 6);
 	}
 
-	rc = sqlite3_step(stmt);
+	rc = (*proxy_sqlite3_step)(stmt);
 	(*proxy_sqlite3_finalize)(stmt);
 
 	if (rc != SQLITE_DONE) {
@@ -2240,4 +2334,762 @@ int Discovery_Schema::log_query_tool_call(
 	}
 
 	return 0;
+}
+
+// ============================================================
+// MCP QUERY RULES
+// ============================================================
+// Load MCP query rules from database into memory
+//
+// This function replaces all in-memory MCP query rules with the rules
+// from the provided resultset. It compiles regex patterns for each rule
+// and initializes all rule properties.
+//
+// Args:
+//   resultset: SQLite result set containing rule definitions from the database
+//               Must contain 17 columns in the correct order:
+//               rule_id, active, username, schemaname, tool_name, match_pattern,
+//               negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern,
+//               timeout_ms, error_msg, OK_msg, log, apply, comment
+//
+// Thread Safety:
+//   Uses write lock on mcp_rules_lock during update
+//
+// Side Effects:
+//   - Increments mcp_rules_version (triggers runtime cache invalidation)
+//   - Clears and rebuilds mcp_query_rules vector
+//   - Compiles regex engines for all match_pattern fields
+// ============================================================
+
+void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
+	if (!resultset || resultset->rows_count == 0) {
+		proxy_info("No MCP query rules to load\n");
+		return;
+	}
+
+	pthread_rwlock_wrlock(&mcp_rules_lock);
+
+	// Clear existing rules
+	for (auto rule : mcp_query_rules) {
+		if (rule->regex_engine) {
+			delete (re2::RE2*)rule->regex_engine;
+		}
+		free(rule->username);
+		free(rule->schemaname);
+		free(rule->tool_name);
+		free(rule->match_pattern);
+		free(rule->replace_pattern);
+		free(rule->error_msg);
+		free(rule->ok_msg);
+		free(rule->comment);
+		delete rule;
+	}
+	mcp_query_rules.clear();
+
+	// Load new rules from resultset
+	// Column order: rule_id, active, username, schemaname, tool_name, match_pattern,
+	//               negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern,
+	//               timeout_ms, error_msg, OK_msg, log, apply, comment
+	// Expected: 17 columns (fields[0] through fields[16])
+	for (unsigned int i = 0; i < resultset->rows_count; i++) {
+		SQLite3_row* row = resultset->rows[i];
+
+		// Validate column count before accessing fields
+		if (row->cnt < 17) {
+			proxy_error("Invalid row format in mcp_query_rules: expected 17 columns, got %d. Skipping row %u.\n",
+				row->cnt, i);
+			continue;
+		}
+
+		MCP_Query_Rule* rule = new MCP_Query_Rule();
+
+		rule->rule_id = atoi(row->fields[0]);           // rule_id
+		rule->active = atoi(row->fields[1]) != 0;       // active
+		rule->username = row->fields[2] ? strdup(row->fields[2]) : NULL;  // username
+		rule->schemaname = row->fields[3] ? strdup(row->fields[3]) : NULL;  // schemaname
+		rule->tool_name = row->fields[4] ? strdup(row->fields[4]) : NULL;  // tool_name
+		rule->match_pattern = row->fields[5] ? strdup(row->fields[5]) : NULL;  // match_pattern
+		rule->negate_match_pattern = row->fields[6] ? atoi(row->fields[6]) != 0 : false;  // negate_match_pattern
+		// re_modifiers: Parse VARCHAR value - "CASELESS" maps to 1, otherwise parse as int
+		if (row->fields[7]) {
+			std::string mod = row->fields[7];
+			if (mod == "CASELESS") {
+				rule->re_modifiers = 1;
+			} else if (mod == "0") {
+				rule->re_modifiers = 0;
+			} else {
+				rule->re_modifiers = atoi(mod.c_str());
+			}
+		} else {
+			rule->re_modifiers = 1;  // default CASELESS
+		}
+		rule->flagIN = row->fields[8] ? atoi(row->fields[8]) : 0;  // flagIN
+		rule->flagOUT = row->fields[9] ? atoi(row->fields[9]) : 0;  // flagOUT
+		rule->replace_pattern = row->fields[10] ? strdup(row->fields[10]) : NULL;  // replace_pattern
+		rule->timeout_ms = row->fields[11] ? atoi(row->fields[11]) : 0;  // timeout_ms
+		rule->error_msg = row->fields[12] ? strdup(row->fields[12]) : NULL;  // error_msg
+		rule->ok_msg = row->fields[13] ? strdup(row->fields[13]) : NULL;  // OK_msg
+		rule->log = row->fields[14] ? atoi(row->fields[14]) != 0 : false;  // log
+		rule->apply = row->fields[15] ? atoi(row->fields[15]) != 0 : true;  // apply
+		rule->comment = row->fields[16] ? strdup(row->fields[16]) : NULL;  // comment
+		// Note: hits is in-memory only, not loaded from table
+
+		// Compile regex if match_pattern exists
+		if (rule->match_pattern) {
+			re2::RE2::Options opts;
+			opts.set_log_errors(false);
+			if (rule->re_modifiers & 1) {
+				opts.set_case_sensitive(false);
+			}
+			rule->regex_engine = new re2::RE2(rule->match_pattern, opts);
+			if (!((re2::RE2*)rule->regex_engine)->ok()) {
+				proxy_warning("Failed to compile regex for MCP rule %d: %s\n",
+					rule->rule_id, rule->match_pattern);
+				delete (re2::RE2*)rule->regex_engine;
+				rule->regex_engine = NULL;
+			}
+		}
+
+		mcp_query_rules.push_back(rule);
+	}
+
+	mcp_rules_version++;
+	pthread_rwlock_unlock(&mcp_rules_lock);
+
+	proxy_info("Loaded %zu MCP query rules\n", mcp_query_rules.size());
+}
+
+// Evaluate MCP query rules against an incoming query
+//
+// This function processes the query through all active MCP query rules in order,
+// applying matching rules and collecting their actions. Multiple actions from
+// different rules can be combined.
+//
+// Rule Actions (not mutually exclusive):
+//   - error_msg: Block the query with the specified error message
+//   - replace_pattern: Rewrite the query using regex substitution
+//   - timeout_ms: Set a timeout for query execution
+//   - OK_msg: Return success immediately with the specified message
+//   - log: Enable logging for this query
+//
+// Rule Processing Flow:
+//   1. Skip inactive rules
+//   2. Check flagIN match
+//   3. Check username match (currently skipped as username not available in MCP context)
+//   4. Check schemaname match
+//   5. Check tool_name match
+//   6. Check match_pattern against the query (regex)
+//   7. If match: increment hits, apply actions, set flagOUT, and stop if apply=true
+//
+// Args:
+//   tool_name: The name of the MCP tool being called
+//   schemaname: The schema/database context for the query
+//   arguments: The JSON arguments passed to the tool
+//   original_query: The original SQL query string
+//
+// Returns:
+//   MCP_Query_Processor_Output*: Output object containing all actions to apply
+//   - error_msg: If set, query should be blocked
+//   - OK_msg: If set, return success immediately
+//   - new_query: Rewritten query if replace_pattern was applied
+//   - timeout_ms: Timeout in milliseconds if set
+//   - log: Whether to log this query
+//   - next_query_flagIN: The flagOUT value for chaining rules
+//
+// Thread Safety:
+//   Uses read lock on mcp_rules_lock during evaluation
+//
+// Memory Ownership:
+//   Returns a newly allocated MCP_Query_Processor_Output object.
+//   The caller assumes ownership and MUST delete the returned pointer
+//   when done to avoid memory leaks.
+//
+MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
+	const std::string& tool_name,
+	const std::string& schemaname,
+	const nlohmann::json& arguments,
+	const std::string& original_query
+) {
+	MCP_Query_Processor_Output* qpo = new MCP_Query_Processor_Output();
+	qpo->init();
+
+	std::string current_query = original_query;
+	int current_flag = 0;
+
+	pthread_rwlock_rdlock(&mcp_rules_lock);
+
+	for (auto rule : mcp_query_rules) {
+		// Skip inactive rules
+		if (!rule->active) continue;
+
+		// Check flagIN
+		if (rule->flagIN != current_flag) continue;
+
+		// Check username match
+		if (rule->username) {
+			// For now, we don't have username in MCP context, skip if set
+			// TODO: Add username matching when available
+			continue;
+		}
+
+		// Check schemaname match
+		if (rule->schemaname) {
+			if (!schemaname.empty() && strcmp(rule->schemaname, schemaname.c_str()) != 0) {
+				continue;
+			}
+		}
+
+		// Check tool_name match
+		if (rule->tool_name) {
+			if (strcmp(rule->tool_name, tool_name.c_str()) != 0) continue;
+		}
+
+		// Check match_pattern against the query
+		bool matches = false;
+		if (rule->regex_engine && rule->match_pattern) {
+			re2::RE2* regex = (re2::RE2*)rule->regex_engine;
+			re2::StringPiece piece(current_query);
+			matches = re2::RE2::PartialMatch(piece, *regex);
+			if (rule->negate_match_pattern) {
+				matches = !matches;
+			}
+		} else {
+			// No pattern means match all
+			matches = true;
+		}
+
+		if (matches) {
+			// Increment hit counter
+			__sync_add_and_fetch((unsigned long long*)&rule->hits, 1);
+
+			// Collect rule actions in output object
+			if (!rule->apply) {
+				// Log-only rule, continue processing
+				if (rule->log) {
+					proxy_info("MCP query rule %d logged: tool=%s schema=%s\n",
+						rule->rule_id, tool_name.c_str(), schemaname.c_str());
+				}
+				if (qpo->log == -1) {
+					qpo->log = rule->log ? 1 : 0;
+				}
+				continue;
+			}
+
+			// Set flagOUT for next rules
+			if (rule->flagOUT >= 0) {
+				current_flag = rule->flagOUT;
+			}
+
+			// Collect all actions from this rule in the output object
+			// Actions are NOT mutually exclusive - a single rule can:
+			// rewrite + timeout + block all at once
+
+			// 1. Rewrite action (if replace_pattern is set)
+			if (rule->replace_pattern && rule->regex_engine) {
+				std::string rewritten = current_query;
+				if (re2::RE2::Replace(&rewritten, *(re2::RE2*)rule->regex_engine, rule->replace_pattern)) {
+					// Update current_query for subsequent rule matching
+					current_query = rewritten;
+					// Store in output object
+					if (qpo->new_query) {
+						delete qpo->new_query;
+					}
+					qpo->new_query = new std::string(rewritten);
+				}
+			}
+
+			// 2. Timeout action (if timeout_ms > 0)
+			if (rule->timeout_ms > 0) {
+				qpo->timeout_ms = rule->timeout_ms;
+			}
+
+			// 3. Error message (block action)
+			if (rule->error_msg) {
+				if (qpo->error_msg) {
+					free(qpo->error_msg);
+				}
+				qpo->error_msg = strdup(rule->error_msg);
+			}
+
+			// 4. OK message (allow with response)
+			if (rule->ok_msg) {
+				if (qpo->OK_msg) {
+					free(qpo->OK_msg);
+				}
+				qpo->OK_msg = strdup(rule->ok_msg);
+			}
+
+			// 5. Log flag
+			if (rule->log && qpo->log == -1) {
+				qpo->log = 1;
+			}
+
+			// 6. next_query_flagIN
+			if (rule->flagOUT >= 0) {
+				qpo->next_query_flagIN = rule->flagOUT;
+			}
+
+			// If apply is true and not a log-only rule, stop processing further rules
+			if (rule->apply) {
+				break;
+			}
+		}
+	}
+
+	pthread_rwlock_unlock(&mcp_rules_lock);
+	return qpo;
+}
+
+// Get all MCP query rules from memory
+//
+// Returns all MCP query rules currently loaded in memory.
+// This is used to populate both mcp_query_rules and runtime_mcp_query_rules tables.
+// Note: The hits counter is NOT included (use get_stats_mcp_query_rules() for that).
+//
+// Returns:
+//   SQLite3_result*: Result set with 17 columns (no hits column)
+//
+// Thread Safety:
+//   Uses read lock on mcp_rules_lock
+//
+SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
+	SQLite3_result* result = new SQLite3_result(17);
+
+	// Define columns (17 columns - same for mcp_query_rules and runtime_mcp_query_rules)
+	result->add_column_definition(SQLITE_TEXT, "rule_id");
+	result->add_column_definition(SQLITE_TEXT, "active");
+	result->add_column_definition(SQLITE_TEXT, "username");
+	result->add_column_definition(SQLITE_TEXT, "schemaname");
+	result->add_column_definition(SQLITE_TEXT, "tool_name");
+	result->add_column_definition(SQLITE_TEXT, "match_pattern");
+	result->add_column_definition(SQLITE_TEXT, "negate_match_pattern");
+	result->add_column_definition(SQLITE_TEXT, "re_modifiers");
+	result->add_column_definition(SQLITE_TEXT, "flagIN");
+	result->add_column_definition(SQLITE_TEXT, "flagOUT");
+	result->add_column_definition(SQLITE_TEXT, "replace_pattern");
+	result->add_column_definition(SQLITE_TEXT, "timeout_ms");
+	result->add_column_definition(SQLITE_TEXT, "error_msg");
+	result->add_column_definition(SQLITE_TEXT, "OK_msg");
+	result->add_column_definition(SQLITE_TEXT, "log");
+	result->add_column_definition(SQLITE_TEXT, "apply");
+	result->add_column_definition(SQLITE_TEXT, "comment");
+
+	pthread_rwlock_rdlock(&mcp_rules_lock);
+
+	for (size_t i = 0; i < mcp_query_rules.size(); i++) {
+		MCP_Query_Rule* rule = mcp_query_rules[i];
+		char** pta = (char**)malloc(sizeof(char*) * 17);
+
+		pta[0] = strdup(std::to_string(rule->rule_id).c_str());           // rule_id
+		pta[1] = strdup(std::to_string(rule->active ? 1 : 0).c_str());    // active
+		pta[2] = rule->username ? strdup(rule->username) : NULL;         // username
+		pta[3] = rule->schemaname ? strdup(rule->schemaname) : NULL;      // schemaname
+		pta[4] = rule->tool_name ? strdup(rule->tool_name) : NULL;         // tool_name
+		pta[5] = rule->match_pattern ? strdup(rule->match_pattern) : NULL;  // match_pattern
+		pta[6] = strdup(std::to_string(rule->negate_match_pattern ? 1 : 0).c_str());  // negate_match_pattern
+		pta[7] = strdup(std::to_string(rule->re_modifiers).c_str());      // re_modifiers
+		pta[8] = strdup(std::to_string(rule->flagIN).c_str());            // flagIN
+		pta[9] = strdup(std::to_string(rule->flagOUT).c_str());           // flagOUT
+		pta[10] = rule->replace_pattern ? strdup(rule->replace_pattern) : NULL;  // replace_pattern
+		pta[11] = strdup(std::to_string(rule->timeout_ms).c_str());       // timeout_ms
+		pta[12] = rule->error_msg ? strdup(rule->error_msg) : NULL;      // error_msg
+		pta[13] = rule->ok_msg ? strdup(rule->ok_msg) : NULL;            // OK_msg
+		pta[14] = strdup(std::to_string(rule->log ? 1 : 0).c_str());      // log
+		pta[15] = strdup(std::to_string(rule->apply ? 1 : 0).c_str());    // apply
+		pta[16] = rule->comment ? strdup(rule->comment) : NULL;          // comment
+
+		result->add_row(pta);
+
+		// Free the row data
+		for (int j = 0; j < 17; j++) {
+			if (pta[j]) {
+				free(pta[j]);
+			}
+		}
+		free(pta);
+	}
+
+	pthread_rwlock_unlock(&mcp_rules_lock);
+	return result;
+}
+
+// Get MCP query rules statistics (hit counters)
+//
+// Returns the hit counter for each MCP query rule.
+// The hit counter increments each time a rule matches during query processing.
+// This is used to populate the stats_mcp_query_rules table.
+//
+// Returns:
+//   SQLite3_result*: Result set with 2 columns (rule_id, hits)
+//
+// Thread Safety:
+//   Uses read lock on mcp_rules_lock
+//
+SQLite3_result* Discovery_Schema::get_stats_mcp_query_rules() {
+	SQLite3_result* result = new SQLite3_result(2);
+
+	// Define columns
+	result->add_column_definition(SQLITE_TEXT, "rule_id");
+	result->add_column_definition(SQLITE_TEXT, "hits");
+
+	pthread_rwlock_rdlock(&mcp_rules_lock);
+
+	for (size_t i = 0; i < mcp_query_rules.size(); i++) {
+		MCP_Query_Rule* rule = mcp_query_rules[i];
+		char** pta = (char**)malloc(sizeof(char*) * 2);
+
+		pta[0] = strdup(std::to_string(rule->rule_id).c_str());
+		pta[1] = strdup(std::to_string(rule->hits).c_str());
+
+		result->add_row(pta);
+
+		// Free the row data
+		for (int j = 0; j < 2; j++) {
+			if (pta[j]) {
+				free(pta[j]);
+			}
+		}
+		free(pta);
+	}
+
+	pthread_rwlock_unlock(&mcp_rules_lock);
+	return result;
+}
+
+// ============================================================
+// MCP QUERY DIGEST
+// ============================================================
+
+// Update MCP query digest statistics after a tool call completes.
+//
+// This function is called after each successful MCP tool execution to
+// record performance and frequency statistics. Similar to MySQL's query
+// digest tracking, this aggregates statistics for "similar" queries
+// (queries with the same fingerprinted structure).
+//
+// Parameters:
+//   tool_name    - Name of the MCP tool that was called (e.g., "run_sql_readonly")
+//   run_id       - Discovery run identifier (0 if no schema context)
+//   digest       - Computed digest hash (lower 64 bits of SpookyHash)
+//   digest_text  - Fingerprinted JSON arguments with literals replaced by '?'
+//   duration_us  - Query execution time in microseconds
+//   timestamp    - Unix timestamp of when the query completed
+//
+// Statistics Updated:
+//   - count_star: Incremented for each execution
+//   - sum_time: Accumulates total execution time
+//   - min_time: Tracks minimum execution time
+//   - max_time: Tracks maximum execution time
+//   - first_seen: Set once on first occurrence (not updated)
+//   - last_seen: Updated to current timestamp on each execution
+//
+// Thread Safety:
+//   Acquires write lock on mcp_digest_rwlock for the entire operation.
+//   Nested map structure: mcp_digest_umap["tool_name|run_id"][digest]
+//
+// Note: Digest statistics are currently kept in memory only. Persistence
+// to SQLite is planned (TODO at line 2775).
+void Discovery_Schema::update_mcp_query_digest(
+	const std::string& tool_name,
+	int run_id,
+	uint64_t digest,
+	const std::string& digest_text,
+	unsigned long long duration_us,
+	time_t timestamp
+) {
+	// Create composite key: tool_name + run_id
+	std::string key = tool_name + "|" + std::to_string(run_id);
+
+	pthread_rwlock_wrlock(&mcp_digest_rwlock);
+
+	// Find or create digest stats entry
+	auto& tool_map = mcp_digest_umap[key];
+	auto it = tool_map.find(digest);
+
+	MCP_Query_Digest_Stats* stats = NULL;
+	if (it != tool_map.end()) {
+		stats = (MCP_Query_Digest_Stats*)it->second;
+	} else {
+		stats = new MCP_Query_Digest_Stats();
+		stats->tool_name = tool_name;
+		stats->run_id = run_id;
+		stats->digest = digest;
+		stats->digest_text = digest_text;
+		tool_map[digest] = stats;
+	}
+
+	// Update statistics
+	stats->add_timing(duration_us, timestamp);
+
+	pthread_rwlock_unlock(&mcp_digest_rwlock);
+
+	// Periodically persist to SQLite (every 100 updates or so)
+	static thread_local unsigned int update_count = 0;
+	if (++update_count % 100 == 0) {
+		// TODO: Implement batch persistence
+	}
+}
+
+// Get MCP query digest statistics from the in-memory digest map.
+//
+// Returns all accumulated digest statistics for MCP tool calls that have been
+// processed. This includes execution counts, timing information, and the
+// fingerprinted query text.
+//
+// Parameters:
+//   reset - If true, clears all in-memory digest statistics after returning them.
+//           This is used for the stats_mcp_query_digest_reset table.
+//           If false, statistics remain in memory (stats_mcp_query_digest table).
+//
+// Returns:
+//   SQLite3_result* - Result set containing digest statistics with columns:
+//     - tool_name: Name of the MCP tool that was called
+//     - run_id: Discovery run identifier
+//     - digest: 128-bit hash (lower 64 bits) identifying the query fingerprint
+//     - digest_text: Fingerprinted JSON with literals replaced by '?'
+//     - count_star: Number of times this digest was seen
+//     - first_seen: Unix timestamp of first occurrence
+//     - last_seen: Unix timestamp of most recent occurrence
+//     - sum_time: Total execution time in microseconds
+//     - min_time: Minimum execution time in microseconds
+//     - max_time: Maximum execution time in microseconds
+//
+// Thread Safety:
+//   Uses read-write lock (mcp_digest_rwlock) for concurrent access.
+//   Reset operation acquires write lock to clear the digest map.
+//
+// Note: The caller is responsible for freeing the returned SQLite3_result.
+SQLite3_result* Discovery_Schema::get_mcp_query_digest(bool reset) {
+	SQLite3_result* result = new SQLite3_result(10);
+
+	// Define columns for MCP query digest statistics
+	result->add_column_definition(SQLITE_TEXT, "tool_name");
+	result->add_column_definition(SQLITE_TEXT, "run_id");
+	result->add_column_definition(SQLITE_TEXT, "digest");
+	result->add_column_definition(SQLITE_TEXT, "digest_text");
+	result->add_column_definition(SQLITE_TEXT, "count_star");
+	result->add_column_definition(SQLITE_TEXT, "first_seen");
+	result->add_column_definition(SQLITE_TEXT, "last_seen");
+	result->add_column_definition(SQLITE_TEXT, "sum_time");
+	result->add_column_definition(SQLITE_TEXT, "min_time");
+	result->add_column_definition(SQLITE_TEXT, "max_time");
+
+	// Use appropriate lock based on reset flag to prevent TOCTOU race condition
+	// If reset is true, we need a write lock from the start to prevent new data
+	// from being added between the read and write lock operations
+	if (reset) {
+		pthread_rwlock_wrlock(&mcp_digest_rwlock);
+	} else {
+		pthread_rwlock_rdlock(&mcp_digest_rwlock);
+	}
+
+	for (auto const& [key1, inner_map] : mcp_digest_umap) {
+		for (auto const& [digest, stats_ptr] : inner_map) {
+			MCP_Query_Digest_Stats* stats = (MCP_Query_Digest_Stats*)stats_ptr;
+			char** pta = (char**)malloc(sizeof(char*) * 10);
+
+			pta[0] = strdup(stats->tool_name.c_str());                         // tool_name
+			pta[1] = strdup(std::to_string(stats->run_id).c_str());            // run_id
+			pta[2] = strdup(std::to_string(stats->digest).c_str());            // digest
+			pta[3] = strdup(stats->digest_text.c_str());                       // digest_text
+			pta[4] = strdup(std::to_string(stats->count_star).c_str());        // count_star
+			pta[5] = strdup(std::to_string(stats->first_seen).c_str());        // first_seen
+			pta[6] = strdup(std::to_string(stats->last_seen).c_str());         // last_seen
+			pta[7] = strdup(std::to_string(stats->sum_time).c_str());          // sum_time
+			pta[8] = strdup(std::to_string(stats->min_time).c_str());          // min_time
+			pta[9] = strdup(std::to_string(stats->max_time).c_str());          // max_time
+
+			result->add_row(pta);
+
+			// Free the row data
+			for (int j = 0; j < 10; j++) {
+				if (pta[j]) {
+					free(pta[j]);
+				}
+			}
+			free(pta);
+		}
+	}
+
+	if (reset) {
+		// Clear all digest stats (we already have write lock)
+		for (auto const& [key1, inner_map] : mcp_digest_umap) {
+			for (auto const& [key2, stats] : inner_map) {
+				delete (MCP_Query_Digest_Stats*)stats;
+			}
+		}
+		mcp_digest_umap.clear();
+	}
+
+	pthread_rwlock_unlock(&mcp_digest_rwlock);
+
+	return result;
+}
+
+// Compute a unique digest hash for an MCP tool call.
+//
+// Creates a deterministic hash value that identifies similar MCP queries
+// by normalizing the arguments (fingerprinting) and hashing the result.
+// Queries with the same tool name and argument structure (but different
+// literal values) will produce the same digest.
+//
+// This is analogous to MySQL query digest computation, which fingerprints
+// SQL queries by replacing literal values with placeholders.
+//
+// Parameters:
+//   tool_name - Name of the MCP tool being called (e.g., "run_sql_readonly")
+//   arguments - JSON object containing the tool's arguments
+//
+// Returns:
+//   uint64_t - Lower 64 bits of the 128-bit SpookyHash digest value
+//
+// Digest Computation:
+//   1. Arguments are fingerprinted (literals replaced with '?' placeholders)
+//   2. Tool name and fingerprint are combined: "tool_name:{fingerprint}"
+//   3. SpookyHash 128-bit hash is computed on the combined string
+//   4. Lower 64 bits (hash1) are returned as the digest
+//
+// Example:
+//   Input: tool_name="run_sql_readonly", arguments={"sql": "SELECT * FROM users WHERE id = 123"}
+//   Fingerprint: {"sql":"?"}
+//   Combined: "run_sql_readonly:{"sql":"?"}"
+//   Digest: (uint64_t hash value)
+//
+// Note: Uses SpookyHash for fast, non-cryptographic hashing with good
+// distribution properties. The same algorithm is used for MySQL query digests.
+uint64_t Discovery_Schema::compute_mcp_digest(
+	const std::string& tool_name,
+	const nlohmann::json& arguments
+) {
+	std::string fingerprint = fingerprint_mcp_args(arguments);
+
+	// Combine tool_name and fingerprint for hashing
+	std::string combined = tool_name + ":" + fingerprint;
+
+	// Use SpookyHash to compute digest
+	uint64_t hash1 = SpookyHash::Hash64(combined.data(), combined.length(), 0);
+
+	return hash1;
+}
+
+static options get_def_mysql_opts() {
+	options opts {};
+
+	opts.lowercase = false;
+	opts.replace_null = true;
+	opts.replace_number = false;
+	opts.grouping_limit = 3;
+	opts.groups_grouping_limit = 1;
+	opts.keep_comment = false;
+	opts.max_query_length = 65000;
+
+	return opts;
+}
+
+// Generate a fingerprint of MCP tool arguments by replacing literals with placeholders.
+//
+// Converts a JSON arguments structure into a normalized form where all
+// literal values (strings, numbers, booleans) are replaced with '?' placeholders.
+// This allows similar queries to be grouped together for statistics and analysis.
+//
+// Parameters:
+//   arguments - JSON object/array containing the tool's arguments
+//
+// Returns:
+//   std::string - Fingerprinted JSON string with literals replaced by '?'
+//
+// Fingerprinting Rules:
+//   - String values: replaced with "?"
+//   - Number values: replaced with "?"
+//   - Boolean values: replaced with "?"
+//   - Objects: recursively fingerprinted (keys preserved, values replaced)
+//   - Arrays: replaced with "[?]" (entire array is a placeholder)
+//   - Null values: preserved as "null"
+//
+// Example:
+//   Input: {"sql": "SELECT * FROM users WHERE id = 123", "timeout": 5000}
+//   Output: {"sql":"<digest_of_sql>","timeout":"?"}
+//
+//   Input: {"filters": {"status": "active", "age": 25}}
+//   Output: {"filters":{"?":"?","?":"?"}}
+//
+// Note: Object keys (field names) are preserved as-is, only values are replaced.
+// This ensures that queries with different parameter structures produce different
+// fingerprints, while queries with the same structure but different values produce
+// the same fingerprint.
+//
+// SQL Handling: For arguments where key is "sql", the value is replaced by a
+// digest generated using mysql_query_digest_and_first_comment instead of "?".
+// This normalizes SQL queries (removes comments, extra whitespace, etc.) so that
+// semantically equivalent queries produce the same fingerprint.
+std::string Discovery_Schema::fingerprint_mcp_args(const nlohmann::json& arguments) {
+	// Serialize JSON with literals replaced by placeholders
+	std::string result;
+
+	if (arguments.is_object()) {
+		result += "{";
+		bool first = true;
+		for (auto it = arguments.begin(); it != arguments.end(); ++it) {
+			if (!first) result += ",";
+			first = false;
+			result += "\"" + it.key() + "\":";
+
+			if (it.value().is_string()) {
+				// Special handling for "sql" key - generate digest instead of "?"
+				if (it.key() == "sql") {
+					std::string sql_value = it.value().get<std::string>();
+					const options def_opts { get_def_mysql_opts() };
+					char* first_comment = nullptr;  // Will be allocated by the function if needed
+					char* digest = mysql_query_digest_and_first_comment(
+						sql_value.c_str(),
+						sql_value.length(),
+						&first_comment,
+						NULL,  // buffer - not needed
+						&def_opts
+					);
+					if (first_comment) {
+						free(first_comment);
+					}
+					// Escape the digest for JSON and add it to result
+					result += "\"";
+					if (digest) {
+						// Full JSON escaping - handle all control characters
+						for (const char* p = digest; *p; p++) {
+							unsigned char c = (unsigned char)*p;
+							if (c == '\\') result += "\\\\";
+							else if (c == '"') result += "\\\"";
+							else if (c == '\n') result += "\\n";
+							else if (c == '\r') result += "\\r";
+							else if (c == '\t') result += "\\t";
+							else if (c < 0x20) {
+								char buf[8];
+								snprintf(buf, sizeof(buf), "\\u%04x", c);
+								result += buf;
+							}
+							else result += *p;
+						}
+						free(digest);
+					}
+					result += "\"";
+				} else {
+					result += "\"?\"";
+				}
+			} else if (it.value().is_number() || it.value().is_boolean()) {
+				result += "\"?\"";
+			} else if (it.value().is_object()) {
+				result += fingerprint_mcp_args(it.value());
+			} else if (it.value().is_array()) {
+				result += "[\"?\"]";
+			} else {
+				result += "null";
+			}
+		}
+		result += "}";
+	} else if (arguments.is_array()) {
+		result += "[\"?\"]";
+	} else {
+		result += "\"?\"";
+	}
+
+	return result;
 }

@@ -352,6 +352,33 @@ bool RAG_Tool_Handler::validate_query_length(const std::string& query) {
 }
 
 /**
+ * @brief Escape FTS query string for safe use in MATCH clause
+ *
+ * Escapes single quotes in FTS query strings by doubling them,
+ * which is the standard escaping method for SQLite FTS5.
+ * This prevents FTS injection while allowing legitimate single quotes in queries.
+ *
+ * @param query Raw FTS query string from user input
+ * @return Escaped query string safe for use in MATCH clause
+ *
+ * @see execute_tool()
+ */
+std::string RAG_Tool_Handler::escape_fts_query(const std::string& query) {
+	std::string escaped;
+	escaped.reserve(query.length() * 2); // Reserve space for potential escaping
+
+	for (char c : query) {
+		if (c == '\'') {
+			escaped += "''"; // Escape single quote by doubling
+		} else {
+			escaped += c;
+		}
+	}
+
+	return escaped;
+}
+
+/**
  * @brief Execute database query and return results
  *
  * Executes a SQL query against the vector database and returns the results.
@@ -376,7 +403,7 @@ SQLite3_result* RAG_Tool_Handler::execute_query(const char* query) {
 
 	if (error) {
 		proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
-		proxy_sqlite3_free(error);
+		(*proxy_sqlite3_free)(error);
 		return NULL;
 	}
 
@@ -407,7 +434,7 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 	// Prepare the statement
 	auto prepare_result = vector_db->prepare_v2(query);
 	if (prepare_result.first != SQLITE_OK) {
-		proxy_error("RAG_Tool_Handler: Failed to prepare statement: %s\n", sqlite3_errstr(prepare_result.first));
+		proxy_error("RAG_Tool_Handler: Failed to prepare statement: %s\n", (*proxy_sqlite3_errstr)(prepare_result.first));
 		return NULL;
 	}
 
@@ -421,9 +448,9 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 	for (const auto& binding : text_bindings) {
 		int position = binding.first;
 		const std::string& value = binding.second;
-		int result = proxy_sqlite3_bind_text(stmt, position, value.c_str(), -1, SQLITE_STATIC);
+		int result = (*proxy_sqlite3_bind_text)(stmt, position, value.c_str(), -1, SQLITE_STATIC);
 		if (result != SQLITE_OK) {
-			proxy_error("RAG_Tool_Handler: Failed to bind text parameter at position %d: %s\n", position, sqlite3_errstr(result));
+			proxy_error("RAG_Tool_Handler: Failed to bind text parameter at position %d: %s\n", position, (*proxy_sqlite3_errstr)(result));
 			return NULL;
 		}
 	}
@@ -432,22 +459,25 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
 	for (const auto& binding : int_bindings) {
 		int position = binding.first;
 		int value = binding.second;
-		int result = proxy_sqlite3_bind_int(stmt, position, value);
+		int result = (*proxy_sqlite3_bind_int)(stmt, position, value);
 		if (result != SQLITE_OK) {
-			proxy_error("RAG_Tool_Handler: Failed to bind integer parameter at position %d: %s\n", position, sqlite3_errstr(result));
+			proxy_error("RAG_Tool_Handler: Failed to bind integer parameter at position %d: %s\n", position, (*proxy_sqlite3_errstr)(result));
 			return NULL;
 		}
 	}
 
-	// Execute the statement and get results
+	// Execute the prepared statement and get results
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
-	SQLite3_result* result = vector_db->execute_statement(query, &error, &cols, &affected_rows);
+	SQLite3_result* result = NULL;
 
-	if (error) {
-		proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
-		proxy_sqlite3_free(error);
+	// Use execute_prepared to execute the bound statement, not the raw query
+	if (!vector_db->execute_prepared(stmt, &error, &cols, &affected_rows, &result)) {
+		if (error) {
+			proxy_error("RAG_Tool_Handler: SQL error: %s\n", error);
+			(*proxy_sqlite3_free)(error);
+		}
 		return NULL;
 	}
 
@@ -1155,7 +1185,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				"FROM rag_fts_chunks f "
 				"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 				"JOIN rag_documents d ON d.doc_id = c.doc_id "
-				"WHERE f MATCH '" + query + "'";
+				"WHERE f MATCH '" + escape_fts_query(query) + "'";
 
 			// Apply filters using consolidated filter building function
 			if (!build_sql_filters(filters, sql)) {
@@ -1336,7 +1366,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				"FROM rag_vec_chunks v "
 				"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
 				"JOIN rag_documents d ON d.doc_id = c.doc_id "
-				"WHERE v.embedding MATCH '" + embedding_json + "'";
+				"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "'";
 
 			// Apply filters using consolidated filter building function
 			if (!build_sql_filters(filters, sql)) {
@@ -1511,7 +1541,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"FROM rag_fts_chunks f "
 					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE f MATCH '" + query + "'";
+					"WHERE f MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, fts_sql)) {
@@ -1634,7 +1664,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"FROM rag_vec_chunks v "
 					"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE v.embedding MATCH '" + embedding_json + "'";
+					"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, vec_sql)) {
@@ -1889,7 +1919,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"FROM rag_fts_chunks f "
 					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE f MATCH '" + query + "'";
+					"WHERE f MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, fts_sql)) {
@@ -2032,7 +2062,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 						"FROM rag_vec_chunks v "
 						"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
 						"JOIN rag_documents d ON d.doc_id = c.doc_id "
-						"WHERE v.embedding MATCH '" + embedding_json + "' "
+						"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "' "
 						"AND v.chunk_id IN (" + candidate_list + ")";
 
 					// Apply filters
