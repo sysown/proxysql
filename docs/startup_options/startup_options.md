@@ -21,7 +21,7 @@ information. The options are the following:
 - `--initial`: Rename/empty the database file
 - `--no-version-check`: Do not check for the latest version of ProxySQL
 - `--reload`: Merge the [configuration file][1] into the database file
-- `--sqlite3-server`: Enable [SQLite3 Server][3]
+- `--sqlite3-server`: Enable the built-in [SQLite3 Server](../features/sqlite3_server)
 
 [1]: /configuration-file/
 [2]: /clickhouse-configuration/

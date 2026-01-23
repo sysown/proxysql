@@ -1,5 +1,9 @@
 # MySQL Tables
 
+:::info
+**Note**: Changes made to the configuration on this page must be explicitly loaded to the runtime to take effect. Please refer to the **[Admin Commands](../the_admin_schemas/admin_commands)** documentation for details on the `LOAD` and `SAVE` commands.
+:::
+
 This section documents all tables related to the MySQL protocol in ProxySQL, including configuration, runtime, and collations.
 
 ## List of MySQL Tables
@@ -397,5 +401,8 @@ All configuration tables have a corresponding `runtime_` version:
 - `runtime_mysql_hostgroup_attributes`
 - `runtime_mysql_query_rules`
 - `runtime_mysql_query_rules_fast_routing`
+
+---
+**Apply your changes**: Remember to use the appropriate `LOAD` and `SAVE` commands to activate and persist your configuration. See the complete **[Admin Commands](../the_admin_schemas/admin_commands)** reference.
 
 [2]: https://proxysql.com/global-variables/mysql-monitor-variables/#mysql-monitor_writer_is_also_reader
