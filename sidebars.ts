@@ -75,6 +75,15 @@ const sidebars: SidebarsConfig = {
         'global_variables/pgsql_variables',
         'global_variables/pgsql_monitor_variables',
         'backend_monitoring/postgresql_monitoring',
+        {
+          type: 'category',
+          label: 'Extended Query Protocol',
+          items: [
+            'postgresql/extended_query_protocol',
+            'postgresql/applying_query_rules_in_extended_query_protocol',
+            'postgresql/prepared_statement_cache',
+          ],
+        },
       ],
     },
     {
