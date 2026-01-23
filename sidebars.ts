@@ -159,7 +159,11 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Features',
       items: [
-        'proxysql_cluster/proxysql-cluster',
+        {
+          type: 'doc',
+          id: 'proxysql_cluster/proxysql-cluster',
+          label: 'ProxySQL Cluster',
+        },
         {
           type: 'category',
           label: 'Query Logging',
