@@ -69,6 +69,11 @@ int AI_Features_Manager::init_vector_db() {
 		return -1;
 	}
 
+	// Enable SQLite extensions for vector_db
+	// Once enabled, SQLite loads extensions such as vec0 and rembed automatically.
+	// Refer - Admin_Bootstrap.cpp:590
+	(*proxy_sqlite3_enable_load_extension)(vector_db->get_db(), 1);
+
 	// Create tables for LLM cache
 	const char* create_llm_cache =
 		"CREATE TABLE IF NOT EXISTS llm_cache ("
