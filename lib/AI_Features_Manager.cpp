@@ -132,7 +132,7 @@ int AI_Features_Manager::init_vector_db() {
 	// 1. LLM cache virtual table
 	const char* create_llm_vec =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS llm_cache_vec USING vec0("
-		"embedding float(1536)"
+		"embedding float[1536]"
 		");";
 
 	if (!vector_db->execute(create_llm_vec)) {
@@ -144,7 +144,7 @@ int AI_Features_Manager::init_vector_db() {
 	// 2. Anomaly patterns virtual table
 	const char* create_anomaly_vec =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS anomaly_patterns_vec USING vec0("
-		"embedding float(1536)"
+		"embedding float[1536]"
 		");";
 
 	if (!vector_db->execute(create_anomaly_vec)) {
@@ -155,7 +155,7 @@ int AI_Features_Manager::init_vector_db() {
 	// 3. Query history virtual table
 	const char* create_history_vec =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS query_history_vec USING vec0("
-		"embedding float(1536)"
+		"embedding float[1536]"
 		");";
 
 	if (!vector_db->execute(create_history_vec)) {
@@ -311,7 +311,7 @@ int AI_Features_Manager::init_vector_db() {
 
 	std::string create_rag_vec_chunks_sql =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS rag_vec_chunks USING vec0("
-		"embedding float(" + std::to_string(vector_dimension) + "), "
+		"embedding float[" + std::to_string(vector_dimension) + "], "
 		"chunk_id TEXT, "
 		"doc_id TEXT, "
 		"source_id INTEGER, "
