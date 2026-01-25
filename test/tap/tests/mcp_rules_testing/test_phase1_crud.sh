@@ -7,39 +7,21 @@
 
 set -e
 
-# Default configuration
-PROXYSQL_ADMIN_HOST="${PROXYSQL_ADMIN_HOST:-127.0.0.1}"
-PROXYSQL_ADMIN_PORT="${PROXYSQL_ADMIN_PORT:-6032}"
-PROXYSQL_ADMIN_USER="${PROXYSQL_ADMIN_USER:-radmin}"
-PROXYSQL_ADMIN_PASSWORD="${PROXYSQL_ADMIN_PASSWORD:-radmin}"
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
+# Source the helper functions
+if [ -f "${SCRIPT_DIR}/mcp_test_helpers.sh" ]; then
+    source "${SCRIPT_DIR}/mcp_test_helpers.sh"
+else
+    echo "ERROR: mcp_test_helpers.sh not found at ${SCRIPT_DIR}"
+    exit 1
+fi
 
 # Statistics
 TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
-
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-log_test() { echo -e "${GREEN}[TEST]${NC} $1"; }
-
-# Execute MySQL command
-exec_admin() {
-    mysql -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
-          -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
-          -e "$1" 2>&1
-}
-
-# Execute MySQL command (silent)
-exec_admin_silent() {
-    mysql -B -N -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
-          -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
-          -e "$1" 2>/dev/null
-}
 
 # Check if table has rule
 rule_exists() {

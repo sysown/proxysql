@@ -1,84 +1,25 @@
 #!/bin/bash
 #
-# test_phase4_stats.sh - Test MCP Query Rules Statistics Table
-#
-# Phase 4: Test stats_mcp_query_rules table behavior (hit counters)
+# MCP Query Rules Test Script
 #
 
 set -e
 
-# Default configuration
-MCP_HOST="${MCP_HOST:-127.0.0.1}"
-MCP_PORT="${MCP_PORT:-6071}"
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-PROXYSQL_ADMIN_HOST="${PROXYSQL_ADMIN_HOST:-127.0.0.1}"
-PROXYSQL_ADMIN_PORT="${PROXYSQL_ADMIN_PORT:-6032}"
-PROXYSQL_ADMIN_USER="${PROXYSQL_ADMIN_USER:-radmin}"
-PROXYSQL_ADMIN_PASSWORD="${PROXYSQL_ADMIN_PASSWORD:-radmin}"
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
+# Source the helper functions
+if [ -f "${SCRIPT_DIR}/mcp_test_helpers.sh" ]; then
+    source "${SCRIPT_DIR}/mcp_test_helpers.sh"
+else
+    echo "ERROR: mcp_test_helpers.sh not found at ${SCRIPT_DIR}"
+    exit 1
+fi
 
 # Statistics
 TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
-
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-log_test() { echo -e "${GREEN}[TEST]${NC} $1"; }
-
-# Execute MySQL command
-exec_admin() {
-    mysql -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
-          -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
-          -e "$1" 2>&1
-}
-
-# Execute MySQL command (silent)
-exec_admin_silent() {
-    mysql -B -N -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
-          -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
-          -e "$1" 2>/dev/null
-}
-
-# Get endpoint URL
-get_endpoint_url() {
-    local endpoint="$1"
-    echo "https://${MCP_HOST}:${MCP_PORT}/mcp/${endpoint}"
-}
-
-# Execute MCP request via curl
-mcp_request() {
-    local endpoint="$1"
-    local payload="$2"
-
-    curl -k -s -X POST "$(get_endpoint_url "${endpoint}")" \
-        -H "Content-Type: application/json" \
-        -d "${payload}" 2>/dev/null
-}
-
-# Check if ProxySQL admin is accessible
-check_proxysql_admin() {
-    if exec_admin_silent "SELECT 1" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Check if MCP server is accessible
-check_mcp_server() {
-    local response
-    response=$(mcp_request "config" '{"jsonrpc":"2.0","method":"ping","id":1}')
-    if echo "${response}" | grep -q "result"; then
-        return 0
-    else
-        return 1
-    fi
-}
 
 # Run test function
 run_test() {

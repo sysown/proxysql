@@ -414,7 +414,7 @@ main() {
 
     if ! check_mcp_server; then
         log_error "MCP server not accessible. Please run:"
-        echo "  ./configure_mcp.sh --enable"
+        echo "  ./configure_mcp.sh --enable -u $TAP_MYSQLUSERNAME -p $TAP_MYSQLUSERNAME -P $TAP_MYSQLPORT -d testdb"
         exit 1
     fi
 

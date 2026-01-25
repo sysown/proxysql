@@ -51,12 +51,15 @@ Actions are NOT mutually exclusive - a single rule can perform multiple actions 
 
 | Test ID | Description | Expected Result |
 |---------|-------------|-----------------|
-| T2.1 | `LOAD MCP QUERY RULES TO MEMORY` | Rules loaded from disk to memory table |
+| T2.1 | `SAVE MCP QUERY RULES TO DISK` | Rules persisted to disk |
 | T2.2 | `LOAD MCP QUERY RULES FROM MEMORY` | Rules copied from memory to... |
 | T2.3 | `LOAD MCP QUERY RULES TO RUNTIME` | Rules become active for evaluation |
-| T2.4 | `SAVE MCP QUERY RULES TO DISK` | Rules persisted to disk |
+| T2.4 | Verify rules in runtime after LOAD TO RUNTIME | Runtime table reflects loaded rules |
 | T2.5 | `SAVE MCP QUERY RULES TO MEMORY` | Rules saved to memory table |
 | T2.6 | `SAVE MCP QUERY RULES FROM RUNTIME` | Runtime rules saved to memory |
+| T2.7 | SAVE TO DISK / LOAD FROM DISK persistence | Modified rules persist across disk save/load |
+| T2.8 | Round-trip memory -> runtime -> memory | Rules correctly saved from runtime back to memory |
+| T2.9 | New rule appears in runtime after LOAD | Newly created rules become active after LOAD TO RUNTIME |
 
 ### Phase 3: Runtime Table Tests
 
