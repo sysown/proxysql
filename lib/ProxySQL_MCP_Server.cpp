@@ -216,6 +216,14 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 
 	// Clean up all tool handlers stored in the handler object
 	if (handler) {
+
+		// Clean up MySQL Tool Handler
+		if (handler->mysql_tool_handler) {
+			proxy_info("Cleaning up MySQL Tool Handler...\n");
+			delete handler->mysql_tool_handler;
+			handler->mysql_tool_handler = NULL;
+		}
+
 		// Clean up Config Tool Handler
 		if (handler->config_tool_handler) {
 			proxy_info("Cleaning up Config Tool Handler...\n");

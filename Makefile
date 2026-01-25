@@ -152,6 +152,15 @@ build_lib_debug: $(if $(LEGACY_BUILD),build_lib_debug_legacy,build_lib_debug_def
 .PHONY: build_src_debug
 build_src_debug: $(if $(LEGACY_BUILD),build_src_debug_legacy,build_src_debug_default)
 
+# RAG ingester (PoC)
+.PHONY: rag_ingest
+rag_ingest: build_deps
+	cd RAG_POC && ${MAKE} CC=${CC} CXX=${CXX} CXXFLAGS="${CXXFLAGS}"
+
+.PHONY: rag_ingest_clean
+rag_ingest_clean:
+	cd RAG_POC && ${MAKE} clean
+
 # legacy build targets (pre c++17)
 .PHONY: build_deps_legacy
 build_deps_legacy:
