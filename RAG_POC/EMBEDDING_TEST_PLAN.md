@@ -8,7 +8,8 @@
 ## Quick Start
 
 ```bash
-cd /home/rene/pr5312/proxysql/RAG_POC
+# From repository root
+cd RAG_POC
 
 # Step 1: Set your embedding service credentials
 export OPENAI_API_BASE="https://your-embedding-service.com/v1"

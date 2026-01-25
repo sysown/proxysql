@@ -9,8 +9,8 @@
 ## Quick Start
 
 ```bash
-# 1. Build the tool
-cd /home/rene/pr5312/proxysql/RAG_POC
+# 1. Build the tool (from repository root)
+cd RAG_POC
 make
 
 # 2. Create a RAG database with schema
@@ -30,7 +30,8 @@ sqlite3 /path/to/rag.db < setup_source.sql
 ### Step 1: Create the RAG Database
 
 ```bash
-cd /home/rene/pr5312/proxysql/RAG_POC
+# From repository root
+cd RAG_POC
 
 # Create empty database and load schema
 sqlite3 rag_index.db < schema.sql
