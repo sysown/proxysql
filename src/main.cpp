@@ -1382,7 +1382,16 @@ static void LoadPlugins() {
 	GloMyLdapAuth = NULL;
 	if (proxy_sqlite3_open_v2 == nullptr) {
 		SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
+	} else {
+		int i= (*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);
+
+		if (i != SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on (*proxy_sqlite3_config)(SQLITE_CONFIG_URI,1)\n");
+			assert(i==SQLITE_OK);
+			exit(EXIT_FAILURE);
+		}
 	}
+
 	if (GloVars.web_interface_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;
