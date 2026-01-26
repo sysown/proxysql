@@ -80,9 +80,10 @@ private:
 		}
 	};
 
-	// Tool usage counters: tool_name -> schema_name -> ToolUsageStats
+	// Tool usage counters: endpoint -> tool_name -> schema_name -> ToolUsageStats
 	typedef std::map<std::string, ToolUsageStats> SchemaStatsMap;
-	typedef std::map<std::string, SchemaStatsMap> ToolUsageStatsMap;
+	typedef std::map<std::string, SchemaStatsMap> ToolStatsMap;
+	typedef std::map<std::string, ToolStatsMap> ToolUsageStatsMap;
 	ToolUsageStatsMap tool_usage_stats;
 	pthread_mutex_t counters_lock;
 
@@ -146,7 +147,7 @@ private:
 	bool is_dangerous_query(const std::string& query);
 
 	// Friend function for tracking tool invocations
-	friend void track_tool_invocation(Query_Tool_Handler*, const std::string&, const std::string&, unsigned long long);
+	friend void track_tool_invocation(Query_Tool_Handler*, const std::string&, const std::string&, const std::string&, unsigned long long);
 
 public:
 	/**
@@ -186,14 +187,14 @@ public:
 
 	/**
 	 * @brief Get tool usage statistics (thread-safe copy)
-	 * @return ToolUsageStatsMap copy with tool_name -> schema_name -> ToolUsageStats
+	 * @return ToolUsageStatsMap copy with endpoint -> tool_name -> schema_name -> ToolUsageStats
 	 */
 	ToolUsageStatsMap get_tool_usage_stats();
 
 	/**
 	 * @brief Get tool usage statistics as SQLite3_result* with optional reset
 	 * @param reset If true, resets internal counters after capturing data
-	 * @return SQLite3_result* with columns: tool, schema, count, first_seen, last_seen, sum_time, min_time, max_time. Caller must delete.
+	 * @return SQLite3_result* with columns: endpoint, tool, schema, count, first_seen, last_seen, sum_time, min_time, max_time. Caller must delete.
 	 */
 	SQLite3_result* get_tool_usage_stats_resultset(bool reset = false);
 };

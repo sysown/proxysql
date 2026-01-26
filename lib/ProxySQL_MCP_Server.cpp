@@ -182,7 +182,9 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	// 7. RAG endpoint (for Retrieval-Augmented Generation)
 	extern AI_Features_Manager *GloAI;
 	if (GloAI) {
-		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI);
+		// Use same catalog path as query_tool_handler for logging
+		std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
+		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI, catalog_path);
 		if (handler->rag_tool_handler->init() == 0) {
 			std::unique_ptr<httpserver::http_resource> rag_resource =
 				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->rag_tool_handler, "rag"));

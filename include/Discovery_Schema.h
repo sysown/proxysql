@@ -784,6 +784,23 @@ public:
 	);
 
 	/**
+	 * @brief Log RAG FTS search operation
+	 *
+	 * Logs RAG full-text search operations to the rag_search_log table.
+	 * Similar to log_llm_search() but for RAG searches.
+	 *
+	 * @param query Search query string
+	 * @param k Number of results requested
+	 * @param filters JSON string of filters applied (empty if none)
+	 * @return 0 on success, -1 on error
+	 */
+	int log_rag_search_fts(
+		const std::string& query,
+		int k,
+		const std::string& filters = ""
+	);
+
+	/**
 	 * @brief Log MCP tool invocation via /mcp/query/ endpoint
 	 * @param tool_name Name of the tool that was called
 	 * @param schema Schema name (empty if not applicable)

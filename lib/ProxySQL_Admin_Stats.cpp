@@ -20,6 +20,7 @@
 #include "MySQL_Logger.hpp"
 #include "MCP_Thread.h"
 #include "Query_Tool_Handler.h"
+#include "RAG_Tool_Handler.h"
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -1586,19 +1587,14 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 
 void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 	if (!GloMCPH) return;
-	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
-	if (!qth) return;
-
-	SQLite3_result* resultset = qth->get_tool_usage_stats_resultset(reset);
-	if (resultset == NULL) return;
 
 	statsdb->execute("BEGIN");
 
 	// Use prepared statement to prevent SQL injection
 	// Table name is fixed based on reset flag (safe from injection)
 	const char* query_str = reset
-		? "INSERT INTO stats_mcp_query_tools_counters_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
-		: "INSERT INTO stats_mcp_query_tools_counters VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+		? "INSERT INTO stats_mcp_query_tools_counters_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+		: "INSERT INTO stats_mcp_query_tools_counters VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 
 	sqlite3_stmt* statement = NULL;
 	int rc = statsdb->prepare_v2(query_str, &statement);
@@ -1610,28 +1606,64 @@ void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 		statsdb->execute("DELETE FROM stats_mcp_query_tools_counters");
 	}
 
-	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
-	     it != resultset->rows.end(); ++it) {
-		SQLite3_row* r = *it;
+	// Collect stats from Query_Tool_Handler
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (qth) {
+		SQLite3_result* resultset = qth->get_tool_usage_stats_resultset(reset);
+		if (resultset) {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+			     it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
 
-		// Bind all 8 columns using positional parameters
-		rc = (*proxy_sqlite3_bind_text)(statement, 1, r->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_bind_text)(statement, 2, r->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoll(r->fields[2])); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoll(r->fields[3])); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoll(r->fields[4])); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoll(r->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoll(r->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoll(r->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+				// Bind all 9 columns using positional parameters
+				rc = (*proxy_sqlite3_bind_text)(statement, 1, r->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 2, r->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoll(r->fields[3])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoll(r->fields[4])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoll(r->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoll(r->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoll(r->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 9, atoll(r->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
 
-		SAFE_SQLITE3_STEP2(statement);
-		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb);
-		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+				SAFE_SQLITE3_STEP2(statement);
+				rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			delete resultset;
+		}
+	}
+
+	// Collect stats from RAG_Tool_Handler
+	RAG_Tool_Handler* ragth = GloMCPH->rag_tool_handler;
+	if (ragth) {
+		SQLite3_result* resultset = ragth->get_tool_usage_stats_resultset(reset);
+		if (resultset) {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin();
+			     it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
+
+				// Bind all 9 columns using positional parameters
+				rc = (*proxy_sqlite3_bind_text)(statement, 1, r->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 2, r->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoll(r->fields[3])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoll(r->fields[4])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoll(r->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoll(r->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoll(r->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 9, atoll(r->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+
+				SAFE_SQLITE3_STEP2(statement);
+				rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+				rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			delete resultset;
+		}
 	}
 
 	(*proxy_sqlite3_finalize)(statement);
 	statsdb->execute("COMMIT");
-	delete resultset;
 }
 
 int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(

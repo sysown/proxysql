@@ -21,6 +21,7 @@
 
 #include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
+#include "Discovery_Schema.h"
 #include "GenAI_Thread.h"
 #include "LLM_Bridge.h"
 #include "proxysql_debug.h"
@@ -41,6 +42,25 @@ using json = nlohmann::json;
 
 // Forward declaration for GloGATH
 extern GenAI_Threads_Handler *GloGATH;
+
+// ============================================================================
+// Tool Invocation Tracking
+// ============================================================================
+
+/**
+ * @brief Track tool invocation (thread-safe)
+ */
+void track_tool_invocation(
+	RAG_Tool_Handler* handler,
+	const std::string& endpoint,
+	const std::string& tool_name,
+	const std::string& schema_name,
+	unsigned long long duration_us
+) {
+	pthread_mutex_lock(&handler->counters_lock);
+	handler->tool_usage_stats[endpoint][tool_name][schema_name].add_timing(duration_us, monotonic_time());
+	pthread_mutex_unlock(&handler->counters_lock);
+}
 
 // ============================================================================
 // Constructor/Destructor
@@ -64,9 +84,11 @@ extern GenAI_Threads_Handler *GloGATH;
  * @see AI_Features_Manager
  * @see GenAI_Thread
  */
-RAG_Tool_Handler::RAG_Tool_Handler(AI_Features_Manager* ai_mgr)
+RAG_Tool_Handler::RAG_Tool_Handler(AI_Features_Manager* ai_mgr, const std::string& cat_path)
 	: vector_db(NULL),
 	  ai_manager(ai_mgr),
+	  catalog(NULL),
+	  catalog_path(cat_path),
 	  k_max(50),
 	  candidates_max(500),
 	  query_max_bytes(8192),
@@ -82,6 +104,9 @@ RAG_Tool_Handler::RAG_Tool_Handler(AI_Features_Manager* ai_mgr)
 		timeout_ms = GloGATH->variables.genai_rag_timeout_ms;
 	}
 
+	// Initialize counters mutex
+	pthread_mutex_init(&counters_lock, NULL);
+
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "RAG_Tool_Handler created\n");
 }
 
@@ -94,6 +119,7 @@ RAG_Tool_Handler::RAG_Tool_Handler(AI_Features_Manager* ai_mgr)
  */
 RAG_Tool_Handler::~RAG_Tool_Handler() {
 	close();
+	pthread_mutex_destroy(&counters_lock);
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "RAG_Tool_Handler destroyed\n");
 }
 
@@ -123,6 +149,19 @@ int RAG_Tool_Handler::init() {
 		return -1;
 	}
 
+	// Initialize catalog for logging if path is provided
+	if (!catalog_path.empty()) {
+		catalog = new Discovery_Schema(catalog_path);
+		if (catalog->init() != 0) {
+			proxy_error("RAG_Tool_Handler: Failed to initialize catalog at %s\n", catalog_path.c_str());
+			delete catalog;
+			catalog = NULL;
+			// Continue without catalog - logging will be skipped
+		} else {
+			proxy_info("RAG_Tool_Handler: Catalog initialized for logging\n");
+		}
+	}
+
 	proxy_info("RAG_Tool_Handler initialized\n");
 	return 0;
 }
@@ -137,7 +176,10 @@ int RAG_Tool_Handler::init() {
  * @see ~RAG_Tool_Handler()
  */
 void RAG_Tool_Handler::close() {
-	// Cleanup will be handled by AI_Features_Manager
+	if (catalog) {
+		delete catalog;
+		catalog = NULL;
+	}
 }
 
 // ============================================================================
@@ -1175,6 +1217,12 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				query.find("INSERT") != std::string::npos ||
 				query.find("UPDATE") != std::string::npos) {
 				return create_error_response("Invalid characters in query");
+			}
+
+			// Log the RAG FTS search
+			if (catalog) {
+				std::string filters_str = filters.empty() ? "" : filters.dump();
+				catalog->log_rag_search_fts(query, k, filters_str);
 			}
 
 			// Build FTS query with filters
@@ -2575,8 +2623,16 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 
 		} else {
 			// Unknown tool
+			auto end_time = std::chrono::high_resolution_clock::now();
+			auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
+			track_tool_invocation(this, "RAG", tool_name, "rag", duration_us);
 			return create_error_response("Unknown tool: " + tool_name);
 		}
+
+		// Track invocation with timing
+		auto end_time = std::chrono::high_resolution_clock::now();
+		auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
+		track_tool_invocation(this, "RAG", tool_name, "rag", duration_us);
 
 		return create_success_response(result);
 
@@ -2587,4 +2643,77 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 		proxy_error("RAG_Tool_Handler: Unknown exception in execute_tool\n");
 		return create_error_response("Unknown exception");
 	}
+}
+
+// ============================================================================
+// Tool Usage Statistics
+// ============================================================================
+
+RAG_Tool_Handler::ToolUsageStatsMap RAG_Tool_Handler::get_tool_usage_stats() {
+	// Thread-safe copy of counters
+	pthread_mutex_lock(&counters_lock);
+	ToolUsageStatsMap copy = tool_usage_stats;
+	pthread_mutex_unlock(&counters_lock);
+	return copy;
+}
+
+SQLite3_result* RAG_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
+	SQLite3_result* result = new SQLite3_result(9);
+	result->add_column_definition(SQLITE_TEXT, "endpoint");
+	result->add_column_definition(SQLITE_TEXT, "tool");
+	result->add_column_definition(SQLITE_TEXT, "schema");
+	result->add_column_definition(SQLITE_TEXT, "count");
+	result->add_column_definition(SQLITE_TEXT, "first_seen");
+	result->add_column_definition(SQLITE_TEXT, "last_seen");
+	result->add_column_definition(SQLITE_TEXT, "sum_time");
+	result->add_column_definition(SQLITE_TEXT, "min_time");
+	result->add_column_definition(SQLITE_TEXT, "max_time");
+
+	pthread_mutex_lock(&counters_lock);
+
+	for (ToolUsageStatsMap::const_iterator endpoint_it = tool_usage_stats.begin();
+	     endpoint_it != tool_usage_stats.end(); ++endpoint_it) {
+		const std::string& endpoint = endpoint_it->first;
+		const ToolStatsMap& tools = endpoint_it->second;
+
+		for (ToolStatsMap::const_iterator tool_it = tools.begin();
+		     tool_it != tools.end(); ++tool_it) {
+			const std::string& tool_name = tool_it->first;
+			const SchemaStatsMap& schemas = tool_it->second;
+
+			for (SchemaStatsMap::const_iterator schema_it = schemas.begin();
+			     schema_it != schemas.end(); ++schema_it) {
+				const std::string& schema_name = schema_it->first;
+				const ToolUsageStats& stats = schema_it->second;
+
+				char** row = new char*[9];
+				row[0] = strdup(endpoint.c_str());
+				row[1] = strdup(tool_name.c_str());
+				row[2] = strdup(schema_name.c_str());
+
+				char buf[32];
+				snprintf(buf, sizeof(buf), "%llu", stats.count);
+				row[3] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.first_seen);
+				row[4] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.last_seen);
+				row[5] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.sum_time);
+				row[6] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.min_time);
+				row[7] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.max_time);
+				row[8] = strdup(buf);
+
+				result->add_row(row);
+			}
+		}
+	}
+
+	if (reset) {
+		tool_usage_stats.clear();
+	}
+
+	pthread_mutex_unlock(&counters_lock);
+	return result;
 }

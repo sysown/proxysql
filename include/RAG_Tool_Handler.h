@@ -34,9 +34,11 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <pthread.h>
 
 // Forward declarations
 class AI_Features_Manager;
+class Discovery_Schema;
 
 /**
  * @brief RAG Tool Handler for MCP
@@ -69,6 +71,12 @@ private:
 	/// AI features manager for shared resources
 	AI_Features_Manager* ai_manager;
 
+	/// Discovery catalog for logging
+	Discovery_Schema* catalog;
+
+	/// Catalog path for database initialization
+	std::string catalog_path;
+
 	/// @name Configuration Parameters
 	/// @{
 
@@ -89,7 +97,45 @@ private:
 
 	/// @}
 
-	
+	// Statistics for a specific (tool, schema) pair
+	struct ToolUsageStats {
+		unsigned long long count;
+		unsigned long long first_seen;
+		unsigned long long last_seen;
+		unsigned long long sum_time;
+		unsigned long long min_time;
+		unsigned long long max_time;
+
+		ToolUsageStats() : count(0), first_seen(0), last_seen(0),
+		                   sum_time(0), min_time(0), max_time(0) {}
+
+		void add_timing(unsigned long long duration, unsigned long long timestamp) {
+			count++;
+			sum_time += duration;
+			if (duration < min_time || min_time == 0) {
+				if (duration) min_time = duration;
+			}
+			if (duration > max_time) {
+				max_time = duration;
+			}
+			if (first_seen == 0) {
+				first_seen = timestamp;
+			}
+			last_seen = timestamp;
+		}
+	};
+
+	// Tool usage counters: endpoint -> tool_name -> schema_name -> ToolUsageStats
+	typedef std::map<std::string, ToolUsageStats> SchemaStatsMap;
+	typedef std::map<std::string, SchemaStatsMap> ToolStatsMap;
+	typedef std::map<std::string, ToolStatsMap> ToolUsageStatsMap;
+	ToolUsageStatsMap tool_usage_stats;
+	pthread_mutex_t counters_lock;
+
+	// Friend function for tracking tool invocations
+	friend void track_tool_invocation(RAG_Tool_Handler*, const std::string&, const std::string&, const std::string&, unsigned long long);
+
+
 	/**
 	 * @brief Helper to extract string parameter from JSON
 	 *
@@ -326,11 +372,13 @@ public:
 	 * - timeout_ms: Operation timeout in milliseconds (default: 2000)
 	 *
 	 * @param ai_mgr Pointer to AI_Features_Manager for database access and configuration
+	 * @param cat_path Path to the catalog database (for logging)
 	 *
 	 * @see AI_Features_Manager
+	 * @see Discovery_Schema
 	 * @see GenAI_Thread
 	 */
-	RAG_Tool_Handler(AI_Features_Manager* ai_mgr);
+	RAG_Tool_Handler(AI_Features_Manager* ai_mgr, const std::string& cat_path = "");
 
 	/**
 	 * @brief Destructor
@@ -446,6 +494,19 @@ public:
 	 * @see init()
 	 */
 	void set_vector_db(SQLite3DB* db) { vector_db = db; }
+
+	/**
+	 * @brief Get tool usage statistics (thread-safe copy)
+	 * @return ToolUsageStatsMap copy with endpoint -> tool_name -> schema_name -> ToolUsageStats
+	 */
+	ToolUsageStatsMap get_tool_usage_stats();
+
+	/**
+	 * @brief Get tool usage statistics as SQLite3_result* with optional reset
+	 * @param reset If true, resets internal counters after capturing data
+	 * @return SQLite3_result* with columns: endpoint, tool, schema, count, first_seen, last_seen, sum_time, min_time, max_time. Caller must delete.
+	 */
+	SQLite3_result* get_tool_usage_stats_resultset(bool reset = false);
 };
 
 #endif /* CLASS_RAG_TOOL_HANDLER_H */
