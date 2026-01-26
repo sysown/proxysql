@@ -884,6 +884,8 @@ struct OpenAIEmbeddingProvider : public EmbeddingProvider {
         if (!url.empty() && url.back() == '/') url.pop_back();
         url += "/embeddings";
 
+        std::cerr << "    Calling OpenAI API: " << url << " (model=" << model << ", chunks=" << inputs.size() << ")\n";
+
         CURL* curl = curl_easy_init();
         if (!curl) throw std::runtime_error("curl_easy_init failed");
 
@@ -1105,6 +1107,8 @@ static size_t flush_embedding_batch(std::vector<PendingEmbedding>& pending,
                                     MySQLDB& db) {
     if (pending.empty()) return 0;
 
+    std::cerr << "  Generating embeddings for batch of " << pending.size() << " chunks...\n";
+
     std::vector<std::string> inputs;
     inputs.reserve(pending.size());
     for (const auto& p : pending) {
@@ -1120,6 +1124,7 @@ static size_t flush_embedding_batch(std::vector<PendingEmbedding>& pending,
 
     size_t count = pending.size();
     pending.clear();
+    std::cerr << "  Successfully stored " << count << " embeddings\n";
     return count;
 }
 
