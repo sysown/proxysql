@@ -627,6 +627,14 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
+	if (!strncasecmp("SELECT $$", query_no_space, strlen("SELECT $$"))) {
+		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
+		GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, const_cast<char*>(err_info.second));
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
