@@ -50,6 +50,8 @@ public:
 		char* mcp_query_endpoint_auth;          ///< Authentication for /mcp/query endpoint
 		char* mcp_admin_endpoint_auth;          ///< Authentication for /mcp/admin endpoint
 		char* mcp_cache_endpoint_auth;          ///< Authentication for /mcp/cache endpoint
+		char* mcp_rag_endpoint_auth;            ///< Authentication for /mcp/rag endpoint
+
 		int mcp_timeout_ms;                     ///< Request timeout in milliseconds (default: 30000)
 		// MySQL Tool Handler configuration
 		char* mcp_mysql_hosts;                  ///< Comma-separated list of MySQL hosts

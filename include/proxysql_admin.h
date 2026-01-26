@@ -566,6 +566,11 @@ class ProxySQL_Admin {
 	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
 	 */
 	void load_restapi_server();
+	/**
+	 * @brief Loads the MCP server config to runtime if all modules are ready, no-op otherwise.
+	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
+	 */
+	void load_mcp_server();
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);

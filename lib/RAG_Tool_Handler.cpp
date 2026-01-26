@@ -1180,12 +1180,12 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			// Build FTS query with filters
 			std::string sql = "SELECT c.chunk_id, c.doc_id, c.source_id, "
 				"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
-				"c.title, bm25(f) as score_fts_raw, "
+				"c.title, bm25(rag_fts_chunks) as score_fts_raw, "
 				"c.metadata_json, c.body "
 				"FROM rag_fts_chunks f "
 				"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 				"JOIN rag_documents d ON d.doc_id = c.doc_id "
-				"WHERE f MATCH '" + escape_fts_query(query) + "'";
+				"WHERE rag_fts_chunks MATCH '" + escape_fts_query(query) + "'";
 
 			// Apply filters using consolidated filter building function
 			if (!build_sql_filters(filters, sql)) {
@@ -1536,12 +1536,12 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				// Run FTS search with filters
 				std::string fts_sql = "SELECT c.chunk_id, c.doc_id, c.source_id, "
 					"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
-					"c.title, bm25(f) as score_fts_raw, "
+					"c.title, bm25(rag_fts_chunks) as score_fts_raw, "
 					"c.metadata_json "
 					"FROM rag_fts_chunks f "
 					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE f MATCH '" + escape_fts_query(query) + "'";
+					"WHERE rag_fts_chunks MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, fts_sql)) {
@@ -1919,7 +1919,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"FROM rag_fts_chunks f "
 					"JOIN rag_chunks c ON c.chunk_id = f.chunk_id "
 					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE f MATCH '" + escape_fts_query(query) + "'";
+					"WHERE rag_fts_chunks MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
 				if (!build_sql_filters(filters, fts_sql)) {
@@ -2002,7 +2002,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					fts_sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
 				}
 
-				fts_sql += " ORDER BY bm25(f) "
+				fts_sql += " ORDER BY bm25(rag_fts_chunks) "
 					"LIMIT " + std::to_string(candidates_k);
 
 				SQLite3_result* fts_result = execute_query(fts_sql.c_str());

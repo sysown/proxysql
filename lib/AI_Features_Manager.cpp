@@ -69,6 +69,11 @@ int AI_Features_Manager::init_vector_db() {
 		return -1;
 	}
 
+	// Enable SQLite extensions for vector_db
+	// Once enabled, SQLite loads extensions such as vec0 and rembed automatically.
+	// Refer - Admin_Bootstrap.cpp:590
+	(*proxy_sqlite3_enable_load_extension)(vector_db->get_db(), 1);
+
 	// Create tables for LLM cache
 	const char* create_llm_cache =
 		"CREATE TABLE IF NOT EXISTS llm_cache ("
@@ -82,7 +87,7 @@ int AI_Features_Manager::init_vector_db() {
 		"created_at INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
-	if (vector_db->execute(create_llm_cache) != 0) {
+	if (!vector_db->execute(create_llm_cache)) {
 		proxy_error("AI: Failed to create llm_cache table\n");
 		return -1;
 	}
@@ -99,7 +104,7 @@ int AI_Features_Manager::init_vector_db() {
 		"created_at INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
-	if (vector_db->execute(create_anomaly_patterns) != 0) {
+	if (!vector_db->execute(create_anomaly_patterns)) {
 		proxy_error("AI: Failed to create anomaly_patterns table\n");
 		return -1;
 	}
@@ -116,7 +121,7 @@ int AI_Features_Manager::init_vector_db() {
 		"timestamp INTEGER DEFAULT (strftime('%s' ,  'now'))"
 		");";
 
-	if (vector_db->execute(create_query_history) != 0) {
+	if (!vector_db->execute(create_query_history)) {
 		proxy_error("AI: Failed to create query_history table\n");
 		return -1;
 	}
@@ -127,10 +132,10 @@ int AI_Features_Manager::init_vector_db() {
 	// 1. LLM cache virtual table
 	const char* create_llm_vec =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS llm_cache_vec USING vec0("
-		"embedding float(1536)"
+		"embedding float[1536]"
 		");";
 
-	if (vector_db->execute(create_llm_vec) != 0) {
+	if (!vector_db->execute(create_llm_vec)) {
 		proxy_error("AI: Failed to create llm_cache_vec virtual table\n");
 		// Virtual table creation failure is not critical - log and continue
 		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without llm_cache_vec");
@@ -139,10 +144,10 @@ int AI_Features_Manager::init_vector_db() {
 	// 2. Anomaly patterns virtual table
 	const char* create_anomaly_vec =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS anomaly_patterns_vec USING vec0("
-		"embedding float(1536)"
+		"embedding float[1536]"
 		");";
 
-	if (vector_db->execute(create_anomaly_vec) != 0) {
+	if (!vector_db->execute(create_anomaly_vec)) {
 		proxy_error("AI: Failed to create anomaly_patterns_vec virtual table\n");
 		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without anomaly_patterns_vec");
 	}
@@ -150,10 +155,10 @@ int AI_Features_Manager::init_vector_db() {
 	// 3. Query history virtual table
 	const char* create_history_vec =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS query_history_vec USING vec0("
-		"embedding float(1536)"
+		"embedding float[1536]"
 		");";
 
-	if (vector_db->execute(create_history_vec) != 0) {
+	if (!vector_db->execute(create_history_vec)) {
 		proxy_error("AI: Failed to create query_history_vec virtual table\n");
 		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without query_history_vec");
 	}
@@ -181,7 +186,7 @@ int AI_Features_Manager::init_vector_db() {
 		"updated_at INTEGER NOT NULL DEFAULT (unixepoch())"
 		");";
 
-	if (vector_db->execute(create_rag_sources) != 0) {
+	if (!vector_db->execute(create_rag_sources)) {
 		proxy_error("AI: Failed to create rag_sources table\n");
 		return -1;
 	}
@@ -190,7 +195,7 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_rag_sources_enabled_idx =
 		"CREATE INDEX IF NOT EXISTS idx_rag_sources_enabled ON rag_sources(enabled);";
 
-	if (vector_db->execute(create_rag_sources_enabled_idx) != 0) {
+	if (!vector_db->execute(create_rag_sources_enabled_idx)) {
 		proxy_error("AI: Failed to create idx_rag_sources_enabled index\n");
 		return -1;
 	}
@@ -198,7 +203,7 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_rag_sources_backend_idx =
 		"CREATE INDEX IF NOT EXISTS idx_rag_sources_backend ON rag_sources(backend_type, backend_host, backend_port, backend_db, table_name);";
 
-	if (vector_db->execute(create_rag_sources_backend_idx) != 0) {
+	if (!vector_db->execute(create_rag_sources_backend_idx)) {
 		proxy_error("AI: Failed to create idx_rag_sources_backend index\n");
 		return -1;
 	}
@@ -217,7 +222,7 @@ int AI_Features_Manager::init_vector_db() {
 		"deleted INTEGER NOT NULL DEFAULT 0"
 		");";
 
-	if (vector_db->execute(create_rag_documents) != 0) {
+	if (!vector_db->execute(create_rag_documents)) {
 		proxy_error("AI: Failed to create rag_documents table\n");
 		return -1;
 	}
@@ -226,7 +231,7 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_rag_documents_source_updated_idx =
 		"CREATE INDEX IF NOT EXISTS idx_rag_documents_source_updated ON rag_documents(source_id, updated_at);";
 
-	if (vector_db->execute(create_rag_documents_source_updated_idx) != 0) {
+	if (!vector_db->execute(create_rag_documents_source_updated_idx)) {
 		proxy_error("AI: Failed to create idx_rag_documents_source_updated index\n");
 		return -1;
 	}
@@ -234,7 +239,7 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_rag_documents_source_deleted_idx =
 		"CREATE INDEX IF NOT EXISTS idx_rag_documents_source_deleted ON rag_documents(source_id, deleted);";
 
-	if (vector_db->execute(create_rag_documents_source_deleted_idx) != 0) {
+	if (!vector_db->execute(create_rag_documents_source_deleted_idx)) {
 		proxy_error("AI: Failed to create idx_rag_documents_source_deleted index\n");
 		return -1;
 	}
@@ -253,7 +258,7 @@ int AI_Features_Manager::init_vector_db() {
 		"deleted INTEGER NOT NULL DEFAULT 0"
 		");";
 
-	if (vector_db->execute(create_rag_chunks) != 0) {
+	if (!vector_db->execute(create_rag_chunks)) {
 		proxy_error("AI: Failed to create rag_chunks table\n");
 		return -1;
 	}
@@ -262,7 +267,7 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_rag_chunks_doc_idx =
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_chunks_doc_idx ON rag_chunks(doc_id, chunk_index);";
 
-	if (vector_db->execute(create_rag_chunks_doc_idx) != 0) {
+	if (!vector_db->execute(create_rag_chunks_doc_idx)) {
 		proxy_error("AI: Failed to create uq_rag_chunks_doc_idx index\n");
 		return -1;
 	}
@@ -270,7 +275,7 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_rag_chunks_source_doc_idx =
 		"CREATE INDEX IF NOT EXISTS idx_rag_chunks_source_doc ON rag_chunks(source_id, doc_id);";
 
-	if (vector_db->execute(create_rag_chunks_source_doc_idx) != 0) {
+	if (!vector_db->execute(create_rag_chunks_source_doc_idx)) {
 		proxy_error("AI: Failed to create idx_rag_chunks_source_doc index\n");
 		return -1;
 	}
@@ -278,7 +283,7 @@ int AI_Features_Manager::init_vector_db() {
 	const char* create_rag_chunks_deleted_idx =
 		"CREATE INDEX IF NOT EXISTS idx_rag_chunks_deleted ON rag_chunks(deleted);";
 
-	if (vector_db->execute(create_rag_chunks_deleted_idx) != 0) {
+	if (!vector_db->execute(create_rag_chunks_deleted_idx)) {
 		proxy_error("AI: Failed to create idx_rag_chunks_deleted index\n");
 		return -1;
 	}
@@ -292,7 +297,7 @@ int AI_Features_Manager::init_vector_db() {
 		"tokenize = 'unicode61'"
 		");";
 
-	if (vector_db->execute(create_rag_fts_chunks) != 0) {
+	if (!vector_db->execute(create_rag_fts_chunks)) {
 		proxy_error("AI: Failed to create rag_fts_chunks virtual table\n");
 		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without rag_fts_chunks");
 	}
@@ -306,7 +311,7 @@ int AI_Features_Manager::init_vector_db() {
 
 	std::string create_rag_vec_chunks_sql =
 		"CREATE VIRTUAL TABLE IF NOT EXISTS rag_vec_chunks USING vec0("
-		"embedding float(" + std::to_string(vector_dimension) + "), "
+		"embedding float[" + std::to_string(vector_dimension) + "], "
 		"chunk_id TEXT, "
 		"doc_id TEXT, "
 		"source_id INTEGER, "
@@ -315,7 +320,7 @@ int AI_Features_Manager::init_vector_db() {
 
 	const char* create_rag_vec_chunks = create_rag_vec_chunks_sql.c_str();
 
-	if (vector_db->execute(create_rag_vec_chunks) != 0) {
+	if (!vector_db->execute(create_rag_vec_chunks)) {
 		proxy_error("AI: Failed to create rag_vec_chunks virtual table\n");
 		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without rag_vec_chunks");
 	}
@@ -338,7 +343,7 @@ int AI_Features_Manager::init_vector_db() {
 		"JOIN rag_documents d ON d.doc_id = c.doc_id "
 		"WHERE c.deleted = 0 AND d.deleted = 0;";
 
-	if (vector_db->execute(create_rag_chunk_view) != 0) {
+	if (!vector_db->execute(create_rag_chunk_view)) {
 		proxy_error("AI: Failed to create rag_chunk_view view\n");
 		proxy_debug(PROXY_DEBUG_GENAI, 3, "Continuing without rag_chunk_view");
 	}
@@ -353,7 +358,7 @@ int AI_Features_Manager::init_vector_db() {
 		"last_error TEXT"
 		");";
 
-	if (vector_db->execute(create_rag_sync_state) != 0) {
+	if (!vector_db->execute(create_rag_sync_state)) {
 		proxy_error("AI: Failed to create rag_sync_state table\n");
 		return -1;
 	}
