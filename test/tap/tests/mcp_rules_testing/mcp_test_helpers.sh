@@ -51,15 +51,17 @@ exec_admin() {
 
 # Execute MySQL command via ProxySQL admin (silent mode)
 exec_admin_silent() {
+    set +e
     if [ -z "${PROXYSQL_ADMIN_PASSWORD}" ] || [ "${PROXYSQL_ADMIN_PASSWORD}" = "none" ]; then
         mysql -B -N -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
               -u "${PROXYSQL_ADMIN_USER}" \
-              -e "$1" 2>/dev/null
+              -e "$1" 2>&1 | { grep -vP "^mysql: \[Warning\].* insecure.$" || true; }
     else
         mysql -B -N -h "${PROXYSQL_ADMIN_HOST}" -P "${PROXYSQL_ADMIN_PORT}" \
               -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASSWORD}" \
-              -e "$1" 2>/dev/null
+              -e "$1" 2>&1 | { grep -vP "^mysql: \[Warning\].* insecure.$" || true; }
     fi
+    set -e
 }
 
 # Execute MySQL command directly on backend MySQL server
@@ -82,6 +84,7 @@ exec_mysql() {
 
 # Execute MySQL command directly on backend MySQL server (silent mode)
 exec_mysql_silent() {
+    set +e
     local db_param=""
     if [ -n "${MYSQL_DATABASE}" ]; then
         db_param="-D ${MYSQL_DATABASE}"
@@ -90,12 +93,13 @@ exec_mysql_silent() {
     if [ -z "${MYSQL_PASSWORD}" ] || [ "${MYSQL_PASSWORD}" = "none" ]; then
         mysql -B -N -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" \
               -u "${MYSQL_USER}" \
-              ${db_param} -e "$1" 2>/dev/null
+              ${db_param} -e "$1" 2>&1 | { grep -vP "^mysql: \[Warning\].* insecure.$" || true; }
     else
         mysql -B -N -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" \
               -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
-              ${db_param} -e "$1" 2>/dev/null
+              ${db_param} -e "$1" 2>&1 | { grep -vP "^mysql: \[Warning\].* insecure.$" || true; }
     fi
+    set -e
 }
 
 # Get endpoint URL for MCP requests
