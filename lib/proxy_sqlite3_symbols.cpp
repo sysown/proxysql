@@ -50,9 +50,17 @@ int (*proxy_sqlite3_prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, cons
 int (*proxy_sqlite3_open_v2)(const char*, sqlite3**, int, const char*) = sqlite3_open_v2;
 int (*proxy_sqlite3_exec)(sqlite3*, const char*, int (*)(void*,int,char**,char**), void*, char**) = sqlite3_exec;
 
-// Optional hooks used by sqlite-vec (function pointers will be set by LoadPlugin or remain NULL)
-void (*proxy_sqlite3_vec_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
-void (*proxy_sqlite3_rembed_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
+// Optional hooks used by sqlite-vec and sqlite-rembed
+// These are statically linked extensions that need to be initialized
+
+// Forward declarations for the extension init functions
+extern "C" int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+extern "C" int sqlite3_rembed_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+
+// Initialize the extension pointers to the statically linked functions
+// These allow Admin_Bootstrap.cpp to register them as auto-extensions
+int (*proxy_sqlite3_vec_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi) = sqlite3_vec_init;
+int (*proxy_sqlite3_rembed_init)(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi) = sqlite3_rembed_init;
 
 // Internal helpers used by admin stats batching; keep defaults as NULL
 
