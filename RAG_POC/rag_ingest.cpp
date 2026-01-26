@@ -835,11 +835,43 @@ static std::vector<float> pseudo_embedding(const std::string& text, int dim) {
     return v;
 }
 
+/**
+ * @brief Abstract base class for embedding generation providers
+ *
+ * Embedding providers generate vector embeddings from text input.
+ * This interface supports both stub (pseudo-embeddings for testing)
+ * and real OpenAI-compatible API providers.
+ *
+ * @note The embed() method accepts multiple inputs for batch processing,
+ *       which significantly reduces API calls for real providers.
+ */
 struct EmbeddingProvider {
     virtual ~EmbeddingProvider() = default;
+
+    /**
+     * @brief Generate embeddings for multiple text inputs
+     * @param inputs Vector of text strings to embed
+     * @param dim Expected output vector dimension
+     * @return Vector of embedding vectors (one per input)
+     *
+     * @note This method should handle all inputs in a single batch for
+     *       optimal performance with API-based providers.
+     */
     virtual std::vector<std::vector<float>> embed(const std::vector<std::string>& inputs, int dim) = 0;
 };
 
+/**
+ * @brief Stub embedding provider for testing without external API calls
+ *
+ * Generates deterministic pseudo-embeddings by hashing the input text.
+ * Useful for testing embedding workflows without:
+ * - Network dependencies
+ * - API rate limits
+ * - API costs
+ *
+ * The pseudo-embeddings are normalized and maintain consistent values
+ * for the same input text.
+ */
 struct StubEmbeddingProvider : public EmbeddingProvider {
     std::vector<std::vector<float>> embed(const std::vector<std::string>& inputs, int dim) override {
         std::vector<std::vector<float>> out;
@@ -853,6 +885,9 @@ struct CurlBuffer {
     std::string data;
 };
 
+/**
+ * @brief libcurl write callback for capturing HTTP response body
+ */
 static size_t curl_write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t total = size * nmemb;
     CurlBuffer* buf = static_cast<CurlBuffer*>(userp);
@@ -860,6 +895,27 @@ static size_t curl_write_cb(void* contents, size_t size, size_t nmemb, void* use
     return total;
 }
 
+/**
+ * @brief OpenAI-compatible API embedding provider
+ *
+ * Connects to OpenAI or OpenAI-compatible embedding services via HTTP.
+ * Supports batch processing by sending multiple inputs in a single API request.
+ *
+ * Features:
+ * - Configurable API endpoint (api_base)
+ * - Bearer token authentication
+ * - Request timeout configuration
+ * - Batch processing (sends multiple texts in one request)
+ * - Model and dimension parameters
+ *
+ * Compatible with:
+ * - OpenAI API (api.openai.com/v1)
+ * - Azure OpenAI
+ * - Any OpenAI-compatible service (e.g., synthetic.new, local models)
+ *
+ * @note Batching significantly reduces API overhead. For example, with batch_size=16,
+ *       100 chunks require only 7 API calls (16+16+16+16+16+16+4) instead of 100.
+ */
 struct OpenAIEmbeddingProvider : public EmbeddingProvider {
     std::string api_base;
     std::string api_key;
@@ -1101,6 +1157,33 @@ static void insert_vec(MySQLDB& db,
     db.execute(sql.str().c_str());
 }
 
+/**
+ * @brief Process a batch of pending chunks for embedding generation
+ *
+ * This function implements bulk embedding generation by:
+ * 1. Collecting input text from all pending chunks
+ * 2. Calling the embedding provider once with all inputs
+ * 3. Storing the resulting embeddings in rag_vec_chunks
+ *
+ * Batching significantly reduces API calls:
+ * - Without batching: N chunks = N API calls
+ * - With batching (batch_size=B): N chunks = ceil(N/B) API calls
+ *
+ * Example: 100 chunks with batch_size=16:
+ * - Without batching: 100 API calls
+ * - With batching: 7 API calls (16+16+16+16+16+16+4)
+ *
+ * @param pending Vector of pending chunks to embed
+ * @param embedder Embedding provider (stub or OpenAI)
+ * @param ecfg Embedding configuration (dimension, timeout, etc.)
+ * @param db Database connection for storing results
+ * @return Number of embeddings generated and stored
+ *
+ * @note Logs progress to stderr:
+ *       - "Generating embeddings for batch of N chunks..."
+ *       - "Calling OpenAI API: ... (model=X, chunks=N)" (OpenAI only)
+ *       - "Successfully stored N embeddings"
+ */
 static size_t flush_embedding_batch(std::vector<PendingEmbedding>& pending,
                                     EmbeddingProvider* embedder,
                                     const EmbeddingConfig& ecfg,
