@@ -1,8 +1,10 @@
-# RAG Ingestion Tool - Usage Guide
+# RAG Ingestion Tool - Usage Guide (MySQL Protocol Version)
 
 ## Overview
 
 `rag_ingest` reads data from MySQL, transforms it, chunks documents, builds full-text search indexes, and optionally generates vector embeddings for semantic search.
+
+**This version connects via MySQL protocol to a server that has SQLite as backend** (ProxySQL SQLite3 Server on port 6030). All SQLite queries, FTS5, and vec0 extensions work transparently through the gateway.
 
 ---
 
@@ -13,35 +15,43 @@
 cd RAG_POC
 make
 
-# 2. Create a RAG database with schema
-./rag_ingest /path/to/rag.db  # First run creates schema automatically
+# 2. Initialize the RAG database schema
+./rag_ingest init --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
 
-# 3. Configure your data source (via SQL)
-sqlite3 /path/to/rag.db < setup_source.sql
+# 3. Configure your data source (via MySQL protocol)
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag_db < setup_source.sql
 
 # 4. Run ingestion
-./rag_ingest /path/to/rag.db
+./rag_ingest ingest --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
 ```
 
 ---
 
 ## Step-by-Step Guide
 
-### Step 1: Create the RAG Database
+### Step 1: Initialize the RAG Database
 
 ```bash
-# From repository root
-cd RAG_POC
+# Using MySQL-style long options
+./rag_ingest init \
+  --host=127.0.0.1 \
+  --port=6030 \
+  --user=root \
+  --password=root \
+  --database=rag_index
 
-# Create empty database and load schema
-sqlite3 rag_index.db < schema.sql
+# Using short options
+./rag_ingest init -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
 
-# Verify schema loaded
-sqlite3 rag_index.db ".tables"
-# Expected output:
-# rag_chunks           rag_fts_chunks       rag_sources
-# rag_documents        rag_sync_state       rag_vec_chunks
+# Using defaults (host=127.0.0.1, port=6030)
+./rag_ingest init -u root -p root -D rag_index
 ```
+
+**What happens:**
+- Connects to SQLite3 Server via MySQL protocol (default: 127.0.0.1:6030)
+- Creates RAG schema tables if they don't exist
+- Creates FTS5 full-text search indexes
+- Creates vec0 vector similarity search indexes
 
 ### Step 2: Configure Your Data Source
 
@@ -53,11 +63,11 @@ INSERT INTO rag_sources (
     name,
     enabled,
     backend_type,
-    host,
-    port,
-    user,
-    pass,
-    db,
+    backend_host,
+    backend_port,
+    backend_user,
+    backend_pass,
+    backend_db,
     table_name,
     pk_column
 ) VALUES (
@@ -77,17 +87,54 @@ INSERT INTO rag_sources (
 ### Step 3: Run Ingestion
 
 ```bash
-./rag_ingest rag_index.db
+./rag_ingest ingest --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_index
 ```
 
 **What happens:**
-1. Connects to MySQL using credentials from `rag_sources`
+1. Connects to MySQL backend using credentials from `rag_sources`
 2. Executes `SELECT * FROM posts`
 3. For each row:
-   - Creates a document in `rag_documents`
+   - Creates a document in `rag_documents` (via MySQL protocol to SQLite backend)
    - Creates a chunk in `rag_chunks` (1 per document when chunking disabled)
    - Creates FTS entry in `rag_fts_chunks`
 4. Updates `rag_sync_state` with the max primary key value
+
+---
+
+## Command-Line Options
+
+### init
+
+Initialize database schema.
+
+```bash
+./rag_ingest init [OPTIONS]
+
+Options:
+  -h, --host=name     Connect to host (default: 127.0.0.1)
+  -P, --port=#        Port number to use (default: 6030)
+  -u, --user=name     User for login
+  -p, --password=name Password to use
+  -D, --database=name Database to use (required)
+  --vec-dim=#        Vector dimension for rag_vec_chunks table (default: 1536)
+  -?, --help          Show this help message
+```
+
+### ingest
+
+Run ingestion from configured sources.
+
+```bash
+./rag_ingest ingest [OPTIONS]
+
+Options:
+  -h, --host=name     Connect to host (default: 127.0.0.1)
+  -P, --port=#        Port number to use (default: 6030)
+  -u, --user=name     User for login
+  -p, --password=name Password to use
+  -D, --database=name Database to use (required)
+  -?, --help          Show this help message
+```
 
 ---
 
@@ -96,8 +143,16 @@ INSERT INTO rag_sources (
 ### Configuration 1: Basic Ingestion (No Chunking, No Embeddings)
 
 ```sql
-INSERT INTO rag_sources (name, enabled, backend_type, host, port, user, pass, db, table_name, pk_column)
-VALUES ('basic_source', 1, 'mysql', '127.0.0.1', 3306, 'root', 'pass', 'mydb', 'posts', 'Id');
+INSERT INTO rag_sources (
+    name, enabled, backend_type,
+    backend_host, backend_port, backend_user, backend_pass, backend_db,
+    table_name, pk_column
+)
+VALUES (
+    'basic_source', 1, 'mysql',
+    '127.0.0.1', 3306, 'root', 'pass', 'mydb',
+    'posts', 'Id'
+);
 
 -- chunking_json and embedding_json default to disabled
 ```
@@ -111,18 +166,15 @@ VALUES ('basic_source', 1, 'mysql', '127.0.0.1', 3306, 'root', 'pass', 'mydb', '
 Chunking splits long documents into smaller pieces for better retrieval precision.
 
 ```sql
-INSERT INTO rag_sources (name, enabled, backend_type, host, port, user, pass, db, table_name, pk_column, chunking_json)
+INSERT INTO rag_sources (
+    name, enabled, backend_type,
+    backend_host, backend_port, backend_user, backend_pass, backend_db,
+    table_name, pk_column, chunking_json
+)
 VALUES (
-    'chunked_source',
-    1,
-    'mysql',
-    '127.0.0.1',
-    3306,
-    'root',
-    'pass',
-    'mydb',
-    'posts',
-    'Id',
+    'chunked_source', 1, 'mysql',
+    '127.0.0.1', 3306, 'root', 'pass', 'mydb',
+    'posts', 'Id',
     '{
         "enabled": true,
         "unit": "chars",
@@ -142,18 +194,15 @@ VALUES (
 For testing without an external embedding service.
 
 ```sql
-INSERT INTO rag_sources (name, enabled, backend_type, host, port, user, pass, db, table_name, pk_column, chunking_json, embedding_json)
+INSERT INTO rag_sources (
+    name, enabled, backend_type,
+    backend_host, backend_port, backend_user, backend_pass, backend_db,
+    table_name, pk_column, chunking_json, embedding_json
+)
 VALUES (
-    'embedded_source_stub',
-    1,
-    'mysql',
-    '127.0.0.1',
-    3306,
-    'root',
-    'pass',
-    'mydb',
-    'posts',
-    'Id',
+    'embedded_source_stub', 1, 'mysql',
+    '127.0.0.1', 3306, 'root', 'pass', 'mydb',
+    'posts', 'Id',
     '{
         "enabled": true,
         "unit": "chars",
@@ -178,18 +227,15 @@ VALUES (
 With an OpenAI-compatible embedding service.
 
 ```sql
-INSERT INTO rag_sources (name, enabled, backend_type, host, port, user, pass, db, table_name, pk_column, chunking_json, embedding_json)
+INSERT INTO rag_sources (
+    name, enabled, backend_type,
+    backend_host, backend_port, backend_user, backend_pass, backend_db,
+    table_name, pk_column, chunking_json, embedding_json
+)
 VALUES (
-    'embedded_source_real',
-    1,
-    'mysql',
-    '127.0.0.1',
-    3306,
-    'root',
-    'pass',
-    'mydb',
-    'posts',
-    'Id',
+    'embedded_source_real', 1, 'mysql',
+    '127.0.0.1', 3306, 'root', 'pass', 'mydb',
+    'posts', 'Id',
     '{
         "enabled": true,
         "unit": "chars",
@@ -270,22 +316,20 @@ Controls what text is embedded. Example:
 By default, all columns from the source table are available. To map columns to document fields:
 
 ```sql
-INSERT INTO rag_sources (name, enabled, backend_type, host, port, user, pass, db, table_name, pk_column, doc_map_json)
+INSERT INTO rag_sources (
+    name, enabled, backend_type,
+    backend_host, backend_port, backend_user, backend_pass, backend_db,
+    table_name, pk_column, doc_map_json
+)
 VALUES (
-    'mapped_source',
-    1,
-    'mysql',
-    '127.0.0.1',
-    3306,
-    'root',
-    'pass',
-    'mydb',
-    'posts',
-    'Id',
+    'mapped_source', 1, 'mysql',
+    '127.0.0.1', 3306, 'root', 'pass', 'mydb',
+    'posts', 'Id',
     '{
-        "title": {"expr": "concat(Title, '' - '', Subtitle)"},
-        "body": {"col": "Content"},
-        "metadata": {"expr": "json_object(''id''', Id, ''score'', Score, ''tags'', Tags)"}
+        "doc_id": {"format": "posts:{Id}"},
+        "title": {"concat": [{"col": "Title"}]},
+        "body": {"concat": [{"col": "Content"}]},
+        "metadata": {"pick": ["Id", "Score", "Tags"]}
     }'
 );
 ```
@@ -311,7 +355,7 @@ WHERE source_id = 1;
 ### Single Run
 
 ```bash
-./rag_ingest rag_index.db
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
 ```
 
 ### Incremental Runs (Watermark)
@@ -320,10 +364,10 @@ The tool tracks the last processed primary key value in `rag_sync_state`. Subseq
 
 ```bash
 # First run: ingests all rows
-./rag_ingest rag_index.db
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
 
 # Second run: only ingests new rows
-./rag_ingest rag_index.db
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
 ```
 
 ---
@@ -332,7 +376,7 @@ The tool tracks the last processed primary key value in `rag_sync_state`. Subseq
 
 ```bash
 # Progress is printed to stderr
-./rag_ingest rag_index.db
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
 # Output:
 # Ingesting source_id=1 name=my_source backend=mysql table=posts
 #   progress: ingested_docs=1000 skipped_docs=50
@@ -345,9 +389,8 @@ The tool tracks the last processed primary key value in `rag_sync_state`. Subseq
 ## Verification
 
 ```bash
-sqlite3 rag_index.db <<SQL
-.load ../deps/sqlite3/sqlite3/vec0.so
-
+# Connect to SQLite3 Server via MySQL protocol
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag_index -e "
 -- Check counts
 SELECT 'documents' AS type, COUNT(*) FROM rag_documents
 UNION ALL
@@ -359,7 +402,7 @@ SELECT 'vectors', COUNT(*) FROM rag_vec_chunks;
 
 -- Check sync state
 SELECT source_id, mode, cursor_json FROM rag_sync_state;
-SQL
+"
 ```
 
 ---
@@ -369,44 +412,68 @@ SQL
 ### Workflow 1: Initial Setup
 
 ```bash
-# 1. Create database
-sqlite3 rag.db < schema.sql
+# 1. Initialize database
+./rag_ingest init -h 127.0.0.1 -P 6030 -u root -p root -D rag
 
 # 2. Add source
-sqlite3 rag.db "INSERT INTO rag_sources (name, enabled, backend_type, host, port, user, pass, db, table_name, pk_column, chunking_json)
-VALUES ('my_data', 1, 'mysql', 'localhost', 3306, 'root', 'pass', 'mydb', 'posts', 'Id', '{\"enabled\":true,\"chunk_size\":4000,\"overlap\":400}');"
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag -e "
+INSERT INTO rag_sources (name, enabled, backend_type,
+    backend_host, backend_port, backend_user, backend_pass, backend_db,
+    table_name, pk_column, chunking_json)
+VALUES ('my_data', 1, 'mysql',
+    'localhost', 3306, 'root', 'pass', 'mydb',
+    'posts', 'Id',
+    '{\"enabled\":true,\"chunk_size\":4000,\"overlap\":400}');
+"
 
 # 3. Ingest
-./rag_ingest rag.db
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag
 ```
 
 ### Workflow 2: Re-run with New Configuration
 
 ```bash
 # 1. Update source configuration
-sqlite3 rag.db "UPDATE rag_sources SET chunking_json='{\"enabled\":true,\"chunk_size\":2000}' WHERE source_id=1;"
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag -e "
+UPDATE rag_sources
+SET chunking_json='{\"enabled\":true,\"chunk_size\":2000}'
+WHERE source_id=1;
+"
 
 # 2. Clear existing data (optional - to re-chunk with new settings)
-sqlite3 rag.db "DELETE FROM rag_vec_chunks; DELETE FROM rag_fts_chunks; DELETE FROM rag_chunks; DELETE FROM rag_documents; DELETE FROM rag_sync_state;"
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag -e "
+DELETE FROM rag_vec_chunks WHERE source_id = 1;
+DELETE FROM rag_sync_state WHERE source_id = 1;
+DELETE FROM rag_chunks WHERE source_id = 1;
+DELETE FROM rag_documents WHERE source_id = 1;
+"
 
 # 3. Re-ingest
-./rag_ingest rag.db
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag
 ```
 
 ### Workflow 3: Add Embeddings to Existing Data
 
 ```bash
 # 1. Enable embeddings on existing source
-sqlite3 rag.db "UPDATE rag_sources SET embedding_json='{\"enabled\":true,\"provider\":\"stub\",\"dim\":1536}' WHERE source_id=1;"
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag -e "
+UPDATE rag_sources
+SET embedding_json='{\"enabled\":true,\"provider\":\"stub\",\"dim\":1536}'
+WHERE source_id=1;
+"
 
 # 2. Clear sync state (so it re-processes all rows)
-sqlite3 rag.db "DELETE FROM rag_sync_state WHERE source_id=1;"
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag -e "
+DELETE FROM rag_sync_state WHERE source_id=1;
+"
 
 # 3. Clear vectors only (keep documents and chunks)
-sqlite3 rag.db "DELETE FROM rag_vec_chunks;"
+mysql -h 127.0.0.1 -P 6030 -u root -proot rag -e "
+DELETE FROM rag_vec_chunks WHERE source_id=1;
+"
 
 # 4. Re-ingest (will skip existing documents, but generate embeddings)
-./rag_ingest rag.db
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag
 ```
 
 **Note:** v0 skips documents that already exist. To regenerate embeddings, clear `rag_documents` or use `WHERE` clause.
@@ -415,16 +482,22 @@ sqlite3 rag.db "DELETE FROM rag_vec_chunks;"
 
 ## Troubleshooting
 
-### "MySQL query failed"
+### "MySQL connect failed"
 
-- Verify MySQL credentials in `rag_sources`
-- Check MySQL server is running
+- Verify SQLite3 Server is running on port 6030
+- Check credentials are correct
+- Ensure database exists
+
+### "MySQL query failed" (backend)
+
+- Verify backend MySQL credentials in `rag_sources`
+- Check backend MySQL server is running (default: 127.0.0.1:3306)
 - Verify table and column names exist
 
-### "Failed to load vec0 extension"
+### "No enabled sources found"
 
-- Ensure `RAG_VEC0_EXT` environment variable points to valid `vec0.so`
-- Or run: `export RAG_VEC0_EXT=/path/to/vec0.so`
+- Run: `SELECT * FROM rag_sources WHERE enabled = 1;` via MySQL protocol
+- Ensure `enabled = 1` for your source
 
 ### "Failed to generate embeddings"
 
@@ -433,7 +506,34 @@ sqlite3 rag.db "DELETE FROM rag_vec_chunks;"
 - Check network connectivity to embedding service
 - Increase `timeout_ms` if needed
 
-### "No enabled sources found"
+---
 
-- Run: `SELECT * FROM rag_sources WHERE enabled = 1;`
-- Ensure `enabled = 1` for your source
+## Architecture Notes
+
+### MySQL Protocol Gateway
+
+This version uses ProxySQL's SQLite3 Server as a gateway:
+
+```
+rag_ingest --[MySQL Protocol]--> ProxySQL SQLite3 Server (port 6030) --> SQLite Backend
+                                     |
+                                     +-- FTS5 Full-Text Search
+                                     +-- vec0 Vector Similarity
+                                     +-- Standard SQL Queries
+```
+
+**Benefits:**
+- No local SQLite file dependencies
+- Centralized RAG index database
+- Concurrent access from multiple clients
+- Same schema and queries work transparently
+
+### Backend Data Source
+
+The tool connects to a separate MySQL/MariaDB server to fetch source data:
+
+```
+rag_ingest --[MySQL Protocol]--> Backend MySQL (port 3306) --> Source Tables
+```
+
+This is configured via `rag_sources` table (`backend_host`, `backend_port`, etc.).
