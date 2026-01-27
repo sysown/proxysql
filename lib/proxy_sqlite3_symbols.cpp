@@ -1,4 +1,5 @@
 #include "sqlite3.h"
+#include "sqlite-vec.h"
 #include <cstddef>
 #include "sqlite3db.h"
 // Forward declarations for proxy types
@@ -50,9 +51,10 @@ int (*proxy_sqlite3_prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, cons
 int (*proxy_sqlite3_open_v2)(const char*, sqlite3**, int, const char*) = sqlite3_open_v2;
 int (*proxy_sqlite3_exec)(sqlite3*, const char*, int (*)(void*,int,char**,char**), void*, char**) = sqlite3_exec;
 
-// Optional hooks used by sqlite-vec (function pointers will be set by LoadPlugin or remain NULL)
-void (*proxy_sqlite3_vec_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
-void (*proxy_sqlite3_rembed_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
+// Hooks for sqlite-vec and sqlite-rembed
+int (*proxy_sqlite3_vec_init)(sqlite3*, char**, const sqlite3_api_routines*) = sqlite3_vec_init;
+// TODO: Fix sqlite-rembed header inclusion and assign the function pointer properly
+int (*proxy_sqlite3_rembed_init)(sqlite3*, char**, const sqlite3_api_routines*) = NULL;
 
 // Internal helpers used by admin stats batching; keep defaults as NULL
 
