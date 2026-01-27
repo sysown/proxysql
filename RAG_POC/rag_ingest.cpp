@@ -196,6 +196,43 @@ struct MySQLDB {
     }
 
     /**
+     * @brief Verify connected server is ProxySQL SQLite3 Server
+     *
+     * Checks if the connected server is a SQLite Server by querying
+     * sqlite_master table. If not, logs an error and exits.
+     */
+    void verify_sqlite_server() {
+        // Try to query sqlite_master - this will only work on SQLite Server
+        if (mysql_query(conn, "SELECT name FROM sqlite_master LIMIT 1") != 0) {
+            std::cerr << "\n"
+                      << "========================================\n"
+                      << "ERROR: Not connected to SQLite Server!\n"
+                      << "========================================\n"
+                      << "\n"
+                      << "rag_ingest writes RAG index data to ProxySQL SQLite3 Server.\n"
+                      << "The server you connected to does not appear to be a SQLite Server.\n"
+                      << "\n"
+                      << "SQLite Server identification failed: sqlite_master table not found.\n"
+                      << "\n"
+                      << "Please ensure you are connecting to:\n"
+                      << "  - ProxySQL SQLite3 Server (default port: 6030)\n"
+                      << "  - NOT a regular MySQL/MariaDB server (port: 3306)\n"
+                      << "\n"
+                      << "Connection details:\n"
+                      << "  - Host: " << mysql_get_host_info(conn) << "\n"
+                      << "  - Server info: " << mysql_get_server_info(conn) << "\n"
+                      << "========================================\n";
+            std::exit(1);
+        }
+
+        // Free the result from the verification query
+        MYSQL_RES* res = mysql_store_result(conn);
+        if (res) {
+            mysql_free_result(res);
+        }
+    }
+
+    /**
      * @brief Connect to MySQL server
      * @param host Server hostname or IP
      * @param port Server port
@@ -213,6 +250,9 @@ struct MySQLDB {
         if (!mysql_real_connect(conn, host, user, pass, db, port, nullptr, 0)) {
             fatal(std::string("MySQL connect failed: ") + mysql_error(conn));
         }
+
+        // Verify we're connected to SQLite Server
+        verify_sqlite_server();
     }
 
     /**
