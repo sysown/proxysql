@@ -23,6 +23,7 @@ static const char* mcp_thread_variables_names[] = {
 	"query_endpoint_auth",
 	"admin_endpoint_auth",
 	"cache_endpoint_auth",
+	"rag_endpoint_auth",
 	"timeout_ms",
 	// MySQL Tool Handler configuration
 	"mysql_hosts",
@@ -48,6 +49,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_query_endpoint_auth = strdup("");
 	variables.mcp_admin_endpoint_auth = strdup("");
 	variables.mcp_cache_endpoint_auth = strdup("");
+	variables.mcp_rag_endpoint_auth = strdup("");
 	variables.mcp_timeout_ms = 30000;
 	// MySQL Tool Handler default values
 	variables.mcp_mysql_hosts = strdup("127.0.0.1");
@@ -83,6 +85,8 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		free(variables.mcp_admin_endpoint_auth);
 	if (variables.mcp_cache_endpoint_auth)
 		free(variables.mcp_cache_endpoint_auth);
+	if (variables.mcp_rag_endpoint_auth)
+		free(variables.mcp_rag_endpoint_auth);
 	// Free MySQL Tool Handler variables
 	if (variables.mcp_mysql_hosts)
 		free(variables.mcp_mysql_hosts);
@@ -198,6 +202,10 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%s", variables.mcp_cache_endpoint_auth ? variables.mcp_cache_endpoint_auth : "");
 		return 0;
 	}
+	if (!strcmp(name, "rag_endpoint_auth")) {
+		sprintf(val, "%s", variables.mcp_rag_endpoint_auth ? variables.mcp_rag_endpoint_auth : "");
+		return 0;
+	}
 	if (!strcmp(name, "timeout_ms")) {
 		sprintf(val, "%d", variables.mcp_timeout_ms);
 		return 0;
@@ -289,6 +297,12 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		if (variables.mcp_cache_endpoint_auth)
 			free(variables.mcp_cache_endpoint_auth);
 		variables.mcp_cache_endpoint_auth = strdup(value);
+		return 0;
+	}
+	if (!strcmp(name, "rag_endpoint_auth")) {
+		if (variables.mcp_rag_endpoint_auth)
+			free(variables.mcp_rag_endpoint_auth);
+		variables.mcp_rag_endpoint_auth = strdup(value);
 		return 0;
 	}
 	if (!strcmp(name, "timeout_ms")) {

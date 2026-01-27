@@ -40,6 +40,8 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 		expected_token = handler->variables.mcp_admin_endpoint_auth;
 	} else if (endpoint_name == "cache") {
 		expected_token = handler->variables.mcp_cache_endpoint_auth;
+	} else if (endpoint_name == "rag") {
+		expected_token = handler->variables.mcp_rag_endpoint_auth;
 	} else {
 		proxy_error("MCP authentication on %s: unknown endpoint\n", endpoint_name.c_str());
 		return false;
