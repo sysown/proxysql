@@ -196,6 +196,7 @@ public:
 		// Service endpoints
 		char* genai_embedding_uri;      ///< URI for embedding service (default: http://127.0.0.1:8013/embedding)
 		char* genai_rerank_uri;         ///< URI for reranking service (default: http://127.0.0.1:8012/rerank)
+		char* genai_embedding_model;    ///< Embedding model name (default: empty)
 
 		// Timeouts (in milliseconds)
 		int genai_embedding_timeout_ms; ///< Timeout for embedding requests (default: 30000)
