@@ -146,6 +146,22 @@ private:
 	 */
 	bool is_dangerous_query(const std::string& query);
 
+	/**
+	 * @brief Strip simple SQL comments from the start of a query
+	 *
+	 * Removes leading '-- ' style comments from SQL queries.
+	 * Handles multiple comment lines and whitespace before/after comments.
+	 * This is a simple pre-processing step to allow queries with leading comments.
+	 *
+	 * @param sql The SQL query that may have leading comments
+	 * @return SQL query with leading comments removed
+	 *
+	 * @note Only removes comments from the START of the query
+	 * @note Does not handle inline comments (comments within the query)
+	 * @note Does not handle block comments
+	 */
+	std::string strip_leading_comments(const std::string& sql);
+
 	// Friend function for tracking tool invocations
 	friend void track_tool_invocation(Query_Tool_Handler*, const std::string&, const std::string&, const std::string&, unsigned long long);
 

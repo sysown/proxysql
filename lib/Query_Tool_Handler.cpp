@@ -610,6 +610,35 @@ bool Query_Tool_Handler::is_dangerous_query(const std::string& query) {
 	return false;
 }
 
+std::string Query_Tool_Handler::strip_leading_comments(const std::string& sql) {
+	std::string result = sql;
+	size_t pos = 0;
+	size_t len = result.length();
+
+	// Skip leading whitespace
+	while (pos < len && isspace(result[pos])) {
+		pos++;
+	}
+
+	// Remove leading '-- ' comment lines
+	while (pos < len && result.substr(pos, 2) == "--") {
+		// Skip until end of line
+		while (pos < len && result[pos] != '\n') {
+			pos++;
+		}
+		// Skip the newline
+		if (pos < len && result[pos] == '\n') {
+			pos++;
+		}
+		// Skip leading whitespace after the comment
+		while (pos < len && isspace(result[pos])) {
+			pos++;
+		}
+	}
+
+	return result.substr(pos);
+}
+
 json Query_Tool_Handler::create_tool_schema(
 	const std::string& tool_name,
 	const std::string& description,
@@ -1748,6 +1777,9 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			}
 
 			delete qpo;
+
+			// Strip leading comments from query
+			sql = strip_leading_comments(sql);
 
 			// Continue with validation and execution
 			if (!validate_readonly_query(sql)) {

@@ -1049,6 +1049,52 @@ std::string MySQL_Tool_Handler::sample_distinct(
 	return result.dump();
 }
 
+/**
+ * @brief Strip simple SQL comments from the start of a query
+ *
+ * Removes leading '-- ' style comments from SQL queries.
+ * Handles multiple comment lines and whitespace before/after comments.
+ * This is a simple pre-processing step to allow queries with leading comments.
+ *
+ * @param sql The SQL query that may have leading comments
+ * @return SQL query with leading comments removed
+ *
+ * @note Only removes comments from the START of the query
+ * @note Does not handle inline comments (comments within the query)
+ * @note Does not handle \/\* *\/ style comments
+ */
+std::string MySQL_Tool_Handler::strip_leading_comments(const std::string& sql) {
+	std::string result = sql;
+	size_t pos = 0;
+	size_t len = result.length();
+
+	// Skip any leading whitespace
+	while (pos < len && isspace(result[pos])) {
+		pos++;
+	}
+
+	// Remove leading '-- ' comment lines
+	while (pos < len && result.substr(pos, 3) == "-- ") {
+		// Found a comment, skip to end of line
+		while (pos < len && result[pos] != '\n') {
+			pos++;
+		}
+
+		// Skip the newline
+		if (pos < len && result[pos] == '\n') {
+			pos++;
+		}
+
+		// Skip any leading whitespace before next comment
+		while (pos < len && isspace(result[pos])) {
+			pos++;
+		}
+	}
+
+	// Return the query without leading comments
+	return result.substr(pos);
+}
+
 std::string MySQL_Tool_Handler::run_sql_readonly(
 	const std::string& sql,
 	int max_rows,
@@ -1057,14 +1103,16 @@ std::string MySQL_Tool_Handler::run_sql_readonly(
 	json result;
 	result["success"] = false;
 
+	// Strip leading comments from the query
+	std::string query = strip_leading_comments(sql);
+
 	// Validate query is read-only
-	if (!validate_readonly_query(sql)) {
+	if (!validate_readonly_query(query)) {
 		result["error"] = "Query validation failed: not SELECT-only or contains dangerous keywords";
 		return result.dump();
 	}
 
 	// Add LIMIT if not present and not an aggregate query
-	std::string query = sql;
 	std::string upper = sql;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 

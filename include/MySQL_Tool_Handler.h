@@ -286,6 +286,22 @@ public:
 	);
 
 	/**
+	 * @brief Strip simple SQL comments from the start of a query
+	 *
+	 * Removes leading '-- ' style comments from SQL queries.
+	 * Handles multiple comment lines and whitespace before/after comments.
+	 * This is a simple pre-processing step to allow queries with leading comments.
+	 *
+	 * @param sql The SQL query that may have leading comments
+	 * @return SQL query with leading comments removed
+	 *
+	 * @note Only removes comments from the START of the query
+	 * @note Does not handle inline comments (comments within the query)
+	 * @note Does not handle block comments
+	 */
+	std::string strip_leading_comments(const std::string& sql);
+
+	/**
 	 * @brief Explain a query (EXPLAIN/EXPLAIN ANALYZE)
 	 * @param sql SQL query to explain
 	 * @return JSON with execution plan
