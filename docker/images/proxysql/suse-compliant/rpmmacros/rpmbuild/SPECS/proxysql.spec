@@ -15,7 +15,7 @@ Source: %{name}-%{version}.tar.gz
 URL: https://proxysql.com/
 Requires: gnutls
 Requires: (openssl >= 3.0.0 or openssl3 >= 3.0.0)
-#BuildRequires: systemd-rpm-macros
+BuildRequires: systemd-rpm-macros
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 Provides: user(%{name})
 Provides: group(%{name})
