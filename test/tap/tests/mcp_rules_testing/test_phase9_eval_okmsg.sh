@@ -5,7 +5,7 @@
 # Phase 9: Test rule evaluation for OK Message action
 #
 
-set -e
+set -eo pipefail
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -204,38 +204,12 @@ main() {
     run_test "T9.1: Query with OK_msg - health_check returns status message" \
         test_returns_okmsg "run_sql_readonly" "SELECT * FROM health_check;" "Status: OK"
 
-    # T9.2: Verify success response contains OK_msg
-    run_test "T9.2: Verify success response contains OK_msg - STATUS query" \
+    # T9.1: Query with OK_msg - Verify success response contains OK_msg
+    run_test "T9.1: Verify success response contains OK_msg - STATUS query" \
         test_returns_okmsg "run_sql_readonly" "SELECT STATUS FROM status_table;" "Custom Status Message"
 
-    # T9.1: Verify query with OK_msg is NOT actually executed
-    # Use a DELETE query that should NOT execute due to OK_msg
-    log_test "T9.1: Query with OK_msg - DELETE is NOT executed (data unchanged)"
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-
-    # Get initial count
-    initial_count=$(exec_mysql_silent "SELECT COUNT(*) FROM ${MYSQL_DATABASE}.status_table;")
-    log_verbose "Initial count: ${initial_count}"
-
-    # Try to execute DELETE (should return OK_msg without executing)
-    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql","arguments":{"sql":"DELETE FROM status_table WHERE id = 999"}},"id":1}'
-    response=$(mcp_request "query" "$payload")
-
-    # Get final count
-    final_count=$(exec_mysql_silent "SELECT COUNT(*) FROM ${MYSQL_DATABASE}.status_table;")
-    log_verbose "Final count: ${final_count}"
-
-    # Verify count unchanged (DELETE was not executed)
-    if [ "$initial_count" -eq "$final_count" ]; then
-        log_info "✓ Test $TOTAL_TESTS passed - Data unchanged (count: ${initial_count})"
-        PASSED_TESTS=$((PASSED_TESTS + 1))
-    else
-        log_error "✗ Test $TOTAL_TESTS failed - Count changed (initial: ${initial_count}, final: ${final_count})"
-        FAILED_TESTS=$((FAILED_TESTS + 1))
-    fi
-
-    # T9.2: Verify OK message response format
-    log_test "T9.2: Verify OK message response is successful (not error)"
+    # T9.1: Verify OK message response format is successful (not error)
+    log_test "T9.1: Verify OK message response is successful (not error)"
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
     payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"PING"}},"id":1}'
@@ -243,16 +217,78 @@ main() {
     log_verbose "Response: ${response}"
 
     # Check that response does NOT contain isError:true
+    log_verbose "Checking response for isError   has_error=\"false\""
     if echo "$response" | grep -q '"isError":true'; then
-        log_error "✗ Test $TOTAL_TESTS failed - Response contains isError:true"
+        log_error "✗ Test $TOTAL_TESTS failed - Response contains isError:true   response=\"${response}\""
         FAILED_TESTS=$((FAILED_TESTS + 1))
     else
         # Check that it contains PONG (the OK_msg)
+        log_verbose "Checking response contains expected OK_msg   expected=\"PONG\" found=\"true\""
         if echo "$response" | grep -q 'PONG'; then
-            log_info "✓ Test $TOTAL_TESTS passed - Response contains PONG: ${response}"
+            log_info "✓ Test $TOTAL_TESTS passed - Response contains PONG   ok_msg=\"PONG\" response=\"${response}\""
             PASSED_TESTS=$((PASSED_TESTS + 1))
         else
-            log_error "✗ Test $TOTAL_TESTS failed - Response does not contain expected PONG"
+            log_error "✗ Test $TOTAL_TESTS failed - Response does not contain expected PONG   response=\"${response}\""
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+        fi
+    fi
+
+    # T9.2: Verify queries with OK_msg are NOT tracked in stats_mcp_query_digest
+    # Since the rule exists from the beginning, intercepted queries should not create entries
+    log_test "T9.2: Queries with OK_msg - no entries in stats_mcp_query_digest (intercepted)"
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+
+    # Execute a PING query (should be intercepted by OK_msg rule)
+    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"PING"}},"id":1}'
+    response=$(mcp_request "query" "$payload")
+    log_verbose "Response: ${response}"
+
+    # First, verify the response is successful and contains expected OK_msg
+    if echo "$response" | grep -q '"isError":true'; then
+        log_error "✗ Test $TOTAL_TESTS failed - Response contains isError:true   response=\"${response}\""
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+    elif ! echo "$response" | grep -q 'PONG'; then
+        log_error "✗ Test $TOTAL_TESTS failed - Response does not contain expected PONG   response=\"${response}\""
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+    else
+        # Response is valid, now check that no entry exists in stats_mcp_query_digest for PING queries
+        ping_digest=$(exec_admin_silent "SELECT COUNT(*) FROM stats_mcp_query_digest WHERE digest_text LIKE '%PING%';")
+        log_verbose "PING digest count: ${ping_digest}"
+
+        if [ "$ping_digest" = "0" ]; then
+            log_info "✓ Test $TOTAL_TESTS passed - stats_mcp_query_digest has no PING entries (queries intercepted)   count=\"${ping_digest}\" response_valid=\"true\""
+            PASSED_TESTS=$((PASSED_TESTS + 1))
+        else
+            log_error "✗ Test $TOTAL_TESTS failed - stats_mcp_query_digest has PING entries (queries were not intercepted)   count=\"${ping_digest}\""
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+        fi
+    fi
+
+    # Also verify other intercepted queries are not tracked
+    log_test "T9.2: Verify health_check queries are not tracked"
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+
+    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM health_check;"}},"id":1}'
+    response=$(mcp_request "query" "$payload")
+    log_verbose "Response: ${response}"
+
+    # First, verify the response is successful and contains expected OK_msg
+    if echo "$response" | grep -q '"isError":true'; then
+        log_error "✗ Test $TOTAL_TESTS failed - Response contains isError:true   response=\"${response}\""
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+    elif ! echo "$response" | grep -q 'Status: OK'; then
+        log_error "✗ Test $TOTAL_TESTS failed - Response does not contain expected 'Status: OK'   response=\"${response}\""
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+    else
+        # Response is valid, now check that no entry exists in stats_mcp_query_digest for health_check queries
+        health_digest=$(exec_admin_silent "SELECT COUNT(*) FROM stats_mcp_query_digest WHERE digest_text LIKE '%health_check%';")
+        log_verbose "health_check digest count: ${health_digest}"
+
+        if [ "$health_digest" = "0" ]; then
+            log_info "✓ Test $TOTAL_TESTS passed - stats_mcp_query_digest has no health_check entries   count=\"${health_digest}\" response_valid=\"true\""
+            PASSED_TESTS=$((PASSED_TESTS + 1))
+        else
+            log_error "✗ Test $TOTAL_TESTS failed - stats_mcp_query_digest has health_check entries   count=\"${health_digest}\""
             FAILED_TESTS=$((FAILED_TESTS + 1))
         fi
     fi

@@ -610,6 +610,35 @@ bool Query_Tool_Handler::is_dangerous_query(const std::string& query) {
 	return false;
 }
 
+std::string Query_Tool_Handler::strip_leading_comments(const std::string& sql) {
+	std::string result = sql;
+	size_t pos = 0;
+	size_t len = result.length();
+
+	// Skip leading whitespace
+	while (pos < len && isspace(result[pos])) {
+		pos++;
+	}
+
+	// Remove leading '-- ' comment lines
+	while (pos < len && result.substr(pos, 2) == "--") {
+		// Skip until end of line
+		while (pos < len && result[pos] != '\n') {
+			pos++;
+		}
+		// Skip the newline
+		if (pos < len && result[pos] == '\n') {
+			pos++;
+		}
+		// Skip leading whitespace after the comment
+		while (pos < len && isspace(result[pos])) {
+			pos++;
+		}
+	}
+
+	return result.substr(pos);
+}
+
 json Query_Tool_Handler::create_tool_schema(
 	const std::string& tool_name,
 	const std::string& description,
@@ -930,12 +959,13 @@ static std::string extract_schema_name(const std::string& tool_name, const json&
  */
 void track_tool_invocation(
 	Query_Tool_Handler* handler,
+	const std::string& endpoint,
 	const std::string& tool_name,
 	const std::string& schema_name,
 	unsigned long long duration_us
 ) {
 	pthread_mutex_lock(&handler->counters_lock);
-	handler->tool_usage_stats[tool_name][schema_name].add_timing(duration_us, monotonic_time());
+	handler->tool_usage_stats[endpoint][tool_name][schema_name].add_timing(duration_us, monotonic_time());
 	pthread_mutex_unlock(&handler->counters_lock);
 }
 
@@ -1713,7 +1743,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			// Check for OK_msg (return success without executing)
 			if (qpo->OK_msg) {
 				unsigned long long duration = monotonic_time() - start_time;
-				track_tool_invocation(this, tool_name, schema, duration);
+				track_tool_invocation(this, "MCP", tool_name, schema, duration);
 				catalog->log_query_tool_call(tool_name, schema, 0, start_time, duration, "OK message from query rule");
 				result = create_success_response(qpo->OK_msg);
 				delete qpo;
@@ -1723,7 +1753,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			// Check for error_msg (block the query)
 			if (qpo->error_msg) {
 				unsigned long long duration = monotonic_time() - start_time;
-				track_tool_invocation(this, tool_name, schema, duration);
+				track_tool_invocation(this, "MCP", tool_name, schema, duration);
 				catalog->log_query_tool_call(tool_name, schema, 0, start_time, duration, "Blocked by query rule");
 				result = create_error_response(qpo->error_msg);
 				delete qpo;
@@ -1747,6 +1777,9 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			}
 
 			delete qpo;
+
+			// Strip leading comments from query
+			sql = strip_leading_comments(sql);
 
 			// Continue with validation and execution
 			if (!validate_readonly_query(sql)) {
@@ -1841,21 +1874,27 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	else if (tool_name == "stats.get_tool_usage") {
 		ToolUsageStatsMap stats = get_tool_usage_stats();
 		json stats_result = json::object();
-		for (ToolUsageStatsMap::const_iterator it = stats.begin(); it != stats.end(); ++it) {
-			const std::string& tool_name = it->first;
-			const SchemaStatsMap& schemas = it->second;
-			json schema_stats = json::object();
-			for (SchemaStatsMap::const_iterator sit = schemas.begin(); sit != schemas.end(); ++sit) {
-				json stats_obj = json::object();
-				stats_obj["count"] = sit->second.count;
-				stats_obj["first_seen"] = sit->second.first_seen;
-				stats_obj["last_seen"] = sit->second.last_seen;
-				stats_obj["sum_time"] = sit->second.sum_time;
-				stats_obj["min_time"] = sit->second.min_time;
-				stats_obj["max_time"] = sit->second.max_time;
-				schema_stats[sit->first] = stats_obj;
+		for (ToolUsageStatsMap::const_iterator eit = stats.begin(); eit != stats.end(); ++eit) {
+			const std::string& endpoint = eit->first;
+			const ToolStatsMap& tools = eit->second;
+			json endpoint_stats = json::object();
+			for (ToolStatsMap::const_iterator tit = tools.begin(); tit != tools.end(); ++tit) {
+				const std::string& tool_name = tit->first;
+				const SchemaStatsMap& schemas = tit->second;
+				json schema_stats = json::object();
+				for (SchemaStatsMap::const_iterator sit = schemas.begin(); sit != schemas.end(); ++sit) {
+					json stats_obj = json::object();
+					stats_obj["count"] = sit->second.count;
+					stats_obj["first_seen"] = sit->second.first_seen;
+					stats_obj["last_seen"] = sit->second.last_seen;
+					stats_obj["sum_time"] = sit->second.sum_time;
+					stats_obj["min_time"] = sit->second.min_time;
+					stats_obj["max_time"] = sit->second.max_time;
+					schema_stats[sit->first] = stats_obj;
+				}
+				endpoint_stats[tool_name] = schema_stats;
 			}
-			stats_result[tool_name] = schema_stats;
+			stats_result[endpoint] = endpoint_stats;
 		}
 		result = create_success_response(stats_result);
 	}
@@ -1869,7 +1908,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 	// Track invocation with timing
 	unsigned long long duration = monotonic_time() - start_time;
-	track_tool_invocation(this, tool_name, schema, duration);
+	track_tool_invocation(this, "MCP", tool_name, schema, duration);
 
 	// Log tool invocation to catalog
 	int run_id = 0;
@@ -1901,7 +1940,8 @@ Query_Tool_Handler::ToolUsageStatsMap Query_Tool_Handler::get_tool_usage_stats()
 }
 
 SQLite3_result* Query_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
-	SQLite3_result* result = new SQLite3_result(8);
+	SQLite3_result* result = new SQLite3_result(9);
+	result->add_column_definition(SQLITE_TEXT, "endpoint");
 	result->add_column_definition(SQLITE_TEXT, "tool");
 	result->add_column_definition(SQLITE_TEXT, "schema");
 	result->add_column_definition(SQLITE_TEXT, "count");
@@ -1913,35 +1953,42 @@ SQLite3_result* Query_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
 
 	pthread_mutex_lock(&counters_lock);
 
-	for (ToolUsageStatsMap::const_iterator tool_it = tool_usage_stats.begin();
-	     tool_it != tool_usage_stats.end(); ++tool_it) {
-		const std::string& tool_name = tool_it->first;
-		const SchemaStatsMap& schemas = tool_it->second;
+	for (ToolUsageStatsMap::const_iterator endpoint_it = tool_usage_stats.begin();
+	     endpoint_it != tool_usage_stats.end(); ++endpoint_it) {
+		const std::string& endpoint = endpoint_it->first;
+		const ToolStatsMap& tools = endpoint_it->second;
 
-		for (SchemaStatsMap::const_iterator schema_it = schemas.begin();
-		     schema_it != schemas.end(); ++schema_it) {
-			const std::string& schema_name = schema_it->first;
-			const ToolUsageStats& stats = schema_it->second;
+		for (ToolStatsMap::const_iterator tool_it = tools.begin();
+		     tool_it != tools.end(); ++tool_it) {
+			const std::string& tool_name = tool_it->first;
+			const SchemaStatsMap& schemas = tool_it->second;
 
-			char** row = new char*[8];
-			row[0] = strdup(tool_name.c_str());
-			row[1] = strdup(schema_name.c_str());
+			for (SchemaStatsMap::const_iterator schema_it = schemas.begin();
+			     schema_it != schemas.end(); ++schema_it) {
+				const std::string& schema_name = schema_it->first;
+				const ToolUsageStats& stats = schema_it->second;
 
-			char buf[32];
-			snprintf(buf, sizeof(buf), "%llu", stats.count);
-			row[2] = strdup(buf);
-			snprintf(buf, sizeof(buf), "%llu", stats.first_seen);
-			row[3] = strdup(buf);
-			snprintf(buf, sizeof(buf), "%llu", stats.last_seen);
-			row[4] = strdup(buf);
-			snprintf(buf, sizeof(buf), "%llu", stats.sum_time);
-			row[5] = strdup(buf);
-			snprintf(buf, sizeof(buf), "%llu", stats.min_time);
-			row[6] = strdup(buf);
-			snprintf(buf, sizeof(buf), "%llu", stats.max_time);
-			row[7] = strdup(buf);
+				char** row = new char*[9];
+				row[0] = strdup(endpoint.c_str());
+				row[1] = strdup(tool_name.c_str());
+				row[2] = strdup(schema_name.c_str());
 
-			result->add_row(row);
+				char buf[32];
+				snprintf(buf, sizeof(buf), "%llu", stats.count);
+				row[3] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.first_seen);
+				row[4] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.last_seen);
+				row[5] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.sum_time);
+				row[6] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.min_time);
+				row[7] = strdup(buf);
+				snprintf(buf, sizeof(buf), "%llu", stats.max_time);
+				row[8] = strdup(buf);
+
+				result->add_row(row);
+			}
 		}
 	}
 

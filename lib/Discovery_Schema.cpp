@@ -577,6 +577,21 @@ int Discovery_Schema::create_llm_tables() {
 	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_query ON llm_search_log(query);");
 	db->execute("CREATE INDEX IF NOT EXISTS idx_llm_search_log_time ON llm_search_log(searched_at);");
 
+	// RAG FTS search log table - tracks rag.search_fts operations
+	db->execute(
+		"CREATE TABLE IF NOT EXISTS rag_search_log ("
+		"  log_id      INTEGER PRIMARY KEY AUTOINCREMENT , "
+		"  query       TEXT NOT NULL , "
+		"  k           INTEGER NOT NULL , "
+		"  filters     TEXT , "
+		"  searched_at TEXT NOT NULL DEFAULT (datetime('now'))"
+		");"
+	);
+	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Discovery_Schema: rag_search_log table created/verified\n");
+
+	db->execute("CREATE INDEX IF NOT EXISTS idx_rag_search_log_query ON rag_search_log(query);");
+	db->execute("CREATE INDEX IF NOT EXISTS idx_rag_search_log_time ON rag_search_log(searched_at);");
+
 	// Query endpoint tool invocation log - tracks all MCP tool calls via /mcp/query/
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS query_tool_calls ("
@@ -2283,6 +2298,35 @@ int Discovery_Schema::log_llm_search(
 
 	if (rc != SQLITE_DONE) {
 		proxy_error("Failed to insert llm_search_log: %d\n", rc);
+		return -1;
+	}
+
+	return 0;
+}
+
+int Discovery_Schema::log_rag_search_fts(
+	const std::string& query,
+	int k,
+	const std::string& filters
+) {
+	sqlite3_stmt* stmt = NULL;
+	const char* sql = "INSERT INTO rag_search_log(query, k, filters) VALUES(?1, ?2 ,  ?3);";
+
+	int rc = db->prepare_v2(sql, &stmt);
+	if (rc != SQLITE_OK || !stmt) {
+		proxy_error("Failed to prepare rag_search_log insert: %d\n", rc);
+		return -1;
+	}
+
+	(*proxy_sqlite3_bind_text)(stmt, 1, query.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_int)(stmt, 2, k);
+	(*proxy_sqlite3_bind_text)(stmt, 3, filters.c_str(), -1, SQLITE_TRANSIENT);
+
+	rc = (*proxy_sqlite3_step)(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
+
+	if (rc != SQLITE_DONE) {
+		proxy_error("Failed to insert rag_search_log: %d\n", rc);
 		return -1;
 	}
 
