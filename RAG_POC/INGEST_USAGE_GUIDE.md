@@ -23,6 +23,9 @@ mysql -h 127.0.0.1 -P 6030 -u root -proot rag_db < setup_source.sql
 
 # 4. Run ingestion
 ./rag_ingest ingest --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
+
+# 5. For detailed logging (optional)
+./rag_ingest ingest --log-level=debug --host=127.0.0.1 -P 6030 -u root -p root -D rag_db
 ```
 
 ---
@@ -103,6 +106,42 @@ INSERT INTO rag_sources (
 
 ## Command-Line Options
 
+### Logging
+
+Control log verbosity with `--log-level` (available for all commands):
+
+```bash
+--log-level=LEVEL
+```
+
+| Level | Output | Use Case |
+|-------|--------|----------|
+| `error` | Only errors | Production scripts, minimal logging |
+| `warn` | Warnings + errors | Detect issues without verbose output |
+| `info` | **Default** | Progress, statistics, key events |
+| `debug` | Detailed info | SQL queries, configuration values, diagnostics |
+| `trace` | Everything | Fine-grained function entry/exit, development |
+
+**Examples:**
+```bash
+# Minimal output (errors only)
+./rag_ingest ingest --log-level=error --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
+
+# Default (info level)
+./rag_ingest ingest --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
+
+# Detailed debugging
+./rag_ingest ingest --log-level=debug --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
+
+# Maximum verbosity
+./rag_ingest ingest --log-level=trace --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
+```
+
+**Output Format:**
+- Timestamps: `[YYYY-MM-DD HH:MM:SS]`
+- Log levels: `[ERROR]`, `[WARN]`, `[INFO]`, `[DEBUG]`, `[TRACE]`
+- Color-coded (ANSI colors for terminal output)
+
 ### init
 
 Initialize database schema.
@@ -110,14 +149,19 @@ Initialize database schema.
 ```bash
 ./rag_ingest init [OPTIONS]
 
-Options:
+Common Options:
   -h, --host=name     Connect to host (default: 127.0.0.1)
   -P, --port=#        Port number to use (default: 6030)
   -u, --user=name     User for login
   -p, --password=name Password to use
   -D, --database=name Database to use (required)
-  --vec-dim=#        Vector dimension for rag_vec_chunks table (default: 1536)
   -?, --help          Show this help message
+
+Logging Options:
+  --log-level=LEVEL  Log verbosity: error, warn, info, debug, trace (default: info)
+
+Init Options:
+  --vec-dim=#        Vector dimension for rag_vec_chunks table (default: 1536)
 ```
 
 ### ingest
@@ -127,13 +171,40 @@ Run ingestion from configured sources.
 ```bash
 ./rag_ingest ingest [OPTIONS]
 
-Options:
+Common Options:
   -h, --host=name     Connect to host (default: 127.0.0.1)
   -P, --port=#        Port number to use (default: 6030)
   -u, --user=name     User for login
   -p, --password=name Password to use
   -D, --database=name Database to use (required)
   -?, --help          Show this help message
+
+Logging Options:
+  --log-level=LEVEL  Log verbosity: error, warn, info, debug, trace (default: info)
+```
+
+### query
+
+Vector similarity search using embeddings.
+
+```bash
+./rag_ingest query [OPTIONS]
+
+Common Options:
+  -h, --host=name     Connect to host (default: 127.0.0.1)
+  -P, --port=#        Port number to use (default: 6030)
+  -u, --user=name     User for login
+  -p, --password=name Password to use
+  -D, --database=name Database to use (required)
+  -?, --help          Show this help message
+
+Logging Options:
+  --log-level=LEVEL  Log verbosity: error, warn, info, debug, trace (default: info)
+
+Query Options:
+  -t, --text=text     Query text to search for (required)
+  -s, --source-id=#   Source ID to search (default: all enabled sources)
+  -l, --limit=#       Maximum results to return (default: 5)
 ```
 
 ---
@@ -372,17 +443,120 @@ The tool tracks the last processed primary key value in `rag_sync_state`. Subseq
 
 ---
 
-## Monitoring Progress
+## Transaction Handling
+
+### Per-Source Commits
+
+Each data source is processed in its own transaction:
+
+```text
+Source 1: BEGIN IMMEDIATE → ingest data → COMMIT  ✅
+Source 2: BEGIN IMMEDIATE → ingest data → ROLLBACK ❌ (error occurred)
+Source 3: BEGIN IMMEDIATE → ingest data → COMMIT  ✅
+```
+
+**Benefits:**
+- **Isolated failures**: If source 2 fails, sources 1 and 3 are still committed
+- **Shorter locks**: Each table is only locked during its own ingestion
+- **Better recovery**: Partial progress is preserved on failures
+- **Lower memory**: Changes are flushed per source instead of held until end
+
+### Transaction Logging
 
 ```bash
-# Progress is printed to stderr
 ./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
 # Output:
-# Ingesting source_id=1 name=my_source backend=mysql table=posts
-#   progress: ingested_docs=1000 skipped_docs=50
-#   progress: ingested_docs=2000 skipped_docs=100
-# Done source my_source ingested_docs=2500 skipped_docs=120
+[INFO] Processing source 1 of 3
+[DEBUG] Starting transaction for source 1...
+[INFO] Committing source 1...
+
+[INFO] Processing source 2 of 3
+[DEBUG] Starting transaction for source 2...
+[WARN] Rolling back source 2 due to errors
+
+[INFO] Processing source 3 of 3
+[DEBUG] Starting transaction for source 3...
+[INFO] Committing source 3...
+
+[INFO] === 'ingest' command complete ===
+  Succeeded: 2
+  Failed: 1
 ```
+
+### Multiple Sources Example
+
+```sql
+-- Configure multiple sources
+INSERT INTO rag_sources (name, enabled, backend_type, ...)
+VALUES
+  ('stack_overflow', 1, 'mysql', '127.0.0.1', 3306, ...),
+  ('github_issues', 1, 'mysql', '127.0.0.1', 3306, ...),
+  ('discussions', 1, 'mysql', '127.0.0.1', 3306, ...);
+```
+
+If `github_issues` fails (e.g., connection timeout), the other two sources are still ingested successfully.
+
+---
+
+## Monitoring Progress
+
+### Default Logging (INFO level)
+
+```bash
+./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
+# Output:
+[2026-01-28 12:34:56] [INFO] === RAG Ingestion Tool Starting ===
+[2026-01-28 12:34:56] [INFO] Loaded 1 enabled source(s)
+[2026-01-28 12:34:57] [INFO] === Starting ingestion for source_id=1, name=my_source ===
+[2026-01-28 12:34:58] [INFO] Backend query returned 10000 row(s) to process
+[2026-01-28 12:35:00] [INFO] Progress: ingested_docs=1000, skipped_docs=50, chunks=4000
+[2026-01-28 12:35:02] [INFO] Progress: ingested_docs=2000, skipped_docs=100, chunks=8000
+[2026-01-28 12:35:10] [INFO] === Source ingestion complete: my_source ===
+[2026-01-28 12:35:10] [INFO]   ingested_docs=9850, skipped_docs=150, total_chunks=39400
+[2026-01-28 12:35:10] [INFO]   embedding_batches=2463
+```
+
+### Detailed Logging (DEBUG level)
+
+```bash
+./rag_ingest ingest --log-level=debug -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
+# Output includes:
+# - Connection parameters
+# - SQL queries executed
+# - Configuration parsing (chunking, embeddings)
+# - Per-document operations
+# - Chunk counts per document
+# - Embedding batch operations
+# - Sync state updates
+```
+
+### Maximum Verbosity (TRACE level)
+
+```bash
+./rag_ingest ingest --log-level=trace -h 127.0.0.1 -P 6030 -u root -p root -D rag_index
+# Output includes EVERYTHING:
+# - Function entry/exit
+# - Individual SQL statement execution
+# - Per-chunk operations
+# - Internal state changes
+```
+
+### Progress Indicators
+
+| Interval | Trigger | Output |
+|----------|---------|--------|
+| Per-command | Start/end | `=== RAG Ingestion Tool Starting ===` |
+| Per-source | Start/end | `=== Starting ingestion for source_id=X, name=Y ===` |
+| Every 1000 docs | During processing | `Progress: ingested_docs=1000, skipped_docs=50, chunks=4000` |
+| Per-batch | Embeddings | `Generating embeddings for batch of 16 chunks...` |
+| End of source | Summary | `ingested_docs=9850, skipped_docs=150, total_chunks=39400` |
+
+### Understanding the Output
+
+- **ingested_docs**: New documents added to the index
+- **skipped_docs**: Documents already in the index (not re-processed)
+- **total_chunks**: Total chunks created across all ingested documents
+- **embedding_batches**: Number of embedding API calls made (for embedding-enabled sources)
 
 ---
 
@@ -505,6 +679,42 @@ DELETE FROM rag_vec_chunks WHERE source_id=1;
 - For `provider="openai"`: verify `api_base`, `api_key`, `model`
 - Check network connectivity to embedding service
 - Increase `timeout_ms` if needed
+
+### Too much / too little output
+
+- Use `--log-level=error` for production scripts (minimal output)
+- Use `--log-level=info` for normal operation (default)
+- Use `--log-level=debug` to see SQL queries and configuration values
+- Use `--log-level=trace` for development and deep troubleshooting
+
+### Debugging SQL queries
+
+```bash
+# Use --log-level=debug to see all SQL queries being executed
+./rag_ingest ingest --log-level=debug -h 127.0.0.1 -P 6030 -u root -p root -D rag_db
+# Output will include:
+# - SELECT queries to rag_sources, rag_sync_state, rag_documents
+# - INSERT statements for documents, chunks, FTS entries
+# - Backend SELECT query being built and executed
+```
+
+### Checking configuration values
+
+```bash
+# Use --log-level=debug to see parsed configuration
+./rag_ingest ingest --log-level=debug -h 127.0.0.1 -P 6030 -u root -p root -D rag_db
+# Output includes:
+# - Chunking config: enabled=yes, chunk_size=4000, overlap=400
+# - Embedding config: enabled=yes, provider=openai, model=text-embedding-3-small
+# - Watermark/resync values
+```
+
+### Performance issues
+
+- Use `--log-level=debug` to see embedding batch operations
+- Check `embedding_batches` count in final summary
+- Reduce `batch_size` in `embedding_json` if API timeouts occur
+- Increase `timeout_ms` for slower embedding services
 
 ---
 
