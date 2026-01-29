@@ -60,6 +60,23 @@ Supported providers include **OpenAI**, **Anthropic**, **Ollama** (local), **Coh
 ### 3. Full-Text Search (FTS5)
 Standard SQLite FTS5 capabilities are available for high-speed keyword searching over text data.
 
+### 4. RAG Index Management
+
+For automated ingestion of data into the RAG index, ProxySQL provides the **`rag_ingest`** command-line tool. This tool connects to SQLite3 Server via the MySQL protocol and orchestrates the extraction, chunking, embedding generation, and indexing of data from backend **MySQL** sources.
+
+Key features of `rag_ingest`:
+- **MySQL Protocol Connection**: Connects via standard MySQL protocol to port 6030
+- **Automated Chunking**: Character-based text splitting with configurable size and overlap
+- **Embedding Generation**: Support for `stub` (testing) and `openai` (OpenAI-compatible APIs)
+- **Bulk Processing**: Batch embedding generation for efficiency
+- **Incremental Ingestion**: Watermark-based updates for large datasets
+
+:::tip
+
+See the **[RAG Ingest Tool](../genai/rag_ingest)** documentation for detailed usage instructions, configuration examples, and workflow guides.
+
+:::
+
 ---
 
 ## Configuration & Management

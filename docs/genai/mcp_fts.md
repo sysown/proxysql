@@ -8,6 +8,21 @@ The FTS implementation is based on **SQLite FTS5** and is a foundational compone
 
 ---
 
+## Populating the FTS Index
+
+To create and populate the FTS index with your data, use the **[`rag_ingest`](./rag_ingest)** command-line tool. This tool:
+
+- Connects to SQLite3 Server via the MySQL protocol
+- Extracts data from backend MySQL sources
+- Chunks text according to configurable strategies
+- Embeds chunks into the FTS5 index for fast retrieval
+
+:::tip
+
+See the **[RAG Ingest Tool](./rag_ingest)** documentation for step-by-step instructions on configuring and running data ingestion.
+
+:::
+
 ## Key Features
 
 ### 1. BM25 Ranking
