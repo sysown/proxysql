@@ -323,11 +323,12 @@ private:
 	 *
 	 * @param filters JSON object containing filter parameters
 	 * @param sql Reference to SQL string to append conditions to
+	 * @param add_where_clause If true, adds 'WHERE 1=1' before filters (default: true)
 	 * @return true on success, false on validation error
 	 *
 	 * @see execute_tool()
 	 */
-	bool build_sql_filters(const json& filters, std::string& sql);
+	bool build_sql_filters(const json& filters, std::string& sql, bool add_where_clause = true);
 
 	/**
 	 * @brief Compute Reciprocal Rank Fusion score

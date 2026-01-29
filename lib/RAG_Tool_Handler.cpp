@@ -539,7 +539,12 @@ SQLite3_result* RAG_Tool_Handler::execute_parameterized_query(const char* query,
  *
  * @see execute_tool()
  */
-bool RAG_Tool_Handler::build_sql_filters(const json& filters, std::string& sql) {
+bool RAG_Tool_Handler::build_sql_filters(const json& filters, std::string& sql, bool add_where_clause) {
+	// Add WHERE clause base for filter conditions if requested
+	if (add_where_clause) {
+		sql += " WHERE 1=1";
+	}
+
 	// Apply filters with input validation to prevent SQL injection
 	if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
 		std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
@@ -1236,7 +1241,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				"WHERE rag_fts_chunks MATCH '" + escape_fts_query(query) + "'";
 
 			// Apply filters using consolidated filter building function
-			if (!build_sql_filters(filters, sql)) {
+			if (!build_sql_filters(filters, sql, false)) {
 				return create_error_response("Invalid filter parameters");
 			}
 
@@ -1407,22 +1412,27 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 			embedding_json += "]";
 
 			// Build vector search query using sqlite-vec syntax with filters
+			// Must use subquery approach: LIMIT must be at same query level as MATCH
 			std::string sql = "SELECT v.chunk_id, c.doc_id, c.source_id, "
 				"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
 				"c.title, v.distance as score_vec_raw, "
 				"c.metadata_json, c.body "
-				"FROM rag_vec_chunks v "
+				"FROM ("
+				"  SELECT chunk_id, distance "
+				"  FROM rag_vec_chunks "
+				"  WHERE embedding MATCH '" + escape_fts_query(embedding_json) + "' "
+				"  ORDER BY distance "
+				"  LIMIT " + std::to_string(k) + " "
+				") v "
 				"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
-				"JOIN rag_documents d ON d.doc_id = c.doc_id "
-				"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "'";
+				"JOIN rag_documents d ON d.doc_id = c.doc_id";
 
 			// Apply filters using consolidated filter building function
 			if (!build_sql_filters(filters, sql)) {
 				return create_error_response("Invalid filter parameters");
 			}
 
-			sql += " ORDER BY v.distance "
-				"LIMIT " + std::to_string(k);
+			sql += " ORDER BY v.distance";
 
 			SQLite3_result* db_result = execute_query(sql.c_str());
 			if (!db_result) {
@@ -1592,7 +1602,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"WHERE rag_fts_chunks MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
-				if (!build_sql_filters(filters, fts_sql)) {
+				if (!build_sql_filters(filters, fts_sql, false)) {
 					return create_error_response("Invalid filter parameters");
 				}
 
@@ -1705,98 +1715,29 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				}
 				embedding_json += "]";
 
+				// Build vector search query using sqlite-vec syntax with filters
+				// Must use subquery approach: LIMIT must be at same query level as MATCH
 				std::string vec_sql = "SELECT v.chunk_id, c.doc_id, c.source_id, "
 					"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
 					"c.title, v.distance as score_vec_raw, "
 					"c.metadata_json "
-					"FROM rag_vec_chunks v "
+					"FROM ("
+					"  SELECT chunk_id, distance "
+					"  FROM rag_vec_chunks "
+					"  WHERE embedding MATCH '" + escape_fts_query(embedding_json) + "' "
+					"  ORDER BY distance "
+					"  LIMIT " + std::to_string(vec_k) + " "
+					") v "
 					"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
-					"JOIN rag_documents d ON d.doc_id = c.doc_id "
-					"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "'";
+					"JOIN rag_documents d ON d.doc_id = c.doc_id";
 
 				// Apply filters using consolidated filter building function
+				// These filters are applied to the outer query after JOINs
 				if (!build_sql_filters(filters, vec_sql)) {
 					return create_error_response("Invalid filter parameters");
 				}
 
-				if (filters.contains("source_names") && filters["source_names"].is_array()) {
-					std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
-					if (!source_names.empty()) {
-						std::string source_list = "";
-						for (size_t i = 0; i < source_names.size(); ++i) {
-							if (i > 0) source_list += ",";
-							source_list += "'" + source_names[i] + "'";
-						}
-						vec_sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
-					}
-				}
-
-				if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
-					std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
-					if (!doc_ids.empty()) {
-						std::string doc_list = "";
-						for (size_t i = 0; i < doc_ids.size(); ++i) {
-							if (i > 0) doc_list += ",";
-							doc_list += "'" + doc_ids[i] + "'";
-						}
-						vec_sql += " AND c.doc_id IN (" + doc_list + ")";
-					}
-				}
-
-				// Metadata filters
-				if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
-					std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
-					if (!post_type_ids.empty()) {
-						// Filter by PostTypeId in metadata_json
-						std::string post_type_conditions = "";
-						for (size_t i = 0; i < post_type_ids.size(); ++i) {
-							if (i > 0) post_type_conditions += " OR ";
-							post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
-						}
-						vec_sql += " AND (" + post_type_conditions + ")";
-					}
-				}
-
-				if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
-					std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
-					if (!tags_any.empty()) {
-						// Filter by any of the tags in metadata_json Tags field
-						std::string tag_conditions = "";
-						for (size_t i = 0; i < tags_any.size(); ++i) {
-							if (i > 0) tag_conditions += " OR ";
-							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
-						}
-						vec_sql += " AND (" + tag_conditions + ")";
-					}
-				}
-
-				if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
-					std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
-					if (!tags_all.empty()) {
-						// Filter by all of the tags in metadata_json Tags field
-						std::string tag_conditions = "";
-						for (size_t i = 0; i < tags_all.size(); ++i) {
-							if (i > 0) tag_conditions += " AND ";
-							tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
-						}
-						vec_sql += " AND (" + tag_conditions + ")";
-					}
-				}
-
-				if (filters.contains("created_after") && filters["created_after"].is_string()) {
-					std::string created_after = filters["created_after"].get<std::string>();
-					// Filter by CreationDate in metadata_json
-					vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
-				}
-
-				if (filters.contains("created_before") && filters["created_before"].is_string()) {
-					std::string created_before = filters["created_before"].get<std::string>();
-					// Filter by CreationDate in metadata_json
-					vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
-				}
-
-				vec_sql += " ORDER BY v.distance "
-					"LIMIT " + std::to_string(vec_k);
+				vec_sql += " ORDER BY v.distance";
 
 				SQLite3_result* vec_result = execute_query(vec_sql.c_str());
 				if (!vec_result) {
@@ -1970,7 +1911,7 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					"WHERE rag_fts_chunks MATCH '" + escape_fts_query(query) + "'";
 
 				// Apply filters using consolidated filter building function
-				if (!build_sql_filters(filters, fts_sql)) {
+				if (!build_sql_filters(filters, fts_sql, false)) {
 					return create_error_response("Invalid filter parameters");
 				}
 
@@ -2103,107 +2044,30 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					}
 					candidate_list += "'";
 
+					// Build vector search query using sqlite-vec syntax with filters
+					// Must use subquery approach: LIMIT must be at same query level as MATCH
 					std::string vec_sql = "SELECT v.chunk_id, c.doc_id, c.source_id, "
 						"(SELECT name FROM rag_sources WHERE source_id = c.source_id) as source_name, "
 						"c.title, v.distance as score_vec_raw, "
 						"c.metadata_json "
-						"FROM rag_vec_chunks v "
+						"FROM ("
+						"  SELECT chunk_id, distance "
+						"  FROM rag_vec_chunks "
+						"  WHERE embedding MATCH '" + escape_fts_query(embedding_json) + "' "
+						"    AND chunk_id IN (" + candidate_list + ") "
+						"  ORDER BY distance "
+						"  LIMIT " + std::to_string(rerank_k) + " "
+						") v "
 						"JOIN rag_chunks c ON c.chunk_id = v.chunk_id "
-						"JOIN rag_documents d ON d.doc_id = c.doc_id "
-						"WHERE v.embedding MATCH '" + escape_fts_query(embedding_json) + "' "
-						"AND v.chunk_id IN (" + candidate_list + ")";
+						"JOIN rag_documents d ON d.doc_id = c.doc_id";
 
-					// Apply filters
-					if (filters.contains("source_ids") && filters["source_ids"].is_array()) {
-						std::vector<int> source_ids = get_json_int_array(filters, "source_ids");
-						if (!source_ids.empty()) {
-							std::string source_list = "";
-							for (size_t i = 0; i < source_ids.size(); ++i) {
-								if (i > 0) source_list += ",";
-								source_list += std::to_string(source_ids[i]);
-							}
-							vec_sql += " AND c.source_id IN (" + source_list + ")";
-						}
+					// Apply filters using consolidated filter building function
+					// These filters are applied to the outer query after JOINs
+					if (!build_sql_filters(filters, vec_sql)) {
+						return create_error_response("Invalid filter parameters");
 					}
 
-					if (filters.contains("source_names") && filters["source_names"].is_array()) {
-						std::vector<std::string> source_names = get_json_string_array(filters, "source_names");
-						if (!source_names.empty()) {
-							std::string source_list = "";
-							for (size_t i = 0; i < source_names.size(); ++i) {
-								if (i > 0) source_list += ",";
-								source_list += "'" + source_names[i] + "'";
-							}
-							vec_sql += " AND c.source_id IN (SELECT source_id FROM rag_sources WHERE name IN (" + source_list + "))";
-						}
-					}
-
-					if (filters.contains("doc_ids") && filters["doc_ids"].is_array()) {
-						std::vector<std::string> doc_ids = get_json_string_array(filters, "doc_ids");
-						if (!doc_ids.empty()) {
-							std::string doc_list = "";
-							for (size_t i = 0; i < doc_ids.size(); ++i) {
-								if (i > 0) doc_list += ",";
-								doc_list += "'" + doc_ids[i] + "'";
-							}
-							vec_sql += " AND c.doc_id IN (" + doc_list + ")";
-						}
-					}
-
-					// Metadata filters
-					if (filters.contains("post_type_ids") && filters["post_type_ids"].is_array()) {
-						std::vector<int> post_type_ids = get_json_int_array(filters, "post_type_ids");
-						if (!post_type_ids.empty()) {
-							// Filter by PostTypeId in metadata_json
-							std::string post_type_conditions = "";
-							for (size_t i = 0; i < post_type_ids.size(); ++i) {
-								if (i > 0) post_type_conditions += " OR ";
-								post_type_conditions += "json_extract(d.metadata_json, '$.PostTypeId') = " + std::to_string(post_type_ids[i]);
-							}
-							vec_sql += " AND (" + post_type_conditions + ")";
-						}
-					}
-
-					if (filters.contains("tags_any") && filters["tags_any"].is_array()) {
-						std::vector<std::string> tags_any = get_json_string_array(filters, "tags_any");
-						if (!tags_any.empty()) {
-							// Filter by any of the tags in metadata_json Tags field
-							std::string tag_conditions = "";
-							for (size_t i = 0; i < tags_any.size(); ++i) {
-								if (i > 0) tag_conditions += " OR ";
-								tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_any[i] + ">%'";
-							}
-							vec_sql += " AND (" + tag_conditions + ")";
-						}
-					}
-
-					if (filters.contains("tags_all") && filters["tags_all"].is_array()) {
-						std::vector<std::string> tags_all = get_json_string_array(filters, "tags_all");
-						if (!tags_all.empty()) {
-							// Filter by all of the tags in metadata_json Tags field
-							std::string tag_conditions = "";
-							for (size_t i = 0; i < tags_all.size(); ++i) {
-								if (i > 0) tag_conditions += " AND ";
-								tag_conditions += "json_extract(d.metadata_json, '$.Tags') LIKE '%<" + tags_all[i] + ">%'";
-							}
-							vec_sql += " AND (" + tag_conditions + ")";
-						}
-					}
-
-					if (filters.contains("created_after") && filters["created_after"].is_string()) {
-						std::string created_after = filters["created_after"].get<std::string>();
-						// Filter by CreationDate in metadata_json
-						vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') >= '" + created_after + "'";
-					}
-
-					if (filters.contains("created_before") && filters["created_before"].is_string()) {
-						std::string created_before = filters["created_before"].get<std::string>();
-						// Filter by CreationDate in metadata_json
-						vec_sql += " AND json_extract(d.metadata_json, '$.CreationDate') <= '" + created_before + "'";
-					}
-
-					vec_sql += " ORDER BY v.distance "
-						"LIMIT " + std::to_string(rerank_k);
+					vec_sql += " ORDER BY v.distance";
 
 					SQLite3_result* vec_result = execute_query(vec_sql.c_str());
 					if (!vec_result) {

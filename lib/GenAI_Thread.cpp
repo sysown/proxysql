@@ -4,6 +4,7 @@
 #include <cstring>
 #include <sstream>
 #include <algorithm>
+#include <string>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
@@ -39,6 +40,7 @@ static const char* genai_thread_variables_names[] = {
 	// Original GenAI variables
 	"threads",
 	"embedding_uri",
+	"embedding_model",
 	"rerank_uri",
 	"embedding_timeout_ms",
 	"rerank_timeout_ms",
@@ -156,6 +158,7 @@ GenAI_Threads_Handler::GenAI_Threads_Handler() {
 	variables.genai_threads = 4;
 	variables.genai_embedding_uri = strdup("http://127.0.0.1:8013/embedding");
 	variables.genai_rerank_uri = strdup("http://127.0.0.1:8012/rerank");
+	variables.genai_embedding_model = strdup("");
 	variables.genai_embedding_timeout_ms = 30000;
 	variables.genai_rerank_timeout_ms = 30000;
 
@@ -212,6 +215,8 @@ GenAI_Threads_Handler::~GenAI_Threads_Handler() {
 		free(variables.genai_embedding_uri);
 	if (variables.genai_rerank_uri)
 		free(variables.genai_rerank_uri);
+	if (variables.genai_embedding_model)
+		free(variables.genai_embedding_model);
 
 	// Free LLM bridge string variables
 	if (variables.genai_llm_provider)
@@ -376,6 +381,9 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 	if (!strcmp(name, "rerank_uri")) {
 		return strdup(variables.genai_rerank_uri ? variables.genai_rerank_uri : "");
 	}
+	if (!strcmp(name, "embedding_model")) {
+		return strdup(variables.genai_embedding_model ? variables.genai_embedding_model : "");
+	}
 	if (!strcmp(name, "embedding_timeout_ms")) {
 		char buf[64];
 		snprintf(buf, sizeof(buf), "%d", variables.genai_embedding_timeout_ms);
@@ -527,6 +535,12 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 		if (variables.genai_rerank_uri)
 			free(variables.genai_rerank_uri);
 		variables.genai_rerank_uri = strdup(value);
+		return true;
+	}
+	if (!strcmp(name, "embedding_model")) {
+		if (variables.genai_embedding_model)
+			free(variables.genai_embedding_model);
+		variables.genai_embedding_model = strdup(value);
 		return true;
 	}
 	if (!strcmp(name, "embedding_timeout_ms")) {
@@ -935,6 +949,7 @@ GenAI_EmbeddingResult GenAI_Threads_Handler::call_llama_batch_embedding(const st
 	// Build JSON request using nlohmann/json
 	json payload;
 	payload["input"] = texts;
+	payload["model"] = std::string(variables.genai_embedding_model);
 	std::string json_str = payload.dump();
 
 	// Configure curl
