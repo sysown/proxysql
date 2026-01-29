@@ -125,16 +125,16 @@ Control log verbosity with `--log-level` (available for all commands):
 **Examples:**
 ```bash
 # Minimal output (errors only)
-./rag_ingest ingest --log-level=error -h 127.0.0.1 -P 6030 -u root -p root -D rag_db
+./rag_ingest ingest --log-level=error --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
 
 # Default (info level)
-./rag_ingest ingest -h 127.0.0.1 -P 6030 -u root -p root -D rag_db
+./rag_ingest ingest --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
 
 # Detailed debugging
-./rag_ingest ingest --log-level=debug -h 127.0.0.1 -P 6030 -u root -p root -D rag_db
+./rag_ingest ingest --log-level=debug --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
 
 # Maximum verbosity
-./rag_ingest ingest --log-level=trace -h 127.0.0.1 -P 6030 -u root -p root -D rag_db
+./rag_ingest ingest --log-level=trace --host=127.0.0.1 --port=6030 --user=root --password=root --database=rag_db
 ```
 
 **Output Format:**
@@ -449,7 +449,7 @@ The tool tracks the last processed primary key value in `rag_sync_state`. Subseq
 
 Each data source is processed in its own transaction:
 
-```
+```text
 Source 1: BEGIN IMMEDIATE → ingest data → COMMIT  ✅
 Source 2: BEGIN IMMEDIATE → ingest data → ROLLBACK ❌ (error occurred)
 Source 3: BEGIN IMMEDIATE → ingest data → COMMIT  ✅

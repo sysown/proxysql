@@ -122,6 +122,7 @@
 #include <sstream>
 #include <chrono>
 #include <ctime>
+#include <cctype>
 
 #include <iostream>
 #include <string>
@@ -206,7 +207,9 @@ struct Logger {
             auto now = std::chrono::system_clock::now();
             auto time = std::chrono::system_clock::to_time_t(now);
             char time_buf[64];
-            std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&time));
+            struct tm timeinfo;
+            localtime_r(&time, &timeinfo);
+            std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
             out << "[" << time_buf << "] ";
         }
 
@@ -1226,8 +1229,6 @@ struct OpenAIEmbeddingProvider : public EmbeddingProvider {
                       ", inputs=" + std::to_string(inputs.size()) +
                       ", dim=" + std::to_string(dim));
 
-        std::cerr << "    Calling OpenAI API: " << url << " (model=" << model << ", chunks=" << inputs.size() << ")\n";
-
         CURL* curl = curl_easy_init();
         if (!curl) throw std::runtime_error("curl_easy_init failed");
 
@@ -1523,7 +1524,6 @@ static size_t flush_embedding_batch(std::vector<PendingEmbedding>& pending,
     if (pending.empty()) return 0;
 
     g_logger.info(std::string("Generating embeddings for batch of ") + std::to_string(pending.size()) + " chunks...");
-    std::cerr << "  Generating embeddings for batch of " << pending.size() << " chunks...\n";
 
     g_logger.trace("Building input texts for embedding batch...");
     std::vector<std::string> inputs;
@@ -1545,7 +1545,6 @@ static size_t flush_embedding_batch(std::vector<PendingEmbedding>& pending,
     size_t count = pending.size();
     pending.clear();
     g_logger.info(std::string("Successfully stored ") + std::to_string(count) + " embeddings");
-    std::cerr << "  Successfully stored " << count << " embeddings\n";
     return count;
 }
 
@@ -1558,14 +1557,9 @@ static void ingest_source(MySQLDB& db, const RagSource& src) {
                   ", name=" + src.name +
                   ", backend=" + src.backend_type +
                   ", table=" + src.table_name + " ===");
-    std::cerr << "Ingesting source_id=" << src.source_id
-              << " name=" << src.name
-              << " backend=" << src.backend_type
-              << " table=" << src.table_name << "\n";
 
     if (src.backend_type != "mysql") {
         g_logger.warn(std::string("Skipping source ") + src.name + ": backend_type '" + src.backend_type + "' not supported");
-        std::cerr << "  Skipping: backend_type not supported in v0.\n";
         return;
     }
 
@@ -1718,8 +1712,6 @@ static void ingest_source(MySQLDB& db, const RagSource& src) {
             g_logger.info(std::string("Progress: ingested_docs=") + std::to_string(ingested_docs) +
                          ", skipped_docs=" + std::to_string(skipped_docs) +
                          ", chunks=" + std::to_string(total_chunks));
-            std::cerr << "  progress: ingested_docs=" << ingested_docs
-                      << " skipped_docs=" << skipped_docs << "\n";
         }
     }
 
@@ -1753,10 +1745,6 @@ static void ingest_source(MySQLDB& db, const RagSource& src) {
     if (ecfg.enabled) {
         g_logger.info(std::string("  embedding_batches=") + std::to_string(embedding_batches));
     }
-
-    std::cerr << "Done source " << src.name
-              << " ingested_docs=" << ingested_docs
-              << " skipped_docs=" << skipped_docs << "\n";
 }
 
 // ===========================================================================
@@ -1915,7 +1903,6 @@ static bool init_schema(MySQLDB& db, int vec_dim = 1536) {
             << ")";
     if (!db.try_execute(vec_sql.str().c_str())) {
         g_logger.warn("vec0 table creation failed (sqlite-vec extension not available). Vector embeddings will be disabled.");
-        std::cerr << "Warning: vec0 table creation failed (sqlite-vec extension not available). Vector embeddings will be disabled.\n";
     } else {
         g_logger.trace("rag_vec_chunks vec0 table created");
     }
@@ -1991,7 +1978,9 @@ struct ConnParams {
  */
 static LogLevel parse_log_level(const std::string& level_str) {
     std::string lower = level_str;
-    for (char& c : lower) c = std::tolower(c);
+    for (char& c : lower) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
 
     if (lower == "error") return LogLevel::ERROR;
     if (lower == "warn" || lower == "warning") return LogLevel::WARN;
