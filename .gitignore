@@ -8,6 +8,11 @@
 .docusaurus
 .cache-loader
 
+# Compiled JavaScript
+*.js
+!src/**/*.jsx
+!scripts/**/*.js
+
 # Misc
 .DS_Store
 .env.local

@@ -100,8 +100,27 @@ const sidebars: SidebarsConfig = {
         'genai/mcp_endpoints',
         'genai/mcp_autodiscovery',
         'genai/nl2sql',
-        'genai/rag_ingest',
-        'genai/mcp_fts',
+        {
+          type: 'category',
+          label: 'RAG',
+          items: [
+            {
+              type: 'doc',
+              id: 'genai/rag_overview',
+              label: 'Overview',
+            },
+            {
+              type: 'doc',
+              id: 'genai/rag_ingest',
+              label: 'Ingest CLI',
+            },
+            {
+              type: 'doc',
+              id: 'genai/mcp_fts',
+              label: 'Full-Text Search (FTS)',
+            },
+          ],
+        },
         {
           type: 'category',
           label: 'MCP Tools',

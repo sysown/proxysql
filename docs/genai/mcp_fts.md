@@ -19,7 +19,7 @@ To create and populate the FTS index with your data, use the **[`rag_ingest`](./
 
 :::tip
 
-See the **[RAG Ingest Tool](./rag_ingest)** documentation for step-by-step instructions on configuring and running data ingestion.
+See the **[RAG Ingest CLI](./rag_ingest)** documentation for step-by-step instructions on configuring and running data ingestion.
 
 :::
 

@@ -1,4 +1,10 @@
-# RAG Ingest Tool (`rag_ingest`)
+# RAG Ingest CLI (`rag_ingest`)
+
+:::tip
+
+See [RAG Overview](./rag_overview.md) for an introduction to ProxySQL's RAG capabilities, architecture, and use cases.
+
+:::
 
 ## Overview
 
@@ -707,6 +713,7 @@ MySQL connect failed: Access denied for user 'blog_user'@'localhost'
 
 ## Related Documentation
 
+- [RAG Overview](./rag_overview.md) - Introduction to ProxySQL RAG features and architecture
 - [SQLite3 Server](../features/sqlite3_server.md) - Gateway architecture and configuration
 - [RAG Tools](./mcp_tools_rag.md) - MCP endpoint tools for querying the RAG index
 - [Full-Text Search](./mcp_fts.md) - FTS5 search capabilities

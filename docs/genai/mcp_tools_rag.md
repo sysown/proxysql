@@ -1,5 +1,11 @@
 # RAG Tools (`/mcp/rag`)
 
+:::tip
+
+See [RAG Overview](./rag_overview.md) for an introduction to ProxySQL's RAG capabilities, architecture, and use cases.
+
+:::
+
 The tools available at the `/mcp/rag` endpoint are designed for Retrieval Augmented Generation (RAG) workflows, including advanced search and source data retrieval.
 
 ## Search Tools

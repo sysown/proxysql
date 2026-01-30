@@ -73,7 +73,7 @@ Key features of `rag_ingest`:
 
 :::tip
 
-See the **[RAG Ingest Tool](../genai/rag_ingest)** documentation for detailed usage instructions, configuration examples, and workflow guides.
+See the **[RAG Ingest CLI](../genai/rag_ingest)** documentation for detailed usage instructions, configuration examples, and workflow guides.
 
 :::
 
