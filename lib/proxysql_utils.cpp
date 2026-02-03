@@ -741,3 +741,41 @@ std::string get_client_addr(struct sockaddr* client_addr) {
 
 	return str_client_addr;
 }
+
+std::string sql_escape(const std::string& input) {
+	std::string output;
+	output.reserve(input.size() * 2);
+	for (char c : input) {
+		if (c == '\'') {
+			output += "''";
+		} else if (c == '\\') {
+			output += "\\\\";
+		} else {
+			output += c;
+		}
+	}
+	return output;
+}
+
+int calculate_percentile_from_histogram(
+	const std::vector<int>& buckets,
+	const std::vector<int>& thresholds,
+	double percentile
+) {
+	int total = 0;
+	for (int b : buckets) total += b;
+
+	if (total == 0) return 0;
+
+	int target = (int)(total * percentile);
+	int cumulative = 0;
+
+	for (size_t i = 0; i < buckets.size() && i < thresholds.size(); i++) {
+		cumulative += buckets[i];
+		if (cumulative >= target) {
+			return thresholds[i];
+		}
+	}
+
+	return thresholds.empty() ? 0 : thresholds.back();
+}

@@ -32,8 +32,8 @@ bool MCP_JSONRPC_Resource::authenticate_request(const httpserver::http_request& 
 
 	if (endpoint_name == "config") {
 		expected_token = handler->variables.mcp_config_endpoint_auth;
-	} else if (endpoint_name == "observe") {
-		expected_token = handler->variables.mcp_observe_endpoint_auth;
+	} else if (endpoint_name == "stats") {
+		expected_token = handler->variables.mcp_stats_endpoint_auth;
 	} else if (endpoint_name == "query") {
 		expected_token = handler->variables.mcp_query_endpoint_auth;
 	} else if (endpoint_name == "admin") {

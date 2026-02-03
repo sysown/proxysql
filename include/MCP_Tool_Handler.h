@@ -1,11 +1,9 @@
 #ifndef CLASS_MCP_TOOL_HANDLER_H
 #define CLASS_MCP_TOOL_HANDLER_H
 
-#include "cpp.h"
 #include <string>
-#include <memory>
+#include "cpp.h"
 
-// Include JSON library
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -14,7 +12,7 @@ using json = nlohmann::json;
  * @brief Base class for all MCP Tool Handlers
  *
  * This class defines the interface that all tool handlers must implement.
- * Each endpoint (config, query, admin, cache, observe) will have its own
+ * Each endpoint (config, query, admin, cache, stats) will have its own
  * dedicated tool handler that provides specific tools for that endpoint's purpose.
  *
  * Tool handlers are responsible for:
@@ -183,6 +181,19 @@ protected:
 		}
 		return response;
 	}
+
+	/**
+	 * @brief Convert a SQLite3_result into a JSON array of row objects.
+	 *
+	 * Each row becomes a JSON object keyed by column name. Field values
+	 * that look numeric are stored as integers or doubles; NULL fields
+	 * become JSON null; everything else is stored as a string.
+	 *
+	 * @param resultset The SQLite3_result to convert (may be NULL).
+	 * @param cols      Number of columns in the result set.
+	 * @return JSON array of row objects (empty array when resultset is NULL or has no rows).
+	 */
+	static json resultset_to_json(SQLite3_result* resultset, int cols);
 };
 
 #endif /* CLASS_MCP_TOOL_HANDLER_H */

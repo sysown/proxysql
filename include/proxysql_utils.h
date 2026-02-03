@@ -357,6 +357,27 @@ static inline void set_thread_name(const char(&name)[LEN], const bool en = true)
 std::string get_client_addr(struct sockaddr* client_addr);
 
 /**
+ * @brief Escape single quotes in a string for safe SQL insertion.
+ * @param input The string to escape.
+ * @return A new string with single quotes doubled and backslashes escaped.
+ */
+std::string sql_escape(const std::string& input);
+
+/**
+ * @brief Calculate an approximate percentile value from histogram bucket counts.
+ * @param buckets Vector of counts per histogram bucket.
+ * @param thresholds Vector of upper-bound threshold values for each bucket (same length as buckets).
+ * @param percentile The percentile to calculate, in the range [0.0, 1.0].
+ * @return The threshold value of the bucket in which the target percentile falls,
+ *         or 0 if the buckets are empty.
+ */
+int calculate_percentile_from_histogram(
+	const std::vector<int>& buckets,
+	const std::vector<int>& thresholds,
+	double percentile
+);
+
+/**
  * @brief Check if a port is available for binding
  *
  * Creates a temporary socket and attempts to bind to the specified port

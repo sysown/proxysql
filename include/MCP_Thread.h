@@ -15,7 +15,7 @@ class Config_Tool_Handler;
 class Query_Tool_Handler;
 class Admin_Tool_Handler;
 class Cache_Tool_Handler;
-class Observe_Tool_Handler;
+class Stats_Tool_Handler;
 class AI_Tool_Handler;
 class RAG_Tool_Handler;
 
@@ -46,7 +46,7 @@ public:
 		int mcp_port;                           ///< HTTP/HTTPS port for MCP server (default: 6071)
 		bool mcp_use_ssl;                       ///< Enable/disable SSL/TLS (default: true)
 		char* mcp_config_endpoint_auth;         ///< Authentication for /mcp/config endpoint
-		char* mcp_observe_endpoint_auth;        ///< Authentication for /mcp/observe endpoint
+		char* mcp_stats_endpoint_auth;          ///< Authentication for /mcp/stats endpoint
 		char* mcp_query_endpoint_auth;          ///< Authentication for /mcp/query endpoint
 		char* mcp_admin_endpoint_auth;          ///< Authentication for /mcp/admin endpoint
 		char* mcp_cache_endpoint_auth;          ///< Authentication for /mcp/cache endpoint
@@ -98,7 +98,7 @@ public:
 	 * - query_tool_handler: /mcp/query endpoint (includes two-phase discovery tools)
 	 * - admin_tool_handler: /mcp/admin endpoint
 	 * - cache_tool_handler: /mcp/cache endpoint
-	 * - observe_tool_handler: /mcp/observe endpoint
+	 * - stats_tool_handler: /mcp/stats endpoint
 	 * - ai_tool_handler: /mcp/ai endpoint
 	 * - rag_tool_handler: /mcp/rag endpoint
 	 */
@@ -106,7 +106,7 @@ public:
 	Query_Tool_Handler* query_tool_handler;
 	Admin_Tool_Handler* admin_tool_handler;
 	Cache_Tool_Handler* cache_tool_handler;
-	Observe_Tool_Handler* observe_tool_handler;
+	Stats_Tool_Handler* stats_tool_handler;
 	AI_Tool_Handler* ai_tool_handler;
 	RAG_Tool_Handler* rag_tool_handler;
 

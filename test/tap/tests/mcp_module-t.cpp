@@ -230,7 +230,7 @@ int test_variable_persistence(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-enabled=false");
 	MYSQL_QUERY(admin, "SET mcp-port=6071");
 	MYSQL_QUERY(admin, "SET mcp-config_endpoint_auth=''");
-	MYSQL_QUERY(admin, "SET mcp-observe_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-stats_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-query_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-admin_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-cache_endpoint_auth=''");

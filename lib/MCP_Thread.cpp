@@ -4,7 +4,7 @@
 #include "Query_Tool_Handler.h"
 #include "Admin_Tool_Handler.h"
 #include "Cache_Tool_Handler.h"
-#include "Observe_Tool_Handler.h"
+#include "Stats_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "ProxySQL_MCP_Server.hpp"
 
@@ -19,7 +19,7 @@ static const char* mcp_thread_variables_names[] = {
 	"port",
 	"use_ssl",
 	"config_endpoint_auth",
-	"observe_endpoint_auth",
+	"stats_endpoint_auth",
 	"query_endpoint_auth",
 	"admin_endpoint_auth",
 	"cache_endpoint_auth",
@@ -45,7 +45,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_port = 6071;
 	variables.mcp_use_ssl = true;                      // Default to true for security
 	variables.mcp_config_endpoint_auth = strdup("");
-	variables.mcp_observe_endpoint_auth = strdup("");
+	variables.mcp_stats_endpoint_auth = strdup("");
 	variables.mcp_query_endpoint_auth = strdup("");
 	variables.mcp_admin_endpoint_auth = strdup("");
 	variables.mcp_cache_endpoint_auth = strdup("");
@@ -70,15 +70,15 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	query_tool_handler = NULL;
 	admin_tool_handler = NULL;
 	cache_tool_handler = NULL;
-	observe_tool_handler = NULL;
+	stats_tool_handler = NULL;
 	rag_tool_handler = NULL;
 }
 
 MCP_Threads_Handler::~MCP_Threads_Handler() {
 	if (variables.mcp_config_endpoint_auth)
 		free(variables.mcp_config_endpoint_auth);
-	if (variables.mcp_observe_endpoint_auth)
-		free(variables.mcp_observe_endpoint_auth);
+	if (variables.mcp_stats_endpoint_auth)
+		free(variables.mcp_stats_endpoint_auth);
 	if (variables.mcp_query_endpoint_auth)
 		free(variables.mcp_query_endpoint_auth);
 	if (variables.mcp_admin_endpoint_auth)
@@ -126,9 +126,9 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		delete cache_tool_handler;
 		cache_tool_handler = NULL;
 	}
-	if (observe_tool_handler) {
-		delete observe_tool_handler;
-		observe_tool_handler = NULL;
+	if (stats_tool_handler) {
+		delete stats_tool_handler;
+		stats_tool_handler = NULL;
 	}
 	if (rag_tool_handler) {
 		delete rag_tool_handler;
@@ -186,8 +186,8 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%s", variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : "");
 		return 0;
 	}
-	if (!strcmp(name, "observe_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_observe_endpoint_auth ? variables.mcp_observe_endpoint_auth : "");
+	if (!strcmp(name, "stats_endpoint_auth")) {
+		sprintf(val, "%s", variables.mcp_stats_endpoint_auth ? variables.mcp_stats_endpoint_auth : "");
 		return 0;
 	}
 	if (!strcmp(name, "query_endpoint_auth")) {
@@ -275,10 +275,10 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		variables.mcp_config_endpoint_auth = strdup(value);
 		return 0;
 	}
-	if (!strcmp(name, "observe_endpoint_auth")) {
-		if (variables.mcp_observe_endpoint_auth)
-			free(variables.mcp_observe_endpoint_auth);
-		variables.mcp_observe_endpoint_auth = strdup(value);
+	if (!strcmp(name, "stats_endpoint_auth")) {
+		if (variables.mcp_stats_endpoint_auth)
+			free(variables.mcp_stats_endpoint_auth);
+		variables.mcp_stats_endpoint_auth = strdup(value);
 		return 0;
 	}
 	if (!strcmp(name, "query_endpoint_auth")) {

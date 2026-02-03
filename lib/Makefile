@@ -81,10 +81,10 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
 	pgsql_tokenizer.oo \
-	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo \
+	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo MCP_Tool_Handler.oo \
 	MySQL_Catalog.oo MySQL_Tool_Handler.oo MySQL_FTS.oo \
 	Config_Tool_Handler.oo Query_Tool_Handler.oo \
-	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Observe_Tool_Handler.oo \
+	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Stats_Tool_Handler.oo \
 	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo Anomaly_Detector.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
 	RAG_Tool_Handler.oo \
 	Discovery_Schema.oo Static_Harvester.oo

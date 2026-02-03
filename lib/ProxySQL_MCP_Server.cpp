@@ -11,7 +11,7 @@ using json = nlohmann::json;
 #include "Query_Tool_Handler.h"
 #include "Admin_Tool_Handler.h"
 #include "Cache_Tool_Handler.h"
-#include "Observe_Tool_Handler.h"
+#include "Stats_Tool_Handler.h"
 #include "AI_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
@@ -122,10 +122,10 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		proxy_info("Cache Tool Handler initialized\n");
 	}
 
-	// 5. Observe Tool Handler
-	handler->observe_tool_handler = new Observe_Tool_Handler(handler);
-	if (handler->observe_tool_handler->init() == 0) {
-		proxy_info("Observe Tool Handler initialized\n");
+	// 5. Stats Tool Handler
+	handler->stats_tool_handler = new Stats_Tool_Handler(handler);
+	if (handler->stats_tool_handler->init() == 0) {
+		proxy_info("Stats Tool Handler initialized\n");
 	}
 
 	// 6. AI Tool Handler (for LLM and other AI features)
@@ -151,10 +151,10 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	ws->register_resource("/mcp/config", config_resource.get(), true);
 	_endpoints.push_back({"/mcp/config", std::move(config_resource)});
 
-	std::unique_ptr<httpserver::http_resource> observe_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->observe_tool_handler, "observe"));
-	ws->register_resource("/mcp/observe", observe_resource.get(), true);
-	_endpoints.push_back({"/mcp/observe", std::move(observe_resource)});
+	std::unique_ptr<httpserver::http_resource> stats_resource =
+		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->stats_tool_handler, "stats"));
+	ws->register_resource("/mcp/stats", stats_resource.get(), true);
+	_endpoints.push_back({"/mcp/stats", std::move(stats_resource)});
 
 	std::unique_ptr<httpserver::http_resource> query_resource =
 		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->query_tool_handler, "query"));
@@ -202,7 +202,7 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	}
 
 	int endpoint_count = (handler->ai_tool_handler ? 1 : 0) + (handler->rag_tool_handler ? 1 : 0) + 5;
-	std::string endpoints_list = "/mcp/config, /mcp/observe, /mcp/query, /mcp/admin, /mcp/cache";
+	std::string endpoints_list = "/mcp/config, /mcp/stats, /mcp/query, /mcp/admin, /mcp/cache";
 	if (handler->ai_tool_handler) {
 		endpoints_list += ", /mcp/ai";
 	}
@@ -254,11 +254,11 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 			handler->cache_tool_handler = NULL;
 		}
 
-		// Clean up Observe Tool Handler
-		if (handler->observe_tool_handler) {
-			proxy_info("Cleaning up Observe Tool Handler...\n");
-			delete handler->observe_tool_handler;
-			handler->observe_tool_handler = NULL;
+		// Clean up Stats Tool Handler
+		if (handler->stats_tool_handler) {
+			proxy_info("Cleaning up Stats Tool Handler...\n");
+			delete handler->stats_tool_handler;
+			handler->stats_tool_handler = NULL;
 		}
 
 		// Clean up AI Tool Handler (uses shared components, don't delete them)
