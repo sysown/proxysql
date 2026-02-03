@@ -16,6 +16,7 @@ services:
       - NOJEMALLOC
       - WITHASAN
       - BLD_NAME
+      - PROXYSQLGENAI
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
 ####################################################################################################
