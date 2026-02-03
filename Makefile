@@ -278,27 +278,27 @@ build_src_debug_clickhouse: build_src_debug_default
 
 .PHONY: build_deps_default
 build_deps_default:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 PHONY: build_deps_debug_default
 build_deps_debug_default:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_default
 build_lib_debug_default: build_deps_debug_default
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_default
 build_src_default: build_lib_default
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 
 ### packaging targets

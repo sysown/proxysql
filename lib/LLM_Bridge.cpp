@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 /**
  * @file LLM_Bridge.cpp
  * @brief Implementation of Generic LLM Bridge
@@ -373,3 +375,5 @@ std::string LLM_Bridge::get_cache_stats() {
 
 	return stats.dump();
 }
+
+#endif /* PROXYSQLGENAI */

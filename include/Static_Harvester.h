@@ -1,6 +1,8 @@
 #ifndef CLASS_STATIC_HARVESTER_H
 #define CLASS_STATIC_HARVESTER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "Discovery_Schema.h"
 #include "cpp.h"
 #include <string>

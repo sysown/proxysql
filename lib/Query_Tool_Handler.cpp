@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -1999,3 +2001,5 @@ SQLite3_result* Query_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
 	pthread_mutex_unlock(&counters_lock);
 	return result;
 }
+
+#endif /* PROXYSQLGENAI */

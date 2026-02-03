@@ -327,7 +327,12 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+
+#ifdef PROXYSQLGENAI
 extern MCP_Threads_Handler* GloMCPH;
+extern GenAI_Threads_Handler* GloGATH;
+extern AI_Features_Manager *GloAI;
+#endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
 
@@ -1595,6 +1600,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_pgsql_client_host_cache_reset) {
 			stats___pgsql_client_host_cache(true);
 		}
+#ifdef PROXYSQLGENAI
 		if (stats_mcp_query_tools_counters) {
 			stats___mcp_query_tools_counters(false);
 		}
@@ -1611,6 +1617,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mcp_query_rules) {
 			stats___mcp_query_rules();
 		}
+#endif /* PROXYSQLGENAI */
 
 		if (admin) {
 			if (dump_global_variables) {
@@ -1624,8 +1631,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true);
+#ifdef PROXYSQLGENAI
 				flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, false);
 				flush_genai_variables___runtime_to_database(admindb, false, false, false, true, false);
+#endif /* PROXYSQLGENAI */
 				pthread_mutex_unlock(&GloVars.checksum_mutex);
 			}
 			if (runtime_mysql_servers) {
@@ -1685,9 +1694,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (runtime_pgsql_query_rules_fast_routing) {
 				save_pgsql_query_rules_fast_routing_from_runtime(true);
 			}
+#ifdef PROXYSQLGENAI
 			if (runtime_mcp_query_rules) {
 				save_mcp_query_rules_from_runtime(true);
 			}
+#endif /* PROXYSQLGENAI */
 			if (runtime_scheduler) {
 				save_scheduler_runtime_to_database(true);
 			}
@@ -2883,6 +2894,7 @@ void ProxySQL_Admin::init_pgsql_variables() {
 	flush_pgsql_variables___database_to_runtime(admindb, true);
 }
 
+#ifdef PROXYSQLGENAI
 void ProxySQL_Admin::init_mcp_variables() {
 	if (GloMCPH) {
 		flush_mcp_variables___runtime_to_database(configdb, false, false, false, false, false);
@@ -2896,6 +2908,7 @@ void ProxySQL_Admin::init_genai_variables() {
 	flush_genai_variables___runtime_to_database(admindb, false, true, false);
 	flush_genai_variables___database_to_runtime(admindb, true);
 }
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::admin_shutdown() {
 	int i;
@@ -3252,6 +3265,7 @@ void ProxySQL_Admin::load_restapi_server() {
 	}
 }
 
+#ifdef PROXYSQLGENAI
 void ProxySQL_Admin::load_mcp_server() {
 	if (!all_modules_started) { return; }
 	if (GloMCPH == NULL) { return; }
@@ -3368,6 +3382,7 @@ void ProxySQL_Admin::load_mcp_server() {
 		}
 	}
 }
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::load_http_server() {
 	if (!all_modules_started) { return; }
@@ -7879,6 +7894,7 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 // Returns:
 //   NULL on success, error message string on failure (caller must free)
 //
+#ifdef PROXYSQLGENAI
 char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 	unsigned long long curtime1 = monotonic_time();
 	char* error = NULL;
@@ -8019,6 +8035,7 @@ void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
 		delete resultset;
 	}
 }
+#endif /* PROXYSQLGENAI */
 
 char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and

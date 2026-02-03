@@ -1,6 +1,8 @@
 #ifndef CLASS_OBSERVE_TOOL_HANDLER_H
 #define CLASS_OBSERVE_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "MCP_Tool_Handler.h"
 #include <pthread.h>
 
@@ -46,4 +48,5 @@ public:
 	std::string get_handler_name() const override { return "observe"; }
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_OBSERVE_TOOL_HANDLER_H */

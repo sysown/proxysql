@@ -70,13 +70,18 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
+
 
 
 MYCXXFLAGS := $(STDCPP)
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS += -fuse-ld=lld
 endif
-MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
+MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQLGA) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
 STATICMYLIBS := -Wl,-Bstatic \
@@ -131,6 +136,7 @@ ifeq ($(CENTOSVER),6)
 endif
 
 SQLITE_REMBED_LIB := $(DEPS_PATH)/sqlite3/libsqlite_rembed.a
+SQLITE_VEC_OBJ := $(DEPS_PATH)/sqlite3/sqlite3/vec.o
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(JEMALLOC_LDIR)/libjemalloc.a
@@ -146,7 +152,10 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
 	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
 endif
-LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a $(SQLITE_REMBED_LIB)
+LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
+ifeq ($(PROXYSQLGENAI),1)
+LIBPROXYSQLAR += $(SQLITE_REMBED_LIB) $(SQLITE_VEC_OBJ)
+endif
 
 ODIR := obj
 
@@ -160,9 +169,17 @@ $(ODIR)/%.o: %.cpp
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
+ifeq ($(PROXYSQLGENAI),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
+	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
+endif
+else
+ifeq ($(PROXYSQLGENAI),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
+else
+	$(CXX) -o $@ $(OBJ) $(CLANGFIX) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
+endif
 endif
 ifeq ($(UNAME_S),Darwin)
 	shasum $(EXECUTABLE) > $(EXECUTABLE).sha1

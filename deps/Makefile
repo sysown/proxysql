@@ -63,6 +63,9 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	targets += clickhouse-cpp
 endif
 
+ifeq ($(PROXYSQLGENAI),1)
+	targets += sqlite-vec sqlite-rembed
+endif
 
 default: $(targets)
 .PHONY: default
@@ -356,6 +359,24 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(SSL_IDIR)" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 
 libscram: libscram/lib/libscram.a
+
+
+# sqlite-vec: Vector similarity search extension (for GenAI)
+sqlite3/sqlite3/vec.o: sqlite3/sqlite3/sqlite3.o
+	cd sqlite3/sqlite3 && cp ../sqlite-vec-source/sqlite-vec.c . && cp ../sqlite-vec-source/sqlite-vec.h .
+	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o vec.o sqlite-vec.c -DSQLITE_CORE -DSQLITE_VEC_STATIC -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1
+
+sqlite-vec: sqlite3/sqlite3/vec.o
+
+# sqlite-rembed: Remote embedding extension (Rust-based, for GenAI)
+sqlite3/libsqlite_rembed.a: sqlite3/sqlite-rembed-0.0.1-alpha.9.tar.gz
+	cd sqlite3 && rm -rf sqlite-rembed-*/ sqlite-rembed-source/ || true
+	cd sqlite3 && tar -zxf sqlite-rembed-0.0.1-alpha.9.tar.gz
+	mv sqlite3/sqlite-rembed-0.0.1-alpha.9 sqlite3/sqlite-rembed-source
+	cd sqlite3/sqlite-rembed-source && SQLITE3_INCLUDE_DIR=$(SQLITE3_INCLUDE_DIR) SQLITE3_LIB_DIR=$(SQLITE3_LIB_DIR) SQLITE3_STATIC=1 $(CARGO) build --release --features=sqlite-loadable/static --lib
+	cp sqlite3/sqlite-rembed-source/target/release/libsqlite_rembed.a sqlite3/libsqlite_rembed.a
+
+sqlite-rembed: sqlite3/libsqlite_rembed.a
 
 
 ### clean targets

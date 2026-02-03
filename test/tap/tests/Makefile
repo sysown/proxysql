@@ -24,7 +24,8 @@ IDIRS :=	-I$(TAP_IDIR) \
 			-I$(POSTGRESQL_IDIR)\
 			-I$(LIBSCRAM_IDIR) \
 			-I$(LIBUSUAL_IDIR) \
-			-I$(SSL_IDIR)
+			-I$(SSL_IDIR) \
+			-I$(PROXYSQL_PATH)/include
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \

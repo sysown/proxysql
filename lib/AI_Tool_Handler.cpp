@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 /**
  * @file AI_Tool_Handler.cpp
  * @brief Implementation of AI Tool Handler for MCP protocol
@@ -219,3 +221,5 @@ json AI_Tool_Handler::execute_tool(const std::string& tool_name, const json& arg
 		return create_error_response("Unknown exception");
 	}
 }
+
+#endif /* PROXYSQLGENAI */

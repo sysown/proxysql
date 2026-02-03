@@ -1,6 +1,8 @@
 #ifndef CLASS_CONFIG_TOOL_HANDLER_H
 #define CLASS_CONFIG_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "MCP_Tool_Handler.h"
 #include <pthread.h>
 
@@ -82,4 +84,5 @@ public:
 	std::string get_handler_name() const override { return "config"; }
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_CONFIG_TOOL_HANDLER_H */

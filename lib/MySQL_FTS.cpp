@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 #include "MySQL_FTS.h"
 #include "MySQL_Tool_Handler.h"
 #include "cpp.h"
@@ -840,3 +842,5 @@ std::string MySQL_FTS::rebuild_all(MySQL_Tool_Handler* mysql_handler) {
 
 	return result.dump();
 }
+
+#endif /* PROXYSQLGENAI */

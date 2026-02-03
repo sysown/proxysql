@@ -1,6 +1,8 @@
 #ifndef __CLASS_GENAI_THREAD_H
 #define __CLASS_GENAI_THREAD_H
 
+#ifdef PROXYSQLGENAI
+
 #include "proxysql.h"
 #include <vector>
 #include <queue>
@@ -441,5 +443,7 @@ public:
 
 // Global instance of the GenAI Threads Handler
 extern GenAI_Threads_Handler *GloGATH;
+
+#endif /* PROXYSQLGENAI */
 
 #endif // __CLASS_GENAI_THREAD_H

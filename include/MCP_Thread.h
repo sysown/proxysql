@@ -1,6 +1,8 @@
 #ifndef __CLASS_MCP_THREAD_H
 #define __CLASS_MCP_THREAD_H
 
+#ifdef PROXYSQLGENAI
+
 #define MCP_THREAD_VERSION "0.1.0"
 
 #include <pthread.h>
@@ -203,5 +205,7 @@ public:
 
 // Global instance of the MCP Threads Handler
 extern MCP_Threads_Handler *GloMCPH;
+
+#endif /* PROXYSQLGENAI */
 
 #endif // __CLASS_MCP_THREAD_H

@@ -48,6 +48,11 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
+
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
@@ -58,12 +63,12 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQLGA) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
 
-_OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo MySQL_Query_Processor.oo PgSQL_Query_Processor.oo  ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo MySQL_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo proxy_sqlite3_symbols.oo \
+_OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo MySQL_Query_Processor.oo PgSQL_Query_Processor.oo  ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo MySQL_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo \
 	sha256crypt.oo \
 	BaseSrvList.oo BaseHGC.oo Base_HostGroups_Manager.oo \
 	QP_rule_text.oo QP_query_digest_stats.oo \
@@ -75,12 +80,16 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	proxy_protocol_info.oo \
 	proxysql_find_charset.oo ProxySQL_Poll.oo \
 	PgSQL_Protocol.oo PgSQL_Thread.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo \
-	GenAI_Thread.oo \
 	MySQL_Query_Cache.oo PgSQL_Query_Cache.oo PgSQL_Monitor.oo \
 	MySQL_Set_Stmt_Parser.oo PgSQL_Set_Stmt_Parser.oo \
 	PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
 	pgsql_tokenizer.oo \
+	proxy_sqlite3_symbols.oo
+
+# GenAI object files (conditionally included)
+ifeq ($(PROXYSQLGENAI),1)
+_OBJ_CXX += GenAI_Thread.oo \
 	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo \
 	MySQL_Catalog.oo MySQL_Tool_Handler.oo MySQL_FTS.oo \
 	Config_Tool_Handler.oo Query_Tool_Handler.oo \
@@ -88,6 +97,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo Anomaly_Detector.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
 	RAG_Tool_Handler.oo \
 	Discovery_Schema.oo Static_Harvester.oo
+endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp

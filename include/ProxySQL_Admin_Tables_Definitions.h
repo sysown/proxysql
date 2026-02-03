@@ -261,6 +261,27 @@
 #define ADMIN_SQLITE_TABLE_RUNTIME_CLICKHOUSE_USERS "CREATE TABLE runtime_clickhouse_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username))"
 #endif /* PROXYSQLCLICKHOUSE */
 
+#ifdef PROXYSQLGENAI
+// GenAI Tables
+
+#define ADMIN_SQLITE_TABLE_GENAI_CONFIG "CREATE TABLE genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_GENAI_CONFIG "CREATE TABLE runtime_genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+// MCP Tables
+
+#define ADMIN_SQLITE_TABLE_MCP_CONFIG "CREATE TABLE mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_CONFIG "CREATE TABLE runtime_mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+// MCP Query Rules
+
+#define ADMIN_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES "CREATE TABLE runtime_mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
+
+#endif /* PROXYSQLGENAI */
+
 
 #define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_columns INT NOT NULL, num_params INT NOT NULL, query VARCHAR NOT NULL)"
 

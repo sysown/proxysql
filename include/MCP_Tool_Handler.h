@@ -1,6 +1,8 @@
 #ifndef CLASS_MCP_TOOL_HANDLER_H
 #define CLASS_MCP_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "cpp.h"
 #include <string>
 #include <memory>

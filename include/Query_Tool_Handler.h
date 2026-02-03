@@ -1,6 +1,8 @@
 #ifndef CLASS_QUERY_TOOL_HANDLER_H
 #define CLASS_QUERY_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "MCP_Tool_Handler.h"
 #include "Discovery_Schema.h"
 #include "Static_Harvester.h"
@@ -214,5 +216,7 @@ public:
 	 */
 	SQLite3_result* get_tool_usage_stats_resultset(bool reset = false);
 };
+
+#endif /* PROXYSQLGENAI */
 
 #endif /* CLASS_QUERY_TOOL_HANDLER_H */

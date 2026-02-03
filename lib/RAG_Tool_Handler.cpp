@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 /**
  * @file RAG_Tool_Handler.cpp
  * @brief Implementation of RAG Tool Handler for MCP protocol
@@ -2581,3 +2583,5 @@ SQLite3_result* RAG_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
 	pthread_mutex_unlock(&counters_lock);
 	return result;
 }
+
+#endif /* PROXYSQLGENAI */

@@ -1,6 +1,8 @@
 #ifndef CLASS_MYSQL_CATALOG_H
 #define CLASS_MYSQL_CATALOG_H
 
+#ifdef PROXYSQLGENAI
+
 #include "sqlite3db.h"
 #include <string>
 #include <vector>

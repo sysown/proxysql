@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 /**
  * @file LLM_Clients.cpp
  * @brief HTTP client implementations for LLM providers
@@ -707,3 +709,5 @@ std::string LLM_Bridge::call_generic_anthropic_with_retry(
 	// Should not reach here, but handle gracefully
 	return "";
 }
+
+#endif /* PROXYSQLGENAI */

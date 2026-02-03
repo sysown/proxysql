@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -532,3 +534,5 @@ json MCP_JSONRPC_Resource::handle_resources_list() {
 	result["resources"] = json::array();
 	return result;
 }
+
+#endif /* PROXYSQLGENAI */

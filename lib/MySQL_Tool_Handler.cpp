@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 #include "MySQL_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "cpp.h"
@@ -1467,3 +1469,5 @@ int MySQL_Tool_Handler::reinit_fts(const std::string& fts_path) {
 	proxy_info("MySQL_Tool_Handler: FTS reinitialized successfully at %s\n", fts_path.c_str());
 	return 0;
 }
+
+#endif /* PROXYSQLGENAI */

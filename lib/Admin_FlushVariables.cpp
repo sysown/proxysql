@@ -147,8 +147,12 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+
+#ifdef PROXYSQLGENAI
 extern MCP_Threads_Handler* GloMCPH;
 extern GenAI_Threads_Handler* GloGATH;
+extern AI_Features_Manager *GloAI;
+#endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
 
@@ -964,6 +968,7 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 	if (resultset) delete resultset;
 }
 
+#ifdef PROXYSQLGENAI
 // GenAI Variables Flush Functions
 void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
@@ -1100,6 +1105,7 @@ void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, 
 	}
 	if (resultset) delete resultset;
 }
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
@@ -1344,6 +1350,7 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 	free(varnames);
 }
 
+#ifdef PROXYSQLGENAI
 // MCP (Model Context Protocol) VARIABLES
 void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d\n", replace);
@@ -1490,3 +1497,4 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 	}
 	free(varnames);
 }
+#endif /* PROXYSQLGENAI */

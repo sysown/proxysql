@@ -189,6 +189,12 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
+#ifdef PROXYSQLGENAI
+extern MCP_Threads_Handler* GloMCPH;
+extern GenAI_Threads_Handler* GloGATH;
+extern AI_Features_Manager *GloAI;
+#endif /* PROXYSQLGENAI */
+
 extern void (*flush_logs_function)();
 
 extern Web_Interface *GloWebInterface;
@@ -723,6 +729,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * - Tool usage statistics
 	 * - Search history
 	 */
+#ifdef PROXYSQLGENAI
 	mcpdb = new SQLite3DB();
 	std::string mcp_catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
 	mcpdb->open((char *)mcp_catalog_path.c_str(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -734,6 +741,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 * registered for vector similarity searches in the catalog.
 	 */
 	(*proxy_sqlite3_enable_load_extension)(mcpdb->get_db(),1);
+#endif /* PROXYSQLGENAI */
 
 	tables_defs_admin=new std::vector<table_def_t *>;
 	tables_defs_stats=new std::vector<table_def_t *>;
@@ -810,11 +818,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin, "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_admin, "runtime_pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 
+#ifdef PROXYSQLGENAI
 	// MCP query rules
 	insert_into_tables_defs(tables_defs_admin, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES);
 
 	insert_into_tables_defs(tables_defs_config, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
+#endif /* PROXYSQLGENAI */
 
 	insert_into_tables_defs(tables_defs_config, "pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config, "pgsql_users", ADMIN_SQLITE_TABLE_PGSQL_USERS);
@@ -905,6 +915,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
+#ifdef PROXYSQLGENAI
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_tools_counters_reset", STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET);
 
@@ -912,6 +923,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_digest_reset", STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mcp_query_rules", STATS_SQLITE_TABLE_MCP_QUERY_RULES); // Reuse same schema for stats
+#endif /* PROXYSQLGENAI */
 
 	// init ldap here
 	init_ldap();
@@ -944,7 +956,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	__attach_db(statsdb, monitordb, (char *)"monitor");
 	__attach_db(admindb, statsdb_disk, (char *)"stats_history");
 	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
+#ifdef PROXYSQLGENAI
 	__attach_db(admindb, mcpdb, (char *)"mcp_catalog");
+#endif /* PROXYSQLGENAI */
 
 	dump_mysql_collations();
 
@@ -1243,8 +1257,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 #endif /* PROXYSQLCLICKHOUSE */
 	flush_sqliteserver_variables___database_to_runtime(admindb,true);
+#ifdef PROXYSQLGENAI
 	flush_mcp_variables___database_to_runtime(admindb, true);
 	flush_genai_variables___database_to_runtime(admindb, true);
+#endif /* PROXYSQLGENAI */
 
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);
