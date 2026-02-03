@@ -32,7 +32,6 @@
 #include <iostream>
 
 #include "mysql.h"
-#include "mysqld_error.h"
 
 #include "proxysql_utils.h"
 #include "json.hpp"
