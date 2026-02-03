@@ -13,6 +13,12 @@ GIT_VERSION ?= $(shell git describe --long --abbrev=7 2>/dev/null || git describ
 ifndef GIT_VERSION
     $(error GIT_VERSION is not set)
 endif
+
+# If PROXYSQLGENAI is enabled, increment the major version number by 1
+ifeq ($(PROXYSQLGENAI),1)
+    GIT_VERSION := $(shell echo "$(GIT_VERSION)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+endif
+
 export GIT_VERSION
 
 ### NOTES:
