@@ -75,7 +75,7 @@
 #include "mysql.h"
 #include "tap.h"
 #include "utils.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 using std::vector;
 using std::string;

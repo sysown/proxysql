@@ -1,6 +1,6 @@
 #include <iostream>
 #include <vector>
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 using nlohmann::json;
 
@@ -490,4 +490,3 @@ int detect_version(CommandLine& cl, bool& is_mariadb) {
 	mysql_close(mysql);
 	return 0;
 }
-

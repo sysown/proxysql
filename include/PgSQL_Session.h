@@ -24,7 +24,7 @@ struct PgSQL_Param_Value;
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 extern class PgSQL_Variables pgsql_variables;

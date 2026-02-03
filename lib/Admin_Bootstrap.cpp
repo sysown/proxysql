@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -710,6 +710,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
 
+	// OpenTelemetry
+	insert_into_tables_defs(tables_defs_admin,"otel_span_filters", OTEL_SQLITE_TABLE_SPAN_FILTERS);
+	insert_into_tables_defs(tables_defs_config,"otel_span_filters", OTEL_SQLITE_TABLE_SPAN_FILTERS);
+
 	// init ldap here
 	init_ldap();
 
@@ -826,6 +830,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			proxysql_config().Read_PgSQL_Users_from_configfile(e);
 			proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
 			proxysql_config().Read_Global_Variables_from_configfile("pgsql");
+
+			// OpenTelemetry
+			proxysql_config().Read_Global_Variables_from_configfile("otel");
 
 			proxysql_config().Read_Scheduler_from_configfile();
 			proxysql_config().Read_Restapi_from_configfile();

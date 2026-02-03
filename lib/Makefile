@@ -26,6 +26,9 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(SQLITE3_IDIR) \
 			-I$(POSTGRESQL_IDIR) \
 			-I$(JSON_IDIR) \
+			-I$(ABSL_IDIR) \
+			-I$(PROTOBUF_IDIR) \
+			-I$(OTEL_IDIR) \
 			-I$(SSL_IDIR) \
 
 ifeq ($(UNAME_S),Linux)
@@ -78,6 +81,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	MySQL_Set_Stmt_Parser.oo PgSQL_Set_Stmt_Parser.oo \
 	PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
+	otel_tracer.oo \
 	pgsql_tokenizer.oo
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))

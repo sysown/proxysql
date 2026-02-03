@@ -24,7 +24,11 @@ IDIRS :=	-I$(TAP_IDIR) \
 			-I$(POSTGRESQL_IDIR)\
 			-I$(LIBSCRAM_IDIR) \
 			-I$(LIBUSUAL_IDIR) \
-			-I$(SSL_IDIR)
+			-I$(SSL_IDIR) \
+			-I$(ABSL_IDIR) \
+			-I$(PROTOBUF_IDIR) \
+			-I$(OTEL_IDIR)
+			
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \
@@ -35,7 +39,8 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(LIBDAEMON_LDIR) \
 			-L$(MICROHTTPD_LDIR) \
 			-L$(LIBHTTPSERVER_LDIR) \
-			-L$(CURL_LDIR) -L$(EV_LDIR) \
+			-L$(CURL_LDIR) \
+			-L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
 			-L$(PCRE_LDIR) \

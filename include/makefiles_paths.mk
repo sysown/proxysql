@@ -33,8 +33,8 @@ PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
 
-JSON_PATH := $(DEPS_PATH)/json
-JSON_IDIR := $(JSON_PATH)
+JSON_PATH := $(DEPS_PATH)/json/json
+JSON_IDIR := $(JSON_PATH)/include
 
 RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH)
@@ -75,8 +75,9 @@ COREDUMPER_IDIR := $(COREDUMPER_PATH)/include
 COREDUMPER_LDIR := $(COREDUMPER_PATH)/src
 
 CURL_PATH := $(DEPS_PATH)/curl/curl
-CURL_IDIR := $(CURL_PATH)/include
-CURL_LDIR := $(CURL_PATH)/lib/.libs
+CURL_ROOT := $(CURL_PATH)/local
+CURL_IDIR := $(CURL_ROOT)/include
+CURL_LDIR := $(CURL_ROOT)/lib
 
 EV_PATH := $(DEPS_PATH)/libev/libev
 EV_IDIR := $(EV_PATH)
@@ -93,6 +94,23 @@ LIBUSUAL_LDIR := $(LIBUSUAL_PATH)/.libs
 LIBSCRAM_PATH := $(DEPS_PATH)/libscram
 LIBSCRAM_IDIR := $(LIBSCRAM_PATH)/include
 LIBSCRAM_LDIR := $(LIBSCRAM_PATH)/lib
+
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp
+ABSL_ROOT := $(ABSL_PATH)/local
+ABSL_IDIR := $(ABSL_ROOT)/include
+ABSL_LDIR := $(ABSL_ROOT)/lib
+
+PROTOBUF_PATH := $(DEPS_PATH)/protobuf/protobuf
+PROTOBUF_ROOT := $(PROTOBUF_PATH)/local
+PROTOBUF_IDIR := $(PROTOBUF_ROOT)/include
+PROTOBUF_LDIR := $(PROTOBUF_ROOT)/lib
+
+OTEL_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-cpp
+OTEL_ROOT := $(OTEL_PATH)/local
+OTEL_IDIR := $(OTEL_ROOT)/include
+OTEL_LDIR := $(OTEL_ROOT)/lib
+
+OTEL_PROTO_PATH := $(DEPS_PATH)/opentelemetry/opentelemetry-proto
 
 
 TAP_PATH := $(PROXYSQL_PATH)/test/tap/tap

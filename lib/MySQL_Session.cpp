@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -689,6 +689,10 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+
+	span_stack = unsafe_shared_ptr(new OTelSpanStack());
+	root_span = SESSION_TRACE(this);
+
 	this->wait_timeout = mysql_thread___wait_timeout;
 	backend_closed_in_fast_forward = false;
 	fast_forward_grace_start_time = 0;

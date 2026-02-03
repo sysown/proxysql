@@ -20,7 +20,10 @@ IDIRS :=	-I$(TAP_IDIR) \
 			-I$(SQLITE3_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(POSTGRESQL_IDIR) \
-			-I$(SSL_IDIR)
+			-I$(SSL_IDIR) \
+			-I$(ABSL_IDIR) \
+			-I$(PROTOBUF_IDIR) \
+			-I$(OTEL_IDIR)
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \

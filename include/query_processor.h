@@ -10,11 +10,11 @@
 #define DIGEST_STATS_FAST_MINSIZE   100000
 #define DIGEST_STATS_FAST_THREADS   4
 
-//#include "../deps/json/json.hpp"
+//#include "nlohmann/json.hpp"
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
 
 #include "khash.h"

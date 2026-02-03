@@ -11,7 +11,7 @@
 #include <mutex>
 
 #include "mysql.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 #include "re2/re2.h"
 
 #include "tap.h"

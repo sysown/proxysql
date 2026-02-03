@@ -3,42 +3,63 @@
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
 
+
+# force CMake to always use lib, instead of lib64
+CMAKE_FLAGS := -DCMAKE_INSTALL_LIBDIR=lib
+
+
+# set debug flags
 ifeq ($(PROXYDEBUG),1)
-	MYCFLAGS := -O0
+	MYCFLAGS := -O0 -ggdb
 	MYJEOPT := --enable-xmalloc --enable-prof --enable-fill --enable-debug
+	CMAKE_FLAGS += -DCMAKE_BUILD_TYPE=Debug
 else
-	MYCFLAGS := -O2
+	MYCFLAGS := -O2 -g
 	MYJEOPT := --enable-xmalloc --enable-prof
+	CMAKE_FLAGS += -DCMAKE_BUILD_TYPE=RelWithDebInfo
 endif
 ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
 	MYJEOPT += --with-lg-page=16
 endif
 
 
-targets :=	check_openssl_version \
-			libconfig \
-			libdaemon \
-			jemalloc \
-			mariadb_client \
-			re2 \
-			sqlite3 \
-			pcre \
-			lz4 \
-			cityhash \
-			microhttpd \
-			curl \
-			ev \
-			libhttpserver \
-			libinjection \
-			prometheus-cpp \
-			postgresql \
-			libusual \
-			libscram
+# set cmake c++ standard
+ifeq ($(CPLUSPLUS),201703L)
+	CMAKE_FLAGS += -DCMAKE_CXX_STANDARD=17
+else
+	CMAKE_FLAGS += -DCMAKE_CXX_STANDARD=11
+endif
+
+
+targets := check_openssl_version    \
+			libconfig               \
+			libdaemon               \
+			jemalloc                \
+			mariadb_client          \
+			re2                     \
+			sqlite3                 \
+			pcre                    \
+			lz4                     \
+			cityhash                \
+			microhttpd              \
+			curl                    \
+			ev                      \
+			libhttpserver           \
+			libinjection            \
+			prometheus-cpp          \
+			postgresql              \
+			libusual                \
+			libscram                \
+			json                    \
+			abseil                  \
+			protobuf                \
+			otel
 
 ifeq ($(UNAME_S),Linux)
 	targets += coredumper
@@ -76,6 +97,7 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
+
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
@@ -108,23 +130,24 @@ ev: libev/libev/.libs/libev.a
 coredumper/coredumper/src/libcoredumper.a:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd coredumper && tar -zxf coredumper-*.tar.gz
-	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd coredumper/coredumper && cmake . $(CMAKE_FLAGS) -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF
 	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
 
 coredumper: coredumper/coredumper/src/libcoredumper.a
 
 
-curl/curl/lib/.libs/libcurl.a:
+$(CURL_ROOT)/lib/libcurl.a:
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl --enable-shared=yes
+	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --prefix=$(CURL_ROOT) --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl
 	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ${MAKE} install
 
-curl: curl/curl/lib/.libs/libcurl.a
+curl: $(CURL_ROOT)/lib/libcurl.a
 
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
@@ -152,10 +175,12 @@ lz4/lz4/lib/liblz4.a:
 lz4: lz4/lz4/lib/liblz4.a
 
 
-clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
+clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a: abseil
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp-*.tar.gz
-	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
+	cd clickhouse-cpp/clickhouse-cpp && cmake .         \
+										$(CMAKE_FLAGS)  \
+										-DCMAKE_PREFIX_PATH=$(abspath abseil/abseil-cpp/local)
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
@@ -188,7 +213,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
-	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(SSL_IDIR) -DOPENSSL_LIBRARIES=$(SSL_LDIR) -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
+	cd mariadb-client-library/mariadb_client && cmake . $(CMAKE_FLAGS) -Wno-dev -DOPENSSL_ROOT_DIR=$(SSL_IDIR) -DOPENSSL_LIBRARIES=$(SSL_LDIR) -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
 ifeq ($(PROXYDEBUG),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)
@@ -265,7 +290,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../registry_counters_reset.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../fix_old_distros.patch
-	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
+	cd prometheus-cpp/prometheus-cpp && cmake . $(CMAKE_FLAGS) -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
@@ -319,7 +344,7 @@ libusual/libusual/.libs/libusual.a:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libusual && tar -zxf libusual-*.tar.gz
 	cd libusual/libusual && ./autogen.sh
-	cd libusual/libusual &&  CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)" ./configure --with-openssl="$(SSL_LDIR)" --disable-shared
+	cd libusual/libusual &&  CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-openssl="$(SSL_LDIR)" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a
@@ -330,6 +355,80 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(SSL_IDIR)" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 
 libscram: libscram/lib/libscram.a
+
+
+$(JSON_PATH)/include/nlohmann/json.hpp:
+	cd json && rm -rf json-*/ || true
+	cd json && tar -zxf json-3.12.0.tar.gz
+	cd json/json && cmake . $(CMAKE_FLAGS)
+
+json: $(JSON_PATH)/include/nlohmann/json.hpp
+
+
+$(ABSL_ROOT)/lib/libabsl.a:
+	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd abseil && tar -zxf abseil-cpp-20250512.0.tar.gz
+ifneq (,$(filter $(DISTRO)$(DISTVERS),almalinux8 opensuse15))
+	cd abseil/abseil-cpp && patch -p0 < ../constexpr.patch
+endif
+	cd abseil/abseil-cpp && mkdir -p build
+	cd abseil/abseil-cpp/build && cmake .. $(CMAKE_FLAGS) -DCMAKE_INSTALL_PREFIX=$(ABSL_ROOT) -DBUILD_TESTING=OFF
+	cd abseil/abseil-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd abseil/abseil-cpp/build && ${MAKE} install
+	cd $(ABSL_ROOT)/lib && ${AR} -crs --thin libabsl.a *.a
+	# cd $(ABSL_ROOT)/lib && ls libabsl_*.a | xargs -n1 ${AR} -x
+	# cd $(ABSL_ROOT)/lib && ${AR} -crs libabsl.a *.o && rm *.o
+
+abseil: $(ABSL_ROOT)/lib/libabsl.a
+
+
+$(PROTOBUF_ROOT)/lib/libprotobuf.a: abseil
+	cd protobuf && rm -rf protobuf-*/ || true
+	cd protobuf && tar -zxf protobuf-31.0.tar.gz
+	cd protobuf/protobuf && mkdir -p build
+	cd protobuf/protobuf/build && cmake ..                                     \
+								$(CMAKE_FLAGS)                                 \
+								-DCMAKE_PREFIX_PATH=$(ABSL_ROOT)        \
+								-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_ROOT) \
+								-Dprotobuf_BUILD_TESTS=OFF                     \
+								-Dprotobuf_LOCAL_DEPENDENCIES_ONLY=ON
+	cd protobuf/protobuf/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd protobuf/protobuf/build && ${MAKE} install
+	cd $(PROTOBUF_ROOT)/lib && ${AR} -crs --thin libprotobuf.a *.a
+	# cd $(PROTOBUF_ROOT)/lib && ls libutf8_*.a | xargs -n1 ${AR} -x
+	# cd $(PROTOBUF_ROOT)/lib && ${AR} -crs libutf8.a *.o && rm *.o
+ifeq ($(PROXYDEBUG),1)
+	cd $(PROTOBUF_ROOT)/lib && cp libprotobufd.a libprotobuf.a
+endif
+
+protobuf: $(PROTOBUF_ROOT)/lib/libprotobuf.a
+
+
+$(OTEL_ROOT)/lib/libopentelemetry.a: protobuf abseil curl json
+	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
+	cd opentelemetry && tar -zxf opentelemetry-cpp-1.21.0.tar.gz
+	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
+	cd opentelemetry && tar -zxf opentelemetry-proto-1.6.0.tar.gz
+	cd opentelemetry/opentelemetry-cpp && patch -p0 < ../active_span.patch
+	cd opentelemetry/opentelemetry-cpp && mkdir -p build
+	cd opentelemetry/opentelemetry-cpp/build && cmake ..                   \
+								$(CMAKE_FLAGS)                             \
+								-DBUILD_SHARED_LIBS=OFF                    \
+								-DBUILD_TESTING=OFF                        \
+								-DWITH_BENCHMARK=OFF                       \
+								-DWITH_EXAMPLES=OFF                        \
+								-DWITH_OTLP_HTTP=ON                        \
+								-DWITH_OTLP_GRPC=OFF                       \
+								-DOTELCPP_PROTO_PATH=$(OTEL_PROTO_DIR)     \
+								-DCMAKE_INSTALL_PREFIX=$(OTEL_ROOT) \
+								-DCMAKE_PREFIX_PATH="$(PROTOBUF_ROOT);$(ABSL_ROOT);$(CURL_ROOT);$(JSON_PATH)"
+	cd opentelemetry/opentelemetry-cpp/build && CC=${CC} CXX=${CXX} ${MAKE}
+	cd opentelemetry/opentelemetry-cpp/build && ${MAKE} install
+	cd $(OTEL_ROOT)/lib && ${AR} -crs --thin libopentelemetry.a *.a
+	# cd $(OTEL_ROOT)/lib && ls libopentelemetry_*.a | xargs -n1 ${AR} -x
+	# cd $(OTEL_ROOT)/lib && ${AR} -crs libopentelemetry.a *.o && rm *.o
+
+otel: $(OTEL_ROOT)/lib/libopentelemetry.a
 
 
 ### clean targets
@@ -366,5 +465,8 @@ cleanall:
 	cd libusual && rm -rf libusual-*/ || true
 	cd libscram && rm -rf lib/* obj/* || true
 	cd json && rm -rf json-*/ || true
+	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd protobuf && rm -rf protobuf-*/ || true
+	cd opentelemetry && rm -rf opentelemetry-cpp-*/ || true
+	cd opentelemetry && rm -rf opentelemetry-proto-*/ || true
 .PHONY: cleanall
-

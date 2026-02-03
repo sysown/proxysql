@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -44,6 +44,7 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
+#include "otel_tracer.h"
 
 #include <dirent.h>
 #include <search.h>
@@ -138,6 +139,7 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+extern OTelTracer *GloOTelTracer;
 
 extern void (*flush_logs_function)();
 
@@ -190,7 +192,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 		} else if (modname == "ldap") {
 			rc = GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
+		} else if (modname == "otel") {
+			rc = GloOTelTracer->SetVariable(r->fields[0], r->fields[1]);
 		}
+
 		const string v = string(r->fields[0]);
 		if (rc==false) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
@@ -208,7 +213,10 @@ void ProxySQL_Admin::flush_GENERIC_variables__process__database_to_runtime(
 #endif // PROXYSQLCLICKHOUSE
 				} else if (modname == "ldap") {
 					val = GloMyLdapAuth->get_variable(r->fields[0]);
+				} else if (modname == "otel") {
+					val = GloOTelTracer->GetVariable(r->fields[0]);
 				}
+
 				char q[1000];
 				if (val) {
 					if (variables_read_only.count(v) > 0) {
@@ -1195,4 +1203,136 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 	}
 	free(varnames);
 
+}
+
+void ProxySQL_Admin::flush_otel_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing OTEL variables. Replace:%d\n", replace);
+
+	char *error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *resultset = NULL;
+
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("otel", error, cols, affected_rows, resultset) == true) {
+		GloOTelTracer->wrlock();
+		flush_GENERIC_variables__process__database_to_runtime("otel", db, resultset, false, replace, {}, {}, {}, {});
+		GloOTelTracer->unlock();
+	}
+
+	// setup tracer after configuration change
+	GloOTelTracer->Setup();
+
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::flush_otel_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing OTEL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+
+	if (onlyifempty) {
+		char *error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result *resultset = NULL;
+
+		char *q = (char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'otel-%'";
+		db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+
+		int matching_rows = 0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row *r = *it;
+				matching_rows += atoi(r->fields[0]);
+			}
+		}
+
+		if (resultset) delete resultset;
+
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has OTEL variables - skipping\n");
+			return;
+		}
+	}
+
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting OTEL variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'otel-%'");
+	}
+
+	static char *a;
+	static char *b;
+	if (replace) {
+		a = (char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	} else {
+		a = (char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+
+	int rc;
+	sqlite3_stmt *statement1 = NULL;
+	sqlite3_stmt *statement2 = NULL;
+
+	rc=db->prepare_v2(a, &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+	if (runtime)  {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'otel-%'");
+
+		b = (char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+		rc = db->prepare_v2(b, &statement2);
+		ASSERT_SQLITE_OK(rc, db);
+	}
+
+	GloOTelTracer->wrlock();
+	db->execute("BEGIN");
+
+	for (auto& var : GloOTelTracer->GetVariablesList()) {
+		const char *varname = var.c_str();
+		char *val = GloOTelTracer->GetVariable(varname);
+
+		char *qualified_name = (char *)malloc(strlen(varname) + 6);
+		sprintf(qualified_name, "otel-%s", varname);
+
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, db);
+
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT);
+		ASSERT_SQLITE_OK(rc, db);
+
+		SAFE_SQLITE3_STEP2(statement1);
+
+		rc = (*proxy_sqlite3_clear_bindings)(statement1);
+		ASSERT_SQLITE_OK(rc, db);
+
+		rc = (*proxy_sqlite3_reset)(statement1);
+		ASSERT_SQLITE_OK(rc, db);
+
+		if (runtime) {
+			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT);
+			ASSERT_SQLITE_OK(rc, db);
+
+			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT);
+			ASSERT_SQLITE_OK(rc, db);
+
+			SAFE_SQLITE3_STEP2(statement2);
+
+			rc = (*proxy_sqlite3_clear_bindings)(statement2);
+			ASSERT_SQLITE_OK(rc, db);
+
+			rc = (*proxy_sqlite3_reset)(statement2);
+			ASSERT_SQLITE_OK(rc, db);
+		}
+
+		if (val)
+			free(val);
+
+		free(qualified_name);
+	}
+
+	db->execute("COMMIT");
+	GloOTelTracer->unlock();
+
+	(*proxy_sqlite3_finalize)(statement1);
+	if (runtime)
+		(*proxy_sqlite3_finalize)(statement2);
 }

@@ -77,6 +77,7 @@ ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	LEGACY_BUILD := 1
     export CC=gcc
     export CXX=g++
+    export AR=ar
 endif
 export MAKEOPT := -j${NPROCS}
 
@@ -155,7 +156,7 @@ build_src_debug: $(if $(LEGACY_BUILD),build_src_debug_legacy,build_src_debug_def
 # legacy build targets (pre c++17)
 .PHONY: build_deps_legacy
 build_deps_legacy:
-	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_legacy
 build_lib_legacy: build_deps_legacy
@@ -167,7 +168,7 @@ build_src_legacy: build_lib_legacy
 
 .PHONY: build_deps_debug_legacy
 build_deps_debug_legacy:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_legacy
 build_lib_debug_legacy: build_deps_debug_legacy
@@ -269,11 +270,11 @@ build_src_debug_clickhouse: build_src_debug_default
 
 .PHONY: build_deps_default
 build_deps_default:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 PHONY: build_deps_debug_default
 build_deps_debug_default:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default

@@ -12,7 +12,10 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I${CURL_IDIR} \
 			-I${SQLITE3_IDIR} \
 			-I$(DOTENV_IDIR) \
-			-I$(RE2_IDIR)
+			-I$(RE2_IDIR) \
+			-I$(ABSL_IDIR) \
+			-I$(PROTOBUF_IDIR) \
+			-I$(OTEL_IDIR)
 
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
@@ -123,4 +126,3 @@ cleanall: clean
 	# Remove cpp-dotenv source directories (213MB)
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
-

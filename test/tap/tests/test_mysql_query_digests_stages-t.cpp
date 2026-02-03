@@ -33,7 +33,7 @@
 #include <vector>
 #include <string>
 
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 #include "proxysql.h"
 #include "proxysql_utils.h"
 #include "re2/re2.h"

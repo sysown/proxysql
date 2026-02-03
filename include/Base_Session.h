@@ -10,13 +10,26 @@
 
 #ifndef PROXYJSON
 #define PROXYJSON
-#include "../deps/json/json_fwd.hpp"
+#include "nlohmann/json_fwd.hpp"
 #endif // PROXYJSON
+
+#include "otel_tracer.h"
 
 class MySQL_STMTs_meta;
 class StmtLongDataHandler;
 class MySQL_Session;
 class PgSQL_Session;
+
+extern OTelTracer *GloOTelTracer;
+
+#define SESSION_TRACE(session) \
+	session->CreateSessionSpan(__FILE__, __LINE__, __func__)
+
+#define SESSION_TRACE_NAMED(session, name) \
+	session->CreateSessionSpan(__FILE__, __LINE__, name)
+
+#define SESSION_TRACE_AUTO(session) \
+	auto otel_span_ = session->CreateSessionSpan(__FILE__, __LINE__, __func__)
 
 enum SESSION_FORWARD_TYPE : uint8_t {
 	SESSION_FORWARD_TYPE_NONE					= 0x00,
@@ -28,6 +41,9 @@ enum SESSION_FORWARD_TYPE : uint8_t {
 
 template<typename S, typename DS, typename B, typename T>
 class Base_Session {
+	protected:
+	unsafe_shared_ptr<OTelSpanStack> span_stack;
+
 	public:
 	Base_Session();
 	virtual ~Base_Session();
@@ -98,6 +114,7 @@ class Base_Session {
 	bool use_ssl;
 	//MySQL_STMTs_meta *sess_STMTs_meta;
 	//StmtLongDataHandler *SLDH;
+	std::unique_ptr<OTelSpan> root_span;
 
 
 
@@ -145,6 +162,17 @@ class Base_Session {
 	 * @returns The hostgroup in which the connection was found, -1 in case no connection is found.
 	 */
 	int FindOneActiveTransaction(bool check_savepoint=false);
+
+	std::unique_ptr<OTelSpan> CreateSessionSpan(
+		const char *__file,
+		int __line,
+		const char *name
+	) {
+		if (!GloOTelTracer) {
+			return nullptr;
+		}
+		return GloOTelTracer->StartSpan(span_stack, __file, __line, name);
+	}
 };
 
 #endif // CLASS_BASE_SESSION_H

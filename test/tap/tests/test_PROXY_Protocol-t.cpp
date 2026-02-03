@@ -14,7 +14,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include <utility> // For std::pair
 

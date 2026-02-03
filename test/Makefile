@@ -22,6 +22,9 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(CURL_IDIR) \
 			-I$(EV_IDIR) \
 			-I$(JSON_IDIR) \
+			-I$(ABSL_IDIR) \
+			-I$(PROTOBUF_IDIR) \
+			-I$(OTEL_IDIR) \
 			-I$(SSL_IDIR)
 
 

@@ -7,44 +7,51 @@ include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
-IDIRS :=	-I$(PROXYSQL_IDIR) \
-			-I$(JEMALLOC_IDIR) \
-			-I$(MARIADB_IDIR) \
-			-I$(LIBCONFIG_IDIR) \
-			-I$(LIBDAEMON_IDIR) \
-			-I$(RE2_IDIR) \
-			-I$(PCRE_IDIR) \
-			-I$(CLICKHOUSE_CPP_IDIR) \
-			-I$(MICROHTTPD_IDIR) \
-			-I$(LIBHTTPSERVER_IDIR) \
-			-I$(LIBINJECTION_IDIR) \
-			-I$(CURL_IDIR) \
-			-I$(EV_IDIR) \
-			-I$(PROMETHEUS_IDIR) \
-			-I$(LIBUSUAL_IDIR) \
-			-I$(LIBSCRAM_IDIR) \
-			-I$(SQLITE3_IDIR) \
-			-I$(POSTGRESQL_IDIR) \
-			-I$(JSON_IDIR) \
-			-I$(SSL_IDIR) \
+IDIRS := -I$(PROXYSQL_IDIR)       \
+		-I$(JEMALLOC_IDIR)        \
+		-I$(MARIADB_IDIR)         \
+		-I$(LIBCONFIG_IDIR)       \
+		-I$(LIBDAEMON_IDIR)       \
+		-I$(RE2_IDIR)             \
+		-I$(PCRE_IDIR)            \
+		-I$(MICROHTTPD_IDIR)      \
+		-I$(LIBHTTPSERVER_IDIR)   \
+		-I$(LIBINJECTION_IDIR)    \
+		-I$(CURL_IDIR)            \
+		-I$(EV_IDIR)              \
+		-I$(PROMETHEUS_IDIR)      \
+		-I$(POSTGRESQL_IDIR)      \
+		-I$(LIBUSUAL_IDIR)        \
+		-I$(LIBSCRAM_IDIR)        \
+		-I$(SQLITE3_IDIR)         \
+		-I$(CLICKHOUSE_CPP_IDIR)  \
+		-I$(JSON_IDIR)            \
+		-I$(ABSL_IDIR)            \
+		-I$(PROTOBUF_IDIR)        \
+		-I$(OTEL_IDIR)            \
+		-I$(SSL_IDIR)             \
 
-LDIRS :=	-L$(PROXYSQL_LDIR) \
-			-L$(JEMALLOC_LDIR) \
-			-L$(MARIADB_LDIR) \
-			-L$(LIBCONFIG_LDIR) \
-			-L$(LIBDAEMON_LDIR) \
-			-L$(RE2_LDIR) \
-			-L$(PCRE_LDIR) \
-			-L$(MICROHTTPD_LDIR) \
-			-L$(LIBHTTPSERVER_LDIR) \
-			-L$(LIBINJECTION_LDIR) \
-			-L$(CURL_LDIR) \
-			-L$(EV_LDIR) \
-			-L$(PROMETHEUS_LDIR) \
-			-L$(POSTGRESQL_LDIR) \
-			-L$(LIBUSUAL_LDIR) \
-			-L$(LIBSCRAM_LDIR) \
-			-L$(SSL_LDIR)
+LDIRS := -L$(PROXYSQL_LDIR)     \
+		-L$(JEMALLOC_LDIR)      \
+		-L$(MARIADB_LDIR)       \
+		-L$(LIBCONFIG_LDIR)     \
+		-L$(LIBDAEMON_LDIR)     \
+		-L$(RE2_LDIR)           \
+		-L$(PCRE_LDIR)          \
+		-L$(MICROHTTPD_LDIR)    \
+		-L$(LIBHTTPSERVER_LDIR) \
+		-L$(LIBINJECTION_LDIR)  \
+		-L$(CURL_LDIR)          \
+		-L$(EV_LDIR)            \
+		-L$(PROMETHEUS_LDIR)    \
+		-L$(POSTGRESQL_LDIR)    \
+		-L$(LIBUSUAL_LDIR)      \
+		-L$(LIBSCRAM_LDIR)      \
+		-L$(ABSL_LDIR)          \
+		-L$(PROTOBUF_LDIR)      \
+		-L$(OTEL_LDIR)          \
+		-L$(SSL_LDIR)
+
 
 ifeq ($(UNAME_S),Linux)
 	LDIRS += -L$(COREDUMPER_LDIR)
@@ -78,25 +85,28 @@ ifeq ($(CXX),clang++)
 endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
-
-STATICMYLIBS := -Wl,-Bstatic \
-				-lconfig \
-				-lproxysql \
-				-ldaemon \
-				-lconfig++ \
-				-lre2 \
-				-lpcrecpp \
-				-lpcre \
+STATICMYLIBS := -Wl,-Bstatic    \
+				-lconfig        \
+				-lproxysql      \
+				-lopentelemetry \
+				-lprotobuf      \
+				-lutf8_range -lutf8_validity \
+				-labsl          \
+				-ldaemon        \
+				-lconfig++      \
+				-lre2           \
+				-lpcrecpp       \
+				-lpcre          \
 				-lmariadbclient \
-				-lhttpserver \
-				-lmicrohttpd \
-				-linjection \
-				-lcurl \
-				-lev \
-				-lscram \
-				-lusual \
-				-lpq \
-				-lpgcommon \
+				-lhttpserver    \
+				-lmicrohttpd    \
+				-linjection     \
+				-lcurl          \
+				-lev            \
+				-lscram         \
+				-lusual         \
+				-lpq            \
+				-lpgcommon      \
 				-lpgport
 
 ifneq ($(NOJEMALLOC),1)
@@ -107,18 +117,12 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread -lssl -lcrypto -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
-ifeq ($(DISTRO),almalinux)
-ifeq ($(CENTOSVER),8)
-	MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH) -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
-endif
-endif
 
 ifeq ($(UNAME_S),Darwin)
 	MYLIBS :=-lre2 -lmariadbclient -lpq -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 else
-	CURL_DIR := $(DEPS_PATH)/curl/curl
-	IDIRS += -L$(CURL_DIR)/include
-	LDIRS += -L$(CURL_DIR)/lib/.libs
+	IDIRS += -L$(CURL_IDIR)
+	LDIRS += -L$(CURL_LDIR)
 endif
 ifeq ($(UNAME_S),Linux)
 	MYLIBS += -ldl
@@ -182,4 +186,3 @@ default: $(EXECUTABLE)
 
 clean:
 	rm -rf *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1 $(ODIR)
-

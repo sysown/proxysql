@@ -1,4 +1,4 @@
-﻿#include "../deps/json/json.hpp"
+﻿#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 #include <variant>
@@ -280,6 +280,9 @@ PgSQL_Session::PgSQL_Session() {
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
 	transaction_state_manager = new PgSQL_ExplicitTxnStateMgr(this);
+
+	span_stack = unsafe_shared_ptr(new OTelSpanStack());
+	root_span = SESSION_TRACE(this);
 }
 
 void PgSQL_Session::reset() {

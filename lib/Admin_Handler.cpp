@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -269,12 +269,64 @@ const std::vector<std::string> SAVE_PGSQL_VARIABLES_TO_MEMORY = {
 	"SAVE PGSQL VARIABLES TO MEM" ,
 	"SAVE PGSQL VARIABLES FROM RUNTIME" ,
 	"SAVE PGSQL VARIABLES FROM RUN" };
-//
+
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
 	"LOAD COREDUMP FROM MEM" ,
 	"LOAD COREDUMP TO RUNTIME" ,
 	"LOAD COREDUMP TO RUN" };
+
+const std::vector<std::string> LOAD_OTEL_VARIABLES_TO_MEMORY = {
+	"LOAD OTEL VARIABLES TO MEMORY",
+	"LOAD OTEL VARIABLES TO MEM",
+	"LOAD OTEL VARIABLES FROM DISK"
+};
+
+const std::vector<std::string> SAVE_OTEL_VARIABLES_FROM_MEMORY = {
+	"SAVE OTEL VARIABLES FROM MEMORY",
+	"SAVE OTEL VARIABLES FROM MEM",
+	"SAVE OTEL VARIABLES TO DISK"
+};
+
+const std::vector<std::string> LOAD_OTEL_VARIABLES_FROM_MEMORY = {
+	"LOAD OTEL VARIABLES FROM MEMORY",
+	"LOAD OTEL VARIABLES FROM MEM",
+	"LOAD OTEL VARIABLES TO RUNTIME",
+	"LOAD OTEL VARIABLES TO RUN"
+};
+
+const std::vector<std::string> SAVE_OTEL_VARIABLES_TO_MEMORY = {
+	"SAVE OTEL VARIABLES TO MEMORY",
+	"SAVE OTEL VARIABLES TO MEM",
+	"SAVE OTEL VARIABLES FROM RUNTIME",
+	"SAVE OTEL VARIABLES FROM RUN"
+};
+
+const std::vector<std::string> LOAD_OTEL_FILTER_TO_MEMORY = {
+	"LOAD OTEL FILTER TO MEMORY",
+	"LOAD OTEL FILTER TO MEM",
+	"LOAD OTEL FILTER FROM DISK"
+};
+
+const std::vector<std::string> SAVE_OTEL_FILTER_FROM_MEMORY = {
+	"SAVE OTEL FILTER FROM MEMORY",
+	"SAVE OTEL FILTER FROM MEM",
+	"SAVE OTEL FILTER TO DISK"
+};
+
+const std::vector<std::string> LOAD_OTEL_FILTER_FROM_MEMORY = {
+	"LOAD OTEL FILTER FROM MEMORY",
+	"LOAD OTEL FILTER FROM MEM",
+	"LOAD OTEL FILTER TO RUNTIME",
+	"LOAD OTEL FILTER TO RUN"
+};
+
+const std::vector<std::string> SAVE_OTEL_FILTER_TO_MEMORY = {
+	"SAVE OTEL FILTER TO MEMORY",
+	"SAVE OTEL FILTER TO MEM",
+	"SAVE OTEL FILTER FROM RUNTIME",
+	"SAVE OTEL FILTER FROM RUN"
+};
 
 extern unordered_map<string,std::tuple<string, vector<string>, vector<string>>> load_save_disk_commands;
 
@@ -2243,6 +2295,73 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	}
 
+	// OpenTelemetry
+	if ((query_no_space_length > 20)
+		&& ((!strncasecmp("SAVE OTEL VARIABLES ", query_no_space, 20))
+			|| (!strncasecmp("LOAD OTEL VARIABLES ", query_no_space, 20)))) {
+		if (is_admin_command_or_alias(LOAD_OTEL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'otel-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+
+		if (is_admin_command_or_alias(SAVE_OTEL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'otel-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+
+		if (is_admin_command_or_alias(LOAD_OTEL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+			pa->load_otel_variables_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded otel variables to RUNTIME\n");
+			pa->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		if (is_admin_command_or_alias(SAVE_OTEL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+			pa->save_otel_variables_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved otel variables from RUNTIME\n");
+			pa->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+	}
+
+	if ((query_no_space_length > 17)
+		&& ((!strncasecmp("SAVE OTEL FILTER ", query_no_space, 17))
+			|| (!strncasecmp("LOAD OTEL FILTER ", query_no_space, 17)))) {
+		if (is_admin_command_or_alias(LOAD_OTEL_FILTER_TO_MEMORY, query_no_space, query_no_space_length)) {
+			pa->admindb->execute("DELETE FROM main.otel_span_filters");
+			pa->admindb->execute("INSERT INTO main.otel_span_filters SELECT * FROM disk.otel_span_filters");
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded otel span filters to MEMORY\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		if (is_admin_command_or_alias(SAVE_OTEL_FILTER_FROM_MEMORY, query_no_space, query_no_space_length)) {
+			pa->admindb->execute("DELETE FROM disk.otel_span_filters");
+			pa->admindb->execute("INSERT INTO disk.otel_span_filters SELECT * FROM main.otel_span_filters");
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved otel span filters to DISK\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		if (is_admin_command_or_alias(LOAD_OTEL_FILTER_FROM_MEMORY, query_no_space, query_no_space_length)) {
+			pa->load_otel_filter_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded otel span filter to RUNTIME\n");
+			pa->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		if (is_admin_command_or_alias(SAVE_OTEL_FILTER_TO_MEMORY, query_no_space, query_no_space_length)) {
+			pa->save_otel_filter_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved otel span filter from RUNTIME\n");
+			pa->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+	}
+
 	if (!strncasecmp("SAVE CONFIG TO FILE", query_no_space, strlen("SAVE CONFIG TO FILE"))) {
 		std::string fileName = query_no_space + strlen("SAVE CONFIG TO FILE");
 
@@ -4144,4 +4263,3 @@ __run_query:
 // Explicitly instantiate the required template class and member functions
 template void admin_session_handler<MySQL_Session>(MySQL_Session* sess, void *_pa, PtrSize_t *pkt);
 template void admin_session_handler<PgSQL_Session>(PgSQL_Session* sess, void *_pa, PtrSize_t *pkt);
-

@@ -498,6 +498,10 @@ class ProxySQL_Admin {
 	void flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
+	// OpenTelemetry
+	void flush_otel_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void flush_otel_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime = false);
+
 	public:
 	/**
 	 * @brief Mutex taken by 'ProxySQL_Admin::admin_session_handler'. It's used prevent multiple
@@ -669,6 +673,13 @@ class ProxySQL_Admin {
 	// Coredump filters
 	bool load_coredump_to_runtime() { return flush_coredump_filters_database_to_runtime(admindb); }
 	
+	// OpenTelemetry
+	void init_otel_variables();
+	void load_otel_variables_to_runtime() { flush_otel_variables___database_to_runtime(admindb, true); }
+	void save_otel_variables_from_runtime() { flush_otel_variables___runtime_to_database(admindb, true, true, false); }
+	void load_otel_filter_to_runtime();
+	void save_otel_filter_from_runtime();
+
 	void p_update_metrics();
 	void stats___mysql_query_rules();
 	int stats___save_mysql_query_digest_to_sqlite(

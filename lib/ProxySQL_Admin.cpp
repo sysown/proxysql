@@ -1,4 +1,4 @@
-#include "../deps/json/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -5249,6 +5249,9 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	if (GloMyLdapAuth) {
 		admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
 	}
+
+	//OpenTelemetry
+	BQE1(admindb, {"otel_span_filters"}, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 }
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
@@ -8496,3 +8499,64 @@ void ProxySQL_Admin::enable_replicationlag_testing() {
 }
 #endif // TEST_REPLICATIONLAG
 
+// OpenTelemetry
+void ProxySQL_Admin::init_otel_variables() {
+	flush_otel_variables___database_to_runtime(admindb, true);
+	flush_otel_variables___runtime_to_database(configdb, false, false, false);
+	flush_otel_variables___runtime_to_database(admindb, false, true, false);
+}
+
+void ProxySQL_Admin::load_otel_filter_to_runtime() {
+	int cols = 0;
+	int affected_rows = 0;
+	char *error = NULL;
+	SQLite3_result *resultset = NULL;
+
+	std::string query = "SELECT file, line, span FROM otel_span_filters";
+	admindb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		// LCOV_EXCL_START
+		proxy_error("Error on %s : %s\n", query.c_str(), error);
+		// LCOV_EXCL_STOP
+	} else {
+		std::set<std::string> filters;
+
+		for (const auto& row : resultset->rows) {
+			std::string key;
+
+			// use the format file:line:span_name
+			key = row->fields[0];
+			key += ":";
+			key += row->fields[1];
+			key += ":";
+			key += row->fields[2];
+			filters.emplace(key);
+		}
+
+		GloOTelTracer->SetFilter(filters);
+	}
+
+	if (resultset)
+		delete resultset;
+}
+
+void ProxySQL_Admin::save_otel_filter_from_runtime() {
+	std::set<std::string> filters = GloOTelTracer->GetFilter();
+
+	std::string query = "DELETE FROM otel_span_filters";
+	admindb->execute(query.c_str());
+
+	for (auto& key : filters) {
+		std::vector<std::string> ret = split_str(key, ':');
+
+		query = "INSERT INTO otel_span_filters VALUES ('";
+		query += ret[0]; // file
+		query += "',";
+		query += ret[1]; // line
+		query += ",'";
+		query += ret[2]; // span_name
+		query += "')";
+
+		admindb->execute(query.c_str());
+	}
+}

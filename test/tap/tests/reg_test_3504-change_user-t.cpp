@@ -29,7 +29,7 @@
 #include "mysql.h"
 
 #include "command_line.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 #include "tap.h"
 #include "utils.h"
 

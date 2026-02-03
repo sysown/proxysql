@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "mysql.h"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 #include "tap.h"
 #include "command_line.h"
