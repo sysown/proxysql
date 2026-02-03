@@ -1875,6 +1875,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return true;
 		}
 	}
+#endif /* PROXYSQLGENAI */
 
 	// MCP (Model Context Protocol) LOAD/SAVE handlers
 #ifdef PROXYSQLGENAI
