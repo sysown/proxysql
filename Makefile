@@ -35,6 +35,7 @@ ifeq ($(CURVER_CHECK),0)
 endif
 
 export CURVER
+export PROXYSQLGENAI
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
