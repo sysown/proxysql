@@ -47,6 +47,7 @@ __thread bool mysql_thread___query_digests_no_digits = false;
 __thread bool mysql_thread___query_digests_keep_comment = false;
 __thread int mysql_thread___query_digests_grouping_limit = 3;
 __thread int mysql_thread___query_digests_groups_grouping_limit = 1;
+__thread char* mysql_thread___server_version = const_cast<char*>("8.0.11");
 
 __thread int pgsql_thread___query_digests_max_query_length = 65000;
 __thread bool pgsql_thread___query_digests_lowercase = false;
@@ -58,22 +59,6 @@ __thread int pgsql_thread___query_digests_groups_grouping_limit = 1;
 
 using std::vector;
 using std::string;
-
-std::string replace_str(const std::string& str, const std::string& match, const std::string& repl) {
-	if(match.empty()) {
-		return str;
-	}
-
-	std::string result = str;
-	size_t start_pos = 0;
-
-	while((start_pos = result.find(match, start_pos)) != std::string::npos) {
-		result.replace(start_pos, match.length(), repl);
-		start_pos += repl.length();
-	}
-
-	return result;
-}
 
 typedef std::chrono::high_resolution_clock hrc;
 
@@ -215,6 +200,8 @@ int count_test_defs(const nlohmann::json& j_test_defs, uint32_t& test_num) {
 	return EXIT_SUCCESS;
 }
 
+__thread char opt_srv_ver[MYSQL_SERVER_VER_MAX_LENGTH];
+
 void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, const string query) {
 	char* first_comment = NULL;
 	char buf[QUERY_DIGEST_BUF];
@@ -241,6 +228,9 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			int lowercase = 0;
 			bool keep_comment = false;
 			bool replace_null = true;
+			string server_version = "8.0.11";
+
+			bool inv_setting = false;
 
 			if (mz_test_def.contains("digest_max_size")) {
 				digest_max_size = mz_test_def.at("digest_max_size");
@@ -267,6 +257,18 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			if (mz_test_def.contains("replace_null")) {
 				replace_null = mz_test_def.at("replace_null");
 			}
+			if (mz_test_def.contains("server_version")) {
+				server_version = mz_test_def.at("server_version");
+				bool vres = validate_mysql_version(server_version.c_str());
+
+				if (!vres) {
+					diag(
+						"Invalid value found for setting; aborting check   name=\"server_version\" val=\"%s\"",
+						server_version.c_str()
+					);
+					continue;
+				}
+			}
 
 			int backup_digest_max_length = mysql_thread___query_digests_max_query_length;
 			mysql_thread___query_digests_max_query_length = digest_max_size;
@@ -282,6 +284,8 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			mysql_thread___query_digests_replace_null = replace_null;
 			int keep_comment_backup = mysql_thread___query_digests_keep_comment;
 			mysql_thread___query_digests_keep_comment = keep_comment;
+			char* srv_ver_backup = mysql_thread___server_version;
+			mysql_thread___server_version = const_cast<char*>(server_version.c_str());
 
 			char* c_res = mysql_query_digest_and_first_comment_2(c_query, query.size(), &first_comment,
 					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
@@ -302,6 +306,7 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			mysql_thread___query_digests_lowercase = lowercase_backup;
 			mysql_thread___query_digests_keep_comment = keep_comment_backup;
 			mysql_thread___query_digests_replace_null = replace_null_backup;
+			mysql_thread___server_version = srv_ver_backup;
 
 			if (query.size() >= QUERY_DIGEST_BUF) {
 				free(c_res);

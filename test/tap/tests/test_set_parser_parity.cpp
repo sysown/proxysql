@@ -19,7 +19,10 @@
 #include "MySQL_Parser.h"
 #include "proxysql_utils.h"
 
+#include "ezOptionParser.hpp"
+
 #include "utils.h"
+#include "tap.h"
 
 #include "json.hpp"
 
@@ -28,14 +31,22 @@
 
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <string.h>
 #include <vector>
 
 using std::fstream;
 using std::pair;
+using std::map;
 using std::string;
+using std::string_view;
+using std::unique_ptr;
 using std::vector;
+
+using nlohmann::json;
 
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 
@@ -270,16 +281,6 @@ const vector<string> valid_sql_mode_subexpr {
 	"SET sql_mode=(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', 5))"
 };
 
-/**
- * @brief For testing 'sql_mode' special error handling. Correctly parsed but denied due to AST properties.
- * @details TODO: This requires a special test, current covering is insufficient.
- */
-const vector<string> invalid_sql_mode_subexpr {
-	"SET sql_mode=(SELECT @user_var)",
-	"SET sql_mode=(SELECT CONCAT(@@sys_var, 'foo')",
-	"SET sql_mode=(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', (SELECT @sys_var)))",
-};
-
 rc_t<bool> check_sess_scope(const MySQLParser::AstNode* node) {
 	using MySQLParser::NodeType;
 
@@ -300,53 +301,35 @@ rc_t<bool> check_sess_scope(const MySQLParser::AstNode* node) {
 
 const string SET_TESTING_CSV_PATH { get_env("TAP_WORKDIR") + "./set_testing-240.csv" };
 
-rc_t<vector<string>> get_test_queries() {
+rc_t<vector<string>> get_valid_queries() {
 	vector<string> test_qs {};
 
-	int n { 0 };
-	if (ioctl(STDIN_FILENO, FIONREAD, &n)) {
-		std::cerr << "ioctl: Failed to read number of bytes in stdin   errno=" << errno << "\n";
-		return { EXIT_FAILURE, {} };
-	}
+	std::copy(exhaustive_queries.begin(), exhaustive_queries.end(), std::back_inserter(test_qs));
+	std::copy(set_queries.begin(), set_queries.end(), std::back_inserter(test_qs));
+	std::copy(setparser_queries.begin(), setparser_queries.end(), std::back_inserter(test_qs));
+	std::copy(valid_sql_mode_subexpr.begin(), valid_sql_mode_subexpr.end(), std::back_inserter(test_qs));
 
-	if (n > 0) {
-		string line {};
-		string cin_query {};
+	char* DISABLE_SET_TESTING_CSV { getenv("DISABLE_SET_TESTING_CSV_PATH") };
 
-		while (std::getline(std::cin, line)) {
-			cin_query += line + "\n";
+	if (!DISABLE_SET_TESTING_CSV) {
+		std::fstream logfile_fs {};
+
+		printf("Openning log file   path:'%s'\n", SET_TESTING_CSV_PATH.c_str());
+		// no scope found, defaults to session
+		logfile_fs.open(SET_TESTING_CSV_PATH.c_str(), std::fstream::in | std::fstream::out);
+
+		if (!logfile_fs.is_open() || !logfile_fs.good()) {
+			fprintf(stderr, "Failed to open '%s' file   path=\"%s\" error=%d\n",
+				basename(SET_TESTING_CSV_PATH.c_str()), SET_TESTING_CSV_PATH.c_str(), errno
+			);
+			return { EXIT_FAILURE, {} };
 		}
 
-		test_qs.push_back(cin_query);
-	} else {
-		std::copy(exhaustive_queries.begin(), exhaustive_queries.end(), std::back_inserter(test_qs));
-		std::copy(set_queries.begin(), set_queries.end(), std::back_inserter(test_qs));
-		std::copy(setparser_queries.begin(), setparser_queries.end(), std::back_inserter(test_qs));
-		std::copy(valid_sql_mode_subexpr.begin(), valid_sql_mode_subexpr.end(), std::back_inserter(test_qs));
-		std::copy(invalid_sql_mode_subexpr.begin(), invalid_sql_mode_subexpr.end(), std::back_inserter(test_qs));
+		string next_line {};
 
-		char* DISABLE_SET_TESTING_CSV { getenv("DISABLE_SET_TESTING_CSV_PATH") };
-
-		if (!DISABLE_SET_TESTING_CSV) {
-			std::fstream logfile_fs {};
-
-			printf("Openning log file   path:'%s'\n", DISABLE_SET_TESTING_CSV);
-			// no scope found, defaults to session
-			logfile_fs.open(SET_TESTING_CSV_PATH.c_str(), std::fstream::in | std::fstream::out);
-
-			if (!logfile_fs.is_open() || !logfile_fs.good()) {
-				fprintf(stderr, "Failed to open '%s' file   path=\"%s\" error=%d\n",
-					basename(SET_TESTING_CSV_PATH.c_str()), SET_TESTING_CSV_PATH.c_str(), errno
-				);
-				return { EXIT_FAILURE, {} };
-			}
-
-			string next_line {};
-
-			while (std::getline(logfile_fs, next_line)) {
-				nlohmann::json j_next_line = nlohmann::json::parse(next_line);
-				test_qs.push_back(j_next_line["query"]);
-			}
+		while (std::getline(logfile_fs, next_line)) {
+			nlohmann::json j_next_line = nlohmann::json::parse(next_line);
+			test_qs.push_back(j_next_line["query"]);
 		}
 	}
 
@@ -360,13 +343,13 @@ char safe_tolower(char ch) {
 nlohmann::json to_json(const var_map_t& var_map) {
 	nlohmann::json json_map;
 
-	for (const auto& [key, value_vector] : var_map) {
+	for (const auto& [key, assigns] : var_map) {
 		nlohmann::json json_vector;
 
-		for (const auto& [ast_node_ptr, string_value] : value_vector) {
+		for (const auto& [_, node, val] : assigns) {
 			nlohmann::json json_pair;
-			json_pair["node_addr"] = reinterpret_cast<std::uintptr_t>(ast_node_ptr);
-			json_pair["val"] = string_value;
+			json_pair["node_addr"] = reinterpret_cast<std::uintptr_t>(node);
+			json_pair["val"] = val;
 			json_vector.push_back(json_pair);
 		}
 
@@ -376,7 +359,166 @@ nlohmann::json to_json(const var_map_t& var_map) {
 	return json_map;
 }
 
-int main() {
+const auto str_acc = [] (const string& s1, const string& s2) -> string {
+	return s2 + " " + s1;
+};
+
+string to_string(const perr_t& e) {
+	const auto c_join = [](const string& s1, const string& s2) -> string {
+		return s2.empty() ? s1 : s1 + "," + s2;
+	};
+	const string s_err_ctx { "[" + fold(c_join, e.ctx) + "]" };
+
+	return "(" + _TO_S(e.rc) + ", '" + e.msg + "', '" + s_err_ctx + "')";
+}
+
+rc_t<string> verf_parser_match(
+	const var_map_t& var_map,
+	map<string, vector<string>>& regex_vals,
+	const string& q
+) {
+	for (auto e : var_map) {
+		using MySQLParser::NodeType;
+
+		if (e.second.size() <= 0) {
+			assert(0 && "Invalid parse result for a SET statement, at least one value is expected.");
+		}
+
+		const string& v_name { e.first };
+		const MySQLParser::AstNode* v_node { e.second.front().node };
+		const string_view& v_val { e.second.front().val };
+
+		const bool is_sess_scope { check_sess_scope(v_node).second };
+		const bool is_user_def {
+			get_node(v_node, {{ MySQLParser::NodeType::NODE_USER_VARIABLE, 0 }}).first == 0
+		};
+
+		const string v_pos { "(" + _TO_S(v_node->val_init_pos) + "," + _TO_S(v_node->val_end_pos) + ")" };
+
+		std::cout << "Variable assignment - Node details:\n";
+		std::cout << "  - Name:           " << v_name << "\n";
+		std::cout << "  - Sess Scope:     " << is_sess_scope << "\n";
+		std::cout << "  - User Defined:   " << is_user_def << "\n";
+		std::cout << "  - Type:           " << to_string(v_node->type) << "\n";
+		std::cout << "  - Value           " << v_pos << ": " << v_val << "\n";
+
+		if (v_name == "sql_mode") {
+			const auto v_res { verf_sql_mode_val(v_node, v_val, q) };
+			const string s_err { to_string(v_res) };
+
+			std::cout << "  - SQL_MODE_VERF:  " << s_err << "\n";
+		}
+
+		std::cout << "  - AST Parser Val: _" << v_val << "_\n";
+
+		const string lc_name {
+			std::accumulate(v_name.begin(), v_name.end(), string {},
+				[] (const string& s, const char c) -> string {
+					return s + safe_tolower(c);
+				}
+			)
+		};
+
+		const vector<string> re_vals { regex_vals[lc_name] };
+		const string re_val { trim(fold(str_acc, re_vals)) };
+
+		auto acc_child_vals = [] (MySQLParser::AstNode* const n, const string& s) -> string {
+			return s + " " + n->value;
+		};
+
+		const vector<string> known_re2_fails {
+			"DEFAULT;"
+		};
+
+		std::cout << "  - RE2 Parser map: _" << nlohmann::json(regex_vals).dump() << "_\n";
+		std::cout << "  - AST Parser map: _" << to_json(var_map).dump() << "_\n";
+		std::cout << "  - RE2 Parser Val: _" << re_val << "_\n";
+		std::cout << "  - AST Parser Val: _" << v_val << "_\n";
+
+		if (!is_user_def && is_sess_scope && re_val != v_val) {
+			std::cout << "WARNING: Mismatch between REGEX Parser and AST parser\n";
+
+			if (std::find(std::begin(known_re2_fails), std::end(known_re2_fails), re_val) != std::end(known_re2_fails)) {
+				std::cout << "  + Known legacy failure of the REGEX parser\n";
+			} else if (!v_val.empty() && re_val.empty()) {
+				std::cout << "  + Query matched with empty value in the REGEX parser, this is likely an"
+					" unsupported query for this parser.\n";
+			} else {
+				return { -1, q };
+			}
+		}
+	}
+
+	return { 0, "" };
+}
+
+struct cmd_opts_t {
+	bool verbose;
+	string query;
+};
+
+rc_t<cmd_opts_t> get_cmd_options(int argc, const char* argv[]) {
+	// command line options to extract
+	cmd_opts_t opts { false, {} };
+
+	// define the command line options
+	ez::ezOptionParser opt_p {};
+	opt_p.overview = "TAP test for parity between REGEX and Bison SQL parsers for SET statements";
+	opt_p.syntax = "test_set_parser_parity [OPTIONS]";
+	opt_p.footer = "\n\nHave fun :)";
+
+	// clang-format off
+	opt_p.add(
+		(const char *)"", 0, 0, 0, (const char *)"Display usage instructions.",
+		(const char *)"-h", (const char *)"-help", (const char *)"--help", (const char *)"--usage"
+	);
+	opt_p.add(
+		(const char *)"", 0, 0, 0, (const char *)"Enable verbose output",
+		(const char *)"-v", (const char *)"--verbose"
+	);
+	opt_p.add(
+		(const char *)"", 0, 1, 0, (const char *)"Process single input query",
+		(const char *)"-q", (const char *)"--query"
+	);
+	// clang-format on
+
+	// parse the arguments
+	opt_p.parse(argc, argv);
+
+	// extract command line options
+	if (opt_p.isSet("-h")) {
+		std::string usage {};
+		opt_p.getUsage(usage);
+		std::cout << usage << std::endl;
+
+		exit(EXIT_SUCCESS);
+	}
+	if (opt_p.isSet("-v")) {
+		opts.verbose = true;
+	}
+	if (opt_p.isSet("-q")) {
+		opt_p.get("-q")->getString(opts.query);
+	}
+
+	int n { 0 };
+	if (ioctl(STDIN_FILENO, FIONREAD, &n)) {
+		std::cerr << "ioctl: Failed to read number of bytes in stdin   errno=" << errno << "\n";
+		return { EXIT_FAILURE, {} };
+	}
+
+	if (n > 0) {
+		string line {};
+		string cin_query {};
+
+		while (std::getline(std::cin, line)) {
+			opts.query += line + "\n";
+		}
+	}
+
+	return { 0, opts };
+}
+
+int main(int argc, const char* argv[]) {
 	// Required for giving some defaults
 	mysql_thread___query_digests_max_query_length = 65000;
 	mysql_thread___query_digests_lowercase = false;
@@ -386,143 +528,42 @@ int main() {
 	mysql_thread___query_digests_grouping_limit = 3;
 	mysql_thread___query_digests_groups_grouping_limit = 1;
 
+	const auto opts { get_cmd_options(argc, argv) };
+
 	vector<string> failed_matches {};
-	rc_t<vector<string>> test_qs { get_test_queries() };
+	rc_t<vector<string>> test_qs {
+		opts.second.query.empty() ? get_valid_queries() : rc_t<vector<string>> { 0, { opts.second.query } }
+	};
 
 	if (test_qs.first) {
+		diag("Creating test queries failed   rc=%d", test_qs.first);
 		return test_qs.first;
+	} else {
+		plan(1);
 	}
 
 	// Current ProxySQL parser
 	MySQL_Set_Stmt_Parser regex_parser("");
+	// Bison SQL parser
+	MySQLParser::Parser parser;
 
 	for (const auto& q : test_qs.second) {
 		std::cout << "------------------------------------------\n";
 		std::cout << "Parsing MySQL SET query: " << q << std::endl;
 
-		MySQLParser::Parser parser;
-		std::unique_ptr<MySQLParser::AstNode> ast = parser.parse(q);
+		std::unique_ptr<MySQLParser::AstNode> ast { parser.parse(q) };
+		regex_parser.set_query(q);
+
+		map<string,vector<string>> regex_vals {};
 
 		if (ast) {
-			MySQLParser::print_ast(ast.get());
-
-			const auto var_map { ext_vars_assigns_map(ast.get(), q) };
-
-			regex_parser.set_query(q);
-			auto regex_vals { regex_parser.parse1v2() };
-
-			const auto str_acc = [] (const string& s1, const string& s2) -> string {
-				return s2 + " " + s1;
-			};
-
-			for (auto e : var_map) {
-				using MySQLParser::NodeType;
-
-				const string& var_name { e.first };
-				// We assume that the expression has at least one node
-				const MySQLParser::AstNode* var_node { e.second.front().first };
-				const string& var_val { e.second.front().second };
-
-				const bool is_sess_scope { check_sess_scope(var_node).second };
-				const bool is_user_def {
-					get_node(var_node, {{ MySQLParser::NodeType::NODE_USER_VARIABLE, 0 }}).first == 0
-				};
-
-				std::cout << "Variable assignment node details:\n";
-				std::cout << "  - Name: " << var_name << "\n";
-				std::cout << "  - Sess Scope: " << is_sess_scope << "\n";
-				std::cout << "  - User Defined: " << is_user_def << "\n";
-				std::cout << "  - Type: " << to_string(var_node->type) << "\n";
-				std::cout << "  - Value (" << var_node->val_init_pos << "," << var_node->val_end_pos << "): "
-					<< var_val << "\n";
-
-				if (var_name == "sql_mode") {
-					const auto c_join = [](const string& s1, const string& s2) -> string {
-						return s2.empty() ? s1 : s1 + "," + s2;
-					};
-					const auto verf_err { verf_sql_mode_val(var_node, var_val, q) };
-					const string s_err_ctx { "[" + fold(c_join, verf_err.ctx) + "]" };
-
-					std::cout << "  - SQL_MODE_VERF: (" <<
-						verf_err.rc << ", '" << verf_err.msg << "', '" << s_err_ctx
-					<< "')\n";
-				}
-
-				const string lower_name {
-					std::accumulate(var_name.begin(), var_name.end(), string {},
-						[] (const string& s, const char c) -> string {
-							return s + safe_tolower(c);
-						}
-					)
-				};
-				const vector<string> re_vals { regex_vals[lower_name] };
-				const string re_val { trim(fold(str_acc, re_vals)) };
-
-				std::cout << "  - RE2 Parser map: _" << nlohmann::json(regex_vals).dump() << "_\n";
-				std::cout << "  - AST Parser map: _" << to_json(var_map).dump() << "_\n";
-				std::cout << "  - RE2 Parser Val: _" << re_val << "_\n";
-				std::cout << "  - AST Parser Val: _" << var_val << "_\n";
-
-				if (!is_user_def && is_sess_scope && re_val != var_val) {
-					std::cout << "WARNING: Mismatch between Regex Parser and AST parser\n";
-					if (!var_val.empty() && re_val.empty()) {
-						std::cout <<
-							"  + Query matched with empty value in the REGEX parser, this is likely an"
-							" unsupported query for this parser.\n";
-					} else {
-						failed_matches.push_back(q);
-					}
-				}
+			if (opts.second.verbose) {
+				std::cout << "[Verbose] AST after query parse:\n";
+				MySQLParser::print_ast(ast.get());
 			}
 
-			// Special query 'SET NAMES' / 'SET CHARACTER SET' / etc
-			if (
-				var_map.empty()
-				&& (
-					ast.get()->type == MySQLParser::NodeType::NODE_SET_NAMES
-					|| ast.get()->type == MySQLParser::NodeType::NODE_SET_CHARSET
-				)
-			) {
-				const string type {
-					ast.get()->type == MySQLParser::NodeType::NODE_SET_NAMES ?
-					"NAMES" : "CHARSET"
-				};
-				std::cout << type << " assignment details:\n";
-
-				regex_parser.set_query(q);
-
-				string re_val {};
-
-				if (ast.get()->type == MySQLParser::NodeType::NODE_SET_NAMES) {
-					auto re_map { regex_parser.parse1v2() };
-					const auto re_vals { re_map["names"] };
-
-					re_val = trim(fold(str_acc, re_vals));
-				} else {
-					re_val = regex_parser.parse_character_set();
-				}
-
-				auto acc_child_vals = [] (MySQLParser::AstNode* const n, const string& s) -> string {
-					return s + " " + n->value;
-				};
-				const string p_val { trim(fold(acc_child_vals, ast.get()->children)) };
-
-				std::cout << "  - RE2 Parser Val: " << re_val << "\n";
-				std::cout << "  - AST Parser Val: " << p_val << "\n";
-
-				const vector<string> known_re2_fails {
-					"DEFAULT;"
-				};
-
-				if (re_val != p_val) {
-					if (std::find(std::begin(known_re2_fails), std::end(known_re2_fails), re_val) != std::end(known_re2_fails)) {
-						std::cout << "  + Known legacy failure of the REGEX parser\n";
-					} else {
-						std::cout << "WARNING: Mismatch between Regex Parser and AST parser\n";
-						failed_matches.push_back(q);
-					}
-				}
-			}
+			// NOTE: First node from INPUT_STATEMENT_LIST; single statement queries are assumed
+			const MySQLParser::AstNode* stmt { ast->children.size() ? ast->children.front() : nullptr };
 
 			std::cout << "'MySQL_Session' regexes equivalences:\n";
 
@@ -530,11 +571,15 @@ int main() {
 			{
 				char* _cmt { nullptr };
 				q_digest = mysql_query_digest_and_first_comment_2(q.c_str(), q.size(), &_cmt, nullptr);
+
+				if (_cmt) {
+					free(_cmt);
+				}
 			}
 
-			// ProxySQL statement regexes
+			// ProxySQL (MySQL_Session) statement regexes
 			{
-				bool p_match_1 = p_match_regex_1(ast.get());
+				bool p_match_1 = p_match_regex_1(stmt);
 				bool r_match_1 = strncasecmp(q_digest, "SET ", 4) == 0 &&
 					(
 						mysql_match_regexes[1].match(const_cast<char*>(q_digest))
@@ -544,53 +589,84 @@ int main() {
 
 				printf("  + Match 1   parser=%d regex=%d\n", p_match_1, r_match_1);
 
+				if (r_match_1) {
+					regex_vals = regex_parser.parse1v2();
+				}
 				if (p_match_1 != r_match_1) {
 					failed_matches.push_back(q.c_str());
 				}
 			}
 
 			{
-				bool p_match_2 = p_match_regex_2(ast.get());
+				bool p_match_2 = p_match_regex_2(stmt);
 				bool r_match_2 = strncasecmp(q.c_str(), "SET ", 4) == 0 &&
 					mysql_match_regexes[2].match(const_cast<char*>(q_digest));
 
 				printf("  + Match 2   parser=%d regex=%d\n", p_match_2, r_match_2);
 
+				if (r_match_2) {
+					regex_vals = regex_parser.parse2();
+				}
 				if (p_match_2 != r_match_2) {
 					failed_matches.push_back(q.c_str());
 				}
 			}
 
 			{
-				bool p_match_3 = p_match_regex_3(ast.get());
+				bool p_match_3 = p_match_regex_3(stmt);
 				bool r_match_3 = strncasecmp(q.c_str(), "SET ", 4) == 0 &&
 					mysql_match_regexes[3].match(const_cast<char*>(q_digest));
 
 				printf("  + Match 3   parser=%d regex=%d\n", p_match_3, r_match_3);
 
+				if (r_match_3) {
+					const string val { regex_parser.parse_character_set() };
+					regex_vals["character_set"] = { val };
+				}
 				if (p_match_3 != r_match_3) {
 					failed_matches.push_back(q.c_str());
 				}
 			}
+
+			const auto var_map { ext_set_details(stmt, q) };
+
+			// Verify REGEX and SQL parser value extraction matches
+			{
+				const auto p_res { verf_parser_match(var_map.vars_assigns, regex_vals, q) };
+
+				if (p_res.first) {
+					failed_matches.push_back(p_res.second);
+				}
+			}
+
+			free(q_digest);
 		} else {
-			std::cout << "Parsing failed:" << std::endl;
+			std::cout << "Parsing failed:\n";
 			const auto& errors = parser.get_errors();
 
 			if (errors.empty()) {
-				std::cout << "  - No specific error, check parser logic or 'mysql_yyerror'." << std::endl;
+				std::cout << " - No specific error, check parser logic or 'mysql_yyerror'.\n";
 			} else {
 				for (const auto& error : errors) {
-					std::cout << " - Error: " << error << std::endl;
+					std::cout << " - Error: " << error << "\n";
 				}
+			}
+
+			if (!regex_vals.empty()) {
+				std::cout << " - REGEX based parser returned non-empty output. Flagging as failure!\n";
+				std::cout << "   + REGEX Vals: " << nlohmann::json(regex_vals).dump();
+				failed_matches.push_back(q);
 			}
 		}
 	}
 
 	std::cout << "\n";
 
+	ok(failed_matches.size() == 0, "No matching differences should be observed between parsers");
+
 	for (const auto& f : failed_matches) {
 		std::cout << "Match failure   q=\"" << f << "\"\n";
 	}
 
-	return failed_matches.size();
+	return exit_status();
 }

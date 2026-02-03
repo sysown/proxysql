@@ -456,6 +456,7 @@ void * my_conn_thread(void *arg) {
 	for (i=0; i<count; i++) {
 		mysql_close(mysqlconns[i]);
 	}
+	free(mysqlconns);
 
 	return NULL;
 }
@@ -579,5 +580,6 @@ int main(int argc, char *argv[]) {
 		sleep(10);
 
 	}
+	mysql_close(proxysql_admin);
 	return exit_status();
 }

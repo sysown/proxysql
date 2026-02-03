@@ -133,10 +133,10 @@
 			"SELECT * FROM test.select_for_update_foo FOR UPDATE  ;  /* comment */ SELECT 1     ;",
 			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE ; -- final_comment\n SELECT 1;  -- final_comment\n  "
 		],
-		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
-		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
-		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
-		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?"
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?"
 	},
 	// Final spaces and ending and middle query delimiters (';'). No extra spaces before (';')
 	{
@@ -144,12 +144,25 @@
 			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT 1         ;",
 			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE;  SELECT 1;     ",
 			"SELECT * FROM test.select_for_update_foo FOR UPDATE;  /* comment */ SELECT 1     ;",
-			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n SELECT 1;  -- final_comment\n  "
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n SELECT 1;  -- final_comment\n  ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE;  /* comment */ SELECT 1     ;    ;   ;;;"
 		],
 		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
 		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
 		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
 		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?"
+	},
+	// Final spaces and ending collapsed for empty queries
+	{
+		"q": [
+			"",
+			"   ;",
+			"   ;;;;",
+			"   ;;;;   ;;;",
+			"   ;;;;   ;;; -- cmd_1",
+			"/* cmd_1 */   ;;;;   ;;; -- cmd_2"
+		],
+		"s1": ""
 	},
 	// Floats
 	{
@@ -505,6 +518,39 @@
 		"s2": "create table test.null_digests_2 (null_c1 TEXT,c2 TEXT,c3 TEXT)",
 		"s3": "create table test.null_digests_2 (null_c1 TEXT,c2 TEXT,c3 TEXT)",
 		"s4": "create table test.null_digests_2 (null_c1 TEXT,c2 TEXT,c3 TEXT)"
+	},
+	// CMD: Command-version processing
+	{
+		// TODO: Make crash candidate out of this; target the ';' as starting character
+		"q": [
+			"/*!40000 SET bar=\"barbar\" */;",
+			"/*!40000 SET bar=\"barbar\" */ ;",
+			"/*!40000 SET bar=\"barbar\" */ ;-- comment ",
+			"/*!40000 SET bar=\"barbar\" */ ; -- comment "
+		],
+		"mz": [
+			{
+				"digest_max_size": 300,
+				"server_version": "4.0.2",
+				"digest": "SET bar=?"
+			}
+		]
+	},
+	{
+		// TODO: Make crash candidate out of this; target the ';' as starting character
+		"q": [
+			"/*!40000 SET bar=\"barbar\" */;",
+			"/*!40000 SET bar=\"barbar\" */ ;",
+			"/*!40000 SET bar=\"barbar\" */ ;-- comment ",
+			"/*!40000 SET bar=\"barbar\" */ ; -- comment "
+		],
+		"mz": [
+			{
+				"digest_max_size": 300,
+				"server_version": "3.0.2",
+				"digest": ""
+			}
+		]
 	},
 	// SimpleGroping: Query digest reduction
 	{
