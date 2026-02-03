@@ -17,6 +17,7 @@ services:
       - WITHASAN
       - BLD_NAME
       - PROXYSQLGENAI
+      - GIT_VERSION
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
 ####################################################################################################
