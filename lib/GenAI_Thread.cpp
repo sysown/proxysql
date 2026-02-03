@@ -1,5 +1,7 @@
 #ifdef PROXYSQLGENAI
 
+
+#include "proxysql.h"
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
 #include "proxysql_debug.h"

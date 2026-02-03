@@ -1,5 +1,7 @@
 #ifdef PROXYSQLGENAI
 
+
+#include "proxysql.h"
 /**
  * @file RAG_Tool_Handler.cpp
  * @brief Implementation of RAG Tool Handler for MCP protocol

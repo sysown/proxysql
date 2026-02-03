@@ -1,5 +1,7 @@
 #ifdef PROXYSQLGENAI
 
+
+#include "proxysql.h"
 /**
  * @file AI_Tool_Handler.cpp
  * @brief Implementation of AI Tool Handler for MCP protocol

@@ -1,5 +1,7 @@
 #ifdef PROXYSQLGENAI
 
+
+#include "proxysql.h"
 // ============================================================
 // Static_Harvester Implementation
 //

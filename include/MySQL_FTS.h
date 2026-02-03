@@ -203,4 +203,5 @@ public:
 	SQLite3DB* get_db() { return db; }
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_MYSQL_FTS_H */

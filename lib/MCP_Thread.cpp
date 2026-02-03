@@ -1,5 +1,7 @@
 #ifdef PROXYSQLGENAI
 
+
+#include "proxysql.h"
 #include "MCP_Thread.h"
 #include "MySQL_Tool_Handler.h"
 #include "Config_Tool_Handler.h"

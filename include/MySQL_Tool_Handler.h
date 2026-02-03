@@ -5,7 +5,6 @@
 
 #include "MySQL_Catalog.h"
 #include "MySQL_FTS.h"
-#include "cpp.h"
 #include <string>
 #include <memory>
 #include <vector>

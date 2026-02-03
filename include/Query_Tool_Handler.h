@@ -5,8 +5,10 @@
 
 #include "MCP_Tool_Handler.h"
 #include "Discovery_Schema.h"
-#include "Static_Harvester.h"
 #include <pthread.h>
+
+// Forward declaration to avoid circular include
+class Static_Harvester;
 
 /**
  * @brief Query Tool Handler for /mcp/query endpoint

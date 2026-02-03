@@ -1,5 +1,7 @@
 #ifdef PROXYSQLGENAI
 
+#include "proxysql.h"
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON

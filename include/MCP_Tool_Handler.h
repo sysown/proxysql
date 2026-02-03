@@ -3,7 +3,6 @@
 
 #ifdef PROXYSQLGENAI
 
-#include "cpp.h"
 #include <string>
 #include <memory>
 
@@ -187,4 +186,5 @@ protected:
 	}
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_MCP_TOOL_HANDLER_H */

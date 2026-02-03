@@ -95,4 +95,5 @@ public:
 	json execute_tool(const std::string& tool_name, const json& arguments) override;
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_AI_TOOL_HANDLER_H */
