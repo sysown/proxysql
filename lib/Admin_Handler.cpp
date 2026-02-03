@@ -1858,6 +1858,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 
 	// MCP (Model Context Protocol) VARIABLES - DISK commands
+#ifdef PROXYSQLGENAI
 	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
 		const std::string modname = "mcp_variables";
 		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
