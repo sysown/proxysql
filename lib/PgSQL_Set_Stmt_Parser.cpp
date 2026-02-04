@@ -1,13 +1,13 @@
-#include "PgSQL_Set_Stmt_Parser.h"
-#include "gen_utils.h"
 #include <string>
 #include <vector>
 #include <map>
 #include <cassert>
 #include <utility> // for std::pair
-//#ifdef PARSERDEBUG
 #include <iostream>
-//#endif
+
+#include "PgSQL_Set_Stmt_Parser.h"
+#include "gen_utils.h"
+#include "proxysql.h"
 
 #ifdef DEBUG
 //#define VALGRIND_ENABLE_ERROR_REPORTING

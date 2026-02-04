@@ -120,8 +120,6 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	std::map<unsigned int, unsigned int> sessmap;
 #endif // IDLE_THREADS
 
-	//Session_Regex **match_regexes;
-
 #ifdef IDLE_THREADS
 	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
 	void worker_thread_gets_sessions_from_idle_thread();

@@ -2,14 +2,13 @@
 using json = nlohmann::json;
 #define PROXYJSON
 
+#include "MySQL_Session.h"
+#include "MySQL_Session_Utils.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Thread.h"
 #include "proxysql.h"
-#include "cpp.h"
 #include "proxysql_utils.h"
 #include "re2/re2.h"
-#include "re2/regexp.h"
-#include "mysqld_error.h"
 
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
@@ -25,11 +24,11 @@ using json = nlohmann::json;
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
+#include "MySQL_Variables_Utils.h"
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Query_Cache.h"
 #include "MySQL_SET_Parser_Utils.h"
 
-#include "libinjection.h"
 #include "libinjection_sqli.h"
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -690,8 +689,6 @@ MySQL_Session::MySQL_Session() {
 	gtid_hid = -1;
 	memset(gtid_buf,0,sizeof(gtid_buf));
 
-	match_regexes=NULL;
-
 	init(); // we moved this out to allow CHANGE_USER
 
 	last_insert_id=0; // #1093
@@ -812,7 +809,6 @@ MySQL_Session::~MySQL_Session() {
 	}
 	assert(qpo);
 	delete qpo;
-	match_regexes=NULL;
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
@@ -7302,9 +7298,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				match_regex_2 = !match_regex_1 && p_match_regex_2(ast.get());
 				match_regex_3 = !match_regex_2 && p_match_regex_3(ast.get());
 			} else {
-				match_regex_1 = match_regexes && (match_regexes[1]->match(dig));
-				match_regex_2 = !match_regex_1 && match_regexes && (match_regexes[2]->match(dig));
-				match_regex_3 = !match_regex_2 && match_regexes && (match_regexes[3]->match(dig));
+				match_regex_1 = (mysql_match_regexes[1].match(dig));
+				match_regex_2 = !match_regex_1 && (mysql_match_regexes[2].match(dig));
+				match_regex_3 = !match_regex_2 && (mysql_match_regexes[3].match(dig));
 			}
 
 			if (
@@ -7759,7 +7755,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ACCESS MODE to READ %s\n", value1.c_str());
 						}
-					} else if (std::find(mysql_variables.ignore_vars.begin(), mysql_variables.ignore_vars.end(), var) != mysql_variables.ignore_vars.end()) {
+					} else if (
+						std::find(get_mysql_ignore_vars().begin(), get_mysql_ignore_vars().end(), var)
+							!= get_mysql_ignore_vars().end()
+					) {
 						// this is a variable we parse but ignore
 						// see MySQL_Variables::MySQL_Variables() for a list of ignored variables
 #ifdef DEBUG

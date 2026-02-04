@@ -1,15 +1,14 @@
 ﻿#include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
-#include <variant>
+
+#include "PgSQL_Session.h"
+#include "PgSQL_Session_Utils.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
 #include "proxysql.h"
-#include "cpp.h"
 #include "proxysql_utils.h"
 #include "re2/re2.h"
-#include "re2/regexp.h"
-#include "mysqld_error.h"
 
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
@@ -22,12 +21,13 @@ using json = nlohmann::json;
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
 #include "PgSQL_Variables.h"
+#include "PgSQL_Variables_Utils.h"
 #include "ProxySQL_Cluster.hpp"
 #include "PgSQL_Query_Cache.h"
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_ExplicitTxnStateMgr.h"
 #include "PgSQL_Extended_Query_Message.h"
-#include "libinjection.h"
+
 #include "libinjection_sqli.h"
 
 #define EXPMARIA
@@ -270,7 +270,6 @@ PgSQL_Session::PgSQL_Session() {
 
 	use_ssl = false;
 
-	match_regexes = NULL;
 	copy_cmd_matcher = NULL;
 	init(); // we moved this out to allow CHANGE_USER
 
@@ -356,7 +355,6 @@ PgSQL_Session::~PgSQL_Session() {
 	}
 	assert(qpo);
 	delete qpo;
-	match_regexes = NULL;
 	copy_cmd_matcher = NULL;
 	if (mirror) {
 		__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
@@ -3903,9 +3901,8 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	// remove trailing space and semicolon if present. See issue#4380
 	nq.erase(nq.find_last_not_of(" ;") + 1);
 	if (
-		(match_regexes && match_regexes[1]->match(dig))
-		)
-	{
+		pgsql_match_regexes[1].match(dig)
+	) {
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
 		PgSQL_Set_Stmt_Parser parser(nq);
@@ -4035,7 +4032,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 						}
 					}
 				}
-			} else if (std::find(pgsql_variables.ignore_vars.begin(), pgsql_variables.ignore_vars.end(), var) != pgsql_variables.ignore_vars.end()) {
+			} else if (
+				std::find(get_pgsql_ignore_vars().begin(), get_pgsql_ignore_vars().end(), var)
+					!= get_pgsql_ignore_vars().end()
+			) {
 				// this is a variable we parse but ignore
 				// see MySQL_Variables::MySQL_Variables() for a list of ignored variables
 #ifdef DEBUG
@@ -4124,7 +4124,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		}
 		client_myds->myconn->reorder_dynamic_variables_idx();
 
-	} else if (std::find(pgsql_variables.ignore_vars.begin(), pgsql_variables.ignore_vars.end(), nq) != pgsql_variables.ignore_vars.end()) {
+	} else if (
+		std::find(get_pgsql_ignore_vars().begin(), get_pgsql_ignore_vars().end(), nq)
+			!= get_pgsql_ignore_vars().end()
+	) {
 		// this is a variable we parse but ignore
 #ifdef DEBUG
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing RESET %s\n", nq.c_str());

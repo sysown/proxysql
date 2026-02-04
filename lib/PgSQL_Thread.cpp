@@ -2695,20 +2695,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (pgsql_thread___ssl_p2s_crl) { free(pgsql_thread___ssl_p2s_crl); pgsql_thread___ssl_p2s_crl = NULL; }
 	if (pgsql_thread___ssl_p2s_crlpath) { free(pgsql_thread___ssl_p2s_crlpath); pgsql_thread___ssl_p2s_crlpath = NULL; }
 
-	if (match_regexes) {
-		Session_Regex* sr = NULL;
-		sr = match_regexes[0];
-		delete sr;
-		sr = match_regexes[1];
-		delete sr;
-		sr = match_regexes[2];
-		delete sr;
-		sr = match_regexes[3];
-		delete sr;
-		free(match_regexes);
-		match_regexes = NULL;
-	}
-
 	if (copy_cmd_matcher) {
 		delete copy_cmd_matcher;
 		copy_cmd_matcher = NULL;
@@ -2756,16 +2742,6 @@ bool PgSQL_Thread::init() {
 	assert(i == 0);
 
 	thr_SetParser = new PgSQL_Set_Stmt_Parser("");
-	match_regexes = (Session_Regex**)malloc(sizeof(Session_Regex*) * 4);
-	//	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
-
-	std::stringstream ss;
-	//ss << "^SET (|SESSION |@@|@@session.|@@local.)`?(" << pgsql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION|TX_READ_ONLY|TRANSACTION_ISOLATION|TRANSACTION_READ_ONLY)`?( *)(:|)=( *)";
-	ss << "^SET(?: +)(|SESSION +)`?(" << pgsql_variables.variables_regexp << ")`?( *)(|=|TO)( *)";
-	match_regexes[1] = new Session_Regex((char*)ss.str().c_str());
-	match_regexes[2] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
-	match_regexes[3] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)`?(client_encoding|names)`?( *)(|=|TO)( *)");
 
 	copy_cmd_matcher = new CopyCmdMatcher();
 
@@ -4009,7 +3985,6 @@ PgSQL_Thread::PgSQL_Thread() {
 	for (unsigned int i = 0; i < PG_st_var_END; i++) {
 		status_variables.stvar[i] = 0;
 	}
-	match_regexes = NULL;
 	copy_cmd_matcher = NULL;
 
 	variables.min_num_servers_lantency_awareness = 1000;

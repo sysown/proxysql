@@ -1,4 +1,6 @@
 #include "MySQL_Variables.h"
+#include "MySQL_Variables_Utils.h"
+
 #include "proxysql.h"
 
 #include "MySQL_Session.h"
@@ -40,21 +42,7 @@ bool is_perm_track_err(int err, const char* varname) {
 verify_var MySQL_Variables::verifiers[SQL_NAME_LAST_HIGH_WM];
 update_var MySQL_Variables::updaters[SQL_NAME_LAST_HIGH_WM];
 
-
 MySQL_Variables::MySQL_Variables() {
-	// add here all the variables we want proxysql to recognize, but ignore
-	ignore_vars.push_back("interactive_timeout");
-	ignore_vars.push_back("wait_timeout");
-	ignore_vars.push_back("net_read_timeout");
-	ignore_vars.push_back("net_write_timeout");
-	ignore_vars.push_back("net_buffer_length");
-	ignore_vars.push_back("read_buffer_size");
-	ignore_vars.push_back("read_rnd_buffer_size");
-	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
-	ignore_vars.push_back("session_track_schema");
-	// NOTE: This variable has been temporarily ignored. Check issues #4839
-	ignore_vars.push_back("session_track_system_variables");
-	variables_regexp = "";
 	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		// we initialized all the internal_variable_name if set to NULL
 		if (mysql_tracked_variables[i].internal_variable_name == NULL) {
@@ -87,14 +75,6 @@ MySQL_Variables::MySQL_Variables() {
 			MySQL_Variables::verifiers[i] = verify_server_variable;
 			MySQL_Variables::updaters[i] = update_server_variable;
 		}
-		if (mysql_tracked_variables[i].status == SETTING_VARIABLE) {
-			variables_regexp += mysql_tracked_variables[i].set_variable_name;
-			variables_regexp += "|";
-		}
-	}
-	for (std::vector<std::string>::iterator it=ignore_vars.begin(); it != ignore_vars.end(); it++) {
-		variables_regexp += *it;
-		variables_regexp += "|";
 	}
 }
 

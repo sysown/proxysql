@@ -21,6 +21,8 @@ using json = nlohmann::json;
 
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
+#include "MySQL_Variables_Utils.h"
+
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
@@ -2945,20 +2947,6 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___ssl_p2s_crl) { free(mysql_thread___ssl_p2s_crl); mysql_thread___ssl_p2s_crl=NULL; }
 	if (mysql_thread___ssl_p2s_crlpath) { free(mysql_thread___ssl_p2s_crlpath); mysql_thread___ssl_p2s_crlpath=NULL; }
 
-
-	if (match_regexes) {
-		Session_Regex *sr=NULL;
-		sr=match_regexes[0];
-		delete sr;
-		sr=match_regexes[1];
-		delete sr;
-		sr=match_regexes[2];
-		delete sr;
-		sr = match_regexes[3];
-		delete sr;
-		free(match_regexes);
-		match_regexes=NULL;
-	}
 	if (thr_SetParser != NULL) {
 		delete thr_SetParser;
 		thr_SetParser = NULL;
@@ -3002,16 +2990,6 @@ bool MySQL_Thread::init() {
 	assert(i==0);
 
 	thr_SetParser = new MySQL_Set_Stmt_Parser("");
-	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
-//	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
-	
-	std::stringstream ss;
-	ss << "^SET (|SESSION |@@|@@session.|@@local.)`?(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION|TX_READ_ONLY|TRANSACTION_ISOLATION|TRANSACTION_READ_ONLY)`?( *)(:|)=( *)";
-	match_regexes[1]=new Session_Regex((char *)ss.str().c_str());
-
-	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
-	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
 
 	return true;
 }
@@ -4475,7 +4453,6 @@ MySQL_Thread::MySQL_Thread() {
 	for (unsigned int i = 0; i < MY_st_var_END ; i++) {
 		status_variables.stvar[i] = 0;
 	}
-	match_regexes=NULL;
 
 	variables.min_num_servers_lantency_awareness = 1000;
 	variables.aurora_max_lag_ms_only_read_from_replicas = 2;

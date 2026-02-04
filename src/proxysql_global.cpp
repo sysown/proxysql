@@ -1,8 +1,13 @@
 #define PROXYSQL_EXTERN
+
 #include "proxysql.h"
-//#include "proxysql_glovars.hpp"
-#include "cpp.h"
-//ProxySQL_GlobalVariables GloVars;
+#include "MySQL_Variables_Utils.h"
+
+#include <vector>
+#include <string>
+
+using std::vector;
+using std::string;
 
 SSL_CTX * ProxySQL_GlobalVariables::get_SSL_ctx() {
 	// take the mutex
@@ -50,9 +55,12 @@ vector<string> extend(const vector<string>& v1, const vector<string>& v2) {
 }
 
 // Create a vector with the ordered tracked variables for 'p_match_regex_1'.
-const s_vector<string> tracked_vars {
+const s_vector<string> mysql_tracked_vars {
 	extend(
-		filter_setting_vars(mysql_tracked_variables),
+		extend(
+			filter_setting_vars(mysql_tracked_variables),
+			get_mysql_ignore_vars()
+		),
 		{
 			"SESSION_TRACK_GTIDS",
 			"TX_ISOLATION",

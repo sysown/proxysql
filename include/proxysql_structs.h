@@ -1807,7 +1807,7 @@ mysql_variable_st mysql_tracked_variables[] {
  * @details This ordered vector is used for set statement matches by `p_match_regex_1`.
  *  It's always defined as 'extern' in headers, symbol is defined in 'proxysql_global.cpp'.
  */
-extern const s_vector<std::string> tracked_vars;
+extern const s_vector<std::string> mysql_tracked_vars;
 #else
 extern mysql_variable_st mysql_tracked_variables[];
 extern var_track_err_st perm_track_errs[];
@@ -1816,7 +1816,7 @@ extern var_track_err_st perm_track_errs[];
  * @details This ordered vector is used for set statement matches by `p_match_regex_1`.
  *  It's always defined as 'extern' in headers, symbol is defined in 'proxysql_global.cpp'.
  */
-extern const s_vector<std::string> tracked_vars;
+extern const s_vector<std::string> mysql_tracked_vars;
 #endif // PROXYSQL_EXTERN
 #endif // MYSQL_TRACKED_VARIABLES
 

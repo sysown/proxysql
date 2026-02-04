@@ -1,16 +1,13 @@
 #ifndef MYSQL_VARIABLES_H
 #define MYSQL_VARIABLES_H
 
-#include "proxysql.h"
-#include "cpp.h"
+#include "proxysql_structs.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
-#include <memory>
 
 class MySQL_Session;
-
-extern void print_backtrace(void);
 
 typedef bool (*verify_var)(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
 typedef bool (*update_var)(MySQL_Session* session, int idx, int &_rc);
@@ -26,10 +23,6 @@ class MySQL_Variables {
 	static verify_var verifiers[SQL_NAME_LAST_HIGH_WM];
 	static update_var updaters[SQL_NAME_LAST_HIGH_WM];
 
-public:
-	std::string variables_regexp;
-	// ignore_vars is a list of all variables that proxysql will parse but ignore its value
-	std::vector<std::string> ignore_vars;
 public:
 	MySQL_Variables();
 

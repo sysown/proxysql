@@ -195,12 +195,4 @@ class ProxySQL_GlobalVariables {
 	void install_signal_handler();
 };
 
-/*
-#ifndef PROXYSQL_EXTERN
-#define EXTERN extern
-#else
-#define EXTERN
-#endif // PROXYSQL_EXTERN
-EXTERN ProxySQL_GlobalVariables GloVars;
-*/
 #endif /* __CLASS_PROXYSQL_GLOVARS_H */

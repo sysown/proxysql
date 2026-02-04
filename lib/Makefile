@@ -86,8 +86,9 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo \
 	MySQL_Query_Cache.oo PgSQL_Query_Cache.oo PgSQL_Monitor.oo MySQL_Set_Stmt_Parser.oo \
 	PgSQL_Set_Stmt_Parser.oo PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
-	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo MySQL_Parser.oo \
-	MySQL_Lexer.yy.oo MySQL_Parser.tab.oo MySQL_SET_Parser_Utils.oo pgsql_tokenizer.oo \
+	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo MySQL_Parser.oo Base_Session_Utils.oo \
+	MySQL_Session_Utils.oo PgSQL_Session_Utils.oo MySQL_Lexer.yy.oo MySQL_Parser.tab.oo \
+	MySQL_SET_Parser_Utils.oo MySQL_Variables_Utils.oo PgSQL_Variables_Utils.oo pgsql_tokenizer.oo \
 	proxy_sqlite3_symbols.oo
 
 # GenAI object files (conditionally included)

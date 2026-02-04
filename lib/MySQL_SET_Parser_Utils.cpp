@@ -179,7 +179,7 @@ bool p_match_regex_1(const MySQLParser::AstNode* node) {
 				return false;
 			} else {
 				const auto sys_var { get_node(v, {{ NodeType::NODE_SYSTEM_VARIABLE, 0 }}) };
-				const auto is_tracked { ci_binary_search(tracked_vars, sys_var.second->value) };
+				const auto is_tracked { ci_binary_search(mysql_tracked_vars, sys_var.second->value) };
 
 				if (!is_tracked && sys_var.second->value != "autocommit") {
 					return false;

@@ -22,10 +22,6 @@ class PgSQL_Variables {
 	static pgsql_update_var updaters[PGSQL_NAME_LAST_HIGH_WM];
 
 public:
-	std::string variables_regexp;
-	// ignore_vars is a list of all variables that proxysql will parse but ignore its value
-	std::vector<std::string> ignore_vars;
-public:
 	PgSQL_Variables();
 	~PgSQL_Variables();
 

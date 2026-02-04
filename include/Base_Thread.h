@@ -1,7 +1,11 @@
 #ifndef CLASS_BASE_THREAD_H
 #define CLASS_BASE_THREAD_H
 
-#include "proxysql.h"
+#ifdef DEBUG
+#include <atomic>
+#endif
+
+#include "proxysql_structs.h"
 
 typedef struct _thr_id_username_t {
 	uint32_t id;
@@ -13,25 +17,6 @@ typedef struct _kill_queue_t {
 	std::vector<thr_id_usr *> conn_ids;
 	std::vector<thr_id_usr *> query_ids;
 } kill_queue_t;
-
-/**
- * @class Session_Regex
- * @brief Encapsulates regex operations for session handling.
- *
- * This class is used for matching patterns in SQL queries, specifically for
- * settings like sql_log_bin, sql_mode, and time_zone.
- * See issues #509 , #815 and #816
- */
-class Session_Regex {
-private:
-	void* opt;
-	void* re;
-	char* s;
-public:
-	Session_Regex(const char* p);
-	~Session_Regex();
-	bool match(const char* m);
-};
 
 class MySQL_Thread;
 class PgSQL_Thread;
@@ -53,7 +38,6 @@ private:
 	bool epoll_thread;
 	int shutdown;
 	PtrArray *mysql_sessions;
-	Session_Regex **match_regexes;
 	Base_Thread();
 	~Base_Thread();
 	template<typename T, typename S>

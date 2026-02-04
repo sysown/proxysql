@@ -14,12 +14,6 @@ pgsql_verify_var PgSQL_Variables::verifiers[PGSQL_NAME_LAST_HIGH_WM];
 pgsql_update_var PgSQL_Variables::updaters[PGSQL_NAME_LAST_HIGH_WM];
 
 PgSQL_Variables::PgSQL_Variables() {
-	// add here all the variables we want proxysql to recognize, but ignore
-	ignore_vars.push_back("application_name");
-	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
-	//ignore_vars.push_back("session_track_schema");
-	variables_regexp = "";
-
 	/*
 	   NOTE:
 		make special ATTENTION that the order in pgsql_variable_name
@@ -41,28 +35,6 @@ PgSQL_Variables::PgSQL_Variables() {
 
 		PgSQL_Variables::verifiers[i] = verify_server_variable;
 		PgSQL_Variables::updaters[i] = update_server_variable;
-
-		if (pgsql_tracked_variables[i].status == SETTING_VARIABLE) {
-			variables_regexp += pgsql_tracked_variables[i].set_variable_name;
-			variables_regexp += "|";
-
-			int idx = 0;
-			while (pgsql_tracked_variables[i].alias[idx]) {
-				variables_regexp += pgsql_tracked_variables[i].alias[idx];
-				variables_regexp += "|";
-				idx++;
-			}
-		}
-	}
-
-	for (std::vector<std::string>::iterator it=ignore_vars.begin(); it != ignore_vars.end(); it++) {
-		variables_regexp += *it;
-		variables_regexp += "|";
-	}
-
-	// Check if the last character is '|'
-	if (!variables_regexp.empty() && variables_regexp.back() == '|') {
-		variables_regexp.pop_back(); // Remove the last character
 	}
 }
 
