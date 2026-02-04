@@ -1,8 +1,5 @@
-.git
 binaries/
 pkgroot/
 docker/
 *.deb
 *.rpm
-*.o
-*.a

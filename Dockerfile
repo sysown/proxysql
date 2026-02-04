@@ -5,19 +5,23 @@
 # ------------------ Stage 1: Build ------------------------------------------
 FROM ubuntu:24.04 AS builder
 
-ARG MAKEOPT=-j$(nproc)
-ARG PROXYSQL_BUILD_TYPE=clickhouse
-
+ARG GIT_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf \
     automake \
+    bison \
     bzip2 \
+    ca-certificates \
     cmake \
     make \
     g++ \
     gcc \
+    flex \
+    gawk \
     git \
+    libtool \
     openssl \
     libssl-dev \
     libgnutls28-dev \
@@ -29,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu-dev \
     libevent-dev \
     libtirpc-dev \
+    zlib1g-dev \
     patch \
     python3 \
     pkg-config \
@@ -38,8 +43,9 @@ WORKDIR /opt/proxysql
 
 COPY . .
 
-RUN make build_deps ${MAKEOPT} \
-    && make ${MAKEOPT}
+RUN export GIT_VERSION="${GIT_VERSION:-$(git describe --long --abbrev=7 2>/dev/null || echo '3.0.6-0-unknown')}" \
+    && make build_deps \
+    && make -j$(nproc)
 
 # ------------------ Stage 2: Runtime ----------------------------------------
 FROM ubuntu:24.04
