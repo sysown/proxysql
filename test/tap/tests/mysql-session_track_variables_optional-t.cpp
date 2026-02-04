@@ -1,5 +1,5 @@
 /**
- * @file mysql-track_system_variables_optional-t.cpp
+ * @file mysql-session_track_variables_optional-t.cpp
  * @brief This test verifies that ProxySQL properly handles session variable tracking
  *   in OPTIONAL mode based on MySQL server version. Session tracking should work
  *   on MySQL 5.7+ and gracefully degrade on 5.6 and below.
@@ -7,101 +7,11 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "json.hpp"
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-
-using nlohmann::json;
-
-bool get_server_version(MYSQL* proxy, int& major, int& minor) {
-	MYSQL_QUERY_T(proxy, "SELECT @@version");
-	MYSQL_RES* result = mysql_store_result(proxy);
-	if (!result) {
-		return false;
-	}
-
-	MYSQL_ROW row = mysql_fetch_row(result);
-	if (!row) {
-		mysql_free_result(result);
-		return false;
-	}
-
-	// Parse version string
-	if (sscanf(row[0], "%d.%d", &major, &minor) != 2) {
-		mysql_free_result(result);
-		return false;
-	}
-
-	mysql_free_result(result);
-	return true;
-}
-
-bool test_session_variables(MYSQL* proxy, int& set_value, int& backend_value, int& client_value) {
-	set_value = -1;
-	backend_value = -1;
-	client_value = -1;
-
-	MYSQL_QUERY_T(proxy, "CREATE DATABASE IF NOT EXISTS test");
-	MYSQL_QUERY_T(proxy, "SELECT 1");
-	mysql_free_result(mysql_store_result(proxy));
-
-	MYSQL_QUERY_T(proxy, "DROP PROCEDURE IF EXISTS test.set_innodb_lock_wait_timeout");
-	const char* create_proc =
-		"CREATE PROCEDURE test.set_innodb_lock_wait_timeout() "
-		"BEGIN "
-		"  SET innodb_lock_wait_timeout = CAST(FLOOR(50 + (RAND() * 100)) AS UNSIGNED); "
-		"END";
-
-	MYSQL_QUERY_T(proxy, create_proc);
-
-	MYSQL_QUERY_T(proxy, "CALL test.set_innodb_lock_wait_timeout()");
-
-	MYSQL_QUERY_T(proxy, "SELECT @@innodb_lock_wait_timeout");
-	MYSQL_RES* result = mysql_store_result(proxy);
-	if (result) {
-		MYSQL_ROW row = mysql_fetch_row(result);
-		if (row) {
-			set_value = atoi(row[0]);
-		}
-		mysql_free_result(result);
-	}
-
-	MYSQL_QUERY(proxy, "PROXYSQL INTERNAL SESSION");
-	result = mysql_store_result(proxy);
-	if (!result) {
-		return false;
-	}
-
-	MYSQL_ROW row = mysql_fetch_row(result);
-	if (!row) {
-		mysql_free_result(result);
-		return false;
-	}
-
-	auto j_session = nlohmann::json::parse(row[0]);
-	mysql_free_result(result);
-
-	if (j_session.contains("backends")) {
-		for (auto& backend : j_session["backends"]) {
-			if (backend != nullptr && backend.contains("conn")) {
-				if (backend["conn"].contains("innodb_lock_wait_timeout")) {
-					backend_value = std::stoi(backend["conn"]["innodb_lock_wait_timeout"].get<std::string>());
-					break;
-				}
-			}
-		}
-	}
-
-	if (j_session.contains("conn")) {
-		if (j_session["conn"].contains("innodb_lock_wait_timeout")) {
-			client_value = std::stoi(j_session["conn"]["innodb_lock_wait_timeout"].get<std::string>());
-		}
-	}
-
-	return true;
-}
+#include "session_track_variables.h"
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -129,7 +39,7 @@ int main(int argc, char** argv) {
 	}
 
 	int major = 0, minor = 0;
-	if (!get_server_version(proxy, major, minor)) {
+	if (get_server_version(proxy, major, minor) != EXIT_SUCCESS) {
 		diag("Failed to get server version");
 		return exit_status();
 	}
@@ -140,7 +50,7 @@ int main(int argc, char** argv) {
 	int backend_value = -1;
 	int client_value = -1;
 
-	if (!test_session_variables(proxy, set_value, backend_value, client_value)) {
+	if (test_session_variables(proxy, set_value, backend_value, client_value) != EXIT_SUCCESS) {
 		diag("Failed to run test");
 		return exit_status();
 	}
