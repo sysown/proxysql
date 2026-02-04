@@ -583,6 +583,21 @@ void ProxySQL_Admin::disk_upgrade_mysql_users() {
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,comment) SELECT * FROM mysql_users_v200");
 	}
+	// adding mysql_users.backend_username for frontend-to-backend user mapping
+	rci=configdb->check_table_structure((char *)"mysql_users",(char *)ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_1_0);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version pre-3.0 of table mysql_users\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_users in progress\n");
+		// drop any existing table with suffix _v210
+		configdb->execute("DROP TABLE IF EXISTS mysql_users_v210");
+		// rename current table to add suffix _v210
+		configdb->execute("ALTER TABLE mysql_users RENAME TO mysql_users_v210");
+		// create new table
+		configdb->build_table((char *)"mysql_users",(char *)ADMIN_SQLITE_TABLE_MYSQL_USERS,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) SELECT * FROM mysql_users_v210");
+	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
 

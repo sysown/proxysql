@@ -181,8 +181,9 @@ int ProxySQL_Config::Write_MySQL_Users_to_configfile(std::string& data) {
 				addField(data, "backend", r->fields[9], "");
 				addField(data, "frontend", r->fields[10], "");
 				addField(data, "max_connections", r->fields[11], "");
-				addField(data, "attributes", r->fields[12]);
-				addField(data, "comment", r->fields[13]);
+				addField(data, "backend_username", r->fields[12]);
+				addField(data, "attributes", r->fields[13]);
+				addField(data, "comment", r->fields[14]);
 				data += "\t}";
 				isNext = true;
 			}
@@ -209,7 +210,7 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s','%s')";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, backend_username, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s', '%s','%s')";
 	for (int i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
@@ -222,6 +223,7 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 		int transaction_persistent=1;
 		int fast_forward=0;
 		int max_connections=10000;
+		std::string backend_username="";
 		std::string comment="";
 		std::string attributes="";
 
@@ -236,12 +238,13 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 		user.lookupValue("transaction_persistent", transaction_persistent);
 		user.lookupValue("fast_forward", fast_forward);
 		user.lookupValue("max_connections", max_connections);
+		user.lookupValue("backend_username", backend_username);
 		user.lookupValue("attributes", attributes);
 		user.lookupValue("comment", comment);
 		char *o1=strdup(comment.c_str());
 		char *o=escape_string_single_quotes(o1, false);
-		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+strlen(attributes.c_str())+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
+		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+strlen(attributes.c_str())+strlen(backend_username.c_str())+128);
+		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, backend_username.c_str(), attributes.c_str(), o);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);

@@ -39,6 +39,10 @@ void free_account_details(account_details_t& ad) {
 		free(ad.default_schema);
 		ad.default_schema = nullptr;
 	}
+	if (ad.backend_username) {
+		free(ad.backend_username);
+		ad.backend_username = nullptr;
+	}
 	if (ad.attributes) {
 		free(ad.attributes);
 		ad.attributes = nullptr;
@@ -121,7 +125,7 @@ __loop_remove_inactives:
 #endif
 }
 
-bool MySQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
+bool MySQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char *backend_username, char* attributes, char *comment) {
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
 	myhash.Init(1,2);
@@ -167,6 +171,10 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		if (strcmp(ad->comment,comment)) {
 			free(ad->comment);
 			ad->comment=strdup(comment);
+		}
+		if (ad->backend_username == NULL || strcmp(ad->backend_username, backend_username)) {
+			if (ad->backend_username) free(ad->backend_username);
+			ad->backend_username=strdup(backend_username);
 		}
 		if (strcasecmp(ad->attributes, attributes)) {
 			free(ad->attributes);
@@ -241,6 +249,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		} else {
 			ad->attributes=strdup(attributes); // default, empty string
 		}
+		ad->backend_username=strdup(backend_username);
 		new_ad=true;
 		ad->sha1_pass=NULL;
 		ad->num_connections_used=0;
@@ -289,6 +298,7 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->clear_text_password[1]) ret += strlen(ado->clear_text_password[1]) + 1;
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
+		if (ado->backend_username) ret += strlen(ado->backend_username) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
 	}
 	ret += sizeof(creds_group_t);
@@ -304,6 +314,7 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->clear_text_password[1]) ret += strlen(ado->clear_text_password[1]) + 1;
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
+		if (ado->backend_username) ret += strlen(ado->backend_username) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
 	}
 	ret += sizeof(creds_group_t);
@@ -346,6 +357,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		if (_complete==false) {
 			ad->password=NULL;
 			ad->default_schema=NULL;
+			ad->backend_username=NULL;
 			ad->attributes=NULL;
 			ad->comment=NULL;
 			ad->num_connections_used=ado->num_connections_used;
@@ -357,6 +369,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 			ad->clear_text_password[1] = NULL;
 			ad->use_ssl=ado->use_ssl;
 			ad->default_schema=strdup(ado->default_schema);
+			ad->backend_username=strdup(ado->backend_username);
 			ad->attributes=strdup(ado->attributes);
 			ad->comment=strdup(ado->comment);
 			ad->schema_locked=ado->schema_locked;
@@ -381,6 +394,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		ad->use_ssl=ado->use_ssl;
 		ad->default_hostgroup=ado->default_hostgroup;
 		ad->default_schema=strdup(ado->default_schema);
+		ad->backend_username=strdup(ado->backend_username);
 		ad->attributes=strdup(ado->attributes);
 		ad->comment=strdup(ado->comment);
 		ad->schema_locked=ado->schema_locked;
@@ -677,6 +691,10 @@ account_details_t MySQL_Authentication::lookup(
 			}
 		}
 
+		if (ad->backend_username && strlen(ad->backend_username) > 0) {
+			ret.backend_username = strdup(ad->backend_username);
+		}
+
 		if (dup_details.attributes) {
 			ret.attributes = l_strdup(ad->attributes);
 		}
@@ -767,6 +785,9 @@ static uint64_t compute_accounts_hash(const umap_auth& accs_map) {
 				acc_map_hash.Update(ad->default_schema,strlen(ad->default_schema));
 			if (ad->comment)
 				acc_map_hash.Update(ad->comment,strlen(ad->comment));
+			if (ad->backend_username) {
+				acc_map_hash.Update(ad->backend_username,strlen(ad->backend_username));
+			}
 			if (ad->attributes) {
 				acc_map_hash.Update(ad->attributes,strlen(ad->attributes));
 			}
@@ -800,8 +821,8 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
 
 	// The following order is assumed for the resulset received fields:
-	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, 
-	// 	  transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment.
+	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked,
+	// 	  transaction_persistent, fast_forward, backend, frontend, max_connections, backend_username, attributes, comment.
 	umap_auth f_accs_map {};
 	umap_auth b_accs_map {};
 
@@ -830,8 +851,9 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 		acc_details->__backend = strcmp(row[8], "1") == 0 ? true : false;
 		acc_details->__frontend = strcmp(row[9], "1") == 0 ? true : false;
 		acc_details->max_connections = atoi(row[10]);
-		acc_details->attributes = row[11] ? row[11] : const_cast<char*>("");
-		acc_details->comment = row[12] ? row[12] : const_cast<char*>("");
+		acc_details->backend_username = row[11] ? row[11] : const_cast<char*>("");
+		acc_details->attributes = row[12] ? row[12] : const_cast<char*>("");
+		acc_details->comment = row[13] ? row[13] : const_cast<char*>("");
 
 		return acc_details;
 	};

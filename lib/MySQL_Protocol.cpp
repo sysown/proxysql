@@ -2529,14 +2529,44 @@ __exit_do_auth:
 
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
-		if (!userinfo->username) // if set already, ignore
-			userinfo->username=strdup((const char *)vars1.user);
-		if (userinfo->password) {
-			free(userinfo->password);
+		// If backend_username is configured, resolve the backend user's credentials
+		if (account_details.backend_username && strlen(account_details.backend_username) > 0) {
+			account_details_t backend_acct {
+				GloMyAuth->lookup(account_details.backend_username, USERNAME_BACKEND, { true, true, true })
+			};
+
+			if (backend_acct.password) {
+				// Set the backend username and password on userinfo for backend connections
+				userinfo->set(account_details.backend_username, NULL, NULL, NULL);
+				if (userinfo->password) {
+					free(userinfo->password);
+				}
+				userinfo->password = strdup(backend_acct.password);
+				// Track the original frontend username
+				if (userinfo->fe_username) free(userinfo->fe_username);
+				userinfo->fe_username = strdup((const char *)vars1.user);
+				if (vars1.db) userinfo->set_schemaname(vars1.db, strlen(vars1.db));
+				userinfo->passtype = vars1.passtype;
+
+				free_account_details(backend_acct);
+			} else {
+				proxy_error(
+					"Unable to load credentials for backend user '%s', mapped from frontend user '%s'\n",
+					account_details.backend_username, vars1.user
+				);
+				ret = false;
+				free_account_details(backend_acct);
+			}
+		} else {
+			if (!userinfo->username) // if set already, ignore
+				userinfo->username=strdup((const char *)vars1.user);
+			if (userinfo->password) {
+				free(userinfo->password);
+			}
+			userinfo->password=strdup((const char *)vars1.password);
+			if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
+			userinfo->passtype = vars1.passtype;
 		}
-		userinfo->password=strdup((const char *)vars1.password);
-		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
-		userinfo->passtype = vars1.passtype;
 	} else {
 		// we always duplicate username and password, or crashes happen
 		if (!userinfo->username) // if set already, ignore

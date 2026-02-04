@@ -1366,8 +1366,8 @@ uint64_t get_mysql_users_checksum(
 void update_mysql_users(MYSQL_RES* result) {
 	GloAdmin->admindb->execute("DELETE FROM mysql_users");
 	char* q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema,"
-		" schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment)"
-		" VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		" schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, backend_username, attributes, comment)"
+		" VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
 
 	sqlite3_stmt *statement1 = NULL;
 	int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
@@ -1386,8 +1386,9 @@ void update_mysql_users(MYSQL_RES* result) {
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoll(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoll(row[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 12, atoll(row[10])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connection
-		rc=(*proxy_sqlite3_bind_text)(statement1, 13, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
-		rc=(*proxy_sqlite3_bind_text)(statement1, 14, row[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+		rc=(*proxy_sqlite3_bind_text)(statement1, 13, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend_username
+		rc=(*proxy_sqlite3_bind_text)(statement1, 14, row[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
+		rc=(*proxy_sqlite3_bind_text)(statement1, 15, row[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 
 		SAFE_SQLITE3_STEP2(statement1);
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);

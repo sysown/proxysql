@@ -3519,7 +3519,7 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		
 		if constexpr (pt == SERVER_TYPE_MYSQL) { 
 			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
+				GloMyAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"", (char*)"");
 			}
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
@@ -5793,7 +5793,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 	if (__user==NULL) {
 		if (mysql_users_resultset == nullptr) {
 			if constexpr (pt == SERVER_TYPE_MYSQL) {
-				str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment FROM main.mysql_users WHERE active=1 AND default_hostgroup>=0";
+				str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,backend_username,attributes,comment FROM main.mysql_users WHERE active=1 AND default_hostgroup>=0";
 			} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 				str = (char*)"SELECT username,password,use_ssl,default_hostgroup,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment FROM main.pgsql_users WHERE active=1 AND default_hostgroup>=0";
 			}
@@ -5803,7 +5803,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 		}
 	} else {
 		if constexpr (pt == SERVER_TYPE_MYSQL) {
-			str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
+			str = (char*)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,backend_username,attributes,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			str = (char*)"SELECT username,password,use_ssl,default_hostgroup,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.pgsql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
 		}
@@ -5841,13 +5841,16 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 			char* attributes = nullptr;
 			char* comment = nullptr;
 
+			char* backend_username_val = nullptr;
+
 			if constexpr (pt == SERVER_TYPE_MYSQL) {
 				if (__user != nullptr) {
 					usertypes.push_back(usertype);
 
 					max_connections = r->fields[8];
-					attributes = r->fields[9];
-					comment = r->fields[10];
+					backend_username_val = r->fields[9];
+					attributes = r->fields[10];
+					comment = r->fields[11];
 				}
 				else {
 					if (strcasecmp(r->fields[8], "1") == 0) {
@@ -5858,8 +5861,9 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 					}
 
 					max_connections = r->fields[10];
-					attributes = r->fields[11];
-					comment = r->fields[12];
+					backend_username_val = r->fields[11];
+					attributes = r->fields[12];
+					comment = r->fields[13];
 				}
 			} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 				if (__user != nullptr) {
@@ -5895,6 +5899,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 						(strcmp(r->fields[6], "1") == 0 ? true : false), // transaction_persistent
 						(strcmp(r->fields[7], "1") == 0 ? true : false), // fast_forward
 						(atoi(max_connections) > 0 ? atoi(max_connections) : 0),  // max_connections
+						(backend_username_val == NULL ? (char*)"" : backend_username_val), // backend_username
 						(attributes == NULL ? (char*)"" : attributes), // attributes
 						(comment == NULL ? (char*)"" : comment) //comment
 					);
@@ -6191,10 +6196,10 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 	int i;
 	int rc;
 
-	char *qf_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11)";
-	char *qb_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11)";
-	char *qfr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11)";
-	char *qbr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11)";
+	char *qf_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,backend_username,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11,?12)";
+	char *qb_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,backend_username,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11,?12)";
+	char *qfr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,backend_username,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11,?12)";
+	char *qbr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,backend_username,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11,?12)";
 
 	num_users=GloMyAuth->dump_all_users(&ads);
 	if (num_users==0) return;
@@ -6237,8 +6242,9 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, ad->transaction_persistent); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, ad->fast_forward); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 10, ad->attributes, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 11, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 10, ad->backend_username ? ad->backend_username : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 11, ad->attributes, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 12, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
@@ -6247,6 +6253,7 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		free(ad->password); // this is not initialized with dump_all_users( , false)
 		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
 		free(ad->comment);
+		if (ad->backend_username) free(ad->backend_username);
 		free(ad->attributes);
 		free(ad);
 	}

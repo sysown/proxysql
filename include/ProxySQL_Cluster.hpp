@@ -53,7 +53,7 @@
 #define	CLUSTER_QUERY_MYSQL_GALERA "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_galera_hostgroups ORDER BY writer_hostgroup"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_users'. See top comment for details. */
-#define CLUSTER_QUERY_MYSQL_USERS "PROXY_SELECT username, password, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_mysql_users"
+#define CLUSTER_QUERY_MYSQL_USERS "PROXY_SELECT username, password, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, backend_username, attributes, comment FROM runtime_mysql_users"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_query_rules'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_QUERY_RULES "PROXY_SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules ORDER BY rule_id"
