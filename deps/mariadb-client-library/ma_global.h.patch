@@ -1,0 +1,13 @@
+--- include/ma_global.h	2023-11-01 11:28:04.000000000 +0100
++++ include/ma_global.h	2023-11-01 11:28:04.000000000 +0100
+@@ -683,9 +683,9 @@
+ typedef int		myf;	/* Type of MyFlags in my_funcs */
+ typedef char		my_bool; /* Small bool */
+ typedef unsigned long long my_ulonglong;
+-#if !defined(bool) && !defined(bool_defined) && (!defined(HAVE_BOOL) || !defined(__cplusplus))
++#if !defined(bool) && !defined(bool_defined) && (!defined(HAVE_BOOL) || !defined(__cplusplus)) && (__STDC_VERSION__ < 202300L)
+ typedef char		bool;	/* Ordinary boolean values 0 1 */
+ #endif
+ 	/* Macros for converting *constants* to the right type */
+ #define INT8(v)		(int8) (v)
+ #define INT16(v)	(int16) (v)
