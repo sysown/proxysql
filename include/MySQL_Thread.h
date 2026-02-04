@@ -17,6 +17,7 @@
 #include "prometheus_helpers.h"
 
 #include "MySQL_Set_Stmt_Parser.h"
+#include "MySQL_Parser.h"
 
 /*
 #define MIN_POLL_LEN 8
@@ -202,6 +203,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 
 	// if set_parser_algorithm == 2 , a single thr_SetParser is used
 	MySQL_Set_Stmt_Parser* thr_SetParser;
+	MySQLParser::Parser parser {};
 
 	MySQL_Thread();
 	~MySQL_Thread();

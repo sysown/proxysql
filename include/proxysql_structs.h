@@ -1,6 +1,12 @@
 #define PKT_PARSED 0
 #define PKT_ERROR 1
 
+#include <cstdint>
+#include <strings.h>
+#include <stdint.h>
+#include <time.h>
+#include <sys/types.h>
+
 #ifdef max_allowed_packet
 #undef max_allowed_packet
 #endif
@@ -1796,9 +1802,21 @@ mysql_variable_st mysql_tracked_variables[] {
 	*/
 };
 
+/**
+ * @brief Holds an sorted vector (s_vector) of the variable names being tracked.
+ * @details This ordered vector is used for set statement matches by `p_match_regex_1`.
+ *  It's always defined as 'extern' in headers, symbol is defined in 'proxysql_global.cpp'.
+ */
+extern const s_vector<std::string> tracked_vars;
 #else
 extern mysql_variable_st mysql_tracked_variables[];
 extern var_track_err_st perm_track_errs[];
+/**
+ * @brief Holds an sorted vector (s_vector) of the variable names being tracked.
+ * @details This ordered vector is used for set statement matches by `p_match_regex_1`.
+ *  It's always defined as 'extern' in headers, symbol is defined in 'proxysql_global.cpp'.
+ */
+extern const s_vector<std::string> tracked_vars;
 #endif // PROXYSQL_EXTERN
 #endif // MYSQL_TRACKED_VARIABLES
 

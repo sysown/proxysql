@@ -741,3 +741,20 @@ std::string get_client_addr(struct sockaddr* client_addr) {
 
 	return str_client_addr;
 }
+
+vector<string> sort_vec(vector<string>&& s) {
+	const auto f_str_cmp = [] (const auto& s1, const auto& s2) {
+		return strcasecmp(s1.c_str(), s2.c_str()) < 0;
+	};
+	std::sort(s.begin(), s.end(), f_str_cmp);
+	return s;
+}
+
+bool ci_binary_search(const s_vector<std::string>& vec, const std::string& key) {
+	const auto it = std::lower_bound(vec.vals.begin(), vec.vals.end(), key,
+		[] (const string& s1, const string& s2) -> bool {
+			return strcasecmp(s1.c_str(), s2.c_str()) < 0;
+		}
+	);
+	return it != vec.vals.end() && strcasecmp(it->c_str(), key.c_str()) == 0;
+}

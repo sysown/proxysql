@@ -2,6 +2,7 @@
 #define __PROXYSQL_UTILS_H
 
 #include <cstdarg>
+#include <numeric>
 #include <type_traits>
 #include <memory>
 #include <string>
@@ -140,6 +141,82 @@ cfmt_t cstr_format(char (&out_buf)[N], const char* fmt, ...) {
             }
         }
     }
+}
+
+template<class T>
+struct rm_cvref
+{
+    using type = std::remove_cv_t<std::remove_reference_t<T>>;
+};
+
+template< class T >
+using rm_cvref_t = typename rm_cvref<T>::type;
+
+template <class T>
+struct _h_fold : _h_fold<decltype(&T::operator())>
+{};
+
+/**
+ * @brief Helper type for 'fold', responsible for performing the type deduction.
+ * @tparam C Inferred type for the lambda, class or function object.
+ * @tparam R The return type of the function object.
+ * @tparam B The second parameter type (accumulator) of the function object.
+ * @tparam A The first parameter type (range value) of the function object.
+ */
+template <class C, class R, class B, class A>
+struct _h_fold<R(C::*)(A, B) const>
+{
+	template <template <class> class T, typename F>
+	R operator()(const F& f, const T<rm_cvref_t<A>>& v) {
+		const auto r_args = [&f] (auto& a, auto& b) { return f(b, a); };
+		return std::accumulate(v.begin(), v.end(), B {}, r_args);
+	}
+};
+
+/**
+ * @brief Applies a binary function to a range of elements, accumulating the result.
+ * @details Reverses the order of arguments passed to the function compared to a typical `std::accumulate`.
+ *
+ * @tparam F The type of the binary function to apply. It can be a function object, a class or a lambda. The
+ *           function must accept two arguments and return a value that can be accumulated.
+ * @tparam T The type of the range of elements to fold. Must be compatible with `std::begin` and `std::end`.
+ *
+ * @param f The binary function to apply. It should take two arguments, where the first argument is an element
+ *          from the range and the second argument is the accumulated value so far. Note that the arguments
+ *          are reversed compared to `std::accumulate`.
+ * @param v The range of elements to fold. This can be any type that supports `std::begin` and `std::end`,
+ *          such as a `std::vector`, `std::array`, or a C-style array.
+ *
+ * @return The accumulated result of applying the function to the range of elements. The initial value
+ *         for the accumulation is deduced from the return type and second argument type of the function `f`.
+  */
+template <class F, class T>
+inline constexpr auto fold(const F& f, T&& v) {
+	return _h_fold<F>()(f, std::forward<T>(v));
+}
+
+/**
+ * @brief Applies a binary function pointer to a range of elements, accumulating the result.
+ * @details Overload of `fold` for function pointers. Thanks to the inferred type avoids the need for the
+ *   `_h_fold` helper when a function pointer is provided.
+ *
+ * @tparam R The return type of the binary function.
+ * @tparam A The type of the first argument of the binary function.
+ * @tparam B The type of the second argument of the binary function.
+ * @tparam T The type of the range of elements to fold.
+ *
+ * @param f A function pointer to the binary function to apply. It should take two arguments, where the first
+ *   argument is an element from the range and the second argument is the accumulated value so far. Note that
+ *   the arguments are reversed compared to `std::accumulate`.
+ * @param v The range of elements to fold.
+ *
+ * @return The accumulated result of applying the function to the range of elements. The initial value
+ *         for the accumulation is deduced from the return type and second argument type of the function `f`.
+ */
+template <class R, class A, class B, class T>
+inline constexpr auto fold(R(*f)(A, B), T&& v) {
+	const auto r_args = [&f] (auto& a, auto& b) { return f(b, a); };
+	return std::accumulate(v.begin(), v.end(), B {}, r_args);
 }
 
 /**
@@ -368,5 +445,77 @@ std::string get_client_addr(struct sockaddr* client_addr);
  * @return int Error code (0 = success, -1 = setsockopt failed, -2 = invalid parameters)
  */
 int check_port_availability(int port_num, bool* port_free);
+
+/**
+ * @brief Sorts a vector in-place in non-descending order.
+ * @tparam T The type of elements in the vector. Must be comparable using operator `<`.
+ * @param v The vector to be sorted (passed by rvalue reference).
+ * @return The received vector, but sorted.
+ */
+template <class T>
+std::vector<T> sort_vec(std::vector<T>&& v) {
+	std::sort(v.begin(), v.end());
+	return v;
+}
+
+/**
+ * @brief Sorts a vector of strings in non-descending order. Uses `strcasecmp` as comparator.
+ * @param s The vector of strings to be sorted (passed by rvalue reference).
+ * @return A new vector containing the sorted strings.
+ */
+std::vector<std::string> sort_vec(std::vector<std::string>&& s);
+
+/**
+ * @brief A wrapper class for a sorted vector.
+ * @details Takes the ownership of a vector supplied during construction and stores it sorted. The vector is
+ *   retained sorted and immutable after construction.
+ * @tparam T The type of elements in the vector. Must be a valid overload of `sort_vec`.
+ */
+template <class T>
+struct s_vector {
+	const std::vector<T> vals;
+
+	/**
+	 * @brief Constructs an `s_vector` from an initializer list, sorting the input.
+	 * @param i The initializer list to construct the vector from (passed by rvalue reference).
+	 */
+	s_vector(std::initializer_list<T>&& i) : vals(sort_vec(std::vector<T>(std::move(i)))) {}
+	/**
+	 * @brief Constructs an `s_vector` from an `std::vector`, sorting the input.
+	 * @param i The `std::vector` to construct the vector from (passed by rvalue reference).
+	 */
+	s_vector(std::vector<T>&& v) : vals(sort_vec(std::move(v))) {}
+	/**
+	 * @brief Constructs an `s_vector` from an array, sorting the input.
+	 * @param i The array to construct the vector from.
+	 */
+	template <size_t SIZE>
+	s_vector(const T(&a)[SIZE]) : vals(sort_vec(std::vector<T>(std::begin(a), std::end(a)))) {}
+
+	/**
+	 * @brief Deleted copy constructor.
+	 * @details Prevents any unintential copies.
+	 */
+	s_vector(const std::vector<T>&) = delete;
+	/**
+	 * @brief Deleted const lvalue reference copy assignment operator.
+	 * @details Prevents any unintential copies, or modification of the internal sorted vector.
+	 */
+	s_vector& operator=(const std::vector<T>&) = delete;
+	/**
+	 * @brief Deleted rvalue reference copy assignment operator.
+	 * @details Prevents any unintential copies, or modification of the internal sorted vector.
+	 */
+	s_vector& operator=(std::vector<T>&&) = delete;
+};
+
+/*
+ * @brief Performs a case-insensitive binary search for a key in a sorted vector of strings.
+ * @details Stands for case-insensitive binary search.
+ * @param vec Vector of strings to search in. It's expected to be sorted by `sort_vec<string>`.
+ * @param key The string to search for.
+ * @return `true` if the key is found in the vector, `false` otherwise.
+ */
+bool ci_binary_search(const s_vector<std::string>& vec, const std::string& key);
 
 #endif
