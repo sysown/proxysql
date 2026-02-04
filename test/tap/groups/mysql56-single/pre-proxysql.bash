@@ -40,7 +40,7 @@ source $JENKINS_SCRIPTS_PATH/${INFRA}/.env
 
 # Start infra
 $JENKINS_SCRIPTS_PATH/infra-docker-hoster/docker-compose-init.bash
-$JENKINS_SCRIPTS_PATH/${INFRA}/docker-compose-init.bash
+$JENKINS_SCRIPTS_PATH/${INFRA}/docker-compose-init.bash no-repl
 
 # create default users
 for MYUSER in root user testuser sbtest1 sbtest2 sbtest3 sbtest4 ssluser ; do
