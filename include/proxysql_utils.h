@@ -219,6 +219,94 @@ inline constexpr auto fold(R(*f)(A, B), T&& v) {
 	return std::accumulate(v.begin(), v.end(), B {}, r_args);
 }
 
+template <class T>
+struct _h_fmap : _h_fmap<decltype(&T::operator())> {};
+
+template <class C, class R, class A>
+struct _b_h_fmap {
+	template <template <class> class T, typename F>
+	T<R> operator()(const F& f, const T<rm_cvref_t<A>>& c) {
+		T<R> r {};
+
+		r.reserve(c.size());
+		std::transform(c.begin(), c.end(), std::back_inserter(r), f);
+
+		return r;
+	}
+
+	template <template <class> class T, typename F>
+	T<R> operator()(const F& f, T<A>&& c) {
+		T<R> r {};
+
+		r.reserve(c.size());
+		std::transform(
+			std::make_move_iterator(c.begin()),
+			std::make_move_iterator(c.end()),
+			std::back_inserter(r),
+			f
+		);
+
+		return r;
+	}
+};
+
+template <class C, class R, class A>
+struct _h_fmap<R(C::*)(A) const> : _b_h_fmap<C,R,A> {};
+
+template <class C, class R, class A>
+struct _h_fmap<R(C::*)(const A*) const> : _b_h_fmap<C,R,A*> {};
+
+
+template <class F, class T>
+inline constexpr auto fmap(const F& f, const T& v) {
+	return _h_fmap<F>()(f, v);
+}
+
+/**
+ * @brief This fmap overload transforms elements using a function pointer taking a const A&.
+ *
+ * @tparam R Result type, as in the alternative fmap overload.
+ * @tparam A Argument type, as in the alternative fmap overload.
+ * @tparam T Container type, as in the alternative fmap overload.
+ * @param f The transformation function pointer, taking a const A& and returning R.
+ * @param c Input container, similar to the alternative, but elements are accessed by const reference.
+ * @return New container with transformed elements, as in the alternative fmap overload.
+ */
+template <class R, class A, template <class> class T>
+inline constexpr auto fmap(R(*f)(const A&), const T<A>& c) -> T<R> {
+	T<R> r {};
+
+	r.reserve(c.size());
+	std::transform(c.begin(), c.end(), std::back_inserter(r), f);
+
+	return r;
+}
+
+/**
+ * @brief Transforms elements of a container using a given function.
+ *
+ * @tparam R The result type of the transformation and the element type of the output container.
+ * @tparam A The argument type of the transformation and the element type of the input container.
+ * @tparam T The container type (e.g., std::vector).
+ * @param f The transformation function, taking an A&& and returning R.
+ * @param c The input container of type T<A>. Its elements are moved, leaving it in an unspecified state.
+ * @return A new container of type T<R> with the transformed elements.
+ */
+template <class R, class A, template <class> class T>
+inline constexpr auto fmap(R(*f)(A&&), T<A>&& c) -> T<R> {
+	T<R> r {};
+
+	r.reserve(c.size());
+	std::transform(
+		std::make_move_iterator(c.begin()),
+		std::make_move_iterator(c.end()),
+		std::back_inserter(r),
+		f
+	);
+
+	return r;
+}
+
 /**
  * @brief Simple struct that holds the 'timeout options' for 'wexecvp'.
  */
@@ -454,6 +542,23 @@ std::string get_client_addr(struct sockaddr* client_addr);
 int check_port_availability(int port_num, bool* port_free);
 
 /**
+ * @brief Appends elements from a source vector to a destination vector by moving them.
+ * @tparam T The type of elements stored in the vectors.
+ * @param dest A reference to the destination vector where elements will be appended.
+ * @param src An rvalue reference to the source vector from which elements will be moved.
+ *   `src` will be empty or in a valid but unspecified state after the operation.
+ *
+ * @return void
+ */
+template <typename T>
+void append(std::vector<T>& dest, std::vector<T>&& src) {
+	dest.insert(dest.end(),
+		std::make_move_iterator(src.begin()),
+		std::make_move_iterator(src.end())
+	);
+}
+
+/**
  * @brief Sorts a vector in-place in non-descending order.
  * @tparam T The type of elements in the vector. Must be comparable using operator `<`.
  * @param v The vector to be sorted (passed by rvalue reference).
@@ -524,5 +629,20 @@ struct s_vector {
  * @return `true` if the key is found in the vector, `false` otherwise.
  */
 bool ci_binary_search(const s_vector<std::string>& vec, const std::string& key);
+/**
+ * @brief Check if a MySQL version number has a valid format of kind 'MM.mm.rr-suffix'
+ * @param v The string to be verified.
+ * @return 'True' if the format is valid, 'false' otherwise.
+ */
+bool validate_mysql_version(const char* v);
+/**
+ * @brief Converts a MySQL server version string into a numeric representation.
+ * @details This function is directly taken from 'libmaridb_client', see 'mariadb_server_version_id'.
+ * @param ver The MySQL server version string to parse, expected in "MAJOR.MINOR.PATCH" format.
+ *   Example: "8.0.29".
+ * @return An `unsigned long` representing the server version, calculated as `MAJOR * 10000 + MINOR * 100 +
+ *   PATCH`. Returns 0 if parsing fails or if the input string is not in the expected format.
+ */
+unsigned long mysql_get_server_version(const char* ver);
 
 #endif

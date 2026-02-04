@@ -1837,13 +1837,20 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 	if (!strcasecmp(name,"server_version")) {
 		if (vallen) {
-			free(variables.server_version);
-			if (strcmp(value,(const char *)"5.1.30")==0) { // per issue #632 , the default 5.1.30 is replaced with 5.5.30
-				variables.server_version=strdup((char *)"5.5.30");
+			if (validate_mysql_version(value)) {
+				free(variables.server_version);
+
+				if (strcmp(value,(const char *)"5.1.30")==0) { // per issue #632 , the default 5.1.30 is replaced with 5.5.30
+					variables.server_version=strdup((char *)"5.5.30");
+				} else {
+					variables.server_version=strdup(value);
+				}
+
+				return true;
 			} else {
-				variables.server_version=strdup(value);
+				proxy_error("'%s' is an invalid value for 'mysql-server_version'.\n", value);
+				return false;
 			}
-			return true;
 		} else {
 			return false;
 		}

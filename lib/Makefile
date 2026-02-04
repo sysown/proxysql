@@ -29,6 +29,8 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JSON_IDIR) \
 			-I$(SSL_IDIR) \
 
+IDIR := ../include/
+
 ifeq ($(UNAME_S),Linux)
 	IDIRS += -I$(COREDUMPER_IDIR)
 endif
@@ -112,7 +114,7 @@ MYSQL_PARSER = MySQL_Parser
 $(MYSQL_FLEX_C): $(MYSQL_LEXER_FILE) $(MYSQL_BISON_H)
 	flex -o $(MYSQL_FLEX_C) $(MYSQL_LEXER_FILE)
 
-$(MYSQL_BISON_H) $(MYSQL_BISON_C): $(MYSQL_PARSER).y $(IDIR)/MySQL_AST.h $(IDIR)/$(MYSQL_PARSER).h
+$(MYSQL_BISON_C): $(MYSQL_PARSER).y $(IDIR)/MySQL_AST.h $(IDIR)/$(MYSQL_PARSER).h
 	bison -Wcounterexamples -d -v --report=all -o $(MYSQL_BISON_C) --defines=$(MYSQL_BISON_H) $(MYSQL_PARSER).y
 
 $(ODIR)/MySQL_Parser.tab.oo: $(MYSQL_BISON_C) $(MYSQL_BISON_H) $(IDIR)/$(MYSQL_PARSER).h
@@ -135,8 +137,8 @@ $(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS)
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_DIR)/sqlite3.o $(MYSQL_PARSER_OBJ)
-	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o $(MYSQL_PARSER_OBJ)
+	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
 
 $(ODIR):
 	mkdir $(ODIR)

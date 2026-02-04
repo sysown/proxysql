@@ -11,6 +11,10 @@ extern __thread bool mysql_thread___query_digests_no_digits;
 extern __thread bool mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___query_digests_keep_comment;
+extern __thread char* mysql_thread___server_version;
+
+__thread char cur_proc_cmnt[FIRST_COMMENT_MAX_LENGTH];
+__thread char tap_srv_ver[MYSQL_SERVER_VER_MAX_LENGTH];
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -228,6 +232,85 @@ static inline void replace_with_q_mark(
 	}
 }
 
+/**
+ * @brief Copies a MySQL version string to a destination buffer, formatting each component to two digits with
+ *   leading zeros.
+ * @details This function parses an input version string, typically in the format "MAJOR.MINOR.PATCH"
+ *   (e.g., "8.0.30" or "5.7.9"), and extracts its first three numeric components found between dots. Copying
+ *   only the first two chars found between the delimiters. Each found component (MAJOR, MINOR, PATCH) is then
+ *   formatted to occupy exactly two characters, with a leading '0' added if the original component is a
+ *   single digit.
+ *
+ *   For example:
+ *     - "8.0.30" becomes "080030"
+ *     - "5.7.9" becomes "050709"
+ *     - "10.1.2" becomes "100102"
+ *     - "8.0" becomes "080000" (missing components are treated as 0)
+ *
+ * @param dst Pointer to the destination character array. This buffer must be large enough
+ *            to hold the 6-character formatted version string plus a null terminator (at least 7 bytes).
+ * @param src Pointer to the null-terminated source string containing the MySQL version number.
+ *            Expected format is "X.Y.Z" where X, Y, and Z are numeric, but it can handle
+ *            fewer components or suffixes (e.g., "8.0", "5.7.9-log").
+ * @return A pointer to the destination buffer `dst`, allowing for call chaining.
+ */
+char* copy_mysql_ver_num(char* dst, const char* src) {
+	if (!src) { return dst; }
+
+	char* d { dst };
+	const char* s { src };
+
+	const char* s_end { s + strlen(s) - 1 };
+	size_t dot_p { strcspn(s, ".") };
+
+	if (dot_p >= 2) {
+		strncpy(d, s, 2);
+		s += 3;
+	} else {
+		*d     = '0';
+		*(d+1) = *s;
+
+		s += 2;
+	}
+
+	d += 2;
+	dot_p = strcspn(src, ".");
+
+	if (dot_p >= 2) {
+		strncpy(d, s, 2);
+		s += 3;
+	} else {
+		*d     = '0';
+		*(d+1) = *s;
+
+		s += 2;
+	}
+
+	d += 2;
+	dot_p = 0;
+
+	if (s <= s_end) {
+		dot_p += is_digit_char(*s);
+	}
+	if (s + 1 <= s_end) {
+		dot_p += is_digit_char(*(s + 1));
+	}
+
+	if (dot_p >= 2) {
+		strncpy(d, s, 2);
+		s += 3;
+	} else {
+		*d     = '0';
+		*(d+1) = *s;
+
+		s += 2;
+	}
+
+	d += 2;
+	*d = 0;
+
+	return dst;
+}
 
 /**
  * @brief Helper functiont that initializes the supplied 'options' struct with the configuration variables
@@ -243,6 +326,7 @@ static inline void get_mysql_options(options* opts) {
 	opts->groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
 	opts->keep_comment = mysql_thread___query_digests_keep_comment;
 	opts->max_query_length = mysql_thread___query_digests_max_query_length;
+	opts->server_version = copy_mysql_ver_num(tap_srv_ver, mysql_thread___server_version);
 }
 
 /**
@@ -253,9 +337,10 @@ enum p_st {
 	st_cmnt_type_1 = 1,
 	st_cmnt_type_2 = 2,
 	st_cmnt_type_3 = 3,
-	st_literal_string = 4,
-	st_literal_number = 5,
-	st_replace_null = 6
+	st_cmnt_type_cmd = 4,
+	st_literal_string = 5,
+	st_literal_number = 6,
+	st_replace_null = 7
 };
 
 /**
@@ -290,16 +375,16 @@ typedef struct shared_st {
 	bool keep_prev_char;
 	/* @brief Decides whether or not the next char should be copy during 'stage_1'. */
 	bool copy_next_char;
+	/* @brief Decides whether or not the next char should be copy during 'stage_1'. */
+	bool proc_cmd;
 } shared_st;
 
 /**
  * @brief State used for parsing 'type_1' comments, i.e: /\* *\/.
  */
 typedef struct cmnt_type_1_st {
-	/* @brief Flag to announce if the found comment is a 'cmd' comment. */
-	bool is_cmd;
-	/* @brief Counter holding the length of the 'cmd' comment currently being processed. */
-	int cur_cmd_cmnt_len;
+	/* @brief Counter holding the length of the comment currently being processed. */
+	int cur_cmnt_len;
 	/**
 	 * @brief Flag showing first comment parsing state. '0' when no comment or end has been found, and '1'
 	 *   when the first comment has already been found.
@@ -310,6 +395,16 @@ typedef struct cmnt_type_1_st {
 	/* @brief Counter keeping track of the number of chars copied into 'first_comment' buffer. */
 	int fst_cmnt_len;
 } cmnt_type_1_st;
+
+/**
+ * @brief State used for parsing 'type_cmd' comments, i.e: /\*! *\/.
+ */
+typedef struct cmnt_type_cmd_st {
+	/* @brief Flag signaling if version mark is being processed. */
+	bool proc_ver_mark;
+	/* @brief Counter holding the length of the version mark. */
+	int ver_num_len;
+} cmnt_type_cmd_st;
 
 /**
  * @brief State used for parsing 'literal strings' values, i.e: 'foo', "bar", etc..
@@ -346,6 +441,7 @@ typedef struct literal_null_st {
  */
 typedef struct stage_1_st {
 	struct cmnt_type_1_st cmnt_type_1_st;
+	struct cmnt_type_cmd_st cmnt_type_cmd_st;
 	struct literal_string_st literal_str_st;
 	struct literal_digit_st literal_digit_st;
 	/* @brief Holds the previous iteration parsing ending position. */
@@ -431,10 +527,16 @@ static inline char* get_result_buffer(int len, char* buf) {
 	return r;
 }
 
+enum p_st process_cmnt_closing_mark(shared_st* shared_st);
+
 /**
  * @brief Return the next st to be processed. State filtering based on end of query being reached is also
  *   performed here.
-*
+ * @details This remark was added for 'proc_cmd' checks. During next stage detection, is safe to check against
+ *   the exact query length because the current character could be a closing mark, being the final element in
+ *   the query. Current processing position shouldn't be advanced in this state; it should be done **after**
+ *   current char processing, within one of the processing states. This way the offset check at the beginning
+ *   of each iteration is able to prevent any invalid memory accesses.
  * @param shared_st The shared processing state used to decide which is the next 'processing state'.
  *
  * @return The next processing state.
@@ -444,8 +546,23 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 	char prev_char = shared_st->prev_char;
 	enum p_st st = st_no_mark_found;
 
+	// cmnt type 'cmd' - start with '/*!'
+	if (
+		shared_st->q_cur_pos < (shared_st->q_len - 2) &&
+		*shared_st->q == '/' && *(shared_st->q+1) == '*' && *(shared_st->q+2) == '!'
+	) {
+		st = st_cmnt_type_cmd;
+	}
+	// cmnt type 'cmd' - ending with '*/'
+	else if (
+		// processing the contents of a 'cmd' as a regular query
+		shared_st->proc_cmd && shared_st->q_cur_pos <= (shared_st->q_len - 2) &&
+		*(shared_st->q) == '*' && *(shared_st->q+1) == '/'
+	) {
+		st = st_cmnt_type_cmd;
+	}
 	// cmnt type 1 - start with '/*'
-	if(
+	else if(
 		// v1_crashing_payload_05
 		shared_st->q_cur_pos < (shared_st->q_len - 2) &&
 		*shared_st->q == '/' && *(shared_st->q+1) == '*'
@@ -518,8 +635,6 @@ void copy_next_char(shared_st* shared_st, const options* opts) {
 
 	inc_proc_pos(shared_st);
 }
-
-static thread_local char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 
 /**
  * @brief Safer version of 'is_digit_string' performing boundary checks.
@@ -598,24 +713,19 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	// initial mark "/*|/*!" detection
 	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
 	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
-		c_t_1_st->cur_cmd_cmnt_len = 0;
-
-		// check length before accessing beyond 'q_cur_pos + 1'
-		if (shared_st->q_cur_pos != (shared_st->q_len-2) && *(shared_st->q+2) == '!') {
-			c_t_1_st->is_cmd = 1;
-		}
+		c_t_1_st->cur_cmnt_len = 0;
 
 		// copy the initial mark "/*" if comment preserving is enabled
 		if (opts->keep_comment) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q);
-			c_t_1_st->cur_cmd_cmnt_len++;
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q + 1);
-			c_t_1_st->cur_cmd_cmnt_len++;
+			cur_proc_cmnt[c_t_1_st->cur_cmnt_len] = *(shared_st->q);
+			c_t_1_st->cur_cmnt_len++;
+			cur_proc_cmnt[c_t_1_st->cur_cmnt_len] = *(shared_st->q + 1);
+			c_t_1_st->cur_cmnt_len++;
 		}
 
 		// discard processed "/*" or "/*!"
-		shared_st->q += 2 + c_t_1_st->is_cmd;
-		shared_st->q_cur_pos += 2 + c_t_1_st->is_cmd;
+		shared_st->q += 2;
+		shared_st->q_cur_pos += 2;
 
 		// v1_crashing_payload_04
 		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
@@ -629,11 +739,11 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 //  {
 
 	// we are parsing a "/*!" comment
-	if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
+	if (opts->keep_comment) {
 		// copy the char into 'cur_cmd_cmnt'
-		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *shared_st->q;
-			c_t_1_st->cur_cmd_cmnt_len++;
+		if (c_t_1_st->cur_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
+			cur_proc_cmnt[c_t_1_st->cur_cmnt_len] = *shared_st->q;
+			c_t_1_st->cur_cmnt_len++;
 		}
 	}
 
@@ -668,28 +778,28 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 
 	// comment type 1 - /* .. */
 	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-		if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len]=0;
+		if (opts->keep_comment) {
+			cur_proc_cmnt[c_t_1_st->cur_cmnt_len]=0;
 
-			if (c_t_1_st->cur_cmd_cmnt_len >= 2) {
+			if (c_t_1_st->cur_cmnt_len >= 2) {
 				// we are not interested into copying the final '*/' for the comment
 				if (opts->keep_comment == false) {
-					c_t_1_st->cur_cmd_cmnt_len -= 2;
+					c_t_1_st->cur_cmnt_len -= 2;
 				}
 
-				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
+				cur_proc_cmnt[c_t_1_st->cur_cmnt_len] = 0;
 				// counter for the lenght of the cmd comment annotation, with format `/*!12345 ... */`.
 				int cmnt_annot_len = 0;
 				bool end = 0;
 
 				// count the number of chars found before annotation ends
-				while (end == 0 && cmnt_annot_len < c_t_1_st->cur_cmd_cmnt_len) {
+				while (end == 0 && cmnt_annot_len < c_t_1_st->cur_cmnt_len) {
 					if (
-						cur_cmd_cmnt[cmnt_annot_len] == '/' ||
-						cur_cmd_cmnt[cmnt_annot_len] == '*' ||
-						cur_cmd_cmnt[cmnt_annot_len] == '!' ||
-						cur_cmd_cmnt[cmnt_annot_len] == ' ' ||
-						is_digit_char(cur_cmd_cmnt[cmnt_annot_len])
+						cur_proc_cmnt[cmnt_annot_len] == '/' ||
+						cur_proc_cmnt[cmnt_annot_len] == '*' ||
+						cur_proc_cmnt[cmnt_annot_len] == '!' ||
+						cur_proc_cmnt[cmnt_annot_len] == ' ' ||
+						is_digit_char(cur_proc_cmnt[cmnt_annot_len])
 					) {
 						cmnt_annot_len += 1;
 					} else {
@@ -704,17 +814,17 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 					int comment_size = 0;
 
 					if (opts->keep_comment) {
-						comment_size = c_t_1_st->cur_cmd_cmnt_len;
+						comment_size = c_t_1_st->cur_cmnt_len;
 					} else {
-						comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
+						comment_size = c_t_1_st->cur_cmnt_len - cmnt_annot_len;
 					}
 
 					int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
 
 					if (opts->keep_comment) {
-						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+						memcpy(shared_st->res_cur_pos, cur_proc_cmnt, copy_length);
 					} else {
-						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
+						memcpy(shared_st->res_cur_pos, cur_proc_cmnt + cmnt_annot_len, copy_length);
 					}
 
 					shared_st->res_cur_pos += copy_length;
@@ -728,19 +838,18 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			}
 
 			// Re-initialize the comment state
-			c_t_1_st->is_cmd = 0;
-			c_t_1_st->cur_cmd_cmnt_len = 0;
+			c_t_1_st->cur_cmnt_len = 0;
 		}
 
 		if (
 			// not at the beginning or at the end of the query
 			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
-			// if the prev copied char isn't a space comment wasn't space separated in the query:
+			// if the prev copied char isn't a space, comment wasn't space separated in the query:
 			// ```
 			// Q: `SELECT/*FOO*/1`
 			//          ^ no space char
 			// ```
-			// thus we impose an extra space in replace for the ommited comment
+			// thus we impose an extra space in replace for the omitted comment
 			*(shared_st->res_cur_pos-1) != ' '
 		) {
 			*shared_st->res_cur_pos++ = ' ';
@@ -750,8 +859,6 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 		shared_st->prev_char = ' ';
 		// back to main shared_st->query parsing state
 		next_st = st_no_mark_found;
-		// reset the comment processing state (v1_crashing_payload_04)
-		c_t_1_st->is_cmd = 0;
 		// skip ending mark for comment for next iteration
 		shared_st->q_cur_pos += 1;
 		shared_st->q++;
@@ -825,6 +932,106 @@ enum p_st process_cmnt_type_3(shared_st* shared_st) {
 	}
 
 	return next_state;
+}
+
+/**
+ * @brief Process the final closing mark for a cmd comment '*\/'.
+ * @details This logic is shared with 'process_cmnt_type_1'. It assumes the mark has been detected.
+ * @param shared_st Shared state to update.
+ * @param c_t_st Comment state to reset.
+ * @return 'st_no_mark_found'.
+ */
+enum p_st process_cmnt_closing_mark(shared_st* shared_st) {
+	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
+
+	if (
+		// not at the beginning or at the end of the query
+		shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos
+		// if the prev copied char isn't a space, comment wasn't space separated in the query:
+		// ```
+		// Q: `SELECT/*FOO*/1`
+		//          ^ no space char
+		// ```
+		// thus we impose an extra space in replace for the omitted comment
+		&& *(shared_st->res_cur_pos-1) != ' '
+	) {
+		*shared_st->res_cur_pos++ = ' ';
+	}
+
+	// if there were no space we have imposed it
+	shared_st->prev_char = ' ';
+	// skip ending mark for comment for next iteration
+	shared_st->q_cur_pos += 1;
+	shared_st->q++;
+
+	return st_no_mark_found;
+}
+
+enum p_st process_cmnt_type_cmd(const options* opts, shared_st* shared_st, cmnt_type_cmd_st* c_t_st) {
+	enum p_st next_st = st_cmnt_type_cmd;
+
+	if (
+		shared_st->q_cur_pos <= (shared_st->q_len-3) &&
+		*shared_st->q == '/' && *(shared_st->q+1) == '*' && *(shared_st->q+2) == '!'
+	) {
+		// discard processed "/*!"
+		shared_st->q += 3;
+		shared_st->q_cur_pos += 3;
+
+		// reset the version number counter
+		c_t_st->ver_num_len = 0;
+		c_t_st->proc_ver_mark = true;
+	}
+
+	if (c_t_st->proc_ver_mark && is_digit_char(*shared_st->q)) {
+		if (c_t_st->ver_num_len < FIRST_COMMENT_MAX_LENGTH - 1) {
+			cur_proc_cmnt[c_t_st->ver_num_len] = *shared_st->q;
+		}
+
+		c_t_st->ver_num_len++;
+	} else {
+		// consume final space-char delim; avoids space duplication on multi-stmt digests
+		if (
+			shared_st->q_cur_pos <= (shared_st->q_len-2) &&
+			c_t_st->proc_ver_mark && is_space_char(*shared_st->q)
+		) {
+			shared_st->q += 1;
+			shared_st->q_cur_pos += 1;
+		}
+
+		c_t_st->proc_ver_mark = false;
+
+		// process version number; /*!MMmmrr */
+		if (c_t_st->ver_num_len) {
+			cur_proc_cmnt[c_t_st->ver_num_len] = 0;
+			char cur_cmd_ver[MYSQL_SERVER_VER_MAX_LENGTH + 1] { 0 };
+
+			if (c_t_st->ver_num_len == 5) {
+				cur_cmd_ver[0] = '0';
+				cur_cmd_ver[1] = cur_proc_cmnt[0];
+
+				strncpy(cur_cmd_ver + 2, cur_proc_cmnt + 1, 4);
+			} else if (c_t_st->ver_num_len == 6) {
+				strncpy(cur_cmd_ver, cur_proc_cmnt, MYSQL_SERVER_VER_MAX_LENGTH);
+			}
+
+			int cmp = strcasecmp(opts->server_version, cur_cmd_ver);
+			if (cmp >= 0) {
+				next_st = st_no_mark_found;
+				shared_st->proc_cmd = true;
+			}
+
+			// flag version number mark as processed
+			c_t_st->ver_num_len = 0;
+		}
+
+		if (shared_st->prev_char == '*' && *shared_st->q == '/') {
+			next_st = process_cmnt_closing_mark(shared_st);
+			shared_st->proc_cmd = false;
+		}
+	}
+
+	return next_st;
 }
 
 /**
@@ -1192,6 +1399,7 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 	// state required between different iterations of special parsing states
 	char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
 	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
+	cmnt_type_cmd_st* const cmnt_type_cmd_st = &stage_1_st->cmnt_type_cmd_st;
 	literal_string_st* const literal_str_st = &stage_1_st->literal_str_st;
 	literal_digit_st* const literal_digit_st = &stage_1_st->literal_digit_st;
 
@@ -1260,6 +1468,16 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 					continue;
 				}
 
+				// suppress spaces before semicolon ';'
+				// ===================================
+				// This provides homogeneous digests for multi-statements
+				if (
+					is_space_char(shared_st->prev_char) && *shared_st->q == ';'
+					&& shared_st->res_cur_pos > shared_st->res_init_pos
+				) {
+					shared_st->res_cur_pos--;
+				}
+
 				// copy the current char
 				copy_next_char(shared_st, opts);
 			}
@@ -1282,6 +1500,14 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 			} else if (cur_st == st_cmnt_type_3) {
 				shared_st->copy_next_char = 0;
 				cur_st = process_cmnt_type_3(shared_st);
+				if (cur_st == st_no_mark_found) {
+					shared_st->copy_next_char = 1;
+					continue;
+				}
+			} else if (cur_st == st_cmnt_type_cmd) {
+				// by default, we don't copy the next char for 'cmd'
+				shared_st->copy_next_char = 0;
+				cur_st = process_cmnt_type_cmd(opts, shared_st, cmnt_type_cmd_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
@@ -1903,7 +2129,7 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	{
 		// v1_crashing_payload_06
 		char* f_char = shared_st->res_cur_pos - 1;
-		while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+		while (f_char >= shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
 			f_char--;
 		}
 		f_char++;

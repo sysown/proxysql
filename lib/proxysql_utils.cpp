@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <sstream>
 #include <algorithm>
+#include <climits>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -18,6 +19,8 @@
 #include <dirent.h>
 #include <sys/syscall.h>
 #include <linux/close_range.h>
+
+#include "re2/re2.h"
 
 using std::string;
 using std::string_view;
@@ -404,6 +407,35 @@ int wexecvp(
 	return child_err;
 }
 
+string hex(const string& str) {
+	std::ostringstream hex_stream;
+
+	 for (unsigned char c : str) {
+		hex_stream << std::hex << std::setfill('0') << std::setw(2) <<
+			std::uppercase << static_cast<uint64_t>(c);
+	}
+
+	return hex_stream.str();
+}
+
+std::string unhex(const std::string& hex) {
+	if (hex.size() % 2 || hex.size() == 0) { return {}; };
+
+	string result {};
+
+	for (size_t i = 0; i < hex.size() - 1; i += 2) {
+		string hex_char { string { hex[i] } + hex[i+1] };
+		uint64_t char_val { 0 };
+
+		std::istringstream stream { hex_char };
+		stream >> std::hex >> char_val;
+
+		result += string { static_cast<char>(char_val) };
+	}
+
+	return result;
+}
+
 std::vector<std::string> split_str(const std::string& s, char delimiter) {
 	std::vector<std::string> tokens {};
 	std::string token {};
@@ -761,4 +793,27 @@ bool ci_binary_search(const s_vector<std::string>& vec, const std::string& key) 
 		}
 	);
 	return it != vec.vals.end() && strcasecmp(it->c_str(), key.c_str()) == 0;
+}
+
+const re2::LazyRE2 SRV_VER_REGEX { "^\\d\\d?\\.\\d\\d?\\.\\d\\d?(?:-[a-z0-9]+)?$" };
+
+bool validate_mysql_version(const char* v) {
+	if (v == nullptr) { return false; }
+
+	return RE2::FullMatch(re2::StringPiece(v), *SRV_VER_REGEX);
+}
+
+unsigned long mysql_get_server_version(const char* ver) {
+	if (!ver) { return 0; }
+
+	size_t major, minor, patch { 0 };
+	char* p { const_cast<char*>(ver) };
+
+	major = strtol(p, &p, 10);
+	p += 1; /* consume the dot */
+	minor = strtol(p, &p, 10);
+	p += 1; /* consume the dot */
+	patch = strtol(p, &p, 10);
+
+	return (major * 10000L + (unsigned long)(minor * 100L + patch));
 }

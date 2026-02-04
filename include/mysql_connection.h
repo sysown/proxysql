@@ -1,6 +1,8 @@
 #ifndef __CLASS_MYSQL_CONNECTION_H
 #define __CLASS_MYSQL_CONNECTION_H
 
+#include "MySQL_Parser_Utils.h"
+
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -73,6 +75,9 @@ class MySQL_Connection {
 	void connect_start_SetSslSettings();
 	void ProcessQueryAndSetStatusFlags_Warnings(char *);
 	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
+	void ProcessQueryAndSetStatusFlags_UserVariables(
+		const MySQL_Query_Processor_Output* qpo, const char* digest
+	);
 	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
 	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
 	public:
@@ -252,6 +257,31 @@ class MySQL_Connection {
 	bool IsAutoCommit();
 	bool AutocommitFalse_AndSavepoint();
 	bool MultiplexDisabled(bool check_delay_token = true);
+	/**
+	 * @brief Determines if a query's variable assignments would prevent 'keep multiplexing' from being enabled.
+	 * @details  This function examines the provided `query_details_t`. If the query represents a `SET` statement
+	 *   (i.e., contains `set_details_t`), it checks each variable being assigned against a predefined
+	 *   list of variables (`mysql_thread___keep_multiplexing_variables`) that, when modified,
+	 *   indicate that 'keep multiplexing' should not be active.
+	 *
+	 *   Variable comparison logic:
+	 *   - For user-defined variables (starting with '@'), the function checks if the variable name
+	 *     (excluding the leading '@') contains any of the 'keep multiplexing' variables.
+	 *   - For system variables, an exact match is required.
+	 *
+	 *  - TODO: In the future, this overload should replace the previous processing 'query_digest_text'.
+	 *  - TODO: This should be tested.
+	 * @param q A constant reference to `query_details_t` encapsulating the details of the SQL query.
+	 *          This parameter is inspected to determine if it's a `SET` query and to retrieve
+	 *          any variable assignments.
+	 * @return `true` if the query is a `SET` statement and none of the assigned variables are
+	 *         found in the list that disables 'keep multiplexing'. This implies 'keep multiplexing'
+	 *         can potentially remain enabled.
+	 *         `false` otherwise (i.e., if the query is not a `SET` statement, or if it is a `SET` statement
+	 *         and at least one assigned variable is found in the list that disables 'keep multiplexing').
+	 *         In these cases, 'keep multiplexing' should be disabled or not considered.
+	 */
+	bool IsKeepMultiplexEnabledVariables(const query_details_t& q);
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 	void optimize();

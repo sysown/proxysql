@@ -2,14 +2,9 @@
 #define MYSQL_SET_PARSER_UTILS_H
 
 #include "MySQL_AST.h"
+#include "MySQL_Parser_Utils.h"
 
-#include <map>
-
-/**
- * @brief Map where the key is the variable name and the value is a vector of strings representing the
- *  assigned values for that variable.
- */
-using var_map_t = std::map<std::string, std::vector<std::pair<const MySQLParser::AstNode*, std::string>>>;
+#include <string_view>
 
 /**
  * @brief Extracts the AST nodes corresponding to variable assignments from a SQL SET statement's AST.
@@ -37,7 +32,7 @@ std::vector<const MySQLParser::AstNode*> ext_vars_assigns(const MySQLParser::Ast
  *  representing the assigned values for that variable. Returns an empty map if no variable assignments are
  *  found or if the input `root` is `nullptr`.
  */
-var_map_t ext_vars_assigns_map(const MySQLParser::AstNode* root, const std::string& q);
+set_details_t ext_set_details(const MySQLParser::AstNode* root, const std::string_view& q);
 
 /**
  * @brief Helper type that holds an RC and an extra value.
@@ -82,6 +77,10 @@ using child_idx_t = std::pair<MySQLParser::NodeType, size_t>;
 rc_t<const MySQLParser::AstNode*> get_node(
     const MySQLParser::AstNode* root, const std::vector<child_idx_t>& c_path
 );
+
+//         TODO: CREATED ON EARLY DEVELOPMENT. CANDIDATE FOR REMOVAL.
+///////////////////////////////////////////////////////////////////////////////
+
 /**
  * @brief Checks if a given AST node matches a specific pattern related to SET statements.
  * @details Hanldes both `NODE_SET_STATEMENT` and `NODE_SET_NAMES` node types. This implementation
@@ -116,6 +115,9 @@ bool p_match_regex_2(const MySQLParser::AstNode* node);
  * @return `true` if the node matches the expected pattern, `false` otherwise.
  */
 bool p_match_regex_3(const MySQLParser::AstNode* node);
+
+///////////////////////////////////////////////////////////////////////////////
+
 /**
  * @brief Type used for improved error reporting for AST based validation.
  * @details When returning an AST error message, it's expected to.
@@ -128,6 +130,25 @@ struct perr_t {
 	/// Chain of conditions, or sub-errors, that add context to the error.
 	std::vector<std::string> ctx {};
 };
+
+/**
+ * @brief Verifies that the provided AST node represents a valid set of multi-statements.
+ * @details Check if the given AST node consists of a list of set statements. It ensures that:
+ *   1. The node is not null.
+ *   2. Is of the correct type (`NODE_INPUT_STATEMENT_LIST`).
+ *   3. All its children are either `NODE_SET_STATEMENT` or `NODE_EMPTY_STATEMENT`.
+ *
+ *   Currently, only SET statements are allowed in multi-statement lists.
+ *
+ * @param n A pointer to the AST node to verify. Must not be null and must represent a
+ *   `NODE_INPUT_STATEMENT_LIST`.
+ * @param q The original query string associated with the AST. Used for error reporting.
+ *
+ * @return A `perr_t` struct indicating the result of the verification. If the verification
+ *   is successful, the `err` field will be 0. If an error occurs, the `err` field will
+ *   be -1 and the `msg` field will contain an error message.
+ */
+perr_t verf_set_multi_stmts(const MySQLParser::AstNode* n, const std::string_view& q);
 
 /**
  * @brief Verifies recurring simple expressions.
@@ -148,6 +169,13 @@ struct perr_t {
  * @param offset Offset of the original query at which AST represented by 'n' is found.
  * @return A pair of kind { success, error_message }.
  */
-perr_t verf_sql_mode_val(const MySQLParser::AstNode* n, const std::string& v, const std::string& q);
+perr_t verf_sql_mode_val(const MySQLParser::AstNode* n, const std::string_view& v, const std::string_view& q);
+
+/**
+ * @brief True if the supplied character is either ' ', '\t', '\n' or '\r'.
+ * @param c The character to be checked.
+ * @return True if one the supplied character is defined as an space, false otherwise.
+ */
+char is_space_char(char c);
 
 #endif // MYSQL_SET_PARSER_UTILS_H

@@ -1,3 +1,4 @@
+#include <stddef.h>
 
 #pragma once
 #ifndef C_TOKENIZER_H
@@ -8,6 +9,10 @@
 #ifndef FIRST_COMMENT_MAX_LENGTH
 #define FIRST_COMMENT_MAX_LENGTH  1024
 #endif /* FIRST_COMMENT_MAX_LENGTH */
+
+#ifndef MYSQL_SERVER_VER_MAX_LENGTH
+#define MYSQL_SERVER_VER_MAX_LENGTH  6
+#endif /* MYSQL_SERVER_VER_MAX_LENGTH */
 
 typedef struct
 {
@@ -34,6 +39,7 @@ typedef struct _options {
 	int grouping_limit;
 	int groups_grouping_limit;
 	int max_query_length;
+	char* server_version;
 } options;
 
 
@@ -59,6 +65,12 @@ char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** cons
 char* pgsql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
 char* pgsql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
 char* pgsql_query_digest_and_first_comment_one_it(char* s, int len, char** first_comment, char* buf);
+
+/**
+ * @brief Copies a MySQL version number of format 'MMnnrr-suffix' from 's' to 'd'.
+ * @returns The parameter 'd'.
+ */
+char* copy_mysql_ver_num(char* d, const char* s);
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */

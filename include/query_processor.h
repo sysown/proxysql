@@ -1,9 +1,12 @@
 #ifndef __CLASS_QUERY_PROCESSOR_H
 #define __CLASS_QUERY_PROCESSOR_H
+
 #include <type_traits>
-#include <set>
+
 #include "proxysql.h"
 #include "cpp.h"
+
+#include "MySQL_Parser_Utils.h"
 
 // Optimization introduced in 2.0.6
 // to avoid a lot of unnecessary copy
@@ -177,6 +180,14 @@ class Query_Processor_Output {
 	
 	bool create_new_conn;
 	std::string *new_query;
+	/**
+	 * @brief Output from processing SQL Parser output.
+	 * @details Should specify the type of the query, and all the details required for further processing.
+	 *   Any details required at session or connection level that are derived from the parsing of the
+	 *   statement should be present in the specific query type enclosed in this variant.
+	 */
+	query_details_t query_details;
+
 	void * operator new(size_t size) {
 		return l_alloc(size);
 	}

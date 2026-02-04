@@ -1045,7 +1045,6 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	*_thread_id=thread_id;
 
   rand_struct rand_st;
-  //randominit(&rand_st,rand(),rand());
   rand_st.max_value= 0x3FFFFFFFL;
   rand_st.max_value_dbl=0x3FFFFFFFL;
   rand_st.seed1=rand()%rand_st.max_value;
@@ -1054,19 +1053,9 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
   memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
-//#ifdef MARIADB_BASE_VERSION
-//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
-//#else
   proxy_create_random_string((*myds)->myconn->scramble_buff+0,8,(struct rand_struct *)&rand_st);
-//#endif
 
   int i;
-
-//  for (i=0;i<8;i++) {
-//    if ((*myds)->myconn->scramble_buff[i]==0) {
-//      (*myds)->myconn->scramble_buff[i]='a';
-//    }
-//  }
 
 	memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
 	_ptr[l]=0x00; l+=1; //0x00
@@ -1123,23 +1112,10 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	memcpy(_ptr+l, &auth_plugin_data_len, sizeof(auth_plugin_data_len)); l += sizeof(auth_plugin_data_len);
 
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
-  //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
-//#ifdef MARIADB_BASE_VERSION
-//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
-//#else
   proxy_create_random_string((*myds)->myconn->scramble_buff+8,12,(struct rand_struct *)&rand_st);
-//#endif
-  //create_random_string(scramble_buf+8,12,&rand_st);
-
-//  for (i=8;i<20;i++) {
-//    if ((*myds)->myconn->scramble_buff[i]==0) {
-//      (*myds)->myconn->scramble_buff[i]='a';
-//    }
-//  }
 
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00
-  //memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
   memcpy(_ptr+l,plugins[use_plugin_id],strlen(plugins[use_plugin_id]));
 
 	if (send==true) {
@@ -2570,7 +2546,7 @@ __exit_process_pkt_handshake_response:
 		const string tmp_cpass { get_debug_pass(reinterpret_cast<const char*>(vars1.pass), vars1.pass_len) };
 
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 1,
-			"Handshake in progress   session_id=%u user=\"%s\" password=\"%s\" client_pass=\"%s\" scramble=\"%s\""
+			"Hanshake in progress   session_id=%u user=\"%s\" password=\"%s\" client_pass=\"%s\" scramble=\"%s\""
 				" db=\"%s\" auth_method=\"%s\" max_pkt=%u capabilities=%u charset=%u use_ssl=%d auth_in_progress=%d\n",
 			(*myds)->sess->thread_session_id, vars1.user, tmp_pass.c_str(), tmp_cpass.c_str(),
 			hex((*myds)->myconn->scramble_buff).c_str(), vars1.db, vars1.auth_plugin,
@@ -2593,6 +2569,7 @@ __exit_process_pkt_handshake_response:
 		ret = verify_user_attributes(__LINE__, __func__, vars1.user);
 	}
 	free_account_details(account_details);
+
 	return ret;
 }
 

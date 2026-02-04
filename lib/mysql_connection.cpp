@@ -2678,6 +2678,106 @@ bool MySQL_Connection::MultiplexDisabled(bool check_delay_token) {
 	return ret;
 }
 
+/**
+ * @brief Splits a string_view into a vector of string_views based on a C-style string delimiter.
+ *
+ * This function parses the input `string_view` `str` and divides it into substrings
+ * wherever the `delim` sequence is found. Each resulting substring is returned as a
+ * `string_view` within a `std::vector`. The original `string_view` `str` is not modified,
+ * and the returned `string_view`s refer to its underlying character data.
+ *
+ * Behavior for edge cases:
+ * - Empty parts resulting from consecutive delimiters or delimiters at the start/end
+ *   of the string are not included in the result (e.g., "a,,b" split by "," yields {"a", "b"}).
+ * - If the delimiter is not found, the entire input `str` is returned as a single element
+ *   in the vector.
+ * - If `str` is empty, an empty vector is returned.
+ * - It is assumed that `delim` is a non-empty C-style string. Passing an empty `delim`
+ *   may lead to undefined behavior or an infinite loop.
+ *
+ * @param str The input `string_view` to be split.
+ * @param delim A null-terminated C-style string representing the delimiter.
+ * @return A `std::vector` of `string_view`s, where each `string_view` represents a
+ *         segment of the original string between delimiters.
+ */
+vector<string_view> split_view(const string_view& str, const char* delim) {
+	const char* c_pos { str.data() };
+	const size_t c_len { str.length() };
+
+	size_t d_len { strlen(delim) };
+	vector<string_view> vars {};
+
+	while (const char* n_pos = strstr(c_pos, delim)) {
+		size_t c_len { size_t(n_pos - c_pos) };
+
+		if (c_len) {
+			vars.push_back(string_view { c_pos, c_len });
+		}
+
+		c_pos += c_len + d_len;
+	}
+
+	if (c_pos != str && c_pos != (str.data() + c_len)) {
+		vars.push_back(string_view { c_pos });
+	}
+
+	return vars;
+}
+
+string_view trim(const string_view& s) {
+	size_t s_pos { s.find_first_not_of(" \n\r\t") };
+	size_t f_pos { s.find_last_not_of(" \n\r\t") };
+
+	return s.substr(s_pos == std::string_view::npos ? 0 : s_pos, f_pos + 1);
+}
+
+vector<string_view> get_keep_mult_vars(const char* keep_mult_vars) {
+	const auto r_vars { split_view(keep_mult_vars, ",") };
+	vector<string_view> res {};
+
+	std::copy_if(r_vars.begin(), r_vars.end(), std::back_inserter(res),
+		[] (const string_view& v) -> bool {
+			return !v.empty() && !std::all_of(v.begin(), v.end(), is_space_char);
+		}
+	);
+
+	std::for_each(res.begin(), res.end(),
+		[] (string_view& v) {
+			v = trim(v);
+		}
+	);
+
+	return res;
+}
+
+bool MySQL_Connection::IsKeepMultiplexEnabledVariables(const query_details_t& q) {
+	if (const set_details_t* s = std::get_if<set_details_t>(&q)) {
+		const auto& keep_mult_vars { get_keep_mult_vars(mysql_thread___keep_multiplexing_variables) };
+
+		for (const auto& v : s->vars_assigns) {
+			const auto it {
+				std::find_if(keep_mult_vars.begin(), keep_mult_vars.end(),
+					[&v] (const string_view& vn) {
+						if (v.first.rfind("@") == 0) {
+							return v.first.rfind(vn.data(), 1, v.first.size() - 1) != std::string::npos;
+						} else {
+							return v.first == vn;
+						}
+					}
+				)
+			};
+
+			if (it != keep_mult_vars.end()) {
+				return false;
+			}
+		}
+
+		return true;
+	} else {
+		return false;
+	}
+}
+
 bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) {
 	if (query_digest_text==NULL) return true;
 
@@ -2802,32 +2902,21 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags_Warnings(char *query_digest
 	}
 }
 
-
 void MySQL_Connection::ProcessQueryAndSetStatusFlags_UserVariables(char *query_digest_text, int mul) {
 	if (get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE)==false) { // we search for variables only if not already set
-//			if (
-//				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
-//				&&
-//				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
 		if (strncasecmp(query_digest_text,"SET ",4)==0) {
 			// For issue #555 , multiplexing is disabled if --safe-updates is used (see session_vars definition)
 			int sqloh = mysql_thread___set_query_lock_on_hostgroup;
 			switch (sqloh) {
 				case 0: // old algorithm
+					// TODO: Document the relationship between QPO and this. This should no longer depend
+					// on the digest text, this should be a direct result of the QPO itself if parsing is
+					// enabled. Or this should be completely removed as a legacy algorithm with no use.
 					if (mul!=2) {
 						if (index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 							if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
 								set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 							}
-/* deprecating session_vars[] because we are introducing a better algorithm
-						} else {
-							for (unsigned int i = 0; i < sizeof(session_vars)/sizeof(char *); i++) {
-								if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
-									set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
-									break;
-								}
-							}
-*/
 						}
 					}
 					break;
@@ -2845,6 +2934,44 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags_UserVariables(char *query_d
 				if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
 					set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 				}
+			}
+		}
+	}
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags_UserVariables(
+	const MySQL_Query_Processor_Output* qpo, const char* digest
+) {
+	// Only attempt to set if currently 'false'
+	if (get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE)) { return; }
+
+	if (const set_details_t* s = std::get_if<set_details_t>(&qpo->query_details)) {
+		if (mysql_thread___set_query_lock_on_hostgroup == 0) {
+			// Case of 'multiplex == 2' is special. The value indicates the user intent of **not disabling**
+			// multiplex for the CURRENT query, thus, it prevents this status update.
+			if (qpo->multiplex != 2) {
+				if (s->has_user_var && !IsKeepMultiplexEnabledVariables(qpo->query_details)) {
+					set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+				}
+			}
+		} else {
+			if (myds->sess->locked_on_hostgroup > -1) {
+				// If 'locked_on_hostgroup' was set, it implies that an user variable was detected, a
+				// variable failed to parse, or the lock was required due to a known query. For these
+				// cases we disable multiplexing assuming an user variable might be in the connection.
+				set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+			}
+		}
+	} else {
+		// Case of 'multiplex == 2' is special. The value indicates the user intent of **not disabling**
+		// multiplex for the CURRENT query, thus, it prevents this status update.
+		//
+		// TODO-FUTURE: The following is analogous to the old-impl. This is just copied due to limitations in
+		// the current parser. Once the parser is able to address generic statements (not just SET). This
+		// should be replaced with the new impl, using `qpo->query_details` for processing.
+		if (qpo->multiplex != 2 && index(digest, '@')) {
+			if (!IsKeepMultiplexEnabledVariables(const_cast<char*>(digest))) {
+				set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 			}
 		}
 	}
@@ -2896,28 +3023,35 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags_SetBackslashEscapes() {
 	}
 }
 
+/**
+ * @brief Updates the connection internal status flags.
+ * @details TODO-FUTURE: Data for the decision making for status updates should be rooted in 'QPO'
+ *   (`query_details_t`). No digest or query processing should take place at connection level, if any extra
+ *   information is required it should **always** be extracted at 'QPO level' depending on the query type.
+ *
+ * @param query_digest_text The digest from the processed query. TODO-FUTURE: To be replaced by
+ *   `query_details_t`.
+ */
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (query_digest_text==NULL) return;
-	// unknown what to do with multiplex
-	int mul=-1;
-	if (myds) {
-		if (myds->sess) {
-			if (myds->sess->qpo) {
-				mul=myds->sess->qpo->multiplex;
-				if (mul==0) {
-					set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
-				} else {
-					if (mul==1) {
-						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
-					}
-				}
-			}
-		}
+
+	// Setting 'STATUS_MYSQL_CONNECTION_NO_MULTIPLEX' can directly map 'qpo->multiplex':
+	//  - 'qpo->multiplex == 0' we disable; this can't contradict 'lock_on_hostgroup'.
+	//  - 'qpo->multiplex == 1' enables; since 'lock_on_hostgroup' is only possible for 'qpo->multiplex ==
+	//     -1', this doesn't contradicts any previous logic.
+	//  - 'qpo->multiplex == 2' imposes that the current query **doesn't** disable multiplexing; so for this
+	//     value **no modification** should be performed for the current status.
+	int mul = myds && myds->sess && myds->sess->qpo ? myds->sess->qpo->multiplex : -1;
+
+	if (mul == 0) {
+		set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
+	} else if (mul == 1) {
+		set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 	}
 
 	ProcessQueryAndSetStatusFlags_Warnings(query_digest_text);
 
-	ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+	ProcessQueryAndSetStatusFlags_UserVariables(myds->sess->qpo, query_digest_text);
 
 	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {

@@ -3,6 +3,7 @@
 #include "PgSQL_Thread.h"
 
 #include "gen_utils.h"
+#include "proxysql_utils.h"
 
 #include <pthread.h>
 #include <poll.h>
@@ -35,14 +36,6 @@ const char PING_QUERY[] { "" };
  * @details If the server is not in this mode would be assumed to be a primary.
  */
 const char READ_ONLY_QUERY[] { "SELECT pg_is_in_recovery()" };
-
-template <typename T>
-void append(std::vector<T>& dest, std::vector<T>&& src) {
-	dest.insert(dest.end(),
-		std::make_move_iterator(src.begin()),
-		std::make_move_iterator(src.end())
-	);
-}
 
 /**
  * @brief Only responsive servers are eligible for monitoring actions.

@@ -66,7 +66,9 @@ const s_vector<string> mysql_tracked_vars {
 			"TX_ISOLATION",
 			"TX_READ_ONLY",
 			"TRANSACTION_ISOLATION",
-			"TRANSACTION_READ_ONLY"
+			"TRANSACTION_READ_ONLY",
+			"NAMES",
+			"CHARSET"
 		}
 	)
 };

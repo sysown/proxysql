@@ -13,6 +13,7 @@ using std::pair;
 using std::map;
 using std::deque;
 using std::string;
+using std::string_view;
 using std::unique_ptr;
 using std::vector;
 
@@ -30,7 +31,12 @@ vector<const MySQLParser::AstNode*> ext_vars_assigns(const MySQLParser::AstNode*
 		const MySQLParser::AstNode* node = current.first;
 		size_t depth = current.second;
 
-		if (node->type == MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT) {
+		if (
+			node->type == NodeType::NODE_VARIABLE_ASSIGNMENT
+			|| node->type == NodeType::NODE_SET_NAMES
+			|| node->type == NodeType::NODE_SET_CHARSET
+			|| node->type == NodeType::NODE_SET_TRANSACTION
+		) {
 			if (target_depth == size_t(-1)) {
 				target_depth = depth;
 				result.push_back(node);
@@ -51,16 +57,17 @@ vector<const MySQLParser::AstNode*> ext_vars_assigns(const MySQLParser::AstNode*
 	return result;
 }
 
-string unquote_string(const string& s) {
+template <class S>
+S unquote_string(const S& s) {
 	if (
 		s.size() >= 2
 		&& (
 			(s.front() == '"' && s.back() == '"')
-		|| (s.front() == '\'' && s.back() == '\'')
+			|| (s.front() == '\'' && s.back() == '\'')
 			|| (s.front() == '`' && s.back() == '`')
 		)
 	) {
-	return s.substr(1, s.size() - 2);
+		return s.substr(1, s.size() - 2);
 	} else {
 		return s;
 	}
@@ -86,28 +93,101 @@ string fold_spaces(char c, const string& s) {
 	}
 }
 
-var_map_t ext_vars_assigns_map(const MySQLParser::AstNode* root, const string& q) {
-	var_map_t res {};
+string get_var_name(const MySQLParser::AstNode* va) {
+	if (va->type == NodeType::NODE_VARIABLE_ASSIGNMENT) {
+		return get_node(va, {{ NodeType::NODE_UNKNOWN, 0 }}).second->value;
+	} else if (va->type == NodeType::NODE_SET_NAMES) {
+		return "names";
+	} else if (va->type == NodeType::NODE_SET_CHARSET) {
+		if (va->value == "CHARACTER_SET") {
+			return "character_set";
+		} else {
+			return "charset";
+		}
+	} else if (va->type == NodeType::NODE_SET_TRANSACTION) {
+		return "transaction";
+	} else {
+		assert(0 && "Invalid AST node type found in assignment!");
+	}
+}
+
+vector<string_view> get_var_values(const MySQLParser::AstNode* va, const string_view& q) {
+	if (va->type == NodeType::NODE_VARIABLE_ASSIGNMENT) {
+		const string_view raw_val { q.data() + va->val_init_pos - 1, va->val_end_pos - va->val_init_pos };
+
+		const bool is_str { get_node(va, {{ NodeType::NODE_STRING_LITERAL, 1 }}).first == 0 };
+		const bool is_id { get_node(va, {{ NodeType::NODE_IDENTIFIER, 1 }}).first == 0 };
+
+		// NOTE-TODO: Required for compatibility with REGEX based SET parser and existing logic; quotes are
+		// removed from literal values and identifiers.
+		const string_view u_val { is_str || is_id ? unquote_string<string_view>(raw_val) : raw_val };
+		// NOTE-TODO: Required for compatibility with REGEX based SET parser and existing logic; literal
+		// values and identifiers consisting only of spaces are converted into an empty string.
+		const string_view f_val { std::all_of(u_val.begin(), u_val.end(), is_space_char) ? "" : u_val };
+
+		return { f_val };
+	} else if (va->type == NodeType::NODE_SET_NAMES) {
+		return fmap([] (const MySQLParser::AstNode* c) -> string_view { return c->value; }, va->children);
+	} else if (va->type == NodeType::NODE_SET_CHARSET) {
+		return fmap([] (const MySQLParser::AstNode* c) -> string_view { return c->value; }, va->children);
+	} else if (va->type == NodeType::NODE_SET_TRANSACTION) {
+		vector<string_view> vals {};
+		deque<const MySQLParser::AstNode*> n_queue { va };
+
+		for (; !n_queue.empty(); n_queue.pop_front()) {
+			const MySQLParser::AstNode* cur { n_queue.front() };
+
+			for (const MySQLParser::AstNode* c : cur->children) {
+				if (c->value != "TXN_CHAR_LIST") {
+					vals.push_back(c->value);
+				}
+
+				n_queue.push_back(c);
+			}
+		}
+
+		return vals;
+	} else {
+		assert(0 && "Invalid AST node type found in assignment!");
+	}
+}
+
+var_type_t get_var_type(const MySQLParser::AstNode* va) {
+	if (va->type == NodeType::NODE_VARIABLE_ASSIGNMENT) {
+		const auto rc_node { get_node(va, {{ NodeType::NODE_USER_VARIABLE, 0 }}) };
+
+		if (!rc_node.first) {
+			return var_type_t::user;
+		} else {
+			return var_type_t::system;
+		}
+	} else {
+		return var_type_t::system;
+	}
+}
+
+set_details_t ext_set_details(const MySQLParser::AstNode* root, const string_view& q) {
+	var_map_t var_map {};
+	bool has_user_var { false };
+
 	const auto assigns { ext_vars_assigns(root) };
 
 	for (const auto& va : assigns) {
-		const string var_name { get_node(va, {{ NodeType::NODE_UNKNOWN, 0 }}).second->value };
-		const string r_val { q.substr(va->val_init_pos - 1, va->val_end_pos - va->val_init_pos) };
+		const var_type_t type { get_var_type(va) };
+		const string name { get_var_name(va) };
+		const string mkey { type == var_type_t::system ? name : "@" + name };
+		const vector<string_view> f_vals { get_var_values(va, q) };
 
-		// NOTE: Required for compatibility with REGEX based SET parser and existing logic:
-		// Quotes are removed from literal values and identifiers.
-		const bool is_str { get_node(va, {{ NodeType::NODE_STRING_LITERAL, 1 }}).first == 0 };
-		const bool is_id { get_node(va, {{ NodeType::NODE_IDENTIFIER, 1 }}).first == 0 };
-		const string u_val { is_id || is_str ? unquote_string(r_val) : r_val };
+		for (auto&& f_val : f_vals) {
+			var_map[mkey].push_back({type, va, std::move(f_val)});
+		}
 
-		// NOTE: Required for compatibility with REGEX based SET parser and existing logic:
-		// Literal values and identifiers consisting only of spaces are converted into an empty string.
-		const string f_val { std::all_of(u_val.begin(), u_val.end(), is_space_char) ? "" : u_val };
-
-		res[var_name].push_back({va, f_val});
+		if (type == var_type_t::user) {
+			has_user_var = true;
+		}
 	}
 
-	return res;
+	return { has_user_var, var_map };
 }
 
 rc_t<const MySQLParser::AstNode*> get_node(
@@ -148,66 +228,55 @@ rc_t<bool> check_sys_var(const MySQLParser::AstNode* node) {
 		{{ NodeType::NODE_SYSTEM_VARIABLE, 0 }, { NodeType::NODE_VARIABLE_SCOPE, 0 }})
 	};
 
-	if (!scope.second) {
-		return { 0, false };
-	} else {
-		return {
-			0,
+	if (scope.first == -1) {
+		return { 0,
 			// no scope found; just check kind since scope defaults to SESSION
 			scope.second->type == NodeType::NODE_SYSTEM_VARIABLE
+		};
+	} else {
+		return { 0,
 			// found scope, match is required
-			|| scope.second->value == "SESSION"
+			scope.second->value == "SESSION"
 		};
 	}
 }
 
 bool p_match_regex_1(const MySQLParser::AstNode* node) {
-	if (node == nullptr) { return false; }
+	if (node == nullptr || node->type != NodeType::NODE_SET_STATEMENT) { return false; }
 
-	if (node->type != NodeType::NODE_SET_STATEMENT && node->type != NodeType::NODE_SET_NAMES) {
-		return false;
-	}
+	const auto vars_assings { ext_vars_assigns(node) };
+	// Not a SET with assignments
+	if (vars_assings.empty()) { return false; }
 
-	if (node->type == NodeType::NODE_SET_STATEMENT) {
-		const auto vars_assings { ext_vars_assigns(node) };
-		// Not a SET with assignments
-		if (vars_assings.empty()) { return false; }
+	for (const auto& v : vars_assings) {
+		// Not a tracked SYSVAR/SET_NAMES; user defined, etc...
+		if (v->type == NodeType::NODE_SET_NAMES) {
+			continue;
+		} else if (!check_sys_var(v).second) {
+			return false;
+		} else {
+			const auto sys_var { get_node(v, {{ NodeType::NODE_SYSTEM_VARIABLE, 0 }}) };
+			const auto is_tracked { ci_binary_search(mysql_tracked_vars, sys_var.second->value) };
 
-		for (const auto& v : vars_assings) {
-			// Not a tracked system variable; user defined, etc...
-			if (!check_sys_var(v).second) {
+			if (!is_tracked && sys_var.second->value != "autocommit") {
 				return false;
-			} else {
-				const auto sys_var { get_node(v, {{ NodeType::NODE_SYSTEM_VARIABLE, 0 }}) };
-				const auto is_tracked { ci_binary_search(mysql_tracked_vars, sys_var.second->value) };
-
-				if (!is_tracked && sys_var.second->value != "autocommit") {
-					return false;
-				}
 			}
 		}
-
-		return true;
-	} else {
-		return node->type == NodeType::NODE_SET_NAMES;
 	}
+
+	return true;
 }
 
 bool p_match_regex_2(const MySQLParser::AstNode* node) {
-	if (node == nullptr) { return false; }
-
-	if (node->type != NodeType::NODE_SET_STATEMENT) {
-		return false;
-	} else {
-		return node->value == "SET_SESSION_TRANSACTION"
-			|| node->value == "SET_TRANSACTION";
-	}
+	return node != nullptr && node->type == NodeType::NODE_SET_TRANSACTION;
 }
 
 bool p_match_regex_3(const MySQLParser::AstNode* node) {
-	if (node == nullptr) { return false; }
+	const auto set_charset { get_node(node,
+		{{ NodeType::NODE_SET_OPTION_VALUE_LIST, 0 }, { NodeType::NODE_SET_CHARSET , 0 }}
+	)};
 
-	return node->type == NodeType::NODE_SET_CHARSET;
+	return node != nullptr && set_charset.first == 0;
 }
 
 //                         Special Variable Handling
@@ -223,7 +292,8 @@ string acc_node_path(const child_idx_t& c, const string& s) {
 	}
 }
 
-string rm_outer_parens(const string& s) {
+template <class S>
+S rm_outer_parens(const S& s) {
 	if (s.size() < 2) {
 		return s;
 	} else {
@@ -243,8 +313,39 @@ string comma_join(const string& s1, const string& s2) {
 	}
 }
 
-perr_t verf_sql_mode_val(const MySQLParser::AstNode* n, const string& v, const string& q) {
-	const string perr_msg { "Failed to verify 'sql_mode' with value=`" + v + "`" };
+string to_string(MySQLParser::AstNode* n) {
+	return string { "(" } + "value: " + n->value + ", type: " + to_string(n->type) + ")";
+}
+
+perr_t verf_set_multi_stmts(const MySQLParser::AstNode* n, const string_view& q) {
+	if (n == nullptr) {
+		return { -1, "Invalid param; uninitialized AST supplied for query `" + string {q} + "`" };
+	}
+
+	if (n->type != MySQLParser::NodeType::NODE_INPUT_STATEMENT_LIST) {
+		return { -1, "Invalid AST found; base node isn't a 'INPUT_STATEMENT_LIST'" };
+	} else {
+		for (auto c : n->children) {
+			if (c->type != NodeType::NODE_SET_STATEMENT && c->type != NodeType::NODE_EMPTY_STATEMENT) {
+				return { -1,
+					"Only SET statements are allowed (for now) in SET multi-statements"
+						"   node=`" + to_string(c) + "`"
+				};
+			}
+		}
+	}
+
+	return { 0 };
+}
+
+perr_t verf_sql_mode_val(const MySQLParser::AstNode* n, const string_view& v, const string_view& q) {
+	if (n == nullptr) {
+		return { -1, "Invalid param; uninitialized AST supplied for query `" + string { q } + "`" };
+	}
+
+	const string perr_msg {
+		"Failed to verify 'sql_mode' with value=`" + string { v.data(), v.size() } + "`"
+	};
 
 	const auto verf_fn_expr = [] (const MySQLParser::AstNode* n) -> pair<int,string> {
 		const auto valid_fn_name = [] (const string& n) -> bool {
@@ -293,7 +394,7 @@ perr_t verf_sql_mode_val(const MySQLParser::AstNode* n, const string& v, const s
 	};
 
 	// Verifies simple subexpr selects - (SELECT 'str_literal')
-	const auto verf_select_lit = [] (const MySQLParser::AstNode* c, const string& q, size_t offset)
+	const auto verf_select_lit = [] (const MySQLParser::AstNode* c, const string_view& q, size_t offset)
 		-> pair<int,string>
 	{
 		if (c->type != NodeType::NODE_SELECT_RAW_SUBQUERY) {
@@ -307,6 +408,7 @@ perr_t verf_sql_mode_val(const MySQLParser::AstNode* n, const string& v, const s
 
 			if (ast) {
 				const vector<child_idx_t> str_lit_path {
+					{ NodeType::NODE_SELECT_STATEMENT, 0 },
 					{ NodeType::NODE_SELECT_ITEM_LIST, 1 },
 					{ NodeType::NODE_SELECT_ITEM, 0 },
 					{ NodeType::NODE_STRING_LITERAL, 0 }
@@ -417,13 +519,16 @@ perr_t verf_sql_mode_val(const MySQLParser::AstNode* n, const string& v, const s
 		// literals: SET sql_mode=(SELECT CONCAT(@@sqlmode, 'foo')).
 		else if (c.second->type == NodeType::NODE_SELECT_RAW_SUBQUERY) {
 			size_t subsel_offset { c.second->val_init_pos };
-			const string subsel_err { "Found invalid SUBSELECT expr=`" + v + "`" };
+			const string subsel_err {
+				"Found invalid SUBSELECT expr=`" + string { v.data(), v.size() } + "`"
+			};
 
 			MySQLParser::Parser parser;
 			std::unique_ptr<MySQLParser::AstNode> ast { parser.parse(rm_outer_parens(v)) };
 
 			if (ast) {
 				const vector<child_idx_t> c_pth {
+					{ NodeType::NODE_SELECT_STATEMENT, 0 },
 					{ NodeType::NODE_SELECT_ITEM_LIST, 1 },
 					{ NodeType::NODE_SELECT_ITEM, 0 },
 					{ NodeType::NODE_UNKNOWN, 0 }

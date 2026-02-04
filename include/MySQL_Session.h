@@ -8,12 +8,16 @@
 #define __CLASS_MYSQL_SESSION_H
 
 #include <functional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
 #include "Base_Session.h"
+
+#include "MySQL_SET_Parser_Utils.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -191,11 +195,23 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(
+		PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set
+	);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command___LEGACY(
+		const char* dig, uint8_t command_type, bool* lock_hostgroup
+	);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command___SQL_parser(
+		const char* dig, uint8_t command_type, bool* lock_hostgroup
+	);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(
+		const char* dig, uint8_t command_type, bool* lock_hostgroup
+	);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command___sql_mode(
+		bool* lock_hostgroup, const assign_info_t& inf, const std::string_view& q
+	);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo___handle_sql_mode(
-		bool* lock_hostgroup,
-		const std::pair<const MySQLParser::AstNode*, std::string>& e,
-		const std::string& q
+		bool* lock_hostgroup, const assign_info_t& inf, const std::string_view& q
 	);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
@@ -554,7 +570,18 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
 	void generate_proxysql_internal_session_json(nlohmann::json &) override;
 	bool known_query_for_locked_on_hostgroup(uint64_t);
-	void unable_to_parse_set_statement(bool *, const std::string& err = {});
+	void unable_to_parse_set_statement(bool *);
+	/**
+	 * @brief Logs the appropriate warnings and returns if the session should be locked on hostgroup based on
+	 *   the current query being processed.
+	 * @details Replaces the previous 'unable_to_parse_set_statement', which the purpose of being used at
+	 *   'handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command___SQL_parser' once the
+	 *   legacy alternative of the function is deprecated, this should replace the original function, and
+	 *   probably refactored to avoid the current logic nesting / parameter passing.
+	 * @param err Message to complement the pertinent warning if lock_on_hostgroup should be exercised.
+	 * @return True if session should be lock on hostgroup, false otherwise.
+	 */
+	bool unable_to_parse_set_statement_2(const std::string_view& err = {});
 	//bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);

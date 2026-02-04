@@ -1803,6 +1803,8 @@ void Query_Processor<QP_DERIVED>::update_query_processor_stats() {
 	
 };
 
+__thread char qpo_srv_ver[MYSQL_SERVER_VER_MAX_LENGTH + 1] { 0 };
+
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *query, int query_length, int flags) {
 	// trying to get rid of libinjection
@@ -1819,6 +1821,7 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 		opts.groups_grouping_limit = GET_THREAD_VARIABLE(query_digests_groups_grouping_limit);
 		opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
 		opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
+		opts.server_version = copy_mysql_ver_num(qpo_srv_ver, GET_THREAD_VARIABLE(server_version));
 
 		if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
 			qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
