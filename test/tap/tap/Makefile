@@ -17,7 +17,6 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
-
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 
 # NOTE-LWGCOV (LinkWithGCOV):
