@@ -44,7 +44,11 @@ fi
 # clean is expensive, do it before, outside of container
 #${MAKE} cleanbuild
 ${MAKE} ${MAKEOPT} ${deps_target}
-${MAKE} ${MAKEOPT} ${build_target}
+if [[ "${PROXYSQLGENAI:-}" == "1" ]]; then
+    ${MAKE} ${MAKEOPT} PROXYSQLGENAI=1 ${build_target}
+else
+    ${MAKE} ${MAKEOPT} ${build_target}
+fi
 
 touch /opt/proxysql/src/proxysql
 

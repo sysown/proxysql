@@ -13,7 +13,29 @@ GIT_VERSION ?= $(shell git describe --long --abbrev=7 2>/dev/null || git describ
 ifndef GIT_VERSION
     $(error GIT_VERSION is not set)
 endif
+
+# If PROXYSQLGENAI is enabled, increment the major version number by 1
+# Only increment if GIT_VERSION was not passed from environment (to avoid double-incrementing in Docker)
+ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(origin GIT_VERSION),environment)
+    GIT_VERSION := $(shell echo "$(GIT_VERSION)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+endif
+endif
+
 export GIT_VERSION
+
+# Extract CURVER from GIT_VERSION (first 3 numbers, e.g., 3.0.6 from 3.0.6-388-ga94b7d6)
+CURVER := $(shell echo "$(GIT_VERSION)" | grep -oP '^\d+\.\d+\.\d+' | head -1)
+
+# Validate CURVER has 3 numbers separated by dots
+CURVER_CHECK := $(shell echo "$(CURVER)" | grep -cP '^\d+\.\d+\.\d+$$')
+
+ifeq ($(CURVER_CHECK),0)
+    $(error CURVER "$(CURVER)" derived from GIT_VERSION "$(GIT_VERSION)" does not have 3 numbers separated by dots (expected format: X.Y.Z)
+endif
+
+export CURVER
+export PROXYSQLGENAI
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
@@ -43,11 +65,9 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 4.0.0
 #export DEBUG
 #export EXTRALINK
 export MAKE
-export CURVER
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')

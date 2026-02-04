@@ -422,13 +422,16 @@ void Query_Tool_Handler::return_connection(void* mysql_ptr) {
 	pthread_mutex_unlock(&pool_lock);
 }
 
-// Helper to find connection wrapper by mysql pointer (caller should NOT hold pool_lock)
+// Helper to find connection wrapper by mysql pointer (thread-safe, acquires pool_lock)
 Query_Tool_Handler::MySQLConnection* Query_Tool_Handler::find_connection(void* mysql_ptr) {
+	pthread_mutex_lock(&pool_lock);
 	for (auto& conn : connection_pool) {
 		if (conn.mysql == mysql_ptr) {
+			pthread_mutex_unlock(&pool_lock);
 			return &conn;
 		}
 	}
+	pthread_mutex_unlock(&pool_lock);
 	return nullptr;
 }
 
