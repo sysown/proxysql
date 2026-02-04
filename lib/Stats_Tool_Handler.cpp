@@ -61,6 +61,19 @@ void Stats_Tool_Handler::close() {
 // Helper Methods
 // ============================================================================
 
+/**
+ * @brief Execute a read-only SQL query against GloAdmin->admindb.
+ *
+ * Runs @p sql through the admin SQLite database (the in-memory stats schema).
+ * On success the caller receives a heap-allocated SQLite3_result that it must
+ * delete. On failure the resultset pointer is set to NULL and an error string
+ * is returned.
+ *
+ * @param sql        SQL statement to execute.
+ * @param resultset  Out-parameter; receives the result set (caller owns it).
+ * @param cols       Out-parameter; receives the column count.
+ * @return Empty string on success, human-readable error message on failure.
+ */
 std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_result** resultset, int* cols) {
 	if (!GloAdmin || !GloAdmin->admindb) {
 		return "ProxySQL Admin not available";
@@ -86,6 +99,17 @@ std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_res
 	return "";  // empty string = success
 }
 
+/**
+ * @brief Execute a read-only SQL query against GloAdmin->statsdb_disk.
+ *
+ * Same contract as execute_admin_query() but targets the on-disk historical
+ * statistics database (history_mysql_*, history_pgsql_*, system_cpu, etc.).
+ *
+ * @param sql        SQL statement to execute.
+ * @param resultset  Out-parameter; receives the result set (caller owns it).
+ * @param cols       Out-parameter; receives the column count.
+ * @return Empty string on success, human-readable error message on failure.
+ */
 std::string Stats_Tool_Handler::execute_statsdb_disk_query(const char* sql, SQLite3_result** resultset, int* cols) {
 	if (!GloAdmin || !GloAdmin->statsdb_disk) {
 		return "ProxySQL statsdb_disk not available";
@@ -111,6 +135,16 @@ std::string Stats_Tool_Handler::execute_statsdb_disk_query(const char* sql, SQLi
 	return "";
 }
 
+/**
+ * @brief Convert a two-column (Variable_Name, Variable_Value) result set into a map.
+ *
+ * Used for stats_mysql_global, stats_pgsql_global, and stats_memory_metrics
+ * tables that follow the standard ProxySQL key-value layout.  Rows where
+ * either column is NULL are silently skipped.
+ *
+ * @param resultset  Result set from a "SELECT Variable_Name, Variable_Value ..." query.
+ * @return Map of variable name to variable value (both as strings).
+ */
 std::map<std::string, std::string> Stats_Tool_Handler::parse_global_stats(SQLite3_result* resultset) {
 	std::map<std::string, std::string> stats;
 
@@ -125,6 +159,16 @@ std::map<std::string, std::string> Stats_Tool_Handler::parse_global_stats(SQLite
 	return stats;
 }
 
+/**
+ * @brief Check whether a table name is on the allowed-prefix whitelist.
+ *
+ * Only tables whose name starts with one of the prefixes in
+ * VALID_STATS_TABLE_PREFIXES are accepted.  This prevents the get_stats
+ * tool from being used to read arbitrary tables (e.g. runtime configuration).
+ *
+ * @param table  Table name supplied by the caller.
+ * @return true if the name matches at least one whitelisted prefix.
+ */
 bool Stats_Tool_Handler::is_valid_stats_table(const std::string& table) {
 	for (const auto& prefix : VALID_STATS_TABLE_PREFIXES) {
 		if (table.compare(0, prefix.size(), prefix) == 0) {
@@ -138,6 +182,16 @@ bool Stats_Tool_Handler::is_valid_stats_table(const std::string& table) {
 // Tool List / Description / Dispatch
 // ============================================================================
 
+/**
+ * @brief Build and return the full MCP tools/list payload.
+ *
+ * Constructs a JSON object containing the "tools" array with all 17 tool
+ * descriptions (9 core + 8 analysis).  Each entry includes name, description
+ * text, and an inputSchema with typed properties so that MCP clients can
+ * validate arguments before calling execute_tool().
+ *
+ * @return JSON object: { "tools": [ {name, description, inputSchema}, ... ] }
+ */
 json Stats_Tool_Handler::get_tool_list() {
 	json tools = json::array();
 
@@ -639,6 +693,15 @@ json Stats_Tool_Handler::get_tool_list() {
 	return result;
 }
 
+/**
+ * @brief Return the description for a single tool by name.
+ *
+ * Iterates the full tool list and returns the matching entry.  If no tool
+ * with the given name exists, returns an error response.
+ *
+ * @param tool_name  Name of the tool to describe (e.g. "get_health").
+ * @return JSON tool description or error response.
+ */
 json Stats_Tool_Handler::get_tool_description(const std::string& tool_name) {
 	json tools_list = get_tool_list();
 	for (const auto& tool : tools_list["tools"]) {
@@ -649,6 +712,18 @@ json Stats_Tool_Handler::get_tool_description(const std::string& tool_name) {
 	return create_error_response("Tool not found: " + tool_name);
 }
 
+/**
+ * @brief Dispatch a tools/call request to the appropriate handler method.
+ *
+ * Acquires handler_lock for the duration of the call so that all tool
+ * executions are serialised (stats queries touch shared GloAdmin state).
+ * Maps @p tool_name to the corresponding handle_* method.  Any C++
+ * exception thrown by a handler is caught and returned as an error response.
+ *
+ * @param tool_name  Name of the tool to execute.
+ * @param arguments  JSON object with tool-specific arguments.
+ * @return JSON success or error response.
+ */
 json Stats_Tool_Handler::execute_tool(const std::string& tool_name, const json& arguments) {
 	pthread_mutex_lock(&handler_lock);
 
@@ -707,6 +782,29 @@ json Stats_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 // Core Operational Tool Implementations
 // ============================================================================
 
+/**
+ * @brief Produce a comprehensive health-status summary of the ProxySQL instance.
+ *
+ * Gathers data from four sources and merges them into a single response:
+ *   1. stats_mysql_global / stats_pgsql_global -- client & server connection
+ *      counts, total questions, slow-query rate.
+ *   2. stats_memory_metrics -- jemalloc allocated/resident/active memory.
+ *   3. stats_proxysql_servers_status -- cluster node count and online ratio.
+ *   4. (optional) stats_*_connection_pool -- per-backend utilisation when
+ *      the "include_backend" argument is true.
+ *
+ * Alerts are raised when the slow-query rate exceeds 1 % (warning) or 5 %
+ * (critical).  The overall_status field is set to "healthy", "degraded", or
+ * "unhealthy" accordingly.
+ *
+ * Supported arguments:
+ *   - database          (string) "mysql" | "pgsql" | "all"  (default "all")
+ *   - include_backend   (bool)   include per-server pool detail (default false)
+ *   - severity_threshold (string) only return issues at or above this level
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with nested health_data object.
+ */
 json Stats_Tool_Handler::handle_get_health(const json& arguments) {
 	std::string database = arguments.value("database", "all");
 	bool include_backend = arguments.value("include_backend", false);
@@ -922,6 +1020,24 @@ json Stats_Tool_Handler::handle_get_health(const json& arguments) {
 	return create_success_response(health_data);
 }
 
+/**
+ * @brief Return active sessions, analogous to MySQL SHOW PROCESSLIST.
+ *
+ * Queries stats_mysql_processlist or stats_pgsql_processlist and returns
+ * every matching session with thread/session IDs, client/backend endpoints,
+ * current command, elapsed time, and query text.  A summary section
+ * aggregates session counts by user, hostgroup, command, and backend server.
+ *
+ * Supported arguments:
+ *   - database   (string)  "mysql" | "pgsql"    (default "mysql")
+ *   - user       (string)  filter by username
+ *   - hostgroup  (int)     filter by hostgroup ID
+ *   - backend    (string)  filter by "host:port"
+ *   - min_time_ms (int)    only sessions running longer than N ms
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with sessions array and summary object.
+ */
 json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	std::string user_filter = arguments.value("user", "");
@@ -1014,6 +1130,25 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return categorised metrics in a Prometheus-compatible structure.
+ *
+ * Collects counters and gauges from stats_mysql_global, stats_pgsql_global,
+ * stats_memory_metrics, and stats_proxysql_servers_status.  Each metric
+ * includes name, type (gauge/counter), help text, numeric value, timestamp,
+ * and a labels object (database type, hostname, etc.).
+ *
+ * Metrics are grouped into four categories that can be selected individually:
+ * connection, query, memory, and cluster.
+ *
+ * Supported arguments:
+ *   - category  (string)  "connection" | "query" | "memory" | "cluster" | "all"
+ *   - database  (string)  "mysql" | "pgsql" | "all"   (default "all")
+ *   - format    (string)  "prometheus" | "json"        (default "prometheus")
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with metrics array.
+ */
 json Stats_Tool_Handler::handle_show_metrics(const json& arguments) {
 	std::string category = arguments.value("category", "all");
 	std::string database = arguments.value("database", "all");
@@ -1162,6 +1297,32 @@ json Stats_Tool_Handler::handle_show_metrics(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return aggregated query performance statistics from the query digest.
+ *
+ * Queries stats_mysql_query_digest or stats_pgsql_query_digest and returns
+ * per-digest rows with execution count, timing (sum/min/max/avg in
+ * microseconds), rows affected/sent, and a computed performance_tier
+ * classification (fast / medium / slow / very_slow).
+ *
+ * When include_top is true (default), the response also contains the top-10
+ * slowest and top-10 most-frequent digests for quick triage.
+ *
+ * Supported arguments:
+ *   - database    (string)  "mysql" | "pgsql"                   (default "mysql")
+ *   - sort_by     (string)  "count" | "avg_time" | "sum_time" | "max_time" | "rows_sent"
+ *   - limit       (int)     max rows returned                   (default 100)
+ *   - min_count   (int)     minimum execution count filter
+ *   - min_time_us (int)     minimum avg time filter (microseconds)
+ *   - schemaname  (string)  filter by schema
+ *   - username    (string)  filter by user
+ *   - hostgroup   (int)     filter by hostgroup ID
+ *   - digest      (string)  filter by specific digest hash
+ *   - include_top (bool)    include top-10 summaries             (default true)
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with queries array and optional summary.
+ */
 json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	std::string sort_by = arguments.value("sort_by", "count");
@@ -1308,6 +1469,26 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return backend connection-pool metrics per server.
+ *
+ * Queries stats_mysql_connection_pool or stats_pgsql_connection_pool and
+ * returns per-server rows with connections used/free/ok/err, max used,
+ * queries routed, bytes sent/received, latency, and computed utilisation
+ * and error-rate percentages.
+ *
+ * A summary section provides totals across all servers and a breakdown
+ * by status (ONLINE, SHUNNED, OFFLINE_SOFT, OFFLINE_HARD).
+ *
+ * Supported arguments:
+ *   - database  (string)  "mysql" | "pgsql"                   (default "mysql")
+ *   - hostgroup (int)     filter by hostgroup ID
+ *   - server    (string)  filter by "host:port"
+ *   - status    (string)  filter by server status
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with servers array and summary.
+ */
 json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	int hostgroup_filter = arguments.value("hostgroup", -1);
@@ -1412,6 +1593,28 @@ json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return error tracking data grouped by type, user, schema, and hostgroup.
+ *
+ * Queries stats_mysql_errors or stats_pgsql_errors and returns each distinct
+ * error row with occurrence count, first/last seen timestamps, the last error
+ * message, and a computed frequency_per_hour.
+ *
+ * A summary section aggregates total occurrences broken down by errno/sqlstate,
+ * username, schema, and hostgroup.
+ *
+ * Supported arguments:
+ *   - database    (string)  "mysql" | "pgsql"                     (default "mysql")
+ *   - errno       (int)     filter by error number / sqlstate
+ *   - username    (string)  filter by username
+ *   - schemaname  (string)  filter by schema
+ *   - hostgroup   (int)     filter by hostgroup ID
+ *   - min_count   (int)     only errors with count >= N
+ *   - sort_by     (string)  "count" | "first_seen" | "last_seen"  (default "count")
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with errors array and summary.
+ */
 json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	int errno_filter = arguments.value("errno", -1);
@@ -1523,6 +1726,28 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return ProxySQL cluster node health, sync status, and network metrics.
+ *
+ * Gathers data from up to three sources:
+ *   1. stats_proxysql_servers_status -- per-node weight, master flag, ping
+ *      time, check success/failure counts, and derived online/offline status.
+ *   2. stats_proxysql_servers_metrics (when detailed_metrics is true) --
+ *      uptime, queries, and client connections per node.
+ *   3. stats_proxysql_servers_checksums (when include_checksums is true) --
+ *      per-module configuration version, checksum, and diff_check flag.
+ *
+ * The cluster_health field is set to "healthy", "degraded", "unhealthy", or
+ * "not_configured" based on the ratio of online nodes and checksum sync state.
+ *
+ * Supported arguments:
+ *   - hostname           (string) filter by node hostname
+ *   - include_checksums  (bool)   include checksum detail    (default true)
+ *   - detailed_metrics   (bool)   include per-node metrics   (default false)
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with nodes array, checksums, and summary.
+ */
 json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 	std::string hostname_filter = arguments.value("hostname", "");
 	bool include_checksums = arguments.value("include_checksums", true);
@@ -1688,6 +1913,20 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief List all available statistics tables with row counts and categories.
+ *
+ * Queries stats.sqlite_master for tables matching the stats_* pattern,
+ * retrieves a COUNT(*) for each, and classifies them into categories:
+ * connection, query, error, cluster, memory, or other.
+ *
+ * Supported arguments:
+ *   - filter    (string) substring match against table names
+ *   - database  (string) "mysql" | "pgsql" | "all"  (default "all")
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with tables array and categories object.
+ */
 json Stats_Tool_Handler::handle_list_stats(const json& arguments) {
 	std::string filter = arguments.value("filter", "");
 	std::string database = arguments.value("database", "all");
@@ -1772,6 +2011,27 @@ json Stats_Tool_Handler::handle_list_stats(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Ad-hoc query any whitelisted stats table with optional filtering.
+ *
+ * Builds a SELECT from the requested table with caller-supplied columns,
+ * WHERE, ORDER BY, and LIMIT clauses.  The table name is validated against
+ * VALID_STATS_TABLE_PREFIXES to prevent access to non-stats tables.
+ *
+ * Tables starting with "history_", "mysql_connections", "pgsql_connections",
+ * "mysql_query_cache", "system_", or "myhgm_" are routed to statsdb_disk;
+ * all other stats tables are queried from admindb.
+ *
+ * Supported arguments (table is required):
+ *   - table     (string)  stats table name
+ *   - columns   (array)   column names to select  (default: all)
+ *   - where     (string)  WHERE clause
+ *   - order_by  (string)  ORDER BY clause
+ *   - limit     (int)     LIMIT value             (default 100)
+ *
+ * @param arguments  JSON object; must contain "table".
+ * @return Success response with rows array and the executed SQL.
+ */
 json Stats_Tool_Handler::handle_get_stats(const json& arguments) {
 	if (!arguments.contains("table")) {
 		return create_error_response("Missing required parameter: table");
@@ -1847,6 +2107,22 @@ json Stats_Tool_Handler::handle_get_stats(const json& arguments) {
 // Performance, Historical, and Analysis Tool Implementations
 // ============================================================================
 
+/**
+ * @brief Return command execution statistics with latency histograms.
+ *
+ * Queries stats_mysql_commands_counters or stats_pgsql_commands_counters
+ * and returns per-command (SELECT, INSERT, UPDATE, ...) totals, average
+ * execution time, a 12-bucket latency distribution (100us .. INF), and
+ * calculated percentiles (p50, p90, p95, p99) derived from the histogram
+ * using calculate_percentile_from_histogram().
+ *
+ * Supported arguments:
+ *   - database  (string)  "mysql" | "pgsql"          (default "mysql")
+ *   - command   (string)  filter by specific command name
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with commands array and total count.
+ */
 json Stats_Tool_Handler::handle_show_commands(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	std::string command_filter = arguments.value("command", "");
@@ -1931,6 +2207,20 @@ json Stats_Tool_Handler::handle_show_commands(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return per-user connection statistics and capacity utilisation.
+ *
+ * Queries stats_mysql_users or stats_pgsql_users and returns each user's
+ * current frontend connections, max allowed, utilisation percentage, and a
+ * status flag ("normal", "near_limit" >= 80 %, "at_limit" == 100 %).
+ *
+ * Supported arguments:
+ *   - database  (string)  "mysql" | "pgsql"  (default "mysql")
+ *   - username  (string)  filter by specific username
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with users array and aggregate summary.
+ */
 json Stats_Tool_Handler::handle_show_users(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	std::string username_filter = arguments.value("username", "");
@@ -1996,6 +2286,21 @@ json Stats_Tool_Handler::handle_show_users(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return the client host cache used for connection-error throttling.
+ *
+ * Queries stats_mysql_client_host_cache or stats_pgsql_client_host_cache
+ * and returns per-client-IP error counts and last-updated timestamps.
+ * Useful for identifying blocked or throttled client addresses.
+ *
+ * Supported arguments:
+ *   - database        (string)  "mysql" | "pgsql"  (default "mysql")
+ *   - client_address  (string)  filter by specific IP
+ *   - min_error_count (int)     only hosts with error_count >= N
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with hosts array.
+ */
 json Stats_Tool_Handler::handle_show_client_cache(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	std::string client_filter = arguments.value("client_address", "");
@@ -2048,6 +2353,19 @@ json Stats_Tool_Handler::handle_show_client_cache(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return GTID replication information for MySQL backends.
+ *
+ * Queries stats_mysql_gtid_executed and returns per-server GTID sets and
+ * event counts.  Only applicable to MySQL (no PostgreSQL equivalent).
+ *
+ * Supported arguments:
+ *   - hostname  (string)  filter by backend hostname
+ *   - port      (int)     filter by backend port
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with gtid_info array and event totals.
+ */
 json Stats_Tool_Handler::handle_show_gtid(const json& arguments) {
 	std::string hostname_filter = arguments.value("hostname", "");
 	int port_filter = arguments.value("port", -1);
@@ -2100,6 +2418,22 @@ json Stats_Tool_Handler::handle_show_gtid(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return hit counts for query routing rules.
+ *
+ * Queries stats_mysql_query_rules or stats_pgsql_query_rules and returns
+ * per-rule hit counts.  Helps identify heavily used rules and unused rules
+ * that may be candidates for cleanup.
+ *
+ * Supported arguments:
+ *   - database          (string)  "mysql" | "pgsql"  (default "mysql")
+ *   - rule_id           (int)     filter by specific rule ID
+ *   - min_hits          (int)     only rules with hits >= N
+ *   - include_zero_hits (bool)    include rules with zero hits (default false)
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with rules array, total hits, and unused count.
+ */
 json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	int rule_id_filter = arguments.value("rule_id", -1);
@@ -2162,6 +2496,22 @@ json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return historical connection trends for capacity planning.
+ *
+ * Queries the on-disk statsdb_disk database for time-series connection data
+ * at raw, hourly, or daily resolution.  The table chosen depends on the
+ * database type and resolution (e.g. mysql_connections_hour).
+ *
+ * Supported arguments:
+ *   - database    (string)  "mysql" | "pgsql"              (default "mysql")
+ *   - resolution  (string)  "raw" | "hour" | "day"         (default "hour")
+ *   - start_time  (int)     Unix timestamp start            (default 24h ago)
+ *   - end_time    (int)     Unix timestamp end              (default now)
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with metrics array and time range metadata.
+ */
 json Stats_Tool_Handler::handle_show_history_connections(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	std::string resolution = arguments.value("resolution", "hour");
@@ -2205,6 +2555,21 @@ json Stats_Tool_Handler::handle_show_history_connections(const json& arguments) 
 	return create_success_response(result);
 }
 
+/**
+ * @brief Return historical query digest snapshots for trend analysis.
+ *
+ * Queries history_mysql_query_digest or history_pgsql_query_digest from
+ * statsdb_disk, ordered by dump_time descending so the most recent
+ * snapshots appear first.  Useful for comparing query performance over time.
+ *
+ * Supported arguments:
+ *   - database  (string)  "mysql" | "pgsql"  (default "mysql")
+ *   - digest    (string)  filter by specific digest hash
+ *   - limit     (int)     max rows returned   (default 100)
+ *
+ * @param arguments  JSON object with optional filters.
+ * @return Success response with queries array and row count.
+ */
 json Stats_Tool_Handler::handle_show_history_query_digest(const json& arguments) {
 	std::string database = arguments.value("database", "mysql");
 	std::string digest_filter = arguments.value("digest", "");
@@ -2241,6 +2606,23 @@ json Stats_Tool_Handler::handle_show_history_query_digest(const json& arguments)
 	return create_success_response(result);
 }
 
+/**
+ * @brief Perform custom aggregations on global stats variables.
+ *
+ * Searches stats_mysql_global and/or stats_pgsql_global for variables
+ * whose name contains the given metric pattern, collects their numeric
+ * values, and applies the requested aggregation function (sum, avg, min,
+ * max, or count).  The response includes both the aggregated result and
+ * the individual per-variable details.
+ *
+ * Supported arguments (metric is required):
+ *   - metric       (string)  variable name pattern (substring match)
+ *   - aggregation  (string)  "sum" | "avg" | "min" | "max" | "count"  (default "sum")
+ *   - database     (string)  "mysql" | "pgsql" | "all"                (default "all")
+ *
+ * @param arguments  JSON object; must contain "metric".
+ * @return Success response with aggregated_value and per-variable details.
+ */
 json Stats_Tool_Handler::handle_aggregate_metrics(const json& arguments) {
 	if (!arguments.contains("metric")) {
 		return create_error_response("Missing required parameter: metric");
