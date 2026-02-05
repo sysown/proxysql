@@ -356,4 +356,17 @@ static inline void set_thread_name(const char(&name)[LEN], const bool en = true)
  */
 std::string get_client_addr(struct sockaddr* client_addr);
 
+/**
+ * @brief Check if a port is available for binding
+ *
+ * Creates a temporary socket and attempts to bind to the specified port
+ * to verify availability. The socket is closed immediately after the test.
+ * Sets SO_REUSEADDR to allow rebinding to recently used ports.
+ *
+ * @param port_num Port number to check
+ * @param port_free Output parameter - set to true if port is available, false if in use
+ * @return int Error code (0 = success, -1 = setsockopt failed, -2 = invalid parameters)
+ */
+int check_port_availability(int port_num, bool* port_free);
+
 #endif
