@@ -120,7 +120,7 @@ services:
 
   fedora43_clang_build:
     extends:
-      service: fedora42_build
+      service: fedora43_build
     image: proxysql/packaging:build-clang-fedora43-v3.0.6
     environment:
       - PKG_RELEASE=fedora43-clang
