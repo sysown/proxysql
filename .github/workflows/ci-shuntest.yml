@@ -96,7 +96,7 @@ jobs:
         ls -l ${{ github.workspace }}/proxysql/src
         
         cd proxysql_repl_tests
-        ./exec_shun_test.sh
+        bash -x ./exec_shun_test.sh
         RC=$?
         
         sudo chmod -R 777 ${{ github.workspace }}/*
