@@ -795,7 +795,7 @@ bool ci_binary_search(const s_vector<std::string>& vec, const std::string& key) 
 	return it != vec.vals.end() && strcasecmp(it->c_str(), key.c_str()) == 0;
 }
 
-const re2::LazyRE2 SRV_VER_REGEX { "^\\d\\d?\\.\\d\\d?\\.\\d\\d?(?:-[a-z0-9]+)?$" };
+const re2::LazyRE2 SRV_VER_REGEX { "^\\d\\d?\\.\\d\\d?\\.\\d\\d?(?:-[-.~+:a-z0-9]+)?$" };
 
 bool validate_mysql_version(const char* v) {
 	if (v == nullptr) { return false; }
