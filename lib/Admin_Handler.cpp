@@ -42,6 +42,8 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "MCP_Thread.h"
+#include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -151,6 +153,12 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+
+#ifdef PROXYSQLGENAI
+extern MCP_Threads_Handler* GloMCPH;
+extern GenAI_Threads_Handler* GloGATH;
+extern AI_Features_Manager *GloAI;
+#endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
 
@@ -269,6 +277,30 @@ const std::vector<std::string> SAVE_PGSQL_VARIABLES_TO_MEMORY = {
 	"SAVE PGSQL VARIABLES TO MEM" ,
 	"SAVE PGSQL VARIABLES FROM RUNTIME" ,
 	"SAVE PGSQL VARIABLES FROM RUN" };
+
+const std::vector<std::string> LOAD_MCP_VARIABLES_FROM_MEMORY = {
+	"LOAD MCP VARIABLES FROM MEMORY" ,
+	"LOAD MCP VARIABLES FROM MEM" ,
+	"LOAD MCP VARIABLES TO RUNTIME" ,
+	"LOAD MCP VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_MCP_VARIABLES_TO_MEMORY = {
+	"SAVE MCP VARIABLES TO MEMORY" ,
+	"SAVE MCP VARIABLES TO MEM" ,
+	"SAVE MCP VARIABLES FROM RUNTIME" ,
+	"SAVE MCP VARIABLES FROM RUN" };
+// GenAI
+const std::vector<std::string> LOAD_GENAI_VARIABLES_FROM_MEMORY = {
+	"LOAD GENAI VARIABLES FROM MEMORY" ,
+	"LOAD GENAI VARIABLES FROM MEM" ,
+	"LOAD GENAI VARIABLES TO RUNTIME" ,
+	"LOAD GENAI VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_GENAI_VARIABLES_TO_MEMORY = {
+	"SAVE GENAI VARIABLES TO MEMORY" ,
+	"SAVE GENAI VARIABLES TO MEM" ,
+	"SAVE GENAI VARIABLES FROM RUNTIME" ,
+	"SAVE GENAI VARIABLES FROM RUN" };
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -856,6 +888,40 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	return true;
 }
 
+// Creates a masked copy of the query string for logging, masking sensitive values like API keys
+// Returns a newly allocated string that must be freed by the caller
+static char* mask_sensitive_values_in_query(const char* query) {
+	if (!query || !strstr(query, "_key="))
+		return strdup(query);
+
+	char* masked = strdup(query);
+	char* key_pos = strstr(masked, "_key=");
+	if (key_pos) {
+		key_pos += 5; // Move past "_key="
+		char* value_start = key_pos;
+		// Find the end of the value (either single quote, space, or end of string)
+		char* value_end = value_start;
+		if (*value_start == '\'') {
+			value_start++; // Skip opening quote
+			value_end = value_start;
+			while (*value_end && *value_end != '\'')
+				value_end++;
+		} else {
+			while (*value_end && *value_end != ' ' && *value_end != '\0')
+				value_end++;
+		}
+
+		size_t value_len = value_end - value_start;
+		if (value_len > 2) {
+			// Keep first 2 chars, mask the rest
+			for (size_t i = 2; i < value_len; i++) {
+				value_start[i] = 'x';
+			}
+		}
+	}
+	return masked;
+}
+
 // Returns true if the given name is either a know mysql or admin global variable.
 bool is_valid_global_variable(const char *var_name) {
 	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
@@ -872,6 +938,12 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
+#ifdef PROXYSQLGENAI
+	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4) && GloMCPH && GloMCPH->has_variable(var_name + 4)) {
+		return true;
+	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6) && GloGATH && GloGATH->has_variable(var_name + 6)) {
+		return true;
+#endif /* PROXYSQLGENAI */
 	} else {
 		return false;
 	}
@@ -888,7 +960,9 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
 			if (strncasecmp(query_no_space,(char *)"SET @@session.autocommit",strlen((char *)"SET @@session.autocommit"))) {
-				proxy_info("Received command %s\n", query_no_space);
+				char* masked_query = mask_sensitive_values_in_query(query_no_space);
+				proxy_info("Received command %s\n", masked_query);
+				free(masked_query);
 			}
 		}
 	}
@@ -925,7 +999,15 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			free(buff);
 			run_query = false;
 		} else {
-			const char *update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			// Check if the value is a boolean literal that needs to be quoted as a string
+			// to prevent SQLite from interpreting it as a boolean keyword (storing 1 or 0)
+			bool is_boolean = (strcasecmp(var_value, "true") == 0 || strcasecmp(var_value, "false") == 0);
+			const char *update_format;
+			if (is_boolean) {
+				update_format = (char *)"UPDATE global_variables SET variable_value='%s' WHERE variable_name='%s'";
+			} else {
+				update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			}
 			// Computed length is more than needed since it also counts the format modifiers (%s).
 			size_t query_len = strlen(update_format) + strlen(var_name) + strlen(var_value) + 1;
 			char *query = (char *)l_alloc(query_len);
@@ -1637,16 +1719,21 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 
 		if ((query_no_space_length > 21) && ((!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21)) ||
-			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)))) {
+			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)) ||
+			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)))) {
 
 			const bool is_pgsql = (query_no_space[5] == 'P' || query_no_space[5] == 'p') ? true : false;
-			const std::string modname = is_pgsql ? "pgsql_variables" : "mysql_variables";
+			const bool is_genai = (query_no_space[5] == 'G' || query_no_space[5] == 'g') ? true : false;
+			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : "mysql_variables");
 
 			tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 			if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
 				l_free(*ql, *q);
 				if (is_pgsql) {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'pgsql-%'");
+				}
+				else if (is_genai) {
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'genai-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1659,6 +1746,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				l_free(*ql, *q);
 				if (is_pgsql) {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'pgsql-%'");
+				}
+				else if (is_genai) {
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'genai-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1676,7 +1766,19 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					return false;
 				}
-			} else {
+			}
+#ifdef PROXYSQLGENAI
+			else if (is_genai) {
+				if (is_admin_command_or_alias(LOAD_GENAI_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+					SPA->load_genai_variables_to_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai variables to RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					return false;
+				}
+			}
+#endif /* PROXYSQLGENAI */
+			else {
 				if (is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 					SPA->load_mysql_variables_to_runtime();
@@ -1688,7 +1790,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && (!strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length) ||
-				!strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length)))
+				!strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length) ||
+				!strncasecmp("LOAD GENAI VARIABLES FROM CONFIG", query_no_space, query_no_space_length)))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1699,6 +1802,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql global variables from CONFIG\n");
+					} else if (query_no_space[5] == 'G' || query_no_space[5] == 'g') {
+						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("genai");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai global variables from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_Global_Variables_from_configfile("mysql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql global variables from CONFIG\n");
@@ -1728,7 +1834,19 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
-		} else {
+		}
+#ifdef PROXYSQLGENAI
+		else if (is_genai) {
+			if (is_admin_command_or_alias(SAVE_GENAI_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+				SPA->save_genai_variables_from_runtime();
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved genai variables from RUNTIME\n");
+				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				return false;
+			}
+		}
+#endif /* PROXYSQLGENAI */
+		else {
 			if (is_admin_command_or_alias(SAVE_MYSQL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->save_mysql_variables_from_runtime();
@@ -1738,6 +1856,70 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			}
 		}
 	}
+
+	// MCP (Model Context Protocol) VARIABLES - DISK commands
+#ifdef PROXYSQLGENAI
+	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
+		const std::string modname = "mcp_variables";
+		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+		if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+		if (is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+	}
+#endif /* PROXYSQLGENAI */
+
+	// MCP (Model Context Protocol) LOAD/SAVE handlers
+#ifdef PROXYSQLGENAI
+	if (is_admin_command_or_alias(LOAD_MCP_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		SPA->load_mcp_variables_to_runtime();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp variables to RUNTIME\n");
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+	if (is_admin_command_or_alias(SAVE_MCP_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+		SPA->save_mcp_variables_from_runtime();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp variables from RUNTIME\n");
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if ((query_no_space_length == 31) && (!strncasecmp("LOAD MCP VARIABLES FROM CONFIG", query_no_space, query_no_space_length))) {
+		proxy_info("Received %s command\n", query_no_space);
+		if (GloVars.configfile_open) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+			if (GloVars.confFile->OpenFile(NULL)==true) {
+				int rows=0;
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("mcp");
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp global variables from CONFIG\n");
+				SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
+				GloVars.confFile->CloseFile();
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+				char *s=(char *)"Unable to open or parse config file %s";
+				char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+				sprintf(m,s,GloVars.config_file);
+				SPA->send_error_msg_to_client(sess, m);
+				free(m);
+			}
+		} else {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+			SPA->send_error_msg_to_client(sess, (char *)"Config file unknown");
+		}
+		return false;
+	}
+#endif /* PROXYSQLGENAI */
 
 	if ((query_no_space_length > 14) && (!strncasecmp("LOAD COREDUMP ", query_no_space, 14))) {
 
@@ -2180,6 +2362,156 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 	}
+
+	// ============================================================
+	// MCP QUERY RULES COMMAND HANDLERS
+	// ============================================================
+#ifdef PROXYSQLGENAI
+	// Supported commands:
+	//   LOAD MCP QUERY RULES FROM DISK  - Copy from disk to memory
+	//   LOAD MCP QUERY RULES TO MEMORY  - Copy from disk to memory (alias)
+	//   LOAD MCP QUERY RULES TO RUNTIME - Load from memory to in-memory cache
+	//   LOAD MCP QUERY RULES FROM MEMORY - Load from memory to in-memory cache (alias)
+	//   SAVE MCP QUERY RULES TO DISK    - Copy from memory to disk
+	//   SAVE MCP QUERY RULES TO MEMORY   - Save from in-memory cache to memory
+	//   SAVE MCP QUERY RULES FROM RUNTIME - Save from in-memory cache to memory (alias)
+	// ============================================================
+	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MCP QUERY RULES ", query_no_space, 21)) || (!strncasecmp("LOAD MCP QUERY RULES ", query_no_space, 21)) ) ) {
+
+		// LOAD MCP QUERY RULES FROM DISK / TO MEMORY
+		// Copies rules from persistent storage (disk.mcp_query_rules) to working memory (main.mcp_query_rules)
+		if (
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM DISK") && !strncasecmp("LOAD MCP QUERY RULES FROM DISK", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO MEMORY") && !strncasecmp("LOAD MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			) {
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+
+			// Execute as transaction to ensure both statements run atomically
+			// Begin transaction
+			if (!SPA->admindb->execute("BEGIN")) {
+				proxy_error("Failed to BEGIN transaction for LOAD MCP QUERY RULES\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+
+			// Clear target table
+			if (!SPA->admindb->execute("DELETE FROM main.mcp_query_rules")) {
+				proxy_error("Failed to DELETE from main.mcp_query_rules\n");
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to DELETE from main.mcp_query_rules");
+				return false;
+			}
+
+			// Insert from source
+			if (!SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_query_rules SELECT * FROM disk.mcp_query_rules")) {
+				proxy_error("Failed to INSERT into main.mcp_query_rules\n");
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to INSERT into main.mcp_query_rules");
+				return false;
+			}
+
+			// Commit transaction
+			if (!SPA->admindb->execute("COMMIT")) {
+				proxy_error("Failed to COMMIT transaction for LOAD MCP QUERY RULES\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+
+			proxy_info("Received %s command\n", query_no_space);
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// SAVE MCP QUERY RULES TO DISK
+		// Copies rules from working memory (main.mcp_query_rules) to persistent storage (disk.mcp_query_rules)
+		if (
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO DISK") && !strncasecmp("SAVE MCP QUERY RULES TO DISK", query_no_space, query_no_space_length))
+			) {
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+
+			// Execute as transaction to ensure both statements run atomically
+			// Begin transaction
+			if (!SPA->admindb->execute("BEGIN")) {
+				proxy_error("Failed to BEGIN transaction for SAVE MCP QUERY RULES TO DISK\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+
+			// Clear target table
+			if (!SPA->admindb->execute("DELETE FROM disk.mcp_query_rules")) {
+				proxy_error("Failed to DELETE from disk.mcp_query_rules\n");
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to DELETE from disk.mcp_query_rules");
+				return false;
+			}
+
+			// Insert from source
+			if (!SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_query_rules SELECT * FROM main.mcp_query_rules")) {
+				proxy_error("Failed to INSERT into disk.mcp_query_rules\n");
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to INSERT into disk.mcp_query_rules");
+				return false;
+			}
+
+			// Commit transaction
+			if (!SPA->admindb->execute("COMMIT")) {
+				proxy_error("Failed to COMMIT transaction for SAVE MCP QUERY RULES TO DISK\n");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+
+			proxy_info("Received %s command\n", query_no_space);
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// SAVE MCP QUERY RULES FROM RUNTIME / TO MEMORY
+		// Saves rules from in-memory cache to working memory (main.mcp_query_rules)
+		// This persists the currently active rules (with their hit counters) to the database
+		if (
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEMORY") && !strncasecmp("SAVE MCP QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES TO MEM") && !strncasecmp("SAVE MCP QUERY RULES TO MEM", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE MCP QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("SAVE MCP QUERY RULES FROM RUN") && !strncasecmp("SAVE MCP QUERY RULES FROM RUN", query_no_space, query_no_space_length))
+			) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			SPA->save_mcp_query_rules_from_runtime(false);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mcp query rules from RUNTIME\n");
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// LOAD MCP QUERY RULES TO RUNTIME / FROM MEMORY
+		// Loads rules from working memory (main.mcp_query_rules) to in-memory cache
+		// This makes the rules active for query processing
+		if (
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUNTIME") && !strncasecmp("LOAD MCP QUERY RULES TO RUNTIME", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES TO RUN") && !strncasecmp("LOAD MCP QUERY RULES TO RUN", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM MEMORY") && !strncasecmp("LOAD MCP QUERY RULES FROM MEMORY", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length == strlen("LOAD MCP QUERY RULES FROM MEM") && !strncasecmp("LOAD MCP QUERY RULES FROM MEM", query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			char* err = SPA->load_mcp_query_rules_to_runtime();
+
+			if (err==NULL) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mcp query rules to RUNTIME\n");
+				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			} else {
+				SPA->send_error_msg_to_client(sess, err);
+			}
+			return false;
+		}
+	}
+#endif /* PROXYSQLGENAI */
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
 
@@ -3629,6 +3961,23 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
+		// MCP (Model Context Protocol) VARIABLES CHECKSUM
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MCP VARIABLES") && !strncasecmp("CHECKSUM DISK MCP VARIABLES", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MCP VARIABLES") && !strncasecmp("CHECKSUM MEMORY MCP VARIABLES", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MCP VARIABLES") && !strncasecmp("CHECKSUM MEM MCP VARIABLES", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MCP VARIABLES") && !strncasecmp("CHECKSUM MCP VARIABLES", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
 		if (error) {
 			proxy_error("Error: %s\n", error);
 			char buf[1024];
@@ -3914,6 +4263,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_pgsql_global ORDER BY variable_name");
 		query_length = strlen(query) + 1;
 		GloAdmin->stats___pgsql_global();
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW MCP VARIABLES") && !strncasecmp("SHOW MCP VARIABLES", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name");
+		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 

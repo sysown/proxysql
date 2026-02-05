@@ -1,0 +1,15 @@
+# Python virtual environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Trace files (optional - comment out if you want to commit traces)
+trace.jsonl
+*.jsonl
+
+# IDE
+.vscode/
+.idea/
+*.swp

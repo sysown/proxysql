@@ -4,6 +4,21 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
+# Rust toolchain detection
+RUSTC := $(shell which rustc 2>/dev/null)
+CARGO := $(shell which cargo 2>/dev/null)
+ifndef RUSTC
+$(error "rustc not found. Please install Rust toolchain")
+endif
+ifndef CARGO
+$(error "cargo not found. Please install Rust toolchain")
+endif
+
+# SQLite environment variables for sqlite-rembed build
+export SQLITE3_INCLUDE_DIR=$(shell pwd)/sqlite3/sqlite3
+export SQLITE3_LIB_DIR=$(shell pwd)/sqlite3/sqlite3
+export SQLITE3_STATIC=1
+
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
@@ -48,6 +63,9 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	targets += clickhouse-cpp
 endif
 
+ifeq ($(PROXYSQLGENAI),1)
+	targets += sqlite-vec sqlite-rembed
+endif
 
 default: $(targets)
 .PHONY: default
@@ -243,10 +261,21 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3/sqlite3 && patch -p0 < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../sqlite3_pass_exts.patch
 	cd sqlite3/sqlite3 && patch -p0 < ../throw.patch
-	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1 -DSQLITE_ENABLE_MATH_FUNCTIONS
+	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1 -DSQLITE_ENABLE_MATH_FUNCTIONS
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 
-sqlite3: sqlite3/sqlite3/sqlite3.o
+sqlite3/sqlite3/vec.o: sqlite3/sqlite3/sqlite3.o
+	cd sqlite3/sqlite3 && cp ../sqlite-vec-source/sqlite-vec.c . && cp ../sqlite-vec-source/sqlite-vec.h .
+	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o vec.o sqlite-vec.c -DSQLITE_CORE -DSQLITE_VEC_STATIC -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1
+
+sqlite3/libsqlite_rembed.a: sqlite3/sqlite-rembed-0.0.1-alpha.9.tar.gz
+	cd sqlite3 && rm -rf sqlite-rembed-*/ sqlite-rembed-source/ || true
+	cd sqlite3 && tar -zxf sqlite-rembed-0.0.1-alpha.9.tar.gz
+	mv sqlite3/sqlite-rembed-0.0.1-alpha.9 sqlite3/sqlite-rembed-source
+	cd sqlite3/sqlite-rembed-source && SQLITE3_INCLUDE_DIR=$(SQLITE3_INCLUDE_DIR) SQLITE3_LIB_DIR=$(SQLITE3_LIB_DIR) SQLITE3_STATIC=1 $(CARGO) build --release --features=sqlite-loadable/static --lib
+	cp sqlite3/sqlite-rembed-source/target/release/libsqlite_rembed.a sqlite3/libsqlite_rembed.a
+
+sqlite3: sqlite3/sqlite3/sqlite3.o sqlite3/sqlite3/vec.o sqlite3/libsqlite_rembed.a
 
 
 libconfig/libconfig/out/libconfig++.a:
@@ -332,12 +361,31 @@ libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 libscram: libscram/lib/libscram.a
 
 
+# sqlite-vec: Vector similarity search extension (for GenAI)
+sqlite3/sqlite3/vec.o: sqlite3/sqlite3/sqlite3.o
+	cd sqlite3/sqlite3 && cp ../sqlite-vec-source/sqlite-vec.c . && cp ../sqlite-vec-source/sqlite-vec.h .
+	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o vec.o sqlite-vec.c -DSQLITE_CORE -DSQLITE_VEC_STATIC -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5 -DSQLITE_DLL=1
+
+sqlite-vec: sqlite3/sqlite3/vec.o
+
+# sqlite-rembed: Remote embedding extension (Rust-based, for GenAI)
+sqlite3/libsqlite_rembed.a: sqlite3/sqlite-rembed-0.0.1-alpha.9.tar.gz
+	cd sqlite3 && rm -rf sqlite-rembed-*/ sqlite-rembed-source/ || true
+	cd sqlite3 && tar -zxf sqlite-rembed-0.0.1-alpha.9.tar.gz
+	mv sqlite3/sqlite-rembed-0.0.1-alpha.9 sqlite3/sqlite-rembed-source
+	cd sqlite3/sqlite-rembed-source && SQLITE3_INCLUDE_DIR=$(SQLITE3_INCLUDE_DIR) SQLITE3_LIB_DIR=$(SQLITE3_LIB_DIR) SQLITE3_STATIC=1 $(CARGO) build --release --features=sqlite-loadable/static --lib
+	cp sqlite3/sqlite-rembed-source/target/release/libsqlite_rembed.a sqlite3/libsqlite_rembed.a
+
+sqlite-rembed: sqlite3/libsqlite_rembed.a
+
+
 ### clean targets
 
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd jemalloc && rm -rf jemalloc-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
+	cd sqlite3 && rm -rf libsqlite_rembed.a sqlite-rembed-source/ sqlite-rembed-*/ || true
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && rm -rf postgres-*/ || true
 .PHONY: cleanpart
