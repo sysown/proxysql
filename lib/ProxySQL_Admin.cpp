@@ -20,6 +20,8 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
+#include "Discovery_Schema.h"
+#include "Query_Tool_Handler.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -42,6 +44,8 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "MCP_Thread.h"
+#include "ProxySQL_MCP_Server.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -323,6 +327,12 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+
+#ifdef PROXYSQLGENAI
+extern MCP_Threads_Handler* GloMCPH;
+extern GenAI_Threads_Handler* GloGATH;
+extern AI_Features_Manager *GloAI;
+#endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
 
@@ -1106,12 +1116,8 @@ void ProxySQL_Admin::flush_logs() {
 	proxy_debug(PROXY_DEBUG_ADMIN, 1, "Running PROXYSQL FLUSH LOGS\n");
 }
 
-
 // Explicitly instantiate the required template class and member functions
-template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, int, char const*);
-template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
-template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
-template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
+// NOTE: send_ok_msg_to_client and send_error_msg_to_client instantiations moved to after definitions (near line 5730)
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)1>(SQLite3DB*);
 
@@ -1155,6 +1161,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_memory_metrics=false;
 	bool stats_mysql_commands_counters=false;
 	bool stats_pgsql_commands_counters = false;
+	bool stats_mcp_query_tools_counters = false;
+	bool stats_mcp_query_tools_counters_reset = false;
+	bool stats_mcp_query_digest = false;
+	bool stats_mcp_query_digest_reset = false;
+	bool stats_mcp_query_rules = false;
 	bool stats_mysql_query_rules=false;
 	bool stats_pgsql_query_rules = false;
 	bool stats_mysql_users=false;
@@ -1181,6 +1192,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_pgsql_servers = false;
 	bool runtime_pgsql_query_rules = false;
 	bool runtime_pgsql_query_rules_fast_routing = false;
+
+	bool runtime_mcp_query_rules = false;
 
 	bool stats_pgsql_global = false;
 	bool stats_pgsql_connection_pool = false;
@@ -1344,6 +1357,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_proxysql_message_metrics=true; refresh=true; }
 	if (strstr(query_no_space,"stats_proxysql_message_metrics_reset"))
 		{ stats_proxysql_message_metrics_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_tools_counters"))
+		{ stats_mcp_query_tools_counters=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_tools_counters_reset"))
+		{ stats_mcp_query_tools_counters_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_digest_reset"))
+		{ stats_mcp_query_digest_reset=true; refresh=true; }
+	else if (strstr(query_no_space,"stats_mcp_query_digest"))
+		{ stats_mcp_query_digest=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mcp_query_rules"))
+		{ stats_mcp_query_rules=true; refresh=true; }
 
 	// temporary disabled because not implemented
 /*
@@ -1429,6 +1452,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (strstr(query_no_space, "runtime_pgsql_query_rules_fast_routing")) {
 				runtime_pgsql_query_rules_fast_routing = true; refresh = true;
+			}
+			if (strstr(query_no_space, "runtime_mcp_query_rules")) {
+				runtime_mcp_query_rules = true; refresh = true;
 			}
 			if (strstr(query_no_space,"runtime_scheduler")) {
 				runtime_scheduler=true; refresh=true;
@@ -1574,6 +1600,24 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_pgsql_client_host_cache_reset) {
 			stats___pgsql_client_host_cache(true);
 		}
+#ifdef PROXYSQLGENAI
+		if (stats_mcp_query_tools_counters) {
+			stats___mcp_query_tools_counters(false);
+		}
+		if (stats_mcp_query_tools_counters_reset) {
+			stats___mcp_query_tools_counters(true);
+		}
+		if (stats_mcp_query_digest_reset) {
+			stats___mcp_query_digest(true);
+		} else {
+			if (stats_mcp_query_digest) {
+				stats___mcp_query_digest(false);
+			}
+		}
+		if (stats_mcp_query_rules) {
+			stats___mcp_query_rules();
+		}
+#endif /* PROXYSQLGENAI */
 
 		if (admin) {
 			if (dump_global_variables) {
@@ -1587,6 +1631,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true);
+#ifdef PROXYSQLGENAI
+				flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, false);
+				flush_genai_variables___runtime_to_database(admindb, false, false, false, true, false);
+#endif /* PROXYSQLGENAI */
 				pthread_mutex_unlock(&GloVars.checksum_mutex);
 			}
 			if (runtime_mysql_servers) {
@@ -1646,6 +1694,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (runtime_pgsql_query_rules_fast_routing) {
 				save_pgsql_query_rules_fast_routing_from_runtime(true);
 			}
+#ifdef PROXYSQLGENAI
+			if (runtime_mcp_query_rules) {
+				save_mcp_query_rules_from_runtime(true);
+			}
+#endif /* PROXYSQLGENAI */
 			if (runtime_scheduler) {
 				save_scheduler_runtime_to_database(true);
 			}
@@ -2610,6 +2663,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("pgsql_users",		  "PGSQL USERS");
 	generate_load_save_disk_commands("pgsql_servers",	  "PGSQL SERVERS");
 	generate_load_save_disk_commands("pgsql_variables",   "PGSQL VARIABLES");
+	generate_load_save_disk_commands("mcp_query_rules",   "MCP QUERY RULES");
+	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
+	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
@@ -2837,6 +2893,22 @@ void ProxySQL_Admin::init_pgsql_variables() {
 	flush_pgsql_variables___runtime_to_database(admindb, false, true, false);
 	flush_pgsql_variables___database_to_runtime(admindb, true);
 }
+
+#ifdef PROXYSQLGENAI
+void ProxySQL_Admin::init_mcp_variables() {
+	if (GloMCPH) {
+		flush_mcp_variables___runtime_to_database(configdb, false, false, false, false, false);
+		flush_mcp_variables___runtime_to_database(admindb, false, true, false, false, false);
+		flush_mcp_variables___database_to_runtime(admindb, true, "", 0);
+	}
+}
+
+void ProxySQL_Admin::init_genai_variables() {
+	flush_genai_variables___runtime_to_database(configdb, false, false, false);
+	flush_genai_variables___runtime_to_database(admindb, false, true, false);
+	flush_genai_variables___database_to_runtime(admindb, true);
+}
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::admin_shutdown() {
 	int i;
@@ -3192,6 +3264,125 @@ void ProxySQL_Admin::load_restapi_server() {
 		}
 	}
 }
+
+#ifdef PROXYSQLGENAI
+void ProxySQL_Admin::load_mcp_server() {
+	if (!all_modules_started) { return; }
+	if (GloMCPH == NULL) { return; }
+
+	// Helper lambda to check if MCP port is available
+	const auto check_mcp_port = [&](int port, bool& port_free) -> void {
+		int e_port_check = check_port_availability(port, &port_free);
+
+		if (port_free == false) {
+			if (e_port_check == -1) {
+				proxy_error("Unable to start MCP Server, failed to set 'SO_REUSEADDR' to check port availability.\n");
+			} else if (e_port_check == -2) {
+				proxy_error("Unable to start MCP Server, invalid port check parameters.\n");
+			} else {
+				proxy_error("Unable to start MCP Server, port '%d' already in use.\n", port);
+			}
+		}
+	};
+
+	// Check if MCP server is enabled and needs management
+	bool enabled = GloMCPH->variables.mcp_enabled;
+
+	if (enabled) {
+		if (GloMCPH->mcp_server == NULL) {
+			// Start the server if not running
+			int port = GloMCPH->variables.mcp_port;
+			bool use_ssl = GloMCPH->variables.mcp_use_ssl;
+
+			// Check SSL certificates if SSL mode is enabled
+			if (use_ssl) {
+				if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+					proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+						"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+					return;
+				}
+			}
+
+			// Check port availability
+			bool port_free = false;
+			check_mcp_port(port, port_free);
+
+			if (port_free) {
+				proxy_info("MCP: Starting server on port %d\n", port);
+				GloMCPH->mcp_server = new ProxySQL_MCP_Server(port, GloMCPH);
+				if (GloMCPH->mcp_server) {
+					GloMCPH->mcp_server->start();
+					proxy_info("MCP: Server started successfully\n");
+				} else {
+					proxy_error("MCP: Failed to create server instance\n");
+				}
+			}
+		} else {
+			// Server is already running, check if restart is needed
+			int current_port = GloMCPH->variables.mcp_port;
+			int server_port = GloMCPH->mcp_server->get_port();
+			bool current_use_ssl = GloMCPH->variables.mcp_use_ssl;
+			bool server_use_ssl = GloMCPH->mcp_server->is_using_ssl();
+
+			bool needs_restart = false;
+			std::string restart_reason;
+
+			if (current_port != server_port) {
+				needs_restart = true;
+				restart_reason += "port (" + std::to_string(server_port) + " -> " + std::to_string(current_port) + ") ";
+			}
+
+			if (current_use_ssl != server_use_ssl) {
+				needs_restart = true;
+				restart_reason += "SSL mode";
+			}
+
+			if (needs_restart) {
+				proxy_info("MCP: Configuration changed (%s), restarting server...\n", restart_reason.c_str());
+
+				proxy_info("MCP: Stopping server on port %d\n", server_port);
+				delete GloMCPH->mcp_server;
+				GloMCPH->mcp_server = NULL;
+				proxy_info("MCP: Old server deleted\n");
+
+				// Check SSL certificates if SSL mode is enabled
+				if (current_use_ssl) {
+					if (!GloVars.global.ssl_key_pem_mem || !GloVars.global.ssl_cert_pem_mem) {
+						proxy_error("MCP: Cannot start server in SSL mode - SSL certificates not loaded. "
+							"Please configure ssl_key_fp and ssl_cert_fp, or set mcp_use_ssl=false.\n");
+						return;
+					}
+				}
+
+				// Check port availability before starting new server
+				bool port_free = false;
+				check_mcp_port(current_port, port_free);
+
+				if (port_free) {
+					proxy_info("MCP: Starting server on port %d\n", current_port);
+					GloMCPH->mcp_server = new ProxySQL_MCP_Server(current_port, GloMCPH);
+					if (GloMCPH->mcp_server) {
+						GloMCPH->mcp_server->start();
+						proxy_info("MCP: Server restarted successfully\n");
+					} else {
+						proxy_error("MCP: Failed to create server instance\n");
+					}
+				}
+			} else {
+				proxy_info("MCP: Server already running, no configuration changes detected\n");
+			}
+		}
+	} else {
+		// Stop the server if running and disabled
+		if (GloMCPH->mcp_server != NULL) {
+			proxy_info("MCP: Stopping server\n");
+			delete GloMCPH->mcp_server;
+			GloMCPH->mcp_server = NULL;
+			proxy_info("MCP: Server stopped successfully\n");
+		}
+	}
+}
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::load_http_server() {
 	if (!all_modules_started) { return; }
@@ -5705,6 +5896,13 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 	}
 }
 
+// Explicit template instantiations for send_ok_msg_to_client and send_error_msg_to_client
+// These must come after the template definitions above
+template void ProxySQL_Admin::send_ok_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_ok_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, int, char const*);
+template void ProxySQL_Admin::send_error_msg_to_client<MySQL_Session>(MySQL_Session*, char const*, unsigned short);
+template void ProxySQL_Admin::send_error_msg_to_client<PgSQL_Session>(PgSQL_Session*, char const*, unsigned short);
+
 template <enum SERVER_TYPE pt>
 void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
 	char *error=NULL;
@@ -7681,6 +7879,163 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 
 	return NULL;
 }
+
+// Load MCP query rules from memory (main database) to runtime
+//
+// This command loads MCP query rules from the admin database (main.mcp_query_rules)
+// into the Discovery Schema's in-memory rule cache. After loading, rules become
+// active for query processing.
+//
+// The command follows the ProxySQL pattern:
+//   1. Read rules from main.mcp_query_rules table
+//   2. Load into Discovery Schema's in-memory cache
+//   3. Compile regex patterns for matching
+//
+// Returns:
+//   NULL on success, error message string on failure (caller must free)
+//
+#ifdef PROXYSQLGENAI
+char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
+	unsigned long long curtime1 = monotonic_time();
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	bool success = false;
+
+	if (!GloMCPH) return (char*)"MCP Handler not started: command impossible to run";
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (!qth) return (char*)"Query Tool Handler not initialized";
+
+	// Get the discovery schema catalog
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (!catalog) return (char*)"Discovery Schema catalog not initialized";
+
+	char* query = (char*)"SELECT rule_id, active, username, schemaname,"
+		" tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
+		" replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment FROM"
+		" main.mcp_query_rules WHERE active=1 ORDER BY rule_id";
+	SQLite3_result* resultset = NULL;
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		success = true;
+		catalog->load_mcp_query_rules(resultset);
+	}
+
+	if (success == false) {
+		if (resultset) {
+			delete resultset;
+		}
+	}
+
+	unsigned long long curtime2 = monotonic_time();
+	curtime1 = curtime1 / 1000;
+	curtime2 = curtime2 / 1000;
+	if (curtime2 - curtime1 > 1000) {
+		proxy_info("Locked for %llums\n", curtime2 - curtime1);
+	}
+
+	return NULL;
+}
+
+// Save MCP query rules from runtime to database
+//
+// Saves the current in-memory MCP query rules to a database table.
+// This is used to persist rules that have been loaded and are active in runtime.
+//
+// Args:
+//   _runtime: If true, save to runtime_mcp_query_rules (same schema, no hits)
+//            If false, save to mcp_query_rules (no hits)
+//            Note: The hits counter is in-memory only and is NOT persisted.
+//
+// The function copies all rules from the Discovery Schema's in-memory cache
+// to the specified admin database table. This is typically called after:
+//   - Querying runtime_mcp_query_rules (to refresh the view with current data)
+//   - Manual runtime-to-memory save operation
+//
+void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
+	if (!GloMCPH) return;
+	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
+	if (!qth) return;
+	Discovery_Schema* catalog = qth->get_catalog();
+	if (!catalog) return;
+
+	if (_runtime) {
+		admindb->execute("DELETE FROM runtime_mcp_query_rules");
+	} else {
+		admindb->execute("DELETE FROM mcp_query_rules");
+	}
+
+	// Get current rules from Discovery_Schema (same 17 columns for both tables)
+	SQLite3_result* resultset = catalog->get_mcp_query_rules();
+	if (resultset) {
+		char *a = NULL;
+		if (_runtime) {
+			a = (char *)"INSERT INTO runtime_mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		} else {
+			a = (char *)"INSERT INTO mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		}
+		int num_fields = 17; // same for both tables
+
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+
+			// Build query with escaped values
+			int arg_len = 0;
+			char* buffs[17];
+			for (int i = 0; i < num_fields; i++) {
+				if (r->fields[i]) {
+					char* o = escape_string_single_quotes(r->fields[i], false);
+					int l = strlen(o) + 4;
+					arg_len += l;
+					buffs[i] = (char*)malloc(l);
+					sprintf(buffs[i], "'%s'", o);
+					if (o != r->fields[i]) { // there was a copy
+						free(o);
+					}
+				} else {
+					int l = 5;
+					arg_len += l;
+					buffs[i] = (char*)malloc(l);
+					sprintf(buffs[i], "NULL");
+				}
+			}
+
+			char* query = (char*)malloc(strlen(a) + arg_len + 32);
+
+			sprintf(query, a,
+				buffs[0],  // rule_id
+				buffs[1],  // active
+				buffs[2],  // username
+				buffs[3],  // schemaname
+				buffs[4],  // tool_name
+				buffs[5],  // match_pattern
+				buffs[6],  // negate_match_pattern
+				buffs[7],  // re_modifiers
+				buffs[8],  // flagIN
+				buffs[9],  // flagOUT
+				buffs[10], // replace_pattern
+				buffs[11], // timeout_ms
+				buffs[12], // error_msg
+				buffs[13], // OK_msg
+				buffs[14], // log
+				buffs[15], // apply
+				buffs[16]  // comment
+			);
+
+			admindb->execute(query);
+
+			for (int i = 0; i < num_fields; i++) {
+				free(buffs[i]);
+			}
+			free(query);
+		}
+		delete resultset;
+	}
+}
+#endif /* PROXYSQLGENAI */
 
 char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and

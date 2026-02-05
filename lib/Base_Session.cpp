@@ -85,6 +85,15 @@ void Base_Session<S,DS,B,T>::init() {
 		MySQL_Session* mysession = static_cast<S*>(this);
 		mysession->sess_STMTs_meta = new MySQL_STMTs_meta();
 		mysession->SLDH = new StmtLongDataHandler();
+#ifdef epoll_create1
+		// Initialize GenAI async support
+		mysession->next_genai_request_id_ = 1;
+		mysession->genai_epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
+		if (mysession->genai_epoll_fd_ < 0) {
+			proxy_error("Failed to create GenAI epoll fd: %s\n", strerror(errno));
+			mysession->genai_epoll_fd_ = -1;
+		}
+#endif
 	}
 };
 

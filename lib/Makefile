@@ -6,6 +6,7 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
+SQLITE_REMBED_LIB := $(SQLITE3_LDIR)/../libsqlite_rembed.a
 
 IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(JEMALLOC_IDIR) \
@@ -47,6 +48,11 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
+PSQLGA :=
+ifeq ($(PROXYSQLGENAI),1)
+	PSQLGA := -DPROXYSQLGENAI
+endif
+
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
@@ -57,7 +63,7 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQLGA) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
@@ -78,13 +84,29 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	MySQL_Set_Stmt_Parser.oo PgSQL_Set_Stmt_Parser.oo \
 	PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
 	PgSQL_PreparedStatement.oo PgSQL_Extended_Query_Message.oo \
-	pgsql_tokenizer.oo
+	pgsql_tokenizer.oo \
+	proxy_sqlite3_symbols.oo
+
+# GenAI object files (conditionally included)
+ifeq ($(PROXYSQLGENAI),1)
+_OBJ_CXX += GenAI_Thread.oo \
+	MCP_Thread.oo ProxySQL_MCP_Server.oo MCP_Endpoint.oo \
+	MySQL_Catalog.oo MySQL_Tool_Handler.oo MySQL_FTS.oo \
+	Config_Tool_Handler.oo Query_Tool_Handler.oo \
+	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Observe_Tool_Handler.oo \
+	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo Anomaly_Detector.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
+	RAG_Tool_Handler.oo \
+	Discovery_Schema.oo Static_Harvester.oo
+endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
 
 %.ko: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
+
+$(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -DSQLITE_CORE -DSQLITE_VEC_STATIC
 
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)

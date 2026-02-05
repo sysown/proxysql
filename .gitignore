@@ -115,6 +115,7 @@ deps/pcre/pcre-*/
 deps/prometheus-cpp/prometheus-cpp-*/
 deps/re2/re2-*/
 deps/sqlite3/sqlite-amalgamation-*/
+deps/sqlite3/sqlite-rembed-*/
 deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
@@ -124,6 +125,7 @@ test/.vagrant
 .DS_Store
 proxysql-tests.ini
 test/sqlite_history_convert
+test/rag/test_rag_schema
 
 #heaptrack
 heaptrack.*
@@ -174,3 +176,8 @@ test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
 .aider*
 GEMINI.md
+
+# Database discovery output files
+discovery_*.md
+database_discovery_report.md
+scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/tmp/
