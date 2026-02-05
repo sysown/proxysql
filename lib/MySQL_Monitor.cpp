@@ -185,7 +185,7 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 static void close_mysql(MYSQL *my) {
-	if (my->net.pvio) {
+	if (my->net.pvio && !my->options.use_ssl) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;

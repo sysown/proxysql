@@ -77,62 +77,6 @@ services:
 
 ####################################################################################################
 ####################################################################################################
-  fedora40_build:
-    extends:
-      service: _build
-    image: proxysql/packaging:build-fedora40-v3.0.3
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - PKG_RELEASE=fedora40
-      - PROXYSQL_BUILD_TYPE=clickhouse
-
-  fedora40_clang_build:
-    extends:
-      service: fedora40_build
-    image: proxysql/packaging:build-clang-fedora40-v3.0.3
-    environment:
-      - PKG_RELEASE=fedora40-clang
-
-  fedora40_dbg_build:
-    extends:
-      service: fedora40_build
-    environment:
-      - PKG_RELEASE=dbg-fedora40
-      - PROXYSQL_BUILD_TYPE=debug
-
-####################################################################################################
-  fedora41_build:
-    extends:
-      service: _build
-    image: proxysql/packaging:build-fedora41-v3.0.6
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - PKG_RELEASE=fedora41
-      - PROXYSQL_BUILD_TYPE=clickhouse
-
-  fedora41_clang_build:
-    extends:
-      service: fedora41_build
-    image: proxysql/packaging:build-clang-fedora41-v3.0.6
-    environment:
-      - PKG_RELEASE=fedora41-clang
-
-  fedora41_dbg_build:
-    extends:
-      service: fedora41_build
-    environment:
-      - PKG_RELEASE=dbg-fedora41
-      - PROXYSQL_BUILD_TYPE=debug
-
-####################################################################################################
   fedora42_build:
     extends:
       service: _build
@@ -158,6 +102,34 @@ services:
       service: fedora42_build
     environment:
       - PKG_RELEASE=dbg-fedora42
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  fedora43_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-fedora43-v3.0.6
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=fedora43
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora43_clang_build:
+    extends:
+      service: fedora42_build
+    image: proxysql/packaging:build-clang-fedora43-v3.0.6
+    environment:
+      - PKG_RELEASE=fedora43-clang
+
+  fedora43_dbg_build:
+    extends:
+      service: fedora43_build
+    environment:
+      - PKG_RELEASE=dbg-fedora43
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
