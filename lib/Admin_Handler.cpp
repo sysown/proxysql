@@ -808,6 +808,32 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+#ifdef DEBUG
+	if (query_no_space_length == strlen("PROXYSQL FLUSH STATS") && !strncasecmp("PROXYSQL FLUSH STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == strlen("PROXYSQL FLUSH MYSQL STATS") && !strncasecmp("PROXYSQL FLUSH MYSQL STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH MYSQL STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_mysql_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == strlen("PROXYSQL FLUSH PGSQL STATS") && !strncasecmp("PROXYSQL FLUSH PGSQL STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH PGSQL STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_pgsql_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+#endif // DEBUG
+
 	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;

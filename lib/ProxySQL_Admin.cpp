@@ -1116,6 +1116,47 @@ void ProxySQL_Admin::flush_logs() {
 	proxy_debug(PROXY_DEBUG_ADMIN, 1, "Running PROXYSQL FLUSH LOGS\n");
 }
 
+#ifdef DEBUG
+void ProxySQL_Admin::flush_stats() {
+	flush_mysql_stats();
+	flush_pgsql_stats();
+}
+
+void ProxySQL_Admin::flush_mysql_stats() {
+	if (!GloMyQPro || !GloMTH || !MyHGM) {
+		proxy_info("MySQL statistics flush skipped: MySQL modules not initialized\n");
+		return;
+	}
+	// Reset MySQL query digest statistics
+	stats___mysql_query_digests_v2(true, false, false);
+	// Reset MySQL error statistics
+	stats___mysql_errors(true);
+	// Reset MySQL connection pool statistics
+	stats___mysql_connection_pool(true);
+	// Reset MySQL client host cache
+	stats___mysql_client_host_cache(true);
+
+	proxy_info("MySQL statistics flushed successfully\n");
+}
+
+void ProxySQL_Admin::flush_pgsql_stats() {
+	if (!GloPgQPro || !GloPTH || !PgHGM) {
+		proxy_info("PgSQL statistics flush skipped: PgSQL modules not initialized\n");
+		return;
+	}
+	// Reset PostgreSQL query digest statistics
+	stats___pgsql_query_digests_v2(true, false, false);
+	// Reset PostgreSQL error statistics
+	stats___pgsql_errors(true);
+	// Reset PostgreSQL connection pool statistics
+	stats___pgsql_connection_pool(true);
+	// Reset PostgreSQL client host cache
+	stats___pgsql_client_host_cache(true);
+
+	proxy_info("PgSQL statistics flushed successfully\n");
+}
+#endif // DEBUG
+
 // Explicitly instantiate the required template class and member functions
 // NOTE: send_ok_msg_to_client and send_error_msg_to_client instantiations moved to after definitions (near line 5730)
 template int ProxySQL_Admin::FlushDigestTableToDisk<(SERVER_TYPE)0>(SQLite3DB*);
