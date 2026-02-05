@@ -5,11 +5,11 @@
 using std::vector;
 using std::string;
 
-static const vector<string> pgsql_ignore_vars {
-	"application_name"
-};
-
 const vector<string>& get_pgsql_ignore_vars() {
+	static const vector<string> pgsql_ignore_vars {
+		"application_name"
+	};
+
 	return pgsql_ignore_vars;
 }
 
@@ -47,8 +47,7 @@ string build_pgsql_variables_regex(const vector<string>& ignore_vars) {
 	return res;
 }
 
-static const string pgsql_variables_regexp { build_pgsql_variables_regex(pgsql_ignore_vars) };
-
 const string& get_pgsql_variables_regexp() {
+	static const string pgsql_variables_regexp { build_pgsql_variables_regex(get_pgsql_ignore_vars()) };
 	return pgsql_variables_regexp;
 }

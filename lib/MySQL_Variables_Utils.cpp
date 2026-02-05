@@ -5,21 +5,21 @@
 using std::vector;
 using std::string;
 
-static const vector<string> mysql_ignore_vars {
-	"interactive_timeout",
-	"wait_timeout",
-	"net_read_timeout",
-	"net_write_timeout",
-	"net_buffer_length",
-	"read_buffer_size",
-	"read_rnd_buffer_size",
-	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
-	"session_track_schema",
-	// NOTE: This variable has been temporarily ignored. Check issues #4839
-	"session_track_system_variables"
-};
-
 const vector<string>& get_mysql_ignore_vars() {
+	static const vector<string> mysql_ignore_vars {
+		"interactive_timeout",
+		"wait_timeout",
+		"net_read_timeout",
+		"net_write_timeout",
+		"net_buffer_length",
+		"read_buffer_size",
+		"read_rnd_buffer_size",
+		// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
+		"session_track_schema",
+		// NOTE: This variable has been temporarily ignored. Check issues #4839
+		"session_track_system_variables"
+	};
+
 	return mysql_ignore_vars;
 }
 
@@ -63,8 +63,7 @@ string build_mysql_variables_regex(const vector<string>& ignore_vars) {
 	return res;
 }
 
-static const string mysql_variables_regexp { build_mysql_variables_regex(mysql_ignore_vars) };
-
 const string& get_mysql_variables_regexp() {
+	static const string mysql_variables_regexp { build_mysql_variables_regex(get_mysql_ignore_vars()) };
 	return mysql_variables_regexp;
 }
