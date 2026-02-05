@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_T(admin, "SET mysql-session_track_variables=1");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, true);
+	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return exit_status();

@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
 
 	// Get server version BEFORE enabling ENFORCED mode, because ENFORCED mode
 	// backs off all 5.6 servers and we wouldn't be able to query @@version.
-	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, true);
+	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return exit_status();
@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_T(admin, "SET mysql-session_track_variables=2");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password, true);
+	proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		cleanup(admin, proxy);

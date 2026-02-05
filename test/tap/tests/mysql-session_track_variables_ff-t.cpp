@@ -28,14 +28,13 @@ int test_ff_session_tracking(const CommandLine& cl, MYSQL* admin, int mode) {
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	// Enable fast_forward for test user
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_users WHERE username='ff_test_user'");
-	MYSQL_QUERY_T(admin, "INSERT INTO mysql_users (username,password,fast_forward,default_hostgroup) VALUES ('ff_test_user','ff_test_pass',1,0)");
+	MYSQL_QUERY_T(admin, "UPDATE mysql_users SET fast_forward=1 WHERE username='sbtest4'");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
 
 	MYSQL* proxy = mysql_init(NULL);
 	// Enable CLIENT_DEPRECATE_EOF. This is required for session tracking
 	proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
-	if (!mysql_real_connect(proxy, cl.host, "ff_test_user", "ff_test_pass", NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy, cl.host, "sbtest4", "sbtest4", NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
@@ -64,7 +63,7 @@ int test_ff_session_tracking(const CommandLine& cl, MYSQL* admin, int mode) {
 	ok(set_value == tracked_value, "MySQL %d.%d: Fast forward with %s mode: Expected: %d, Tracked: %d", major, minor, mode_name, set_value, tracked_value);
 
 	// Cleanup
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_users WHERE username='ff_test_user'");
+	MYSQL_QUERY_T(admin, "UPDATE mysql_users SET fast_forward=0 WHERE username='sbtest4'");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
 	MYSQL_QUERY_T(admin, "SET mysql-session_track_variables=0");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
