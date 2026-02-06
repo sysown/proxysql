@@ -37,10 +37,10 @@ string build_pgsql_variables_regex(const vector<string>& ignore_vars) {
 	}
 
 	for (const auto& iv : ignore_vars) {
-		res += iv;
-
-		if (&iv != &ignore_vars.back()) {
-			res += "|";
+		if (res.empty()) {
+			res += iv;
+		} else {
+			res += string { "|" } + iv;
 		}
 	}
 
