@@ -43,7 +43,9 @@ void Base_Thread::register_session(T thr, S _sess, bool up_start) {
 //	}
 	_sess->match_regexes=match_regexes;
 	if constexpr (std::is_same_v<T, PgSQL_Thread*>) {
+#ifdef IDLE_THREADS
 		_sess->copy_cmd_matcher = (static_cast<PgSQL_Thread*>(this))->copy_cmd_matcher;
+#endif
 	}
 
 	if (up_start)
