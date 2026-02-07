@@ -408,6 +408,7 @@ cleanall:
 	cd re2 && rm -rf re2-*/ || true
 	cd pcre && rm -rf pcre-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
+	cd sqlite3 && rm -rf libsqlite_rembed.a sqlite-rembed-source/ sqlite-rembed-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
