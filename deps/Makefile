@@ -284,7 +284,7 @@ sqlite3/libsqlite_rembed.a: sqlite3/sqlite-rembed-0.0.1-alpha.9.tar.gz
 	cd sqlite3 && rm -rf sqlite-rembed-*/ sqlite-rembed-source/ || true
 	cd sqlite3 && tar -zxf sqlite-rembed-0.0.1-alpha.9.tar.gz
 	mv sqlite3/sqlite-rembed-0.0.1-alpha.9 sqlite3/sqlite-rembed-source
-	cd sqlite3/sqlite-rembed-source && SQLITE3_INCLUDE_DIR=$(SQLITE3_INCLUDE_DIR) SQLITE3_LIB_DIR=$(SQLITE3_LIB_DIR) SQLITE3_STATIC=1 $(CARGO) build --release --features=sqlite-loadable/static --lib
+	cd sqlite3/sqlite-rembed-source && SQLITE3_INCLUDE_DIR=$(SQLITE3_INCLUDE_DIR) SQLITE3_LIB_DIR=$(SQLITE3_LIB_DIR) SQLITE3_STATIC=1 $(CARGO) build --locked --release --features=sqlite-loadable/static --lib
 	cp sqlite3/sqlite-rembed-source/target/release/libsqlite_rembed.a sqlite3/libsqlite_rembed.a
 
 ifeq ($(PROXYSQLGENAI),1)
