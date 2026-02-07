@@ -6,8 +6,8 @@ include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
 # Rust toolchain detection (only needed for PROXYSQLGENAI)
 ifeq ($(PROXYSQLGENAI),1)
-RUSTC := $(shell which rustc 2>/dev/null)
-CARGO := $(shell which cargo 2>/dev/null)
+RUSTC := $(shell type rustc 2>/dev/null | sed 's/.* //')
+CARGO := $(shell type cargo 2>/dev/null | sed 's/.* //')
 ifndef RUSTC
 $(error "rustc not found. Please install Rust toolchain (required for PROXYSQLGENAI)")
 endif
