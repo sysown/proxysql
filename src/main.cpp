@@ -60,6 +60,10 @@ using json = nlohmann::json;
 
 #include <sys/mman.h>
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 #include <uuid/uuid.h>
 #include <atomic>
 
@@ -3007,7 +3011,18 @@ int main(int argc, const char * argv[]) {
 		int fd = -1;
 		char buff[PATH_MAX+1];
 		ssize_t len = -1;
-#if defined(__FreeBSD__)
+#if defined(__APPLE__)
+		uint32_t bufsize = sizeof(buff) - 1;
+		if (_NSGetExecutablePath(buff, &bufsize) == 0) {
+			len = bufsize;
+			// Resolve symlinks to get the real path
+			char resolved[PATH_MAX];
+			if (realpath(buff, resolved) != NULL) {
+				strncpy(buff, resolved, sizeof(buff) - 1);
+				len = strlen(buff);
+			}
+		}
+#elif defined(__FreeBSD__)
 		len = readlink("/proc/curproc/file", buff, sizeof(buff)-1);
 #else
 		len = readlink("/proc/self/exe", buff, sizeof(buff)-1);
