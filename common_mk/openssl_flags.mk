@@ -20,20 +20,12 @@ endif
 
 ifeq ($(CUSTOM_OPENSSL_PATH),)
     ifeq ($(OPENSSL_PACKAGE),openssl3)
-ifeq ($(UNAME_S),Darwin)
         SSL_IDIR := $(shell pkg-config --cflags $(OPENSSL_PACKAGE) | sed -E 's/-I/ /g' | awk '{for(i=1;i<=NF;i++) if($$i ~ /^\//) print $$i}' | head -n 1)
-else
-        SSL_IDIR := $(shell pkg-config --cflags $(OPENSSL_PACKAGE) | grep -oP "(?<=-I)[^ ]+")
-endif
         SSL_LDIR := $(shell pkg-config --variable=libdir $(OPENSSL_PACKAGE))
         LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.so.3" 2>/dev/null | head -n 1)
         LIB_CRYPTO_PATH := $(shell find $(SSL_LDIR) -name "libcrypto.so.3" 2>/dev/null | head -n 1)
     else
-ifeq ($(UNAME_S),Darwin)
         SSL_IDIR := $(shell export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1; export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1; pkg-config --cflags $(OPENSSL_PACKAGE) | sed -E 's/-I/ /g' | awk '{for(i=1;i<=NF;i++) if($$i ~ /^\//) print $$i}' | head -n 1)
-else
-        SSL_IDIR := $(shell export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1; export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1; pkg-config --cflags $(OPENSSL_PACKAGE) | grep -oP "(?<=-I)[^ ]+")
-endif
         SSL_LDIR := $(shell pkg-config --variable=libdir $(OPENSSL_PACKAGE))
 ifeq ($(UNAME_S),Darwin)
         LIB_SSL_PATH := $(shell find $(SSL_LDIR) -name "libssl.dylib" 2>/dev/null | head -n 1)
