@@ -42,7 +42,7 @@ jobs:
 #        fi
 
   builds:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 #    needs: [ lock ]
 #    outputs:
 #      matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -125,7 +125,7 @@ jobs:
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
         cd proxysql/
-        sed -i 's/docker-compose/docker compose/g' Makefile
+        #sed -i 's/docker-compose/docker compose/g' Makefile
         git fetch --tags --force
         mkdir ci_build_log
         if [[ "${{ matrix.type }}" =~ "-asan" ]]; then
