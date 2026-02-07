@@ -137,8 +137,8 @@ jobs:
           #sed -i "/command/c \    command: bash -l -c '${ASAN} cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
           #make ${{ matrix.dist }} | tee ci_build_log/build-deps.log
           # build tap tests
-          sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
+          #sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
+          #sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
           make ${{ matrix.dist }}-dbg | tee ci_build_log/build-tap.log
           
           # create matrix of all test folders containing *-t
@@ -161,8 +161,8 @@ jobs:
         elif [[ "${{ matrix.type }}" =~ "-test" ]]; then
           TYPE=${{ matrix.type }}
           # build TYPE
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) ${TYPE#-}'" docker-compose.yml
-          make ${{ matrix.dist }} | tee ci_build_log/build.log
+          #sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) ${TYPE#-}'" docker-compose.yml
+          make ${{ matrix.dist }}-test | tee ci_build_log/build.log
         else
           make ${{ matrix.dist }}${{ matrix.type }} | tee ci_build_log/build.log
         fi
