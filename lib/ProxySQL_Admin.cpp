@@ -6293,9 +6293,10 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 		GloVars.checksums_values.dumped_at = GloVars.checksums_values.updates_cnt;
 	}
 	char *q = (char *)"REPLACE INTO runtime_checksums_values VALUES (?1 , ?2 , ?3 , ?4)";
-	sqlite3_stmt *statement1 = NULL;
-	rc = admindb->prepare_v2(q,&statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
+	auto [rc1, statement1_unique] = admindb->prepare_v2(q);
+	ASSERT_SQLITE_OK(rc1, admindb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	int rc;
 	admindb->execute((char *)"BEGIN");
 	admindb->execute((char *)"DELETE FROM runtime_checksums_values");
 
@@ -6402,7 +6403,6 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 
 	admindb->execute((char *)"COMMIT");
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
-	(*proxy_sqlite3_finalize)(statement1);
 }
 
 void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
@@ -6431,9 +6431,6 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 	char *q_stmt1_f=NULL;
 	char *q_stmt1_b=NULL;
 
-	sqlite3_stmt *f_statement1=NULL;
-	sqlite3_stmt *b_statement1=NULL;
-
 	if (_runtime) {
 		q_stmt1_f=qfr_stmt1;
 		q_stmt1_b=qbr_stmt1;
@@ -6442,10 +6439,13 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		q_stmt1_b=qb_stmt1;
 	}
 
-	rc = admindb->prepare_v2(q_stmt1_f, &f_statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
-	rc = admindb->prepare_v2(q_stmt1_b, &b_statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
+	auto [rc1, f_statement1_unique] = admindb->prepare_v2(q_stmt1_f);
+	ASSERT_SQLITE_OK(rc1, admindb);
+	auto [rc2, b_statement1_unique] = admindb->prepare_v2(q_stmt1_b);
+	ASSERT_SQLITE_OK(rc2, admindb);
+	sqlite3_stmt *f_statement1 = f_statement1_unique.get();
+	sqlite3_stmt *b_statement1 = b_statement1_unique.get();
+	int rc;
 
 	for (i=0; i<num_users; i++) {
 		account_details_t *ad=ads[i];
@@ -6479,9 +6479,6 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		free(ad->attributes);
 		free(ad);
 	}
-
-	(*proxy_sqlite3_finalize)(f_statement1);
-	(*proxy_sqlite3_finalize)(b_statement1);
 
 	free(ads);
 }
