@@ -1232,17 +1232,16 @@ void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
 
 		monitordb->execute("DELETE FROM monitor_internal.mysql_servers");
 
-		sqlite3_stmt *statement1=NULL;
-		sqlite3_stmt *statement32=NULL;
-
 		std::string query32s = "INSERT INTO monitor_internal.mysql_servers VALUES " + generate_multi_rows_query(32,4);
 		char* query1 = const_cast<char*>("INSERT INTO monitor_internal.mysql_servers VALUES (?1,?2,?3,?4)");
 		char* query32 = (char *)query32s.c_str();
 
-		rc = monitordb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, monitordb);
-		rc = monitordb->prepare_v2(query32, &statement32);
-		ASSERT_SQLITE_OK(rc, monitordb);
+		auto [rc1, statement1_unique] = monitordb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, monitordb);
+		auto [rc2, statement32_unique] = monitordb->prepare_v2(query32);
+		ASSERT_SQLITE_OK(rc2, monitordb);
+		sqlite3_stmt *statement1 = statement1_unique.get();
+		sqlite3_stmt *statement32 = statement32_unique.get();
 
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
@@ -1275,9 +1274,6 @@ void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
 			}
 			row_idx++;
 		}
-
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 	}
 
 	pthread_mutex_unlock(&GloMyMon->mysql_servers_mutex);
@@ -1291,17 +1287,16 @@ void MySQL_Monitor::update_monitor_proxysql_servers(SQLite3_result* resultset) {
 
 		monitordb->execute("DELETE FROM monitor_internal.proxysql_servers");
 
-		sqlite3_stmt* statement1 = NULL;
-		sqlite3_stmt* statement32 = NULL;
-
 		std::string query32s = "INSERT INTO monitor_internal.proxysql_servers VALUES " + generate_multi_rows_query(32, 4);
 		char* query1 = const_cast<char*>("INSERT INTO monitor_internal.proxysql_servers VALUES (?1,?2,?3,?4)");
 		char* query32 = (char*)query32s.c_str();
 
-		rc = monitordb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, monitordb);
-		rc = monitordb->prepare_v2(query32, &statement32);
-		ASSERT_SQLITE_OK(rc, monitordb);
+		auto [rc1, statement1_unique] = monitordb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, monitordb);
+		auto [rc2, statement32_unique] = monitordb->prepare_v2(query32);
+		ASSERT_SQLITE_OK(rc2, monitordb);
+		sqlite3_stmt* statement1 = statement1_unique.get();
+		sqlite3_stmt* statement32 = statement32_unique.get();
 
 		int row_idx = 0;
 		int max_bulk_row_idx = resultset->rows_count / 32;
@@ -1335,9 +1330,6 @@ void MySQL_Monitor::update_monitor_proxysql_servers(SQLite3_result* resultset) {
 			}
 			row_idx++;
 		}
-
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 	}
 
 	pthread_mutex_unlock(&GloMyMon->proxysql_servers_mutex);
@@ -1359,14 +1351,12 @@ void * monitor_connect_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsd
 	mmsd->t1=start_time;
 	mmsd->t2=monotonic_time();
 
-	sqlite3_stmt *statement=NULL;
-	//sqlite3 *mondb=mmsd->mondb->get_db();
-	int rc;
 	char *query=NULL;
 	query=(char *)"INSERT OR REPLACE INTO mysql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
-	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
-	rc = mmsd->mondb->prepare_v2(query, &statement);
-	ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	auto [rc1, statement_unique] = mmsd->mondb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc1, mmsd->mondb);
+	sqlite3_stmt *statement = statement_unique.get();
+	int rc;
 	rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 	rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 	unsigned long long time_now=realtime_time();
@@ -1377,7 +1367,6 @@ void * monitor_connect_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsd
 	SAFE_SQLITE3_STEP2(statement);
 	rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 	rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-	(*proxy_sqlite3_finalize)(statement);
 	if (mmsd->mysql_error_msg) {
 		if (
 			(strncmp(mmsd->mysql_error_msg,"Access denied for user",strlen("Access denied for user"))==0)
@@ -1471,17 +1460,12 @@ void * monitor_ping_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsds) 
 __exit_monitor_ping_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement=NULL;
-		//sqlite3 *mondb=mmsd->mondb->get_db();
-		int rc;
-#ifdef TEST_AURORA
-//		if ((rand() % 10) ==0) {
-#endif // TEST_AURORA
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
-		//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
-		rc = mmsd->mondb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		auto [rc1, statement_unique] = mmsd->mondb->prepare_v2(query);
+		ASSERT_SQLITE_OK(rc1, mmsd->mondb);
+		sqlite3_stmt *statement = statement_unique.get();
+		int rc;
 		rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		unsigned long long time_now=realtime_time();
@@ -1492,7 +1476,6 @@ __exit_monitor_ping_thread:
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		(*proxy_sqlite3_finalize)(statement);
 		if (mmsd->mysql_error_msg == NULL) {
 			ping_success = true;
 		}
@@ -1767,14 +1750,12 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 __exit_monitor_read_only_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement=NULL;
-		//sqlite3 *mondb=mmsd->mondb->get_db();
-		int rc;
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-		//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
-		rc = mmsd->mondb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		auto [rc1, statement_unique] = mmsd->mondb->prepare_v2(query);
+		ASSERT_SQLITE_OK(rc1, mmsd->mondb);
+		sqlite3_stmt *statement = statement_unique.get();
+		int rc;
 		int read_only=1; // as a safety mechanism , read_only=1 is the default
 		rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -1829,7 +1810,6 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		(*proxy_sqlite3_finalize)(statement);
 
 		if (mmsd->mysql_error_msg == NULL) {
 			read_only_success = true;
@@ -2825,16 +2805,14 @@ void * monitor_replication_lag_thread(const std::vector<MySQL_Monitor_State_Data
 __exit_monitor_replication_lag_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement=NULL;
-		//sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 		char *query=NULL;
 
 		if (strcasestr(server_version.c_str(), (const char *)SERVER_VERSION_READYSET) == NULL) {
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_replication_lag_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
-			rc = mmsd->mondb->prepare_v2(query, &statement);
-			ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			auto [rc1, statement_unique] = mmsd->mondb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc1, mmsd->mondb);
+			sqlite3_stmt *statement = statement_unique.get();
 				// 'replication_lag' to be feed to 'replication_lag_action'
 				int repl_lag=-2;
 				bool override_repl_lag = true;
@@ -2909,14 +2887,14 @@ __exit_monitor_replication_lag_thread:
 				MyHGM->replication_lag_action( std::list<replication_lag_server_t> {
 												replication_lag_server_t {mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag, override_repl_lag }
 												} );
-			(*proxy_sqlite3_finalize)(statement);
 			if (mmsd->mysql_error_msg == NULL) {
 				replication_lag_success = true;
 			}
 		} else { // readyset
 			query=(char *)"INSERT OR REPLACE INTO readyset_status_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-			rc = mmsd->mondb->prepare_v2(query, &statement);
-			ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			auto [rc2, statement_unique2] = mmsd->mondb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc2, mmsd->mondb);
+			sqlite3_stmt *statement = statement_unique2.get();
 			unordered_map<string,string> status_output = {};
 			enum MySerStatus status = MYSQL_SERVER_STATUS_SHUNNED; // default status
 			rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -2965,7 +2943,6 @@ __exit_monitor_replication_lag_thread:
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			MyHGM->set_Readyset_status(mmsd->hostname, mmsd->port, status);
-			(*proxy_sqlite3_finalize)(statement);
 			if (mmsd->mysql_error_msg == NULL) {
 				replication_lag_success = true;
 			}
@@ -3127,14 +3104,12 @@ void * MySQL_Monitor::monitor_connect() {
 
 __end_monitor_connect_loop:
 		if (mysql_thread___monitor_enabled==true) {
-			sqlite3_stmt *statement=NULL;
-			//sqlite3 *mondb=monitordb->get_db();
-			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_connect_log WHERE time_start_us < ?1";
-			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
-			rc = monitordb->prepare_v2(query, &statement);
-			ASSERT_SQLITE_OK(rc, monitordb);
+			auto [rc1, statement_unique] = monitordb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc1, monitordb);
+			sqlite3_stmt *statement = statement_unique.get();
+			int rc;
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
@@ -3144,7 +3119,6 @@ __end_monitor_connect_loop:
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			(*proxy_sqlite3_finalize)(statement);
 		}
 		if (resultset)
 			delete resultset;
@@ -3231,14 +3205,12 @@ void * MySQL_Monitor::monitor_ping() {
 
 __end_monitor_ping_loop:
 		if (mysql_thread___monitor_enabled==true) {
-			sqlite3_stmt *statement=NULL;
-			//sqlite3 *mondb=monitordb->get_db();
-			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start_us < ?1";
-			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
-			rc = monitordb->prepare_v2(query, &statement);
-			ASSERT_SQLITE_OK(rc, monitordb);
+			auto [rc1, statement_unique] = monitordb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc1, monitordb);
+			sqlite3_stmt *statement = statement_unique.get();
+			int rc;
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
@@ -3248,7 +3220,6 @@ __end_monitor_ping_loop:
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			(*proxy_sqlite3_finalize)(statement);
 		}
 
 		if (resultset) {
@@ -3587,14 +3558,12 @@ void * MySQL_Monitor::monitor_read_only() {
 
 __end_monitor_read_only_loop:
 		if (mysql_thread___monitor_enabled==true) {
-			sqlite3_stmt *statement=NULL;
-			//sqlite3 *mondb=monitordb->get_db();
-			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
-			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
-			rc = monitordb->prepare_v2(query, &statement);
-			ASSERT_SQLITE_OK(rc, monitordb);
+			auto [rc1, statement_unique] = monitordb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc1, monitordb);
+			sqlite3_stmt *statement = statement_unique.get();
+			int rc;
 			if (mysql_thread___monitor_history < mysql_thread___monitor_read_only_interval * (mysql_thread___monitor_read_only_max_timeout_count + 1 )) { // issue #626
 				if (mysql_thread___monitor_read_only_interval < 3600000)
 					mysql_thread___monitor_history = mysql_thread___monitor_read_only_interval * (mysql_thread___monitor_read_only_max_timeout_count + 1 );
@@ -3604,7 +3573,6 @@ __end_monitor_read_only_loop:
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			(*proxy_sqlite3_finalize)(statement);
 		}
 
 		if (resultset)
@@ -4635,17 +4603,16 @@ void * MySQL_Monitor::monitor_replication_lag() {
 
 __end_monitor_replication_lag_loop:
 		if (mysql_thread___monitor_enabled==true) {
-			sqlite3_stmt *statement1=NULL;
-			sqlite3_stmt *statement2=NULL;
-			//sqlite3 *mondb=monitordb->get_db();
-			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start_us < ?1";
-			rc = monitordb->prepare_v2(query, &statement1);
-			ASSERT_SQLITE_OK(rc, monitordb);
+			auto [rc1, statement1_unique] = monitordb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc1, monitordb);
+			sqlite3_stmt *statement1 = statement1_unique.get();
 			query=(char *)"DELETE FROM readyset_status_log WHERE time_start_us < ?1";
-			rc = monitordb->prepare_v2(query, &statement2);
-			ASSERT_SQLITE_OK(rc, monitordb);
+			auto [rc2, statement2_unique] = monitordb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc2, monitordb);
+			sqlite3_stmt *statement2 = statement2_unique.get();
+			int rc;
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
@@ -4655,12 +4622,10 @@ __end_monitor_replication_lag_loop:
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
-			(*proxy_sqlite3_finalize)(statement1);
 			rc=(*proxy_sqlite3_bind_int64)(statement2, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
 			SAFE_SQLITE3_STEP2(statement2);
 			rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, monitordb);
 			rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, monitordb);
-			(*proxy_sqlite3_finalize)(statement2);
 		}
 
 		if (resultset)
@@ -5624,16 +5589,13 @@ bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
-	//sqlite3 *mondb=monitordb->get_db();
-	int rc;
-	//char *query=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT INTO mysql_server_group_replication_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
-	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
-	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
-	rc = monitordb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, monitordb);
+	auto [rc1, statement1_unique] = monitordb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, monitordb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	int rc;
 	monitordb->execute((char *)"DELETE FROM mysql_server_group_replication_log");
 	std::map<std::string, MyGR_monitor_node *>::iterator it2;
 	MyGR_monitor_node *node=NULL;
@@ -5660,21 +5622,17 @@ void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 			}
 		}
 	}
-	(*proxy_sqlite3_finalize)(statement1);
 	pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
-	//sqlite3 *mondb=monitordb->get_db();
-	int rc;
-	//char *query=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT OR IGNORE INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
-	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
-	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
-	rc = monitordb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, monitordb);
+	auto [rc1, statement1_unique] = monitordb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, monitordb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	int rc;
 	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
 	std::map<std::string, Galera_monitor_node *>::iterator it2;
 	Galera_monitor_node *node=NULL;
@@ -5706,7 +5664,6 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 			}
 		}
 	}
-	(*proxy_sqlite3_finalize)(statement1);
 	pthread_mutex_unlock(&GloMyMon->galera_mutex);
 }
 
