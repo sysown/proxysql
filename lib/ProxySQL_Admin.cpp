@@ -953,8 +953,6 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 	SQLite3DB * sdb = _db;
 	sdb->execute("BEGIN");
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement32=NULL;
 	char *query1=NULL;
 	char *query32=NULL;
 	std::string query32s = "";
@@ -968,10 +966,12 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 	}
 
 	query32 = (char *)query32s.c_str();
-	rc = sdb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, sdb);
-	rc = sdb->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, sdb);
+	auto [rc1, statement1_unique] = sdb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, sdb);
+	auto [rc2, statement32_unique] = sdb->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, sdb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 	int row_idx=0;
 	int max_bulk_row_idx=r/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
@@ -1069,8 +1069,7 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
+	// RAII auto-finalizes statement1 and statement32
 	sdb->execute("COMMIT");
 
 	for (std::unordered_map<uint64_t, void *>::iterator it=uqd.begin(); it!=uqd.end(); ++it) {
