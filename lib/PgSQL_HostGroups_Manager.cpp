@@ -3829,17 +3829,15 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 		return;
 	}
 	int rc;
-	sqlite3_stmt *statement=NULL;
-
 	const char * query=(const char *)"INSERT INTO pgsql_hostgroup_attributes ( "
 		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
 		"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
 		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-	rc = mydb->prepare_v2(query, &statement);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	sqlite3_stmt *statement = statement_unique.get();
 	proxy_info("New pgsql_hostgroup_attributes table\n");
 	bool current_configured[MyHostGroups->len];
 	// set configured = false to all
