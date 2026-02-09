@@ -8883,7 +8883,9 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 	// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
 	// it will make the 'unexp_com_pings' field obsolete.
 	///////////////////////////////////////////////////////////////////////////////////////////////
-	if (client_myds->unexp_com_pings) {
+	// Fix #5355: Add null pointer check for client_myds to prevent use-after-free crash
+	// when session is deleted while RequestEnd() is still executing (e.g., during COM_CHANGE_USER timeout)
+	if (client_myds && client_myds->unexp_com_pings) {
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 
 		if (client_myds->unexp_com_pings) {
