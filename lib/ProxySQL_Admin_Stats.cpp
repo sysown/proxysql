@@ -943,9 +943,6 @@ void ProxySQL_Admin::stats___pgsql_processlist() {
 	SQLite3_result* resultset = GloPTH->SQL3_Processlist(variables.pgsql_processlist);
 	if (resultset == NULL) return;
 
-	sqlite3_stmt* statement1 = NULL;
-	sqlite3_stmt* statement32 = NULL;
-
 	char* query1 = NULL;
 	char* query32 = NULL;
 	std::string query32s = "";
@@ -957,10 +954,9 @@ void ProxySQL_Admin::stats___pgsql_processlist() {
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
 	ASSERT_SQLITE_OK(rc1, statsdb);
-	sqlite3_stmt *statement1 = statement1_unique.get();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
 	auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
 	ASSERT_SQLITE_OK(rc2, statsdb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
 	sqlite3_stmt *statement32 = statement32_unique.get();
 
 	statsdb->execute("BEGIN");
@@ -1232,8 +1228,7 @@ void ProxySQL_Admin::stats___mysql_free_connections() {
 		row_idx++;
 	}
 	statsdb->execute("COMMIT");
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
+	// RAII auto-finalizes statement1 and statement32
 	delete resultset;
 }
 
@@ -1243,8 +1238,6 @@ void ProxySQL_Admin::stats___pgsql_free_connections() {
 	SQLite3_result* resultset = PgHGM->SQL3_Free_Connections();
 	if (resultset == NULL) return;
 
-	sqlite3_stmt* statement1 = NULL;
-	sqlite3_stmt* statement32 = NULL;
 	//sqlite3 *mydb3=statsdb->get_db();
 	char* query1 = NULL;
 	char* query32 = NULL;
@@ -1257,10 +1250,9 @@ void ProxySQL_Admin::stats___pgsql_free_connections() {
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
 	ASSERT_SQLITE_OK(rc1, statsdb);
-	sqlite3_stmt *statement1 = statement1_unique.get();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
 	auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
 	ASSERT_SQLITE_OK(rc2, statsdb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
 	sqlite3_stmt *statement32 = statement32_unique.get();
 
 	statsdb->execute("BEGIN");
@@ -1331,8 +1323,7 @@ void ProxySQL_Admin::stats___pgsql_free_connections() {
 		row_idx++;
 	}
 	statsdb->execute("COMMIT");
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
+	// RAII auto-finalizes statement1 and statement32
 	delete resultset;
 }
 
@@ -2118,8 +2109,6 @@ void ProxySQL_Admin::stats___pgsql_errors(bool reset) {
 	if (!resultset) return;
 	statsdb->execute("BEGIN");
 	int rc;
-	sqlite3_stmt* statement1 = NULL;
-	sqlite3_stmt* statement32 = NULL;
 	char* query1 = NULL;
 	char* query32 = NULL;
 	std::string query32s = "";
@@ -2139,10 +2128,12 @@ void ProxySQL_Admin::stats___pgsql_errors(bool reset) {
 		query32 = (char*)query32s.c_str();
 	}
 
-	rc = statsdb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, statsdb);
-	rc = statsdb->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, statsdb);
+	auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, statsdb);
+	auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, statsdb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 	int row_idx = 0;
 	int max_bulk_row_idx = resultset->rows_count / 32;
 	max_bulk_row_idx = max_bulk_row_idx * 32;
@@ -2415,8 +2406,6 @@ void ProxySQL_Admin::stats___pgsql_prepared_statements_info() {
 	if (resultset == NULL) return;
 	statsdb->execute("BEGIN");
 	int rc;
-	sqlite3_stmt* statement1 = NULL;
-	sqlite3_stmt* statement32 = NULL;
 	//sqlite3 *mydb3=statsdb->get_db();
 	char* query1 = NULL;
 	char* query32 = NULL;
@@ -2429,10 +2418,9 @@ void ProxySQL_Admin::stats___pgsql_prepared_statements_info() {
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
 	ASSERT_SQLITE_OK(rc1, statsdb);
-	sqlite3_stmt *statement1 = statement1_unique.get();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
 	auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
 	ASSERT_SQLITE_OK(rc2, statsdb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
 	sqlite3_stmt *statement32 = statement32_unique.get();
 	int row_idx = 0;
 	int max_bulk_row_idx = resultset->rows_count / 32;
@@ -2481,8 +2469,6 @@ int ProxySQL_Admin::stats___save_pgsql_query_digest_to_sqlite(
 ) {
 	statsdb->execute("BEGIN");
 	int rc;
-	sqlite3_stmt* statement1 = NULL;
-	sqlite3_stmt* statement32 = NULL;
 	char* query1 = NULL;
 	char* query32 = NULL;
 	std::string query32s = "";
@@ -2499,10 +2485,12 @@ int ProxySQL_Admin::stats___save_pgsql_query_digest_to_sqlite(
 		query32 = (char*)query32s.c_str();
 	}
 
-	rc = statsdb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, statsdb);
-	rc = statsdb->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, statsdb);
+	auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, statsdb);
+	auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, statsdb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 	int row_idx = 0;
 	int num_rows = resultset ? resultset->rows_count : digest_umap->size();
 	int max_bulk_row_idx = num_rows / 32;

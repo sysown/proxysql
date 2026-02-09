@@ -1299,10 +1299,10 @@ bool is_task_finish(pgsql_conn_t& c, task_st_t& st) {
 }
 
 void update_connect_table(SQLite3DB* db, state_t& state) {
-	auto [rc1, stmt_unique] = db->prepare_v2(
+	auto [rc, stmt_unique] = db->prepare_v2(
 		"INSERT OR REPLACE INTO pgsql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)"
 	);
-	ASSERT_SQLITE_OK(rc1, db);
+	ASSERT_SQLITE_OK(rc, db);
 	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
@@ -1344,10 +1344,10 @@ void update_connect_table(SQLite3DB* db, state_t& state) {
 }
 
 void update_ping_table(SQLite3DB* db, state_t& state) {
-	auto [rc1, stmt_unique] = db->prepare_v2(
+	auto [rc, stmt_unique] = db->prepare_v2(
 		"INSERT OR REPLACE INTO pgsql_server_ping_log VALUES (?1, ?2, ?3, ?4, ?5)"
 	);
-	ASSERT_SQLITE_OK(rc1, db);
+	ASSERT_SQLITE_OK(rc, db);
 	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
@@ -1393,10 +1393,10 @@ void update_readonly_table(SQLite3DB* db, state_t& state) {
 		static_cast<readonly_res_t*>(state.task.op_st.op_result.get())
 	};
 
-	auto [rc1, stmt_unique] = db->prepare_v2(
+	auto [rc, stmt_unique] = db->prepare_v2(
 		"INSERT OR REPLACE INTO pgsql_server_read_only_log VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
 	);
-	ASSERT_SQLITE_OK(rc1, db);
+	ASSERT_SQLITE_OK(rc, db);
 	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
@@ -1935,8 +1935,8 @@ void* worker_thread(void* args) {
 }
 
 void maint_monitor_table(SQLite3DB* db, const char query[], const ping_params_t& params) {
-	auto [rc1, stmt_unique] = db->prepare_v2(query);
-	ASSERT_SQLITE_OK(rc1, db);
+	auto [rc, stmt_unique] = db->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc, db);
 	sqlite3_stmt* stmt = stmt_unique.get();
 
 	if (pgsql_thread___monitor_history < (params.interval * (params.max_failures + 1)) / 1000) {
