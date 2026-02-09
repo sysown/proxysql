@@ -2625,6 +2625,10 @@ void update_modules_metrics() {
 	if (PgHGM) {
 		PgHGM->p_update_metrics();
 	}
+	// Update pgsql_threads_handler metrics
+	if (GloPTH) {
+		GloPTH->p_update_metrics();
+	}
 	// Update monitor metrics
 	if (GloMyMon) {
 		GloMyMon->p_update_metrics();
@@ -2634,14 +2638,7 @@ void update_modules_metrics() {
 		GloMyQC->p_update_metrics();
 	}
 #if 0 // Turning off Prometheus metrics collection for PostgreSQL modules in ProxySQL
-	// Update pgsql_threads_handler metrics
-	if (GloPTH) {
-		GloPTH->p_update_metrics();
-	}
-	// Update pgsql_hostgroups_manager metrics
-	if (PgHGM) {
-		PgHGM->p_update_metrics();
-	}
+	// Note: Query Cache metrics use shared template base class and would collide between MySQL and PostgreSQL
 	// Update pgsql query_cache metrics
 	if (GloPgQC) {
 		GloPgQC->p_update_metrics();
