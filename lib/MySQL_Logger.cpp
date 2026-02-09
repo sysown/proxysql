@@ -1859,8 +1859,6 @@ void MySQL_Logger_CircularBuffer::setBufferSize(size_t newSize) {
 
 void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& tableName, size_t numEvents, std::vector<MySQL_Event*>::const_iterator begin){
 	int rc = 0;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement32=NULL;
 	char *query1=NULL;
 	char *query32=NULL;
 	const int numcols = 19;
@@ -1873,10 +1871,12 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 	query32s = "INSERT INTO " + tableName + coldefs + " VALUES " + generate_multi_rows_query(32, numcols);
 	query1  = (char *)query1s.c_str();
 	query32 = (char *)query32s.c_str();
-	rc = db->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, db);
-	rc = db->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, db);
+	auto [rc1, statement1_unique] = db->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, db);
+	auto [rc2, statement32_unique] = db->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, db);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 
 	char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
 
@@ -1944,8 +1944,6 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	db->execute("COMMIT");
 }
 
