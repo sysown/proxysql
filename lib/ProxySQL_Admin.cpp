@@ -6670,10 +6670,6 @@ void ProxySQL_Admin::save_pgsql_ldap_mapping_runtime_to_database(bool _runtime) 
 	admindb->execute(query);
 	resultset = GloMyLdapAuth->dump_table_pgsql_ldap_mapping();
 	if (resultset) {
-		int rc;
-		sqlite3_stmt* statement1 = NULL;
-		sqlite3_stmt* statement8 = NULL;
-		//sqlite3 *mydb3=admindb->get_db();
 		char* query1 = NULL;
 		char* query8 = NULL;
 		std::string query8s = "";
@@ -6687,12 +6683,13 @@ void ProxySQL_Admin::save_pgsql_ldap_mapping_runtime_to_database(bool _runtime) 
 			query8s = "INSERT INTO pgsql_ldap_mapping VALUES " + generate_multi_rows_query(8, 4);
 			query8 = (char*)query8s.c_str();
 		}
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = admindb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, admindb);
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query8, -1, &statement8, 0);
-		rc = admindb->prepare_v2(query8, &statement8);
-		ASSERT_SQLITE_OK(rc, admindb);
+		auto [rc1, statement1_unique] = admindb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, admindb);
+		auto [rc2, statement8_unique] = admindb->prepare_v2(query8);
+		ASSERT_SQLITE_OK(rc2, admindb);
+		sqlite3_stmt* statement1 = statement1_unique.get();
+		sqlite3_stmt* statement8 = statement8_unique.get();
+		int rc;
 		int row_idx = 0;
 		int max_bulk_row_idx = resultset->rows_count / 8;
 		max_bulk_row_idx = max_bulk_row_idx * 8;
@@ -6721,8 +6718,6 @@ void ProxySQL_Admin::save_pgsql_ldap_mapping_runtime_to_database(bool _runtime) 
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement8);
 	}
 	if (resultset) delete resultset;
 	resultset = NULL;
@@ -6912,10 +6907,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	admindb->execute(query);
 	resultset=MyHGM->dump_table_mysql("mysql_servers");
 	if (resultset) {
-		int rc;
-		sqlite3_stmt *statement1=NULL;
-		sqlite3_stmt *statement32=NULL;
-
 		char *query1=NULL;
 		char *query32=NULL;
 		std::string query32s = "";
@@ -6929,11 +6920,13 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			query32 = (char *)query32s.c_str();
 		}
 
-		rc = admindb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, admindb);
-		rc = admindb->prepare_v2(query32, &statement32);
-		ASSERT_SQLITE_OK(rc, admindb);
-
+		auto [rc1, statement1_unique] = admindb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, admindb);
+		auto [rc2, statement32_unique] = admindb->prepare_v2(query32);
+		ASSERT_SQLITE_OK(rc2, admindb);
+		sqlite3_stmt *statement1 = statement1_unique.get();
+		sqlite3_stmt *statement32 = statement32_unique.get();
+		int rc;
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
 		max_bulk_row_idx=max_bulk_row_idx*32;
@@ -6977,8 +6970,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
