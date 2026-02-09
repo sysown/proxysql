@@ -82,7 +82,7 @@ services:
   fedora42_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-fedora42-v3.0.3
+    image: proxysql/packaging:build-fedora42-v4.0.0
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -95,7 +95,7 @@ services:
   fedora42_clang_build:
     extends:
       service: fedora42_build
-    image: proxysql/packaging:build-clang-fedora42-v3.0.3
+    image: proxysql/packaging:build-clang-fedora42-v4.0.0
     environment:
       - PKG_RELEASE=fedora42-clang
 
@@ -110,7 +110,7 @@ services:
   fedora43_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-fedora43-v3.0.6
+    image: proxysql/packaging:build-fedora43-v4.0.0
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
@@ -123,7 +123,7 @@ services:
   fedora43_clang_build:
     extends:
       service: fedora43_build
-    image: proxysql/packaging:build-clang-fedora43-v3.0.6
+    image: proxysql/packaging:build-clang-fedora43-v4.0.0
     environment:
       - PKG_RELEASE=fedora43-clang
 
