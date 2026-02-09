@@ -336,12 +336,14 @@ void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, 
 	auto [rc1, statement1_unique] = db->prepare_v2(a);
 	ASSERT_SQLITE_OK(rc1, db);
 	sqlite3_stmt* statement1 = statement1_unique.get();
+	SQLite3DB::stmt_unique_ptr statement2_unique;  // Function scope to avoid dangling pointer
 	sqlite3_stmt* statement2 = NULL;
 	if (runtime) {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'");
 		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-		auto [rc2, statement2_unique] = db->prepare_v2(b);
+		auto [rc2, stmt_temp] = db->prepare_v2(b);
 		ASSERT_SQLITE_OK(rc2, db);
+		statement2_unique = std::move(stmt_temp);
 		statement2 = statement2_unique.get();
 	}
 	if (use_lock) {
@@ -1008,12 +1010,14 @@ void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, 
 	auto [rc1, statement1_unique] = db->prepare_v2(a);
 	ASSERT_SQLITE_OK(rc1, db);
 	sqlite3_stmt* statement1 = statement1_unique.get();
+	SQLite3DB::stmt_unique_ptr statement2_unique;  // Function scope to avoid dangling pointer
 	sqlite3_stmt* statement2 = NULL;
 	if (runtime) {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'genai-%'");
 		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-		auto [rc2, statement2_unique] = db->prepare_v2(b);
+		auto [rc2, stmt_temp] = db->prepare_v2(b);
 		ASSERT_SQLITE_OK(rc2, db);
+		statement2_unique = std::move(stmt_temp);
 		statement2 = statement2_unique.get();
 	}
 	if (use_lock) {
@@ -1141,13 +1145,15 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	auto [rc1, statement1_unique] = db->prepare_v2(a);
 	ASSERT_SQLITE_OK(rc1, db);
 	sqlite3_stmt *statement1 = statement1_unique.get();
+	SQLite3DB::stmt_unique_ptr statement2_unique;  // Function scope to avoid dangling pointer
 	sqlite3_stmt *statement2 = NULL;
 	if (runtime)  {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 
-		auto [rc2, statement2_unique] = db->prepare_v2(b);
+		auto [rc2, stmt_temp] = db->prepare_v2(b);
 		ASSERT_SQLITE_OK(rc2, db);
+		statement2_unique = std::move(stmt_temp);
 		statement2 = statement2_unique.get();
 	}
 	if (use_lock) {
