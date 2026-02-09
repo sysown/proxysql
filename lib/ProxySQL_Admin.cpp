@@ -6511,8 +6511,6 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 	if (num_users == 0) return;
 	char* q_stmt1_f = NULL;
 	char* q_stmt1_b = NULL;
-	sqlite3_stmt* f_statement1 = NULL;
-	sqlite3_stmt* b_statement1 = NULL;
 	//sqlite3 *mydb3=admindb->get_db();
 	if (_runtime) {
 		q_stmt1_f = qfr_stmt1;
@@ -6522,12 +6520,13 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 		q_stmt1_f = qf_stmt1;
 		q_stmt1_b = qb_stmt1;
 	}
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q_stmt1_f, -1, &f_statement1, 0);
-	rc = admindb->prepare_v2(q_stmt1_f, &f_statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q_stmt1_b, -1, &b_statement1, 0);
-	rc = admindb->prepare_v2(q_stmt1_b, &b_statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
+	auto [rc1, f_statement1_unique] = admindb->prepare_v2(q_stmt1_f);
+	ASSERT_SQLITE_OK(rc1, admindb);
+	auto [rc2, b_statement1_unique] = admindb->prepare_v2(q_stmt1_b);
+	ASSERT_SQLITE_OK(rc2, admindb);
+	sqlite3_stmt* f_statement1 = f_statement1_unique.get();
+	sqlite3_stmt* b_statement1 = b_statement1_unique.get();
+	int rc;
 	for (i = 0; i < num_users; i++) {
 		//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
 		pgsql_account_details_t* ad = ads[i];
@@ -6586,10 +6585,6 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 		free(ad->attributes);
 		free(ad);
 	}
-	if (_runtime) {
-		(*proxy_sqlite3_finalize)(f_statement1);
-		(*proxy_sqlite3_finalize)(b_statement1);
-	}
 	free(ads);
 }
 
@@ -6608,10 +6603,6 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 	admindb->execute(query);
 	resultset=GloMyLdapAuth->dump_table_mysql_ldap_mapping();
 	if (resultset) {
-		int rc;
-		sqlite3_stmt *statement1=NULL;
-		sqlite3_stmt *statement8=NULL;
-		//sqlite3 *mydb3=admindb->get_db();
 		char *query1=NULL;
 		char *query8=NULL;
 		std::string query8s = "";
@@ -6624,10 +6615,13 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 			query8s = "INSERT INTO mysql_ldap_mapping VALUES " + generate_multi_rows_query(8,4);
 			query8 = (char *)query8s.c_str();
 		}
-		rc = admindb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, admindb);
-		rc = admindb->prepare_v2(query8, &statement8);
-		ASSERT_SQLITE_OK(rc, admindb);
+		auto [rc1, statement1_unique] = admindb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, admindb);
+		auto [rc2, statement8_unique] = admindb->prepare_v2(query8);
+		ASSERT_SQLITE_OK(rc2, admindb);
+		sqlite3_stmt *statement1 = statement1_unique.get();
+		sqlite3_stmt *statement8 = statement8_unique.get();
+		int rc;
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/8;
 		max_bulk_row_idx=max_bulk_row_idx*8;
@@ -6655,8 +6649,6 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement8);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
