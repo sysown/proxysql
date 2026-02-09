@@ -1202,11 +1202,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_memory_metrics=false;
 	bool stats_mysql_commands_counters=false;
 	bool stats_pgsql_commands_counters = false;
+#ifdef PROXYSQLGENAI
 	bool stats_mcp_query_tools_counters = false;
 	bool stats_mcp_query_tools_counters_reset = false;
 	bool stats_mcp_query_digest = false;
 	bool stats_mcp_query_digest_reset = false;
 	bool stats_mcp_query_rules = false;
+#endif
 	bool stats_mysql_query_rules=false;
 	bool stats_pgsql_query_rules = false;
 	bool stats_mysql_users=false;
@@ -1234,7 +1236,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_pgsql_query_rules = false;
 	bool runtime_pgsql_query_rules_fast_routing = false;
 
+#ifdef PROXYSQLGENAI
 	bool runtime_mcp_query_rules = false;
+#endif
 
 	bool stats_pgsql_global = false;
 	bool stats_pgsql_connection_pool = false;
@@ -1398,6 +1402,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_proxysql_message_metrics=true; refresh=true; }
 	if (strstr(query_no_space,"stats_proxysql_message_metrics_reset"))
 		{ stats_proxysql_message_metrics_reset=true; refresh=true; }
+#ifdef PROXYSQLGENAI
 	if (strstr(query_no_space,"stats_mcp_query_tools_counters"))
 		{ stats_mcp_query_tools_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mcp_query_tools_counters_reset"))
@@ -1408,6 +1413,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mcp_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mcp_query_rules"))
 		{ stats_mcp_query_rules=true; refresh=true; }
+#endif
 
 	// temporary disabled because not implemented
 /*
@@ -1494,9 +1500,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (strstr(query_no_space, "runtime_pgsql_query_rules_fast_routing")) {
 				runtime_pgsql_query_rules_fast_routing = true; refresh = true;
 			}
+#ifdef PROXYSQLGENAI
 			if (strstr(query_no_space, "runtime_mcp_query_rules")) {
 				runtime_mcp_query_rules = true; refresh = true;
 			}
+#endif
 			if (strstr(query_no_space,"runtime_scheduler")) {
 				runtime_scheduler=true; refresh=true;
 			}

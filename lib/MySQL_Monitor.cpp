@@ -105,7 +105,7 @@ class ConsumerThread : public Thread {
 	int thrn;
 	char thr_name[16];
 	public:
-	ConsumerThread(wqueue<WorkItem<T>*>& queue, int _n, char thread_name[16]=NULL) : m_queue(queue) {
+	ConsumerThread(wqueue<WorkItem<T>*>& queue, int _n, const char *thread_name=NULL) : m_queue(queue) {
 		thrn=_n;
 		if (thread_name && thread_name[0]) {
 			snprintf(thr_name, sizeof(thr_name), "%.16s", thread_name);

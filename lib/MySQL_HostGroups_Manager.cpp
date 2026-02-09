@@ -3783,8 +3783,8 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 				if (mysrvc->port==port && strcmp(mysrvc->address,hostname)==0) {
 					enum MySerStatus prev_status = mysrvc->get_status();
 					if (prev_status != status) {
-						char *src_status = "?"; // this shouldn't display
-						char *dst_status = "?"; // this shouldn't display
+						const char *src_status = "?"; // this shouldn't display
+						const char *dst_status = "?"; // this shouldn't display
 						if (prev_status == MYSQL_SERVER_STATUS_ONLINE) { src_status = "ONLINE"; }
 						else if (prev_status == MYSQL_SERVER_STATUS_OFFLINE_SOFT) { src_status = "OFFLINE_SOFT"; }
 						else if (prev_status == MYSQL_SERVER_STATUS_SHUNNED) { src_status = "SHUNNED"; };
