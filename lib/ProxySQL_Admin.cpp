@@ -2621,6 +2621,10 @@ void update_modules_metrics() {
 	if (MyHGM) {
 		MyHGM->p_update_metrics();
 	}
+	// Update pgsql_hostgroups_manager metrics
+	if (PgHGM) {
+		PgHGM->p_update_metrics();
+	}
 	// Update monitor metrics
 	if (GloMyMon) {
 		GloMyMon->p_update_metrics();
