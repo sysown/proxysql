@@ -2465,9 +2465,9 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 
 					MYSQL_ROW row;
 					char *q = (char *)"INSERT OR REPLACE INTO global_variables (variable_name, variable_value) VALUES (?1 , ?2)";
-					sqlite3_stmt *statement1 = NULL;
-					int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
-					ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+					auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+					ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
+					sqlite3_stmt *statement1 = statement1_unique.get();
 
 					while ((row = mysql_fetch_row(result))) {
 						rc=(*proxy_sqlite3_bind_text)(statement1, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // variable_name
@@ -2477,7 +2477,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 						rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 					}
-
+					// RAII auto-finalizes statement1
 					mysql_free_result(result);
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime %s Variables from peer %s:%d\n", vars_type_str, hostname, port);
 					proxy_info("Cluster: Loading to runtime %s Variables from peer %s:%d\n", vars_type_str, hostname, port);
