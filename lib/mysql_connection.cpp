@@ -456,6 +456,8 @@ MySQL_Connection::MySQL_Connection() {
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.session_track_gtids_int=0;
+	options.server_capabilities=0;
+
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -729,6 +731,40 @@ unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_
 	return ret;
 }
 
+bool MySQL_Connection::match_ff_req_options(const MySQL_Connection *c) {
+	// 'server_capabilities' is empty for backend connections
+	const MySQL_Connection* backend { !c->options.server_capabilities ? c : this };
+	const MySQL_Connection* frontend { c->options.server_capabilities ? c : this };
+
+	// Only required to be checked for fast_forward sessions
+	if (frontend->myds && frontend->myds->sess->session_fast_forward) {
+		bool ret = (frontend->options.client_flag & CLIENT_DEPRECATE_EOF) ==
+				(backend->mysql->server_capabilities & CLIENT_DEPRECATE_EOF);
+		if (ret == false) {
+			if (frontend->myds && frontend->myds->PSarrayIN) {
+				PtrSizeArray * PSarrayIN = frontend->myds->PSarrayIN;
+				if (PSarrayIN->len == 1) {
+					PtrSize_t pkt = PSarrayIN->pdata[0];
+					if (pkt.size >= 5) {
+						unsigned char c = *reinterpret_cast<unsigned char*>(static_cast<char*>(pkt.ptr) + 4);
+						switch ((enum_mysql_command)c) {
+							case _MYSQL_COM_BINLOG_DUMP:
+							case _MYSQL_COM_BINLOG_DUMP_GTID:
+							case _MYSQL_COM_REGISTER_SLAVE:
+								ret = true;
+								break;
+							default:
+								break;
+						};
+					}
+				}
+			}
+		}
+		return ret;
+	} else {
+		return true;
+	}
+}
 
 bool MySQL_Connection::match_tracked_options(const MySQL_Connection *c) {
 	uint32_t cf1 = options.client_flag; // own client flags
@@ -2943,7 +2979,7 @@ void MySQL_Connection::optimize() {
 // if avoids that a QUIT command stops forever
 // FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if ((send_quit) && (mysql->net.pvio) && ret_mysql) {
+	if ((send_quit) && (mysql->net.pvio) && ret_mysql && !mysql->options.use_ssl) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;

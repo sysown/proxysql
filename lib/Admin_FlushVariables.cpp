@@ -25,6 +25,14 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
+#include "MCP_Thread.h"
+#include "MySQL_Tool_Handler.h"
+#include "Query_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
+#include "Admin_Tool_Handler.h"
+#include "Cache_Tool_Handler.h"
+#include "Observe_Tool_Handler.h"
+#include "ProxySQL_MCP_Server.hpp"
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
@@ -42,6 +50,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "GenAI_Thread.h"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -135,6 +144,12 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+
+#ifdef PROXYSQLGENAI
+extern MCP_Threads_Handler* GloMCPH;
+extern GenAI_Threads_Handler* GloGATH;
+extern AI_Features_Manager *GloAI;
+#endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
 
@@ -431,7 +446,15 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		assert(previous_default_charset);
 		assert(previous_default_collation_connection);
 		flush_GENERIC_variables__process__database_to_runtime("mysql", db, resultset, false, replace, {}, {"session_debug"}, {"forward_autocommit"},
-			{"default_collation_connection", "default_charset", "show_processlist_extended"},
+			{
+				"default_collation_connection",
+				"default_charset",
+				"show_processlist_extended",
+#ifdef IDLE_THREADS
+				"session_idle_show_processlist",
+#endif // IDLE_THREADS
+				"processlist_max_query_length"
+			},
 			[](const std::string& varname, const char *varvalue, SQLite3DB* db) {
 				if (varname == "default_collation_connection" || varname == "default_charset") {
 					char *val=GloMTH->get_variable((char *)varname.c_str());
@@ -445,10 +468,16 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						free(val);
 					}
 				} else if (varname == "show_processlist_extended") {
-					GloAdmin->variables.mysql_show_processlist_extended = atoi(varvalue);
+					GloAdmin->variables.mysql_processlist.show_extended = atoi(varvalue);
+#ifdef IDLE_THREADS
+				} else if (varname == "session_idle_show_processlist") {
+					GloAdmin->variables.mysql_processlist.show_idle_session = atoi(varvalue);
+#endif // IDLE_THREADS
+				} else if (varname == "processlist_max_query_length") {
+					GloAdmin->variables.mysql_processlist.max_query_length = atoi(varvalue);
 				}
 			}
-			);
+		);
 		char q[1000];
 		char * default_charset = GloMTH->get_variable_string((char *)"default_charset");
 		char * default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
@@ -531,6 +560,36 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.
+		 *
+		 * This safety check warns users when mysql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @recommendation Always set mysql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int mysql_use_tcp_keepalive = GloMTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (mysql_use_tcp_keepalive == 0) {
+			proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
 		}
 	}
 	if (resultset) delete resultset;
@@ -734,9 +793,7 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 		return;
 	}
 	else {
-		GloPTH->wrlock();
-		const char* previous_default_client_encoding = GloPTH->get_variable_string((char*)"default_client_encoding");
-		assert(previous_default_client_encoding);		
+		GloPTH->wrlock();	
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 			const char* value = r->fields[1];
@@ -794,7 +851,13 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0], value);
 				if (strcmp(r->fields[0], (char*)"show_processlist_extended") == 0) {
-					variables.pgsql_show_processlist_extended = atoi(value);
+					variables.pgsql_processlist.show_extended = atoi(value);
+#ifdef IDLE_THREADS
+				} else if (strcmp(r->fields[0], (char*)"session_idle_show_processlist") == 0) {
+					variables.pgsql_processlist.show_idle_session = atoi(value);
+#endif // IDLE_THREADS
+				} else if (strcmp(r->fields[0], (char*)"processlist_max_query_length") == 0) {
+					variables.pgsql_processlist.max_query_length = atoi(value);
 				}
 			}
 			//			}
@@ -864,9 +927,182 @@ void ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(SQLite3DB* db, 
 			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
 		);
 		*/
+	
+		/**
+		 * @brief Check and warn if TCP keepalive is disabled for PostgreSQL connections.
+		 *
+		 * This safety check warns users when pgsql-use_tcp_keepalive is set to false,
+		 * which can cause connection instability in certain deployment scenarios.
+		 *
+		 * @warning Disabling TCP keepalive is unsafe when ProxySQL is deployed behind:
+		 *   - Network load balancers with idle connection timeouts
+		 *   - NAT firewalls with connection state timeout
+		 *   - Cloud environments with connection pooling
+		 *   - Any intermediate network device that drops idle connections
+		 *
+		 * @why_unsafe TCP keepalive sends periodic keep-alive packets on idle connections.
+		 * When disabled for PostgreSQL:
+		 *   - Load balancers may drop connections from their connection pools
+		 *   - NAT devices may remove connection state from their tables
+		 *   - Cloud load balancers (AWS ELB, GCP Load Balancer, etc.) may terminate
+		 *     connections during idle periods
+		 *   - PostgreSQL connections may appear "stale" to the database server
+		 *   - Results in sudden connection failures and "connection reset" errors
+		 *   - Can cause application downtime and poor user experience
+		 *
+		 * @note PostgreSQL connections are often long-lived and benefit greatly from
+		 * TCP keepalive, especially in connection-pooled environments.
+		 *
+		 * @recommendation Always set pgsql-use_tcp_keepalive=true when deploying
+		 * behind load balancers or in cloud environments.
+		 */
+		// Check for TCP keepalive setting and warn if disabled
+		int pgsql_use_tcp_keepalive = GloPTH->get_variable_int((char *)"use_tcp_keepalive");
+		if (pgsql_use_tcp_keepalive == 0) {
+			proxy_warning("pgsql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
+		}
 	}
 	if (resultset) delete resultset;
 }
+
+#ifdef PROXYSQLGENAI
+// GenAI Variables Flush Functions
+void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (onlyifempty) {
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'genai-%'";
+		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		int matching_rows = 0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		}
+		else {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
+				matching_rows += atoi(r->fields[0]);
+			}
+		}
+		if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has GenAI variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting GenAI variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'genai-%'");
+	}
+	static char* a;
+	static char* b;
+	if (replace) {
+		a = (char*)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	else {
+		a = (char*)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	}
+	int rc;
+	sqlite3_stmt* statement1 = NULL;
+	sqlite3_stmt* statement2 = NULL;
+	rc = db->prepare_v2(a, &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'genai-%'");
+		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+		rc = db->prepare_v2(b, &statement2);
+		ASSERT_SQLITE_OK(rc, db);
+	}
+	if (use_lock) {
+		GloGATH->wrlock();
+		db->execute("BEGIN");
+	}
+	char** varnames = GloGATH->get_variables_list();
+	for (int i = 0; varnames[i]; i++) {
+		char* val = GloGATH->get_variable(varnames[i]);
+		char* qualified_name = (char*)malloc(strlen(varnames[i]) + 10);
+		sprintf(qualified_name, "genai-%s", varnames[i]);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+		if (runtime) {
+			rc = (*proxy_sqlite3_bind_text)(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(statement2, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			SAFE_SQLITE3_STEP2(statement2);
+			rc = (*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, db);
+		}
+		if (val)
+			free(val);
+		free(qualified_name);
+	}
+	if (use_lock) {
+		db->execute("COMMIT");
+		GloGATH->wrunlock();
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	if (runtime)
+		(*proxy_sqlite3_finalize)(statement2);
+	for (int i = 0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+}
+
+void ProxySQL_Admin::flush_genai_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing GenAI variables. Replace:%d\n", replace);
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'genai-%'";
+	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	}
+	if (resultset) {
+		if (lock) wrlock();
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			char* name = r->fields[0];
+			char* val = r->fields[1];
+			// Skip the 'genai-' prefix
+			char* var_name = name + 6;
+			GloGATH->set_variable(var_name, val);
+		}
+
+		// Populate runtime_global_variables
+		{
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			wrunlock();  // Release outer lock before calling runtime_to_database
+			flush_genai_variables___runtime_to_database(admindb, false, false, false, true, true);
+			wrlock();  // Re-acquire outer lock
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		// Check if LLM bridge needs to be initialized
+		if (GloAI && GloGATH->variables.genai_llm_enabled && !GloAI->get_llm_bridge()) {
+			proxy_info("LLM bridge enabled but not initialized, initializing now\n");
+			if (GloAI->init_llm_bridge() != 0) {
+				proxy_error("Failed to initialize LLM bridge\n");
+			}
+		}
+
+		if (GloAI && GloGATH->variables.genai_enabled) {
+			GloAI->init();
+		}
+
+		if (lock) wrunlock();
+	}
+	if (resultset) delete resultset;
+}
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
@@ -1109,5 +1345,153 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 		free(varnames[i]);
 	}
 	free(varnames);
-
 }
+
+#ifdef PROXYSQLGENAI
+// MCP (Model Context Protocol) VARIABLES
+void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum, const time_t epoch, bool lock) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d\n", replace);
+	if (GloMCPH == NULL) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
+		return;
+	}
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	}
+	if (resultset) {
+		if (lock) wrlock();
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			char* name = r->fields[0];
+			char* val = r->fields[1];
+			// Skip the 'mcp-' prefix
+			char* var_name = name + 4;
+			GloMCPH->set_variable(var_name, val);
+		}
+
+		// Populate runtime_global_variables
+		// Note: Checksum generation is skipped for MCP until the feature is complete
+		{
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			wrunlock();  // Release outer lock before calling runtime_to_database
+			flush_mcp_variables___runtime_to_database(admindb, false, false, false, true, true);
+			wrlock();  // Re-acquire outer lock
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
+		// Manage MCP server state
+		load_mcp_server();
+
+		if (lock) wrunlock();
+		delete resultset;
+	}
+}
+
+void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	proxy_info("MCP: flush_mcp_variables___runtime_to_database called. runtime=%d, use_lock=%d\n", runtime, use_lock);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MCP variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (GloMCPH == NULL) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "MCP handler not initialized, skipping MCP variables\n");
+		return;
+	}
+	if (onlyifempty) {
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		int matching_rows = 0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		}
+		else {
+			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row* r = *it;
+				matching_rows += atoi(r->fields[0]);
+			}
+		}
+		if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has MCP variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MCP variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mcp-%'");
+	}
+	static char* a;
+	static char* b;
+	if (replace) {
+		a = (char*)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"mcp-%s\",\"%s\")";
+	}
+	else {
+		a = (char*)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"mcp-%s\",\"%s\")";
+	}
+	b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"%s\",\"%s\")";
+	int rc;
+	sqlite3_stmt* statement1 = NULL;
+	rc = db->prepare_v2("REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)", &statement1);
+	ASSERT_SQLITE_OK(rc, db);
+
+	if (use_lock) {
+		GloMCPH->wrlock();
+	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
+	}
+	char** varnames = GloMCPH->get_variables_list();
+	int var_count = 0;
+	for (int i = 0; varnames[i]; i++) {
+		var_count++;
+	}
+	proxy_info("MCP: Processing %d variables\n", var_count);
+	for (int i = 0; varnames[i]; i++) {
+		char val[256];
+		GloMCPH->get_variable(varnames[i], val);
+		char* qualified_name = (char*)malloc(strlen(varnames[i]) + 8);
+		sprintf(qualified_name, "mcp-%s", varnames[i]);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 2, (val ? val : (char*)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+		if (runtime) {
+			if (i < 3) {
+				proxy_info("MCP: Inserting variable %d: %s = %s\n", i, qualified_name, val);
+			}
+			// Use db->execute() for runtime_global_variables like admin version does
+			// qualified_name already contains the mcp- prefix, so we use %s without prefix
+			int l = strlen(qualified_name) + strlen(val) + 100;
+			char* query = (char*)malloc(l);
+			sprintf(query, b, qualified_name, val);
+			if (i < 3) {
+				proxy_info("MCP: Executing SQL: %s\n", query);
+			}
+			db->execute(query);
+			free(query);
+		}
+		free(qualified_name);
+	}
+	proxy_info("MCP: Finished processing %d variables\n", var_count);
+
+	if (use_lock) {
+		proxy_info("MCP: Releasing lock\n");
+		GloMCPH->wrunlock();
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	for (int i = 0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+}
+#endif /* PROXYSQLGENAI */

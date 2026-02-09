@@ -1201,6 +1201,7 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
+	MYSQL_QUERY(mysql_server, "CREATE DATABASE IF NOT EXISTS test");
 
 	for (const auto& test_fn : tests_fns) {
 		int test_res = EXIT_FAILURE;

@@ -5,6 +5,8 @@
 #include <prometheus/gauge.h>
 
 #include "proxysql.h"
+#include "proxysql_admin.h"
+
 #include "Base_Thread.h"
 #include "ProxySQL_Poll.h"
 #include "PgSQL_Variables.h"
@@ -44,7 +46,6 @@ constexpr const char* AUTHENTICATION_METHOD_STR[] = {
 #define SQLITE_HOSTGROUP -4
 
 
-#define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
 #define MYSQL_DEFAULT_MAX_JOIN_SIZE	"18446744073709551615"
@@ -60,22 +61,34 @@ typedef struct __attribute__((aligned(64))) _pgsql_conn_exchange_t {
 } pgsql_conn_exchange_t;
 #endif // IDLE_THREADS
 
-typedef struct _pgsql_thr_id_username_t {
-	uint32_t id;
-	char* username;
-} pgsql_thr_id_username;
+typedef struct PgSQL_Session_Interrupt {
+	uint32_t thread_id;    // Target session
+	uint32_t secret_key;   // Auth via shared secret (authentication)
+	std::unique_ptr<char, decltype(&free)> username;  // Auth via user identity (authorization)
 
-typedef struct _pgsql_kill_queue_t {
+	// Constructor for key
+	PgSQL_Session_Interrupt(uint32_t tid, uint32_t key)
+		: thread_id(tid), secret_key(key), username(nullptr, &free) {
+	}
+
+	// Constructor for username
+	PgSQL_Session_Interrupt(uint32_t tid, const char* user)
+		: thread_id(tid), secret_key(0), username((user ? strdup(user) : nullptr), &free) {
+	}
+} PgSQL_Session_Interrupt_t;
+
+typedef struct PgSQL_Session_Interrupt_Queue_t {
 	pthread_mutex_t m;
-	std::vector<thr_id_usr*> conn_ids;
-	std::vector<thr_id_usr*> query_ids;
-} pgsql_kill_queue;
+	std::vector<PgSQL_Session_Interrupt_t> conn_ids;
+	std::vector<PgSQL_Session_Interrupt_t> query_ids;
+} PgSQL_Session_Interrupt_Queue_t;
 
 enum PgSQL_Thread_status_variable {
 	/*st_var_backend_stmt_prepare,
 	st_var_backend_stmt_execute,
 	st_var_backend_stmt_close,
 	st_var_frontend_stmt_prepare,
+	st_var_frontend_stmt_describe,
 	st_var_frontend_stmt_execute,
 	st_var_frontend_stmt_close,
 	st_var_queries,
@@ -176,7 +189,7 @@ private:
 	/**
 	 * @brief Processes kill requests from the thread's kill queues.
 	 *
-	 * @details This function checks the thread's kill queues (`kq.conn_ids` and `kq.query_ids`)
+	 * @details This function checks the thread's kill queues (`sess_intrpt_queue.conn_ids` and `sess_intrpt_queue.query_ids`)
 	 * for any pending kill requests. If there are any requests, it calls `Scan_Sessions_to_Kill_All()`
 	 * to iterate through all session arrays across all threads and identify sessions that match
 	 * the kill requests. The `killed` flag is set to true for matching sessions. After processing
@@ -220,7 +233,7 @@ public:
 #endif // IDLE_THREADS
 
 	int pipefd[2];
-	kill_queue_t kq;
+	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
 
 	//bool epoll_thread;
 	bool poll_timeout_bool;
@@ -633,13 +646,63 @@ public:
 	void return_local_connections();
 
 	/**
+     * Pseudocode (plan)
+     * - For each pending connection-termination request (conn_ids):
+     *   - If request.thread_id != sess.thread_session_id: continue.
+     *   - If request.username is present AND session has a connected frontend user:
+     *     - If request.username == session.frontend_user:
+     *       - Log info, mark session as killed.
+     *   - Erase the processed request from the queue.
+     *   - Break (at most one matching request per session).
+     * - Return sess->killed (true if this function marked it or it was already marked).
+     */
+
+	/**
+	 * @brief Handle session termination requests targeting the given session.
+	 *
+	 * @details
+	 * Scans the provided connection-termination queue for a request matching the
+	 * specified session. If a matching request is found and the request carries a
+	 * username that matches the authenticated frontend user of the session, the
+	 * session is marked for termination (sess->killed = true) 
+	 *
+	 * @param sess The session potentially targeted for termination.
+	 * @return true if the session is (now) marked as killed, false otherwise.
+	 */
+	bool Scan_Sessions_to_Kill___handle_session_termination(PgSQL_Session* sess);
+
+	/**
+	 * - Iterate over query_ids:
+	 *   - If request.thread_id != sess->thread_session_id: continue
+	 *   - Determine authorization method:
+	 *     - If request.username is null: authenticate via secret_key == sess->cancel_secret_key
+	 *     - Else: authorize via username == session frontend user
+	 *   - If authorized and session has a backend server_myds:
+	 *     - Log the request
+	 *     - Set server_myds->wait_until = curtime to wake processing loop
+	 *     - Set server_myds->kill_type = 1 to request backend cancellation
+	 *     - Mark canceled_query = true
+	 *   - Erase the processed request from query_ids
+	 *   - Break (process at most one request per call)
+	 * - Return canceled_query
+	*/
+
+	/**
+	 * @brief Handle query cancellation requests for the given session.
+	 *
+	 * @param sess       Target session that may have a running query to cancel.
+	 * @return true if a cancellation was scheduled for this session; false otherwise.
+	 */
+	bool Scan_Sessions_to_Kill___handle_query_cancellation(PgSQL_Session* sess);
+
+	/**
 	 * @brief Iterates through a session array to identify and kill sessions.
 	 *
 	 * @param mysess A pointer to the `PtrArray` containing the sessions to scan.
 	 *
 	 * @details This function iterates through the specified session array and checks
-	 * each session against the thread's kill queues (`kq.conn_ids` and
-	 * `kq.query_ids`). If a session matches a kill request, its `killed` flag is set
+	 * each session against the thread's kill queues (`sess_intrpt_queue.conn_ids` and
+	 * `sess_intrpt_queue.query_ids`). If a session matches a kill request, its `killed` flag is set
 	 * to true. The kill queues are then updated to remove the processed kill
 	 * requests.
 	 *
@@ -654,7 +717,7 @@ public:
 	 *
 	 * @details This function iterates through all session arrays across different threads, including main worker threads and idle threads.
 	 * It calls `Scan_Sessions_to_Kill()` for each session array to check for kill requests.
-	 * The kill queues (`kq.conn_ids` and `kq.query_ids`) are cleared after processing all kill requests.
+	 * The kill queues (`sess_intrpt_queue.conn_ids` and `sess_intrpt_queue.query_ids`) are cleared after processing all kill requests.
 	 *
 	 * @note This function is called by `PgSQL_Threads_Handler::kill_connection_or_query()` to kill sessions based on kill requests.
 	 *
@@ -887,10 +950,8 @@ public:
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
-		int show_processlist_extended;
 #ifdef IDLE_THREADS
 		int session_idle_ms;
-		bool session_idle_show_processlist;
 #endif // IDLE_THREADS
 		bool sessions_sort;
 		char* default_schema;
@@ -956,13 +1017,11 @@ public:
 		char* init_connect;
 		char* ldap_user_variable;
 		char* add_ldap_user_comment;
-		char* default_session_track_gtids;
-		char* default_variables[PGSQL_NAME_LAST_HIGH_WM];
+		char* default_variables[PGSQL_NAME_LAST_LOW_WM];
 		char* firewall_whitelist_errormsg;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
-		uint32_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
 		char* eventslog_filename;
@@ -988,15 +1047,25 @@ public:
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
-		bool client_session_track_gtid;
-		bool enable_client_deprecate_eof;
-		bool enable_server_deprecate_eof;
-		bool enable_load_data_local_infile;
-		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
-		int handle_warnings;
 		char* server_version;
 		char* server_encoding;
+		/**
+		 *   The processlist variables are logically group under "pgsql-" variables
+		 *   and they are kept under PgSQL_Threads_Handler.
+		 *
+		 *   Other than configuration load/save or sync activities, these variables
+		 *   are not utilized by PTH or PgSQL_Thread for any other purpose and hence
+		 *   they are not associated with thread-local variables.
+		 *
+		 *   At runtime, ProxySQL_Admin keeps a copy of these variables and uses them
+		 *   when collecting stats for stats_pgsql_processlist.
+		 */
+#ifdef IDLE_THREADS
+		bool session_idle_show_processlist;
+#endif
+		int show_processlist_extended;
+		int processlist_max_query_length;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -1259,23 +1328,6 @@ public:
 	char* get_variable_string(char* name);
 
 	/**
-	 * @brief Retrieves the value of a thread variable as a uint16_t.
-	 *
-	 * @param name The name of the variable to retrieve.
-	 *
-	 * @return The value of the variable as a uint16_t, or 0 if the variable is not found
-	 * or its value is not a valid uint16_t.
-	 *
-	 * @details This function retrieves the value of a thread variable as a uint16_t. It checks
-	 * if the variable exists and then converts its value to a uint16_t. If the variable is
-	 * not found or its value is not a valid uint16_t, it returns 0.
-	 *
-	 * @note This function is used internally by the `get_variable()` function to retrieve
-	 * the value of a variable as a uint16_t.
-	 */
-	uint16_t get_variable_uint16(char* name);
-
-	/**
 	 * @brief Retrieves the value of a thread variable as an integer.
 	 *
 	 * @param name The name of the variable to retrieve.
@@ -1463,6 +1515,8 @@ public:
 	/**
 	 * @brief Retrieves a process list for all threads in the thread pool.
 	 *
+	 * @param args Processlist configuration of PgSQL.
+	 *
 	 * @return A `SQLite3_result` object containing the process list, or `NULL` if an error
 	 * occurred.
 	 *
@@ -1475,7 +1529,7 @@ public:
 	 * object, allowing administrators to monitor active sessions and their status.
 	 *
 	 */
-	SQLite3_result* SQL3_Processlist();
+	SQLite3_result* SQL3_Processlist(processlist_config_t args);
 
 	/**
 	 * @brief Retrieves global status information for the thread pool.
@@ -1639,14 +1693,14 @@ public:
 	 * @param username The username associated with the connection or query.
 	 *
 	 * @details This function sends a kill request to all threads in the pool to either kill
-	 * a connection or a query. It adds the kill request to the kill queue (`kq.conn_ids` or
-	 * `kq.query_ids`) for each thread and then signals all threads to process the kill queue.
+	 * a connection or a query. It adds the kill request to the kill queue (`sess_intrpt_queue.conn_ids` or
+	 * `sess_intrpt_queue.query_ids`) for each thread and then signals all threads to process the kill queue.
 	 *
 	 * @note This function is used to terminate a specific connection or query by its thread
 	 * session ID.
 	 *
 	 */
-	void kill_connection_or_query(uint32_t _thread_session_id, bool query, char* username);
+	void kill_connection_or_query(uint32_t sess_thd_id, uint32_t secret_key, const char* username, bool query);
 };
 	
 	

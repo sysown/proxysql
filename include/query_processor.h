@@ -104,6 +104,16 @@ typedef struct _Query_Processor_rule_t {
 	char *replace_pattern;
 	int destination_hostgroup;
 	int cache_ttl;
+	/** @brief Controls caching of empty resultsets for query rules
+	 *
+	 * Values:
+	 * - -1: Use global setting (query_cache_stores_empty_result)
+	 * - 0: Do NOT cache empty resultsets, but cache non-empty resultsets
+	 * - 1: Always cache resultsets (both empty and non-empty)
+	 *
+	 * Previously, setting cache_empty_result to 0 would prevent ALL caching,
+	 * even for non-empty resultsets. This was fixed in issue #5248.
+	 */
 	int cache_empty_result;
 	int cache_timeout;
 	int reconnect;
@@ -139,6 +149,16 @@ class Query_Processor_Output {
 	int mirror_flagOUT;
 	int next_query_flagIN;
 	int cache_ttl;
+	/** @brief Controls caching of empty resultsets for query rule output
+	 *
+	 * Values:
+	 * - -1: Use global setting (query_cache_stores_empty_result)
+	 * - 0: Do NOT cache empty resultsets, but cache non-empty resultsets
+	 * - 1: Always cache resultsets (both empty and non-empty)
+	 *
+	 * Previously, setting cache_empty_result to 0 would prevent ALL caching,
+	 * even for non-empty resultsets. This was fixed in issue #5248.
+	 */
 	int cache_empty_result;
 	int cache_timeout;
 	int reconnect;

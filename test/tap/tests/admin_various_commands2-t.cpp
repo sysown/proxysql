@@ -27,6 +27,9 @@ std::vector<std::string> queries = {
 	"PROXYSQL FLUSH LOGS",
 	"PROXYSQL FLUSH QUERY CACHE",
 	"PROXYSQL FLUSH CONFIGDB",
+	"PROXYSQL FLUSH STATS",
+	"PROXYSQL FLUSH MYSQL STATS",
+	"PROXYSQL FLUSH PGSQL STATS",
 	"PROXYSQLTEST 21",
 	"PROXYSQLTEST 21 10",
 	"PROXYSQLTEST 41",
@@ -103,10 +106,6 @@ void add_commands_set1(std::vector<std::string>& queries, std::string m, bool wi
 	}
 }
 
-int run_q(MYSQL *mysql, const char *q) {
-	MYSQL_QUERY(mysql,q);
-	return 0;
-}
 int main() {
 	CommandLine cl;
 

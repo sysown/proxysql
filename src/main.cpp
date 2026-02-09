@@ -1,6 +1,7 @@
-#define MAIN_PROXY_SQLITE3
 
 #include "../deps/json/json.hpp"
+
+
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -22,9 +23,17 @@ using json = nlohmann::json;
 
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_PreparedStatement.h"
+#include "PgSQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+
+#ifdef PROXYSQLGENAI
+#include "MCP_Thread.h"
+#include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
+#endif /* PROXYSQLGENAI */
+
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -476,8 +485,16 @@ PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
 PgSQL_Threads_Handler* GloPTH = NULL;
+
+#ifdef PROXYSQLGENAI
+MCP_Threads_Handler* GloMCPH = NULL;
+GenAI_Threads_Handler* GloGATH = NULL;
+AI_Features_Manager *GloAI = NULL;
+#endif /* PROXYSQLGENAI */
+
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
+PgSQL_STMT_Manager *GloPgStmt;
 
 MySQL_Monitor *GloMyMon;
 PgSQL_Monitor *GloPgMon;
@@ -896,6 +913,11 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyAuth=NULL;
 	GloPgAuth=NULL;
 	GloPTH=NULL;
+#ifdef PROXYSQLGENAI
+	GloMCPH=NULL;
+	GloGATH=NULL;
+	GloAI=NULL;
+#endif /* PROXYSQLGENAI */
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -903,7 +925,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyLogger=NULL;
 	GloPgSQL_Logger = NULL;
 	GloMyStmt=NULL;
-
+	GloPgStmt = NULL;
 	// initialize libev
 	if (!ev_default_loop (EVBACKEND_POLL | EVFLAG_NOENV)) {
 		fprintf(stderr,"could not initialise libev");
@@ -921,7 +943,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloPgSQL_Logger = new PgSQL_Logger();
 	GloPgSQL_Logger->print_version();
 	GloMyStmt=new MySQL_STMT_Manager_v14();
-
+	GloPgStmt=new PgSQL_STMT_Manager();
 	PgHGM = new PgSQL_HostGroups_Manager();
 	PgHGM->init();
 	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;
@@ -929,6 +951,19 @@ void ProxySQL_Main_init_main_modules() {
 	GloPTH = _tmp_GloPTH;
 }
 
+#ifdef PROXYSQLGENAI
+void ProxySQL_Main_init_GenAI_module() {
+	GloAI = new AI_Features_Manager();
+	GloAI->init();
+	proxy_info("AI Features module initialized\n");
+}
+
+void ProxySQL_Main_init_MCP_module() {
+	GloMCPH = new MCP_Threads_Handler();
+	GloMCPH->init();
+	proxy_info("MCP module initialized\n");
+}
+#endif /* PROXYSQLGENAI */
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	// cluster module needs to be initialized before
@@ -1248,6 +1283,42 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloMTH shutdown in ";
 #endif
 	}
+	if (GloPTH) {
+		cpu_timer t;
+		pthread_mutex_lock(&GloVars.global.ext_glopth_mutex);
+		delete GloPTH;
+		GloPTH = NULL;
+		pthread_mutex_unlock(&GloVars.global.ext_glopth_mutex);
+#ifdef DEBUG
+		std::cerr << "GloPTH shutdown in ";
+#endif
+	}
+#ifdef PROXYSQLGENAI
+	if (GloMCPH) {
+		cpu_timer t;
+		delete GloMCPH;
+		GloMCPH = NULL;
+#ifdef DEBUG
+		std::cerr << "GloMCPH shutdown in ";
+#endif
+	}
+	if (GloGATH) {
+		cpu_timer t;
+		delete GloGATH;
+		GloGATH = NULL;
+#ifdef DEBUG
+		std::cerr << "GloGATH shutdown in ";
+#endif
+	}
+	if (GloAI) {
+		cpu_timer t;
+		delete GloAI;
+		GloAI = NULL;
+#ifdef DEBUG
+		std::cerr << "GloAI shutdown in ";
+#endif
+	}
+#endif /* PROXYSQLGENAI */
 	if (GloMyLogger) {
 		cpu_timer t;
 		delete GloMyLogger;
@@ -1275,17 +1346,31 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloAdmin shutdown in ";
 #endif
 	}
+	if (MyHGM)
 	{
 		cpu_timer t;
 		MyHGM->shutdown();
 		delete MyHGM;
 #ifdef DEBUG
-		std::cerr << "GloHGM shutdown in ";
+		std::cerr << "GloMyHGM shutdown in ";
+#endif
+	}
+	if (PgHGM)
+	{
+		cpu_timer t;
+		PgHGM->shutdown();
+		delete PgHGM;
+#ifdef DEBUG
+		std::cerr << "GloPgHGM shutdown in ";
 #endif
 	}
 	if (GloMyStmt) {
 		delete GloMyStmt;
 		GloMyStmt=NULL;
+	}
+	if (GloPgStmt) {
+		delete GloPgStmt;
+		GloPgStmt = NULL;
 	}
 }
 
@@ -1308,7 +1393,16 @@ static void LoadPlugins() {
 	GloMyLdapAuth = NULL;
 	if (proxy_sqlite3_open_v2 == nullptr) {
 		SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
+	} else {
+		int i= (*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);
+
+		if (i != SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on (*proxy_sqlite3_config)(SQLITE_CONFIG_URI,1)\n");
+			assert(i==SQLITE_OK);
+			exit(EXIT_FAILURE);
+		}
 	}
+
 	if (GloVars.web_interface_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;
@@ -1398,6 +1492,14 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
+#ifdef PROXYSQLGENAI
+	if (GloVars.global.genai_enabled) {
+		ProxySQL_Main_init_GenAI_module();
+	}
+	if (GloVars.global.mcp_enabled) {
+		ProxySQL_Main_init_MCP_module();
+	}
+#endif /* PROXYSQLGENAI */
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 
@@ -1434,6 +1536,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 
 void ProxySQL_Main_init_phase3___start_all() {
 
+	srandom((unsigned int)(time(NULL) ^ getpid()));
 	{
 		cpu_timer t;
 		GloMyLogger->events_set_datadir(GloVars.datadir);
@@ -1492,6 +1595,18 @@ void ProxySQL_Main_init_phase3___start_all() {
 		ProxySQL_Main_init_Query_Cache_module();
 #ifdef DEBUG
 		std::cerr << "Main phase3 : Query Cache initialized in ";
+#endif
+	}
+
+	{
+		cpu_timer t;
+#ifdef PROXYSQLGENAI
+		if (GloVars.global.mcp_enabled && GloMCPH) {
+			ProxySQL_Main_init_MCP_module();
+		}
+#endif /* PROXYSQLGENAI */
+#ifdef DEBUG
+		std::cerr << "Main phase3 : MCP module initialized in ";
 #endif
 	}
 
@@ -1554,6 +1669,16 @@ void ProxySQL_Main_init_phase3___start_all() {
 	if (GloMyLdapAuth) {
 		GloAdmin->init_ldap_variables();
 	}
+
+#ifdef PROXYSQLGENAI
+	// GenAI
+	if (GloVars.global.genai_enabled && GloGATH) {
+		GloAdmin->init_genai_variables();
+	}
+	if (GloVars.global.mcp_enabled && GloMCPH) {
+		GloAdmin->init_mcp_variables();
+	}
+#endif /* PROXYSQLGENAI */
 
 	// HTTP Server should be initialized after other modules. See #4510
 	GloAdmin->init_http_server();
@@ -2309,6 +2434,210 @@ int print_jemalloc_conf() {
 }
 #endif
 
+// Database type configuration
+enum WatchDogEntityType { 
+	ENTITY_TYPE_MYSQL, 
+	ENTITY_TYPE_POSTGRESQL,
+	ENTITY_TYPE_COUNT
+};
+
+struct WatchdogGroup {
+	WatchDogEntityType type;
+	const char* name;
+	void* thread_handler;  // GloMTH or GloPTH
+	unsigned int missed_heartbeats;
+	unsigned long long prev_time;
+};
+
+template <typename ThreadType>
+unsigned int check_heartbeats(ThreadType* threads, unsigned int num_threads,
+	unsigned long long curtime, unsigned long long poll_timeout) {
+	unsigned int missing = 0;
+	if (!threads) return missing;
+
+	for (unsigned int i = 0; i < num_threads; ++i) {
+		if (threads[i].worker &&
+			curtime > threads[i].worker->atomic_curtime + poll_timeout) {
+			missing++;
+#ifdef DEBUG
+			// This block is only used for Watchdog unit tests:
+			// Specifically for PROXYSQLTEST cases 55 0 and 55 1.
+			if (i == 0 && threads[i].worker->watchdog_test__simulated_delay_ms) {
+				// [Test-only] Break execution after missed heartbeat on thread 0.
+				threads[i].worker->watchdog_test__missed_heartbeats++;
+				break;  
+			}
+#endif
+		}
+	}
+	return missing;
+}
+
+void watchdog_main_loop() {
+#if 0
+	{
+		// the following commented code is here only to manually test handleProcessRestart()
+		// DO NOT ENABLE
+		//proxy_info("Service is up\n");
+		//sleep(2);
+		//assert(0);
+	}
+#endif
+
+	WatchdogGroup groups[ENTITY_TYPE_COUNT] = {
+		{ ENTITY_TYPE_MYSQL, "MySQL", GloMTH, 0, monotonic_time() },
+		{ ENTITY_TYPE_POSTGRESQL, "PostgreSQL", GloPTH, 0, monotonic_time() }
+	};
+
+	unsigned int inner_loops = 0;
+	unsigned long long time_next_version_check = 0;
+	unsigned long long loop_prev_time = monotonic_time();
+	while (glovars.shutdown == 0) {
+		std::this_thread::sleep_for(std::chrono::microseconds(200000));
+		
+		if (disable_watchdog) continue;
+
+		const unsigned long long curtime = monotonic_time();
+
+		// Version check handling
+		if (GloVars.global.version_check && curtime > time_next_version_check) {
+			pthread_attr_t attr;
+			pthread_attr_init(&attr);
+			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+			pthread_t thr;
+			if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) != 0) {
+				perror("Thread creation");
+				exit(EXIT_FAILURE);
+			}
+			if (time_next_version_check == 0)
+				time_next_version_check = curtime;
+			time_next_version_check += (24ULL * 3600 * 1000000); // 24h in microseconds
+		}
+
+		inner_loops++;
+		if (curtime >= ((inner_loops * 300000) + loop_prev_time)) {
+			//proxy_info("Watchdog: main loop is blocked for more than 300ms, resetting prev_time\n");
+			// if this happens, it means that this very simple loop is blocked
+			// probably we are running under gdb
+			loop_prev_time = curtime;
+			for (auto& group : groups) {
+				group.prev_time = curtime;
+			}
+			inner_loops = 0;
+			continue;
+		}
+
+		// Process all
+		for (auto& group : groups) {
+			if (!group.thread_handler) continue;
+
+			// Get poll timeout from thread handler
+			unsigned int poll_timeout_ms = 0;
+			switch (group.type) {
+			case ENTITY_TYPE_MYSQL:
+				poll_timeout_ms = static_cast<MySQL_Threads_Handler*>(group.thread_handler)->variables.poll_timeout;
+				break;
+			case ENTITY_TYPE_POSTGRESQL:
+				poll_timeout_ms = static_cast<PgSQL_Threads_Handler*>(group.thread_handler)->variables.poll_timeout;
+				break;
+			default:
+				assert(0);
+			}
+
+			const unsigned long long poll_timeout = (static_cast<unsigned long long>(poll_timeout_ms) + 1000) * 1000;
+
+			if (curtime < group.prev_time + poll_timeout) continue;
+			loop_prev_time = curtime;
+			group.prev_time = curtime;
+			inner_loops = 0;
+
+			// Check thread heartbeats
+			unsigned int threads_missing_heartbeat = 0;
+			switch (group.type) {
+			case ENTITY_TYPE_MYSQL:
+			{
+				MySQL_Threads_Handler* mth = static_cast<MySQL_Threads_Handler*>(group.thread_handler);
+				threads_missing_heartbeat += check_heartbeats(mth->mysql_threads, mth->num_threads, curtime, poll_timeout);
+#ifdef IDLE_THREADS
+				if (GloVars.global.idle_threads) {
+					threads_missing_heartbeat += check_heartbeats(mth->mysql_threads_idles, mth->num_threads, curtime, poll_timeout);
+				}
+#endif
+				break;
+			}
+			case ENTITY_TYPE_POSTGRESQL:
+			{
+				PgSQL_Threads_Handler* pth = static_cast<PgSQL_Threads_Handler*>(group.thread_handler);
+				threads_missing_heartbeat += check_heartbeats(pth->pgsql_threads, pth->num_threads, curtime, poll_timeout);
+#ifdef IDLE_THREADS
+				if (GloVars.global.idle_threads) {
+					threads_missing_heartbeat += check_heartbeats(pth->pgsql_threads_idles, pth->num_threads, curtime, poll_timeout);
+				}
+#endif
+				break;
+			}
+			default:
+				assert(0);
+			}
+			// Handle heartbeat results
+			if (threads_missing_heartbeat > 0) {
+				proxy_error("Watchdog: %u %s threads missed a heartbeat\n",
+					threads_missing_heartbeat, group.name);
+				group.missed_heartbeats++;
+
+				if (group.missed_heartbeats >= static_cast<unsigned int>(GloVars.restart_on_missing_heartbeats)) {
+#ifdef DEBUG
+					// This block is only used for Watchdog unit tests:
+					// Specifically for PROXYSQLTEST cases 55 0 and 55 1.
+					bool is_test_mode = false;
+					switch (group.type) {
+					case ENTITY_TYPE_MYSQL: {
+						MySQL_Threads_Handler* mth = static_cast<MySQL_Threads_Handler*>(group.thread_handler);
+						if (mth && mth->num_threads && mth->mysql_threads[0].worker &&
+							mth->mysql_threads[0].worker->watchdog_test__simulated_delay_ms) {
+							is_test_mode = true;
+						}
+						break;
+					}
+					case ENTITY_TYPE_POSTGRESQL: {
+						PgSQL_Threads_Handler* pth = static_cast<PgSQL_Threads_Handler*>(group.thread_handler);
+						if (pth && pth->num_threads && pth->pgsql_threads[0].worker &&
+							pth->pgsql_threads[0].worker->watchdog_test__simulated_delay_ms) {
+							is_test_mode = true;
+						}
+						break;
+					}
+					default:
+						assert(0);
+					}
+
+					if (is_test_mode) {
+						proxy_error("Watchdog: reached %u missed %s thread heartbeats. Running in Watchdog test mode. Aborting suppressed.\n",
+							group.missed_heartbeats, group.name);
+						group.missed_heartbeats = 0;
+						continue;
+					}
+#endif
+
+#ifndef RUNNING_ON_VALGRIND
+					if (GloVars.restart_on_missing_heartbeats) {
+						proxy_error("Watchdog: reached %u missed %s thread heartbeats. Aborting!\n",
+							group.missed_heartbeats, group.name);
+						proxy_error("Watchdog: see details at https://github.com/sysown/proxysql/wiki/Watchdog\n");
+						assert(0);
+					}
+#else
+					proxy_error("Watchdog: reached %u missed %s thread heartbeats. Not aborting under Valgrind\n",
+						group.missed_heartbeats, group.name);
+#endif
+				}
+			} else {
+				group.missed_heartbeats = 0;
+			}
+		}
+	}
+}
+
 int main(int argc, const char * argv[]) {
 
 	if (check_openssl_version() == false) {
@@ -2783,107 +3112,7 @@ __start_label:
 	proxy_info("For support visit: https://proxysql.com/services/support/\n");
 	proxy_info("For consultancy visit: https://proxysql.com/services/consulting/\n");
 
-	{
-#if 0
-		{
-			// the following commented code is here only to manually test handleProcessRestart()
-			// DO NOT ENABLE
-			//proxy_info("Service is up\n");
-			//sleep(2);
-			//assert(0);
-		}
-#endif
-		unsigned int missed_heartbeats = 0;
-		unsigned long long previous_time = monotonic_time();
-		unsigned int inner_loops = 0;
-		unsigned long long time_next_version_check = 0;
-		while (glovars.shutdown==0) {
-			usleep(200000);
-			if (disable_watchdog) {
-				continue;
-			}
-			unsigned long long curtime = monotonic_time();
-			if (GloVars.global.version_check) {
-				if (curtime > time_next_version_check) {
-					pthread_attr_t attr;
-					pthread_attr_init(&attr);
-					pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-					pthread_t thr;
-					if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) !=0 ) {
-						perror("Thread creation");
-						exit(EXIT_FAILURE);
-					}
-					if (time_next_version_check == 0)
-						time_next_version_check = curtime;
-					unsigned long long inter = 24*3600*1000;
-					inter *= 1000;
-					time_next_version_check += inter;
-				}
-			}
-			inner_loops++;
-			if (curtime >= inner_loops*300000 + previous_time ) {
-				// if this happens, it means that this very simple loop is blocked
-				// probably we are running under gdb
-				previous_time = curtime;
-				inner_loops = 0;
-				continue;
-			}
-			if (GloMTH) {
-				unsigned long long atomic_curtime = 0;
-				unsigned long long poll_timeout = (unsigned int)GloMTH->variables.poll_timeout;
-				unsigned int threads_missing_heartbeat = 0;
-				poll_timeout += 1000; // add 1 second (rounding up)
-				poll_timeout *= 1000; // convert to us
-				if (curtime < previous_time + poll_timeout) {
-					continue;
-				}
-				previous_time = curtime;
-				inner_loops = 0;
-				unsigned int i;
-				if (GloMTH->mysql_threads) {
-					for (i=0; i<GloMTH->num_threads; i++) {
-						if (GloMTH->mysql_threads[i].worker) {
-							atomic_curtime = GloMTH->mysql_threads[i].worker->atomic_curtime;
-							if (curtime > atomic_curtime + poll_timeout) {
-								threads_missing_heartbeat++;
-							}
-						}
-					}
-				}
-#ifdef IDLE_THREADS
-				if (GloVars.global.idle_threads) {
-					if (GloMTH->mysql_threads) {
-						for (i=0; i<GloMTH->num_threads; i++) {
-							if (GloMTH->mysql_threads_idles[i].worker) {
-								atomic_curtime = GloMTH->mysql_threads_idles[i].worker->atomic_curtime;
-								if (curtime > atomic_curtime + poll_timeout) {
-									threads_missing_heartbeat++;
-								}
-							}
-						}
-					}
-				}
-#endif
-				if (threads_missing_heartbeat) {
-					proxy_error("Watchdog: %u threads missed a heartbeat\n", threads_missing_heartbeat);
-					missed_heartbeats++;
-					if (missed_heartbeats >= (unsigned int)GloVars.restart_on_missing_heartbeats) {
-#ifdef RUNNING_ON_VALGRIND
-						proxy_error("Watchdog: reached %u missed heartbeats. Not aborting because running under Valgrind\n", missed_heartbeats);
-#else
-						if (GloVars.restart_on_missing_heartbeats) {
-							proxy_error("Watchdog: reached %u missed heartbeats. Aborting!\n", missed_heartbeats);
-							proxy_error("Watchdog: see details at https://github.com/sysown/proxysql/wiki/Watchdog\n");
-							assert(0);
-						}
-#endif
-					}
-				} else {
-					missed_heartbeats = 0;
-				}
-			}
-		}
-	}
+	watchdog_main_loop();
 
 __shutdown:
 

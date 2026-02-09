@@ -59,7 +59,7 @@ class MyHGC;
 
 const int MYSQL_ERRORS_STATS_FIELD_NUM = 11;
 
-struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port);
+struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t mysql_port);
 void * GTID_syncer_run();
 
 static int wait_for_mysql(MYSQL *mysql, int status) {
@@ -1680,80 +1680,101 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	return ret;
 }
 
+/**
+ * @brief Generates and manages GTID connection tables for all MySQL servers
+ *
+ * This function synchronizes the GTID server connections with the current MySQL server
+ * configuration. It handles server additions, removals, and reconnections with improved
+ * lifecycle management for stable operation.
+ *
+ * The function operates in several phases:
+ * 1. Mark all existing GTID connections as potentially stale
+ * 2. Iterate through configured MySQL servers to validate existing connections
+ * 3. Establish new connections for servers that don't have active GTID connections
+ * 4. Clean up stale connections for servers that are no longer configured
+ *
+ * Key improvements in this implementation:
+ * - Uses stale_server tracking for efficient cleanup
+ * - Maintains proper lock ordering (gtid_rwlock → wrlock)
+ * - Reuses existing GTID_Server_Data objects when possible
+ * - Proper cleanup of ev_io watchers and socket resources
+ *
+ * @note This function must be called with appropriate locking to prevent race conditions
+ * @note Servers with OFFLINE_HARD status are skipped for connection establishment
+ *
+ * @thread_safety Thread-safe when called with proper external synchronization
+ */
 void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
-	pthread_rwlock_wrlock(&gtid_rwlock);
-	// first, set them all as active = false
-	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si) {
-			gtid_si->active = false;
-		}
-		it++;
-	}
-
 	// NOTE: We are required to lock while iterating over 'MyHostGroups'. Otherwise race conditions could take place,
 	// e.g. servers could be purged by 'purge_mysql_servers_table' and invalid memory be accessed.
 	wrlock();
+
+	pthread_rwlock_wrlock(&gtid_rwlock);
+
+	// first, add them all as stale entries
+	std::unordered_set<string> stale_server;
+	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
+	while(it != gtid_map.end()) {
+		stale_server.emplace(it->first);
+		it++;
+	}
+
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			if (mysrvc->gtid_port) {
-				std::string s1 = mysrvc->address;
-				s1.append(":");
-				s1.append(std::to_string(mysrvc->port));
-				std::unordered_map <string, GTID_Server_Data *>::iterator it2;
-				it2 = gtid_map.find(s1);
-				GTID_Server_Data *gtid_is=NULL;
-				if (it2!=gtid_map.end()) {
-					gtid_is=it2->second;
-					if (gtid_is == NULL) {
-						gtid_map.erase(it2);
-					}
+				std::string srv = mysrvc->address;
+				srv.append(":");
+				srv.append(std::to_string(mysrvc->port));
+
+				GTID_Server_Data *gtid_sd = nullptr;
+				it = gtid_map.find(srv);
+				if (it != gtid_map.end()) {
+					gtid_sd = it->second;
+					stale_server.erase(srv);
 				}
-				if (gtid_is) {
-					gtid_is->active = true;
-				} else if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-					// we didn't find it. Create it
-					/*
-					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
-					gtid_is = new GTID_Server_Data(watcher, mysrvc->address, mysrvc->port, mysrvc->gtid_port);
-					gtid_map.emplace(s1,gtid_is);
-					*/
-					struct ev_io * c = NULL;
-					c = new_connector(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					if (c) {
-						gtid_is = (GTID_Server_Data *)c->data;
-						gtid_map.emplace(s1,gtid_is);
-						//pthread_mutex_lock(&ev_loop_mutex);
-						ev_io_start(MyHGM->gtid_ev_loop,c);
-						//pthread_mutex_unlock(&ev_loop_mutex);
+
+				if (gtid_sd && gtid_sd->active) {
+					continue;
+				}
+
+				if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+					// a new server with gtid port
+					// OR an existing server, but we lost connection with binlog_reader
+					struct ev_io *cw = new_connect_watcher(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
+					if (cw) {
+						if (!gtid_sd) {
+							gtid_sd = new GTID_Server_Data(cw, mysrvc->address, mysrvc->gtid_port, mysrvc->port);
+							cw->data = (void *)gtid_sd;
+							gtid_map.emplace(srv, gtid_sd);
+						} else {
+							gtid_sd->w = cw;
+							gtid_sd->active = true;
+							cw->data = (void *)gtid_sd;
+						}
+						ev_io_start(MyHGM->gtid_ev_loop, cw);
 					}
 				}
 			}
 		}
 	}
-	wrunlock();
-	std::vector<string> to_remove;
-	it = gtid_map.begin();
-	while(it != gtid_map.end()) {
-		GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si && gtid_si->active == false) {
-			to_remove.push_back(it->first);
+
+	for (auto &srv : stale_server) {
+		it = gtid_map.find(srv);
+		GTID_Server_Data *gtid_sd = it->second;
+		if (gtid_sd->w) {
+			ev_io_stop(MyHGM->gtid_ev_loop, gtid_sd->w);
+			close(gtid_sd->w->fd);
+			free(gtid_sd->w);
 		}
-		it++;
+		gtid_map.erase(srv);
+		delete gtid_sd;
 	}
-	for (std::vector<string>::iterator it3=to_remove.begin(); it3!=to_remove.end(); ++it3) {
-		it = gtid_map.find(*it3);
-		GTID_Server_Data * gtid_si = it->second;
-		ev_io_stop(MyHGM->gtid_ev_loop, gtid_si->w);
-		close(gtid_si->w->fd);
-		free(gtid_si->w);
-		gtid_map.erase(*it3);
-	}
+
 	pthread_rwlock_unlock(&gtid_rwlock);
+	wrunlock();
 }
 
 /**
@@ -1768,7 +1789,7 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
-		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+		for (int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			if (mysrvc->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 				if (mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) {
@@ -2915,7 +2936,7 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 					unsigned long long intv = mysql_thread___connection_max_age_ms;
 					intv *= 1000;
 					if (curtime > mc->creation_time + intv) {
-						mc=mscl->remove(0);
+						mc=mscl->remove(i);
 						delete mc;
 						i--;
 					}
@@ -3517,352 +3538,6 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 	return result;
 }
 
-#if 0 // DELETE AFTER 2025-07-14
-void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
-	// define queries
-	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=writer_hostgroup) AND hostname='%s' AND port=%d UNION SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=reader_hostgroup) AND hostname='%s' AND port=%d) LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
-	const char *Q2A=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) AND status='OFFLINE_HARD'";
-	const char *Q2B=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
-	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, gtid_port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, gtid_port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
-	const char *Q3B=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
-	const char *Q4=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
-	const char *Q5=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
-	if (GloAdmin==NULL) {
-		return;
-	}
-
-	// this prevents that multiple read_only_action() are executed at the same time
-	pthread_mutex_lock(&readonly_mutex);
-
-	// define a buffer that will be used for all queries
-	char *query=(char *)malloc(strlen(hostname)*2+strlen(Q3A)+256);
-
-	int cols=0;
-	char *error=NULL;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	int num_rows=0; // note: with the new implementation (2.1.1) , this becomes a sort of boolean, not an actual count
-	wrlock();
-	// we minimum the time we hold the mutex, as connection pool is being locked
-	if (read_only_set1.empty()) {
-		SQLite3_result *res_set1=NULL;
-		const char *q1 = (const char *)"SELECT DISTINCT hostname,port FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND status<>3";
-		mydb->execute_statement((char *)q1, &error , &cols , &affected_rows , &res_set1);
-		for (std::vector<SQLite3_row *>::iterator it = res_set1->rows.begin() ; it != res_set1->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			std::string s = r->fields[0];
-			s += ":::";
-			s += r->fields[1];
-			read_only_set1.insert(s);
-		}
-		proxy_info("Regenerating read_only_set1 with %lu servers\n", read_only_set1.size());
-		if (read_only_set1.empty()) {
-			// to avoid regenerating this set always with 0 entries, we generate a fake entry
-			read_only_set1.insert("----:::----");
-		}
-		delete res_set1;
-	}
-	wrunlock();
-	std::string ser = hostname;
-	ser += ":::";
-	ser += std::to_string(port);
-	std::set<std::string>::iterator it;
-	it = read_only_set1.find(ser);
-	if (it != read_only_set1.end()) {
-		num_rows=1;
-	}
-
-	if (admindb==NULL) { // we initialize admindb only if needed
-		admindb=new SQLite3DB();
-		admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
-	}
-
-	switch (read_only) {
-		case 0:
-			if (num_rows==0) {
-				// the server has read_only=0 , but we can't find any writer, so we perform a swap
-				GloAdmin->mysql_servers_wrlock();
-				if (GloMTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from mysql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=0 phase 1 : Dumping mysql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
-				if (GloMTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from mysql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=0 phase 2 : Dumping mysql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				sprintf(query,Q2A,hostname,port);
-				admindb->execute(query);
-				sprintf(query,Q2B,hostname,port);
-				admindb->execute(query);
-				if (mysql_thread___monitor_writer_is_also_reader) {
-					sprintf(query,Q3A,hostname,port);
-				} else {
-					sprintf(query,Q3B,hostname,port);
-				}
-				admindb->execute(query);
-				if (GloMTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from mysql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=0 phase 3 : Dumping mysql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
-				GloAdmin->mysql_servers_wrunlock();
-			} else {
-				// there is a server in writer hostgroup, let check the status of present and not present hosts
-				bool act=false;
-				wrlock();
-				std::set<std::string>::iterator it;
-				// read_only_set2 acts as a cache
-				// if the server was RO=0 on the previous check and no action was needed,
-				// it will be here
-				it = read_only_set2.find(ser);
-				if (it != read_only_set2.end()) {
-					// the server was already detected as RO=0
-					// no action required
-				} else {
-					// it is the first time that we detect RO on this server
-					sprintf(query,Q1B,hostname,port,hostname,port,hostname,port);
-					mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-					for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-						SQLite3_row *r=*it;
-						int status=MYSQL_SERVER_STATUS_OFFLINE_HARD; // default status, even for missing
-						if (r->fields[1]) { // has status
-							status=atoi(r->fields[1]);
-						}
-						if (status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-							act=true;
-						}
-					}
-					if (act == false) {
-						// no action required, therefore we write in read_only_set2
-						proxy_info("read_only_action() detected RO=0 on server %s:%d for the first time after commit(), but no need to reconfigure\n", hostname, port);
-						read_only_set2.insert(ser);
-					}
-				}
-				wrunlock();
-				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
-					GloAdmin->mysql_servers_wrlock();
-					if (GloMTH->variables.hostgroup_manager_verbose) {
-						char *error2=NULL;
-						int cols2=0;
-						int affected_rows2=0;
-						SQLite3_result *resultset2=NULL;
-						char * query2 = NULL;
-						char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-						sprintf(query2,q,hostname,port);
-						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-						if (error2) {
-							proxy_error("Error on read from mysql_servers : %s\n", error2);
-						} else {
-							if (resultset2) {
-								proxy_info("read_only_action RO=0 , rows=%d , phase 1 : Dumping mysql_servers for %s:%d\n", num_rows, hostname, port);
-								resultset2->dump_to_stderr();
-							}
-						}
-						if (resultset2) { delete resultset2; resultset2=NULL; }
-						free(query2);
-					}
-					GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
-					sprintf(query,Q2A,hostname,port);
-					admindb->execute(query);
-					sprintf(query,Q2B,hostname,port);
-					admindb->execute(query);
-					if (GloMTH->variables.hostgroup_manager_verbose) {
-						char *error2=NULL;
-						int cols2=0;
-						int affected_rows2=0;
-						SQLite3_result *resultset2=NULL;
-						char * query2 = NULL;
-						char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-						sprintf(query2,q,hostname,port);
-						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-						if (error2) {
-							proxy_error("Error on read from mysql_servers : %s\n", error2);
-						} else {
-							if (resultset2) {
-								proxy_info("read_only_action RO=0 , rows=%d , phase 2 : Dumping mysql_servers for %s:%d\n", num_rows, hostname, port);
-								resultset2->dump_to_stderr();
-							}
-						}
-						if (resultset2) { delete resultset2; resultset2=NULL; }
-						free(query2);
-					}
-					if (mysql_thread___monitor_writer_is_also_reader) {
-						sprintf(query,Q3A,hostname,port);
-					} else {
-						sprintf(query,Q3B,hostname,port);
-					}
-					admindb->execute(query);
-					if (GloMTH->variables.hostgroup_manager_verbose) {
-						char *error2=NULL;
-						int cols2=0;
-						int affected_rows2=0;
-						SQLite3_result *resultset2=NULL;
-						char * query2 = NULL;
-						char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-						sprintf(query2,q,hostname,port);
-						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-						if (error2) {
-							proxy_error("Error on read from mysql_servers : %s\n", error2);
-						} else {
-							if (resultset2) {
-								proxy_info("read_only_action RO=0 , rows=%d , phase 3 : Dumping mysql_servers for %s:%d\n", num_rows, hostname, port);
-								resultset2->dump_to_stderr();
-							}
-						}
-						if (resultset2) { delete resultset2; resultset2=NULL; }
-						free(query2);
-					}
-					GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
-					GloAdmin->mysql_servers_wrunlock();
-				}
-			}
-			break;
-		case 1:
-			if (num_rows) {
-				// the server has read_only=1 , but we find it as writer, so we perform a swap
-				GloAdmin->mysql_servers_wrlock();
-				if (GloMTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from mysql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=1 phase 1 : Dumping mysql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
-				sprintf(query,Q4,hostname,port);
-				admindb->execute(query);
-				if (GloMTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from mysql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=1 phase 2 : Dumping mysql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				sprintf(query,Q5,hostname,port);
-				admindb->execute(query);
-				if (GloMTH->variables.hostgroup_manager_verbose) {
-					char *error2=NULL;
-					int cols2=0;
-					int affected_rows2=0;
-					SQLite3_result *resultset2=NULL;
-					char * query2 = NULL;
-					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
-					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
-					sprintf(query2,q,hostname,port);
-					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
-					if (error2) {
-						proxy_error("Error on read from mysql_servers : %s\n", error2);
-					} else {
-						if (resultset2) {
-							proxy_info("read_only_action RO=1 phase 3 : Dumping mysql_servers for %s:%d\n", hostname, port);
-							resultset2->dump_to_stderr();
-						}
-					}
-					if (resultset2) { delete resultset2; resultset2=NULL; }
-					free(query2);
-				}
-				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
-				GloAdmin->mysql_servers_wrunlock();
-			}
-			break;
-		default:
-			// LCOV_EXCL_START
-			assert(0);
-			break;
-			// LCOV_EXCL_STOP
-	}
-
-	pthread_mutex_unlock(&readonly_mutex);
-	if (resultset) {
-		delete resultset;
-	}
-	free(query);
-}
-#endif // 0
-
 /**
  * @brief New implementation of the read_only_action method that does not depend on the admin table.
  *   The method checks each server in the provided list and adjusts the servers according to their corresponding read_only value.
@@ -4088,6 +3763,41 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 				mysrvc=myhgc->mysrvs->idx(j);
 				if (mysrvc->port==port && strcmp(mysrvc->address,hostname)==0) {
 					mysrvc->current_latency_us=_current_latency_us;
+				}
+			}
+		}
+	}
+	wrunlock();
+}
+
+void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enum MySerStatus status) {
+	wrlock();
+	MySrvC *mysrvc=NULL;
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+	MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		unsigned int j;
+		unsigned int l=myhgc->mysrvs->cnt();
+		if (l) {
+			for (j=0; j<l; j++) {
+				mysrvc=myhgc->mysrvs->idx(j);
+				if (mysrvc->port==port && strcmp(mysrvc->address,hostname)==0) {
+					enum MySerStatus prev_status = mysrvc->get_status();
+					if (prev_status != status) {
+						char *src_status = "?"; // this shouldn't display
+						char *dst_status = "?"; // this shouldn't display
+						if (prev_status == MYSQL_SERVER_STATUS_ONLINE) { src_status = "ONLINE"; }
+						else if (prev_status == MYSQL_SERVER_STATUS_OFFLINE_SOFT) { src_status = "OFFLINE_SOFT"; }
+						else if (prev_status == MYSQL_SERVER_STATUS_SHUNNED) { src_status = "SHUNNED"; };
+						if (status == MYSQL_SERVER_STATUS_ONLINE) { dst_status = "ONLINE"; }
+						else if (status == MYSQL_SERVER_STATUS_OFFLINE_SOFT) { dst_status = "OFFLINE_SOFT"; }
+						else if (status == MYSQL_SERVER_STATUS_SHUNNED) { dst_status = "SHUNNED"; };
+						if (status == MYSQL_SERVER_STATUS_ONLINE) {
+							proxy_warning("Changing Readyset status for server %s:%d from HG %u from %s to %s\n", hostname, port, myhgc->hid, src_status, dst_status);
+						} else {
+							proxy_warning("Changing Readyset status for server %s:%d from HG %u from %s to %s\n", hostname, port, myhgc->hid, src_status, dst_status);
+						}
+						mysrvc->set_status(status);
+					}
 				}
 			}
 		}
@@ -5772,48 +5482,39 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 
 	std::unordered_map<string, GTID_Server_Data*>::iterator it = gtid_map.begin();
 	while(it != gtid_map.end()) {
-		GTID_Server_Data* gtid_si = it->second;
-		std::string address {};
-		std::string port {};
-		std::string endpoint_id {};
-
-		if (gtid_si) {
-			address = std::string(gtid_si->address);
-			port = std::to_string(gtid_si->mysql_port);
-		} else {
-			std::string s = it->first;
-			std::size_t found = s.find_last_of(":");
-			address = s.substr(0, found);
-			port = s.substr(found + 1);
+		GTID_Server_Data* gtid_sd = it->second;
+		if (!gtid_sd) {
+			// invalid state
+			continue;
 		}
-		endpoint_id = address + ":" + port;
 
-		const auto& gitd_id_counter = this->status.p_gtid_executed_map.find(endpoint_id);
+		std::string endpoint = it->first;
+		std::string address = std::string(gtid_sd->address);
+		std::string port = std::to_string(gtid_sd->mysql_port);
+
 		prometheus::Counter* gtid_counter = nullptr;
-
-		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
-			auto& gitd_counter =
+		const auto& pc_itr = this->status.p_gtid_executed_map.find(endpoint);
+		if (pc_itr == this->status.p_gtid_executed_map.end()) {
+			auto& gtid_counter_group =
 				this->status.p_dyn_counter_array[p_hg_dyn_counter::gtid_executed];
 
-			gtid_counter = std::addressof(gitd_counter->Add({
+			gtid_counter = std::addressof(gtid_counter_group->Add({
 				{ "hostname", address },
 				{ "port", port },
 			}));
 
 			this->status.p_gtid_executed_map.insert(
 				{
-					endpoint_id,
+					endpoint,
 					gtid_counter
 				}
 			);
 		} else {
-			gtid_counter = gitd_id_counter->second;
+			gtid_counter = pc_itr->second;
 		}
 
-		if (gtid_si) {
-			const auto& cur_executed_gtid = gtid_counter->Value();
-			gtid_counter->Increment(gtid_si->events_read - cur_executed_gtid);
-		}
+		const auto& cur_executed_gtid = gtid_counter->Value();
+		gtid_counter->Increment(gtid_sd->events_read - cur_executed_gtid);
 
 		it++;
 	}

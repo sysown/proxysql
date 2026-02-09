@@ -620,14 +620,14 @@ bool test_parameters(PGconn* admin_conn, const parameter_test& test) {
         snprintf(buffer, sizeof(buffer), "SET %s='%s'", parameter.name.c_str(), parameter.value.c_str());
 
 		if (executeQueries(admin_conn, { buffer, "LOAD PGSQL VARIABLES TO RUNTIME" }) == false) {
-			BAIL_OUT("Error: failed to set admin variable in file %s, line %d", __FILE__, __LINE__);
+			diag("Error: failed to set admin variable in file %s, line %d", __FILE__, __LINE__);
 			return false;
 		}
     }
 
     int sock = connect_server(cl.pgsql_host, cl.pgsql_port);
     if (sock == -1) {
-        BAIL_OUT("Error: failed to connect to the server in file %s, line %d", __FILE__, __LINE__);
+        diag("Error: failed to connect to the server in file %s, line %d", __FILE__, __LINE__);
         return false;
     }
 
@@ -671,7 +671,7 @@ bool test_parameters(PGconn* admin_conn, const parameter_test& test) {
 
     // Send StartupMessage
     if (send_data(sock, startup_msg.data(), startup_msg.size()) == false) {
-        BAIL_OUT("Error: failed to send startup message in file %s, line %d", __FILE__, __LINE__);
+        diag("Error: failed to send startup message in file %s, line %d", __FILE__, __LINE__);
         goto cleanup;
     }
 
@@ -692,7 +692,7 @@ bool test_parameters(PGconn* admin_conn, const parameter_test& test) {
         auto result = execute_query(sock, buffer);
 
 		if (result == nullptr) {
-			BAIL_OUT("Error: failed to execute query in file %s, line %d", __FILE__, __LINE__);
+			diag("Error: failed to execute query in file %s, line %d", __FILE__, __LINE__);
             goto cleanup;
 		}
 
@@ -707,7 +707,7 @@ bool test_parameters(PGconn* admin_conn, const parameter_test& test) {
             diag("Executing: %s\n", reset_cmd.c_str());
             auto result = execute_query(sock, reset_cmd);
 			if (result == nullptr) {
-				BAIL_OUT("Error: failed to reset parameter in file %s, line %d", __FILE__, __LINE__);
+				diag("Error: failed to reset parameter in file %s, line %d", __FILE__, __LINE__);
                 goto cleanup;
 			}
 			if (result->error.empty() == false) {
@@ -722,7 +722,7 @@ bool test_parameters(PGconn* admin_conn, const parameter_test& test) {
         diag("Executing: %s\n", show_cmd.c_str());
         auto result = execute_query(sock, show_cmd);
 		if (result == nullptr) {
-			BAIL_OUT("Error: failed to execute query in file %s, line %d", __FILE__, __LINE__);
+			diag("Error: failed to execute query in file %s, line %d", __FILE__, __LINE__);
             goto cleanup;
 		}
 		if (test.expect_failure == false && result->error.empty()) {
@@ -859,6 +859,26 @@ std::vector<parameter_test> test_cases = {
     }
 };
 
+constexpr int MAX_REG_ITERATION_PER_THREAD = 5;
+constexpr int MAX_REG_THREAD = 2;
+
+void test_invalid_param_reg_4919_thread() {
+    auto admin_conn = createNewConnection(ConnType::ADMIN, "", false);
+
+    if (!admin_conn || PQstatus(admin_conn.get()) != CONNECTION_OK) {
+        diag("Error: failed to connect to the database in file %s, line %d", __FILE__, __LINE__);
+        return;
+    }
+
+    parameter_test invalid_param_test = test_cases.back();
+
+    for (int i = 0; i < MAX_REG_ITERATION_PER_THREAD; i++) {
+        if (test_parameters(admin_conn.get(), invalid_param_test) == false) {
+            diag("Error: failed to test parameters in file %s, line %d", __FILE__, __LINE__);
+			return;
+        }
+    }
+}
 
 int main(int argc, char** argv) {
 
@@ -878,6 +898,29 @@ int main(int argc, char** argv) {
         } else
             test_count += test_case.conn_params.size() * 2;
 	}
+
+    // Regression test for Issue#4919 (https://github.com/sysown/proxysql/issues/4919)
+	int test_count_regression = 0;
+
+    const auto& test_case = test_cases.back();
+
+    if (test_case.expect_failure) {
+        int case_count = 1;
+
+        if (test_case.set_commands.empty() == false)
+            case_count++;
+        if (test_case.reset_after)
+            case_count++;
+
+        test_count_regression += test_case.conn_params.size() * case_count;
+    }
+    else
+        test_count_regression += test_case.conn_params.size() * 2;
+
+	test_count_regression *= MAX_REG_ITERATION_PER_THREAD * MAX_REG_THREAD;
+    test_count_regression += 1; // execute "select 1" to check if proxysql is alive
+	// Regression test for Issue#4919
+    test_count += test_count_regression;
 
     plan(test_count);
 
@@ -900,10 +943,26 @@ int main(int argc, char** argv) {
     for (const auto& test_case : test_cases) {
 
         if (test_parameters(admin_conn.get(), test_case) == false) {
-            BAIL_OUT("Error: failed to test parameters in file %s, line %d", __FILE__, __LINE__);
+            diag("Error: failed to test parameters in file %s, line %d", __FILE__, __LINE__);
             return exit_status();
         }
     }
+
+    // Regression test for Issue#4919 (https://github.com/sysown/proxysql/issues/4919)
+    std::vector<std::thread> threads;
+  
+    for (int i = 0; i < MAX_REG_THREAD; ++i) {
+        threads.emplace_back(test_invalid_param_reg_4919_thread);
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    auto result = executeQueries(admin_conn.get(), {"SELECT 1"});
+
+	ok(result, "ProxySQL should be alive");
+    // Regression test for Issue#4919
 
     return exit_status();
 }

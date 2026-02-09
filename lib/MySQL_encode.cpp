@@ -221,7 +221,15 @@ uint64_t CPY8(unsigned char *ptr) {
  * poiter to the variable to store the length
  * returns the bytes length of th field
 */
-uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len) {
+uint8_t mysql_decode_length(unsigned char *ptr, uint32_t *len) {
+	if (*ptr <= 0xfb) { if (len) { *len = CPY1(ptr); };  return 1; }
+	if (*ptr == 0xfc) { if (len) { *len = CPY2(ptr+1); }; return 3; }
+	if (*ptr == 0xfd) { if (len) { *len = CPY3(ptr+1); };  return 4; }
+	if (*ptr == 0xfe) { if (len) { *len = CPY4(ptr+1); };  return 9; }
+	return 0; // never reaches here
+}
+
+uint8_t mysql_decode_length_ll(unsigned char *ptr, uint64_t *len) {
 	if (*ptr <= 0xfb) { if (len) { *len = CPY1(ptr); };  return 1; }
 	if (*ptr == 0xfc) { if (len) { *len = CPY2(ptr+1); }; return 3; }
 	if (*ptr == 0xfd) { if (len) { *len = CPY3(ptr+1); };  return 4; }

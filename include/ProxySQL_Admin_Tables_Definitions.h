@@ -261,6 +261,27 @@
 #define ADMIN_SQLITE_TABLE_RUNTIME_CLICKHOUSE_USERS "CREATE TABLE runtime_clickhouse_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username))"
 #endif /* PROXYSQLCLICKHOUSE */
 
+#ifdef PROXYSQLGENAI
+// GenAI Tables
+
+#define ADMIN_SQLITE_TABLE_GENAI_CONFIG "CREATE TABLE genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_GENAI_CONFIG "CREATE TABLE runtime_genai_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+// MCP Tables
+
+#define ADMIN_SQLITE_TABLE_MCP_CONFIG "CREATE TABLE mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_CONFIG "CREATE TABLE runtime_mcp_config (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+// MCP Query Rules
+
+#define ADMIN_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES "CREATE TABLE runtime_mcp_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR , schemaname VARCHAR , client_addr VARCHAR , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , tool_name VARCHAR , action VARCHAR CHECK (action IN ('allow','block','rewrite')) NOT NULL DEFAULT 'allow' , comment VARCHAR)"
+
+#endif /* PROXYSQLGENAI */
+
 
 #define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_columns INT NOT NULL, num_params INT NOT NULL, query VARCHAR NOT NULL)"
 
@@ -276,7 +297,10 @@
 #define ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS "CREATE TABLE pgsql_firewall_whitelist_sqli_fingerprints (active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , fingerprint VARCHAR NOT NULL , PRIMARY KEY (fingerprint) )"
 #define ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE pgsql_query_rules_fast_routing (username VARCHAR NOT NULL , database VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, database, flagIN) )"
 #define ADMIN_SQLITE_TABLE_PGSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
-#define ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_1 "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_2 "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
+
+#define ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_2
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS "CREATE TABLE runtime_pgsql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 5432 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_USERS "CREATE TABLE runtime_pgsql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '', comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
@@ -287,14 +311,28 @@
 #define ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS "CREATE TABLE runtime_pgsql_firewall_whitelist_sqli_fingerprints (active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , fingerprint VARCHAR NOT NULL , PRIMARY KEY (fingerprint) )"
 #define ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE runtime_pgsql_query_rules_fast_routing (username VARCHAR NOT NULL , database VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, database, flagIN) )"
 #define ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE runtime_pgsql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
-#define ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
 #define STATS_SQLITE_TABLE_PGSQL_GLOBAL "CREATE TABLE stats_pgsql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 #define STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL "CREATE TABLE stats_pgsql_connection_pool (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 #define STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET "CREATE TABLE stats_pgsql_connection_pool_reset (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 #define STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS "CREATE TABLE stats_pgsql_free_connections (fd INT NOT NULL , hostgroup INT NOT NULL , srv_host VARCHAR NOT NULL , srv_port INT NOT NULL , user VARCHAR NOT NULL , database VARCHAR , init_connect VARCHAR , time_zone VARCHAR , sql_mode VARCHAR , idle_ms INT , statistics VARCHAR , pgsql_info VARCHAR)"
 #define STATS_SQLITE_TABLE_PGSQL_USERS "CREATE TABLE stats_pgsql_users (username VARCHAR PRIMARY KEY , frontend_connections INT NOT NULL , frontend_max_connections INT NOT NULL)"
-#define STATS_SQLITE_TABLE_PGSQL_PROCESSLIST "CREATE TABLE stats_pgsql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , database VARCHAR , cli_host VARCHAR , cli_port INT , hostgroup INT , l_srv_host VARCHAR , l_srv_port INT , srv_host VARCHAR , srv_port INT , command VARCHAR , time_ms INT NOT NULL , info VARCHAR , status_flags INT , extended_info VARCHAR)"
+#define STATS_SQLITE_TABLE_PGSQL_PROCESSLIST "CREATE TABLE stats_pgsql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , database VARCHAR , cli_host VARCHAR , cli_port INT , hostgroup INT , l_srv_host VARCHAR , l_srv_port INT , srv_host VARCHAR , srv_port INT , backend_pid INT , backend_state VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR , status_flags INT , extended_info VARCHAR)"
+/**
+ * @brief PostgreSQL `pg_stat_activity`‑compatible view.
+ *
+ * This is a SQL VIEW, not a table. It provides a `pg_stat_activity`‑like
+ * interface to the data stored in `stats_pgsql_processlist`. Because it is a
+ * view, attempting to execute `DELETE` on it will fail with SQLite error:
+ * `"cannot modify stats_pgsql_stat_activity because it is a view"`.
+ *
+ * @note This view must be excluded from any bulk‑delete operations on
+ *       statistics tables (e.g., in `ProxySQL_Admin::vacuum_stats()`).
+ *       Deleting rows from the underlying `stats_pgsql_processlist` table
+ *       automatically clears the view's content.
+ */
+#define STATS_SQLITE_TABLE_PGSQL_STAT_ACTIVITY "CREATE VIEW stats_pgsql_stat_activity AS SELECT ThreadID AS thread_id, database AS datname, SessionID AS pid, user AS usename, cli_host AS client_addr, cli_port AS client_port, hostgroup, l_srv_host, l_srv_port, srv_host, srv_port, backend_pid, backend_state AS state, command, time_ms AS duration_ms, info as query, status_flags, extended_info FROM stats_pgsql_processlist"
 #define STATS_SQLITE_TABLE_PGSQL_ERRORS "CREATE TABLE stats_pgsql_errors (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , database VARCHAR NOT NULL , sqlstate VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, database, sqlstate) )"
 #define STATS_SQLITE_TABLE_PGSQL_ERRORS_RESET "CREATE TABLE stats_pgsql_errors_reset (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , database VARCHAR NOT NULL , sqlstate VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, database, sqlstate) )"
 #define STATS_SQLITE_TABLE_PGSQL_CLIENT_HOST_CACHE "CREATE TABLE stats_pgsql_client_host_cache (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
@@ -303,7 +341,99 @@
 #define STATS_SQLITE_TABLE_PGSQL_COMMANDS_COUNTERS "CREATE TABLE stats_pgsql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
 #define STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST "CREATE TABLE stats_pgsql_query_digest (hostgroup INT , database VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, database, username, client_address, digest))"
 #define STATS_SQLITE_TABLE_PGSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_pgsql_query_digest_reset (hostgroup INT , database VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, database, username, client_address, digest))"
+#define STATS_SQLITE_TABLE_PGSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_pgsql_prepared_statements_info (global_stmt_id INT NOT NULL , database VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_param_types INT NOT NULL , query VARCHAR NOT NULL)"
 
+#define STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS "CREATE TABLE stats_mcp_query_tools_counters (endpoint VARCHAR NOT NULL , tool VARCHAR NOT NULL , schema VARCHAR NOT NULL , count INT NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY (endpoint, tool, schema))"
+#define STATS_SQLITE_TABLE_MCP_QUERY_TOOLS_COUNTERS_RESET "CREATE TABLE stats_mcp_query_tools_counters_reset (endpoint VARCHAR NOT NULL , tool VARCHAR NOT NULL , schema VARCHAR NOT NULL , count INT NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY (endpoint, tool, schema))"
+
+// MCP query rules table - for firewall and query rewriting
+// Action is inferred from rule properties:
+//   - if error_msg is not NULL     → block
+//   - if replace_pattern is not NULL → rewrite
+//   - if timeout_ms > 0            → timeout
+//   - otherwise                    → allow
+#define ADMIN_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE mcp_query_rules (" \
+  "  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  username VARCHAR ," \
+  "  schemaname VARCHAR ," \
+  "  tool_name VARCHAR ," \
+  "  match_pattern VARCHAR ," \
+  "  negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  re_modifiers VARCHAR DEFAULT 'CASELESS' ," \
+  "  flagIN INT NOT NULL DEFAULT 0 ," \
+  "  flagOUT INT CHECK (flagOUT >= 0) ," \
+  "  replace_pattern VARCHAR ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) ," \
+  "  error_msg VARCHAR ," \
+  "  OK_msg VARCHAR ," \
+  "  log INT CHECK (log IN (0,1)) ," \
+  "  apply INT CHECK (apply IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR" \
+  ")"
+
+// MCP query rules runtime table - shows in-memory state of active rules
+// This table has the same schema as mcp_query_rules (no hits column).
+// The hits counter is only available in stats_mcp_query_rules table.
+// When this table is queried, it is automatically refreshed from the in-memory rules.
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES "CREATE TABLE runtime_mcp_query_rules (" \
+  "  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  username VARCHAR ," \
+  "  schemaname VARCHAR ," \
+  "  tool_name VARCHAR ," \
+  "  match_pattern VARCHAR ," \
+  "  negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  re_modifiers VARCHAR DEFAULT 'CASELESS' ," \
+  "  flagIN INT NOT NULL DEFAULT 0 ," \
+  "  flagOUT INT CHECK (flagOUT >= 0) ," \
+  "  replace_pattern VARCHAR ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) ," \
+  "  error_msg VARCHAR ," \
+  "  OK_msg VARCHAR ," \
+  "  log INT CHECK (log IN (0,1)) ," \
+  "  apply INT CHECK (apply IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR" \
+  ")"
+
+// MCP query digest statistics table
+#define STATS_SQLITE_TABLE_MCP_QUERY_DIGEST "CREATE TABLE stats_mcp_query_digest (" \
+  "  tool_name VARCHAR NOT NULL ," \
+  "  run_id INT ," \
+  "  digest VARCHAR NOT NULL ," \
+  "  digest_text VARCHAR NOT NULL ," \
+  "  count_star INTEGER NOT NULL ," \
+  "  first_seen INTEGER NOT NULL ," \
+  "  last_seen INTEGER NOT NULL ," \
+  "  sum_time INTEGER NOT NULL ," \
+  "  min_time INTEGER NOT NULL ," \
+  "  max_time INTEGER NOT NULL ," \
+  "  PRIMARY KEY(tool_name, run_id, digest)" \
+  ")"
+
+// MCP query digest reset table
+#define STATS_SQLITE_TABLE_MCP_QUERY_DIGEST_RESET "CREATE TABLE stats_mcp_query_digest_reset (" \
+  "  tool_name VARCHAR NOT NULL ," \
+  "  run_id INT ," \
+  "  digest VARCHAR NOT NULL ," \
+  "  digest_text VARCHAR NOT NULL ," \
+  "  count_star INTEGER NOT NULL ," \
+  "  first_seen INTEGER NOT NULL ," \
+  "  last_seen INTEGER NOT NULL ," \
+  "  sum_time INTEGER NOT NULL ," \
+  "  min_time INTEGER NOT NULL ," \
+  "  max_time INTEGER NOT NULL ," \
+  "  PRIMARY KEY(tool_name, run_id, digest)" \
+  ")"
+
+// MCP query rules statistics table - shows hit counters for each rule
+// This table contains only rule_id and hits count.
+// It is automatically populated when stats_mcp_query_rules is queried.
+// The hits counter increments each time a rule matches during query processing.
+#define STATS_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE stats_mcp_query_rules (" \
+  "  rule_id INTEGER PRIMARY KEY NOT NULL ," \
+  "  hits INTEGER NOT NULL" \
+  ")"
 
 //#define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 

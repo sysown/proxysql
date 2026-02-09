@@ -65,18 +65,6 @@ struct pgsql_hdr {
 	PtrSize_t data;
 };
 
-struct PG_Field {
-	char*	 name;
-	uint32_t tbl_oid;
-	uint16_t col_idx;
-	uint32_t type_oid;
-	uint16_t col_len;
-	uint32_t type_mod;
-	uint16_t fmt;
-};
-
-using PG_Fields = std::vector<PG_Field>;
-
 class PG_pkt 
 {
 public:
@@ -245,7 +233,21 @@ public:
 	void write_PasswordMessage(const char* psw) {
 		write_generic('p', "s", psw);
 	}
-
+	void write_ParseCompletion() {
+		//put_char('1');
+		//put_uint32(4);
+		write_generic('1', "");
+	}
+	void write_BindCompletion() {
+		//put_char('2');
+		//put_uint32(4);
+		write_generic('2', "");
+	}
+	void write_CloseCompletion() {
+		//put_char('3');
+		//put_uint32(4);
+		write_generic('3', "");
+	}
 	void write_RowDescription(const char* tupdesc, ...);
 	void write_DataRow(const char* tupdesc, ...);
 
@@ -279,10 +281,20 @@ private:
 	std::vector<unsigned int> pkt_offset;
 	bool multiple_pkt_mode = false;
 	bool ownership = true;
-	friend void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type);
+	friend void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type, bool send_ready_for_query, char txn_state);
 };
 
 class PgSQL_Protocol;
+
+struct ColumnMetadata {
+	char* name;				// Column name
+	uint32_t table_oid;     // Table OID
+	uint16_t column_index;  // Column index in table
+	uint32_t type_oid;      // Data type OID
+	int16_t length;         // Column length (-1 for variable length)
+	int32_t type_modifier;  // Type modifier (-1 if none)
+	uint16_t format;        // 0 = text, 1 = binary
+};
 
 #define PGSQL_QUERY_RESULT_NO_DATA	0x00
 #define PGSQL_QUERY_RESULT_TUPLE	0x01
@@ -471,7 +483,55 @@ public:
      */
     unsigned int add_copy_out_response_end();
 
-	unsigned int add_notice(const PGresult* result);
+    /**
+    * @brief Adds a notice message to the query result.
+    *
+    * This method adds a notice message, to the query result.
+    *
+    * The notice is copied to the internal buffer or to the `PSarrayOUT` if the buffer is full.
+    *
+    * @param result A pointer to a `PGresult` object containing the notice message to add.
+    * @return The number of bytes added to the query result.
+    *
+    */
+    unsigned int add_notice(const PGresult* result);
+
+    /**
+    * @brief Adds a "No Data" message to the query result.
+    *
+    * This method adds a "No Data" message to the query result, indicating that
+    * the executed statement does not return any rows.
+    *
+    * @return The number of bytes added to the query result.
+    *
+    */
+    unsigned int add_no_data();
+
+    /**
+    * @brief Adds a prepare completion message to the query result.
+    *
+    * This method adds a prepare completion message to the query result, indicating
+    * that a prepared statement has been successfully created.
+    *
+    * @return The number of bytes added to the query result.
+    *
+    */
+    unsigned int add_parse_completion();
+    
+	/**
+    * @brief Adds a describe completion message to the query result.
+    *
+    * This method adds a describe completion message (from a `PGresult` object) to the query result.
+    * The describe completion message provides metadata about a prepared statement or portal,
+    * such as the statement type and associated fields.
+    *
+    * @param result A pointer to a `PGresult` object containing the describe completion data.
+    * @param stmt_type The type of statement being described (e.g., prepared statement or portal).
+    *
+    * @return The number of bytes added to the query result.
+    *
+    */
+    unsigned int add_describe_completion(const PGresult* result, uint8_t stmt_type);
 
 	/**
 	 * @brief Retrieves the query result set and copies it to a PtrSizeArray.
@@ -502,6 +562,20 @@ public:
 	 * @return The current size of the `PgSQL_Query_Result` object in bytes.
 	 */
 	unsigned long long current_size();
+
+	/**
+	* @brief Clears the contents of the PgSQL_Query_Result object.
+	*
+	* This method resets the internal state of the PgSQL_Query_Result object, freeing any allocated buffers
+	* and removing all packets from the output array.
+	*
+	* The method performs the following actions:
+	*   - Removes and frees all packets from the PSarrayOUT array.
+	*   - Initializes the internal buffer for result data.
+	*   - Resets all counters and state variables to their default values.
+	*
+	*/
+	void clear();
 
 	inline bool is_transfer_started() const { return transfer_started; }
 	inline unsigned long long get_num_rows() const { return num_rows; }
@@ -570,8 +644,6 @@ private:
 	 *       sent to the client and the object is ready to handle a new query.
 	 */
 	void reset();
-
-	void clear();
 
 	PtrSizeArray PSarrayOUT;
 	unsigned long long resultset_size;
@@ -736,6 +808,12 @@ public:
 	 */
 	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state = 'I', PtrSize_t* _ptr = NULL, 
 		const std::vector<std::pair<std::string,std::string>>& param_status = std::vector<std::pair<std::string, std::string>>());
+
+	bool generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_ready_for_query_packet(bool send, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_close_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
+	bool generate_no_data_packet(bool send, PtrSize_t* _ptr = NULL);
 
 	// temporary overriding generate_pkt_OK to avoid crash. FIXME remove this
 	bool generate_pkt_OK(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, unsigned int affected_rows, 
@@ -951,6 +1029,63 @@ public:
      */
     unsigned int copy_out_response_end_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result);
 
+    /**
+     * @brief Adds a "No Data" message to the query result.
+     *
+     * This method adds a "No Data" message to the query result, indicating that
+     * the executed statement does not return any rows.
+     *
+     * @param send A boolean flag indicating whether to send the generated packet
+     *            immediately or just generate it. (Currently not supported).
+     * @param pg_query_result A pointer to the `PgSQL_Query_Result` object where the
+     *                       "No Data" message will be added.
+     *
+     * @return The number of bytes added to the query result.
+     *
+     * @note This method is typically used in response to DESCRIBE commands that do not return data rows.
+     */
+    unsigned int copy_no_data_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result);
+
+	/**
+	* @brief Copies a parse completion message to PgSQL_Query_Result.
+	*
+	* This function copies a parse completion message to the provided
+	* PgSQL_Query_Result object.
+	*
+	* @param send A boolean flag indicating whether to send the generated packet
+	*            immediately or just generate it. (Currently not supported).
+	* @param pg_query_result A pointer to the PgSQL_Query_Result object where the
+	*                       parse completion message will be copied.
+	*
+	* @return The number of bytes copied to the PgSQL_Query_Result object.
+	*
+	* @note This function adds a '1' (ParseComplete) packet to the query result.
+	*/
+	unsigned int copy_parse_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result);
+
+	/**
+	 * @brief Copies a describe completion message to PgSQL_Query_Result.
+	 *
+	 * This function copies a describe completion message (from a `PGresult` object) to the provided
+	 * `PgSQL_Query_Result` object. The describe completion message provides metadata about a prepared
+	 * statement or portal, such as the statement type and associated fields.
+	 *
+	 * If the statement type is 'S', a parameter description packet is generated, including the number
+	 * and types of parameters. If there are result columns, a row description packet is generated for
+	 * each column, including metadata such as column name, table OID, column index, type OID, length,
+	 * type modifier, and format code. If there are no result columns, a NoData packet is generated.
+	 *
+	 * @param send A boolean flag indicating whether to send the generated packet immediately or just generate it. (Currently not supported).
+	 * @param pg_query_result A pointer to the `PgSQL_Query_Result` object where the describe completion message will be copied.
+	 * @param result A pointer to the `PGresult` object containing the describe completion data.
+	 * @param stmt_type The type of statement being described (e.g., prepared statement 'S' or portal 'P').
+	 *
+	 * @return The number of bytes copied to the `PgSQL_Query_Result` object.
+	 *
+	 */
+	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
+		const PGresult* result, uint8_t stmt_type);
+
 private:
 
 	/**
@@ -1052,6 +1187,6 @@ private:
 	friend void admin_session_handler(S* sess, void* _pa, PtrSize_t* pkt);
 };
 
-void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type);
+void SQLite3_to_Postgres(PtrSizeArray* psa, SQLite3_result* result, char* error, int affected_rows, const char* query_type, bool send_ready_for_query = true, char txn_state = 'I');
 
 #endif // __POSTGRES_PROTOCOL_H

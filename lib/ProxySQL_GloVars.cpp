@@ -209,6 +209,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	pthread_mutex_init(&global.start_mutex,NULL);
 	pthread_mutex_init(&checksum_mutex,NULL);
 	pthread_mutex_init(&global.ext_glomth_mutex,NULL);
+	pthread_mutex_init(&global.ext_glopth_mutex, NULL);
 	epoch_version = 0;
 	checksums_values.updates_cnt = 0;
 	checksums_values.dumped_at = 0;
@@ -339,7 +340,9 @@ void update_string_var_if_set(char** cur_val, ez::ezOptionParser* opt, const cha
 
 void update_ulong_var_if_set(uint64_t& cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
 	if (opt->isSet(cmd_opt)) {
-		opt->get(cmd_opt)->getULong(cur_val);
+		unsigned long val;
+		opt->get(cmd_opt)->getULong(val);
+		cur_val = val;
 	}
 }
 
@@ -442,20 +445,23 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	update_string_var_if_set(&global.gr_bootstrap_ssl_key, opt, "--ssl-key");
 	update_string_var_if_set(&global.gr_bootstrap_ssl_mode, opt, "--ssl-mode");
 
-	config_file=GloVars.__cmd_proxysql_config_file;
-
-	if (config_file==NULL) {
-		config_file=(char *)"proxysql.cnf";
-		if (Proxy_file_regular(config_file)==false) {
-			config_file=(char *)"proxysql.cfg";
-			if (Proxy_file_regular(config_file)==false) {
-				config_file=(char *)"/etc/proxysql.cnf";
-				if (Proxy_file_regular(config_file)==false) {
-					config_file=(char *)"/etc/proxysql.cfg";
+	config_file = GloVars.__cmd_proxysql_config_file;
+	if (!config_file) {
+		config_file = strdup("proxysql.cnf");
+		if (!Proxy_file_regular(config_file)) {
+			free(config_file);
+			config_file = strdup("proxysql.cfg");
+			if (!Proxy_file_regular(config_file)) {
+				free(config_file);
+				config_file = strdup("/etc/proxysql.cnf");
+				if (!Proxy_file_regular(config_file)) {
+					free(config_file);
+					config_file = strdup("/etc/proxysql.cfg");
 				}
 			}
 		}
 	}
+
 #ifdef DEBUG
 	init_debug_struct();
 #endif

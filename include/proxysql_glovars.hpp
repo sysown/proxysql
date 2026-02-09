@@ -11,6 +11,7 @@
 #include "configfile.hpp"
 #include "proxy_defines.h"
 #include "proxysql_utils.h"
+#include <openssl/ssl.h>
 
 namespace ez {
 class ezOptionParser;
@@ -118,6 +119,12 @@ class ProxySQL_GlobalVariables {
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
+
+#ifdef PROXYSQLGENAI
+		bool genai_enabled;
+		bool mcp_enabled;
+#endif /* PROXYSQLGENAI */
+
 		int gr_bootstrap_mode;
 		char* gr_bootstrap_uri;
 		char* gr_bootstrap_account;
@@ -137,7 +144,7 @@ class ProxySQL_GlobalVariables {
 		char* gr_bootstrap_ssl_key;
 		char* gr_bootstrap_ssl_mode;
 		pthread_mutex_t ext_glomth_mutex;
-
+		pthread_mutex_t ext_glopth_mutex;
 		bool ssl_keylog_enabled;
 	} global;
 	struct mysql {

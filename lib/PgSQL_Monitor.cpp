@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <queue>
+#include <climits>
 #include <stdint.h>
 #include <utility>
 #include <vector>
@@ -143,24 +144,24 @@ unique_ptr<PgSQL_Thread> init_pgsql_thread_struct() {
 // Helper function for binding text
 void sqlite_bind_text(sqlite3_stmt* stmt, int index, const char* text) {
 	int rc = (*proxy_sqlite3_bind_text)(stmt, index, text, -1, SQLITE_TRANSIENT);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding integers
 void sqlite_bind_int(sqlite3_stmt* stmt, int index, int value) {
 	int rc = (*proxy_sqlite3_bind_int)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding 64-bit integers
 void sqlite_bind_int64(sqlite3_stmt* stmt, int index, long long value) {
 	int rc = (*proxy_sqlite3_bind_int64)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 void sqlite_bind_null(sqlite3_stmt* stmt, int index) {
 	int rc = (*proxy_sqlite3_bind_null)(stmt, index);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for executing a statement
@@ -180,13 +181,13 @@ int sqlite_execute_statement(sqlite3_stmt* stmt) {
 // Helper function for clearing bindings
 void sqlite_clear_bindings(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_clear_bindings)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for resetting a statement
 void sqlite_reset_statement(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_reset)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for finalizing a statement
@@ -266,6 +267,13 @@ struct mon_srv_t {
 	string addr;
 	uint16_t port;
 	bool ssl;
+	struct ssl_opts_t {
+		string ssl_p2s_key;
+		string ssl_p2s_cert;
+		string ssl_p2s_ca;
+		string ssl_p2s_crl;
+		string ssl_p2s_crlpath;
+	} ssl_opt;
 };
 
 struct mon_user_t {
@@ -353,15 +361,21 @@ unique_ptr<SQLite3_result> fetch_hgm_srvs_conf(PgSQL_HostGroups_Manager* hgm, co
 
 vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 	vector<mon_srv_t> srvs {};
-
+	srvs.reserve(srvs_info->rows.size());
 	for (const auto& row : srvs_info->rows) {
 		srvs.push_back({
 			string { row->fields[0] },
 			static_cast<uint16_t>(std::atoi(row->fields[1])),
-			static_cast<bool>(std::atoi(row->fields[2]))
+			static_cast<bool>(std::atoi(row->fields[2])),
+			mon_srv_t::ssl_opts_t {
+				string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+				string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+				string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+				string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+				string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""}
+			}
 		});
 	}
-
 	return srvs;
 }
 
@@ -624,6 +638,13 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 		case PGRES_POLLING_OK:
 			pgconn.state = ASYNC_ST::ASYNC_CONNECT_END;
 
+			// connection successful, update SSL stats
+			if (PQsslInUse(pgconn.conn)) {
+				__sync_fetch_and_add(&GloPgMon->ssl_connections_OK, 1);
+			} else {
+				__sync_fetch_and_add(&GloPgMon->non_ssl_connections_OK, 1);
+			}
+
 			if (st.task.type == task_type_t::connect) {
 				st.task.end = monotonic_time();
 			} else if (st.task.type == task_type_t::ping) {
@@ -870,18 +891,44 @@ pair<bool,pgsql_conn_t> get_task_conn(conn_pool_t& conn_pool, task_st_t& task_st
 	}
 }
 
+static void append_conninfo_param(std::ostringstream& conninfo, const std::string& key, const std::string& val) {
+	if (val.empty()) return;
+
+	std::string escaped_val;
+	escaped_val.reserve(val.length() * 2);  // Reserve maximum possible size
+
+	for (char c : val) {
+		if (c == '\'' || c == '\\') {
+			escaped_val.push_back('\\');
+		}
+		escaped_val.push_back(c);
+	}
+
+	conninfo << key << "='" << escaped_val << "' ";
+}
+
 string build_conn_str(const task_st_t& task_st) {
 	const mon_srv_t& srv_info { task_st.op_st.srv_info };
 	const mon_user_t& user_info { task_st.op_st.user_info };
 
-	return string {
-		"host='" + srv_info.addr + "' "
-			+ "port='" + std::to_string(srv_info.port) + "' "
-			+ "user='" + user_info.user + "' "
-			+ "password='" + user_info.pass + "' "
-			+ "dbname='" + user_info.dbname + "' "
-			+ "application_name=ProxySQL-Monitor"
-	};
+	std::ostringstream conninfo;
+	append_conninfo_param(conninfo, "user", user_info.user); // username
+	append_conninfo_param(conninfo, "password", user_info.pass); // password
+	append_conninfo_param(conninfo, "dbname", user_info.dbname); // dbname
+	append_conninfo_param(conninfo, "host", srv_info.addr); // backend address
+	conninfo << "port=" << srv_info.port << " "; // backend port
+	conninfo << "application_name=ProxySQL-Monitor "; // application name
+	if (srv_info.ssl) {
+		conninfo << "sslmode='require' "; // SSL required
+		append_conninfo_param(conninfo, "sslkey", srv_info.ssl_opt.ssl_p2s_key);
+		append_conninfo_param(conninfo, "sslcert", srv_info.ssl_opt.ssl_p2s_cert);
+		append_conninfo_param(conninfo, "sslrootcert", srv_info.ssl_opt.ssl_p2s_ca);
+		append_conninfo_param(conninfo, "sslcrl", srv_info.ssl_opt.ssl_p2s_crl);
+		append_conninfo_param(conninfo, "sslcrldir", srv_info.ssl_opt.ssl_p2s_crlpath);
+	} else {
+		conninfo << "sslmode='disable' "; // not supporting SSL
+	}
+	return conninfo.str();
 }
 
 pgsql_conn_t create_new_conn(task_st_t& task_st) {
@@ -1774,7 +1821,7 @@ void* worker_thread(void* args) {
 			add_task(task_poll, POLLOUT, std::move(init_st));
 		}
 
-		uint64_t next_timeout_at = ULONG_LONG_MAX;
+		uint64_t next_timeout_at = ULLONG_MAX;
 		uint64_t tasks_start = monotonic_time();
 
 		// Continue processing tasks; Next async operation

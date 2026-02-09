@@ -54,7 +54,7 @@ using std::string;
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
-    rc=sqlite3_step(_stmt);\
+    rc=(*proxy_sqlite3_step)(_stmt);\
     if (rc!=SQLITE_DONE) {\
       assert(rc==SQLITE_LOCKED);\
       usleep(100);\
@@ -64,7 +64,7 @@ using std::string;
 
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
         do {\
-                rc=sqlite3_step(_stmt);\
+                rc=(*proxy_sqlite3_step)(_stmt);\
                 if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
                         usleep(100);\
                 }\
@@ -627,6 +627,14 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
+	if (!strncasecmp("SELECT $$", query_no_space, strlen("SELECT $$"))) {
+		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
+		GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, const_cast<char*>(err_info.second));
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
@@ -966,7 +974,8 @@ __run_query:
 		if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 			in_trans = true;
 		}
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans);
+		bool deprecate_eof = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans, deprecate_eof);
 		delete resultset;
 #ifdef TEST_READONLY
 		if (strncasecmp("SELECT",query_no_space,6)) {
@@ -1058,7 +1067,7 @@ static void *child_mysql(void *arg) {
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
+	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -1430,7 +1439,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 		sqlite3_stmt *statement=NULL;
 		int rc;
 		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
-		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
 		rc = sessdb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, sessdb);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
@@ -1438,24 +1447,24 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 			serverid = "127.1." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
 //			fprintf(stderr,"%d , %s:3306 \n", hg_id , serverid.c_str());
 
-			rc=sqlite3_bind_int64(statement, 1, hg_id); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_int64(statement, 3, 3306); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_int64(statement, 4, 4); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_int64(statement, 5, 0); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_int64(statement, 6, 0); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_int64(statement, 7, 0); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_text(statement, 8, (char *)"NONE", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_int64(statement, 9, 0); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_bind_text(statement, 10, (char *)"Primary", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, hg_id); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_text)(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 3, 3306); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 4, 4); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 5, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 6, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 7, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_text)(statement, 8, (char *)"NONE", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 9, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_text)(statement, 10, (char *)"Primary", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 
-			rc=sqlite3_bind_text(statement, 11, (char *)"DISABLED", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_bind_text)(statement, 11, (char *)"DISABLED", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, sessdb);
 		}
-		sqlite3_finalize(statement);
+		(*proxy_sqlite3_finalize)(statement);
 	}
 	sessdb->execute("COMMIT");
 }
@@ -1493,15 +1502,15 @@ void bind_query_params(
 ) {
 	int rc = 0;
 
-	rc=sqlite3_bind_text(stmt, 1, server_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=sqlite3_bind_text(stmt, 2, domain.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=sqlite3_bind_text(stmt, 3, session_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=sqlite3_bind_double(stmt, 4, cpu); ASSERT_SQLITE_OK(rc, db);
-	rc=sqlite3_bind_text(stmt, 5, lut.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=sqlite3_bind_double(stmt, 6, lag_ms); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_bind_text)(stmt, 1, server_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_bind_text)(stmt, 2, domain.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_bind_text)(stmt, 3, session_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_bind_double)(stmt, 4, cpu); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_bind_text)(stmt, 5, lut.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_bind_double)(stmt, 6, lag_ms); ASSERT_SQLITE_OK(rc, db);
 	SAFE_SQLITE3_STEP2(stmt);
-	rc=sqlite3_clear_bindings(stmt); ASSERT_SQLITE_OK(rc, db);
-	rc=sqlite3_reset(stmt); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_clear_bindings)(stmt); ASSERT_SQLITE_OK(rc, db);
+	rc=(*proxy_sqlite3_reset)(stmt); ASSERT_SQLITE_OK(rc, db);
 }
 
 /**
@@ -1607,7 +1616,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 			}
 		}
 
-		sqlite3_finalize(stmt);
+		(*proxy_sqlite3_finalize)(stmt);
 		delete resultset;
 	} else {
 		// We just re-generate deterministic 'SESSION_IDS', preserving 'MASTER_SESSION_ID' values:
@@ -1683,7 +1692,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 		float cpu = get_rand_cpu();
 		bind_query_params(sessdb, stmt, serverid, aurora_domain, sessionid, cpu, lut, lag_ms);
 	}
-	sqlite3_finalize(stmt);
+	(*proxy_sqlite3_finalize)(stmt);
 #endif // TEST_AURORA_RANDOM
 }
 #endif // TEST_AURORA

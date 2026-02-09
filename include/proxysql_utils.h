@@ -2,10 +2,10 @@
 #define __PROXYSQL_UTILS_H
 
 #include <cstdarg>
-#include <functional>
 #include <type_traits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -13,7 +13,6 @@
 #include <sys/resource.h>
 #include <assert.h>
 
-#include "sqlite3db.h"
 #include "../deps/json/json.hpp"
 
 #ifndef ProxySQL_Checksum_Value_LENGTH
@@ -27,17 +26,19 @@
 #define	ETIME	ETIMEDOUT
 #endif
 
-#ifdef CXX17
+#if defined(__APPLE__)
+using std::conjunction;
+#elif defined(CXX17)
 template<class...> struct conjunction : std::true_type { };
 template<class B1> struct std::conjunction<B1> : B1 { };
 template<class B1, class... Bn>
-struct std::conjunction<B1, Bn...> 
+struct std::conjunction<B1, Bn...>
     : std::conditional<bool(B1::value), std::conjunction<Bn...>, B1>::type {};
 #else
 template<class...> struct conjunction : std::true_type { };
 template<class B1> struct conjunction<B1> : B1 { };
 template<class B1, class... Bn>
-struct conjunction<B1, Bn...> 
+struct conjunction<B1, Bn...>
     : std::conditional<bool(B1::value), conjunction<Bn...>, B1>::type {};
 #endif // CXX17
 /**
@@ -203,6 +204,19 @@ int wexecvp(
  */
 uint64_t get_timestamp_us();
 
+ /**
+  * @brief Converts a string to its hexadecimal representation.
+  * @param str The input string to convert.
+  * @return The hexadecimal representation of the input string. Empty for empty input.
+  */
+std::string hex(const std::string_view& str);
+/**
+ * @brief Converts a hexadecimal string to its original string representation.
+ * @param hex The hexadecimal string to convert.
+ * @return The original string representation of the input hexadecimal string. Empty for empty input.
+ */
+std::string unhex(const std::string_view& hex);
+
 /**
  * @brief Helper function to replace all the occurrences in a string of a matching substring in favor
  *   of another string.
@@ -251,7 +265,21 @@ inline void replace_checksum_zeros(char* checksum) {
  */
 std::string get_checksum_from_hash(uint64_t hash);
 
-void close_all_non_term_fd(std::vector<int> excludeFDs);
+/**
+ * @brief Closes all open file descriptors except stdin (0), stdout (1), stderr (2), and a specified exclusion list
+ *
+ * This function is typically called after fork() in the child process before exec() to ensure that
+ * the child process does not inherit unintended file descriptors from the parent.
+ *
+ * CRITICAL: This function is designed to be called between fork() and execve() in the child process.
+ * To avoid deadlocks in multi-threaded programs, it must NOT allocate on the heap.
+ *
+ * @param excludeFDs Vector of file descriptors to preserve (in addition to 0, 1, 2)
+ *                   Passed by const reference to avoid heap allocation during copy.
+ *
+ * Thread-safety: Safe to call in child process after fork() before execve()
+ */
+void close_all_non_term_fd(const std::vector<int>& excludeFDs);
 
 /**
  * @brief Returns the expected error for query 'SELECT $$'.
@@ -307,7 +335,9 @@ struct free_deleter {
 template <typename T>
 using mf_unique_ptr = std::unique_ptr<T, free_deleter>;
 
-static inline void set_thread_name(const char name[16], const bool en = true) {
+template<std::size_t LEN>
+static inline void set_thread_name(const char(&name)[LEN], const bool en = true) {
+	static_assert(LEN < 17, "Thread name must not exceed 16 characters");
 	if (en == false) {
 		return;
 	}
@@ -317,5 +347,28 @@ static inline void set_thread_name(const char name[16], const bool en = true) {
 	assert(!rc);
 #endif
 }
+
+/**
+ * @brief Gets the client address stored in 'client_addr' member as
+ *   an string if available. If member 'client_addr' is NULL, returns an
+ *   empty string.
+ *
+ * @return Either an string holding the string representation of internal
+ *   member 'client_addr', or empty string if this member is NULL.
+ */
+std::string get_client_addr(struct sockaddr* client_addr);
+
+/**
+ * @brief Check if a port is available for binding
+ *
+ * Creates a temporary socket and attempts to bind to the specified port
+ * to verify availability. The socket is closed immediately after the test.
+ * Sets SO_REUSEADDR to allow rebinding to recently used ports.
+ *
+ * @param port_num Port number to check
+ * @param port_free Output parameter - set to true if port is available, false if in use
+ * @return int Error code (0 = success, -1 = setsockopt failed, -2 = invalid parameters)
+ */
+int check_port_availability(int port_num, bool* port_free);
 
 #endif

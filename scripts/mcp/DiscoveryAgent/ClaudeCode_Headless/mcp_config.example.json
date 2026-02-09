@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "proxysql": {
+      "command": "python3",
+      "args": ["../../proxysql_mcp_stdio_bridge.py"],
+      "env": {
+        "PROXYSQL_MCP_ENDPOINT": "https://127.0.0.1:6071/mcp/query",
+        "PROXYSQL_MCP_TOKEN": "",
+        "PROXYSQL_MCP_INSECURE_SSL": "1"
+      }
+    }
+  }
+}

@@ -49,6 +49,22 @@ enum ps_type : uint8_t {
 	ps_type_execute_stmt = 0x2
 };
 
+/**
+ * @enum SelectVersionForwardingMode
+ * @brief Defines modes for handling SELECT VERSION() queries in ProxySQL.
+ *
+ * These modes control how ProxySQL responds to SELECT VERSION() queries:
+ * - NEVER: Always return ProxySQL's own version
+ * - ALWAYS: Always proxy the query to a backend server
+ * - SMART_FALLBACK_INTERNAL: Try to get version from backend connection, fallback to ProxySQL version
+ * - SMART_FALLBACK_PROXY: Try to get version from backend connection, fallback to proxying the query
+ */
+enum SelectVersionForwardingMode : uint8_t {
+	SELECT_VERSION_NEVER = 0,
+	SELECT_VERSION_ALWAYS = 1,
+	SELECT_VERSION_SMART_FALLBACK_INTERNAL = 2,
+	SELECT_VERSION_SMART_FALLBACK_PROXY = 3
+};
 
 
 //std::string proxysql_session_type_str(enum proxysql_session_type session_type);
@@ -96,7 +112,32 @@ class Query_Info {
 	void end();
 	char *get_digest_text();
 	bool is_select_NOT_for_update();
+	void set_end_time(unsigned long long time);
 };
+
+/**
+ * @brief Assigns query end time.
+ * @details In addition to being a setter for end_time member variable, this
+ * method ensures that end_time is always greater than or equal to start_time.
+ * Refer https://github.com/sysown/proxysql/issues/4950 for more details.
+ * @param time query end time
+ */
+inline void Query_Info::set_end_time(unsigned long long time) {
+	end_time = time;
+
+#ifndef CLOCK_MONOTONIC_RAW
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is greater than end_time, assign current monotonic time
+	end_time = monotonic_time();
+	if (start_time <= end_time)
+		return;
+
+	// If start_time is still greater than end_time, set the difference to 0
+	end_time = start_time;
+#endif // CLOCK_MONOTONIC_RAW
+}
 
 /**
  * @class MySQL_Session
@@ -129,6 +170,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 */
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_REFRESH(PtrSize_t *pkt);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
 	/**
@@ -232,7 +274,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void GPFC_DetectedMultiPacket_SetDDS();
 	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
 	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
-	void GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
+	int GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
 	bool GPFC_QueryUSE(PtrSize_t&, int&);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
@@ -257,7 +299,76 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler_rc0_RefreshActiveTransactions(MySQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(const char* query, size_t query_len, PtrSize_t* pkt);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(const char* query, size_t query_len, PtrSize_t* pkt);
+#ifdef epoll_create1
+	/**
+	 * @brief Handle GenAI response from socketpair
+	 *
+	 * Called when epoll notifies that a GenAI response is available on a client fd.
+	 * Reads the GenAI_ResponseHeader and JSON result, then sends the resultset
+	 * to the MySQL client.
+	 *
+	 * @param fd The socketpair fd (MySQL side) with data available to read
+	 *
+	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async()
+	 * @see check_genai_events()
+	 */
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(int fd);
+
+	/**
+	 * @brief Send GenAI request asynchronously via socketpair
+	 *
+	 * Creates a socketpair for async communication with the GenAI module:
+	 * 1. Creates socketpair(fds)
+	 * 2. Registers fds[1] with GenAI module
+	 * 3. Sends GenAI_RequestHeader + JSON query via fds[0]
+	 * 4. Adds fds[0] to session's epoll for response notification
+	 * 5. Returns immediately (MySQL thread is free to process other queries)
+	 *
+	 * The response will be handled by handle_genai_response() when ready.
+	 *
+	 * @param query The JSON query string (after "GENAI:" prefix)
+	 * @param query_len Length of the query string
+	 * @param pkt Original packet (stored for later cleanup)
+	 * @return true if request was sent successfully, false on error
+	 *
+	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response()
+	 */
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(const char* query, size_t query_len, PtrSize_t* pkt);
+
+	/**
+	 * @brief Cleanup a GenAI pending request
+	 *
+	 * Removes the request from the pending map, closes the socketpair fd,
+	 * removes from epoll, and frees the original packet. Called after
+	 * the response is processed or on error.
+	 *
+	 * @param request_id The request ID to clean up
+	 *
+	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async()
+	 */
+	void genai_cleanup_request(uint64_t request_id);
+
+	/**
+	 * @brief Check for pending GenAI responses
+	 *
+	 * Performs a non-blocking epoll_wait on the session's GenAI epoll fd
+	 * to check if any responses are ready. If a response is found, it's
+	 * processed immediately by calling handle_genai_response().
+	 *
+	 * This is called from the main handler() loop in the WAITING_CLIENT_DATA
+	 * case to ensure GenAI responses are processed promptly even when
+	 * there's no new client data.
+	 *
+	 * @return true if a response was processed, false if no responses were ready
+	 *
+	 * @see handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response()
+	 */
+	bool check_genai_events();
+#endif
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly();
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
 	void handler___status_WAITING_CLIENT_DATA___default();
@@ -329,12 +440,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	int mirror_hostgroup;
 	int mirror_flagOUT;
 	unsigned int active_transactions;
-	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
 	int to_process;
-	int pending_connect;
 	enum proxysql_session_type session_type;
-	int warning_in_hg;
 
 	// bool
 	bool autocommit;
@@ -354,6 +462,8 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
 #endif // 0
+	int warning_in_hg;
+	int autocommit_on_hostgroup;
 	/**
 	 * @brief This status variable tracks whether the session is performing an
 	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
@@ -371,13 +481,17 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//uint64_t gtid_trxid;
 	int gtid_hid;
 
-//	MySQL_STMTs_meta *sess_STMTs_meta;
-//	StmtLongDataHandler *SLDH;
+	MySQL_STMTs_meta *sess_STMTs_meta;
+	StmtLongDataHandler *SLDH;
 
 	Session_Regex **match_regexes;
 
 	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
+	// Fast forward grace close flags: track backend closure during fast forward mode
+	// to allow pending client data to drain before closing the session.
+	bool backend_closed_in_fast_forward;
+	unsigned long long fast_forward_grace_start_time;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum mysql_variable_name changing_variable_idx;
@@ -443,8 +557,28 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
 	void set_previous_status_mode3(bool allow_execute=true);
+	char* get_current_query(int max_length = -1);
+	/**
+	 * @brief Attempts to get the server version string from a backend connection in the specified hostgroup.
+	 * @details This function iterates through servers in the hostgroup and checks for any available
+	 *   free connections to extract the server version string. It does NOT remove the connection
+	 *   from the pool - it only peeks at the version information.
+	 *
+	 * @param hostgroup_id The hostgroup ID to search for backend connections.
+	 * @return Pointer to the server version string if found, NULL otherwise.
+	 *         Note: The returned pointer points to the connection's internal data and should
+	 *         not be freed or modified. The pointer is only valid while the connection exists.
+	 */
+	char * get_backend_version_for_hostgroup(int hostgroup_id);
 
 	friend void SQLite3_Server_session_handler(MySQL_Session*, void *_pa, PtrSize_t *pkt);
+
+#if defined(__clang__)
+	template<typename SESS, typename DS, typename BE, typename THD>
+	friend class Base_Session;
+#else
+	friend class Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL_Backend, MySQL_Thread>;
+#endif
 };
 
 #define KILL_QUERY       1

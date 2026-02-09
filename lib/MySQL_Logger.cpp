@@ -64,6 +64,7 @@ struct BufferTypeInfo {
 // Helper lambda to convert binary data to a hex string.
 auto binaryToHex = [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
 	std::ostringstream oss;
+	oss << "0x";
 	const unsigned char* data = reinterpret_cast<const unsigned char*>(bind->buffer);
 	for (unsigned long i = 0; i < len; i++) {
 		oss << std::setw(2) << std::setfill('0') << std::hex << (int)data[i];
@@ -109,7 +110,7 @@ static const std::unordered_map<unsigned int, BufferTypeInfo> bufferTypeInfoMap 
 	},
 	{ MYSQL_TYPE_TIMESTAMP,
 		{ "TIMESTAMP", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
-			binaryToHex(bind, len, out);
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
 		}}
 	},
 	{ MYSQL_TYPE_LONGLONG,
@@ -125,17 +126,17 @@ static const std::unordered_map<unsigned int, BufferTypeInfo> bufferTypeInfoMap 
 	},
 	{ MYSQL_TYPE_DATE,
 		{ "DATE", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
-			binaryToHex(bind, len, out);
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
 		}}
 	},
 	{ MYSQL_TYPE_TIME,
 		{ "TIME", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
-			binaryToHex(bind, len, out);
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
 		}}
 	},
 	{ MYSQL_TYPE_DATETIME,
 		{ "DATETIME", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
-			binaryToHex(bind, len, out);
+			binaryToHex(bind, sizeof(MYSQL_TIME), out);
 		}}
 	},
 	{ MYSQL_TYPE_YEAR,
@@ -216,12 +217,12 @@ static const std::unordered_map<unsigned int, BufferTypeInfo> bufferTypeInfoMap 
 	},
 	{ MYSQL_TYPE_VAR_STRING,
 		{ "VAR_STRING", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
-			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+			binaryToHex(bind, len, out);
 		}}
 	},
 	{ MYSQL_TYPE_STRING,
 		{ "STRING", [](const MYSQL_BIND* bind, unsigned long len, std::string &out) {
-			out.assign(reinterpret_cast<char*>(bind->buffer), len);
+			binaryToHex(bind, len, out);
 		}}
 	},
 	{ MYSQL_TYPE_GEOMETRY,
@@ -523,6 +524,11 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 		case PROXYSQL_SQLITE_AUTH_QUIT:
 			write_auth(f, sess);
 			break;
+		case PROXYSQL_METADATA:
+			if (mysql_thread___eventslog_format==1) { // format 1 , binary
+				total_bytes=write_query_format_1(f);
+			}
+			break;
 		default:
 			break;
 	}
@@ -740,7 +746,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 		// Validate Session and Statement Metadata:
 		// The code checks whether the session pointer and the current query's statement metadata (stmt_meta)
 		// are non-null to ensure that parameter details are available.
-		if (session != nullptr && session->CurrentQuery.stmt_meta != nullptr) {
+		if (mysql_thread___eventslog_stmt_parameters > 0 && session != nullptr && session->CurrentQuery.stmt_meta != nullptr) {
 			stmt_execute_metadata_t *meta = session->CurrentQuery.stmt_meta;
 			uint16_t num_params = meta->num_params;
 			// Add bytes for encoded parameter count.
@@ -757,6 +763,17 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 				const MYSQL_BIND *bind = meta->binds ? &meta->binds[i] : nullptr;
 				if (bind != nullptr && !(meta->is_nulls && meta->is_nulls[i])) {
 					unsigned long len = meta->lengths ? meta->lengths[i] : 0;
+					auto bt = bind->buffer_type;
+					switch (bt) {
+						case MYSQL_TYPE_TIMESTAMP:
+						case MYSQL_TYPE_DATE:
+						case MYSQL_TYPE_TIME:
+						case MYSQL_TYPE_DATETIME:
+							len = sizeof(MYSQL_TIME);
+							break;
+						default:
+							break;
+					}
 					// Use getValueForBind() to produce a string representation.
 					auto[valType, convVal] = getValueForBind(bind, len);
 					convertedValue = convVal;
@@ -866,7 +883,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 		// Validate Session and Statement Metadata:
 		// The code checks whether the session pointer and the current query's statement metadata (stmt_meta)
 		// are non-null to ensure that parameter details are available.
-		if (session != nullptr && session->CurrentQuery.stmt_meta != nullptr) {
+		if (mysql_thread___eventslog_stmt_parameters > 0 && session != nullptr && session->CurrentQuery.stmt_meta != nullptr) {
 			stmt_execute_metadata_t *meta = session->CurrentQuery.stmt_meta;
 			// Write the number of parameters.
 			// Writing the Encoded Parameter Count:
@@ -914,6 +931,17 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 					std::string convertedValue;
 					if (bind && bind->buffer && !(meta->is_nulls && meta->is_nulls[i])) {
 						unsigned long len = meta->lengths ? meta->lengths[i] : 0;
+						auto bt = bind->buffer_type;
+						switch (bt) {
+							case MYSQL_TYPE_TIMESTAMP:
+							case MYSQL_TYPE_DATE:
+							case MYSQL_TYPE_TIME:
+							case MYSQL_TYPE_DATETIME:
+								len = sizeof(MYSQL_TIME);
+								break;
+							default:
+								break;
+						}
 						auto[valType, convVal] = getValueForBind(bind, len);
 						convertedValue = convVal;
 					} else {
@@ -934,6 +962,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 			// Deterministic binary logging: always report 0 parameters.
 			uint16_t num_params = 0;
 			uint8_t paramCountLen = mysql_encode_length(num_params, buf);
+			write_encoded_length(buf, num_params, paramCountLen, buf[0]);
 			f->write((char *)buf, paramCountLen);
 		}
 	}
@@ -1073,7 +1102,9 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	}
 	if (et == PROXYSQL_COM_STMT_EXECUTE) {
 		if (session != nullptr) {
-			extractStmtExecuteMetadataToJson(j);
+			if (mysql_thread___eventslog_stmt_parameters != 0) {
+				extractStmtExecuteMetadataToJson(j);
+			}
 		}
 	}
 
@@ -1250,6 +1281,26 @@ void MySQL_Logger::events_open_log_unlocked() {
 	try {
 		events.logfile->open(filen , std::ios::out | std::ios::binary);
 		proxy_info("Starting new mysql event log file %s\n", filen);
+		if (mysql_thread___eventslog_format == 1) {
+			// create a new event, type PROXYSQL_METADATA, that writes the ProxySQL version as part of the payload
+			json j = {};
+			j["version"] = string(PROXYSQL_VERSION);
+			string msg = j.dump();
+			MySQL_Event metaEvent(
+				PROXYSQL_METADATA,    // event type for metadata
+				0,                    // thread_id (0 for metadata events)
+				(char*)msg.c_str(),   // using "metadata" as the username
+				(char*)"",            // empty schemaname
+				0,                    // start_time (current time)
+				0,                    // end_time (current time)
+				0,                    // query_digest not used for metadata
+				(char *)"",           // client field holds the version string
+				0,                    // length of version string
+				nullptr               // no session associated
+			);
+			metaEvent.set_query((char *)"",0);
+			metaEvent.write(events.logfile, nullptr);
+		}
 	}
 	catch (const std::ofstream::failure&) {
 		proxy_error("Error creating new mysql event log file %s\n", filen);

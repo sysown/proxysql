@@ -1,3 +1,24 @@
+# Internal Repos
+priv-infra/
+
+# direnv
+.envrc.local
+
+
+# Intelij
+.idea/
+
+# VS Code
+.vs/
+
+# Sonar
+.scannerwork/
+.vs/
+bw-output/
+out/
+sonar/
+
+
 # Object files
 *.o
 *.ko
@@ -94,14 +115,17 @@ deps/pcre/pcre-*/
 deps/prometheus-cpp/prometheus-cpp-*/
 deps/re2/re2-*/
 deps/sqlite3/sqlite-amalgamation-*/
+deps/sqlite3/sqlite-rembed-*/
 deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
+deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
 
 test/.vagrant
 .DS_Store
 proxysql-tests.ini
 test/sqlite_history_convert
+test/rag/test_rag_schema
 
 #heaptrack
 heaptrack.*
@@ -150,3 +174,10 @@ proxysql-save.cfg
 test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
+.aider*
+GEMINI.md
+
+# Database discovery output files
+discovery_*.md
+database_discovery_report.md
+scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/tmp/

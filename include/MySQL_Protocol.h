@@ -75,7 +75,8 @@ class MySQL_ResultSet {
 };
 
 
-uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
+uint8_t mysql_decode_length(unsigned char *ptr, uint32_t *len);
+uint8_t mysql_decode_length_ll(unsigned char *ptr, uint64_t *len);
 
 /**
  * @brief ProxySQL replacement function for 'mysql_stmt_close'. Closes a
@@ -232,7 +233,9 @@ class MySQL_Protocol {
 	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id=0);
 	void generate_STMT_PREPARE_RESPONSE_OK(uint8_t sequence_id, uint32_t stmt_id);
 
-	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta);
+	stmt_execute_metadata_t * get_binds_from_pkt(
+		PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta
+	);
 
 	bool generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt);
 

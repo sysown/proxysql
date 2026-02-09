@@ -902,6 +902,7 @@ int main(int argc, char** argv) {
 		}
 		MYSQL_QUERY(admin, set_log_mode.c_str());
 		MYSQL_QUERY(admin, "SET mysql-eventslog_default_log=1");
+		MYSQL_QUERY(admin, "SET mysql-eventslog_stmt_parameters=1");
 		MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		MYSQL_QUERY(proxy, "DROP TABLE IF EXISTS test.prepared_log_test");
 		MYSQL_QUERY(proxy, create_table_query_ext().c_str());

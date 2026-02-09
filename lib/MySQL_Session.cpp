@@ -14,6 +14,10 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
+#include "GenAI_Thread.h"
+#include "AI_Features_Manager.h"
+#include "LLM_Bridge.h"
+#include "Anomaly_Detector.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
 #include "MySQL_Authentication.hpp"
@@ -56,6 +60,13 @@ using json = nlohmann::json;
 #define SELECT_VARIABLE_IDENTITY_LEN 17
 #define SELECT_VARIABLE_IDENTITY_LIMIT1 "SELECT @@IDENTITY LIMIT 1"
 #define SELECT_VARIABLE_IDENTITY_LIMIT1_LEN 25
+#define SELECT_MYSQL_VERSION "SELECT @@version"
+#define SELECT_MYSQL_VERSION_LEN 16
+#define SELECT_MYSQL_VERSION_FUNC "SELECT VERSION()"
+#define SELECT_MYSQL_VERSION_FUNC_LEN 16
+
+#define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
+#define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
 #define EXPMARIA
 
@@ -142,6 +153,11 @@ extern SQLite3_Server *GloSQLite3Server;
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
+
+#ifdef PROXYSQLGENAI
+extern AI_Features_Manager *GloAI;
+extern GenAI_Threads_Handler *GloGATH;
+#endif /* PROXYSQLGENAI */
 
 /**
  * @brief Converts session type to a human-readable string.
@@ -308,13 +324,13 @@ void* kill_query_thread(void *arg) {
 	char buf[100];
 	switch (ka->kill_type) {
 		case KILL_QUERY:
-			sprintf(buf,"KILL QUERY %lu", ka->id);
+			snprintf(buf, sizeof(buf), "KILL QUERY %lu", ka->id);
 			break;
 		case KILL_CONNECTION:
-			sprintf(buf,"KILL CONNECTION %lu", ka->id);
+			snprintf(buf, sizeof(buf), "KILL CONNECTION %lu", ka->id);
 			break;
 		default:
-			sprintf(buf,"KILL %lu", ka->id);
+			snprintf(buf, sizeof(buf), "KILL %lu", ka->id);
 			break;
 	}
 	//! Executes the KILL command using mysql_query() on the established MySQL connection. Note that this call is blocking.
@@ -657,6 +673,7 @@ MySQL_Session::MySQL_Session() {
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
+	previous_hostgroup=-1;
 	locked_on_hostgroup=-1;
 	locked_on_hostgroup_and_all_variables_set=false;
 	next_query_flagIN=-1;
@@ -681,6 +698,9 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+	this->wait_timeout = mysql_thread___wait_timeout;
+	backend_closed_in_fast_forward = false;
+	fast_forward_grace_start_time = 0;
 }
 
 /**
@@ -712,6 +732,8 @@ void MySQL_Session::reset() {
 	mybe=NULL;
 
 	with_gtid = false;
+	backend_closed_in_fast_forward = false;
+	fast_forward_grace_start_time = 0;
 
 	//gtid_trxid = 0;
 	gtid_hid = -1;
@@ -1082,6 +1104,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["active_transactions"] = active_transactions;
 	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
 	j["warning_in_hg"] = warning_in_hg;
+	j["wait_timeout"] = this->wait_timeout;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	json& jqpo = j["qpo"];
@@ -1089,6 +1112,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
+	j["fast_forward"] = session_fast_forward;
 	if (client_myds != NULL) { // only if client_myds is defined
 		client_myds->get_client_myds_info_json(j);
 	}
@@ -1392,6 +1416,34 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
+
+	// Handle SHOW STATUS LIKE 'Ssl_version%'
+	if ((pkt->size >= SHOW_STATUS_LIKE_SSL_VERSION_LEN + 5) && (strncasecmp(SHOW_STATUS_LIKE_SSL_VERSION, (char*)pkt->ptr + 5, SHOW_STATUS_LIKE_SSL_VERSION_LEN) == 0)) {
+		SQLite3_result* resultset = new SQLite3_result(2);
+		resultset->add_column_definition(SQLITE_TEXT, "Variable_name");
+		resultset->add_column_definition(SQLITE_TEXT, "Value");
+
+		const char* ssl_version = "";
+		if (client_myds->encrypted && client_myds->ssl) {
+			ssl_version = SSL_get_version(client_myds->ssl);
+		}
+
+		char* pta[2];
+		pta[0] = (char*)"Ssl_version";
+		pta[1] = (char*)ssl_version;
+		resultset->add_row(pta);
+
+		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+		delete resultset;
+
+		if (mirror == false) {
+			RequestEnd(NULL);
+		}
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
+
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
 	if ( (pkt->size >= 22 + 5) && (strncasecmp((char *)"LOAD DATA LOCAL INFILE",(char *)pkt->ptr+5, 22)==0) ) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
@@ -2786,9 +2838,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	return false;
 }
 
-
 bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
-	//fprintf(stderr,"CONNECTING_SERVER\n");
 	unsigned long long curtime=monotonic_time();
 	thread->atomic_curtime=curtime;
 	if (mirror) {
@@ -2898,7 +2948,69 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				myds->wait_until=0;
-				if (session_fast_forward) {
+
+				// NOTE: Even if a connection has correctly been created, since the CLIENT_DEPRECATE_EOF
+				// capability isn't always enforced to match for backend conns (no direct propagation), a
+				// mismatch can take place after the creation. Right now this is only true for
+				// 'CLIENT_DEPRECATE_EOF' since the other capabilities are propagated from client.
+				if (!client_myds->myconn->match_ff_req_options(mybe->server_myds->myconn)) {
+					if (myds->connect_retries_on_failure > 0) {
+						proxy_info(
+							"Failed to obtain suitable connection for fast-forward; server lacks the required capabilities"
+								"   hostgroup=%d client_flags=%u server_capabilities=%lu\n",
+							current_hostgroup,
+							client_myds->myconn->options.client_flag,
+							mybe->server_myds->myconn->mysql->server_capabilities
+						);
+
+						const MySrvC* parent { myconn->parent };
+						MyHGM->p_update_mysql_error_counter(
+							p_mysql_error_type::proxysql, parent->myhgc->hid, parent->address, parent->port,
+							ER_PROXYSQL_FAST_FORWARD_CONN_CREATE
+						);
+						myds->connect_retries_on_failure--;
+						myds->destroy_MySQL_Connection_From_Pool(false);
+
+						// We are still in 'FAST_FORWARD' and we require a new connection, since we are
+						// moving to 'CONNECTING_SERVER' the previous status shouldn't be consumed.
+						previous_status.push(st);
+
+						// NOTE-connect_retries_delay: In case of failure to connect, if
+						// 'mysql_thread___connect_retries_delay' is set, we impose a delay in the session
+						// processing via 'pause_until'. Complementary NOTE above.
+						if (mysql_thread___connect_retries_delay) {
+							pause_until = thread->curtime + mysql_thread___connect_retries_delay*1000;
+							set_status(CONNECTING_SERVER);
+
+							return false;
+						}
+
+						NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+					} else {
+						char buf[256] = { 0 };
+						cstr_format(buf,
+							"Fast-forward connection attempt failed; server lacks the required capabilities"
+								"   hostgroup=%d client_flags=%u server_capabilities=%lu\n",
+							current_hostgroup,
+							client_myds->myconn->options.client_flag,
+							mybe->server_myds->myconn->mysql->server_capabilities
+						);
+
+						client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1815, (char *)"HY000", buf, true);
+
+						while (previous_status.size()) {
+							st=previous_status.top();
+							previous_status.pop();
+						}
+
+						myds->destroy_MySQL_Connection_From_Pool(true);
+						myds->max_connect_time=0;
+
+						NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+					}
+				}
+
+				if (session_fast_forward==true) {
 					// we have a successful connection and session_fast_forward enabled
 					// set DSS=STATE_SLEEP or it will believe it have to use MARIADB client library
 					myds->DSS=STATE_SLEEP;
@@ -2956,7 +3068,6 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 						sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate, errmsg.c_str(), true);
 					} else {
-						char buf[256];
 						errmsg = "Max connect failure while reaching hostgroup " + to_string(current_hostgroup);
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000", errmsg.c_str(), true);
 						if (thread) {
@@ -3261,7 +3372,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			l_free(pkt.size,pkt.ptr);
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
-			CurrentQuery.end_time=thread->curtime;
+			CurrentQuery.set_end_time(thread->curtime);
 			CurrentQuery.end();
 		} else {
 			mybe=find_or_create_backend(current_hostgroup);
@@ -3354,7 +3465,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (stmt_meta==NULL) { // we couldn't find any metadata
 			stmt_meta_found=false;
 		}
-		stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info, &stmt_meta);
+		stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt,stmt_info, &stmt_meta);
 		if (stmt_meta==NULL) {
 			l_free(pkt.size,pkt.ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3507,6 +3618,952 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	return false;
 }
 
+#ifdef PROXYSQLGENAI
+/**
+ * @brief AI-based anomaly detection for queries
+ *
+ * Uses the Anomaly_Detector to perform multi-stage security analysis:
+ * - SQL injection pattern detection (regex-based)
+ * - Rate limiting per user/host
+ * - Statistical anomaly detection
+ * - Embedding-based threat similarity
+ *
+ * @return true if query should be blocked, false otherwise
+ */
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly() {
+	// Check if AI features are available
+	if (!GloAI) {
+		return false;
+	}
+
+	Anomaly_Detector* detector = GloAI->get_anomaly_detector();
+	if (!detector) {
+		return false;
+	}
+
+	// Get user and client information
+	char* username = NULL;
+	char* client_address = NULL;
+	if (client_myds && client_myds->myconn && client_myds->myconn->userinfo) {
+		username = client_myds->myconn->userinfo->username;
+	}
+	if (client_myds && client_myds->addr.addr) {
+		client_address = client_myds->addr.addr;
+	}
+
+	if (!username) username = (char*)"";
+	if (!client_address) client_address = (char*)"";
+
+	// Get schema name if available
+	std::string schema = "";
+	if (client_myds && client_myds->myconn && client_myds->myconn->userinfo && client_myds->myconn->userinfo->schemaname) {
+		schema = client_myds->myconn->userinfo->schemaname;
+	}
+
+	// Build query string
+	std::string query((char *)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+
+	// Run anomaly detection
+	AnomalyResult result = detector->analyze(query, username, client_address, schema);
+
+	// Handle anomaly detected
+	if (result.is_anomaly) {
+		thread->status_variables.stvar[st_var_ai_detected_anomalies]++;
+
+		// Log the anomaly with details
+		proxy_error("AI Anomaly detected from %s@%s (risk: %.2f, type: %s): %s\n",
+		           username, client_address, result.risk_score,
+		           result.anomaly_type.c_str(), result.explanation.c_str());
+		fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+		fprintf(stderr, "\n");
+
+		// Check if should block
+		if (result.should_block) {
+			thread->status_variables.stvar[st_var_ai_blocked_queries]++;
+
+			// Generate error message
+			char err_msg[512];
+			snprintf(err_msg, sizeof(err_msg),
+			        "AI Anomaly Detection: Query blocked due to %s (risk score: %.2f)",
+			        result.explanation.c_str(), result.risk_score);
+
+			// Send error to client
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1313,
+			                                       (char*)"HY000", err_msg, true);
+			RequestEnd(NULL, 1313, err_msg);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+// Handler for GENAI: queries - experimental GenAI integration
+// Query formats:
+//   GENAI: {"type": "embed", "documents": ["doc1", "doc2", ...]}
+//   GENAI: {"type": "rerank", "query": "...", "documents": [...], "top_n": 5, "columns": 3}
+// Returns: Resultset with embeddings or reranked documents
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(const char* query, size_t query_len, PtrSize_t* pkt) {
+	// Skip leading space after "GENAI:"
+	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
+		query++;
+		query_len--;
+	}
+
+	if (query_len == 0) {
+		// Empty query after GENAI:
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1234, (char*)"HY000", "Empty GENAI: query", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Check GenAI module is initialized
+	if (!GloGATH) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1237, (char*)"HY000", "GenAI module is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+#ifdef epoll_create1
+	// Use async path with socketpair for non-blocking operation
+	if (!handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(query, query_len, pkt)) {
+		// Async send failed - error already sent to client
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Request sent asynchronously - don't free pkt, will be freed in response handler
+	// Return immediately, session is now free to handle other queries
+	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI: Query sent asynchronously, session continuing\n");
+#else
+	// Fallback to synchronous blocking path for systems without epoll
+	// Pass JSON query to GenAI module for autonomous processing
+	std::string json_query(query, query_len);
+	std::string result_json = GloGATH->process_json_query(json_query);
+
+	if (result_json.empty()) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1250, (char*)"HY000", "GenAI query processing failed", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Parse the JSON result and build MySQL resultset
+	try {
+		json result = json::parse(result_json);
+
+		if (!result.is_object()) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1251, (char*)"HY000", "GenAI returned invalid result format", true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		// Check if result is an error
+		if (result.contains("error") && result["error"].is_string()) {
+			std::string error_msg = result["error"].get<std::string>();
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1252, (char*)"HY000", (char*)error_msg.c_str(), true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		// Extract resultset data
+		if (!result.contains("columns") || !result["columns"].is_array()) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1253, (char*)"HY000", "GenAI result missing 'columns' field", true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		if (!result.contains("rows") || !result["rows"].is_array()) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1254, (char*)"HY000", "GenAI result missing 'rows' field", true);
+			l_free(pkt->size, pkt->ptr);
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			return;
+		}
+
+		auto columns = result["columns"];
+		auto rows = result["rows"];
+
+		// Build SQLite3 resultset
+		std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(columns.size()));
+
+		// Add column definitions
+		for (size_t i = 0; i < columns.size(); i++) {
+			if (columns[i].is_string()) {
+				std::string col_name = columns[i].get<std::string>();
+				resultset->add_column_definition(SQLITE_TEXT, (char*)col_name.c_str());
+			}
+		}
+
+		// Add rows
+		for (const auto& row : rows) {
+			if (!row.is_array()) continue;
+
+			// Create row data array
+			char** row_data = (char**)malloc(columns.size() * sizeof(char*));
+			size_t valid_cols = 0;
+
+			for (size_t i = 0; i < columns.size() && i < row.size(); i++) {
+				if (row[i].is_string()) {
+					std::string val = row[i].get<std::string>();
+					row_data[valid_cols++] = strdup(val.c_str());
+				} else if (row[i].is_null()) {
+					row_data[valid_cols++] = NULL;
+				} else {
+					// Convert to string
+					std::string val = row[i].dump();
+					// Remove quotes if present
+					if (val.size() >= 2 && val[0] == '"' && val[val.size()-1] == '"') {
+						val = val.substr(1, val.size() - 2);
+					}
+					row_data[valid_cols++] = strdup(val.c_str());
+				}
+			}
+
+			resultset->add_row(row_data);
+
+			// Free row data
+			for (size_t i = 0; i < valid_cols; i++) {
+				if (row_data[i]) free(row_data[i]);
+			}
+			free(row_data);
+		}
+
+		// Send resultset to client
+		SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+		                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+
+	} catch (const json::parse_error& e) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		std::string err_msg = "Failed to parse GenAI result: ";
+		err_msg += e.what();
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1255, (char*)"HY000", (char*)err_msg.c_str(), true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+	} catch (const std::exception& e) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		std::string err_msg = "Error processing GenAI result: ";
+		err_msg += e.what();
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1256, (char*)"HY000", (char*)err_msg.c_str(), true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+	}
+#endif  // epoll_create1 - fallback blocking path
+}
+
+// Handler for LLM: queries - Generic LLM bridge processing
+// Query format:
+//   LLM: Summarize the customer feedback
+//   LLM: Generate a Python function to validate emails
+//   LLM: Explain this SQL query: SELECT * FROM users
+// Returns: Resultset with the text response from LLM
+//
+// Note: This now uses the async GENAI path to avoid blocking MySQL threads.
+// The LLM query is converted to a JSON GENAI request and sent asynchronously.
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(const char* query, size_t query_len, PtrSize_t* pkt) {
+	// Skip leading space after "LLM:"
+	while (query_len > 0 && (*query == ' ' || *query == '\t')) {
+		query++;
+		query_len--;
+	}
+
+	if (query_len == 0) {
+		// Empty query after LLM:
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1240, (char*)"HY000", "Empty LLM: query", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Check GenAI module is initialized (LLM now uses GenAI module)
+	if (!GloGATH) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1241, (char*)"HY000", "GenAI module is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Check AI manager is available for LLM bridge
+	if (!GloAI) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1242, (char*)"HY000", "AI features module is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Get LLM bridge from AI manager
+	LLM_Bridge* llm_bridge = GloAI->get_llm_bridge();
+	if (!llm_bridge) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1243, (char*)"HY000", "LLM bridge is not initialized", true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Increment total requests counter
+	GloAI->increment_llm_total_requests();
+
+#ifdef epoll_create1
+	// Build JSON query for LLM operation
+	json json_query;
+	json_query["type"] = "llm";
+	json_query["prompt"] = std::string(query, query_len);
+	json_query["allow_cache"] = true;
+
+	// Add schema if available (for context)
+	if (client_myds->myconn->userinfo->schemaname) {
+		json_query["schema"] = std::string(client_myds->myconn->userinfo->schemaname);
+	}
+
+	std::string json_str = json_query.dump();
+
+	// Use async GENAI path to avoid blocking
+	if (!handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(json_str.c_str(), json_str.length(), pkt)) {
+		// Async send failed - error already sent to client
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Request sent asynchronously - don't free pkt, will be freed in response handler
+	// Return immediately, session is now free to handle other queries
+	proxy_debug(PROXY_DEBUG_GENAI, 2, "LLM: Query sent asynchronously via GenAI: %s\n", std::string(query, query_len).c_str());
+#else
+	// Fallback to synchronous blocking path for systems without epoll
+	// Build LLM request
+	LLMRequest req;
+	req.prompt = std::string(query, query_len);
+	req.schema_name = client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "";
+	req.allow_cache = true;
+	req.max_latency_ms = 0; // No specific latency requirement
+
+	// Call LLM bridge (blocking fallback)
+	LLMResult result = llm_bridge->process(req);
+
+	// Update performance counters based on result
+	if (result.cache_hit) {
+		GloAI->increment_llm_cache_hits();
+	} else {
+		GloAI->increment_llm_cache_misses();
+	}
+
+	// Update timing counters
+	GloAI->add_llm_response_time_ms(result.total_time_ms);
+	GloAI->add_llm_cache_lookup_time_ms(result.cache_lookup_time_ms);
+	GloAI->increment_llm_cache_lookups();
+
+	if (result.cache_hit) {
+		// For cache hits, we're done
+	} else {
+		// For cache misses, also count LLM call time and cache store time
+		GloAI->add_llm_cache_store_time_ms(result.cache_store_time_ms);
+		if (result.cache_store_time_ms > 0) {
+			GloAI->increment_llm_cache_stores();
+		}
+
+		// Update model call counters
+		char* prefer_local = GloGATH->get_variable((char*)"prefer_local_models");
+		bool prefer_local_models = prefer_local && (strcmp(prefer_local, "true") == 0);
+		if (prefer_local) free(prefer_local);
+
+		if (result.provider_used == "openai") {
+			// Check if it's a local call (Ollama) or cloud call
+			if (prefer_local_models &&
+			    (result.explanation.find("localhost") != std::string::npos ||
+			     result.explanation.find("127.0.0.1") != std::string::npos)) {
+				GloAI->increment_llm_local_model_calls();
+			} else {
+				GloAI->increment_llm_cloud_model_calls();
+			}
+		} else if (result.provider_used == "anthropic") {
+			GloAI->increment_llm_cloud_model_calls();
+		}
+	}
+
+	if (result.text_response.empty() && !result.error_code.empty()) {
+		// LLM processing failed
+		std::string err_msg = "LLM processing failed: ";
+		err_msg += result.error_code;
+		if (!result.error_details.empty()) {
+			err_msg += " - ";
+			err_msg += result.error_details;
+		}
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1244, (char*)"HY000", (char*)err_msg.c_str(), true);
+		l_free(pkt->size, pkt->ptr);
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
+
+	// Build resultset with the generated text response
+	std::vector<std::string> columns = {"text_response", "explanation", "cached", "provider"};
+	std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(columns.size()));
+
+	// Add column definitions
+	for (size_t i = 0; i < columns.size(); i++) {
+		resultset->add_column_definition(SQLITE_TEXT, (char*)columns[i].c_str());
+	}
+
+	// Add single row with the result
+	char** row_data = (char**)malloc(columns.size() * sizeof(char*));
+	row_data[0] = strdup(result.text_response.c_str());
+	row_data[1] = strdup(result.explanation.c_str());
+	row_data[2] = strdup(result.cached ? "true" : "false");
+	row_data[3] = strdup(result.provider_used.c_str());
+
+	resultset->add_row(row_data);
+
+	// Free row data
+	for (size_t i = 0; i < columns.size(); i++) {
+		free(row_data[i]);
+	}
+	free(row_data);
+
+	// Send resultset to client
+	SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+	                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+
+	l_free(pkt->size, pkt->ptr);
+	client_myds->DSS = STATE_SLEEP;
+	status = WAITING_CLIENT_DATA;
+
+	proxy_debug(PROXY_DEBUG_GENAI, 2, "LLM: Processed prompt '%s' [blocking fallback]\n",
+	            req.prompt.c_str());
+#endif
+}
+
+#ifdef epoll_create1
+/**
+ * @brief Send GenAI request asynchronously via socketpair
+ *
+ * This function implements the non-blocking async GenAI request path. It creates
+ * a socketpair for bidirectional communication with the GenAI module and sends
+ * the request immediately without waiting for the response.
+ *
+ * Async flow:
+ * 1. Create socketpair(fds) for bidirectional communication
+ * 2. Register fds[1] (GenAI side) with GenAI module via register_client()
+ * 3. Store request in pending_genai_requests_ map for later response matching
+ * 4. Send GenAI_RequestHeader + JSON query via fds[0]
+ * 5. Add fds[0] to session's genai_epoll_fd_ for response notification
+ * 6. Return immediately (MySQL thread is now free to process other queries)
+ *
+ * The response will be delivered asynchronously and handled by
+ * handle_genai_response() when the GenAI worker completes processing.
+ *
+ * Error handling:
+ * - On socketpair failure: Send ERR packet to client, return false
+ * - On register_client failure: Cleanup fds, send ERR packet, return false
+ * - On write failure: Cleanup request via genai_cleanup_request(), send ERR packet
+ * - On epoll add failure: Log warning but continue (request was sent successfully)
+ *
+ * Memory management:
+ * - Original packet is copied to pending.original_pkt for response generation
+ * - Memory is freed in genai_cleanup_request() when response is processed
+ *
+ * @param query JSON query string to send to GenAI module
+ * @param query_len Length of the query string
+ * @param pkt Original MySQL packet (for command number and later response)
+ * @return true if request was sent successfully, false on error
+ *
+ * @note This function is non-blocking and returns immediately after sending.
+ *       The actual GenAI processing happens in worker threads, not MySQL threads.
+ * @see handle_genai_response(), genai_cleanup_request(), check_genai_events()
+ */
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___genai_send_async(
+		const char* query, size_t query_len, PtrSize_t* pkt) {
+
+	// Create socketpair for async communication
+	int fds[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
+		proxy_error("GenAI: socketpair failed: %s\n", strerror(errno));
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1260, (char*)"HY000",
+			"Failed to create GenAI communication channel", true);
+		return false;
+	}
+
+	// Set MySQL side to non-blocking
+	int flags = fcntl(fds[0], F_GETFL, 0);
+	fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+
+	// Register GenAI side with GenAI module
+	if (!GloGATH->register_client(fds[1])) {
+		proxy_error("GenAI: Failed to register client fd %d with GenAI module\n", fds[1]);
+		close(fds[0]);
+		close(fds[1]);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1261, (char*)"HY000",
+			"Failed to register with GenAI module", true);
+		return false;
+	}
+
+	// Prepare request header
+	GenAI_RequestHeader hdr;
+	hdr.request_id = next_genai_request_id_++;
+	hdr.operation = GENAI_OP_JSON;
+	hdr.query_len = query_len;
+	hdr.flags = 0;
+	hdr.top_n = 0;
+
+	// Store request in pending map
+	GenAI_PendingRequest pending;
+	pending.request_id = hdr.request_id;
+	pending.client_fd = fds[0];
+	pending.json_query = std::string(query, query_len);
+	pending.start_time = std::chrono::steady_clock::now();
+
+	// Copy the original packet for later response
+	pending.original_pkt = (PtrSize_t*)malloc(sizeof(PtrSize_t));
+	if (!pending.original_pkt) {
+		proxy_error("GenAI: Failed to allocate memory for packet copy\n");
+		close(fds[0]);
+		close(fds[1]);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1262, (char*)"HY000",
+			"Memory allocation failed", true);
+		return false;
+	}
+	pending.original_pkt->ptr = pkt->ptr;
+	pending.original_pkt->size = pkt->size;
+
+	pending_genai_requests_[hdr.request_id] = pending;
+
+	// Send request header
+	ssize_t written = write(fds[0], &hdr, sizeof(hdr));
+	if (written != sizeof(hdr)) {
+		proxy_error("GenAI: Failed to write request header to fd %d: %s\n",
+					fds[0], strerror(errno));
+		genai_cleanup_request(hdr.request_id);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1263, (char*)"HY000",
+			"Failed to send request to GenAI module", true);
+		return false;
+	}
+
+	// Send JSON query
+	size_t total_written = 0;
+	while (total_written < query_len) {
+		ssize_t w = write(fds[0], query + total_written, query_len - total_written);
+		if (w <= 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				usleep(1000);
+				continue;
+			}
+			proxy_error("GenAI: Failed to write JSON query to fd %d: %s\n",
+						fds[0], strerror(errno));
+			genai_cleanup_request(hdr.request_id);
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1264, (char*)"HY000",
+				"Failed to send query to GenAI module", true);
+			return false;
+		}
+		total_written += w;
+	}
+
+	// Add to epoll for response notification
+	struct epoll_event ev;
+	ev.events = EPOLLIN;
+	ev.data.fd = fds[0];
+
+	if (epoll_ctl(genai_epoll_fd_, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+		proxy_error("GenAI: Failed to add fd %d to epoll: %s\n", fds[0], strerror(errno));
+		// Request is sent, but we won't be notified of response
+		// This is not fatal - we'll timeout eventually
+	}
+
+	proxy_debug(PROXY_DEBUG_GENAI, 3,
+				"GenAI: Sent async request %lu via fd %d (query_len=%zu)\n",
+				hdr.request_id, fds[0], query_len);
+
+	return true;  // Success - request sent asynchronously
+}
+
+/**
+ * @brief Handle GenAI response from socketpair
+ *
+ * This function is called when epoll notifies that data is available on a
+ * GenAI response file descriptor. It reads the response from the GenAI worker
+ * thread, processes the result, and sends the MySQL result packet to the client.
+ *
+ * Response handling flow:
+ * 1. Read GenAI_ResponseHeader from socketpair
+ * 2. Find matching pending request via request_id in pending_genai_requests_
+ * 3. Read JSON result payload (if result_len > 0)
+ * 4. Parse JSON and convert to MySQL resultset format
+ * 5. Send result packet (or ERR packet on error) to client
+ * 6. Cleanup resources via genai_cleanup_request()
+ *
+ * Response format (from GenAI worker):
+ * - GenAI_ResponseHeader (request_id, status_code, result_len, processing_time_ms)
+ * - JSON result payload (if result_len > 0)
+ *
+ * Error handling:
+ * - On read error: Find and cleanup pending request, return
+ * - On incomplete header: Log error, return
+ * - On unknown request_id: Log error, close fd, return
+ * - On status_code != 0: Send ERR packet to client with error details
+ * - On JSON parse error: Send ERR packet to client
+ *
+ * RTT (Round-Trip Time) tracking:
+ * - Calculates RTT from request start to response receipt
+ * - Logs RTT along with GenAI processing time for monitoring
+ *
+ * @param fd The MySQL side file descriptor from socketpair (fds[0])
+ *
+ * @note This function is called from check_genai_events() which is invoked
+ *       from the main handler() loop. It runs in the MySQL thread context.
+ * @see genai_send_async(), genai_cleanup_request(), check_genai_events()
+ */
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(int fd) {
+	// Read response header
+	GenAI_ResponseHeader resp;
+	ssize_t n = read(fd, &resp, sizeof(resp));
+
+	if (n < 0) {
+		// Check for non-blocking read - not an error, just no data yet
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			return;
+		}
+		// Real error - log and cleanup
+		proxy_error("GenAI: Error reading response header from fd %d: %s\n",
+					fd, strerror(errno));
+	} else if (n == 0) {
+		// Connection closed (EOF) - cleanup
+	} else {
+		// Successfully read header, continue processing
+		goto process_response;
+	}
+
+	// Cleanup path for error or EOF
+	for (auto& pair : pending_genai_requests_) {
+		if (pair.second.client_fd == fd) {
+			genai_cleanup_request(pair.first);
+			break;
+		}
+	}
+	return;
+
+process_response:
+
+	if (n != sizeof(resp)) {
+		proxy_error("GenAI: Incomplete response header from fd %d: got %zd, expected %zu\n",
+					fd, n, sizeof(resp));
+		return;
+	}
+
+	// Find the pending request
+	auto it = pending_genai_requests_.find(resp.request_id);
+	if (it == pending_genai_requests_.end()) {
+		proxy_error("GenAI: Received response for unknown request %lu\n", resp.request_id);
+		close(fd);
+		return;
+	}
+
+	GenAI_PendingRequest& pending = it->second;
+
+	// Read JSON result
+	std::string json_result;
+	if (resp.result_len > 0) {
+		json_result.resize(resp.result_len);
+		size_t total_read = 0;
+		while (total_read < resp.result_len) {
+			ssize_t r = read(fd, &json_result[total_read],
+							   resp.result_len - total_read);
+			if (r <= 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK) {
+					usleep(1000);
+					continue;
+				}
+				proxy_error("GenAI: Error reading JSON result from fd %d: %s\n",
+							fd, strerror(errno));
+				json_result.clear();
+				break;
+			}
+			total_read += r;
+		}
+	}
+
+	// Process the result
+	auto end_time = std::chrono::steady_clock::now();
+	int rtt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+		end_time - pending.start_time).count();
+
+	proxy_debug(PROXY_DEBUG_GENAI, 3,
+				"GenAI: Received response %lu (status=%u, result_len=%u, rtt=%dms, proc=%dms)\n",
+				resp.request_id, resp.status_code, resp.result_len, rtt_ms, resp.processing_time_ms);
+
+	// Check for errors
+	if (resp.status_code != 0 || json_result.empty()) {
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1265, (char*)"HY000",
+			"GenAI query processing failed", true);
+	} else {
+		// Parse JSON result and send resultset
+		try {
+			json result = json::parse(json_result);
+
+			if (!result.is_object()) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1266, (char*)"HY000",
+					"GenAI returned invalid result format", true);
+			} else if (result.contains("error") && result["error"].is_string()) {
+				std::string error_msg = result["error"].get<std::string>();
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1267, (char*)"HY000",
+					(char*)error_msg.c_str(), true);
+			} else if (!result.contains("columns") || !result.contains("rows")) {
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1268, (char*)"HY000",
+					"GenAI result missing required fields", true);
+			} else {
+				// Build and send resultset
+				auto columns = result["columns"];
+				auto rows = result["rows"];
+
+				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(columns.size()));
+
+				// Add column definitions
+				for (size_t i = 0; i < columns.size(); i++) {
+					if (columns[i].is_string()) {
+						std::string col_name = columns[i].get<std::string>();
+						resultset->add_column_definition(SQLITE_TEXT, (char*)col_name.c_str());
+					}
+				}
+
+				// Add rows
+				for (const auto& row : rows) {
+					if (!row.is_array()) continue;
+
+					size_t num_cols = row.size();
+					if (num_cols > columns.size()) num_cols = columns.size();
+
+					char** row_data = (char**)malloc(num_cols * sizeof(char*));
+					size_t valid_cols = 0;
+
+					for (size_t i = 0; i < num_cols; i++) {
+						if (!row[i].is_null()) {
+							std::string val;
+							if (row[i].is_string()) {
+								val = row[i].get<std::string>();
+							} else {
+								val = row[i].dump();
+							}
+							row_data[valid_cols++] = strdup(val.c_str());
+						}
+					}
+
+					resultset->add_row(row_data);
+
+					for (size_t i = 0; i < valid_cols; i++) {
+						if (row_data[i]) free(row_data[i]);
+					}
+					free(row_data);
+				}
+
+				// Send resultset to client
+				SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false,
+				                 (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+			}
+		} catch (const json::parse_error& e) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			std::string err_msg = "Failed to parse GenAI result: ";
+			err_msg += e.what();
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1269, (char*)"HY000",
+				(char*)err_msg.c_str(), true);
+		} catch (const std::exception& e) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			std::string err_msg = "Error processing GenAI result: ";
+			err_msg += e.what();
+			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1270, (char*)"HY000",
+				(char*)err_msg.c_str(), true);
+		}
+	}
+
+	// Cleanup the request
+	genai_cleanup_request(resp.request_id);
+
+	// Return to waiting state
+	client_myds->DSS = STATE_SLEEP;
+	status = WAITING_CLIENT_DATA;
+}
+
+/**
+ * @brief Cleanup a GenAI pending request
+ *
+ * This function cleans up all resources associated with a GenAI pending request.
+ * It is called after a response has been processed or when an error occurs.
+ *
+ * Cleanup operations:
+ * 1. Remove request from pending_genai_requests_ map
+ * 2. Close the socketpair file descriptor (client_fd)
+ * 3. Remove fd from genai_epoll_fd_ monitoring
+ * 4. Free the original packet memory (original_pkt)
+ *
+ * Resource cleanup details:
+ * - client_fd: The MySQL side of the socketpair (fds[0]) is closed
+ * - epoll: The fd is removed from genai_epoll_fd_ to stop monitoring
+ * - original_pkt: The copied packet memory is freed (ptr and size)
+ * - pending map: The request entry is removed from the map
+ *
+ * This function must be called exactly once per request to avoid:
+ * - File descriptor leaks (unclosed sockets)
+ * - Memory leaks (unfreed packets)
+ * - Epoll monitoring stale fds (removed from map but still in epoll)
+ *
+ * @param request_id The request ID to cleanup (must exist in pending_genai_requests_)
+ *
+ * @note This function is idempotent - if the request_id is not found, it safely
+ *       returns without error (useful for error paths where cleanup might be
+ *       called multiple times).
+ * @note If the request is not found in the map, this function silently returns
+ *       without error (this is intentional to avoid crashes on double cleanup).
+ *
+ * @see genai_send_async(), handle_genai_response()
+ */
+void MySQL_Session::genai_cleanup_request(uint64_t request_id) {
+	auto it = pending_genai_requests_.find(request_id);
+	if (it == pending_genai_requests_.end()) {
+		return;
+	}
+
+	GenAI_PendingRequest& pending = it->second;
+
+	// Remove from epoll
+	epoll_ctl(genai_epoll_fd_, EPOLL_CTL_DEL, pending.client_fd, nullptr);
+
+	// Close socketpair fds
+	close(pending.client_fd);
+
+	// Free the original packet
+	if (pending.original_pkt) {
+		l_free(pending.original_pkt->size, pending.original_pkt->ptr);
+		free(pending.original_pkt);
+	}
+
+	pending_genai_requests_.erase(it);
+
+	proxy_debug(PROXY_DEBUG_GENAI, 3, "GenAI: Cleaned up request %lu\n", request_id);
+}
+
+/**
+ * @brief Check for pending GenAI responses
+ *
+ * This function performs a non-blocking epoll_wait on the session's GenAI epoll
+ * file descriptor to check if any responses from GenAI workers are ready to be
+ * processed. It is called from the main handler() loop in the WAITING_CLIENT_DATA
+ * state to interleave GenAI response processing with normal client query handling.
+ *
+ * Event checking flow:
+ * 1. Early return if no pending requests (empty pending_genai_requests_)
+ * 2. Non-blocking epoll_wait with timeout=0 on genai_epoll_fd_
+ * 3. For each ready fd, find matching pending request
+ * 4. Call handle_genai_response() to process the response
+ * 5. Return true after processing one response (to re-check for more)
+ *
+ * Integration with main loop:
+ * ```cpp
+ * handler_again:
+ *     switch (status) {
+ *         case WAITING_CLIENT_DATA:
+ *             handler___status_WAITING_CLIENT_DATA();
+ * #ifdef epoll_create1
+ *             // Check for GenAI responses before processing new client data
+ *             if (check_genai_events()) {
+ *                 // GenAI response was processed, check for more
+ *                 goto handler_again;
+ *             }
+ * #endif
+ *             break;
+ *     }
+ * ```
+ *
+ * Non-blocking behavior:
+ * - epoll_wait timeout is 0 (immediate return)
+ * - Returns true only if a response was actually processed
+ * - Allows main loop to continue processing client queries between responses
+ *
+ * Return value:
+ * - true: A GenAI response was processed (caller should re-check for more)
+ * - false: No responses ready (caller can proceed to normal client handling)
+ *
+ * @return true if a GenAI response was processed, false otherwise
+ *
+ * @note This function is called from the main handler() loop on every iteration
+ *       when in WAITING_CLIENT_DATA state. It must return quickly to avoid
+ *       delaying normal client query processing.
+ * @note Only processes one response per call to avoid starving client handling.
+ *       The main loop will call again to process additional responses.
+ *
+ * @see handle_genai_response(), genai_send_async()
+ */
+bool MySQL_Session::check_genai_events() {
+#ifdef epoll_create1
+	if (pending_genai_requests_.empty()) {
+		return false;
+	}
+
+	const int MAX_EVENTS = 16;
+	struct epoll_event events[MAX_EVENTS];
+
+	int nfds = epoll_wait(genai_epoll_fd_, events, MAX_EVENTS, 0);  // Non-blocking check
+
+	if (nfds <= 0) {
+		return false;
+	}
+
+	for (int i = 0; i < nfds; i++) {
+		int fd = events[i].data.fd;
+
+		// Find the pending request for this fd
+		for (auto it = pending_genai_requests_.begin(); it != pending_genai_requests_.end(); ++it) {
+			if (it->second.client_fd == fd) {
+				handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_genai_response(fd);
+				return true;  // Processed one response
+			}
+		}
+	}
+
+	return false;
+#else
+	return false;
+#endif
+}
+#endif /* PROXYSQLGENAI */
+#endif
+
 // this function was inline inside MySQL_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
@@ -3579,6 +4636,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			break;
 		case _MYSQL_COM_RESET_CONNECTION:
 			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(pkt);
+			break;
+		case _MYSQL_COM_REFRESH:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_REFRESH(pkt);
 			break;
 		default:
 			return false;
@@ -3684,6 +4744,38 @@ int MySQL_Session::GPFC_Statuses2(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 		case FAST_FORWARD:
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+			/*
+			 * Fast Forward Grace Close Logic:
+			 * In fast forward mode, ProxySQL forwards packets without buffering them.
+			 * If the backend connection closes unexpectedly while client data is still
+			 * being sent, we risk data loss. To mitigate this, we implement a grace
+			 * period where the session remains open until all pending client output
+			 * buffers are drained or a timeout (mysql_thread___fast_forward_grace_close_ms)
+			 * is reached.
+			 *
+			 * This logic detects backend closure, starts the grace timer, and waits
+			 * for buffers to empty before closing the session.
+			 */
+			// Detect if backend closed during fast forward
+			if (mybe->server_myds->status == MYSQL_SERVER_STATUS_OFFLINE_HARD || mybe->server_myds->fd == -1) {
+				if (!backend_closed_in_fast_forward) {
+					backend_closed_in_fast_forward = true;
+					fast_forward_grace_start_time = thread->curtime;
+				}
+			}
+			if (backend_closed_in_fast_forward) {
+				if (
+					( mybe->server_myds == nullptr || ( mybe->server_myds && mybe->server_myds->PSarrayIN->len == 0 ) )
+					&&
+					(client_myds->PSarrayOUT->len == 0 && (client_myds->queueOUT.head - client_myds->queueOUT.tail) == 0)
+				) {
+					// buffers empty, close
+					handler_ret = -1;
+				} else if (thread->curtime - fast_forward_grace_start_time > (unsigned long long)mysql_thread___fast_forward_grace_close_ms * 1000) {
+					// timeout, close
+					handler_ret = -1;
+				}
+			}
 			break;
 		// This state is required because it covers the following situation:
 		//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.
@@ -3804,7 +4896,16 @@ void MySQL_Session::GPFC_PreparedStatements(PtrSize_t& pkt, unsigned char c) {
 	}
 }
 
-void MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned char c) {
+int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned char c) {
+	if (session_type != PROXYSQL_SESSION_MYSQL) { // only MySQL module supports replication!!
+		l_free(pkt.size,pkt.ptr);
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported");
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return 0;
+	}
+
 	// In this switch we handle commands that download binlog events from MySQL
 	// servers. For these commands a lot of the features provided by ProxySQL
 	// aren't useful, like multiplexing, query parsing, etc. For this reason,
@@ -3850,6 +4951,7 @@ void MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigne
 	// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
 	// we are now transitioning to 'FAST_FORWARD'.
 	mybe->server_myds->wait_until = 0;
+
 	if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
 		// NOTE: This section is entirely borrowed from 'STATE_SLEEP' for 'session_fast_forward'.
 		// Check comments there for extra information.
@@ -3868,6 +4970,30 @@ void MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigne
 		previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD
 		set_status(CONNECTING_SERVER); // now we need a connection
 	} else {
+		bool match_tracked {
+			// If DSS **IS** initialized, we **MUST** have a connection
+			mybe->server_myds->DSS != STATE_NOT_INITIALIZED
+			// Due to the first condition it's safe check the conn tracked options. Matching capabilities are
+			// mandatory for fast-forward transitions, otherwise session should be terminated.
+			&& client_myds->myconn->match_ff_req_options(mybe->server_myds->myconn)
+		};
+
+		// If a connection has been already acquired, but it doesn't match the required capabilities, the
+		// mismatch should be reported, and session should be killed.
+		if (!match_tracked) {
+			proxy_info(
+				"Failed to switch to fast-forward; session connection lacks the required capabilities"
+				"   hostgroup=%d client_flags=%u server_capabilities=%lu\n",
+				current_hostgroup,
+				client_myds->myconn->options.client_flag,
+				mybe->server_myds->myconn->mysql->server_capabilities
+			);
+			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+			mybe->server_myds->fd=0;
+
+			return -1;
+		}
+
 		// In case of having a connection, we need to make user to reset the state machine
 		// for current server 'MySQL_Data_Stream', setting it outside of any state handled
 		// by 'mariadb' library. Otherwise 'MySQL_Thread' will threat this
@@ -3902,6 +5028,8 @@ void MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigne
 		}
 		set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 	}	
+
+	return 0;
 }
 
 bool MySQL_Session::GPFC_QueryUSE(PtrSize_t& pkt, int& handler_ret) {
@@ -4115,6 +5243,15 @@ __get_pkts_from_client:
 												return handler_ret;
 											}
 										}
+										// AI-based anomaly detection
+#ifdef PROXYSQLGENAI
+										if (GloAI && GloAI->get_anomaly_detector()) {
+											if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly()) {
+												handler_ret = -1;
+												return handler_ret;
+											}
+										}
+#endif /* PROXYSQLGENAI */
 									}
 									if (rc_break==true) {
 										if (mirror==false) {
@@ -4218,7 +5355,8 @@ __get_pkts_from_client:
 							case _MYSQL_COM_BINLOG_DUMP:
 							case _MYSQL_COM_BINLOG_DUMP_GTID:
 							case _MYSQL_COM_REGISTER_SLAVE:
-								GPFC_Replication_SwitchToFastForward(pkt, c);
+								handler_ret = GPFC_Replication_SwitchToFastForward(pkt, c);
+								if (handler_ret) { return handler_ret; }
 								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
@@ -4830,6 +5968,13 @@ handler_again:
 		case WAITING_CLIENT_DATA:
 			// housekeeping
 			handler___status_WAITING_CLIENT_DATA();
+#ifdef epoll_create1
+			// Check for GenAI responses before processing new client data
+			if (check_genai_events()) {
+				// GenAI response was processed, check for more
+				goto handler_again;
+			}
+#endif
 			break;
 		case FAST_FORWARD:
 			if (mybe->server_myds->mypolls==NULL) {
@@ -5108,6 +6253,7 @@ handler_again:
 									NEXT_IMMEDIATE(CONNECTING_SERVER);
 								return handler_ret;
 							}
+							myconn = myds->myconn;
 							handler_minus1_GenerateErrorMessage(myds, myconn, wrong_pass);
 							RequestEnd(myds, myerr);
 							handler_minus1_HandleBackendConnection(myds, myconn);
@@ -5184,8 +6330,6 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_CONNECTING_SERVER(&rc))
 					goto handler_again;	// we changed status
-				//if (rc==1) //handler_again___status_CONNECTING_SERVER returns 1
-				//	goto __exit_DSS__STATE_NOT_INITIALIZED;
 			}
 			break;
 		case session_status___NONE:
@@ -5693,6 +6837,21 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_REFRESH(PtrSize_t *pkt) {
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_REFRESH packet\n");
+
+	l_free(pkt->size, pkt->ptr);
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+
+	unsigned int nTrx = NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
+	if (autocommit)
+		setStatus |= SERVER_STATUS_AUTOCOMMIT;
+
+	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
+	client_myds->DSS=STATE_SLEEP;
+}
+
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -5880,6 +7039,28 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 */
 	bool exit_after_SetParse = true;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
+
+#ifdef PROXYSQLGENAI
+	// Check for GENAI: queries - experimental GenAI integration
+	if (pkt->size > sizeof(mysql_hdr) + 7) { // Need at least "GENAI: " (7 chars after header)
+		const char* query_ptr = (const char*)pkt->ptr + sizeof(mysql_hdr) + 1;
+		size_t query_len = pkt->size - sizeof(mysql_hdr) - 1;
+
+		if (query_len >= 7 && strncasecmp(query_ptr, "GENAI:", 6) == 0) {
+			// This is a GENAI: query - handle with GenAI module
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___genai(query_ptr + 6, query_len - 6, pkt);
+			return true;
+		}
+
+		// Check for LLM: queries - Generic LLM bridge processing
+		if (query_len >= 5 && strncasecmp(query_ptr, "LLM:", 4) == 0) {
+			// This is a LLM: query - handle with LLM bridge
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___llm(query_ptr + 4, query_len - 4, pkt);
+			return true;
+		}
+	}
+#endif // PROXYSQLGENAI
+
 	if (qpo->new_query) {
 		handler_WCD_SS_MCQ_qpo_QueryRewrite(pkt);
 	}
@@ -6414,6 +7595,60 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection charset to %d\n", c->nr);
 							client_myds->myconn->set_charset(c->nr, NAMES);
 						}
+					} else if (var == "wait_timeout") {
+						std::string value = *values++;
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Client requested SET wait_timeout = %s\n", value.c_str());
+
+					// Increment counter for SET wait_timeout commands
+					thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
+
+						unsigned long long client_timeout = 0;
+						try {
+							client_timeout = std::stoull(value) * 1000;
+						} catch (const std::exception& e) {
+							char errmsg[128];
+							snprintf(errmsg, sizeof(errmsg),
+									 "Incorrect argument type wait_timeout value: %s", value.c_str());
+							client_myds->DSS = STATE_QUERY_SENT_NET;
+							client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr, 1, 1231, (char *)"42000", errmsg, true);
+							client_myds->DSS = STATE_SLEEP;
+							status = WAITING_CLIENT_DATA;
+							return true;
+						}
+
+						// Apply ProxySQL's safe limits: clamp between 1 second (1000ms) and 20 days (20*24*3600*1000ms)
+						const unsigned long long MIN_WAIT_TIMEOUT = 1000; // 1 second minimum
+						const unsigned long long MAX_WAIT_TIMEOUT = 20 * 24 * 3600 * 1000; // 20 days maximum
+
+						unsigned long long original_timeout = client_timeout;
+						if (client_timeout < MIN_WAIT_TIMEOUT) {
+							client_timeout = MIN_WAIT_TIMEOUT;
+						} else if (client_timeout > MAX_WAIT_TIMEOUT) {
+							client_timeout = MAX_WAIT_TIMEOUT;
+						}
+
+						// Warn if value was clamped due to ProxySQL limits
+						if (original_timeout != client_timeout) {
+							proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu ms, clamped to %llu ms (ProxySQL limits: 1s to 20 days)\n",
+											client_myds->addr.addr, client_myds->addr.port,
+											client_myds->myconn->userinfo->username,
+											original_timeout,
+											client_timeout);
+						}
+
+						// Warn if client's value exceeds current global timeout (after clamping)
+						if (client_timeout > static_cast<unsigned long long>(mysql_thread___wait_timeout)) {
+							proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu ms, exceeds the global mysql-wait_timeout = %d ms. Global timeout will still be enforced.\n",
+											client_myds->addr.addr, client_myds->addr.port,
+											client_myds->myconn->userinfo->username,
+											client_timeout,
+											mysql_thread___wait_timeout);
+						}
+
+						if (static_cast<unsigned long long>(this->wait_timeout) != client_timeout) {
+							this->wait_timeout = client_timeout;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection wait_timeout to %llu ms\n", client_timeout);
+						}
 					} else if (var == "tx_isolation") {
 						std::string value1 = *values;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET tx_isolation value %s\n", value1.c_str());
@@ -6816,6 +8051,88 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 	}
 
+	// handle case, about SELECT_MYSQL_VERSION or SELECT VERSION()
+	if ((pkt->size==SELECT_MYSQL_VERSION_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION,(char *)pkt->ptr+5,pkt->size-5)==0) ||
+		(pkt->size==SELECT_MYSQL_VERSION_FUNC_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION_FUNC,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+		char *version_to_return = NULL;
+		int mode = mysql_thread___select_version_forwarding;  // SelectVersionForwardingMode enum values
+
+		if (mode == SELECT_VERSION_ALWAYS) {
+			// always: proxy to backend, don't handle here
+			return false;
+		}
+		else if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL || mode == SELECT_VERSION_SMART_FALLBACK_PROXY) {
+			// smart modes: try to get version from backend connection, then fallback based on mode
+			int target_hg = (current_hostgroup >= 0) ? current_hostgroup : default_hostgroup;
+
+			if (target_hg >= 0) {
+				version_to_return = get_backend_version_for_hostgroup(target_hg);
+
+				// Check if backend is ProxySQL (to avoid recursion)
+				if (version_to_return && strstr(version_to_return, "ProxySQL")) {
+					version_to_return = NULL;
+				}
+			}
+
+			// Fallback behavior depends on mode
+			if (!version_to_return) {
+				if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL) {
+					// fallback to internal (ProxySQL) version
+					version_to_return = mysql_thread___server_version;
+				} else {
+					// SELECT_VERSION_SMART_FALLBACK_PROXY: fallback to proxying the query
+					return false;
+				}
+			}
+		}
+		else {
+			// SELECT_VERSION_NEVER (mode 0): use ProxySQL's version
+			version_to_return = mysql_thread___server_version;
+		}
+
+		// Generate response packet with version_to_return
+		char buf2[32];
+		int l0=0;
+		if (pkt->size == SELECT_MYSQL_VERSION_LEN+5)
+			l0 = strlen(SELECT_MYSQL_VERSION);
+		else
+			l0 = strlen(SELECT_MYSQL_VERSION_FUNC);
+		memcpy(buf2, (char *)pkt->ptr + 5, l0);
+		buf2[l0]=0;
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		MySQL_Data_Stream *myds=client_myds;
+		MySQL_Protocol *myprot=&client_myds->myprot;
+		myds->DSS=STATE_QUERY_SENT_DS;
+		int sid=1;
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",33,31,MYSQL_TYPE_VAR_STRING,0,0,false,0,NULL); sid++;
+		myds->DSS=STATE_COLUMN_DEFINITION;
+
+		bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
+		char **p=(char **)malloc(sizeof(char*)*1);
+		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+		l[0]= strlen(version_to_return);
+		p[0]=version_to_return;
+		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+		myds->DSS=STATE_ROW;
+		if (deprecate_eof_active) {
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,0,0,setStatus,0,NULL,true); sid++;
+		} else {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
+		myds->DSS=STATE_SLEEP;
+		RequestEnd(NULL);
+		l_free(pkt->size,pkt->ptr);
+		free(p);
+		free(l);
+		return true;
+	}
+
 	// handle command KILL #860
 	//if (prepared == false) {
 		if (handle_command_query_kill(pkt)) {
@@ -6875,6 +8192,62 @@ __exit_set_destination_hostgroup:
 		}
 	}
 	return false;
+}
+
+char * MySQL_Session::get_backend_version_for_hostgroup(int hostgroup_id) {
+	// Step 1: Validate input
+	if (hostgroup_id < 0) {
+		return NULL;
+	}
+
+	// Step 2: Access the global MySQL_HostGroups_Manager
+	// MyHGM is the global instance
+	MySQL_HostGroups_Manager *myhgm = MyHGM;
+	if (!myhgm) {
+		return NULL;
+	}
+
+	// Step 3: Lock for reading
+	// We only have wrlock(), no rdlock() - use wrlock() for safety
+	myhgm->wrlock();
+
+	// Step 4: Find the hostgroup
+	MyHGC *myhgc = myhgm->MyHGC_lookup(hostgroup_id);
+	if (!myhgc) {
+		// Hostgroup doesn't exist
+		myhgm->wrunlock();
+		return NULL;
+	}
+
+	// Step 5: Check if the hostgroup has any servers
+	if (!myhgc->mysrvs || !myhgc->mysrvs->servers || myhgc->mysrvs->servers->len == 0) {
+		myhgm->wrunlock();
+		return NULL;
+	}
+
+	// Step 6: Iterate through servers in the hostgroup
+	for (unsigned int i = 0; i < myhgc->mysrvs->servers->len; i++) {
+		MySrvC *mysrvc = myhgc->mysrvs->idx(i);
+		if (!mysrvc) {
+			continue;
+		}
+
+		// Step 7: Check if this server has any free connections
+		if (mysrvc->ConnectionsFree && mysrvc->ConnectionsFree->conns_length() > 0) {
+			// Step 8: Peek at the first free connection WITHOUT removing it
+			// ConnectionsFree::index() only returns a pointer, doesn't remove from array
+			MySQL_Connection *myconn = mysrvc->ConnectionsFree->index(0);
+			if (myconn && myconn->options.server_version) {
+				// Found a connection with a version string
+				myhgm->wrunlock();
+				return myconn->options.server_version;
+			}
+		}
+	}
+
+	// Step 9: No free connections found in any server of this hostgroup
+	myhgm->wrunlock();
+	return NULL;
 }
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *pkt) {
@@ -7018,7 +8391,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 }
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
-			// Get a MySQL Connection
+		// Get a MySQL Connection
 
 		MySQL_Connection *mc=NULL;
 		MySQL_Backend * _gtid_from_backend = NULL;
@@ -7091,7 +8464,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #ifdef STRESSTESTPOOL_MEASURE
 		timespec begint;
 		timespec endt;
-		clock_gettime(CLOCK_MONOTONIC,&begint);
+		clock_gettime(PROXYSQL_CLOCK_MONOTONIC, &begint);
 #endif // STRESSTESTPOOL_MEASURE
 		for (unsigned int loops=0; loops < NUM_SLOW_LOOPS; loops++) {
 #endif // STRESSTEST_POOL
@@ -7117,7 +8490,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 #ifdef STRESSTEST_POOL
 #ifdef STRESSTESTPOOL_MEASURE
-		clock_gettime(CLOCK_MONOTONIC,&endt);
+		clock_gettime(PROXYSQL_CLOCK_MONOTONIC, &endt);
 		thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
 			(endt.tv_sec*1000000000+endt.tv_nsec) -
 			(begint.tv_sec*1000000000+begint.tv_nsec);
@@ -7254,10 +8627,25 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
 			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
 				if (mysql_errno(mysql)==0 &&
-					(mysql_warning_count(mysql)==0 || 
+					(mysql_warning_count(mysql)==0 ||
 					 mysql_thread___query_cache_handle_warnings==1)) { // no errors
+					/**
+					 * @brief Check if the query result should be cached based on cache_empty_result setting
+					 *
+					 * The cache_empty_result field in query rule has three possible values:
+					 * - 1: Always cache the result, regardless of whether it's empty or not
+					 * - 0: Cache only non-empty results (num_rows > 0). Empty resultsets are not cached.
+					 * - -1: Use global setting (thread->variables.query_cache_stores_empty_result)
+					 *       OR cache if result is non-empty (num_rows > 0)
+					 *
+					 * Previously, when cache_empty_result was set to 0, nothing was cached at all.
+					 * This fix adds support for caching non-empty results when cache_empty_result=0.
+					 *
+					 * @see Issue #5248: Setting cache_empty_result to "0" on individual mysql_query_rules doesn't work
+					 */
 					if (
 						(qpo->cache_empty_result==1)
+						|| (qpo->cache_empty_result == 0 && MyRS->num_rows)
 						|| (
 							(qpo->cache_empty_result == -1)
 							&&
@@ -7431,7 +8819,7 @@ unsigned long long MySQL_Session::IdleTime() {
 void MySQL_Session::LogQuery(MySQL_Data_Stream *myds, const unsigned int myerrno, const char * errmsg) {
 	// we need to access statistics before calling CurrentQuery.end()
 	// so we track the time here
-	CurrentQuery.end_time=thread->curtime;
+	CurrentQuery.set_end_time(thread->curtime);
 
 	if (qpo) {
 		if (qpo->log==1) {
@@ -7482,6 +8870,46 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 		}
 		myds->free_mysql_real_query();
 	}
+
+	// NOTE: Unexpected-Ping-Handling: Section 2-2
+	///////////////////////////////////////////////////////////////////////////////////////////////
+	// Implements part-2 of the temporary workaround for the handling of unexpected 'COM_PING' packets
+	// received during query processing, while a resultset is yet being streamed to the client. We send a
+	// number of OK packets matching the 'queued' pings. This should ALWAYS be done before the session status
+	// goes back to 'WAITING_CLIENT_DATA', otherwise the flow between client-server could be compromised. By
+	// always sending the OK packets before this transisiton we ensure that the client doesn't hang waiting
+	// for response.
+	//
+	// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
+	// it will make the 'unexp_com_pings' field obsolete.
+	///////////////////////////////////////////////////////////////////////////////////////////////
+	if (client_myds->unexp_com_pings) {
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+
+		if (client_myds->unexp_com_pings) {
+			const string cli_addr { get_client_addr(this->client_myds->client_addr) };
+
+			while (client_myds->unexp_com_pings) {
+				proxy_warning(
+					"Sending OK packet for unexpected COM_PING packet   client_addr=\"%s\"\n",
+					cli_addr.c_str()
+				);
+
+				client_myds->pkt_sid += 1;
+				uint16_t st = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
+				if (autocommit) { st |= SERVER_STATUS_AUTOCOMMIT; }
+
+				client_myds->myprot.generate_pkt_OK(
+					true, NULL, NULL, client_myds->pkt_sid, 0, 0, st, 0, NULL
+				);
+				client_myds->unexp_com_pings--;
+			}
+		}
+
+		client_myds->DSS = STATE_SLEEP;
+	}
+	///////////////////////////////////////////////////////////////////////////
+
 	if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 		// reset status of the session
 		status=WAITING_CLIENT_DATA;
@@ -7601,7 +9029,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 				MySQL_Connection *mc = client_myds->myconn;
 				if (mc->userinfo && mc->userinfo->username) {
 					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
-						char* qu = query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
+						char* qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr), 
 							mysql_thread___query_digests_lowercase);
 						string nq=string(qu,strlen(qu));
 						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
@@ -7971,4 +9399,43 @@ void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection() {
 		}
 		warning_in_hg = -1;
 	}
+}
+
+char* MySQL_Session::get_current_query(int max_length) {
+	const char *query_ptr = NULL;
+	int query_len = 0;
+
+	if (!(mybe && mybe->server_myds && mybe->server_myds->myconn)) {
+		return NULL;
+	}
+
+	if (CurrentQuery.stmt_info == NULL) { // text protocol
+		query_ptr = reinterpret_cast<const char*>(CurrentQuery.QueryPointer);
+		query_len = CurrentQuery.QueryLength;
+	} else { // prepared statement
+		query_ptr = CurrentQuery.stmt_info->query;
+		query_len = CurrentQuery.stmt_info->query_length;
+	}
+
+	bool trunc_query = false;
+	if (max_length > 0 && query_len > max_length) {
+		query_len = max_length;
+		trunc_query = true;
+	}
+
+	char *res = NULL;
+
+	if (query_len > 0) {
+		res = (char *) malloc(query_len + 1);
+		if (trunc_query) {
+			// for truncated queries, add three dots at the end
+			memcpy(res, query_ptr, query_len - 3);
+			memcpy(res + (query_len - 3), "...", 3);
+		} else {
+			strncpy(res, query_ptr, query_len);
+		}
+		res[query_len] = '\0';
+	}
+
+	return res;
 }
