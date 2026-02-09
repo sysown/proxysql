@@ -5759,21 +5759,17 @@ std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
-	//sqlite3 *mondb=monitordb->get_db();
-	int rc;
-	//char *query=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
-	sqlite3_stmt *statement1=NULL;
 	char *query2=NULL;
 	query2=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log (hostname, port, time_start_us, success_time_us, error) VALUES (?1, ?2, ?3, ?4, ?5)";
-	sqlite3_stmt *statement2=NULL;
-	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
-	rc = monitordb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, monitordb);
-	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query2, -1, &statement2, 0);
-	rc = monitordb->prepare_v2(query2, &statement2);
-	ASSERT_SQLITE_OK(rc, monitordb);
+	auto [rc1, statement1_unique] = monitordb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, monitordb);
+	auto [rc2, statement2_unique] = monitordb->prepare_v2(query2);
+	ASSERT_SQLITE_OK(rc2, monitordb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement2 = statement2_unique.get();
+	int rc;
 	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
 	monitordb->execute((char *)"DELETE FROM mysql_server_aws_aurora_log");
 	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
@@ -5821,21 +5817,16 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 			}
 		}
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement2);
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_check_status() {
-	//sqlite3 *mondb=monitordb->get_db();
-	int rc;
-	//char *query=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_check_status VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
-	sqlite3_stmt *statement1=NULL;
-	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
-	rc = monitordb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, monitordb);
+	auto [rc1, statement1_unique] = monitordb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, monitordb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	int rc;
 	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
 	monitordb->execute((char *)"DELETE FROM mysql_server_aws_aurora_check_status");
 	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
@@ -5895,7 +5886,6 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_check_status() {
 		}
 */
 	}
-	(*proxy_sqlite3_finalize)(statement1);
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 }
 
@@ -7301,19 +7291,17 @@ void* monitor_ping_process_ready_task_thread(const std::vector<MySQL_Monitor_Sta
 	if (ready_mmsds.empty()) return NULL;
 
 	SQLite3DB* monitor_db = ready_mmsds.front()->mondb;
-	int rc;
-	sqlite3_stmt* statement1 = NULL;
-	sqlite3_stmt* statement32 = NULL;
-
 	const char* query1 = "INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1, ?2, ?3, ?4, ?5)";
 	std::string query32s = "INSERT OR REPLACE INTO mysql_server_ping_log VALUES " + generate_multi_rows_query(32, 5);
 	const char* query32 = query32s.c_str();
 
-	rc = monitor_db->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, monitor_db);
-
-	rc = monitor_db->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, monitor_db);
+	auto [rc1, statement1_unique] = monitor_db->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, monitor_db);
+	auto [rc2, statement32_unique] = monitor_db->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, monitor_db);
+	sqlite3_stmt* statement1 = statement1_unique.get();
+	sqlite3_stmt* statement32 = statement32_unique.get();
+	int rc;
 
 	size_t row_idx = 0;
 	size_t max_bulk_row_idx = (ready_mmsds.size() / 32) * 32;
@@ -7391,9 +7379,6 @@ void* monitor_ping_process_ready_task_thread(const std::vector<MySQL_Monitor_Sta
 
 		row_idx++;
 	}
-
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 
 	return NULL;
 }
@@ -7585,10 +7570,11 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 			return false;
 		}
 
-		sqlite3_stmt* statement = NULL;
 		const char* query = (char*)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-		int rc = mmsd->mondb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		auto [rc1, statement_unique] = mmsd->mondb->prepare_v2(query);
+		ASSERT_SQLITE_OK(rc1, mmsd->mondb);
+		sqlite3_stmt* statement = statement_unique.get();
+		int rc;
 		int read_only = 1; // as a safety mechanism , read_only=1 is the default
 		rc = (*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc = (*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -7672,7 +7658,6 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		SAFE_SQLITE3_STEP2(statement);
 		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		(*proxy_sqlite3_finalize)(statement);
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			//MyHGM->read_only_action_v2(mmsd->hostname, mmsd->port, read_only); // default behavior
@@ -8057,10 +8042,11 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 		}
 
 		if (strcasestr(server_version.c_str(), (const char *)SERVER_VERSION_READYSET) == NULL) {
-			sqlite3_stmt* statement = NULL;
 			const char* query = (char*)"INSERT OR REPLACE INTO mysql_server_replication_lag_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-			int rc = mmsd->mondb->prepare_v2(query, &statement);
-			ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			auto [rc1, statement_unique] = mmsd->mondb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc1, mmsd->mondb);
+			sqlite3_stmt* statement = statement_unique.get();
+			int rc;
 			// 'replication_lag' to be feed to 'replication_lag_action'
 			int repl_lag = -2;
 			bool override_repl_lag = true;
@@ -8133,13 +8119,13 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			//MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
-			(*proxy_sqlite3_finalize)(statement);
 			mysql_servers.push_back( replication_lag_server_t { mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag, override_repl_lag });
 		} else { // readyset
-			sqlite3_stmt* statement = NULL;
 			const char* query = (char*)"INSERT OR REPLACE INTO readyset_status_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-			int rc = mmsd->mondb->prepare_v2(query, &statement);
-			ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			auto [rc2, statement_unique2] = mmsd->mondb->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc2, mmsd->mondb);
+			sqlite3_stmt* statement = statement_unique2.get();
+			int rc;
 			unordered_map<string,string> status_output = {};
 			enum MySerStatus status = MYSQL_SERVER_STATUS_SHUNNED; // default status
 			rc = (*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -8188,7 +8174,6 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			MyHGM->set_Readyset_status(mmsd->hostname, mmsd->port, status);
-			(*proxy_sqlite3_finalize)(statement);
 		}
 	}
 
