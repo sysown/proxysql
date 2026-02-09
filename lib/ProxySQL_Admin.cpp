@@ -2320,7 +2320,7 @@ void* child_telnet(void* arg)
 	}
 	shutdown(client,SHUT_RDWR);
 	close(client);
-	return arg;
+	return NULL;
 }
 
 /*
