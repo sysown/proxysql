@@ -144,17 +144,17 @@ void write_x509(const char *filen, X509 *x) {
 	BIO_free_all( x509file );
 }
 
-void write_rsa_key(const char *filen, RSA *rsa) {
+void write_rsa_key(const char *filen, EVP_PKEY *pkey) {
 	BIO* pOut = BIO_new_file(filen, "w");
 	if (!pOut) {
 		proxy_error("Error on BIO_new_file\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	if (!PEM_write_bio_RSAPrivateKey( pOut, rsa, NULL, NULL, 0, NULL, NULL)) {
-		proxy_error("Error on PEM_write_bio_RSAPrivateKey for %s\n", filen);
+	if (!PEM_write_bio_PrivateKey(pOut, pkey, NULL, NULL, 0, NULL, NULL)) {
+		proxy_error("Error on PEM_write_bio_PrivateKey for %s\n", filen);
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	BIO_free_all( pOut );
+	BIO_free_all(pOut);
 }
 
 
@@ -219,7 +219,6 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 	X509 *x1;
 	X509 *x2;
 	EVP_PKEY *pk;
-	RSA *rsa;
 
 	// relative path to datadir of ssl files
 	const char * ssl_key_rp = (const char *)"proxysql-key.pem";
@@ -286,46 +285,38 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 	if (bootstrap == true && nfiles == 0) {
 		proxy_info("No SSL keys/certificates found in datadir (%s). Generating new keys/certificates.\n", GloVars.datadir);
 		if ((pkeyp == NULL) || (*pkeyp == NULL)) {
-			if ((pk = EVP_PKEY_new()) == NULL) {
-				proxy_error("Unable to run EVP_PKEY_new()\n");
+			// Generate RSA key using OpenSSL 3.0 EVP_PKEY API
+			EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+			if (!ctx) {
+				proxy_error("Unable to create EVP_PKEY_CTX for RSA\n");
 				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 			}
+			if (EVP_PKEY_keygen_init(ctx) <= 0) {
+				proxy_error("Unable to initialize EVP_PKEY keygen\n");
+				EVP_PKEY_CTX_free(ctx);
+				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			}
+			if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, bits) <= 0) {
+				proxy_error("Unable to set RSA key size\n");
+				EVP_PKEY_CTX_free(ctx);
+				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			}
+			if (EVP_PKEY_generate(ctx, &pk) <= 0) {
+				proxy_error("Unable to generate RSA key\n");
+				EVP_PKEY_CTX_free(ctx);
+				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			}
+			EVP_PKEY_CTX_free(ctx);
 		} else
 			pk = *pkeyp;
 
-		rsa = RSA_new();
+		write_rsa_key(ssl_key_fp, pk);
 
-		if (!rsa) {
-			proxy_error("Unable to run RSA_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		BIGNUM *e= BN_new();
-		if (!e) {
-			proxy_error("Unable to run BN_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		if (!BN_set_word(e, RSA_F4) || !RSA_generate_key_ex(rsa, bits, e, NULL)) {
-			RSA_free(rsa);
-			BN_free(e);
-			proxy_error("Unable to run BN_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		BN_free(e);
-
-
-		write_rsa_key(ssl_key_fp, rsa);
-
-		if (!EVP_PKEY_assign_RSA(pk, rsa)) {
-			proxy_error("Unable to run EVP_PKEY_assign_RSA()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
 		time_t t = time(NULL);
 		x1 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_CA_Certificate", t, 3650, NULL, NULL);
 		write_x509(ssl_ca_fp, x1);
 		x2 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_Server_Certificate", t, 3650, x1, pk);
 		write_x509(ssl_cert_fp, x2);
-
-		rsa = NULL;
 	} else {
 		proxy_info("SSL keys/certificates found in datadir (%s): loading them.\n", GloVars.datadir);
 		if (bootstrap == true) {
