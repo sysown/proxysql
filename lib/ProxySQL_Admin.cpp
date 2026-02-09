@@ -5061,9 +5061,6 @@ void ProxySQL_Admin::save_pgsql_firewall_whitelist_users_from_runtime(bool _runt
 void ProxySQL_Admin::save_mysql_firewall_whitelist_rules_from_runtime(bool _runtime, SQLite3_result *resultset) {
 	// NOTE: this function doesn't delete resultset. The caller must do it
 	if (resultset) {
-		int rc;
-		sqlite3_stmt *statement1=NULL;
-		sqlite3_stmt *statement32=NULL;
 		char *query1=NULL;
 		char *query32=NULL;
 		std::string query32s = "";
@@ -5076,10 +5073,13 @@ void ProxySQL_Admin::save_mysql_firewall_whitelist_rules_from_runtime(bool _runt
 			query32s = "INSERT INTO mysql_firewall_whitelist_rules VALUES " + generate_multi_rows_query(32,7);
 			query32 = (char *)query32s.c_str();
 		}
-		rc = admindb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, admindb);
-		rc = admindb->prepare_v2(query32, &statement32);
-		ASSERT_SQLITE_OK(rc, admindb);
+		auto [rc1, statement1_unique] = admindb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, admindb);
+		auto [rc2, statement32_unique] = admindb->prepare_v2(query32);
+		ASSERT_SQLITE_OK(rc2, admindb);
+		sqlite3_stmt *statement1 = statement1_unique.get();
+		sqlite3_stmt *statement32 = statement32_unique.get();
+		int rc;
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
 		max_bulk_row_idx=max_bulk_row_idx*32;
@@ -5113,17 +5113,12 @@ void ProxySQL_Admin::save_mysql_firewall_whitelist_rules_from_runtime(bool _runt
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 	}
 }
 
 void ProxySQL_Admin::save_pgsql_firewall_whitelist_rules_from_runtime(bool _runtime, SQLite3_result* resultset) {
 	// NOTE: this function doesn't delete resultset. The caller must do it
 	if (resultset) {
-		int rc;
-		sqlite3_stmt* statement1 = NULL;
-		sqlite3_stmt* statement32 = NULL;
 		char* query1 = NULL;
 		char* query32 = NULL;
 		std::string query32s = "";
@@ -5137,10 +5132,13 @@ void ProxySQL_Admin::save_pgsql_firewall_whitelist_rules_from_runtime(bool _runt
 			query32s = "INSERT INTO pgsql_firewall_whitelist_rules VALUES " + generate_multi_rows_query(32, 7);
 			query32 = (char*)query32s.c_str();
 		}
-		rc = admindb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, admindb);
-		rc = admindb->prepare_v2(query32, &statement32);
-		ASSERT_SQLITE_OK(rc, admindb);
+		auto [rc1, statement1_unique] = admindb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, admindb);
+		auto [rc2, statement32_unique] = admindb->prepare_v2(query32);
+		ASSERT_SQLITE_OK(rc2, admindb);
+		sqlite3_stmt* statement1 = statement1_unique.get();
+		sqlite3_stmt* statement32 = statement32_unique.get();
+		int rc;
 		int row_idx = 0;
 		int max_bulk_row_idx = resultset->rows_count / 32;
 		max_bulk_row_idx = max_bulk_row_idx * 32;
@@ -5175,8 +5173,6 @@ void ProxySQL_Admin::save_pgsql_firewall_whitelist_rules_from_runtime(bool _runt
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 	}
 }
 
