@@ -6296,7 +6296,6 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	auto [rc1, statement1_unique] = admindb->prepare_v2(q);
 	ASSERT_SQLITE_OK(rc1, admindb);
 	sqlite3_stmt *statement1 = statement1_unique.get();
-	int rc;
 	admindb->execute((char *)"BEGIN");
 	admindb->execute((char *)"DELETE FROM runtime_checksums_values");
 
@@ -6445,7 +6444,6 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 	ASSERT_SQLITE_OK(rc2, admindb);
 	sqlite3_stmt *f_statement1 = f_statement1_unique.get();
 	sqlite3_stmt *b_statement1 = b_statement1_unique.get();
-	int rc;
 
 	for (i=0; i<num_users; i++) {
 		account_details_t *ad=ads[i];
@@ -6526,7 +6524,7 @@ void ProxySQL_Admin::save_pgsql_users_runtime_to_database(bool _runtime) {
 	ASSERT_SQLITE_OK(rc2, admindb);
 	sqlite3_stmt* f_statement1 = f_statement1_unique.get();
 	sqlite3_stmt* b_statement1 = b_statement1_unique.get();
-	int rc;
+
 	for (i = 0; i < num_users; i++) {
 		//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
 		pgsql_account_details_t* ad = ads[i];
