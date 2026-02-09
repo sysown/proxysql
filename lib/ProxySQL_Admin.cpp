@@ -2637,13 +2637,10 @@ void update_modules_metrics() {
 	if (GloMyQC) {
 		GloMyQC->p_update_metrics();
 	}
-#if 0 // Turning off Prometheus metrics collection for PostgreSQL modules in ProxySQL
-	// Note: Query Cache metrics use shared template base class and would collide between MySQL and PostgreSQL
 	// Update pgsql query_cache metrics
 	if (GloPgQC) {
 		GloPgQC->p_update_metrics();
 	}
-#endif
 	// Update cluster metrics
 	if (GloProxyCluster) {
 		GloProxyCluster->p_update_metrics();
