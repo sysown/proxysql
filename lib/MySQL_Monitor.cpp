@@ -365,6 +365,30 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 					// close connection if not used for a while
 					unsigned long long then = *(unsigned long long*)mysql->net.buff;
 					if (now > (then + mysql_thread___monitor_ping_interval * 1000 * 10)) {
+#ifdef DEBUG
+						// CRITICAL FIX for issue #5256:
+						// When a connection becomes stale and is queued for closure, we MUST remove it
+						// from the DEBUG 'conns' array BEFORE queuing. If we don't:
+						// 1. The connection is closed (via destructor's close_mysql())
+						// 2. The connection pointer remains in 'conns' array
+						// 3. Later, malloc may reuse the same pointer for a new connection
+						// 4. conn_register() will find this pointer in 'conns' and assert
+						//
+						// The stale connection was added to 'conns' in a previous get_connection()
+						// call when it was retrieved from the pool. We need to remove it now.
+						for (unsigned int j=0; j<conns->len; j++) {
+							MYSQL *my1 = (MYSQL *)conns->index(j);
+							if (!my1) continue;
+							if (my1 == mysql) {
+								conns->remove_index_fast(j);
+								proxy_debug(PROXY_DEBUG_MONITOR, 7,
+									"Removing stale MYSQL with FD %d from DEBUG registry before closure: MYSQL %p\n",
+									mysql->net.fd, mysql);
+								break;
+							}
+						}
+#endif // DEBUG
+						// Queue the stale connection for asynchronous closure
 						MySQL_Monitor_State_Data* mmsd = new MySQL_Monitor_State_Data(MON_CLOSE_CONNECTION, (char*)"", 0, false);
 						mmsd->mysql = mysql;
 						GloMyMon->queue->add(new WorkItem<MySQL_Monitor_State_Data>(mmsd, NULL));
