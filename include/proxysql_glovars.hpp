@@ -121,8 +121,7 @@ class ProxySQL_GlobalVariables {
 #endif /* PROXYSQLCLICKHOUSE */
 
 #ifdef PROXYSQLGENAI
-		bool genai_enabled;
-		bool mcp_enabled;
+		bool genai;
 #endif /* PROXYSQLGENAI */
 
 		int gr_bootstrap_mode;

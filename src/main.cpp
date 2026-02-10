@@ -957,6 +957,10 @@ void ProxySQL_Main_init_main_modules() {
 
 #ifdef PROXYSQLGENAI
 void ProxySQL_Main_init_GenAI_module() {
+	GloGATH = new GenAI_Threads_Handler();
+	GloGATH->init();
+	proxy_info("GenAI Threads Handler initialized\n");
+
 	GloAI = new AI_Features_Manager();
 	GloAI->init();
 	proxy_info("AI Features module initialized\n");
@@ -1496,14 +1500,14 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
+
 #ifdef PROXYSQLGENAI
-	if (GloVars.global.genai_enabled) {
+	if (GloVars.global.genai) {
 		ProxySQL_Main_init_GenAI_module();
-	}
-	if (GloVars.global.mcp_enabled) {
 		ProxySQL_Main_init_MCP_module();
 	}
 #endif /* PROXYSQLGENAI */
+
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 
@@ -1602,18 +1606,6 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 
-	{
-		cpu_timer t;
-#ifdef PROXYSQLGENAI
-		if (GloVars.global.mcp_enabled && GloMCPH) {
-			ProxySQL_Main_init_MCP_module();
-		}
-#endif /* PROXYSQLGENAI */
-#ifdef DEBUG
-		std::cerr << "Main phase3 : MCP module initialized in ";
-#endif
-	}
-
 	unsigned int iter = 0;
 	do { sleep_iter(++iter); } while (load_ != 1);
 	load_ = 0;
@@ -1676,10 +1668,10 @@ void ProxySQL_Main_init_phase3___start_all() {
 
 #ifdef PROXYSQLGENAI
 	// GenAI
-	if (GloVars.global.genai_enabled && GloGATH) {
-		GloAdmin->init_genai_variables();
-	}
-	if (GloVars.global.mcp_enabled && GloMCPH) {
+	if (GloVars.global.genai) {
+		if (GloGATH)
+			GloAdmin->init_genai_variables();
+		if (GloMCPH)
 		GloAdmin->init_mcp_variables();
 	}
 #endif /* PROXYSQLGENAI */
