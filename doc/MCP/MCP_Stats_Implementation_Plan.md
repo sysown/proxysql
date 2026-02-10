@@ -64,7 +64,33 @@ Direct access via `statsdb_disk` is preferred for performance.
 
 **Never use `GloAdmin->statsdb` directly** — it's for internal ProxySQL use only.
 
-### 1.3 Query Execution Pattern
+### 1.3 Admin Commands vs. Direct Function Calls
+
+Some ProxySQL operations are exposed as admin commands (e.g., `DUMP EVENTSLOG FROM BUFFER TO MEMORY`, `SAVE MYSQL DIGEST TO DISK`). These commands are intercepted by `Admin_Handler.cpp` when received via the MySQL admin interface and routed to the appropriate C++ functions.
+
+When implementing MCP tools, these admin commands cannot be executed via `admindb->execute_statement()` because SQLite doesn't recognize them as valid SQL. Instead, call the underlying C++ functions directly:
+
+| Admin Command | Direct Function Call | Returns |
+|---------------|---------------------|---------|
+| `DUMP EVENTSLOG FROM BUFFER TO MEMORY` | `GloMyLogger->processEvents(statsdb, nullptr)` | Event count |
+| `DUMP EVENTSLOG FROM BUFFER TO DISK` | `GloMyLogger->processEvents(nullptr, statsdb_disk)` | Event count |
+| `DUMP EVENTSLOG FROM BUFFER TO BOTH` | `GloMyLogger->processEvents(statsdb, statsdb_disk)` | Event count |
+| `SAVE MYSQL DIGEST TO DISK` | `GloAdmin->FlushDigestTableToDisk<SERVER_TYPE_MYSQL>(statsdb_disk)` | Digest count |
+| `SAVE PGSQL DIGEST TO DISK` | `GloAdmin->FlushDigestTableToDisk<SERVER_TYPE_PGSQL>(statsdb_disk)` | Digest count |
+
+Both functions are thread-safe:
+- `processEvents()` uses `std::mutex` internally for the circular buffer
+- `FlushDigestTableToDisk()` uses `pthread_rwlock` for the digest hash map
+
+Required includes for these functions:
+```cpp
+#include "proxysql_admin.h"
+#include "MySQL_Logger.hpp"
+
+extern MySQL_Logger *GloMyLogger;
+```
+
+### 1.4 Query Execution Pattern
 
 ```cpp
 json Stats_Tool_Handler::execute_query(const std::string& sql, SQLite3DB* db) {
@@ -179,26 +205,31 @@ Query events use a circular buffer that must be explicitly flushed to tables.
 
 **Implementation for `flush_query_log`:**
 
-The tool triggers the appropriate admin command based on destination:
+This tool calls `GloMyLogger->processEvents()` directly (see [Section 1.3](#13-admin-commands-vs-direct-function-calls)).
 
 ```cpp
 json Stats_Tool_Handler::handle_flush_query_log(const json& arguments) {
     std::string destination = arguments.value("destination", "memory");
     
-    std::string command;
-    if (destination == "memory") {
-        command = "DUMP EVENTSLOG FROM BUFFER TO MEMORY";
-    } else if (destination == "disk") {
-        command = "DUMP EVENTSLOG FROM BUFFER TO DISK";
-    } else if (destination == "both") {
-        command = "DUMP EVENTSLOG FROM BUFFER TO BOTH";
+    if (destination != "memory" && destination != "disk" && destination != "both") {
+        return create_error_response("Invalid destination");
     }
     
-    // Execute via GloMyLogger->processEvents() with appropriate database pointers
-    int events_flushed = GloMyLogger->processEvents(
-        destination == "disk" ? nullptr : GloAdmin->statsdb,
-        destination == "memory" ? nullptr : GloAdmin->statsdb_disk
-    );
+    if (!GloMyLogger || !GloAdmin) {
+        return create_error_response("Required components not available");
+    }
+    
+    SQLite3DB* statsdb = nullptr;
+    SQLite3DB* statsdb_disk = nullptr;
+    
+    if (destination == "memory" || destination == "both") {
+        statsdb = GloAdmin->statsdb;
+    }
+    if (destination == "disk" || destination == "both") {
+        statsdb_disk = GloAdmin->statsdb_disk;
+    }
+    
+    int events_flushed = GloMyLogger->processEvents(statsdb, statsdb_disk);
     
     json result;
     result["events_flushed"] = events_flushed;
@@ -243,11 +274,19 @@ Query digest statistics are maintained in an in-memory hash map, not SQLite.
 
 1. **Reading live data (`show_queries`):** Non-destructive. ProxySQL handles the swap-serialize-merge internally when you query `stats_mysql_query_digest`.
 
-2. **Saving to history (`flush_queries`):** Destructive. The live map is emptied. Call `FlushDigestTableToDisk()`:
+2. **Saving to history (`flush_queries`):** Destructive. The live map is emptied. This tool calls `FlushDigestTableToDisk()` directly (see [Section 1.3](#13-admin-commands-vs-direct-function-calls)).
 
 ```cpp
 json Stats_Tool_Handler::handle_flush_queries(const json& arguments) {
     std::string db_type = arguments.value("db_type", "mysql");
+    
+    if (db_type != "mysql" && db_type != "pgsql") {
+        return create_error_response("Invalid db_type");
+    }
+    
+    if (!GloAdmin || !GloAdmin->statsdb_disk) {
+        return create_error_response("Stats disk database not available");
+    }
     
     int digests_saved;
     if (db_type == "mysql") {
@@ -259,7 +298,7 @@ json Stats_Tool_Handler::handle_flush_queries(const json& arguments) {
     json result;
     result["db_type"] = db_type;
     result["digests_saved"] = digests_saved;
-    result["dump_time"] = time(NULL);
+    result["dump_time"] = (long long)time(NULL);
     return create_success_response(result);
 }
 ```
@@ -327,7 +366,8 @@ Historical tools accept user-friendly interval parameters and automatically sele
 | `2h` | 7200 | Raw | Fine-grained, moderate dataset |
 | `4h` | 14400 | Raw | Raw data still manageable |
 | `6h` | 21600 | Raw | Raw data still manageable |
-| `12h` | 43200 | Raw | Boundary: last interval using raw |
+| `8h` | 28800 | Hourly | Hourly aggregation preferred |
+| `12h` | 43200 | Hourly | Hourly aggregation preferred |
 | `1d` | 86400 | Hourly | Raw would have ~1440 rows, hourly has 24 |
 | `3d` | 259200 | Hourly | Hourly aggregation more efficient |
 | `7d` | 604800 | Hourly | Raw data may not exist (7-day retention) |
@@ -348,7 +388,8 @@ std::map<std::string, IntervalConfig> interval_map = {
     {"2h",   {7200, false}},
     {"4h",   {14400, false}},
     {"6h",   {21600, false}},
-    {"12h",  {43200, false}},
+    {"8h",   {28800, true}},
+    {"12h",  {43200, true}},
     {"1d",   {86400, true}},
     {"3d",   {259200, true}},
     {"7d",   {604800, true}},

@@ -9,54 +9,168 @@
 /**
  * @brief Stats Tool Handler for /mcp/stats endpoint
  *
- * This handler provides tools for real-time metrics, statistics, and monitoring
- * of ProxySQL internals including connection pools, query digests, errors,
- * cluster status, and more.
+ * This handler provides MCP tools for monitoring ProxySQL statistics and metrics.
+ * Tools are organized into three categories:
  *
- * Tools provided:
- * - get_health: Comprehensive health status summary
- * - show_processlist: Active sessions (like MySQL SHOW PROCESSLIST)
- * - show_metrics: Prometheus-compatible metrics
+ * Live Data Tools (12):
+ * - show_status: Global status variables and metrics
+ * - show_processlist: Currently active sessions
  * - show_queries: Query digest performance statistics
+ * - show_commands: Command execution counters with latency histograms
  * - show_connections: Backend connection pool metrics
- * - show_errors: Error tracking and analysis
- * - show_cluster: Cluster node health and sync status
- * - list_stats: List available statistics tables
- * - get_stats: Ad-hoc query any stats table
- * - show_commands: Command execution statistics with latency distribution
+ * - show_errors: Error tracking and frequency
  * - show_users: User connection statistics
- * - show_client_cache: Client host cache for connection throttling
- * - show_gtid: GTID replication information
- * - show_query_rules: Query rule hit statistics
- * - show_history_connections: Historical connection trends
- * - show_history_query_digest: Historical query digest snapshots
- * - aggregate_metrics: Custom metric aggregations
+ * - show_client_cache: Client host error cache
+ * - show_query_rules: Query rule hit counts
+ * - show_prepared_statements: Prepared statement information
+ * - show_gtid: GTID replication status (MySQL only)
+ * - show_cluster: ProxySQL cluster node health
+ *
+ * Historical Data Tools (4):
+ * - show_system_history: CPU and memory trends over time
+ * - show_query_cache_history: Query cache performance trends
+ * - show_connection_history: Connection metrics history
+ * - show_query_history: Query digest snapshots over time
+ *
+ * Utility Tools (3):
+ * - flush_query_log: Flush query events from buffer to tables
+ * - show_query_log: View query event audit log
+ * - flush_queries: Save query digest statistics to disk
  */
 class Stats_Tool_Handler : public MCP_Tool_Handler {
 private:
 	MCP_Threads_Handler* mcp_handler;  ///< Pointer to MCP handler
 	pthread_mutex_t handler_lock;      ///< Mutex for thread-safe operations
 
-	// Tool handlers
-	json handle_get_health(const json& arguments);
-	json handle_show_processlist(const json& arguments);
-	json handle_show_metrics(const json& arguments);
-	json handle_show_queries(const json& arguments);
-	json handle_show_connections(const json& arguments);
-	json handle_show_errors(const json& arguments);
-	json handle_show_cluster(const json& arguments);
-	json handle_list_stats(const json& arguments);
-	json handle_get_stats(const json& arguments);
-	json handle_show_commands(const json& arguments);
-	json handle_show_users(const json& arguments);
-	json handle_show_client_cache(const json& arguments);
-	json handle_show_gtid(const json& arguments);
-	json handle_show_query_rules(const json& arguments);
-	json handle_show_history_connections(const json& arguments);
-	json handle_show_history_query_digest(const json& arguments);
-	json handle_aggregate_metrics(const json& arguments);
+	// =========================================================================
+	// Live Data Tool Handlers
+	// =========================================================================
 
-	// Helper methods
+	/**
+	 * @brief Returns global status variables and metrics
+	 * @param arguments JSON with db_type, category, variable_name
+	 */
+	json handle_show_status(const json& arguments);
+
+	/**
+	 * @brief Shows all currently active sessions
+	 * @param arguments JSON with db_type, username, hostgroup, min_time_ms, limit, offset
+	 */
+	json handle_show_processlist(const json& arguments);
+
+	/**
+	 * @brief Returns aggregated query performance statistics
+	 * @param arguments JSON with db_type, sort_by, limit, offset, filters
+	 */
+	json handle_show_queries(const json& arguments);
+
+	/**
+	 * @brief Returns command execution statistics with latency histograms
+	 * @param arguments JSON with db_type, command, limit, offset
+	 */
+	json handle_show_commands(const json& arguments);
+
+	/**
+	 * @brief Returns backend connection pool metrics
+	 * @param arguments JSON with db_type, hostgroup, server, status, detail
+	 */
+	json handle_show_connections(const json& arguments);
+
+	/**
+	 * @brief Returns error tracking statistics
+	 * @param arguments JSON with db_type, errno, sqlstate, username, database, hostgroup, filters
+	 */
+	json handle_show_errors(const json& arguments);
+
+	/**
+	 * @brief Returns connection statistics per user
+	 * @param arguments JSON with db_type, username, limit, offset
+	 */
+	json handle_show_users(const json& arguments);
+
+	/**
+	 * @brief Returns client host error cache
+	 * @param arguments JSON with db_type, client_address, min_error_count, limit, offset
+	 */
+	json handle_show_client_cache(const json& arguments);
+
+	/**
+	 * @brief Returns query rule hit statistics
+	 * @param arguments JSON with db_type, rule_id, min_hits, include_zero_hits, limit, offset
+	 */
+	json handle_show_query_rules(const json& arguments);
+
+	/**
+	 * @brief Returns prepared statement information
+	 * @param arguments JSON with db_type, username, database
+	 */
+	json handle_show_prepared_statements(const json& arguments);
+
+	/**
+	 * @brief Returns GTID replication information (MySQL only)
+	 * @param arguments JSON with hostname, port
+	 */
+	json handle_show_gtid(const json& arguments);
+
+	/**
+	 * @brief Returns ProxySQL cluster node health and sync status
+	 * @param arguments JSON with hostname, include_checksums
+	 */
+	json handle_show_cluster(const json& arguments);
+
+	// =========================================================================
+	// Historical Data Tool Handlers
+	// =========================================================================
+
+	/**
+	 * @brief Returns historical CPU and memory usage trends
+	 * @param arguments JSON with metric, interval
+	 */
+	json handle_show_system_history(const json& arguments);
+
+	/**
+	 * @brief Returns historical query cache performance metrics
+	 * @param arguments JSON with db_type, interval
+	 */
+	json handle_show_query_cache_history(const json& arguments);
+
+	/**
+	 * @brief Returns historical connection metrics
+	 * @param arguments JSON with db_type, interval, scope, hostgroup, server
+	 */
+	json handle_show_connection_history(const json& arguments);
+
+	/**
+	 * @brief Returns historical query digest snapshots
+	 * @param arguments JSON with db_type, dump_time, start_time, end_time, filters, limit, offset
+	 */
+	json handle_show_query_history(const json& arguments);
+
+	// =========================================================================
+	// Utility Tool Handlers
+	// =========================================================================
+
+	/**
+	 * @brief Flushes query events from buffer to tables (MySQL only)
+	 * @param arguments JSON with destination (memory, disk, both)
+	 */
+	json handle_flush_query_log(const json& arguments);
+
+	/**
+	 * @brief Returns query event audit log (MySQL only)
+	 * @param arguments JSON with source, filters, limit, offset
+	 */
+	json handle_show_query_log(const json& arguments);
+
+	/**
+	 * @brief Saves query digest statistics to disk
+	 * @param arguments JSON with db_type
+	 */
+	json handle_flush_queries(const json& arguments);
+
+	// =========================================================================
+	// Helper Methods
+	// =========================================================================
 
 	/**
 	 * @brief Execute a SQL query against GloAdmin->admindb
@@ -84,11 +198,22 @@ private:
 	std::map<std::string, std::string> parse_global_stats(SQLite3_result* resultset);
 
 	/**
-	 * @brief Validate a stats table name against a whitelist
-	 * @param table The table name to validate
-	 * @return true if the table name is valid
+	 * @brief Get interval configuration for historical queries
+	 * @param interval User-friendly interval string (e.g. "1h", "1d")
+	 * @param seconds Output: interval in seconds
+	 * @param use_hourly Output: whether to use hourly aggregated tables
+	 * @return true if interval is valid
 	 */
-	static bool is_valid_stats_table(const std::string& table);
+	bool get_interval_config(const std::string& interval, int& seconds, bool& use_hourly);
+
+	/**
+	 * @brief Calculate percentile from histogram buckets
+	 * @param buckets Vector of bucket counts
+	 * @param thresholds Vector of bucket thresholds in microseconds
+	 * @param percentile Percentile to calculate (0.0 to 1.0)
+	 * @return Estimated percentile value in microseconds
+	 */
+	int calculate_percentile(const std::vector<int>& buckets, const std::vector<int>& thresholds, double percentile);
 
 public:
 	/**

@@ -1,8 +1,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
-#include <algorithm>
-#include <numeric>
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -11,24 +9,55 @@ using json = nlohmann::json;
 #include "sqlite3db.h"
 #include "proxysql_debug.h"
 #include "proxysql_utils.h"
+#include "MySQL_Logger.hpp"
 
 #include "MCP_Thread.h"
 #include "Stats_Tool_Handler.h"
 
 extern ProxySQL_Admin *GloAdmin;
+extern MySQL_Logger *GloMyLogger;
 
 // Latency bucket thresholds in microseconds for commands_counters histogram
 static const std::vector<int> LATENCY_BUCKET_THRESHOLDS = {
 	100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000, 5000000, 10000000, 100000000
 };
 
-// Whitelist of allowed stats table prefixes for get_stats
-static const std::vector<std::string> VALID_STATS_TABLE_PREFIXES = {
-	"stats_mysql_", "stats_pgsql_", "stats_proxysql_", "stats_memory_",
-	"history_mysql_", "history_pgsql_",
-	"mysql_connections", "pgsql_connections",
-	"mysql_query_cache", "system_cpu", "system_memory",
-	"myhgm_connections"
+// Interval configuration: maps user-friendly strings to seconds and table selection
+// Table selection: false = raw tables (higher resolution), true = hourly aggregated tables
+// Rule: intervals <=6h use raw tables, intervals >=8h use hourly tables
+static const std::map<std::string, std::pair<int, bool>> INTERVAL_MAP = {
+	{"30m",  {1800, false}},
+	{"1h",   {3600, false}},
+	{"2h",   {7200, false}},
+	{"4h",   {14400, false}},
+	{"6h",   {21600, false}},
+	{"8h",   {28800, true}},
+	{"12h",  {43200, true}},
+	{"1d",   {86400, true}},
+	{"3d",   {259200, true}},
+	{"7d",   {604800, true}},
+	{"30d",  {2592000, true}},
+	{"90d",  {7776000, true}}
+};
+
+// Category prefixes for show_status filtering
+static const std::map<std::string, std::vector<std::string>> CATEGORY_PREFIXES = {
+	{"connections", {"Client_Connections_", "Server_Connections_", "Active_Transactions"}},
+	{"queries", {"Questions", "Slow_queries", "GTID_", "Queries_", "Query_Processor_", "Backend_query_time_"}},
+	{"commands", {"Com_"}},
+	{"pool_ops", {"ConnPool_", "MyHGM_", "PgHGM_"}},
+	{"monitor", {"MySQL_Monitor_", "PgSQL_Monitor_"}},
+	{"query_cache", {"Query_Cache_"}},
+	{"prepared_stmts", {"Stmt_"}},
+	{"security", {"automatic_detected_sql_injection", "ai_", "mysql_whitelisted_"}},
+	{"memory", {"_buffers_bytes", "_internal_bytes", "SQLite3_memory_bytes", "ConnPool_memory_bytes",
+				"jemalloc_", "Auth_memory", "query_digest_memory", "query_rules_memory",
+				"prepare_statement_", "firewall_", "stack_memory_"}},
+	{"errors", {"generated_error_packets", "Access_Denied_", "client_host_error_", "mysql_unexpected_"}},
+	{"logger", {"MySQL_Logger_"}},
+	{"system", {"ProxySQL_Uptime", "MySQL_Thread_Workers", "PgSQL_Thread_Workers",
+				"Servers_table_version", "mysql_listener_paused", "pgsql_listener_paused", "OpenSSL_"}},
+	{"mirror", {"Mirror_"}}
 };
 
 // ============================================================================
@@ -61,19 +90,6 @@ void Stats_Tool_Handler::close() {
 // Helper Methods
 // ============================================================================
 
-/**
- * @brief Execute a read-only SQL query against GloAdmin->admindb.
- *
- * Runs @p sql through the admin SQLite database (the in-memory stats schema).
- * On success the caller receives a heap-allocated SQLite3_result that it must
- * delete. On failure the resultset pointer is set to NULL and an error string
- * is returned.
- *
- * @param sql        SQL statement to execute.
- * @param resultset  Out-parameter; receives the result set (caller owns it).
- * @param cols       Out-parameter; receives the column count.
- * @return Empty string on success, human-readable error message on failure.
- */
 std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_result** resultset, int* cols) {
 	if (!GloAdmin || !GloAdmin->admindb) {
 		return "ProxySQL Admin not available";
@@ -96,20 +112,9 @@ std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_res
 		return err_msg;
 	}
 
-	return "";  // empty string = success
+	return "";
 }
 
-/**
- * @brief Execute a read-only SQL query against GloAdmin->statsdb_disk.
- *
- * Same contract as execute_admin_query() but targets the on-disk historical
- * statistics database (history_mysql_*, history_pgsql_*, system_cpu, etc.).
- *
- * @param sql        SQL statement to execute.
- * @param resultset  Out-parameter; receives the result set (caller owns it).
- * @param cols       Out-parameter; receives the column count.
- * @return Empty string on success, human-readable error message on failure.
- */
 std::string Stats_Tool_Handler::execute_statsdb_disk_query(const char* sql, SQLite3_result** resultset, int* cols) {
 	if (!GloAdmin || !GloAdmin->statsdb_disk) {
 		return "ProxySQL statsdb_disk not available";
@@ -135,16 +140,6 @@ std::string Stats_Tool_Handler::execute_statsdb_disk_query(const char* sql, SQLi
 	return "";
 }
 
-/**
- * @brief Convert a two-column (Variable_Name, Variable_Value) result set into a map.
- *
- * Used for stats_mysql_global, stats_pgsql_global, and stats_memory_metrics
- * tables that follow the standard ProxySQL key-value layout.  Rows where
- * either column is NULL are silently skipped.
- *
- * @param resultset  Result set from a "SELECT Variable_Name, Variable_Value ..." query.
- * @return Map of variable name to variable value (both as strings).
- */
 std::map<std::string, std::string> Stats_Tool_Handler::parse_global_stats(SQLite3_result* resultset) {
 	std::map<std::string, std::string> stats;
 
@@ -159,66 +154,69 @@ std::map<std::string, std::string> Stats_Tool_Handler::parse_global_stats(SQLite
 	return stats;
 }
 
-/**
- * @brief Check whether a table name is on the allowed-prefix whitelist.
- *
- * Only tables whose name starts with one of the prefixes in
- * VALID_STATS_TABLE_PREFIXES are accepted.  This prevents the get_stats
- * tool from being used to read arbitrary tables (e.g. runtime configuration).
- *
- * @param table  Table name supplied by the caller.
- * @return true if the name matches at least one whitelisted prefix.
- */
-bool Stats_Tool_Handler::is_valid_stats_table(const std::string& table) {
-	for (const auto& prefix : VALID_STATS_TABLE_PREFIXES) {
-		if (table.compare(0, prefix.size(), prefix) == 0) {
-			return true;
+bool Stats_Tool_Handler::get_interval_config(const std::string& interval, int& seconds, bool& use_hourly) {
+	auto it = INTERVAL_MAP.find(interval);
+	if (it == INTERVAL_MAP.end()) {
+		return false;
+	}
+	seconds = it->second.first;
+	use_hourly = it->second.second;
+	return true;
+}
+
+int Stats_Tool_Handler::calculate_percentile(const std::vector<int>& buckets, const std::vector<int>& thresholds, double percentile) {
+	int total = 0;
+	for (int count : buckets) {
+		total += count;
+	}
+
+	if (total == 0) return 0;
+
+	int target = (int)(total * percentile);
+	int cumulative = 0;
+
+	for (size_t i = 0; i < buckets.size() && i < thresholds.size(); i++) {
+		cumulative += buckets[i];
+		if (cumulative >= target) {
+			return thresholds[i];
 		}
 	}
-	return false;
+
+	return thresholds.empty() ? 0 : thresholds.back();
 }
 
 // ============================================================================
 // Tool List / Description / Dispatch
 // ============================================================================
 
-/**
- * @brief Build and return the full MCP tools/list payload.
- *
- * Constructs a JSON object containing the "tools" array with all 17 tool
- * descriptions (9 core + 8 analysis).  Each entry includes name, description
- * text, and an inputSchema with typed properties so that MCP clients can
- * validate arguments before calling execute_tool().
- *
- * @return JSON object: { "tools": [ {name, description, inputSchema}, ... ] }
- */
 json Stats_Tool_Handler::get_tool_list() {
 	json tools = json::array();
 
-	// Core operational tools
+	// =========================================================================
+	// Live Data Tools (12)
+	// =========================================================================
 
 	tools.push_back(create_tool_description(
-		"get_health",
-		"Returns a comprehensive health status summary of ProxySQL and its backend servers, "
-		"including connection health, query performance, memory usage, and cluster status",
+		"show_status",
+		"Returns global status variables and metrics from ProxySQL. Similar to MySQL's SHOW STATUS command.",
 		{
 			{"type", "object"},
 			{"properties", {
-				{"include_backend", {
-					{"type", "boolean"},
-					{"description", "Include detailed backend server health (default: false)"},
-					{"default", false}
-				}},
-				{"database", {
+				{"db_type", {
 					{"type", "string"},
-					{"enum", {"mysql", "pgsql", "all"}},
-					{"description", "Filter by database type (default: all)"},
-					{"default", "all"}
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
 				}},
-				{"severity_threshold", {
+				{"category", {
 					{"type", "string"},
-					{"enum", {"warning", "critical"}},
-					{"description", "Only return issues at or above this severity level"}
+					{"enum", {"connections", "queries", "commands", "pool_ops", "monitor", "query_cache",
+							  "prepared_stmts", "security", "memory", "errors", "logger", "system", "mirror"}},
+					{"description", "Filter by category"}
+				}},
+				{"variable_name", {
+					{"type", "string"},
+					{"description", "Filter by variable name pattern (supports SQL LIKE with % wildcards)"}
 				}}
 			}}
 		}
@@ -226,12 +224,17 @@ json Stats_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_description(
 		"show_processlist",
-		"Shows all active sessions currently being processed, similar to MySQL's SHOW PROCESSLIST. "
-		"Includes session details, client/backend info, query text, and timing",
+		"Shows all currently active sessions being processed by ProxySQL.",
 		{
 			{"type", "object"},
 			{"properties", {
-				{"user", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
+				{"username", {
 					{"type", "string"},
 					{"description", "Filter by username"}
 				}},
@@ -239,47 +242,19 @@ json Stats_Tool_Handler::get_tool_list() {
 					{"type", "integer"},
 					{"description", "Filter by hostgroup ID"}
 				}},
-				{"backend", {
-					{"type", "string"},
-					{"description", "Filter by specific backend server (host:port)"}
-				}},
 				{"min_time_ms", {
 					{"type", "integer"},
-					{"description", "Only show sessions running longer than X ms"}
+					{"description", "Only show sessions running longer than N milliseconds"}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
-				}}
-			}}
-		}
-	));
-
-	tools.push_back(create_tool_description(
-		"show_metrics",
-		"Returns categorized metrics in Prometheus-compatible format for monitoring integration",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"category", {
-					{"type", "string"},
-					{"enum", {"query", "connection", "memory", "cluster", "all"}},
-					{"description", "Metric category (default: all)"},
-					{"default", "all"}
+				{"limit", {
+					{"type", "integer"},
+					{"description", "Maximum number of sessions to return (default: 100)"},
+					{"default", 100}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql", "all"}},
-					{"description", "Filter by database type (default: all)"},
-					{"default", "all"}
-				}},
-				{"format", {
-					{"type", "string"},
-					{"enum", {"prometheus", "json"}},
-					{"description", "Output format (default: prometheus)"},
-					{"default", "prometheus"}
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}}
 			}}
 		}
@@ -287,11 +262,16 @@ json Stats_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_description(
 		"show_queries",
-		"Returns aggregated query performance statistics from query digest, identifying slow "
-		"and frequently executed queries with timing, row counts, and performance tiers",
+		"Returns aggregated query performance statistics by digest pattern.",
 		{
 			{"type", "object"},
 			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
 				{"sort_by", {
 					{"type", "string"},
 					{"enum", {"count", "avg_time", "sum_time", "max_time", "rows_sent"}},
@@ -300,8 +280,13 @@ json Stats_Tool_Handler::get_tool_list() {
 				}},
 				{"limit", {
 					{"type", "integer"},
-					{"description", "Max number of results (default: 100)"},
+					{"description", "Maximum number of results (default: 100)"},
 					{"default", 100}
+				}},
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}},
 				{"min_count", {
 					{"type", "integer"},
@@ -311,9 +296,9 @@ json Stats_Tool_Handler::get_tool_list() {
 					{"type", "integer"},
 					{"description", "Only show queries with avg time >= N microseconds"}
 				}},
-				{"schemaname", {
+				{"database", {
 					{"type", "string"},
-					{"description", "Filter by schema/database name"}
+					{"description", "Filter by database name"}
 				}},
 				{"username", {
 					{"type", "string"},
@@ -326,17 +311,36 @@ json Stats_Tool_Handler::get_tool_list() {
 				{"digest", {
 					{"type", "string"},
 					{"description", "Filter by specific query digest"}
-				}},
-				{"include_top", {
-					{"type", "boolean"},
-					{"description", "Include top 10 summary (default: true)"},
-					{"default", true}
-				}},
-				{"database", {
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_commands",
+		"Returns command execution statistics with latency distribution histograms.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"db_type", {
 					{"type", "string"},
 					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
+					{"description", "Database type (default: mysql)"},
 					{"default", "mysql"}
+				}},
+				{"command", {
+					{"type", "string"},
+					{"description", "Filter by specific command (SELECT, INSERT, etc.)"}
+				}},
+				{"limit", {
+					{"type", "integer"},
+					{"description", "Maximum number of commands to return (default: 100)"},
+					{"default", 100}
+				}},
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}}
 			}}
 		}
@@ -344,29 +348,33 @@ json Stats_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_description(
 		"show_connections",
-		"Detailed view of backend connection pool metrics per server, including utilization, "
-		"error rates, queries, latency, and data transfer stats",
+		"Returns backend connection pool metrics per server.",
 		{
 			{"type", "object"},
 			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
 				{"hostgroup", {
 					{"type", "integer"},
 					{"description", "Filter by hostgroup ID"}
 				}},
 				{"server", {
 					{"type", "string"},
-					{"description", "Filter by specific backend server (host:port)"}
+					{"description", "Filter by server (format: host:port)"}
 				}},
 				{"status", {
 					{"type", "string"},
 					{"enum", {"ONLINE", "SHUNNED", "OFFLINE_SOFT", "OFFLINE_HARD"}},
 					{"description", "Filter by server status"}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
+				{"detail", {
+					{"type", "boolean"},
+					{"description", "Include free connection details (default: false)"},
+					{"default", false}
 				}}
 			}}
 		}
@@ -374,21 +382,31 @@ json Stats_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_description(
 		"show_errors",
-		"Tracks MySQL/PostgreSQL errors with frequency, timing, and grouping by type, user, schema, and hostgroup",
+		"Returns error tracking statistics with frequency analysis.",
 		{
 			{"type", "object"},
 			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
 				{"errno", {
 					{"type", "integer"},
-					{"description", "Filter by specific error number (MySQL) or sqlstate (PostgreSQL)"}
+					{"description", "Filter by error number (MySQL)"}
+				}},
+				{"sqlstate", {
+					{"type", "string"},
+					{"description", "Filter by SQLSTATE (PostgreSQL)"}
 				}},
 				{"username", {
 					{"type", "string"},
 					{"description", "Filter by username"}
 				}},
-				{"schemaname", {
+				{"database", {
 					{"type", "string"},
-					{"description", "Filter by schema/database"}
+					{"description", "Filter by database name"}
 				}},
 				{"hostgroup", {
 					{"type", "integer"},
@@ -404,112 +422,15 @@ json Stats_Tool_Handler::get_tool_list() {
 					{"description", "Sort order (default: count)"},
 					{"default", "count"}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
-				}}
-			}}
-		}
-	));
-
-	tools.push_back(create_tool_description(
-		"show_cluster",
-		"Shows ProxySQL cluster node health, synchronization status, and network metrics "
-		"including checksums, ping times, and check results",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"hostname", {
-					{"type", "string"},
-					{"description", "Filter by specific node hostname"}
-				}},
-				{"include_checksums", {
-					{"type", "boolean"},
-					{"description", "Include configuration checksums (default: true)"},
-					{"default", true}
-				}},
-				{"detailed_metrics", {
-					{"type", "boolean"},
-					{"description", "Include detailed per-node metrics (default: false)"},
-					{"default", false}
-				}}
-			}}
-		}
-	));
-
-	tools.push_back(create_tool_description(
-		"list_stats",
-		"List all available statistics tables with descriptions, column info, and row counts",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"filter", {
-					{"type", "string"},
-					{"description", "Pattern filter for table names (e.g. 'mysql', 'pgsql', 'cluster')"}
-				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql", "all"}},
-					{"description", "Filter by database type (default: all)"},
-					{"default", "all"}
-				}}
-			}}
-		}
-	));
-
-	tools.push_back(create_tool_description(
-		"get_stats",
-		"Get specific statistics by querying any stats table directly with optional filtering, ordering, and limits",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"table", {
-					{"type", "string"},
-					{"description", "Stats table name (required, e.g. 'stats_mysql_query_digest')"}
-				}},
-				{"columns", {
-					{"type", "array"},
-					{"items", {{"type", "string"}}},
-					{"description", "Columns to select (default: all)"}
-				}},
-				{"where", {
-					{"type", "string"},
-					{"description", "WHERE clause for filtering (e.g. \"count_star > 100\")"}
-				}},
-				{"order_by", {
-					{"type", "string"},
-					{"description", "ORDER BY clause (e.g. \"count_star DESC\")"}
-				}},
 				{"limit", {
 					{"type", "integer"},
-					{"description", "LIMIT clause (default: 100)"},
+					{"description", "Maximum number of results (default: 100)"},
 					{"default", 100}
-				}}
-			}},
-			{"required", {"table"}}
-		}
-	));
-
-	// Performance, historical, and analysis tools
-
-	tools.push_back(create_tool_description(
-		"show_commands",
-		"Returns command execution statistics with latency distribution (SELECT, INSERT, UPDATE, DELETE, etc.) "
-		"including histogram buckets and calculated percentiles (p50, p90, p95, p99)",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"command", {
-					{"type", "string"},
-					{"description", "Filter by specific command (e.g. SELECT, INSERT)"}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}}
 			}}
 		}
@@ -517,19 +438,29 @@ json Stats_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_description(
 		"show_users",
-		"Shows connection statistics per user, including current connections, limits, and utilization",
+		"Returns connection statistics per user.",
 		{
 			{"type", "object"},
 			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
 				{"username", {
 					{"type", "string"},
 					{"description", "Filter by specific username"}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
+				{"limit", {
+					{"type", "integer"},
+					{"description", "Maximum number of users to return (default: 100)"},
+					{"default", 100}
+				}},
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}}
 			}}
 		}
@@ -537,41 +468,33 @@ json Stats_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_description(
 		"show_client_cache",
-		"Shows client host cache for connection throttling - identifies blocked or throttled client IPs",
+		"Returns client host error cache for connection throttling analysis.",
 		{
 			{"type", "object"},
 			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
 				{"client_address", {
 					{"type", "string"},
-					{"description", "Filter by specific IP address"}
+					{"description", "Filter by specific client IP"}
 				}},
 				{"min_error_count", {
 					{"type", "integer"},
 					{"description", "Only show hosts with error count >= N"}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
-				}}
-			}}
-		}
-	));
-
-	tools.push_back(create_tool_description(
-		"show_gtid",
-		"Shows GTID (Global Transaction ID) replication information for MySQL backends",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"hostname", {
-					{"type", "string"},
-					{"description", "Filter by specific backend server hostname"}
-				}},
-				{"port", {
+				{"limit", {
 					{"type", "integer"},
-					{"description", "Filter by specific port"}
+					{"description", "Maximum number of hosts to return (default: 100)"},
+					{"default", 100}
+				}},
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}}
 			}}
 		}
@@ -579,10 +502,16 @@ json Stats_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_description(
 		"show_query_rules",
-		"Shows hit counts for query routing rules, identifying heavily used and unused rules",
+		"Returns query rule hit statistics.",
 		{
 			{"type", "object"},
 			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
 				{"rule_id", {
 					{"type", "integer"},
 					{"description", "Filter by specific rule ID"}
@@ -596,95 +525,307 @@ json Stats_Tool_Handler::get_tool_list() {
 					{"description", "Include rules with zero hits (default: false)"},
 					{"default", false}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
-				}}
-			}}
-		}
-	));
-
-	tools.push_back(create_tool_description(
-		"show_history_connections",
-		"Historical connection trends over time (raw/hourly/daily aggregates) for capacity planning",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"resolution", {
-					{"type", "string"},
-					{"enum", {"raw", "hour", "day"}},
-					{"description", "Time resolution (default: hour)"},
-					{"default", "hour"}
-				}},
-				{"start_time", {
-					{"type", "integer"},
-					{"description", "Unix timestamp start (default: 24 hours ago)"}
-				}},
-				{"end_time", {
-					{"type", "integer"},
-					{"description", "Unix timestamp end (default: now)"}
-				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
-				}}
-			}}
-		}
-	));
-
-	tools.push_back(create_tool_description(
-		"show_history_query_digest",
-		"Historical query digest snapshots for trend analysis - compare query performance over time",
-		{
-			{"type", "object"},
-			{"properties", {
-				{"digest", {
-					{"type", "string"},
-					{"description", "Filter by specific query digest"}
-				}},
 				{"limit", {
 					{"type", "integer"},
-					{"description", "Max number of results (default: 100)"},
+					{"description", "Maximum number of rules to return (default: 100)"},
 					{"default", 100}
 				}},
-				{"database", {
-					{"type", "string"},
-					{"enum", {"mysql", "pgsql"}},
-					{"description", "Filter by database type (default: mysql)"},
-					{"default", "mysql"}
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}}
 			}}
 		}
 	));
 
 	tools.push_back(create_tool_description(
-		"aggregate_metrics",
-		"Perform custom aggregations (avg, sum, min, max, count) on metrics from global stats tables",
+		"show_prepared_statements",
+		"Returns prepared statement information.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
+				{"username", {
+					{"type", "string"},
+					{"description", "Filter by username"}
+				}},
+				{"database", {
+					{"type", "string"},
+					{"description", "Filter by database name"}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_gtid",
+		"Returns GTID (Global Transaction ID) replication information. MySQL only.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"hostname", {
+					{"type", "string"},
+					{"description", "Filter by backend server hostname"}
+				}},
+				{"port", {
+					{"type", "integer"},
+					{"description", "Filter by backend server port"}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_cluster",
+		"Returns ProxySQL cluster node health, synchronization status, and configuration checksums.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"hostname", {
+					{"type", "string"},
+					{"description", "Filter by specific node hostname"}
+				}},
+				{"include_checksums", {
+					{"type", "boolean"},
+					{"description", "Include configuration checksums (default: true)"},
+					{"default", true}
+				}}
+			}}
+		}
+	));
+
+	// =========================================================================
+	// Historical Data Tools (4)
+	// =========================================================================
+
+	tools.push_back(create_tool_description(
+		"show_system_history",
+		"Returns historical CPU and memory usage trends.",
 		{
 			{"type", "object"},
 			{"properties", {
 				{"metric", {
 					{"type", "string"},
-					{"description", "Metric/variable name pattern to aggregate (e.g. 'Client_Connections', 'Questions')"}
+					{"enum", {"cpu", "memory", "all"}},
+					{"description", "Which metrics to return (default: all)"},
+					{"default", "all"}
 				}},
-				{"aggregation", {
+				{"interval", {
 					{"type", "string"},
-					{"enum", {"avg", "sum", "min", "max", "count"}},
-					{"description", "Aggregation function (default: sum)"},
-					{"default", "sum"}
+					{"enum", {"30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "7d", "30d", "90d"}},
+					{"description", "How far back to look (default: 1h)"},
+					{"default", "1h"}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_query_cache_history",
+		"Returns historical query cache performance metrics. MySQL only.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
+				{"interval", {
+					{"type", "string"},
+					{"enum", {"30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "7d", "30d", "90d"}},
+					{"description", "How far back to look (default: 1h)"},
+					{"default", "1h"}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_connection_history",
+		"Returns historical connection metrics at global or per-server level. MySQL only.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
+				{"interval", {
+					{"type", "string"},
+					{"enum", {"30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "7d", "30d", "90d"}},
+					{"description", "How far back to look (default: 1h)"},
+					{"default", "1h"}
+				}},
+				{"scope", {
+					{"type", "string"},
+					{"enum", {"global", "per_server", "all"}},
+					{"description", "Level of detail (default: global)"},
+					{"default", "global"}
+				}},
+				{"hostgroup", {
+					{"type", "integer"},
+					{"description", "Filter per_server by hostgroup"}
+				}},
+				{"server", {
+					{"type", "string"},
+					{"description", "Filter per_server by server (format: host:port)"}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_query_history",
+		"Returns historical query digest snapshots for trend analysis.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}},
+				{"dump_time", {
+					{"type", "integer"},
+					{"description", "Filter by specific snapshot timestamp"}
+				}},
+				{"start_time", {
+					{"type", "integer"},
+					{"description", "Start of time range (Unix timestamp)"}
+				}},
+				{"end_time", {
+					{"type", "integer"},
+					{"description", "End of time range (Unix timestamp)"}
+				}},
+				{"digest", {
+					{"type", "string"},
+					{"description", "Filter by specific query digest"}
+				}},
+				{"username", {
+					{"type", "string"},
+					{"description", "Filter by username"}
 				}},
 				{"database", {
 					{"type", "string"},
-					{"enum", {"mysql", "pgsql", "all"}},
-					{"description", "Filter by database type (default: all)"},
-					{"default", "all"}
+					{"description", "Filter by database name"}
+				}},
+				{"limit", {
+					{"type", "integer"},
+					{"description", "Maximum results per snapshot (default: 100)"},
+					{"default", 100}
+				}},
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
 				}}
-			}},
-			{"required", {"metric"}}
+			}}
+		}
+	));
+
+	// =========================================================================
+	// Utility Tools (3)
+	// =========================================================================
+
+	tools.push_back(create_tool_description(
+		"flush_query_log",
+		"Flushes query events from the circular buffer into queryable tables. MySQL only.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"destination", {
+					{"type", "string"},
+					{"enum", {"memory", "disk", "both"}},
+					{"description", "Where to flush events (default: memory)"},
+					{"default", "memory"}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"show_query_log",
+		"Returns individual query execution events from the audit log. MySQL only.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"source", {
+					{"type", "string"},
+					{"enum", {"memory", "disk"}},
+					{"description", "Which table to read from (default: memory)"},
+					{"default", "memory"}
+				}},
+				{"username", {
+					{"type", "string"},
+					{"description", "Filter by username"}
+				}},
+				{"database", {
+					{"type", "string"},
+					{"description", "Filter by database name"}
+				}},
+				{"query_digest", {
+					{"type", "string"},
+					{"description", "Filter by digest hash"}
+				}},
+				{"server", {
+					{"type", "string"},
+					{"description", "Filter by backend server"}
+				}},
+				{"errno", {
+					{"type", "integer"},
+					{"description", "Filter by error number"}
+				}},
+				{"errors_only", {
+					{"type", "boolean"},
+					{"description", "Only show queries with errors (default: false)"},
+					{"default", false}
+				}},
+				{"start_time", {
+					{"type", "integer"},
+					{"description", "Start of time range (Unix timestamp)"}
+				}},
+				{"end_time", {
+					{"type", "integer"},
+					{"description", "End of time range (Unix timestamp)"}
+				}},
+				{"limit", {
+					{"type", "integer"},
+					{"description", "Maximum results (default: 100)"},
+					{"default", 100}
+				}},
+				{"offset", {
+					{"type", "integer"},
+					{"description", "Skip first N results (default: 0)"},
+					{"default", 0}
+				}}
+			}}
+		}
+	));
+
+	tools.push_back(create_tool_description(
+		"flush_queries",
+		"Saves current query digest statistics to disk and resets the in-memory counters.",
+		{
+			{"type", "object"},
+			{"properties", {
+				{"db_type", {
+					{"type", "string"},
+					{"enum", {"mysql", "pgsql"}},
+					{"description", "Database type (default: mysql)"},
+					{"default", "mysql"}
+				}}
+			}}
 		}
 	));
 
@@ -693,15 +834,6 @@ json Stats_Tool_Handler::get_tool_list() {
 	return result;
 }
 
-/**
- * @brief Return the description for a single tool by name.
- *
- * Iterates the full tool list and returns the matching entry.  If no tool
- * with the given name exists, returns an error response.
- *
- * @param tool_name  Name of the tool to describe (e.g. "get_health").
- * @return JSON tool description or error response.
- */
 json Stats_Tool_Handler::get_tool_description(const std::string& tool_name) {
 	json tools_list = get_tool_list();
 	for (const auto& tool : tools_list["tools"]) {
@@ -712,61 +844,55 @@ json Stats_Tool_Handler::get_tool_description(const std::string& tool_name) {
 	return create_error_response("Tool not found: " + tool_name);
 }
 
-/**
- * @brief Dispatch a tools/call request to the appropriate handler method.
- *
- * Acquires handler_lock for the duration of the call so that all tool
- * executions are serialised (stats queries touch shared GloAdmin state).
- * Maps @p tool_name to the corresponding handle_* method.  Any C++
- * exception thrown by a handler is caught and returned as an error response.
- *
- * @param tool_name  Name of the tool to execute.
- * @param arguments  JSON object with tool-specific arguments.
- * @return JSON success or error response.
- */
 json Stats_Tool_Handler::execute_tool(const std::string& tool_name, const json& arguments) {
 	pthread_mutex_lock(&handler_lock);
 
 	json result;
 
 	try {
-		// Core operational tools
-		if (tool_name == "get_health") {
-			result = handle_get_health(arguments);
+		// Live Data Tools
+		if (tool_name == "show_status") {
+			result = handle_show_status(arguments);
 		} else if (tool_name == "show_processlist") {
 			result = handle_show_processlist(arguments);
-		} else if (tool_name == "show_metrics") {
-			result = handle_show_metrics(arguments);
 		} else if (tool_name == "show_queries") {
 			result = handle_show_queries(arguments);
+		} else if (tool_name == "show_commands") {
+			result = handle_show_commands(arguments);
 		} else if (tool_name == "show_connections") {
 			result = handle_show_connections(arguments);
 		} else if (tool_name == "show_errors") {
 			result = handle_show_errors(arguments);
-		} else if (tool_name == "show_cluster") {
-			result = handle_show_cluster(arguments);
-		} else if (tool_name == "list_stats") {
-			result = handle_list_stats(arguments);
-		} else if (tool_name == "get_stats") {
-			result = handle_get_stats(arguments);
-		}
-		// Performance, historical, and analysis tools
-		else if (tool_name == "show_commands") {
-			result = handle_show_commands(arguments);
 		} else if (tool_name == "show_users") {
 			result = handle_show_users(arguments);
 		} else if (tool_name == "show_client_cache") {
 			result = handle_show_client_cache(arguments);
-		} else if (tool_name == "show_gtid") {
-			result = handle_show_gtid(arguments);
 		} else if (tool_name == "show_query_rules") {
 			result = handle_show_query_rules(arguments);
-		} else if (tool_name == "show_history_connections") {
-			result = handle_show_history_connections(arguments);
-		} else if (tool_name == "show_history_query_digest") {
-			result = handle_show_history_query_digest(arguments);
-		} else if (tool_name == "aggregate_metrics") {
-			result = handle_aggregate_metrics(arguments);
+		} else if (tool_name == "show_prepared_statements") {
+			result = handle_show_prepared_statements(arguments);
+		} else if (tool_name == "show_gtid") {
+			result = handle_show_gtid(arguments);
+		} else if (tool_name == "show_cluster") {
+			result = handle_show_cluster(arguments);
+		}
+		// Historical Data Tools
+		else if (tool_name == "show_system_history") {
+			result = handle_show_system_history(arguments);
+		} else if (tool_name == "show_query_cache_history") {
+			result = handle_show_query_cache_history(arguments);
+		} else if (tool_name == "show_connection_history") {
+			result = handle_show_connection_history(arguments);
+		} else if (tool_name == "show_query_history") {
+			result = handle_show_query_history(arguments);
+		}
+		// Utility Tools
+		else if (tool_name == "flush_query_log") {
+			result = handle_flush_query_log(arguments);
+		} else if (tool_name == "show_query_log") {
+			result = handle_show_query_log(arguments);
+		} else if (tool_name == "flush_queries") {
+			result = handle_flush_queries(arguments);
 		} else {
 			result = create_error_response("Unknown tool: " + tool_name);
 		}
@@ -779,298 +905,140 @@ json Stats_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 }
 
 // ============================================================================
-// Core Operational Tool Implementations
+// Live Data Tool Implementations
 // ============================================================================
 
 /**
- * @brief Produce a comprehensive health-status summary of the ProxySQL instance.
+ * @brief Returns global status variables and metrics from ProxySQL
  *
- * Gathers data from four sources and merges them into a single response:
- *   1. stats_mysql_global / stats_pgsql_global -- client & server connection
- *      counts, total questions, slow-query rate.
- *   2. stats_memory_metrics -- jemalloc allocated/resident/active memory.
- *   3. stats_proxysql_servers_status -- cluster node count and online ratio.
- *   4. (optional) stats_*_connection_pool -- per-backend utilisation when
- *      the "include_backend" argument is true.
+ * Queries stats_mysql_global or stats_pgsql_global tables for system metrics.
+ * Supports filtering by category (connections, queries, memory, etc.) or by
+ * variable name pattern using SQL LIKE wildcards.
  *
- * Alerts are raised when the slow-query rate exceeds 1 % (warning) or 5 %
- * (critical).  The overall_status field is set to "healthy", "degraded", or
- * "unhealthy" accordingly.
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - category: Filter by category (connections, queries, commands, etc.)
+ *   - variable_name: Filter by variable name pattern (supports % wildcards)
  *
- * Supported arguments:
- *   - database          (string) "mysql" | "pgsql" | "all"  (default "all")
- *   - include_backend   (bool)   include per-server pool detail (default false)
- *   - severity_threshold (string) only return issues at or above this level
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with nested health_data object.
+ * @return JSON response with variables array containing variable_name and value
  */
-json Stats_Tool_Handler::handle_get_health(const json& arguments) {
-	std::string database = arguments.value("database", "all");
-	bool include_backend = arguments.value("include_backend", false);
+json Stats_Tool_Handler::handle_show_status(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string category = arguments.value("category", "");
+	std::string variable_name = arguments.value("variable_name", "");
 
-	json health_data;
-	health_data["timestamp"] = (long long)time(NULL);
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_global" : "stats_mysql_global";
 
-	json alerts = json::array();
-	int warning_count = 0;
-	int critical_count = 0;
+	std::string sql = "SELECT Variable_Name, Variable_Value FROM stats." + table;
 
-	// 1. Get MySQL global stats
-	json connections_data;
-	json queries_data;
+	// Build WHERE clause based on filters
+	std::vector<std::string> conditions;
 
-	if (database == "mysql" || database == "all") {
-		SQLite3_result* resultset = NULL;
-		int cols = 0;
-		std::string err = execute_admin_query(
-			"SELECT Variable_Name, Variable_Value FROM stats.stats_mysql_global",
-			&resultset, &cols
-		);
-
-		if (err.empty() && resultset) {
-			auto stats = parse_global_stats(resultset);
-
-			long long client_conn = 0, server_conn = 0, questions = 0, slow = 0;
-			long long client_created = 0, server_created = 0;
-
-			if (stats.count("Client_Connections_connected"))
-				client_conn = std::stoll(stats["Client_Connections_connected"]);
-			if (stats.count("Client_Connections_created"))
-				client_created = std::stoll(stats["Client_Connections_created"]);
-			if (stats.count("Server_Connections_connected"))
-				server_conn = std::stoll(stats["Server_Connections_connected"]);
-			if (stats.count("Server_Connections_created"))
-				server_created = std::stoll(stats["Server_Connections_created"]);
-			if (stats.count("Questions"))
-				questions = std::stoll(stats["Questions"]);
-			if (stats.count("Slow_queries"))
-				slow = std::stoll(stats["Slow_queries"]);
-
-			connections_data["client_connections"] = {
-				{"connected", client_conn},
-				{"created_lifetime", client_created},
-				{"status", "normal"}
-			};
-			connections_data["server_connections"] = {
-				{"connected", server_conn},
-				{"created_lifetime", server_created},
-				{"status", "normal"}
-			};
-
-			double slow_rate = (questions > 0) ? (double)slow / (double)questions : 0.0;
-			queries_data["total"] = questions;
-			queries_data["slow"] = slow;
-			queries_data["slow_rate_pct"] = slow_rate * 100.0;
-
-			// Check slow query rate
-			if (slow_rate > 0.05) {
-				critical_count++;
-				alerts.push_back({
-					{"severity", "critical"},
-					{"metric", "slow_query_rate"},
-					{"value", slow_rate * 100.0},
-					{"threshold", 5.0},
-					{"message", "Slow query rate exceeds critical threshold (5%)"}
-				});
-			} else if (slow_rate > 0.01) {
-				warning_count++;
-				alerts.push_back({
-					{"severity", "warning"},
-					{"metric", "slow_query_rate"},
-					{"value", slow_rate * 100.0},
-					{"threshold", 1.0},
-					{"message", "Slow query rate exceeds warning threshold (1%)"}
-				});
-			}
-
-			delete resultset;
-		}
-	}
-
-	// 2. Get memory stats
-	json memory_data;
-	{
-		SQLite3_result* resultset = NULL;
-		int cols = 0;
-		std::string err = execute_admin_query(
-			"SELECT Variable_Name, Variable_Value FROM stats.stats_memory_metrics",
-			&resultset, &cols
-		);
-
-		if (err.empty() && resultset) {
-			auto stats = parse_global_stats(resultset);
-
-			long long allocated = 0, resident = 0, active = 0;
-			if (stats.count("Auth_memory"))
-				allocated += std::stoll(stats["Auth_memory"]);
-			if (stats.count("SQLite3_memory_bytes"))
-				allocated += std::stoll(stats["SQLite3_memory_bytes"]);
-			if (stats.count("query_digest_memory"))
-				allocated += std::stoll(stats["query_digest_memory"]);
-
-			// Use jemalloc metrics if available
-			for (const auto& kv : stats) {
-				if (kv.first.find("jemalloc") != std::string::npos) {
-					if (kv.first.find("allocated") != std::string::npos) allocated = std::stoll(kv.second);
-					else if (kv.first.find("resident") != std::string::npos) resident = std::stoll(kv.second);
-					else if (kv.first.find("active") != std::string::npos) active = std::stoll(kv.second);
+	if (!variable_name.empty()) {
+		conditions.push_back("Variable_Name LIKE '" + sql_escape(variable_name) + "'");
+	} else if (!category.empty()) {
+		auto it = CATEGORY_PREFIXES.find(category);
+		if (it != CATEGORY_PREFIXES.end()) {
+			std::vector<std::string> or_conditions;
+			for (const auto& prefix : it->second) {
+				if (prefix.back() == '_') {
+					or_conditions.push_back("Variable_Name LIKE '" + sql_escape(prefix) + "%'");
+				} else {
+					or_conditions.push_back("Variable_Name = '" + sql_escape(prefix) + "'");
 				}
 			}
-
-			memory_data["allocated_mb"] = allocated / (1024.0 * 1024.0);
-			memory_data["resident_mb"] = resident / (1024.0 * 1024.0);
-			memory_data["active_mb"] = active / (1024.0 * 1024.0);
-
-			delete resultset;
-		}
-	}
-
-	// 3. Get cluster stats
-	json cluster_data;
-	{
-		SQLite3_result* resultset = NULL;
-		int cols = 0;
-		std::string err = execute_admin_query(
-			"SELECT hostname, port, checks_OK, checks_ERR, ping_time_us FROM stats.stats_proxysql_servers_status",
-			&resultset, &cols
-		);
-
-		if (err.empty() && resultset) {
-			int total_nodes = resultset->rows_count;
-			int online_nodes = 0;
-
-			for (const auto& row : resultset->rows) {
-				long long checks_ok = row->fields[2] ? std::stoll(row->fields[2]) : 0;
-				long long checks_err = row->fields[3] ? std::stoll(row->fields[3]) : 0;
-				double success_rate = (checks_ok + checks_err > 0) ?
-					(double)checks_ok / (double)(checks_ok + checks_err) : 0.0;
-				if (success_rate > 0.5) online_nodes++;
+			if (!or_conditions.empty()) {
+				std::string combined = "(";
+				for (size_t i = 0; i < or_conditions.size(); i++) {
+					if (i > 0) combined += " OR ";
+					combined += or_conditions[i];
+				}
+				combined += ")";
+				conditions.push_back(combined);
 			}
-
-			cluster_data["nodes_online"] = online_nodes;
-			cluster_data["total_nodes"] = total_nodes;
-			cluster_data["status"] = (total_nodes > 0 && online_nodes == total_nodes) ? "all_healthy" :
-				(online_nodes > 0 ? "degraded" : "unhealthy");
-
-			delete resultset;
-		} else {
-			cluster_data["nodes_online"] = 0;
-			cluster_data["total_nodes"] = 0;
-			cluster_data["status"] = "not_configured";
 		}
 	}
 
-	// 4. Include backend connection pool summary if requested
-	if (include_backend) {
-		SQLite3_result* resultset = NULL;
-		int cols = 0;
-		std::string table = (database == "pgsql") ? "stats_pgsql_connection_pool" : "stats_mysql_connection_pool";
-		std::string sql = "SELECT hostgroup, srv_host, srv_port, status, ConnUsed, ConnFree, ConnERR, Latency_us "
-			"FROM stats." + table;
-
-		std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-		if (err.empty() && resultset) {
-			json backends = json::array();
-			for (const auto& row : resultset->rows) {
-				json backend;
-				backend["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-				backend["srv_host"] = row->fields[1] ? row->fields[1] : "";
-				backend["srv_port"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
-				backend["status"] = row->fields[3] ? row->fields[3] : "";
-				int used = row->fields[4] ? std::stoi(row->fields[4]) : 0;
-				int free = row->fields[5] ? std::stoi(row->fields[5]) : 0;
-				backend["ConnUsed"] = used;
-				backend["ConnFree"] = free;
-				backend["utilization_pct"] = (used + free > 0) ? (double)used / (double)(used + free) * 100.0 : 0.0;
-				backend["Latency_us"] = row->fields[7] ? std::stoi(row->fields[7]) : 0;
-				backends.push_back(backend);
-			}
-			health_data["backend_servers"] = backends;
-			delete resultset;
+	if (!conditions.empty()) {
+		sql += " WHERE ";
+		for (size_t i = 0; i < conditions.size(); i++) {
+			if (i > 0) sql += " AND ";
+			sql += conditions[i];
 		}
 	}
 
-	// Determine overall health status
-	if (critical_count > 0) {
-		health_data["overall_status"] = "unhealthy";
-		health_data["severity"] = "critical";
-	} else if (warning_count > 0) {
-		health_data["overall_status"] = "degraded";
-		health_data["severity"] = "warning";
-	} else {
-		health_data["overall_status"] = "healthy";
-		health_data["severity"] = "info";
+	sql += " ORDER BY Variable_Name";
+
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+
+	if (!err.empty()) {
+		return create_error_response("Failed to query status: " + err);
 	}
 
-	health_data["summary"] = json::object();
-	if (!connections_data.empty()) {
-		health_data["summary"]["client_connections"] = connections_data["client_connections"];
-		health_data["summary"]["server_connections"] = connections_data["server_connections"];
-	}
-	if (!queries_data.empty()) {
-		health_data["summary"]["queries"] = queries_data;
-	}
-	if (!memory_data.empty()) {
-		health_data["summary"]["memory"] = memory_data;
-	}
-	health_data["summary"]["cluster"] = cluster_data;
-	health_data["alerts"] = alerts;
+	json variables = json::array();
 
-	return create_success_response(health_data);
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			json var;
+			var["variable_name"] = row->fields[0] ? row->fields[0] : "";
+			var["value"] = row->fields[1] ? row->fields[1] : "";
+			variables.push_back(var);
+		}
+		delete resultset;
+	}
+
+	json result;
+	result["db_type"] = db_type;
+	result["variables"] = variables;
+
+	return create_success_response(result);
 }
 
 /**
- * @brief Return active sessions, analogous to MySQL SHOW PROCESSLIST.
+ * @brief Shows all currently active sessions being processed by ProxySQL
  *
- * Queries stats_mysql_processlist or stats_pgsql_processlist and returns
- * every matching session with thread/session IDs, client/backend endpoints,
- * current command, elapsed time, and query text.  A summary section
- * aggregates session counts by user, hostgroup, command, and backend server.
+ * Returns detailed information about each active session including client/backend
+ * connection details, current command, execution time, and query info. Includes
+ * summary statistics grouped by user, hostgroup, and command type.
  *
- * Supported arguments:
- *   - database   (string)  "mysql" | "pgsql"    (default "mysql")
- *   - user       (string)  filter by username
- *   - hostgroup  (int)     filter by hostgroup ID
- *   - backend    (string)  filter by "host:port"
- *   - min_time_ms (int)    only sessions running longer than N ms
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - username: Filter by username
+ *   - hostgroup: Filter by hostgroup ID
+ *   - min_time_ms: Only show sessions running longer than N milliseconds
+ *   - limit: Maximum number of sessions to return (default: 100)
+ *   - offset: Skip first N results (default: 0)
  *
- * @param arguments  JSON object with optional filters.
- * @return Success response with sessions array and summary object.
+ * @return JSON response with sessions array and summary statistics
  */
 json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	std::string user_filter = arguments.value("user", "");
-	int hostgroup_filter = arguments.value("hostgroup", -1);
-	std::string backend_filter = arguments.value("backend", "");
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string username = arguments.value("username", "");
+	int hostgroup = arguments.value("hostgroup", -1);
 	int min_time_ms = arguments.value("min_time_ms", -1);
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
 
-	std::string table = (database == "pgsql") ? "stats_pgsql_processlist" : "stats_mysql_processlist";
-	std::string db_col = (database == "pgsql") ? "database" : "db";
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_processlist" : "stats_mysql_processlist";
+	std::string db_col = (db_type == "pgsql") ? "database" : "db";
 
 	std::string sql = "SELECT ThreadID, SessionID, user, " + db_col + ", cli_host, cli_port, "
 		"hostgroup, srv_host, srv_port, command, time_ms, info "
 		"FROM stats." + table + " WHERE 1=1";
 
-	if (!user_filter.empty()) {
-		sql += " AND user = '" + sql_escape(user_filter) + "'";
+	if (!username.empty()) {
+		sql += " AND user = '" + sql_escape(username) + "'";
 	}
-	if (hostgroup_filter >= 0) {
-		sql += " AND hostgroup = " + std::to_string(hostgroup_filter);
-	}
-	if (!backend_filter.empty()) {
-		size_t colon = backend_filter.find(':');
-		if (colon != std::string::npos) {
-			std::string host = backend_filter.substr(0, colon);
-			std::string port = backend_filter.substr(colon + 1);
-			sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + port;
-		}
+	if (hostgroup >= 0) {
+		sql += " AND hostgroup = " + std::to_string(hostgroup);
 	}
 	if (min_time_ms >= 0) {
 		sql += " AND time_ms >= " + std::to_string(min_time_ms);
 	}
 
-	sql += " ORDER BY time_ms DESC";
+	sql += " ORDER BY time_ms DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
 
 	SQLite3_result* resultset = NULL;
 	int cols = 0;
@@ -1081,13 +1049,24 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 	}
 
 	json sessions = json::array();
-	std::map<std::string, int> by_user, by_hostgroup, by_command, by_backend;
+	std::map<std::string, int> by_user, by_hostgroup, by_command;
+
+	// Get total count
+	std::string count_sql = "SELECT COUNT(*) FROM stats." + table;
+	SQLite3_result* count_rs = NULL;
+	int count_cols = 0;
+	int total_sessions = 0;
+	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
+		total_sessions = std::stoi(count_rs->rows[0]->fields[0]);
+	}
+	if (count_rs) delete count_rs;
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
 			json session;
-			session["thread_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
 			session["session_id"] = row->fields[1] ? std::stoll(row->fields[1]) : 0;
+			session["thread_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
 			session["user"] = row->fields[2] ? row->fields[2] : "";
 			session["database"] = row->fields[3] ? row->fields[3] : "";
 			session["client_host"] = row->fields[4] ? row->fields[4] : "";
@@ -1097,248 +1076,70 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 			session["backend_port"] = row->fields[8] ? std::stoi(row->fields[8]) : 0;
 			session["command"] = row->fields[9] ? row->fields[9] : "";
 			session["time_ms"] = row->fields[10] ? std::stoi(row->fields[10]) : 0;
-			session["query"] = row->fields[11] ? row->fields[11] : "";
+			session["info"] = row->fields[11] ? row->fields[11] : "";
 			sessions.push_back(session);
 
 			// Aggregate summaries
 			std::string u = row->fields[2] ? row->fields[2] : "unknown";
 			std::string hg = row->fields[6] ? row->fields[6] : "unknown";
 			std::string cmd = row->fields[9] ? row->fields[9] : "unknown";
-			std::string be = std::string(row->fields[7] ? row->fields[7] : "") + ":" +
-				std::string(row->fields[8] ? row->fields[8] : "0");
-
 			by_user[u]++;
 			by_hostgroup[hg]++;
 			by_command[cmd]++;
-			by_backend[be]++;
 		}
-
 		delete resultset;
 	}
 
 	json result;
-	result["total_sessions"] = (int)sessions.size();
-	result["database"] = database;
+	result["db_type"] = db_type;
+	result["total_sessions"] = total_sessions;
 	result["sessions"] = sessions;
 	result["summary"] = {
 		{"by_user", by_user},
 		{"by_hostgroup", by_hostgroup},
-		{"by_command", by_command},
-		{"by_backend", by_backend}
+		{"by_command", by_command}
 	};
 
 	return create_success_response(result);
 }
 
 /**
- * @brief Return categorised metrics in a Prometheus-compatible structure.
+ * @brief Returns aggregated query performance statistics by digest pattern
  *
- * Collects counters and gauges from stats_mysql_global, stats_pgsql_global,
- * stats_memory_metrics, and stats_proxysql_servers_status.  Each metric
- * includes name, type (gauge/counter), help text, numeric value, timestamp,
- * and a labels object (database type, hostname, etc.).
+ * Queries the stats_mysql_query_digest or stats_pgsql_query_digest tables
+ * for query performance metrics including execution count, timing statistics,
+ * and row counts. Results can be sorted and filtered by various criteria.
  *
- * Metrics are grouped into four categories that can be selected individually:
- * connection, query, memory, and cluster.
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - sort_by: "count" (default), "avg_time", "sum_time", "max_time", "rows_sent"
+ *   - limit: Maximum number of results (default: 100)
+ *   - offset: Skip first N results (default: 0)
+ *   - min_count: Only show queries executed at least N times
+ *   - min_time_us: Only show queries with avg time >= N microseconds
+ *   - database: Filter by database/schema name
+ *   - username: Filter by username
+ *   - hostgroup: Filter by hostgroup ID
+ *   - digest: Filter by specific digest hash
  *
- * Supported arguments:
- *   - category  (string)  "connection" | "query" | "memory" | "cluster" | "all"
- *   - database  (string)  "mysql" | "pgsql" | "all"   (default "all")
- *   - format    (string)  "prometheus" | "json"        (default "prometheus")
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with metrics array.
- */
-json Stats_Tool_Handler::handle_show_metrics(const json& arguments) {
-	std::string category = arguments.value("category", "all");
-	std::string database = arguments.value("database", "all");
-	std::string format = arguments.value("format", "prometheus");
-
-	json metrics = json::array();
-	long long ts = (long long)time(NULL);
-
-	auto add_metric = [&](const std::string& name, const std::string& type,
-		const std::string& help, long long value, const json& labels = json::object()) {
-		json m;
-		m["name"] = name;
-		m["type"] = type;
-		m["help"] = help;
-		m["value"] = value;
-		m["timestamp"] = ts;
-		m["labels"] = labels;
-		metrics.push_back(m);
-	};
-
-	// Connection metrics
-	if (category == "connection" || category == "all") {
-		auto fetch_global = [&](const std::string& db_type) {
-			std::string table = "stats_" + db_type + "_global";
-			SQLite3_result* resultset = NULL;
-			int cols = 0;
-			std::string sql = "SELECT Variable_Name, Variable_Value FROM stats." + table;
-			std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-			if (err.empty() && resultset) {
-				auto stats = parse_global_stats(resultset);
-
-				json lbl = {{"database", db_type}};
-
-				if (stats.count("Client_Connections_connected"))
-					add_metric("proxysql_client_connections_connected", "gauge",
-						"Number of active client connections", std::stoll(stats["Client_Connections_connected"]), lbl);
-				if (stats.count("Client_Connections_created"))
-					add_metric("proxysql_client_connections_created_total", "counter",
-						"Total client connections created", std::stoll(stats["Client_Connections_created"]), lbl);
-				if (stats.count("Server_Connections_connected"))
-					add_metric("proxysql_server_connections_connected", "gauge",
-						"Number of active server connections", std::stoll(stats["Server_Connections_connected"]), lbl);
-				if (stats.count("Server_Connections_created"))
-					add_metric("proxysql_server_connections_created_total", "counter",
-						"Total server connections created", std::stoll(stats["Server_Connections_created"]), lbl);
-
-				delete resultset;
-			}
-		};
-
-		if (database == "mysql" || database == "all") fetch_global("mysql");
-		if (database == "pgsql" || database == "all") fetch_global("pgsql");
-	}
-
-	// Query metrics
-	if (category == "query" || category == "all") {
-		auto fetch_query_metrics = [&](const std::string& db_type) {
-			std::string table = "stats_" + db_type + "_global";
-			SQLite3_result* resultset = NULL;
-			int cols = 0;
-			std::string sql = "SELECT Variable_Name, Variable_Value FROM stats." + table;
-			std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-			if (err.empty() && resultset) {
-				auto stats = parse_global_stats(resultset);
-				json lbl = {{"database", db_type}};
-
-				if (stats.count("Questions"))
-					add_metric("proxysql_questions_total", "counter",
-						"Total number of questions", std::stoll(stats["Questions"]), lbl);
-				if (stats.count("Slow_queries"))
-					add_metric("proxysql_slow_queries_total", "counter",
-						"Total number of slow queries", std::stoll(stats["Slow_queries"]), lbl);
-
-				delete resultset;
-			}
-		};
-
-		if (database == "mysql" || database == "all") fetch_query_metrics("mysql");
-		if (database == "pgsql" || database == "all") fetch_query_metrics("pgsql");
-	}
-
-	// Memory metrics
-	if (category == "memory" || category == "all") {
-		SQLite3_result* resultset = NULL;
-		int cols = 0;
-		std::string err = execute_admin_query(
-			"SELECT Variable_Name, Variable_Value FROM stats.stats_memory_metrics",
-			&resultset, &cols
-		);
-
-		if (err.empty() && resultset) {
-			auto stats = parse_global_stats(resultset);
-			for (const auto& kv : stats) {
-				add_metric("proxysql_memory_bytes", "gauge",
-					"Memory usage in bytes", std::stoll(kv.second),
-					{{"type", kv.first}});
-			}
-			delete resultset;
-		}
-	}
-
-	// Cluster metrics
-	if (category == "cluster" || category == "all") {
-		SQLite3_result* resultset = NULL;
-		int cols = 0;
-		std::string err = execute_admin_query(
-			"SELECT hostname, port, weight, master, ping_time_us, checks_OK, checks_ERR "
-			"FROM stats.stats_proxysql_servers_status",
-			&resultset, &cols
-		);
-
-		if (err.empty() && resultset) {
-			for (const auto& row : resultset->rows) {
-				json lbl = {
-					{"hostname", row->fields[0] ? row->fields[0] : ""},
-					{"port", row->fields[1] ? row->fields[1] : ""}
-				};
-
-				if (row->fields[2])
-					add_metric("proxysql_cluster_node_weight", "gauge",
-						"Cluster node weight", std::stoll(row->fields[2]), lbl);
-				if (row->fields[3])
-					add_metric("proxysql_cluster_node_master", "gauge",
-						"Whether node is master (1) or not (0)",
-						std::string(row->fields[3]) == "TRUE" ? 1 : 0, lbl);
-				if (row->fields[4])
-					add_metric("proxysql_cluster_ping_time_us", "gauge",
-						"Cluster node ping time in microseconds", std::stoll(row->fields[4]), lbl);
-				if (row->fields[5])
-					add_metric("proxysql_cluster_checks_ok_total", "counter",
-						"Total successful health checks", std::stoll(row->fields[5]), lbl);
-				if (row->fields[6])
-					add_metric("proxysql_cluster_checks_error_total", "counter",
-						"Total failed health checks", std::stoll(row->fields[6]), lbl);
-			}
-			delete resultset;
-		}
-	}
-
-	json result;
-	result["metrics"] = metrics;
-	result["format"] = format;
-
-	return create_success_response(result);
-}
-
-/**
- * @brief Return aggregated query performance statistics from the query digest.
- *
- * Queries stats_mysql_query_digest or stats_pgsql_query_digest and returns
- * per-digest rows with execution count, timing (sum/min/max/avg in
- * microseconds), rows affected/sent, and a computed performance_tier
- * classification (fast / medium / slow / very_slow).
- *
- * When include_top is true (default), the response also contains the top-10
- * slowest and top-10 most-frequent digests for quick triage.
- *
- * Supported arguments:
- *   - database    (string)  "mysql" | "pgsql"                   (default "mysql")
- *   - sort_by     (string)  "count" | "avg_time" | "sum_time" | "max_time" | "rows_sent"
- *   - limit       (int)     max rows returned                   (default 100)
- *   - min_count   (int)     minimum execution count filter
- *   - min_time_us (int)     minimum avg time filter (microseconds)
- *   - schemaname  (string)  filter by schema
- *   - username    (string)  filter by user
- *   - hostgroup   (int)     filter by hostgroup ID
- *   - digest      (string)  filter by specific digest hash
- *   - include_top (bool)    include top-10 summaries             (default true)
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with queries array and optional summary.
+ * @return JSON response with queries array containing performance metrics
  */
 json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
+	std::string db_type = arguments.value("db_type", "mysql");
 	std::string sort_by = arguments.value("sort_by", "count");
 	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
 	int min_count = arguments.value("min_count", 0);
 	int min_time_us = arguments.value("min_time_us", 0);
-	std::string schemaname = arguments.value("schemaname", "");
+	std::string database = arguments.value("database", "");
 	std::string username = arguments.value("username", "");
-	int hostgroup_filter = arguments.value("hostgroup", -1);
-	std::string digest_filter = arguments.value("digest", "");
-	bool include_top = arguments.value("include_top", true);
+	int hostgroup = arguments.value("hostgroup", -1);
+	std::string digest = arguments.value("digest", "");
 
-	std::string table = (database == "pgsql") ? "stats_pgsql_query_digest" : "stats_mysql_query_digest";
-	std::string schema_col = (database == "pgsql") ? "database" : "schemaname";
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_query_digest" : "stats_mysql_query_digest";
+	std::string schema_col = (db_type == "pgsql") ? "database" : "schemaname";
 
-	std::string sql = "SELECT hostgroup, " + schema_col + ", username, client_address, digest, "
+	std::string sql = "SELECT hostgroup, " + schema_col + " AS database, username, client_address, digest, "
 		"digest_text, count_star, first_seen, last_seen, "
 		"sum_time, min_time, max_time, sum_rows_affected, sum_rows_sent "
 		"FROM stats." + table + " WHERE 1=1";
@@ -1346,27 +1147,30 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 	if (min_count > 0) {
 		sql += " AND count_star >= " + std::to_string(min_count);
 	}
-	if (!schemaname.empty()) {
-		sql += " AND " + schema_col + " = '" + sql_escape(schemaname) + "'";
+	if (!database.empty()) {
+		sql += " AND " + schema_col + " = '" + sql_escape(database) + "'";
 	}
 	if (!username.empty()) {
 		sql += " AND username = '" + sql_escape(username) + "'";
 	}
-	if (hostgroup_filter >= 0) {
-		sql += " AND hostgroup = " + std::to_string(hostgroup_filter);
+	if (hostgroup >= 0) {
+		sql += " AND hostgroup = " + std::to_string(hostgroup);
 	}
-	if (!digest_filter.empty()) {
-		sql += " AND digest = '" + sql_escape(digest_filter) + "'";
+	if (!digest.empty()) {
+		sql += " AND digest = '" + sql_escape(digest) + "'";
+	}
+	if (min_time_us > 0) {
+		sql += " AND (sum_time / count_star) >= " + std::to_string(min_time_us);
 	}
 
 	// Sort order
 	std::string order_col = "count_star";
-	if (sort_by == "avg_time") order_col = "sum_time/count_star";
+	if (sort_by == "avg_time") order_col = "(sum_time / count_star)";
 	else if (sort_by == "sum_time") order_col = "sum_time";
 	else if (sort_by == "max_time") order_col = "max_time";
 	else if (sort_by == "rows_sent") order_col = "sum_rows_sent";
 
-	sql += " ORDER BY " + order_col + " DESC LIMIT " + std::to_string(limit);
+	sql += " ORDER BY " + order_col + " DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
 
 	SQLite3_result* resultset = NULL;
 	int cols = 0;
@@ -1376,8 +1180,20 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 		return create_error_response("Failed to query digest: " + err);
 	}
 
+	// Get total count
+	std::string count_sql = "SELECT COUNT(*) FROM stats." + table;
+	SQLite3_result* count_rs = NULL;
+	int count_cols = 0;
+	int total_digests = 0;
+	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
+		total_digests = std::stoi(count_rs->rows[0]->fields[0]);
+	}
+	if (count_rs) delete count_rs;
+
 	json queries = json::array();
-	long long total_queries = 0;
+	long long total_query_count = 0;
+	long long total_time = 0;
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
@@ -1387,24 +1203,16 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 			long long max_time = row->fields[11] ? std::stoll(row->fields[11]) : 0;
 			long long avg_time = (count_star > 0) ? sum_time / count_star : 0;
 
-			total_queries += count_star;
-
-			// Classify performance tier
-			std::string tier = "fast";
-			if (avg_time > 1000000) tier = "very_slow";      // > 1s
-			else if (avg_time > 100000) tier = "slow";        // > 100ms
-			else if (avg_time > 10000) tier = "medium";       // > 10ms
-
-			// Filter by min_time_us if specified
-			if (min_time_us > 0 && avg_time < min_time_us) continue;
+			total_query_count += count_star;
+			total_time += sum_time;
 
 			json q;
-			q["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-			q["schemaname"] = row->fields[1] ? row->fields[1] : "";
-			q["username"] = row->fields[2] ? row->fields[2] : "";
-			q["client_address"] = row->fields[3] ? row->fields[3] : "";
 			q["digest"] = row->fields[4] ? row->fields[4] : "";
 			q["digest_text"] = row->fields[5] ? row->fields[5] : "";
+			q["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			q["database"] = row->fields[1] ? row->fields[1] : "";
+			q["username"] = row->fields[2] ? row->fields[2] : "";
+			q["client_address"] = row->fields[3] ? row->fields[3] : "";
 			q["count_star"] = count_star;
 			q["first_seen"] = row->fields[7] ? std::stoll(row->fields[7]) : 0;
 			q["last_seen"] = row->fields[8] ? std::stoll(row->fields[8]) : 0;
@@ -1414,107 +1222,177 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 			q["avg_time_us"] = avg_time;
 			q["sum_rows_affected"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
 			q["sum_rows_sent"] = row->fields[13] ? std::stoll(row->fields[13]) : 0;
-			q["performance_tier"] = tier;
 
 			queries.push_back(q);
 		}
-
 		delete resultset;
 	}
 
 	json result;
-	result["database"] = database;
-	result["total_queries"] = total_queries;
+	result["db_type"] = db_type;
+	result["total_digests"] = total_digests;
 	result["queries"] = queries;
-
-	if (include_top && queries.size() > 0) {
-		// Top 10 slowest by avg_time
-		json top_slowest = json::array();
-		json sorted_by_time = queries;
-		std::sort(sorted_by_time.begin(), sorted_by_time.end(),
-			[](const json& a, const json& b) {
-				return a["avg_time_us"].get<long long>() > b["avg_time_us"].get<long long>();
-			});
-		for (size_t i = 0; i < std::min((size_t)10, sorted_by_time.size()); i++) {
-			top_slowest.push_back({
-				{"digest", sorted_by_time[i]["digest"]},
-				{"digest_text", sorted_by_time[i]["digest_text"]},
-				{"avg_time_us", sorted_by_time[i]["avg_time_us"]},
-				{"count_star", sorted_by_time[i]["count_star"]}
-			});
-		}
-
-		// Top 10 most frequent
-		json top_frequent = json::array();
-		json sorted_by_count = queries;
-		std::sort(sorted_by_count.begin(), sorted_by_count.end(),
-			[](const json& a, const json& b) {
-				return a["count_star"].get<long long>() > b["count_star"].get<long long>();
-			});
-		for (size_t i = 0; i < std::min((size_t)10, sorted_by_count.size()); i++) {
-			top_frequent.push_back({
-				{"digest", sorted_by_count[i]["digest"]},
-				{"digest_text", sorted_by_count[i]["digest_text"]},
-				{"count_star", sorted_by_count[i]["count_star"]},
-				{"avg_time_us", sorted_by_count[i]["avg_time_us"]}
-			});
-		}
-
-		result["summary"] = {
-			{"top_10_slowest", top_slowest},
-			{"top_10_most_frequent", top_frequent}
-		};
-	}
+	result["summary"] = {
+		{"total_queries", total_query_count},
+		{"total_time_us", total_time}
+	};
 
 	return create_success_response(result);
 }
 
 /**
- * @brief Return backend connection-pool metrics per server.
+ * @brief Returns command execution statistics with latency histograms
  *
- * Queries stats_mysql_connection_pool or stats_pgsql_connection_pool and
- * returns per-server rows with connections used/free/ok/err, max used,
- * queries routed, bytes sent/received, latency, and computed utilisation
- * and error-rate percentages.
+ * Queries the stats_mysql_commands_counters or stats_pgsql_commands_counters
+ * tables for per-command metrics. Includes execution counts and latency
+ * histogram data with calculated percentiles (p50, p95, p99).
  *
- * A summary section provides totals across all servers and a breakdown
- * by status (ONLINE, SHUNNED, OFFLINE_SOFT, OFFLINE_HARD).
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - command: Filter by specific command name
+ *   - limit: Maximum number of results (default: 100)
+ *   - offset: Skip first N results (default: 0)
  *
- * Supported arguments:
- *   - database  (string)  "mysql" | "pgsql"                   (default "mysql")
- *   - hostgroup (int)     filter by hostgroup ID
- *   - server    (string)  filter by "host:port"
- *   - status    (string)  filter by server status
+ * @return JSON response with commands array containing counts and percentiles
+ */
+json Stats_Tool_Handler::handle_show_commands(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string command = arguments.value("command", "");
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
+
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_commands_counters" : "stats_mysql_commands_counters";
+
+	std::string sql = "SELECT Command, Total_Time_us, Total_cnt, "
+		"cnt_100us, cnt_500us, cnt_1ms, cnt_5ms, cnt_10ms, cnt_50ms, "
+		"cnt_100ms, cnt_500ms, cnt_1s, cnt_5s, cnt_10s, cnt_INFs "
+		"FROM stats." + table;
+
+	if (!command.empty()) {
+		sql += " WHERE Command = '" + sql_escape(command) + "'";
+	}
+
+	sql += " ORDER BY Total_cnt DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+
+	if (!err.empty()) {
+		return create_error_response("Failed to query commands: " + err);
+	}
+
+	json commands = json::array();
+	long long total_commands = 0;
+	long long total_time = 0;
+
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			long long total_time_cmd = row->fields[1] ? std::stoll(row->fields[1]) : 0;
+			long long total_cnt = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+			long long avg_time = (total_cnt > 0) ? total_time_cmd / total_cnt : 0;
+
+			total_commands += total_cnt;
+			total_time += total_time_cmd;
+
+			// Parse histogram buckets
+			std::vector<int> buckets;
+			for (int i = 3; i <= 14; i++) {
+				buckets.push_back(row->fields[i] ? std::stoi(row->fields[i]) : 0);
+			}
+
+			json cmd;
+			cmd["command"] = row->fields[0] ? row->fields[0] : "";
+			cmd["total_count"] = total_cnt;
+			cmd["total_time_us"] = total_time_cmd;
+			cmd["avg_time_us"] = avg_time;
+			cmd["latency_histogram"] = {
+				{"cnt_100us", buckets.size() > 0 ? buckets[0] : 0},
+				{"cnt_500us", buckets.size() > 1 ? buckets[1] : 0},
+				{"cnt_1ms", buckets.size() > 2 ? buckets[2] : 0},
+				{"cnt_5ms", buckets.size() > 3 ? buckets[3] : 0},
+				{"cnt_10ms", buckets.size() > 4 ? buckets[4] : 0},
+				{"cnt_50ms", buckets.size() > 5 ? buckets[5] : 0},
+				{"cnt_100ms", buckets.size() > 6 ? buckets[6] : 0},
+				{"cnt_500ms", buckets.size() > 7 ? buckets[7] : 0},
+				{"cnt_1s", buckets.size() > 8 ? buckets[8] : 0},
+				{"cnt_5s", buckets.size() > 9 ? buckets[9] : 0},
+				{"cnt_10s", buckets.size() > 10 ? buckets[10] : 0},
+				{"cnt_INFs", buckets.size() > 11 ? buckets[11] : 0}
+			};
+
+			// Calculate percentiles
+			cmd["percentiles"] = {
+				{"p50_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.50)},
+				{"p90_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.90)},
+				{"p95_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.95)},
+				{"p99_us", calculate_percentile(buckets, LATENCY_BUCKET_THRESHOLDS, 0.99)}
+			};
+
+			commands.push_back(cmd);
+		}
+		delete resultset;
+	}
+
+	json result;
+	result["db_type"] = db_type;
+	result["commands"] = commands;
+	result["summary"] = {
+		{"total_commands", total_commands},
+		{"total_time_us", total_time}
+	};
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Returns backend connection pool metrics
  *
- * @param arguments  JSON object with optional filters.
- * @return Success response with servers array and summary.
+ * Queries connection pool statistics for backend MySQL/PostgreSQL servers.
+ * Shows connection counts, error rates, and latency metrics per server.
+ * Optionally includes detailed free connection information.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - hostgroup: Filter by hostgroup ID
+ *   - server: Filter by server address (format: "host:port")
+ *   - status: Filter by server status (ONLINE, SHUNNED, etc.)
+ *   - detail: Include free connection details (default: false)
+ *
+ * @return JSON response with servers array and optional free_connections detail
  */
 json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	int hostgroup_filter = arguments.value("hostgroup", -1);
-	std::string server_filter = arguments.value("server", "");
-	std::string status_filter = arguments.value("status", "");
+	std::string db_type = arguments.value("db_type", "mysql");
+	int hostgroup = arguments.value("hostgroup", -1);
+	std::string server = arguments.value("server", "");
+	std::string status = arguments.value("status", "");
+	bool detail = arguments.value("detail", false);
 
-	std::string table = (database == "pgsql") ? "stats_pgsql_connection_pool" : "stats_mysql_connection_pool";
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_connection_pool" : "stats_mysql_connection_pool";
+	bool is_mysql = (db_type != "pgsql");
 
+	// Build main query - note: PostgreSQL doesn't have Queries_GTID_sync
 	std::string sql = "SELECT hostgroup, srv_host, srv_port, status, "
-		"ConnUsed, ConnFree, ConnOK, ConnERR, MaxConnUsed, "
-		"Queries, Bytes_data_sent, Bytes_data_recv, Latency_us "
+		"ConnUsed, ConnFree, ConnOK, ConnERR, MaxConnUsed, Queries, ";
+	if (is_mysql) {
+		sql += "Queries_GTID_sync, ";
+	}
+	sql += "Bytes_data_sent, Bytes_data_recv, Latency_us "
 		"FROM stats." + table + " WHERE 1=1";
 
-	if (hostgroup_filter >= 0) {
-		sql += " AND hostgroup = " + std::to_string(hostgroup_filter);
+	if (hostgroup >= 0) {
+		sql += " AND hostgroup = " + std::to_string(hostgroup);
 	}
-	if (!server_filter.empty()) {
-		size_t colon = server_filter.find(':');
+	if (!server.empty()) {
+		size_t colon = server.find(':');
 		if (colon != std::string::npos) {
-			std::string host = server_filter.substr(0, colon);
-			std::string port = server_filter.substr(colon + 1);
+			std::string host = server.substr(0, colon);
+			std::string port = server.substr(colon + 1);
 			sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + port;
 		}
 	}
-	if (!status_filter.empty()) {
-		sql += " AND status = '" + sql_escape(status_filter) + "'";
+	if (!status.empty()) {
+		sql += " AND status = '" + sql_escape(status) + "'";
 	}
 
 	sql += " ORDER BY hostgroup, srv_host, srv_port";
@@ -1539,94 +1417,153 @@ json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
 			long long conn_ok = row->fields[6] ? std::stoll(row->fields[6]) : 0;
 			long long conn_err = row->fields[7] ? std::stoll(row->fields[7]) : 0;
 			long long queries = row->fields[9] ? std::stoll(row->fields[9]) : 0;
-			std::string status = row->fields[3] ? row->fields[3] : "";
+			std::string srv_status = row->fields[3] ? row->fields[3] : "";
 
 			double utilization = (conn_used + conn_free > 0) ?
 				(double)conn_used / (double)(conn_used + conn_free) * 100.0 : 0.0;
 			double error_rate = (conn_ok + conn_err > 0) ?
 				(double)conn_err / (double)(conn_ok + conn_err) : 0.0;
 
-			json server;
-			server["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-			server["srv_host"] = row->fields[1] ? row->fields[1] : "";
-			server["srv_port"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
-			server["status"] = status;
-			server["ConnUsed"] = conn_used;
-			server["ConnFree"] = conn_free;
-			server["ConnOK"] = conn_ok;
-			server["ConnERR"] = conn_err;
-			server["MaxConnUsed"] = row->fields[8] ? std::stoi(row->fields[8]) : 0;
-			server["Queries"] = queries;
-			server["Bytes_data_sent"] = row->fields[10] ? std::stoll(row->fields[10]) : 0;
-			server["Bytes_data_recv"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
-			server["Latency_us"] = row->fields[12] ? std::stoi(row->fields[12]) : 0;
-			server["utilization_pct"] = utilization;
-			server["error_rate"] = error_rate;
+			json srv;
+			srv["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			srv["srv_host"] = row->fields[1] ? row->fields[1] : "";
+			srv["srv_port"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
+			srv["status"] = srv_status;
+			srv["conn_used"] = conn_used;
+			srv["conn_free"] = conn_free;
+			srv["conn_ok"] = conn_ok;
+			srv["conn_err"] = conn_err;
+			srv["max_conn_used"] = row->fields[8] ? std::stoi(row->fields[8]) : 0;
+			srv["queries"] = queries;
+			if (is_mysql) {
+				srv["queries_gtid_sync"] = row->fields[10] ? std::stoll(row->fields[10]) : 0;
+				srv["bytes_data_sent"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
+				srv["bytes_data_recv"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
+				srv["latency_us"] = row->fields[13] ? std::stoi(row->fields[13]) : 0;
+			} else {
+				srv["bytes_data_sent"] = row->fields[10] ? std::stoll(row->fields[10]) : 0;
+				srv["bytes_data_recv"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
+				srv["latency_us"] = row->fields[12] ? std::stoi(row->fields[12]) : 0;
+			}
+			srv["utilization_pct"] = utilization;
+			srv["error_rate"] = error_rate;
 
-			servers.push_back(server);
+			servers.push_back(srv);
 
 			total_servers++;
-			if (status == "ONLINE") online_servers++;
+			if (srv_status == "ONLINE") online_servers++;
 			total_used += conn_used;
 			total_free += conn_free;
 			total_queries += queries;
-			by_status[status]++;
+			by_status[srv_status]++;
 		}
-
 		delete resultset;
 	}
 
 	json result;
-	result["database"] = database;
+	result["db_type"] = db_type;
 	result["servers"] = servers;
 	result["summary"] = {
 		{"total_servers", total_servers},
 		{"online_servers", online_servers},
-		{"total_used", total_used},
-		{"total_free", total_free},
+		{"total_conn_used", total_used},
+		{"total_conn_free", total_free},
 		{"total_queries", total_queries},
 		{"overall_utilization_pct", (total_used + total_free > 0) ?
 			(double)total_used / (double)(total_used + total_free) * 100.0 : 0.0},
 		{"by_status", by_status}
 	};
 
+	// Include free connections detail if requested
+	if (detail) {
+		std::string free_table = (db_type == "pgsql") ? "stats_pgsql_free_connections" : "stats_mysql_free_connections";
+		std::string schema_col = (db_type == "pgsql") ? "database" : "schema";
+
+		std::string free_sql = "SELECT fd, hostgroup, srv_host, srv_port, user, " + schema_col;
+		if (is_mysql) {
+			free_sql += ", init_connect, time_zone, sql_mode, autocommit, idle_ms";
+		} else {
+			free_sql += ", init_connect, time_zone, sql_mode, idle_ms";
+		}
+		free_sql += " FROM stats." + free_table;
+
+		if (hostgroup >= 0) {
+			free_sql += " WHERE hostgroup = " + std::to_string(hostgroup);
+		}
+
+		SQLite3_result* free_rs = NULL;
+		int free_cols = 0;
+		std::string free_err = execute_admin_query(free_sql.c_str(), &free_rs, &free_cols);
+
+		if (free_err.empty() && free_rs) {
+			json free_connections = json::array();
+			for (const auto& row : free_rs->rows) {
+				json fc;
+				fc["fd"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+				fc["hostgroup"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+				fc["srv_host"] = row->fields[2] ? row->fields[2] : "";
+				fc["srv_port"] = row->fields[3] ? std::stoi(row->fields[3]) : 0;
+				fc["user"] = row->fields[4] ? row->fields[4] : "";
+				if (db_type == "pgsql") {
+					fc["database"] = row->fields[5] ? row->fields[5] : "";
+					fc["init_connect"] = row->fields[6] ? row->fields[6] : "";
+					fc["time_zone"] = row->fields[7] ? row->fields[7] : "";
+					fc["sql_mode"] = row->fields[8] ? row->fields[8] : "";
+					fc["idle_ms"] = row->fields[9] ? std::stoi(row->fields[9]) : 0;
+				} else {
+					fc["schema"] = row->fields[5] ? row->fields[5] : "";
+					fc["init_connect"] = row->fields[6] ? row->fields[6] : "";
+					fc["time_zone"] = row->fields[7] ? row->fields[7] : "";
+					fc["sql_mode"] = row->fields[8] ? row->fields[8] : "";
+					fc["autocommit"] = row->fields[9] ? row->fields[9] : "";
+					fc["idle_ms"] = row->fields[10] ? std::stoi(row->fields[10]) : 0;
+				}
+				free_connections.push_back(fc);
+			}
+			result["free_connections"] = free_connections;
+			delete free_rs;
+		}
+	}
+
 	return create_success_response(result);
 }
 
 /**
- * @brief Return error tracking data grouped by type, user, schema, and hostgroup.
+ * @brief Returns error tracking statistics
  *
- * Queries stats_mysql_errors or stats_pgsql_errors and returns each distinct
- * error row with occurrence count, first/last seen timestamps, the last error
- * message, and a computed frequency_per_hour.
+ * Queries error statistics from stats_mysql_errors or stats_pgsql_errors.
+ * Shows error counts, frequency, and last occurrence per error type/server.
+ * MySQL uses errno, PostgreSQL uses sqlstate for error identification.
  *
- * A summary section aggregates total occurrences broken down by errno/sqlstate,
- * username, schema, and hostgroup.
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - errno: Filter by error number (MySQL)
+ *   - sqlstate: Filter by SQL state (PostgreSQL)
+ *   - username: Filter by username
+ *   - database: Filter by database name
+ *   - hostgroup: Filter by hostgroup ID
+ *   - min_count: Only show errors with count >= N
+ *   - sort_by: "count" (default), "last_seen", "frequency"
+ *   - limit: Maximum number of results (default: 100)
+ *   - offset: Skip first N results (default: 0)
  *
- * Supported arguments:
- *   - database    (string)  "mysql" | "pgsql"                     (default "mysql")
- *   - errno       (int)     filter by error number / sqlstate
- *   - username    (string)  filter by username
- *   - schemaname  (string)  filter by schema
- *   - hostgroup   (int)     filter by hostgroup ID
- *   - min_count   (int)     only errors with count >= N
- *   - sort_by     (string)  "count" | "first_seen" | "last_seen"  (default "count")
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with errors array and summary.
+ * @return JSON response with errors array and summary statistics
  */
 json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
+	std::string db_type = arguments.value("db_type", "mysql");
 	int errno_filter = arguments.value("errno", -1);
+	std::string sqlstate_filter = arguments.value("sqlstate", "");
 	std::string username = arguments.value("username", "");
-	std::string schemaname = arguments.value("schemaname", "");
-	int hostgroup_filter = arguments.value("hostgroup", -1);
+	std::string database = arguments.value("database", "");
+	int hostgroup = arguments.value("hostgroup", -1);
 	int min_count = arguments.value("min_count", 0);
 	std::string sort_by = arguments.value("sort_by", "count");
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
 
-	std::string table = (database == "pgsql") ? "stats_pgsql_errors" : "stats_mysql_errors";
-	std::string schema_col = (database == "pgsql") ? "database" : "schemaname";
-	std::string errno_col = (database == "pgsql") ? "sqlstate" : "errno";
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_errors" : "stats_mysql_errors";
+	std::string schema_col = (db_type == "pgsql") ? "database" : "schemaname";
+	std::string errno_col = (db_type == "pgsql") ? "sqlstate" : "errno";
 
 	std::string sql = "SELECT hostgroup, hostname, port, username, client_address, "
 		+ schema_col + ", " + errno_col + ", count_star, first_seen, last_seen, last_error "
@@ -1635,24 +1572,26 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 	if (min_count > 0) {
 		sql += " AND count_star >= " + std::to_string(min_count);
 	}
-	if (errno_filter >= 0) {
-		sql += " AND " + errno_col + " = " + std::to_string(errno_filter);
+	if (db_type == "pgsql" && !sqlstate_filter.empty()) {
+		sql += " AND sqlstate = '" + sql_escape(sqlstate_filter) + "'";
+	} else if (db_type == "mysql" && errno_filter >= 0) {
+		sql += " AND errno = " + std::to_string(errno_filter);
 	}
 	if (!username.empty()) {
 		sql += " AND username = '" + sql_escape(username) + "'";
 	}
-	if (!schemaname.empty()) {
-		sql += " AND " + schema_col + " = '" + sql_escape(schemaname) + "'";
+	if (!database.empty()) {
+		sql += " AND " + schema_col + " = '" + sql_escape(database) + "'";
 	}
-	if (hostgroup_filter >= 0) {
-		sql += " AND hostgroup = " + std::to_string(hostgroup_filter);
+	if (hostgroup >= 0) {
+		sql += " AND hostgroup = " + std::to_string(hostgroup);
 	}
 
 	// Sort
 	std::string order_col = "count_star";
 	if (sort_by == "first_seen") order_col = "first_seen";
 	else if (sort_by == "last_seen") order_col = "last_seen";
-	sql += " ORDER BY " + order_col + " DESC";
+	sql += " ORDER BY " + order_col + " DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
 
 	SQLite3_result* resultset = NULL;
 	int cols = 0;
@@ -1662,9 +1601,21 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 		return create_error_response("Failed to query errors: " + err);
 	}
 
+	// Get total counts
+	std::string count_sql = "SELECT COUNT(*), SUM(count_star) FROM stats." + table;
+	SQLite3_result* count_rs = NULL;
+	int count_cols = 0;
+	int total_error_types = 0;
+	long long total_error_count = 0;
+	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (count_rs && count_rs->rows_count > 0) {
+		total_error_types = count_rs->rows[0]->fields[0] ? std::stoi(count_rs->rows[0]->fields[0]) : 0;
+		total_error_count = count_rs->rows[0]->fields[1] ? std::stoll(count_rs->rows[0]->fields[1]) : 0;
+	}
+	if (count_rs) delete count_rs;
+
 	json errors = json::array();
-	long long total_occurrences = 0;
-	std::map<std::string, long long> by_errno, by_username, by_schema, by_hostgroup;
+	std::map<std::string, long long> by_errno, by_hostgroup;
 
 	if (resultset) {
 		for (const auto& row : resultset->rows) {
@@ -1672,14 +1623,9 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 			long long first_seen = row->fields[8] ? std::stoll(row->fields[8]) : 0;
 			long long last_seen = row->fields[9] ? std::stoll(row->fields[9]) : 0;
 
-			total_occurrences += count;
-
 			// Calculate frequency (errors per hour)
-			double hours_since_first = 0;
-			if (first_seen > 0) {
-				hours_since_first = (double)(time(NULL) - first_seen) / 3600.0;
-			}
-			double freq_per_hour = (hours_since_first > 0) ? (double)count / hours_since_first : (double)count;
+			double hours = (last_seen > first_seen) ? (double)(last_seen - first_seen) / 3600.0 : 1.0;
+			double freq_per_hour = count / hours;
 
 			json error;
 			error["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
@@ -1687,8 +1633,12 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 			error["port"] = row->fields[2] ? std::stoi(row->fields[2]) : 0;
 			error["username"] = row->fields[3] ? row->fields[3] : "";
 			error["client_address"] = row->fields[4] ? row->fields[4] : "";
-			error["schemaname"] = row->fields[5] ? row->fields[5] : "";
-			error[errno_col] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
+			error["database"] = row->fields[5] ? row->fields[5] : "";
+			if (db_type == "pgsql") {
+				error["sqlstate"] = row->fields[6] ? row->fields[6] : "";
+			} else {
+				error["errno"] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
+			}
 			error["count_star"] = count;
 			error["first_seen"] = first_seen;
 			error["last_seen"] = last_seen;
@@ -1699,59 +1649,450 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 
 			// Aggregations
 			std::string en = row->fields[6] ? row->fields[6] : "unknown";
-			std::string un = row->fields[3] ? row->fields[3] : "unknown";
-			std::string sn = row->fields[5] ? row->fields[5] : "unknown";
 			std::string hg = row->fields[0] ? row->fields[0] : "unknown";
 			by_errno[en] += count;
-			by_username[un] += count;
-			by_schema[sn] += count;
 			by_hostgroup[hg] += count;
 		}
-
 		delete resultset;
 	}
 
 	json result;
-	result["database"] = database;
-	result["total_error_types"] = (int)errors.size();
-	result["total_error_occurrences"] = total_occurrences;
+	result["db_type"] = db_type;
+	result["total_error_types"] = total_error_types;
+	result["total_error_count"] = total_error_count;
 	result["errors"] = errors;
+
+	json summary;
+	if (db_type == "pgsql") {
+		summary["by_sqlstate"] = by_errno;
+	} else {
+		summary["by_errno"] = by_errno;
+	}
+	summary["by_hostgroup"] = by_hostgroup;
+	result["summary"] = summary;
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Returns connection statistics per user
+ *
+ * Queries stats_mysql_users or stats_pgsql_users for per-user connection
+ * metrics including active connections, max connections, and utilization.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - username: Filter by specific username
+ *   - limit: Maximum number of results (default: 100)
+ *   - offset: Skip first N results (default: 0)
+ *
+ * @return JSON response with users array containing connection statistics
+ */
+json Stats_Tool_Handler::handle_show_users(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string username = arguments.value("username", "");
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
+
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_users" : "stats_mysql_users";
+
+	std::string sql = "SELECT username, frontend_connections, frontend_max_connections "
+		"FROM stats." + table;
+
+	if (!username.empty()) {
+		sql += " WHERE username = '" + sql_escape(username) + "'";
+	}
+
+	sql += " ORDER BY frontend_connections DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+
+	if (!err.empty()) {
+		return create_error_response("Failed to query users: " + err);
+	}
+
+	json users = json::array();
+	int total_users = 0;
+	long long total_connections = 0, total_capacity = 0;
+
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			int connections = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+			int max_connections = row->fields[2] ? std::stoi(row->fields[2]) : 0;
+			double utilization = (max_connections > 0) ? (double)connections / (double)max_connections * 100.0 : 0.0;
+
+			std::string status = "normal";
+			if (max_connections > 0 && connections >= max_connections) status = "at_limit";
+			else if (max_connections > 0 && utilization >= 80.0) status = "near_limit";
+
+			json user;
+			user["username"] = row->fields[0] ? row->fields[0] : "";
+			user["frontend_connections"] = connections;
+			user["frontend_max_connections"] = max_connections;
+			user["utilization_pct"] = utilization;
+			user["status"] = status;
+
+			users.push_back(user);
+
+			total_users++;
+			total_connections += connections;
+			total_capacity += max_connections;
+		}
+		delete resultset;
+	}
+
+	json result;
+	result["db_type"] = db_type;
+	result["users"] = users;
 	result["summary"] = {
-		{"by_errno", by_errno},
-		{"by_username", by_username},
-		{"by_schemaname", by_schema},
-		{"by_hostgroup", by_hostgroup}
+		{"total_users", total_users},
+		{"total_connections", total_connections},
+		{"total_capacity", total_capacity},
+		{"overall_utilization_pct", (total_capacity > 0) ? (double)total_connections / (double)total_capacity * 100.0 : 0.0}
 	};
 
 	return create_success_response(result);
 }
 
 /**
- * @brief Return ProxySQL cluster node health, sync status, and network metrics.
+ * @brief Returns client host error cache
  *
- * Gathers data from up to three sources:
- *   1. stats_proxysql_servers_status -- per-node weight, master flag, ping
- *      time, check success/failure counts, and derived online/offline status.
- *   2. stats_proxysql_servers_metrics (when detailed_metrics is true) --
- *      uptime, queries, and client connections per node.
- *   3. stats_proxysql_servers_checksums (when include_checksums is true) --
- *      per-module configuration version, checksum, and diff_check flag.
+ * Queries stats_mysql_client_host_cache or stats_pgsql_client_host_cache
+ * for client host error tracking data used for connection throttling.
  *
- * The cluster_health field is set to "healthy", "degraded", "unhealthy", or
- * "not_configured" based on the ratio of online nodes and checksum sync state.
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - client_address: Filter by client IP address
+ *   - min_error_count: Only show hosts with error_count >= N
+ *   - limit: Maximum number of results (default: 100)
+ *   - offset: Skip first N results (default: 0)
  *
- * Supported arguments:
- *   - hostname           (string) filter by node hostname
- *   - include_checksums  (bool)   include checksum detail    (default true)
- *   - detailed_metrics   (bool)   include per-node metrics   (default false)
+ * @return JSON response with clients array containing error cache data
+ */
+json Stats_Tool_Handler::handle_show_client_cache(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string client_address = arguments.value("client_address", "");
+	int min_error_count = arguments.value("min_error_count", 0);
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
+
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_client_host_cache" : "stats_mysql_client_host_cache";
+
+	std::string sql = "SELECT client_address, error_count, last_updated "
+		"FROM stats." + table + " WHERE 1=1";
+
+	if (!client_address.empty()) {
+		sql += " AND client_address = '" + sql_escape(client_address) + "'";
+	}
+	if (min_error_count > 0) {
+		sql += " AND error_count >= " + std::to_string(min_error_count);
+	}
+
+	sql += " ORDER BY error_count DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+
+	if (!err.empty()) {
+		return create_error_response("Failed to query client host cache: " + err);
+	}
+
+	json hosts = json::array();
+	int total_hosts = 0;
+	long long total_errors = 0;
+
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			int error_count = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+
+			json host;
+			host["client_address"] = row->fields[0] ? row->fields[0] : "";
+			host["error_count"] = error_count;
+			host["last_updated"] = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+
+			hosts.push_back(host);
+			total_hosts++;
+			total_errors += error_count;
+		}
+		delete resultset;
+	}
+
+	json result;
+	result["db_type"] = db_type;
+	result["hosts"] = hosts;
+	result["summary"] = {
+		{"total_hosts", total_hosts},
+		{"total_errors", total_errors}
+	};
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Returns query rule hit statistics
  *
- * @param arguments  JSON object with optional filters.
- * @return Success response with nodes array, checksums, and summary.
+ * Queries stats_mysql_query_rules or stats_pgsql_query_rules for
+ * hit counts per query rule, useful for analyzing rule effectiveness.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - rule_id: Filter by specific rule ID
+ *   - min_hits: Only show rules with hits >= N
+ *   - include_zero_hits: Include rules with zero hits (default: false)
+ *   - limit: Maximum number of results (default: 100)
+ *   - offset: Skip first N results (default: 0)
+ *
+ * @return JSON response with rules array containing rule_id and hits
+ */
+json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	int rule_id = arguments.value("rule_id", -1);
+	int min_hits = arguments.value("min_hits", 0);
+	bool include_zero_hits = arguments.value("include_zero_hits", false);
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
+
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_query_rules" : "stats_mysql_query_rules";
+
+	std::string sql = "SELECT rule_id, hits FROM stats." + table + " WHERE 1=1";
+
+	if (rule_id >= 0) {
+		sql += " AND rule_id = " + std::to_string(rule_id);
+	}
+	if (!include_zero_hits) {
+		sql += " AND hits > 0";
+	}
+	if (min_hits > 0) {
+		sql += " AND hits >= " + std::to_string(min_hits);
+	}
+
+	sql += " ORDER BY hits DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
+
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+
+	if (!err.empty()) {
+		return create_error_response("Failed to query query rules: " + err);
+	}
+
+	// Get total count
+	std::string count_sql = "SELECT COUNT(*) FROM stats." + table;
+	SQLite3_result* count_rs = NULL;
+	int count_cols = 0;
+	int total_rules = 0;
+	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
+		total_rules = std::stoi(count_rs->rows[0]->fields[0]);
+	}
+	if (count_rs) delete count_rs;
+
+	json rules = json::array();
+	long long total_hits = 0;
+	int rules_with_hits = 0;
+	int rules_without_hits = 0;
+
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			long long hits = row->fields[1] ? std::stoll(row->fields[1]) : 0;
+			total_hits += hits;
+			if (hits > 0) rules_with_hits++;
+			else rules_without_hits++;
+
+			json rule;
+			rule["rule_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			rule["hits"] = hits;
+
+			rules.push_back(rule);
+		}
+		delete resultset;
+	}
+
+	json result;
+	result["db_type"] = db_type;
+	result["total_rules"] = total_rules;
+	result["rules"] = rules;
+	result["summary"] = {
+		{"total_hits", total_hits},
+		{"rules_with_hits", rules_with_hits},
+		{"rules_without_hits", rules_without_hits}
+	};
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Returns prepared statement information
+ *
+ * Queries stats_mysql_prepared_statements_info or stats_pgsql_prepared_statements_info
+ * for active prepared statement details including digest, reference counts, and query text.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" (default) or "pgsql"
+ *   - username: Filter by username
+ *   - database: Filter by database name
+ *
+ * @return JSON response with statements array containing prepared statement details
+ */
+json Stats_Tool_Handler::handle_show_prepared_statements(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string username = arguments.value("username", "");
+	std::string database = arguments.value("database", "");
+
+	std::string table = (db_type == "pgsql") ? "stats_pgsql_prepared_statements_info" : "stats_mysql_prepared_statements_info";
+	std::string schema_col = (db_type == "pgsql") ? "database" : "schemaname";
+
+	std::string sql;
+	if (db_type == "pgsql") {
+		sql = "SELECT global_stmt_id, " + schema_col + ", username, digest, "
+			"ref_count_client, ref_count_server, num_param_types, query "
+			"FROM stats." + table;
+	} else {
+		sql = "SELECT global_stmt_id, " + schema_col + ", username, digest, "
+			"ref_count_client, ref_count_server, num_columns, num_params, query "
+			"FROM stats." + table;
+	}
+
+	std::vector<std::string> conditions;
+	if (!username.empty()) {
+		conditions.push_back("username = '" + sql_escape(username) + "'");
+	}
+	if (!database.empty()) {
+		conditions.push_back(schema_col + " = '" + sql_escape(database) + "'");
+	}
+
+	if (!conditions.empty()) {
+		sql += " WHERE ";
+		for (size_t i = 0; i < conditions.size(); i++) {
+			if (i > 0) sql += " AND ";
+			sql += conditions[i];
+		}
+	}
+
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+
+	if (!err.empty()) {
+		return create_error_response("Failed to query prepared statements: " + err);
+	}
+
+	json statements = json::array();
+	int total_statements = 0;
+
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			json stmt;
+			stmt["global_stmt_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			stmt["database"] = row->fields[1] ? row->fields[1] : "";
+			stmt["username"] = row->fields[2] ? row->fields[2] : "";
+			stmt["digest"] = row->fields[3] ? row->fields[3] : "";
+			stmt["ref_count_client"] = row->fields[4] ? std::stoi(row->fields[4]) : 0;
+			stmt["ref_count_server"] = row->fields[5] ? std::stoi(row->fields[5]) : 0;
+			if (db_type == "pgsql") {
+				stmt["num_param_types"] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
+				stmt["query"] = row->fields[7] ? row->fields[7] : "";
+			} else {
+				stmt["num_columns"] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
+				stmt["num_params"] = row->fields[7] ? std::stoi(row->fields[7]) : 0;
+				stmt["query"] = row->fields[8] ? row->fields[8] : "";
+			}
+
+			statements.push_back(stmt);
+			total_statements++;
+		}
+		delete resultset;
+	}
+
+	json result;
+	result["db_type"] = db_type;
+	result["total_statements"] = total_statements;
+	result["statements"] = statements;
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Returns GTID replication information (MySQL only)
+ *
+ * Queries stats_mysql_gtid_executed for GTID tracking data per backend server.
+ * This tool is MySQL-specific; PostgreSQL does not support GTID.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - hostname: Filter by backend hostname
+ *   - port: Filter by backend port
+ *
+ * @return JSON response with servers array containing GTID execution data
+ */
+json Stats_Tool_Handler::handle_show_gtid(const json& arguments) {
+	std::string hostname = arguments.value("hostname", "");
+	int port = arguments.value("port", -1);
+
+	std::string sql = "SELECT hostname, port, gtid_executed, events "
+		"FROM stats.stats_mysql_gtid_executed WHERE 1=1";
+
+	if (!hostname.empty()) {
+		sql += " AND hostname = '" + sql_escape(hostname) + "'";
+	}
+	if (port > 0) {
+		sql += " AND port = " + std::to_string(port);
+	}
+
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+
+	if (!err.empty()) {
+		return create_error_response("Failed to query GTID: " + err);
+	}
+
+	json servers = json::array();
+	long long total_events = 0;
+
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			long long events = row->fields[3] ? std::stoll(row->fields[3]) : 0;
+			total_events += events;
+
+			json srv;
+			srv["hostname"] = row->fields[0] ? row->fields[0] : "";
+			srv["port"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+			srv["gtid_executed"] = row->fields[2] ? row->fields[2] : "";
+			srv["events"] = events;
+
+			servers.push_back(srv);
+		}
+		delete resultset;
+	}
+
+	json result;
+	result["servers"] = servers;
+	result["summary"] = {
+		{"total_servers", (int)servers.size()},
+		{"total_events", total_events}
+	};
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Returns ProxySQL cluster node health and sync status
+ *
+ * Queries multiple cluster-related tables for node status, sync metrics,
+ * and configuration checksums. Useful for monitoring cluster health.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - hostname: Filter by specific cluster node hostname
+ *   - include_checksums: Include configuration checksums (default: true)
+ *
+ * @return JSON response with nodes array, metrics, and optional checksums
  */
 json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 	std::string hostname_filter = arguments.value("hostname", "");
 	bool include_checksums = arguments.value("include_checksums", true);
-	bool detailed_metrics = arguments.value("detailed_metrics", false);
 
 	// 1. Get cluster node status
 	std::string sql = "SELECT hostname, port, weight, master, global_version, "
@@ -1794,9 +2135,8 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 			node["check_age_us"] = row->fields[5] ? std::stoll(row->fields[5]) : 0;
 			node["ping_time_us"] = ping;
 			node["checks_ok"] = checks_ok;
-			node["checks_error"] = checks_err;
+			node["checks_err"] = checks_err;
 			node["check_success_rate"] = success_rate;
-			node["status"] = (success_rate > 0.5) ? "ONLINE" : "OFFLINE";
 
 			if (is_master) {
 				master_node = std::string(row->fields[0] ? row->fields[0] : "") + ":" +
@@ -1808,44 +2148,47 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 			if (success_rate > 0.5) online_nodes++;
 			total_ping += ping;
 		}
-
 		delete resultset;
 	}
 
-	// 2. Get detailed metrics if requested
-	if (detailed_metrics) {
-		std::string metrics_sql = "SELECT hostname, port, Uptime_s, Queries, Client_Connections_connected "
-			"FROM stats.stats_proxysql_servers_metrics";
-		if (!hostname_filter.empty()) {
-			metrics_sql += " WHERE hostname = '" + sql_escape(hostname_filter) + "'";
-		}
+	// 2. Get metrics from stats_proxysql_servers_metrics
+	std::string metrics_sql = "SELECT hostname, port, Uptime_s, Queries, Client_Connections_connected "
+		"FROM stats.stats_proxysql_servers_metrics";
+	if (!hostname_filter.empty()) {
+		metrics_sql += " WHERE hostname = '" + sql_escape(hostname_filter) + "'";
+	}
 
-		SQLite3_result* metrics_rs = NULL;
-		int mcols = 0;
-		err = execute_admin_query(metrics_sql.c_str(), &metrics_rs, &mcols);
+	SQLite3_result* metrics_rs = NULL;
+	int mcols = 0;
+	long long total_queries = 0;
+	long long total_client_connections = 0;
+	execute_admin_query(metrics_sql.c_str(), &metrics_rs, &mcols);
 
-		if (err.empty() && metrics_rs) {
-			for (const auto& mrow : metrics_rs->rows) {
-				std::string host = mrow->fields[0] ? mrow->fields[0] : "";
-				int port = mrow->fields[1] ? std::stoi(mrow->fields[1]) : 0;
+	if (metrics_rs) {
+		for (const auto& mrow : metrics_rs->rows) {
+			std::string host = mrow->fields[0] ? mrow->fields[0] : "";
+			int port = mrow->fields[1] ? std::stoi(mrow->fields[1]) : 0;
 
-				// Find matching node and add metrics
-				for (auto& node : nodes) {
-					if (node["hostname"] == host && node["port"] == port) {
-						node["uptime_s"] = mrow->fields[2] ? std::stoll(mrow->fields[2]) : 0;
-						node["queries"] = mrow->fields[3] ? std::stoll(mrow->fields[3]) : 0;
-						node["client_connections"] = mrow->fields[4] ? std::stoll(mrow->fields[4]) : 0;
-						break;
-					}
+			// Find matching node and add metrics
+			for (auto& node : nodes) {
+				if (node["hostname"] == host && node["port"] == port) {
+					node["uptime_s"] = mrow->fields[2] ? std::stoll(mrow->fields[2]) : 0;
+					node["queries"] = mrow->fields[3] ? std::stoll(mrow->fields[3]) : 0;
+					node["client_connections"] = mrow->fields[4] ? std::stoll(mrow->fields[4]) : 0;
+					total_queries += mrow->fields[3] ? std::stoll(mrow->fields[3]) : 0;
+					total_client_connections += mrow->fields[4] ? std::stoll(mrow->fields[4]) : 0;
+					break;
 				}
 			}
-			delete metrics_rs;
 		}
+		delete metrics_rs;
 	}
 
 	// 3. Get checksums if requested
 	json checksums = json::array();
 	bool config_in_sync = true;
+	int nodes_in_sync = 0;
+	int nodes_out_of_sync = 0;
 
 	if (include_checksums) {
 		std::string cksum_sql = "SELECT hostname, port, name, version, epoch, checksum, changed_at, updated_at, diff_check "
@@ -1856,33 +2199,45 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 
 		SQLite3_result* cksum_rs = NULL;
 		int ccols = 0;
-		err = execute_admin_query(cksum_sql.c_str(), &cksum_rs, &ccols);
+		execute_admin_query(cksum_sql.c_str(), &cksum_rs, &ccols);
 
-		if (err.empty() && cksum_rs) {
-			std::map<std::string, std::string> name_to_checksum;
+		std::set<std::string> sync_nodes, out_of_sync_nodes;
 
+		if (cksum_rs) {
 			for (const auto& crow : cksum_rs->rows) {
 				int diff_check = crow->fields[8] ? std::stoi(crow->fields[8]) : 0;
-				std::string name = crow->fields[2] ? crow->fields[2] : "";
-				std::string checksum = crow->fields[5] ? crow->fields[5] : "";
+				std::string node_key = std::string(crow->fields[0] ? crow->fields[0] : "") + ":" +
+					std::string(crow->fields[1] ? crow->fields[1] : "");
 
-				if (diff_check > 0) config_in_sync = false;
+				if (diff_check > 0) {
+					config_in_sync = false;
+					out_of_sync_nodes.insert(node_key);
+				} else {
+					sync_nodes.insert(node_key);
+				}
 
 				json cs;
 				cs["hostname"] = crow->fields[0] ? crow->fields[0] : "";
 				cs["port"] = crow->fields[1] ? std::stoi(crow->fields[1]) : 0;
-				cs["name"] = name;
+				cs["name"] = crow->fields[2] ? crow->fields[2] : "";
 				cs["version"] = crow->fields[3] ? std::stoi(crow->fields[3]) : 0;
 				cs["epoch"] = crow->fields[4] ? std::stoll(crow->fields[4]) : 0;
-				cs["checksum"] = checksum;
+				cs["checksum"] = crow->fields[5] ? crow->fields[5] : "";
 				cs["changed_at"] = crow->fields[6] ? std::stoll(crow->fields[6]) : 0;
 				cs["updated_at"] = crow->fields[7] ? std::stoll(crow->fields[7]) : 0;
 				cs["diff_check"] = diff_check;
-				cs["in_sync"] = (diff_check == 0);
 
 				checksums.push_back(cs);
 			}
 			delete cksum_rs;
+
+			// Count nodes that are fully in sync vs out of sync
+			for (const auto& n : sync_nodes) {
+				if (out_of_sync_nodes.find(n) == out_of_sync_nodes.end()) {
+					nodes_in_sync++;
+				}
+			}
+			nodes_out_of_sync = out_of_sync_nodes.size();
 		}
 	}
 
@@ -1902,688 +2257,389 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 	result["online_nodes"] = online_nodes;
 	result["master_node"] = master_node;
 	result["nodes"] = nodes;
-	result["summary"] = {
-		{"avg_ping_time_us", (total_nodes > 0) ? total_ping / total_nodes : 0},
-		{"config_in_sync", config_in_sync}
-	};
 	if (include_checksums) {
 		result["checksums"] = checksums;
 	}
-
-	return create_success_response(result);
-}
-
-/**
- * @brief List all available statistics tables with row counts and categories.
- *
- * Queries stats.sqlite_master for tables matching the stats_* pattern,
- * retrieves a COUNT(*) for each, and classifies them into categories:
- * connection, query, error, cluster, memory, or other.
- *
- * Supported arguments:
- *   - filter    (string) substring match against table names
- *   - database  (string) "mysql" | "pgsql" | "all"  (default "all")
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with tables array and categories object.
- */
-json Stats_Tool_Handler::handle_list_stats(const json& arguments) {
-	std::string filter = arguments.value("filter", "");
-	std::string database = arguments.value("database", "all");
-
-	// Query available stats tables from sqlite_master
-	std::string sql = "SELECT name FROM stats.sqlite_master "
-		"WHERE type='table' AND name LIKE 'stats_%'";
-
-	if (!filter.empty()) {
-		sql += " AND name LIKE '%" + sql_escape(filter) + "%'";
-	}
-	if (database == "mysql") {
-		sql += " AND (name LIKE '%mysql%' OR name LIKE 'stats_memory%' OR name LIKE 'stats_proxysql%')";
-	} else if (database == "pgsql") {
-		sql += " AND (name LIKE '%pgsql%' OR name LIKE 'stats_memory%' OR name LIKE 'stats_proxysql%')";
-	}
-
-	sql += " ORDER BY name";
-
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to list stats tables: " + err);
-	}
-
-	json tables = json::array();
-	json categories;
-	categories["connection"] = json::array();
-	categories["query"] = json::array();
-	categories["error"] = json::array();
-	categories["cluster"] = json::array();
-	categories["memory"] = json::array();
-	categories["other"] = json::array();
-
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			std::string name = row->fields[0] ? row->fields[0] : "";
-
-			// Get row count for this table
-			std::string count_sql = "SELECT COUNT(*) FROM stats." + name;
-			SQLite3_result* count_rs = NULL;
-			int ccols = 0;
-			long long row_count = 0;
-			std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &ccols);
-			if (count_err.empty() && count_rs && count_rs->rows_count > 0) {
-				row_count = count_rs->rows[0]->fields[0] ? std::stoll(count_rs->rows[0]->fields[0]) : 0;
-			}
-			if (count_rs) delete count_rs;
-
-			json table_info;
-			table_info["name"] = name;
-			table_info["row_count"] = row_count;
-
-			tables.push_back(table_info);
-
-			// Categorize
-			if (name.find("connection") != std::string::npos || name.find("processlist") != std::string::npos) {
-				categories["connection"].push_back(name);
-			} else if (name.find("query") != std::string::npos || name.find("commands") != std::string::npos) {
-				categories["query"].push_back(name);
-			} else if (name.find("error") != std::string::npos || name.find("client_host") != std::string::npos) {
-				categories["error"].push_back(name);
-			} else if (name.find("proxysql_servers") != std::string::npos) {
-				categories["cluster"].push_back(name);
-			} else if (name.find("memory") != std::string::npos) {
-				categories["memory"].push_back(name);
-			} else {
-				categories["other"].push_back(name);
-			}
-		}
-
-		delete resultset;
-	}
-
-	json result;
-	result["database"] = database;
-	result["tables"] = tables;
-	result["categories"] = categories;
-
-	return create_success_response(result);
-}
-
-/**
- * @brief Ad-hoc query any whitelisted stats table with optional filtering.
- *
- * Builds a SELECT from the requested table with caller-supplied columns,
- * WHERE, ORDER BY, and LIMIT clauses.  The table name is validated against
- * VALID_STATS_TABLE_PREFIXES to prevent access to non-stats tables.
- *
- * Tables starting with "history_", "mysql_connections", "pgsql_connections",
- * "mysql_query_cache", "system_", or "myhgm_" are routed to statsdb_disk;
- * all other stats tables are queried from admindb.
- *
- * Supported arguments (table is required):
- *   - table     (string)  stats table name
- *   - columns   (array)   column names to select  (default: all)
- *   - where     (string)  WHERE clause
- *   - order_by  (string)  ORDER BY clause
- *   - limit     (int)     LIMIT value             (default 100)
- *
- * @param arguments  JSON object; must contain "table".
- * @return Success response with rows array and the executed SQL.
- */
-json Stats_Tool_Handler::handle_get_stats(const json& arguments) {
-	if (!arguments.contains("table")) {
-		return create_error_response("Missing required parameter: table");
-	}
-
-	std::string table = arguments["table"].get<std::string>();
-
-	// Validate table name
-	if (!is_valid_stats_table(table)) {
-		return create_error_response("Invalid or disallowed table name: " + table +
-			". Table must start with a valid stats prefix (e.g. stats_mysql_, stats_pgsql_, stats_proxysql_, etc.)");
-	}
-
-	// Build SQL
-	std::string columns_str = "*";
-	if (arguments.contains("columns") && arguments["columns"].is_array() && !arguments["columns"].empty()) {
-		columns_str = "";
-		for (size_t i = 0; i < arguments["columns"].size(); i++) {
-			if (i > 0) columns_str += ", ";
-			columns_str += sql_escape(arguments["columns"][i].get<std::string>());
-		}
-	}
-
-	// Determine which schema prefix to use
-	std::string schema_prefix = "stats.";
-	if (table.find("history_") == 0 || table.find("mysql_connections") == 0 ||
-		table.find("pgsql_connections") == 0 || table.find("mysql_query_cache") == 0 ||
-		table.find("system_") == 0 || table.find("myhgm_") == 0) {
-		schema_prefix = "stats_history.";
-	}
-
-	std::string sql = "SELECT " + columns_str + " FROM " + schema_prefix + table;
-
-	if (arguments.contains("where") && arguments["where"].is_string() && !arguments["where"].get<std::string>().empty()) {
-		sql += " WHERE " + arguments["where"].get<std::string>();
-	}
-	if (arguments.contains("order_by") && arguments["order_by"].is_string() && !arguments["order_by"].get<std::string>().empty()) {
-		sql += " ORDER BY " + arguments["order_by"].get<std::string>();
-	}
-
-	int limit = arguments.value("limit", 100);
-	sql += " LIMIT " + std::to_string(limit);
-
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-
-	std::string err;
-	if (schema_prefix == "stats_history.") {
-		err = execute_statsdb_disk_query(sql.c_str(), &resultset, &cols);
-	} else {
-		err = execute_admin_query(sql.c_str(), &resultset, &cols);
-	}
-
-	if (!err.empty()) {
-		return create_error_response("Query failed: " + err);
-	}
-
-	json rows = resultset_to_json(resultset, cols);
-	int row_count = resultset ? resultset->rows_count : 0;
-
-	if (resultset) delete resultset;
-
-	json result;
-	result["table"] = table;
-	result["query"] = sql;
-	result["rows"] = rows;
-	result["row_count"] = row_count;
+	result["summary"] = {
+		{"config_in_sync", config_in_sync},
+		{"nodes_in_sync", nodes_in_sync},
+		{"nodes_out_of_sync", nodes_out_of_sync},
+		{"total_queries_all_nodes", total_queries},
+		{"total_client_connections", total_client_connections},
+		{"avg_ping_time_us", (total_nodes > 0) ? total_ping / total_nodes : 0}
+	};
 
 	return create_success_response(result);
 }
 
 // ============================================================================
-// Performance, Historical, and Analysis Tool Implementations
+// Historical Data Tool Implementations
 // ============================================================================
 
 /**
- * @brief Return command execution statistics with latency histograms.
+ * @brief Returns historical CPU and memory usage trends
  *
- * Queries stats_mysql_commands_counters or stats_pgsql_commands_counters
- * and returns per-command (SELECT, INSERT, UPDATE, ...) totals, average
- * execution time, a 12-bucket latency distribution (100us .. INF), and
- * calculated percentiles (p50, p90, p95, p99) derived from the histogram
- * using calculate_percentile_from_histogram().
+ * Queries historical system metrics from statsdb_disk. Automatically selects
+ * between raw tables and hourly aggregated tables based on the requested interval.
  *
- * Supported arguments:
- *   - database  (string)  "mysql" | "pgsql"          (default "mysql")
- *   - command   (string)  filter by specific command name
+ * @param arguments JSON object with optional parameters:
+ *   - metric: "cpu", "memory", or "all" (default)
+ *   - interval: Time range - "30m", "1h", "2h", "4h", "6h", "12h", "1d", "2d", "1w"
  *
- * @param arguments  JSON object with optional filters.
- * @return Success response with commands array and total count.
+ * @return JSON response with data_points array containing timestamped metrics
  */
-json Stats_Tool_Handler::handle_show_commands(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	std::string command_filter = arguments.value("command", "");
+json Stats_Tool_Handler::handle_show_system_history(const json& arguments) {
+	std::string metric = arguments.value("metric", "all");
+	std::string interval = arguments.value("interval", "1h");
 
-	std::string table = (database == "pgsql") ? "stats_pgsql_commands_counters" : "stats_mysql_commands_counters";
-
-	std::string sql = "SELECT Command, Total_Time_us, Total_cnt, "
-		"cnt_100us, cnt_500us, cnt_1ms, cnt_5ms, cnt_10ms, cnt_50ms, "
-		"cnt_100ms, cnt_500ms, cnt_1s, cnt_5s, cnt_10s, cnt_INFs "
-		"FROM stats." + table;
-
-	if (!command_filter.empty()) {
-		sql += " WHERE Command = '" + sql_escape(command_filter) + "'";
+	int seconds = 0;
+	bool use_hourly = false;
+	if (!get_interval_config(interval, seconds, use_hourly)) {
+		return create_error_response("Invalid interval: " + interval);
 	}
 
-	sql += " ORDER BY Total_cnt DESC";
+	time_t now = time(NULL);
+	time_t start = now - seconds;
+	std::string resolution = use_hourly ? "hourly" : "raw";
 
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+	json result;
+	result["interval"] = interval;
+	result["resolution"] = resolution;
 
-	if (!err.empty()) {
-		return create_error_response("Failed to query commands: " + err);
-	}
+	// Query CPU data
+	if (metric == "cpu" || metric == "all") {
+		std::string table = use_hourly ? "system_cpu_hour" : "system_cpu";
+		std::string sql = "SELECT timestamp, tms_utime, tms_stime FROM " + table +
+			" WHERE timestamp BETWEEN " + std::to_string(start) + " AND " + std::to_string(now) +
+			" ORDER BY timestamp";
 
-	json commands = json::array();
-	long long total_commands = 0;
+		SQLite3_result* resultset = NULL;
+		int cols = 0;
+		std::string err = execute_statsdb_disk_query(sql.c_str(), &resultset, &cols);
 
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			long long total_time = row->fields[1] ? std::stoll(row->fields[1]) : 0;
-			long long total_cnt = row->fields[2] ? std::stoll(row->fields[2]) : 0;
-			long long avg_time = (total_cnt > 0) ? total_time / total_cnt : 0;
-
-			total_commands += total_cnt;
-
-			// Parse histogram buckets
-			std::vector<int> buckets;
-			for (int i = 3; i <= 14 && i < (int)resultset->column_definition.size(); i++) {
-				buckets.push_back(row->fields[i] ? std::stoi(row->fields[i]) : 0);
+		json cpu = json::array();
+		if (err.empty() && resultset) {
+			for (const auto& row : resultset->rows) {
+				json entry;
+				entry["timestamp"] = row->fields[0] ? std::stoll(row->fields[0]) : 0;
+				entry["tms_utime"] = row->fields[1] ? std::stoll(row->fields[1]) : 0;
+				entry["tms_stime"] = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+				cpu.push_back(entry);
 			}
-
-			json cmd;
-			cmd["command"] = row->fields[0] ? row->fields[0] : "";
-			cmd["total_cnt"] = total_cnt;
-			cmd["total_time_us"] = total_time;
-			cmd["avg_time_us"] = avg_time;
-			cmd["latency_distribution"] = {
-				{"cnt_100us", buckets.size() > 0 ? buckets[0] : 0},
-				{"cnt_500us", buckets.size() > 1 ? buckets[1] : 0},
-				{"cnt_1ms", buckets.size() > 2 ? buckets[2] : 0},
-				{"cnt_5ms", buckets.size() > 3 ? buckets[3] : 0},
-				{"cnt_10ms", buckets.size() > 4 ? buckets[4] : 0},
-				{"cnt_50ms", buckets.size() > 5 ? buckets[5] : 0},
-				{"cnt_100ms", buckets.size() > 6 ? buckets[6] : 0},
-				{"cnt_500ms", buckets.size() > 7 ? buckets[7] : 0},
-				{"cnt_1s", buckets.size() > 8 ? buckets[8] : 0},
-				{"cnt_5s", buckets.size() > 9 ? buckets[9] : 0},
-				{"cnt_10s", buckets.size() > 10 ? buckets[10] : 0},
-				{"cnt_INFs", buckets.size() > 11 ? buckets[11] : 0}
-			};
-
-			// Calculate percentiles from histogram
-			cmd["percentiles"] = {
-				{"p50", calculate_percentile_from_histogram(buckets, LATENCY_BUCKET_THRESHOLDS, 0.50)},
-				{"p90", calculate_percentile_from_histogram(buckets, LATENCY_BUCKET_THRESHOLDS, 0.90)},
-				{"p95", calculate_percentile_from_histogram(buckets, LATENCY_BUCKET_THRESHOLDS, 0.95)},
-				{"p99", calculate_percentile_from_histogram(buckets, LATENCY_BUCKET_THRESHOLDS, 0.99)}
-			};
-
-			commands.push_back(cmd);
+			delete resultset;
 		}
-
-		delete resultset;
+		result["cpu"] = cpu;
 	}
 
-	json result;
-	result["database"] = database;
-	result["commands"] = commands;
-	result["summary"] = {{"total_commands", total_commands}};
+	// Query memory data
+	if (metric == "memory" || metric == "all") {
+		std::string table = use_hourly ? "system_memory_hour" : "system_memory";
+		std::string sql = "SELECT timestamp, allocated, resident, active, mapped, metadata, retained FROM " + table +
+			" WHERE timestamp BETWEEN " + std::to_string(start) + " AND " + std::to_string(now) +
+			" ORDER BY timestamp";
+
+		SQLite3_result* resultset = NULL;
+		int cols = 0;
+		std::string err = execute_statsdb_disk_query(sql.c_str(), &resultset, &cols);
+
+		json memory = json::array();
+		if (err.empty() && resultset) {
+			for (const auto& row : resultset->rows) {
+				json entry;
+				entry["timestamp"] = row->fields[0] ? std::stoll(row->fields[0]) : 0;
+				entry["allocated"] = row->fields[1] ? std::stoll(row->fields[1]) : 0;
+				entry["resident"] = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+				entry["active"] = row->fields[3] ? std::stoll(row->fields[3]) : 0;
+				entry["mapped"] = row->fields[4] ? std::stoll(row->fields[4]) : 0;
+				entry["metadata"] = row->fields[5] ? std::stoll(row->fields[5]) : 0;
+				entry["retained"] = row->fields[6] ? std::stoll(row->fields[6]) : 0;
+				memory.push_back(entry);
+			}
+			delete resultset;
+		}
+		result["memory"] = memory;
+	}
 
 	return create_success_response(result);
 }
 
 /**
- * @brief Return per-user connection statistics and capacity utilisation.
+ * @brief Retrieves historical query cache performance metrics.
  *
- * Queries stats_mysql_users or stats_pgsql_users and returns each user's
- * current frontend connections, max allowed, utilisation percentage, and a
- * status flag ("normal", "near_limit" >= 80 %, "at_limit" == 100 %).
+ * Queries the stats database for historical query cache statistics including
+ * GET/SET operations, cache hit rates, memory usage, and entry counts. Data
+ * is automatically aggregated to hourly resolution for intervals >= 24h.
  *
- * Supported arguments:
- *   - database  (string)  "mysql" | "pgsql"  (default "mysql")
- *   - username  (string)  filter by specific username
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: Database type, only "mysql" supported (default: "mysql")
+ *   - interval: Time range - "1h", "6h", "24h", "7d", "30d" (default: "1h")
  *
- * @param arguments  JSON object with optional filters.
- * @return Success response with users array and aggregate summary.
+ * @return JSON response containing:
+ *   - db_type: The database type queried
+ *   - interval: The time interval requested
+ *   - resolution: "raw" for short intervals, "hourly" for >= 24h
+ *   - data: Array of cache metrics with timestamp, counts, bytes, and hit_rate
  */
-json Stats_Tool_Handler::handle_show_users(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	std::string username_filter = arguments.value("username", "");
+json Stats_Tool_Handler::handle_show_query_cache_history(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string interval = arguments.value("interval", "1h");
 
-	std::string table = (database == "pgsql") ? "stats_pgsql_users" : "stats_mysql_users";
-
-	std::string sql = "SELECT username, frontend_connections, frontend_max_connections "
-		"FROM stats." + table;
-
-	if (!username_filter.empty()) {
-		sql += " WHERE username = '" + sql_escape(username_filter) + "'";
+	// PostgreSQL not supported for query cache history
+	if (db_type == "pgsql") {
+		return create_error_response("PostgreSQL is not supported for this tool. Historical query cache data is only available for MySQL.");
 	}
 
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query users: " + err);
+	int seconds = 0;
+	bool use_hourly = false;
+	if (!get_interval_config(interval, seconds, use_hourly)) {
+		return create_error_response("Invalid interval: " + interval);
 	}
 
-	json users = json::array();
-	int total_users = 0;
-	long long total_connections = 0, total_capacity = 0;
+	time_t now = time(NULL);
+	time_t start = now - seconds;
+	std::string resolution = use_hourly ? "hourly" : "raw";
 
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			int connections = row->fields[1] ? std::stoi(row->fields[1]) : 0;
-			int max_connections = row->fields[2] ? std::stoi(row->fields[2]) : 0;
-			double utilization = (max_connections > 0) ? (double)connections / (double)max_connections * 100.0 : 0.0;
-
-			std::string status = "normal";
-			if (max_connections > 0 && connections >= max_connections) status = "at_limit";
-			else if (max_connections > 0 && utilization >= 80.0) status = "near_limit";
-
-			json user;
-			user["username"] = row->fields[0] ? row->fields[0] : "";
-			user["frontend_connections"] = connections;
-			user["frontend_max_connections"] = max_connections;
-			user["utilization_pct"] = utilization;
-			user["status"] = status;
-
-			users.push_back(user);
-
-			total_users++;
-			total_connections += connections;
-			total_capacity += max_connections;
-		}
-
-		delete resultset;
-	}
-
-	json result;
-	result["database"] = database;
-	result["users"] = users;
-	result["summary"] = {
-		{"total_users", total_users},
-		{"total_connections", total_connections},
-		{"total_capacity", total_capacity},
-		{"overall_utilization_pct", (total_capacity > 0) ? (double)total_connections / (double)total_capacity * 100.0 : 0.0}
-	};
-
-	return create_success_response(result);
-}
-
-/**
- * @brief Return the client host cache used for connection-error throttling.
- *
- * Queries stats_mysql_client_host_cache or stats_pgsql_client_host_cache
- * and returns per-client-IP error counts and last-updated timestamps.
- * Useful for identifying blocked or throttled client addresses.
- *
- * Supported arguments:
- *   - database        (string)  "mysql" | "pgsql"  (default "mysql")
- *   - client_address  (string)  filter by specific IP
- *   - min_error_count (int)     only hosts with error_count >= N
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with hosts array.
- */
-json Stats_Tool_Handler::handle_show_client_cache(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	std::string client_filter = arguments.value("client_address", "");
-	int min_error_count = arguments.value("min_error_count", 0);
-
-	std::string table = (database == "pgsql") ? "stats_pgsql_client_host_cache" : "stats_mysql_client_host_cache";
-
-	std::string sql = "SELECT client_address, error_count, last_updated "
-		"FROM stats." + table + " WHERE 1=1";
-
-	if (!client_filter.empty()) {
-		sql += " AND client_address = '" + sql_escape(client_filter) + "'";
-	}
-	if (min_error_count > 0) {
-		sql += " AND error_count >= " + std::to_string(min_error_count);
-	}
-
-	sql += " ORDER BY error_count DESC";
-
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query client host cache: " + err);
-	}
-
-	json hosts = json::array();
-	int total_hosts = 0;
-
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			json host;
-			host["client_address"] = row->fields[0] ? row->fields[0] : "";
-			host["error_count"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
-			host["last_updated"] = row->fields[2] ? std::stoll(row->fields[2]) : 0;
-
-			hosts.push_back(host);
-			total_hosts++;
-		}
-
-		delete resultset;
-	}
-
-	json result;
-	result["database"] = database;
-	result["total_hosts"] = total_hosts;
-	result["hosts"] = hosts;
-
-	return create_success_response(result);
-}
-
-/**
- * @brief Return GTID replication information for MySQL backends.
- *
- * Queries stats_mysql_gtid_executed and returns per-server GTID sets and
- * event counts.  Only applicable to MySQL (no PostgreSQL equivalent).
- *
- * Supported arguments:
- *   - hostname  (string)  filter by backend hostname
- *   - port      (int)     filter by backend port
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with gtid_info array and event totals.
- */
-json Stats_Tool_Handler::handle_show_gtid(const json& arguments) {
-	std::string hostname_filter = arguments.value("hostname", "");
-	int port_filter = arguments.value("port", -1);
-
-	std::string sql = "SELECT hostname, port, gtid_executed, events "
-		"FROM stats.stats_mysql_gtid_executed WHERE 1=1";
-
-	if (!hostname_filter.empty()) {
-		sql += " AND hostname = '" + sql_escape(hostname_filter) + "'";
-	}
-	if (port_filter > 0) {
-		sql += " AND port = " + std::to_string(port_filter);
-	}
-
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query GTID: " + err);
-	}
-
-	json gtid_info = json::array();
-	long long total_events = 0;
-
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			long long events = row->fields[3] ? std::stoll(row->fields[3]) : 0;
-			total_events += events;
-
-			json info;
-			info["hostname"] = row->fields[0] ? row->fields[0] : "";
-			info["port"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
-			info["gtid_executed"] = row->fields[2] ? row->fields[2] : "";
-			info["events"] = events;
-
-			gtid_info.push_back(info);
-		}
-
-		delete resultset;
-	}
-
-	json result;
-	result["gtid_info"] = gtid_info;
-	result["summary"] = {
-		{"total_events", total_events},
-		{"total_servers", (int)gtid_info.size()}
-	};
-
-	return create_success_response(result);
-}
-
-/**
- * @brief Return hit counts for query routing rules.
- *
- * Queries stats_mysql_query_rules or stats_pgsql_query_rules and returns
- * per-rule hit counts.  Helps identify heavily used rules and unused rules
- * that may be candidates for cleanup.
- *
- * Supported arguments:
- *   - database          (string)  "mysql" | "pgsql"  (default "mysql")
- *   - rule_id           (int)     filter by specific rule ID
- *   - min_hits          (int)     only rules with hits >= N
- *   - include_zero_hits (bool)    include rules with zero hits (default false)
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with rules array, total hits, and unused count.
- */
-json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	int rule_id_filter = arguments.value("rule_id", -1);
-	int min_hits = arguments.value("min_hits", 0);
-	bool include_zero_hits = arguments.value("include_zero_hits", false);
-
-	std::string table = (database == "pgsql") ? "stats_pgsql_query_rules" : "stats_mysql_query_rules";
-
-	std::string sql = "SELECT rule_id, hits FROM stats." + table + " WHERE 1=1";
-
-	if (rule_id_filter >= 0) {
-		sql += " AND rule_id = " + std::to_string(rule_id_filter);
-	}
-	if (!include_zero_hits) {
-		sql += " AND hits > 0";
-	}
-	if (min_hits > 0) {
-		sql += " AND hits >= " + std::to_string(min_hits);
-	}
-
-	sql += " ORDER BY hits DESC";
-
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query query rules: " + err);
-	}
-
-	json rules = json::array();
-	long long total_hits = 0;
-	int unused_rules = 0;
-
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			long long hits = row->fields[1] ? std::stoll(row->fields[1]) : 0;
-			total_hits += hits;
-			if (hits == 0) unused_rules++;
-
-			json rule;
-			rule["rule_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-			rule["hits"] = hits;
-
-			rules.push_back(rule);
-		}
-
-		delete resultset;
-	}
-
-	json result;
-	result["database"] = database;
-	result["total_rules"] = (int)rules.size();
-	result["rules"] = rules;
-	result["summary"] = {
-		{"total_hits", total_hits},
-		{"unused_rules", unused_rules}
-	};
-
-	return create_success_response(result);
-}
-
-/**
- * @brief Return historical connection trends for capacity planning.
- *
- * Queries the on-disk statsdb_disk database for time-series connection data
- * at raw, hourly, or daily resolution.  The table chosen depends on the
- * database type and resolution (e.g. mysql_connections_hour).
- *
- * Supported arguments:
- *   - database    (string)  "mysql" | "pgsql"              (default "mysql")
- *   - resolution  (string)  "raw" | "hour" | "day"         (default "hour")
- *   - start_time  (int)     Unix timestamp start            (default 24h ago)
- *   - end_time    (int)     Unix timestamp end              (default now)
- *
- * @param arguments  JSON object with optional filters.
- * @return Success response with metrics array and time range metadata.
- */
-json Stats_Tool_Handler::handle_show_history_connections(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	std::string resolution = arguments.value("resolution", "hour");
-	long long start_time = arguments.value("start_time", (long long)(time(NULL) - 86400));
-	long long end_time = arguments.value("end_time", (long long)time(NULL));
-
-	// Choose table based on resolution
-	std::string db_prefix = (database == "pgsql") ? "pgsql" : "mysql";
-	std::string table = db_prefix + "_connections";
-	if (resolution == "hour") table = db_prefix + "_connections_hour";
-	else if (resolution == "day") table = db_prefix + "_connections_day";
-
-	std::string sql = "SELECT * FROM " + table +
-		" WHERE timestamp >= " + std::to_string(start_time) +
-		" AND timestamp <= " + std::to_string(end_time) +
-		" ORDER BY timestamp ASC";
+	std::string table = use_hourly ? "mysql_query_cache_hour" : "mysql_query_cache";
+	std::string sql = "SELECT timestamp, count_GET, count_GET_OK, count_SET, bytes_IN, bytes_OUT, "
+		"Entries_Purged, Entries_In_Cache, Memory_Bytes FROM " + table +
+		" WHERE timestamp BETWEEN " + std::to_string(start) + " AND " + std::to_string(now) +
+		" ORDER BY timestamp";
 
 	SQLite3_result* resultset = NULL;
 	int cols = 0;
 	std::string err = execute_statsdb_disk_query(sql.c_str(), &resultset, &cols);
 
 	if (!err.empty()) {
-		return create_error_response("Failed to query history connections: " + err);
+		return create_error_response("Failed to query query cache history: " + err);
 	}
 
-	json metrics_arr = resultset_to_json(resultset, cols);
-	int data_points = resultset ? resultset->rows_count : 0;
+	json data = json::array();
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			long long count_get = row->fields[1] ? std::stoll(row->fields[1]) : 0;
+			long long count_get_ok = row->fields[2] ? std::stoll(row->fields[2]) : 0;
+			double hit_rate = (count_get > 0) ? (double)count_get_ok / (double)count_get : 0.0;
 
-	if (resultset) delete resultset;
+			json entry;
+			entry["timestamp"] = row->fields[0] ? std::stoll(row->fields[0]) : 0;
+			entry["count_GET"] = count_get;
+			entry["count_GET_OK"] = count_get_ok;
+			entry["count_SET"] = row->fields[3] ? std::stoll(row->fields[3]) : 0;
+			entry["bytes_IN"] = row->fields[4] ? std::stoll(row->fields[4]) : 0;
+			entry["bytes_OUT"] = row->fields[5] ? std::stoll(row->fields[5]) : 0;
+			entry["entries_purged"] = row->fields[6] ? std::stoll(row->fields[6]) : 0;
+			entry["entries_in_cache"] = row->fields[7] ? std::stoll(row->fields[7]) : 0;
+			entry["memory_bytes"] = row->fields[8] ? std::stoll(row->fields[8]) : 0;
+			entry["hit_rate"] = hit_rate;
+			data.push_back(entry);
+		}
+		delete resultset;
+	}
 
 	json result;
-	result["database"] = database;
+	result["db_type"] = db_type;
+	result["interval"] = interval;
 	result["resolution"] = resolution;
-	result["time_range"] = {
-		{"start", start_time},
-		{"end", end_time},
-		{"data_points", data_points}
-	};
-	result["metrics"] = metrics_arr;
+	result["data"] = data;
 
 	return create_success_response(result);
 }
 
 /**
- * @brief Return historical query digest snapshots for trend analysis.
+ * @brief Retrieves historical connection pool and client connection metrics.
  *
- * Queries history_mysql_query_digest or history_pgsql_query_digest from
- * statsdb_disk, ordered by dump_time descending so the most recent
- * snapshots appear first.  Useful for comparing query performance over time.
+ * Queries the stats database for historical connection statistics at both
+ * global and per-server levels. Global metrics include client/server connection
+ * counts and connection pool operations. Per-server metrics show detailed
+ * backend server connection states and query throughput.
  *
- * Supported arguments:
- *   - database  (string)  "mysql" | "pgsql"  (default "mysql")
- *   - digest    (string)  filter by specific digest hash
- *   - limit     (int)     max rows returned   (default 100)
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: Database type, only "mysql" supported (default: "mysql")
+ *   - interval: Time range - "1h", "6h", "24h", "7d", "30d" (default: "1h")
+ *   - scope: "global", "per_server", or "all" (default: "global")
+ *   - hostgroup: Filter per-server data by hostgroup ID (default: all)
+ *   - server: Filter by server "host:port" (default: all)
  *
- * @param arguments  JSON object with optional filters.
- * @return Success response with queries array and row count.
+ * @return JSON response containing:
+ *   - db_type: The database type queried
+ *   - interval: The time interval requested
+ *   - resolution: "raw" for short intervals, "hourly" for >= 24h
+ *   - scope: The scope requested
+ *   - global: (if scope includes global) Connection and MyHGM metrics arrays
+ *   - per_server: (if scope includes per_server) Per-backend connection metrics
  */
-json Stats_Tool_Handler::handle_show_history_query_digest(const json& arguments) {
-	std::string database = arguments.value("database", "mysql");
-	std::string digest_filter = arguments.value("digest", "");
-	int limit = arguments.value("limit", 100);
+json Stats_Tool_Handler::handle_show_connection_history(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	std::string interval = arguments.value("interval", "1h");
+	std::string scope = arguments.value("scope", "global");
+	int hostgroup = arguments.value("hostgroup", -1);
+	std::string server = arguments.value("server", "");
 
-	std::string table = (database == "pgsql") ? "history_pgsql_query_digest" : "history_mysql_query_digest";
-
-	std::string sql = "SELECT * FROM " + table + " WHERE 1=1";
-
-	if (!digest_filter.empty()) {
-		sql += " AND digest = '" + sql_escape(digest_filter) + "'";
+	// PostgreSQL not supported for connection history
+	if (db_type == "pgsql") {
+		return create_error_response("PostgreSQL is not supported for this tool. Historical connection data is only available for MySQL.");
 	}
 
-	sql += " ORDER BY dump_time DESC, count_star DESC LIMIT " + std::to_string(limit);
+	int seconds = 0;
+	bool use_hourly = false;
+	if (!get_interval_config(interval, seconds, use_hourly)) {
+		return create_error_response("Invalid interval: " + interval);
+	}
+
+	time_t now = time(NULL);
+	time_t start = now - seconds;
+	std::string resolution = use_hourly ? "hourly" : "raw";
+
+	json result;
+	result["db_type"] = db_type;
+	result["interval"] = interval;
+	result["resolution"] = resolution;
+	result["scope"] = scope;
+
+	// Query global connection metrics
+	if (scope == "global" || scope == "all") {
+		std::string table = use_hourly ? "mysql_connections_hour" : "mysql_connections";
+		std::string sql = "SELECT timestamp, Client_Connections_aborted, Client_Connections_connected, "
+			"Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, "
+			"Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, "
+			"ConnPool_get_conn_success, Questions, Slow_queries, GTID_consistent_queries FROM " + table +
+			" WHERE timestamp BETWEEN " + std::to_string(start) + " AND " + std::to_string(now) +
+			" ORDER BY timestamp";
+
+		SQLite3_result* resultset = NULL;
+		int cols = 0;
+		std::string err = execute_statsdb_disk_query(sql.c_str(), &resultset, &cols);
+
+		json connections = json::array();
+		if (err.empty() && resultset) {
+			connections = resultset_to_json(resultset, cols);
+			delete resultset;
+		}
+
+		// Query MyHGM metrics
+		std::string myhgm_table = use_hourly ? "myhgm_connections_hour" : "myhgm_connections";
+		std::string myhgm_sql = "SELECT timestamp, MyHGM_myconnpoll_destroy, MyHGM_myconnpoll_get, "
+			"MyHGM_myconnpoll_get_ok, MyHGM_myconnpoll_push, MyHGM_myconnpoll_reset FROM " + myhgm_table +
+			" WHERE timestamp BETWEEN " + std::to_string(start) + " AND " + std::to_string(now) +
+			" ORDER BY timestamp";
+
+		SQLite3_result* myhgm_rs = NULL;
+		int myhgm_cols = 0;
+		std::string myhgm_err = execute_statsdb_disk_query(myhgm_sql.c_str(), &myhgm_rs, &myhgm_cols);
+
+		json myhgm = json::array();
+		if (myhgm_err.empty() && myhgm_rs) {
+			myhgm = resultset_to_json(myhgm_rs, myhgm_cols);
+			delete myhgm_rs;
+		}
+
+		result["global"] = {
+			{"connections", connections},
+			{"myhgm", myhgm}
+		};
+	}
+
+	// Query per-server metrics
+	if (scope == "per_server" || scope == "all") {
+		std::string sql = "SELECT timestamp, hostgroup, srv_host, srv_port, status, "
+			"ConnUsed, ConnFree, ConnOK, ConnERR, MaxConnUsed, "
+			"Queries, Queries_GTID_sync, Bytes_data_sent, Bytes_data_recv, Latency_us "
+			"FROM history_stats_mysql_connection_pool "
+			"WHERE timestamp BETWEEN " + std::to_string(start) + " AND " + std::to_string(now);
+
+		if (hostgroup >= 0) {
+			sql += " AND hostgroup = " + std::to_string(hostgroup);
+		}
+		if (!server.empty()) {
+			size_t colon = server.find(':');
+			if (colon != std::string::npos) {
+				std::string host = server.substr(0, colon);
+				std::string port = server.substr(colon + 1);
+				sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + port;
+			}
+		}
+
+		sql += " ORDER BY timestamp, hostgroup, srv_host";
+
+		SQLite3_result* resultset = NULL;
+		int cols = 0;
+		std::string err = execute_statsdb_disk_query(sql.c_str(), &resultset, &cols);
+
+		json per_server = json::array();
+		if (err.empty() && resultset) {
+			per_server = resultset_to_json(resultset, cols);
+			delete resultset;
+		}
+
+		result["per_server"] = per_server;
+	}
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Retrieves historical query digest snapshots from disk storage.
+ *
+ * Queries the history_mysql_query_digest or history_pgsql_query_digest tables
+ * for previously saved query digest snapshots. These snapshots are created by
+ * flush_queries and contain aggregated query statistics at specific points in
+ * time, enabling trend analysis and historical query pattern investigation.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" or "pgsql" (default: "mysql")
+ *   - dump_time: Specific snapshot timestamp to retrieve (default: all)
+ *   - start_time: Filter snapshots after this timestamp (default: no filter)
+ *   - end_time: Filter snapshots before this timestamp (default: no filter)
+ *   - digest: Filter by specific query digest hash (default: all)
+ *   - username: Filter by username (default: all)
+ *   - database: Filter by database/schema name (default: all)
+ *   - limit: Maximum queries to return (default: 100)
+ *   - offset: Pagination offset (default: 0)
+ *
+ * @return JSON response containing:
+ *   - db_type: The database type queried
+ *   - snapshots: Array of snapshots, each with dump_time and queries array
+ *   - summary: Total snapshots count and time range
+ */
+json Stats_Tool_Handler::handle_show_query_history(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+	long long dump_time = arguments.value("dump_time", (long long)-1);
+	long long start_time = arguments.value("start_time", (long long)-1);
+	long long end_time = arguments.value("end_time", (long long)-1);
+	std::string digest = arguments.value("digest", "");
+	std::string username = arguments.value("username", "");
+	std::string database = arguments.value("database", "");
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
+
+	std::string table = (db_type == "pgsql") ? "history_pgsql_query_digest" : "history_mysql_query_digest";
+	// Note: Both MySQL and PostgreSQL history tables use 'schemaname' column
+
+	std::string sql = "SELECT dump_time, hostgroup, schemaname, username, client_address, "
+		"digest, digest_text, count_star, first_seen, last_seen, "
+		"sum_time, min_time, max_time, sum_rows_affected, sum_rows_sent "
+		"FROM " + table + " WHERE 1=1";
+
+	if (dump_time >= 0) {
+		sql += " AND dump_time = " + std::to_string(dump_time);
+	}
+	if (start_time >= 0) {
+		sql += " AND dump_time >= " + std::to_string(start_time);
+	}
+	if (end_time >= 0) {
+		sql += " AND dump_time <= " + std::to_string(end_time);
+	}
+	if (!digest.empty()) {
+		sql += " AND digest = '" + sql_escape(digest) + "'";
+	}
+	if (!username.empty()) {
+		sql += " AND username = '" + sql_escape(username) + "'";
+	}
+	if (!database.empty()) {
+		sql += " AND schemaname = '" + sql_escape(database) + "'";
+	}
+
+	sql += " ORDER BY dump_time DESC, count_star DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
 
 	SQLite3_result* resultset = NULL;
 	int cols = 0;
@@ -2593,106 +2649,321 @@ json Stats_Tool_Handler::handle_show_history_query_digest(const json& arguments)
 		return create_error_response("Failed to query history query digest: " + err);
 	}
 
-	json rows = resultset_to_json(resultset, cols);
-	int row_count = resultset ? resultset->rows_count : 0;
+	// Group by dump_time into snapshots
+	std::map<long long, json> snapshot_map;
+	long long earliest = LLONG_MAX;
+	long long latest = 0;
 
-	if (resultset) delete resultset;
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			long long dt = row->fields[0] ? std::stoll(row->fields[0]) : 0;
+			if (dt < earliest) earliest = dt;
+			if (dt > latest) latest = dt;
+
+			long long count_star = row->fields[7] ? std::stoll(row->fields[7]) : 0;
+			long long sum_time = row->fields[10] ? std::stoll(row->fields[10]) : 0;
+
+			json query;
+			query["hostgroup"] = row->fields[1] ? std::stoi(row->fields[1]) : 0;
+			query["database"] = row->fields[2] ? row->fields[2] : "";
+			query["username"] = row->fields[3] ? row->fields[3] : "";
+			query["client_address"] = row->fields[4] ? row->fields[4] : "";
+			query["digest"] = row->fields[5] ? row->fields[5] : "";
+			query["digest_text"] = row->fields[6] ? row->fields[6] : "";
+			query["count_star"] = count_star;
+			query["first_seen"] = row->fields[8] ? std::stoll(row->fields[8]) : 0;
+			query["last_seen"] = row->fields[9] ? std::stoll(row->fields[9]) : 0;
+			query["sum_time_us"] = sum_time;
+			query["min_time_us"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
+			query["max_time_us"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
+			query["sum_rows_affected"] = row->fields[13] ? std::stoll(row->fields[13]) : 0;
+			query["sum_rows_sent"] = row->fields[14] ? std::stoll(row->fields[14]) : 0;
+
+			if (snapshot_map.find(dt) == snapshot_map.end()) {
+				snapshot_map[dt] = json::array();
+			}
+			snapshot_map[dt].push_back(query);
+		}
+		delete resultset;
+	}
+
+	// Convert map to array of snapshots
+	json snapshots = json::array();
+	for (auto it = snapshot_map.rbegin(); it != snapshot_map.rend(); ++it) {
+		json snapshot;
+		snapshot["dump_time"] = it->first;
+		snapshot["queries"] = it->second;
+		snapshots.push_back(snapshot);
+	}
 
 	json result;
-	result["database"] = database;
-	result["queries"] = rows;
-	result["row_count"] = row_count;
+	result["db_type"] = db_type;
+	result["snapshots"] = snapshots;
+	result["summary"] = {
+		{"total_snapshots", (int)snapshots.size()},
+		{"earliest_snapshot", earliest == LLONG_MAX ? 0 : earliest},
+		{"latest_snapshot", latest}
+	};
+
+	return create_success_response(result);
+}
+
+// ============================================================================
+// Utility Tool Implementations
+// ============================================================================
+
+/**
+ * @brief Flushes query events from the MySQL Logger buffer to database storage.
+ *
+ * Triggers immediate processing of buffered query events from the MySQL Logger,
+ * writing them to the specified destination database(s). This is useful for
+ * ensuring recent query activity is persisted before querying with show_query_log.
+ *
+ * @note This function calls GloMyLogger->processEvents() directly rather than
+ *       executing an admin command, as admin commands are intercepted only via
+ *       the MySQL admin interface, not when sent directly to SQLite.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - destination: "memory", "disk", or "both" (default: "memory")
+ *
+ * @return JSON response containing:
+ *   - events_flushed: Number of query events written to database
+ *   - destination: The destination that was used
+ */
+json Stats_Tool_Handler::handle_flush_query_log(const json& arguments) {
+	std::string destination = arguments.value("destination", "memory");
+
+	// Validate destination
+	if (destination != "memory" && destination != "disk" && destination != "both") {
+		return create_error_response("Invalid destination: " + destination + ". Must be 'memory', 'disk', or 'both'.");
+	}
+
+	// Check if MySQL Logger is available
+	if (!GloMyLogger) {
+		return create_error_response("MySQL Logger not available");
+	}
+
+	// Check if Admin is available for database access
+	if (!GloAdmin) {
+		return create_error_response("ProxySQL Admin not available");
+	}
+
+	// Determine which databases to flush to
+	SQLite3DB* statsdb = nullptr;
+	SQLite3DB* statsdb_disk = nullptr;
+
+	if (destination == "memory" || destination == "both") {
+		statsdb = GloAdmin->statsdb;
+		if (!statsdb) {
+			return create_error_response("Stats memory database not available");
+		}
+	}
+	if (destination == "disk" || destination == "both") {
+		statsdb_disk = GloAdmin->statsdb_disk;
+		if (!statsdb_disk) {
+			return create_error_response("Stats disk database not available");
+		}
+	}
+
+	// Call the underlying C++ function to flush events from buffer to database(s)
+	int events_flushed = GloMyLogger->processEvents(statsdb, statsdb_disk);
+
+	json result;
+	result["events_flushed"] = events_flushed;
+	result["destination"] = destination;
 
 	return create_success_response(result);
 }
 
 /**
- * @brief Perform custom aggregations on global stats variables.
+ * @brief Retrieves individual query events from the query log.
  *
- * Searches stats_mysql_global and/or stats_pgsql_global for variables
- * whose name contains the given metric pattern, collects their numeric
- * values, and applies the requested aggregation function (sum, avg, min,
- * max, or count).  The response includes both the aggregated result and
- * the individual per-variable details.
+ * Queries the MySQL query events table for detailed information about individual
+ * query executions. This provides full query text, timing, and error information
+ * for debugging and auditing purposes. Events can be retrieved from either the
+ * in-memory stats database or the on-disk history database.
  *
- * Supported arguments (metric is required):
- *   - metric       (string)  variable name pattern (substring match)
- *   - aggregation  (string)  "sum" | "avg" | "min" | "max" | "count"  (default "sum")
- *   - database     (string)  "mysql" | "pgsql" | "all"                (default "all")
+ * @param arguments JSON object with optional parameters:
+ *   - source: "memory" for recent events, "disk" for history (default: "memory")
+ *   - username: Filter by username (default: all)
+ *   - database: Filter by database/schema name (default: all)
+ *   - query_digest: Filter by query digest hash (default: all)
+ *   - server: Filter by backend server address (default: all)
+ *   - errno: Filter by specific error number (default: all)
+ *   - errors_only: If true, only return events with errors (default: false)
+ *   - start_time: Filter events after this timestamp (default: no filter)
+ *   - end_time: Filter events before this timestamp (default: no filter)
+ *   - limit: Maximum events to return (default: 100)
+ *   - offset: Pagination offset (default: 0)
  *
- * @param arguments  JSON object; must contain "metric".
- * @return Success response with aggregated_value and per-variable details.
+ * @return JSON response containing:
+ *   - source: The data source used
+ *   - total_events: Count of events returned
+ *   - events: Array of query event details
+ *   - summary: Error count and time range statistics
  */
-json Stats_Tool_Handler::handle_aggregate_metrics(const json& arguments) {
-	if (!arguments.contains("metric")) {
-		return create_error_response("Missing required parameter: metric");
+json Stats_Tool_Handler::handle_show_query_log(const json& arguments) {
+	std::string source = arguments.value("source", "memory");
+	std::string username = arguments.value("username", "");
+	std::string database = arguments.value("database", "");
+	std::string query_digest = arguments.value("query_digest", "");
+	std::string server = arguments.value("server", "");
+	int errno_filter = arguments.value("errno", -1);
+	bool errors_only = arguments.value("errors_only", false);
+	long long start_time = arguments.value("start_time", (long long)-1);
+	long long end_time = arguments.value("end_time", (long long)-1);
+	int limit = arguments.value("limit", 100);
+	int offset = arguments.value("offset", 0);
+
+	std::string table = (source == "disk") ? "history_mysql_query_events" : "stats.stats_mysql_query_events";
+
+	std::string sql = "SELECT thread_id, username, schemaname, start_time, end_time, "
+		"query_digest, query, server, client, event_type, hid, "
+		"affected_rows, rows_sent, errno, error "
+		"FROM " + table + " WHERE 1=1";
+
+	if (!username.empty()) {
+		sql += " AND username = '" + sql_escape(username) + "'";
+	}
+	if (!database.empty()) {
+		sql += " AND schemaname = '" + sql_escape(database) + "'";
+	}
+	if (!query_digest.empty()) {
+		sql += " AND query_digest = '" + sql_escape(query_digest) + "'";
+	}
+	if (!server.empty()) {
+		sql += " AND server = '" + sql_escape(server) + "'";
+	}
+	if (errno_filter >= 0) {
+		sql += " AND errno = " + std::to_string(errno_filter);
+	}
+	if (errors_only) {
+		sql += " AND errno != 0";
+	}
+	if (start_time >= 0) {
+		sql += " AND start_time >= " + std::to_string(start_time);
+	}
+	if (end_time >= 0) {
+		sql += " AND start_time <= " + std::to_string(end_time);
 	}
 
-	std::string metric = arguments["metric"].get<std::string>();
-	std::string aggregation = arguments.value("aggregation", "sum");
-	std::string database = arguments.value("database", "all");
+	sql += " ORDER BY start_time DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
 
-	json results_arr = json::array();
+	SQLite3_result* resultset = NULL;
+	int cols = 0;
+	std::string err;
 
-	auto aggregate_from_table = [&](const std::string& db_type) {
-		std::string table = "stats_" + db_type + "_global";
-		SQLite3_result* resultset = NULL;
-		int cols = 0;
-		std::string sql = "SELECT Variable_Name, Variable_Value FROM stats." + table +
-			" WHERE Variable_Name LIKE '%" + sql_escape(metric) + "%'";
+	if (source == "disk") {
+		err = execute_statsdb_disk_query(sql.c_str(), &resultset, &cols);
+	} else {
+		err = execute_admin_query(sql.c_str(), &resultset, &cols);
+	}
 
-		std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
+	if (!err.empty()) {
+		return create_error_response("Failed to query query log: " + err);
+	}
 
-		if (err.empty() && resultset) {
-			auto stats = parse_global_stats(resultset);
+	json events = json::array();
+	int total_errors = 0;
+	long long earliest = LLONG_MAX;
+	long long latest = 0;
 
-			for (const auto& kv : stats) {
-				try {
-					long long val = std::stoll(kv.second);
-					results_arr.push_back({
-						{"database", db_type},
-						{"variable", kv.first},
-						{"value", val}
-					});
-				} catch (...) {
-					// Skip non-numeric values
-				}
-			}
+	if (resultset) {
+		for (const auto& row : resultset->rows) {
+			long long st = row->fields[3] ? std::stoll(row->fields[3]) : 0;
+			int err_no = row->fields[13] ? std::stoi(row->fields[13]) : 0;
 
-			delete resultset;
+			if (st < earliest) earliest = st;
+			if (st > latest) latest = st;
+			if (err_no != 0) total_errors++;
+
+			json event;
+			event["thread_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
+			event["username"] = row->fields[1] ? row->fields[1] : "";
+			event["database"] = row->fields[2] ? row->fields[2] : "";
+			event["start_time"] = st;
+			event["end_time"] = row->fields[4] ? std::stoll(row->fields[4]) : 0;
+			event["query_digest"] = row->fields[5] ? row->fields[5] : "";
+			event["query"] = row->fields[6] ? row->fields[6] : "";
+			event["server"] = row->fields[7] ? row->fields[7] : "";
+			event["client"] = row->fields[8] ? row->fields[8] : "";
+			event["event_type"] = row->fields[9] ? std::stoi(row->fields[9]) : 0;
+			event["hostgroup"] = row->fields[10] ? std::stoi(row->fields[10]) : 0;
+			event["affected_rows"] = row->fields[11] ? std::stoll(row->fields[11]) : 0;
+			event["rows_sent"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
+			event["errno"] = err_no;
+			event["error"] = row->fields[14] ? row->fields[14] : nullptr;
+
+			events.push_back(event);
 		}
-	};
-
-	if (database == "mysql" || database == "all") aggregate_from_table("mysql");
-	if (database == "pgsql" || database == "all") aggregate_from_table("pgsql");
-
-	// Perform aggregation
-	long long agg_result = 0;
-	if (!results_arr.empty()) {
-		std::vector<long long> values;
-		for (const auto& r : results_arr) {
-			values.push_back(r["value"].get<long long>());
-		}
-
-		if (aggregation == "sum") {
-			agg_result = std::accumulate(values.begin(), values.end(), 0LL);
-		} else if (aggregation == "avg") {
-			agg_result = std::accumulate(values.begin(), values.end(), 0LL) / (long long)values.size();
-		} else if (aggregation == "min") {
-			agg_result = *std::min_element(values.begin(), values.end());
-		} else if (aggregation == "max") {
-			agg_result = *std::max_element(values.begin(), values.end());
-		} else if (aggregation == "count") {
-			agg_result = (long long)values.size();
-		}
+		delete resultset;
 	}
 
 	json result;
-	result["metric"] = metric;
-	result["aggregation"] = aggregation;
-	result["database"] = database;
-	result["aggregated_value"] = agg_result;
-	result["details"] = results_arr;
+	result["source"] = source;
+	result["total_events"] = (int)events.size();
+	result["events"] = events;
+	result["summary"] = {
+		{"total_errors", total_errors},
+		{"time_range", {
+			{"earliest", earliest == LLONG_MAX ? 0 : earliest},
+			{"latest", latest}
+		}}
+	};
+
+	return create_success_response(result);
+}
+
+/**
+ * @brief Saves current query digest statistics to disk for historical analysis.
+ *
+ * Flushes the current in-memory query digest statistics to the history tables
+ * on disk, creating a point-in-time snapshot. This enables historical trend
+ * analysis via show_query_history. Each flush creates a new snapshot with a
+ * unique dump_time timestamp.
+ *
+ * @note This function calls GloAdmin->FlushDigestTableToDisk() directly rather
+ *       than executing an admin command, as admin commands are intercepted only
+ *       via the MySQL admin interface, not when sent directly to SQLite.
+ *
+ * @param arguments JSON object with optional parameters:
+ *   - db_type: "mysql" or "pgsql" (default: "mysql")
+ *
+ * @return JSON response containing:
+ *   - db_type: The database type flushed
+ *   - digests_saved: Number of query digests written to disk
+ *   - dump_time: Unix timestamp of this snapshot
+ */
+json Stats_Tool_Handler::handle_flush_queries(const json& arguments) {
+	std::string db_type = arguments.value("db_type", "mysql");
+
+	// Validate db_type
+	if (db_type != "mysql" && db_type != "pgsql") {
+		return create_error_response("Invalid db_type: " + db_type);
+	}
+
+	// Check if Admin is available
+	if (!GloAdmin) {
+		return create_error_response("ProxySQL Admin not available");
+	}
+
+	// Check if statsdb_disk is available
+	if (!GloAdmin->statsdb_disk) {
+		return create_error_response("Stats disk database not available");
+	}
+
+	// Call the underlying C++ function to flush digest stats to disk
+	int digests_saved = 0;
+	if (db_type == "mysql") {
+		digests_saved = GloAdmin->FlushDigestTableToDisk<SERVER_TYPE_MYSQL>(GloAdmin->statsdb_disk);
+	} else {
+		digests_saved = GloAdmin->FlushDigestTableToDisk<SERVER_TYPE_PGSQL>(GloAdmin->statsdb_disk);
+	}
+
+	json result;
+	result["db_type"] = db_type;
+	result["digests_saved"] = digests_saved;
+	result["dump_time"] = (long long)time(NULL);
 
 	return create_success_response(result);
 }

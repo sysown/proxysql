@@ -148,25 +148,28 @@ Returns global status variables and metrics from ProxySQL. Similar to MySQL's `S
     "variables": [
       {
         "variable_name": "Client_Connections_connected",
-        "value": "245",
-        "description": "Currently connected clients"
+        "value": "245"
       },
       {
         "variable_name": "Client_Connections_created",
-        "value": "15432",
-        "description": "Total client connections ever created"
+        "value": "15432"
       },
       {
         "variable_name": "Questions",
-        "value": "156789",
-        "description": "Total queries processed"
+        "value": "156789"
       }
     ]
   }
 }
 ```
 
-**PostgreSQL Notes:** PostgreSQL has ~59 variables compared to MySQL's ~129. Some variable names differ (e.g., `pgsql_backend_buffers_bytes` instead of `mysql_backend_buffers_bytes`).
+#### Variable Reference
+
+For complete documentation of all available variables including descriptions and types, see:
+- **MySQL:** [Stats_Tables.md - stats_mysql_global](../Stats_Tables.md#18-stats_mysql_global) (~102 variables)
+- **PostgreSQL:** [Stats_Tables.md - stats_pgsql_global](../Stats_Tables.md#210-stats_pgsql_global) (~51 variables)
+
+**PostgreSQL Notes:** Some variable names differ between MySQL and PostgreSQL (e.g., `pgsql_backend_buffers_bytes` instead of `mysql_backend_buffers_bytes`).
 
 ---
 
@@ -931,9 +934,9 @@ Returns historical CPU and memory usage trends.
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `metric` | `"cpu"` \| `"memory"` \| `"all"` | No | `"all"` | Which metrics to return |
-| `interval` | `"30m"` \| `"1h"` \| `"2h"` \| `"4h"` \| `"6h"` \| `"12h"` \| `"1d"` \| `"3d"` \| `"7d"` \| `"30d"` \| `"90d"` | No | `"1h"` | How far back to look |
+| `interval` | `"30m"` \| `"1h"` \| `"2h"` \| `"4h"` \| `"6h"` \| `"8h"` \| `"12h"` \| `"1d"` \| `"3d"` \| `"7d"` \| `"30d"` \| `"90d"` | No | `"1h"` | How far back to look |
 
-**Table Selection:** Intervals ≤12h use raw tables; intervals ≥1d use hourly aggregated tables.
+**Table Selection:** Intervals ≤6h use raw tables; intervals ≥8h use hourly aggregated tables.
 
 **Response:**
 ```json
@@ -991,7 +994,7 @@ Returns historical query cache performance metrics.
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `db_type` | `"mysql"` \| `"pgsql"` | No | `"mysql"` | Database type |
-| `interval` | `"30m"` \| `"1h"` \| `"2h"` \| `"4h"` \| `"6h"` \| `"12h"` \| `"1d"` \| `"3d"` \| `"7d"` \| `"30d"` \| `"90d"` | No | `"1h"` | How far back to look |
+| `interval` | `"30m"` \| `"1h"` \| `"2h"` \| `"4h"` \| `"6h"` \| `"8h"` \| `"12h"` \| `"1d"` \| `"3d"` \| `"7d"` \| `"30d"` \| `"90d"` | No | `"1h"` | How far back to look |
 
 **PostgreSQL Support:** Historical query cache data is only available for MySQL. When `db_type="pgsql"`, this tool returns an error.
 
@@ -1032,7 +1035,7 @@ Returns historical connection metrics at global or per-server level.
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `db_type` | `"mysql"` \| `"pgsql"` | No | `"mysql"` | Database type |
-| `interval` | `"30m"` \| `"1h"` \| `"2h"` \| `"4h"` \| `"6h"` \| `"12h"` \| `"1d"` \| `"3d"` \| `"7d"` \| `"30d"` \| `"90d"` | No | `"1h"` | How far back to look |
+| `interval` | `"30m"` \| `"1h"` \| `"2h"` \| `"4h"` \| `"6h"` \| `"8h"` \| `"12h"` \| `"1d"` \| `"3d"` \| `"7d"` \| `"30d"` \| `"90d"` | No | `"1h"` | How far back to look |
 | `scope` | `"global"` \| `"per_server"` \| `"all"` | No | `"global"` | Level of detail |
 | `hostgroup` | int | No | (none) | Filter per_server by hostgroup |
 | `server` | string | No | (none) | Filter per_server by server (format: `host:port`) |
