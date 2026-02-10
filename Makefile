@@ -13,7 +13,29 @@ GIT_VERSION ?= $(shell git describe --long --abbrev=7 2>/dev/null || git describ
 ifndef GIT_VERSION
     $(error GIT_VERSION is not set)
 endif
+
+# If PROXYSQLGENAI is enabled, increment the major version number by 1
+# Only increment if GIT_VERSION was not passed from environment (to avoid double-incrementing in Docker)
+ifeq ($(PROXYSQLGENAI),1)
+ifneq ($(origin GIT_VERSION),environment)
+    GIT_VERSION := $(shell echo "$(GIT_VERSION)" | awk -F. '{printf "%d.%s", $$1+1, substr($$0, length($$1)+2)}')
+endif
+endif
+
 export GIT_VERSION
+
+# Extract CURVER from GIT_VERSION (first 3 numbers, e.g., 3.0.6 from 3.0.6-388-ga94b7d6)
+CURVER := $(shell echo "$(GIT_VERSION)" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1)
+
+# Validate CURVER has 3 numbers separated by dots
+CURVER_CHECK := $(shell echo "$(CURVER)" | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+$$')
+
+ifeq ($(CURVER_CHECK),0)
+    $(error CURVER "$(CURVER)" derived from GIT_VERSION "$(GIT_VERSION)" does not have 3 numbers separated by dots (expected format: X.Y.Z)
+endif
+
+export CURVER
+export PROXYSQLGENAI
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
@@ -43,11 +65,9 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-CURVER ?= 4.0.0
 #export DEBUG
 #export EXTRALINK
 export MAKE
-export CURVER
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | egrep -o '[0-9]{6}L')
@@ -69,6 +89,7 @@ endif
 ### multiprocessing
 NPROCS := 1
 OS := $(shell uname -s)
+UNAME_S := $(OS)
 ifeq ($(OS),Linux)
 	NPROCS := $(shell nproc)
 endif
@@ -87,8 +108,12 @@ ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 endif
 
 ### check user/group
+USERCHECK :=
+GROUPCHECK :=
+ifeq ($(OS),Linux)
 USERCHECK := $(shell getent passwd proxysql)
 GROUPCHECK := $(shell getent group proxysql)
+endif
 
 
 ### main targets
@@ -278,27 +303,27 @@ build_src_debug_clickhouse: build_src_debug_default
 
 .PHONY: build_deps_default
 build_deps_default:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 PHONY: build_deps_debug_default
 build_deps_debug_default:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_default
 build_lib_debug_default: build_deps_debug_default
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_default
 build_src_default: build_lib_default
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLGENAI=$(PROXYSQLGENAI) CC=${CC} CXX=${CXX} ${MAKE}
 
 
 ### packaging targets
@@ -309,7 +334,11 @@ SYS_ARCH := $(shell uname -m)
 REL_ARCH = $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH = .$(SYS_ARCH)
 DEB_ARCH = _$(REL_ARCH)
+ifeq ($(UNAME_S),Darwin)
+REL_VERS := $(shell echo ${GIT_VERSION} | sed -E 's/^v//' | grep -Eo '^[0-9\.]+')
+else
 REL_VERS := $(shell echo ${GIT_VERSION} | grep -Po '(?<=^v|^)[\d\.]+')
+endif
 RPM_VERS := -$(REL_VERS)-1
 DEB_VERS := _$(REL_VERS)
 
@@ -327,7 +356,7 @@ amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensu
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg almalinux10 almalinux10-clang almalinux10-dbg
 amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
-amd64-fedora: fedora40 fedora40-clang fedora40-dbg fedora41 fedora41-clang fedora41-dbg fedora42 fedora42-clang fedora42-dbg
+amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-pkglist:
@@ -338,7 +367,7 @@ arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensu
 arm64-almalinux: almalinux8 almalinux9 almalinux10
 arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
-arm64-fedora: fedora40 fedora41 fedora42
+arm64-fedora: fedora42 fedora43
 arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-pkglist:

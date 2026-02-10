@@ -169,6 +169,8 @@ bool execute_query(const char* query) {
 	return true;
 }
 
+
+#ifdef PROXYSQLGENAI
 // ============================================================================
 // Test: Anomaly Detector Initialization
 // ============================================================================
@@ -718,6 +720,7 @@ void test_false_positive_handling() {
 	detector->close();
 	delete detector;
 }
+#endif // PROXYSQLGENAI
 
 // ============================================================================
 // Main
@@ -739,6 +742,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+#ifdef PROXYSQLGENAI
 	// Plan tests:
 	// - Initialization: 6 tests
 	// - SQL Injection: 10 tests
@@ -760,6 +764,10 @@ int main(int argc, char** argv) {
 	test_integration_scenarios();
 	test_configuration_management();
 	test_false_positive_handling();
+#else
+	plan(1);
+	ok(true, "Dummy test");
+#endif // PROXYSQLGENAI
 
 	mysql_close(g_admin);
 	return exit_status();

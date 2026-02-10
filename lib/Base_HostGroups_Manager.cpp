@@ -2600,7 +2600,7 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 					unsigned long long intv = mysql_thread___connection_max_age_ms;
 					intv *= 1000;
 					if (curtime > mc->creation_time + intv) {
-						mc=mscl->remove(0);
+						mc=mscl->remove(i);
 						delete mc;
 						i--;
 					}

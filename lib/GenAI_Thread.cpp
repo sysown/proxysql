@@ -1,3 +1,7 @@
+#ifdef PROXYSQLGENAI
+
+
+#include "proxysql.h"
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
 #include "proxysql_debug.h"
@@ -1902,3 +1906,5 @@ std::string GenAI_Threads_Handler::process_json_query(const std::string& json_qu
 		return result.dump();
 	}
 }
+
+#endif /* PROXYSQLGENAI */

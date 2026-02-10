@@ -30,6 +30,8 @@
 #ifndef __CLASS_AI_FEATURES_MANAGER_H
 #define __CLASS_AI_FEATURES_MANAGER_H
 
+#ifdef PROXYSQLGENAI
+
 #define AI_FEATURES_MANAGER_VERSION "1.0.0"
 
 #include "proxysql.h"
@@ -212,5 +214,7 @@ public:
 
 // Global instance
 extern AI_Features_Manager *GloAI;
+
+#endif /* PROXYSQLGENAI */
 
 #endif // __CLASS_AI_FEATURES_MANAGER_H

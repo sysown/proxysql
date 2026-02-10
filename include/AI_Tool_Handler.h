@@ -13,6 +13,8 @@
 #ifndef CLASS_AI_TOOL_HANDLER_H
 #define CLASS_AI_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "MCP_Tool_Handler.h"
 #include <string>
 #include <vector>
@@ -93,4 +95,5 @@ public:
 	json execute_tool(const std::string& tool_name, const json& arguments) override;
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_AI_TOOL_HANDLER_H */

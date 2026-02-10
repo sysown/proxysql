@@ -28,6 +28,8 @@
 #ifndef __CLASS_LLM_BRIDGE_H
 #define __CLASS_LLM_BRIDGE_H
 
+#ifdef PROXYSQLGENAI
+
 #define LLM_BRIDGE_VERSION "1.0.0"
 
 #include "proxysql.h"
@@ -329,5 +331,7 @@ public:
 	 */
 	std::string get_cache_stats();
 };
+
+#endif /* PROXYSQLGENAI */
 
 #endif // __CLASS_LLM_BRIDGE_H

@@ -1,6 +1,8 @@
 #ifndef __CLASS_AI_VECTOR_STORAGE_H
 #define __CLASS_AI_VECTOR_STORAGE_H
 
+#ifdef PROXYSQLGENAI
+
 #define AI_VECTOR_STORAGE_VERSION "0.1.0"
 
 #include "proxysql.h"
@@ -36,5 +38,7 @@ public:
 		int limit
 	);
 };
+
+#endif /* PROXYSQLGENAI */
 
 #endif // __CLASS_AI_VECTOR_STORAGE_H

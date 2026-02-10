@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 /**
  * @file LLM_Clients.cpp
  * @brief HTTP client implementations for LLM providers
@@ -25,6 +27,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
+#include <random>
 
 #include "json.hpp"
 #include <curl/curl.h>
@@ -154,8 +157,11 @@ static bool is_retryable_error(int http_status_code, CURLcode curl_code) {
  */
 static void sleep_with_jitter(int base_delay_ms, double jitter_factor = 0.1) {
 	// Add random jitter to prevent synchronized retries
+	// Use thread_local random number generator for thread safety
 	int jitter_ms = static_cast<int>(base_delay_ms * jitter_factor);
-	int random_jitter = (rand() % (2 * jitter_ms)) - jitter_ms;
+	static thread_local std::mt19937 gen(std::random_device{}());
+	std::uniform_int_distribution<> dis(-jitter_ms, jitter_ms);
+	int random_jitter = dis(gen);
 
 	int total_delay_ms = base_delay_ms + random_jitter;
 	if (total_delay_ms < 0) total_delay_ms = 0;
@@ -557,12 +563,9 @@ std::string LLM_Bridge::call_generic_openai_with_retry(
 {
 	int attempt = 0;
 	int current_backoff_ms = initial_backoff_ms;
-	CURLcode last_curl_code = CURLE_OK;
-	int last_http_code = 0;
 
 	while (attempt <= max_retries) {
 		// Call the base function (attempt 0 is the first try)
-		// Note: We need to modify call_generic_openai to return error information
 		std::string result = call_generic_openai(prompt, model, url, key, req_id);
 
 		// If we got a successful response, return it
@@ -574,10 +577,6 @@ std::string LLM_Bridge::call_generic_openai_with_retry(
 			return result;
 		}
 
-		// Check if this is a retryable error
-		// For now, we'll assume empty response means either network error or retryable HTTP error
-		// In a more complete implementation, call_generic_openai should return error codes
-
 		// If this was our last attempt, give up
 		if (attempt == max_retries) {
 			proxy_error("LLM [%s]: Request failed after %d attempts. Max retries reached.\n",
@@ -585,34 +584,21 @@ std::string LLM_Bridge::call_generic_openai_with_retry(
 			return "";
 		}
 
-		// Check if this is a retryable error using our helper function
-		// For now, we'll retry on empty responses as a heuristic for transient failures
-		if (is_retryable_error(last_http_code, last_curl_code) || result.empty()) {
-			// Log retry attempt
-			if (result.empty()) {
-				proxy_warning("LLM [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
-				             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
-			} else {
-				proxy_warning("LLM [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
-				             req_id.c_str(), last_http_code, current_backoff_ms, attempt + 1, max_retries + 1);
-			}
+		// Retry on empty response (heuristic for transient failures)
+		// TODO: Enhance call_generic_openai to return error codes for better retry decisions
+		proxy_warning("LLM [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+		             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
 
-			// Sleep with exponential backoff and jitter
-			sleep_with_jitter(current_backoff_ms);
+		// Sleep with exponential backoff and jitter
+		sleep_with_jitter(current_backoff_ms);
 
-			// Increase backoff for next attempt
-			current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
-			if (current_backoff_ms > max_backoff_ms) {
-				current_backoff_ms = max_backoff_ms;
-			}
-
-			attempt++;
-		} else {
-			// Non-retryable error, give up
-			proxy_error("LLM [%s]: Non-retryable error (HTTP %d), giving up.\n",
-			           req_id.c_str(), last_http_code);
-			return "";
+		// Increase backoff for next attempt
+		current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
+		if (current_backoff_ms > max_backoff_ms) {
+			current_backoff_ms = max_backoff_ms;
 		}
+
+		attempt++;
 	}
 
 	// Should not reach here, but handle gracefully
@@ -651,8 +637,6 @@ std::string LLM_Bridge::call_generic_anthropic_with_retry(
 {
 	int attempt = 0;
 	int current_backoff_ms = initial_backoff_ms;
-	CURLcode last_curl_code = CURLE_OK;
-	int last_http_code = 0;
 
 	while (attempt <= max_retries) {
 		// Call the base function (attempt 0 is the first try)
@@ -674,36 +658,25 @@ std::string LLM_Bridge::call_generic_anthropic_with_retry(
 			return "";
 		}
 
-		// Check if this is a retryable error using our helper function
-		// For now, we'll retry on empty responses as a heuristic for transient failures
-		if (is_retryable_error(last_http_code, last_curl_code) || result.empty()) {
-			// Log retry attempt
-			if (result.empty()) {
-				proxy_warning("LLM [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
-				             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
-			} else {
-				proxy_warning("LLM [%s]: Retryable error (HTTP %d), retrying in %dms (attempt %d/%d)\n",
-				             req_id.c_str(), last_http_code, current_backoff_ms, attempt + 1, max_retries + 1);
-			}
+		// Retry on empty response (heuristic for transient failures)
+		// TODO: Enhance call_generic_anthropic to return error codes for better retry decisions
+		proxy_warning("LLM [%s]: Empty response, retrying in %dms (attempt %d/%d)\n",
+		             req_id.c_str(), current_backoff_ms, attempt + 1, max_retries + 1);
 
-			// Sleep with exponential backoff and jitter
-			sleep_with_jitter(current_backoff_ms);
+		// Sleep with exponential backoff and jitter
+		sleep_with_jitter(current_backoff_ms);
 
-			// Increase backoff for next attempt
-			current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
-			if (current_backoff_ms > max_backoff_ms) {
-				current_backoff_ms = max_backoff_ms;
-			}
-
-			attempt++;
-		} else {
-			// Non-retryable error, give up
-			proxy_error("LLM [%s]: Non-retryable error (HTTP %d), giving up.\n",
-			           req_id.c_str(), last_http_code);
-			return "";
+		// Increase backoff for next attempt
+		current_backoff_ms = static_cast<int>(current_backoff_ms * backoff_multiplier);
+		if (current_backoff_ms > max_backoff_ms) {
+			current_backoff_ms = max_backoff_ms;
 		}
+
+		attempt++;
 	}
 
 	// Should not reach here, but handle gracefully
 	return "";
 }
+
+#endif /* PROXYSQLGENAI */

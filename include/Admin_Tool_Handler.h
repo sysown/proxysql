@@ -1,6 +1,8 @@
 #ifndef CLASS_ADMIN_TOOL_HANDLER_H
 #define CLASS_ADMIN_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "MCP_Tool_Handler.h"
 #include <pthread.h>
 
@@ -47,4 +49,5 @@ public:
 	std::string get_handler_name() const override { return "admin"; }
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_ADMIN_TOOL_HANDLER_H */

@@ -154,6 +154,11 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
 
+#ifdef PROXYSQLGENAI
+extern AI_Features_Manager *GloAI;
+extern GenAI_Threads_Handler *GloGATH;
+#endif /* PROXYSQLGENAI */
+
 /**
  * @brief Converts session type to a human-readable string.
  * @param session_type The session type to convert.
@@ -3613,6 +3618,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	return false;
 }
 
+#ifdef PROXYSQLGENAI
 /**
  * @brief AI-based anomaly detection for queries
  *
@@ -4555,6 +4561,7 @@ bool MySQL_Session::check_genai_events() {
 	return false;
 #endif
 }
+#endif /* PROXYSQLGENAI */
 #endif
 
 // this function was inline inside MySQL_Session::get_pkts_from_client
@@ -5237,12 +5244,14 @@ __get_pkts_from_client:
 											}
 										}
 										// AI-based anomaly detection
+#ifdef PROXYSQLGENAI
 										if (GloAI && GloAI->get_anomaly_detector()) {
 											if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_ai_anomaly()) {
 												handler_ret = -1;
 												return handler_ret;
 											}
 										}
+#endif /* PROXYSQLGENAI */
 									}
 									if (rc_break==true) {
 										if (mirror==false) {
@@ -6244,6 +6253,7 @@ handler_again:
 									NEXT_IMMEDIATE(CONNECTING_SERVER);
 								return handler_ret;
 							}
+							myconn = myds->myconn;
 							handler_minus1_GenerateErrorMessage(myds, myconn, wrong_pass);
 							RequestEnd(myds, myerr);
 							handler_minus1_HandleBackendConnection(myds, myconn);
@@ -7030,6 +7040,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	bool exit_after_SetParse = true;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 
+#ifdef PROXYSQLGENAI
 	// Check for GENAI: queries - experimental GenAI integration
 	if (pkt->size > sizeof(mysql_hdr) + 7) { // Need at least "GENAI: " (7 chars after header)
 		const char* query_ptr = (const char*)pkt->ptr + sizeof(mysql_hdr) + 1;
@@ -7048,6 +7059,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 	}
+#endif // PROXYSQLGENAI
 
 	if (qpo->new_query) {
 		handler_WCD_SS_MCQ_qpo_QueryRewrite(pkt);

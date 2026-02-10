@@ -1,9 +1,14 @@
+#ifdef PROXYSQLGENAI
+
+#include "proxysql.h"
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
-#include "Config_Tool_Handler.h"
 #include "MCP_Thread.h"
+#include "MCP_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "proxysql_utils.h"
 
@@ -262,3 +267,5 @@ json Config_Tool_Handler::handle_get_status() {
 
 	return create_success_response(status);
 }
+
+#endif /* PROXYSQLGENAI */

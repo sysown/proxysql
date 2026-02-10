@@ -1,9 +1,15 @@
+#ifdef PROXYSQLGENAI
+
+#include "proxysql.h"
+#include "cpp.h"
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
 
 #include "Query_Tool_Handler.h"
 #include "proxysql_debug.h"
+#include "Static_Harvester.h"
 
 #include <vector>
 #include <map>
@@ -416,13 +422,16 @@ void Query_Tool_Handler::return_connection(void* mysql_ptr) {
 	pthread_mutex_unlock(&pool_lock);
 }
 
-// Helper to find connection wrapper by mysql pointer (caller should NOT hold pool_lock)
+// Helper to find connection wrapper by mysql pointer (thread-safe, acquires pool_lock)
 Query_Tool_Handler::MySQLConnection* Query_Tool_Handler::find_connection(void* mysql_ptr) {
+	pthread_mutex_lock(&pool_lock);
 	for (auto& conn : connection_pool) {
 		if (conn.mysql == mysql_ptr) {
+			pthread_mutex_unlock(&pool_lock);
 			return &conn;
 		}
 	}
+	pthread_mutex_unlock(&pool_lock);
 	return nullptr;
 }
 
@@ -1999,3 +2008,5 @@ SQLite3_result* Query_Tool_Handler::get_tool_usage_stats_resultset(bool reset) {
 	pthread_mutex_unlock(&counters_lock);
 	return result;
 }
+
+#endif /* PROXYSQLGENAI */

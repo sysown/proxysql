@@ -1,6 +1,8 @@
 #ifndef CLASS_STATS_TOOL_HANDLER_H
 #define CLASS_STATS_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include <map>
 
 #include "MCP_Tool_Handler.h"
@@ -236,4 +238,5 @@ public:
 	std::string get_handler_name() const override { return "stats"; }
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_STATS_TOOL_HANDLER_H */

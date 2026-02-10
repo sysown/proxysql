@@ -1789,7 +1789,7 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
-		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+		for (int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			if (mysrvc->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 				if (mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) {
@@ -2936,7 +2936,7 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 					unsigned long long intv = mysql_thread___connection_max_age_ms;
 					intv *= 1000;
 					if (curtime > mc->creation_time + intv) {
-						mc=mscl->remove(0);
+						mc=mscl->remove(i);
 						delete mc;
 						i--;
 					}

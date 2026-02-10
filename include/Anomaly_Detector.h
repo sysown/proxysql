@@ -35,6 +35,8 @@
 #ifndef __CLASS_ANOMALY_DETECTOR_H
 #define __CLASS_ANOMALY_DETECTOR_H
 
+#ifdef PROXYSQLGENAI
+
 #define ANOMALY_DETECTOR_VERSION "0.1.0"
 
 #include "proxysql.h"
@@ -138,5 +140,7 @@ public:
 
 // Global instance (defined by AI_Features_Manager)
 // extern Anomaly_Detector *GloAnomaly;
+
+#endif /* PROXYSQLGENAI */
 
 #endif // __CLASS_ANOMALY_DETECTOR_H

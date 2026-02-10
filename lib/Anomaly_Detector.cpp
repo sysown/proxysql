@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 /**
  * @file Anomaly_Detector.cpp
  * @brief Implementation of Real-time Anomaly Detection for ProxySQL
@@ -951,3 +953,5 @@ void Anomaly_Detector::clear_user_statistics() {
 	user_statistics.clear();
 	proxy_info("Anomaly: Cleared statistics for %zu users\n", count);
 }
+
+#endif /* PROXYSQLGENAI */

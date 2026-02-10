@@ -1,5 +1,7 @@
+#ifdef PROXYSQLGENAI
+
 #include "sqlite3db.h"
-#include "MCP_Tool_Handler.h"
+#include "cpp.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -45,3 +47,5 @@ json MCP_Tool_Handler::resultset_to_json(SQLite3_result* resultset, int cols) {
 
 	return rows;
 }
+
+#endif /* PROXYSQLGENAI */

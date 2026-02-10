@@ -29,6 +29,31 @@
 #ifdef PROXYSQLCLICKHOUSE
 #include "ClickHouse_Server.h"
 #endif /* PROXYSQLCLICKHOUSE */
+
+#ifdef PROXYSQLGENAI
+#include "MCP_Tool_Handler.h"
+#include "AI_Features_Manager.h"
+#include "AI_Tool_Handler.h"
+#include "AI_Vector_Storage.h"
+#include "Admin_Tool_Handler.h"
+#include "Anomaly_Detector.h"
+#include "Cache_Tool_Handler.h"
+#include "Config_Tool_Handler.h"
+#include "Discovery_Schema.h"
+#include "GenAI_Thread.h"
+#include "LLM_Bridge.h"
+#include "MCP_Endpoint.h"
+#include "MCP_Thread.h"
+#include "MySQL_Catalog.h"
+#include "MySQL_FTS.h"
+#include "MySQL_Tool_Handler.h"
+#include "Stats_Tool_Handler.h"
+#include "ProxySQL_MCP_Server.hpp"
+#include "Query_Tool_Handler.h"
+#include "RAG_Tool_Handler.h"
+#include "Static_Harvester.h"
+#endif /* PROXYSQLGENAI */
+
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Connection.h"

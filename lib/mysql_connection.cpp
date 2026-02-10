@@ -2979,7 +2979,7 @@ void MySQL_Connection::optimize() {
 // if avoids that a QUIT command stops forever
 // FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if ((send_quit) && (mysql->net.pvio) && ret_mysql) {
+	if ((send_quit) && (mysql->net.pvio) && ret_mysql && !mysql->options.use_ssl) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;

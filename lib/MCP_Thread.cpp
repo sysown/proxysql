@@ -1,4 +1,9 @@
+#ifdef PROXYSQLGENAI
+
+
+#include "proxysql.h"
 #include "MCP_Thread.h"
+#include "MCP_Tool_Handler.h"
 #include "MySQL_Tool_Handler.h"
 #include "Config_Tool_Handler.h"
 #include "Query_Tool_Handler.h"
@@ -384,3 +389,5 @@ char** MCP_Threads_Handler::get_variables_list() {
 void MCP_Threads_Handler::print_version() {
 	fprintf(stderr, "MCP Threads Handler rev. %s -- %s -- %s\n", MCP_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 }
+
+#endif /* PROXYSQLGENAI */

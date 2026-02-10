@@ -153,8 +153,12 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 extern PgSQL_Threads_Handler* GloPTH;
+
+#ifdef PROXYSQLGENAI
 extern MCP_Threads_Handler* GloMCPH;
 extern GenAI_Threads_Handler* GloGATH;
+extern AI_Features_Manager *GloAI;
+#endif /* PROXYSQLGENAI */
 
 extern void (*flush_logs_function)();
 
@@ -804,6 +808,32 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+#ifdef DEBUG
+	if (query_no_space_length == strlen("PROXYSQL FLUSH STATS") && !strncasecmp("PROXYSQL FLUSH STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == strlen("PROXYSQL FLUSH MYSQL STATS") && !strncasecmp("PROXYSQL FLUSH MYSQL STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH MYSQL STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_mysql_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == strlen("PROXYSQL FLUSH PGSQL STATS") && !strncasecmp("PROXYSQL FLUSH PGSQL STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH PGSQL STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_pgsql_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+#endif // DEBUG
+
 	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -934,10 +964,12 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
+#ifdef PROXYSQLGENAI
 	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4) && GloMCPH && GloMCPH->has_variable(var_name + 4)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6) && GloGATH && GloGATH->has_variable(var_name + 6)) {
 		return true;
+#endif /* PROXYSQLGENAI */
 	} else {
 		return false;
 	}
@@ -1760,7 +1792,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					return false;
 				}
-			} else if (is_genai) {
+			}
+#ifdef PROXYSQLGENAI
+			else if (is_genai) {
 				if (is_admin_command_or_alias(LOAD_GENAI_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 					SPA->load_genai_variables_to_runtime();
@@ -1768,7 +1802,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					return false;
 				}
-			} else {
+			}
+#endif /* PROXYSQLGENAI */
+			else {
 				if (is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 					SPA->load_mysql_variables_to_runtime();
@@ -1824,7 +1860,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
-		} else if (is_genai) {
+		}
+#ifdef PROXYSQLGENAI
+		else if (is_genai) {
 			if (is_admin_command_or_alias(SAVE_GENAI_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->save_genai_variables_from_runtime();
@@ -1832,7 +1870,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
-		} else {
+		}
+#endif /* PROXYSQLGENAI */
+		else {
 			if (is_admin_command_or_alias(SAVE_MYSQL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->save_mysql_variables_from_runtime();
@@ -1844,6 +1884,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 
 	// MCP (Model Context Protocol) VARIABLES - DISK commands
+#ifdef PROXYSQLGENAI
 	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
 		const std::string modname = "mcp_variables";
 		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
@@ -1860,8 +1901,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return true;
 		}
 	}
+#endif /* PROXYSQLGENAI */
 
 	// MCP (Model Context Protocol) LOAD/SAVE handlers
+#ifdef PROXYSQLGENAI
 	if (is_admin_command_or_alias(LOAD_MCP_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 		SPA->load_mcp_variables_to_runtime();
@@ -1902,6 +1945,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 		return false;
 	}
+#endif /* PROXYSQLGENAI */
 
 	if ((query_no_space_length > 14) && (!strncasecmp("LOAD COREDUMP ", query_no_space, 14))) {
 
@@ -2348,6 +2392,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	// ============================================================
 	// MCP QUERY RULES COMMAND HANDLERS
 	// ============================================================
+#ifdef PROXYSQLGENAI
 	// Supported commands:
 	//   LOAD MCP QUERY RULES FROM DISK  - Copy from disk to memory
 	//   LOAD MCP QUERY RULES TO MEMORY  - Copy from disk to memory (alias)
@@ -2492,6 +2537,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 	}
+#endif /* PROXYSQLGENAI */
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
 

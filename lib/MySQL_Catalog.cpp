@@ -1,3 +1,5 @@
+#ifdef PROXYSQLGENAI
+
 // ============================================================
 // MySQL Catalog Implementation
 //
@@ -614,3 +616,5 @@ int MySQL_Catalog::remove(
 
 	return 0;
 }
+
+#endif /* PROXYSQLGENAI */

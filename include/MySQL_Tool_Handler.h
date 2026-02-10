@@ -1,9 +1,10 @@
 #ifndef CLASS_MYSQL_TOOL_HANDLER_H
 #define CLASS_MYSQL_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include "MySQL_Catalog.h"
 #include "MySQL_FTS.h"
-#include "cpp.h"
 #include <string>
 #include <memory>
 #include <vector>
@@ -500,4 +501,5 @@ public:
 	int reinit_fts(const std::string& fts_path);
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_MYSQL_TOOL_HANDLER_H */

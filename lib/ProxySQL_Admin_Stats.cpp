@@ -18,9 +18,11 @@
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Logger.hpp"
+#ifdef PROXYSQLGENAI
 #include "MCP_Thread.h"
 #include "Query_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
+#endif /* PROXYSQLGENAI */
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -494,6 +496,8 @@ const void sqlite3_global_stats_row_step(
 	if constexpr (std::is_same_v<T, int32_t>)  {
 		sprintf(buf, "%d", val);
 	} else if constexpr (std::is_same_v<T, uint64_t>) {
+		sprintf(buf, "%lu", (unsigned long)val);
+	} else if constexpr (std::is_same_v<T, unsigned long>) {
 		sprintf(buf, "%lu", val);
 	} else if constexpr (std::is_same_v<T, unsigned long long>) {
 		sprintf(buf, "%llu", val);
@@ -1585,6 +1589,7 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 	delete resultset;
 }
 
+#ifdef PROXYSQLGENAI
 void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 	if (!GloMCPH) return;
 
@@ -1665,6 +1670,7 @@ void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 	(*proxy_sqlite3_finalize)(statement);
 	statsdb->execute("COMMIT");
 }
+#endif /* PROXYSQLGENAI */
 
 int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 	const bool reset, const bool copy, const SQLite3_result *resultset, const umap_query_digest *digest_umap,
@@ -2628,6 +2634,7 @@ int ProxySQL_Admin::stats___save_pgsql_query_digest_to_sqlite(
 //   - sum_time: Total execution time in microseconds
 //   - min_time: Minimum execution time in microseconds
 //   - max_time: Maximum execution time in microseconds
+#ifdef PROXYSQLGENAI
 void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 	if (!GloMCPH) return;
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
@@ -2745,6 +2752,7 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+#endif /* PROXYSQLGENAI */
 
 // Collect MCP query rules statistics
 //
@@ -2760,6 +2768,7 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 // Note: Unlike digest stats, query rules stats do not support reset-on-read.
 // The stats table is simply refreshed with current hit counts.
 //
+#ifdef PROXYSQLGENAI
 void ProxySQL_Admin::stats___mcp_query_rules() {
 	if (!GloMCPH) return;
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
@@ -2798,3 +2807,4 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+#endif /* PROXYSQLGENAI */

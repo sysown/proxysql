@@ -1,3 +1,7 @@
+#ifdef PROXYSQLGENAI
+
+#include "proxysql.h"
+
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -173,3 +177,5 @@ json Observe_Tool_Handler::execute_tool(const std::string& tool_name, const json
 	pthread_mutex_unlock(&handler_lock);
 	return result;
 }
+
+#endif /* PROXYSQLGENAI */

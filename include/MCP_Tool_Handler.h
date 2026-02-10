@@ -1,8 +1,9 @@
 #ifndef CLASS_MCP_TOOL_HANDLER_H
 #define CLASS_MCP_TOOL_HANDLER_H
 
+#ifdef PROXYSQLGENAI
+
 #include <string>
-#include "cpp.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -196,4 +197,5 @@ protected:
 	static json resultset_to_json(SQLite3_result* resultset, int cols);
 };
 
+#endif /* PROXYSQLGENAI */
 #endif /* CLASS_MCP_TOOL_HANDLER_H */
