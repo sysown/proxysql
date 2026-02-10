@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <memory>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <chrono>       // std::chrono
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
 #include "openssl/ssl.h"
@@ -4156,6 +4157,93 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		delete resultset;
 		run_query = false;
 
+		goto __run_query;
+	}
+
+	// TSDB QUERY command
+	// Syntax: TSDB QUERY <metric> [FROM <timestamp_ms>] [TO <timestamp_ms>]
+	if (!strncasecmp("TSDB QUERY ", query_no_space, strlen("TSDB QUERY "))) {
+		if (!GloTSDB) {
+			SPA->send_error_msg_to_client(sess, "TSDB is not enabled");
+			run_query = false;
+			goto __run_query;
+		}
+
+		// Parse command: TSDB QUERY metric_name FROM 123 TO 456
+		char *cmd = query_no_space + strlen("TSDB QUERY ");
+		std::string metric;
+		long long from_ms = 0, to_ms = 0;
+
+		// Extract metric name (first token)
+		char *space = strchr(cmd, ' ');
+		if (space) {
+			metric = std::string(cmd, space - cmd);
+			cmd = space + 1;
+
+			// Parse optional FROM/TO
+			while (*cmd) {
+				if (!strncasecmp(cmd, "FROM ", 5)) {
+					cmd += 5;
+					from_ms = atoll(cmd);
+					// Skip to next space
+					while (*cmd && *cmd != ' ') cmd++;
+				} else if (!strncasecmp(cmd, "TO ", 3)) {
+					cmd += 3;
+					to_ms = atoll(cmd);
+					while (*cmd && *cmd != ' ') cmd++;
+				} else {
+					cmd++;
+				}
+			}
+		} else {
+			metric = cmd;
+		}
+
+		// Default to last hour if not specified
+		if (from_ms == 0 && to_ms == 0) {
+			to_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::system_clock::now().time_since_epoch()).count();
+			from_ms = to_ms - 3600000; // 1 hour
+		}
+
+		// Execute query
+		std::map<std::string, std::string> labels; // Empty for now
+		std::vector<ProxySQL_TSDB::query_result_t> results =
+			GloTSDB->query(metric, labels, from_ms, to_ms, 0, "");
+
+		// Build resultset
+		SQLite3_result* resultset = new SQLite3_result(3);
+		resultset->add_column_definition(SQLITE_INTEGER, "timestamp");
+		resultset->add_column_definition(SQLITE_FLOAT, "value");
+		resultset->add_column_definition(SQLITE_TEXT, "labels");
+
+		char* row[3];
+		char ts_buf[64], val_buf[64];
+
+		for (const auto& series_result : results) {
+			// Build labels JSON
+			std::string labels_json = "{";
+			bool first = true;
+			for (const auto& lbl : series_result.labels) {
+				if (!first) labels_json += ",";
+				labels_json += "\"" + lbl.first + "\":\"" + lbl.second + "\"";
+				first = false;
+			}
+			labels_json += "}";
+
+			for (const auto& pt : series_result.points) {
+				sprintf(ts_buf, "%lld", pt.timestamp);
+				sprintf(val_buf, "%f", pt.value);
+				row[0] = ts_buf;
+				row[1] = val_buf;
+				row[2] = (char*)labels_json.c_str();
+				resultset->add_row(row);
+			}
+		}
+
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		delete resultset;
+		run_query = false;
 		goto __run_query;
 	}
 

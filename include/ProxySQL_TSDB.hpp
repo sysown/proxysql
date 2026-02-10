@@ -71,6 +71,7 @@ struct TSDB_Config {
 class ProxySQL_TSDB {
 private:
     TSDB_Config config;
+    std::mutex config_mutex;  // Protects config access from multiple threads
     std::mutex write_mutex;
     std::atomic<bool> stop_threads;
     
@@ -215,6 +216,12 @@ public:
      * @return true if the variable exists.
      */
     bool has_variable(const char *name);
+
+    /**
+     * @brief Checks if the TSDB UI is enabled.
+     * @return true if the UI is enabled.
+     */
+    bool is_ui_enabled();
 };
 
 /**

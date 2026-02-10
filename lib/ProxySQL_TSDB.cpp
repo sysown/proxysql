@@ -172,17 +172,35 @@ void ProxySQL_TSDB::stop() {
  * Actually, I'll document what is there.
  */
 void ProxySQL_TSDB::write(const std::string& name, const std::map<std::string, std::string>& labels, long long timestamp, double value) {
-    if (!config.enabled) return;
+    bool enabled;
+    std::string data_dir;
+    int raw_window;
+
+    {
+        std::lock_guard<std::mutex> lock(config_mutex);
+        enabled = config.enabled;
+        data_dir = config.data_dir;
+        raw_window = config.raw_window_minutes;
+    }
+
+    if (!enabled) return;
+
+    // Validate raw_window to prevent division by zero
+    if (raw_window <= 0) {
+        proxy_error("TSDB: Invalid raw_window_minutes: %d, skipping write\n", raw_window);
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(write_mutex);
-    
+
     // Ensure data directory exists
     struct stat st;
-    if (stat(config.data_dir.c_str(), &st) == -1) {
-        mkdir(config.data_dir.c_str(), 0755);
+    if (stat(data_dir.c_str(), &st) == -1) {
+        mkdir(data_dir.c_str(), 0755);
     }
 
     // Basic append-only storage
-    std::string filename = config.data_dir + "/raw_" + std::to_string(timestamp / (config.raw_window_minutes * 60 * 1000)) + ".tsdb";
+    std::string filename = data_dir + "/raw_" + std::to_string(timestamp / (raw_window * 60 * 1000)) + ".tsdb";
     std::ofstream ofs(filename, std::ios::app | std::ios::binary);
     if (ofs.is_open()) {
         // Simple binary format: [timestamp:8][value:8][name_len:2][name:N][labels_json_len:2][labels_json:M]
@@ -247,9 +265,25 @@ std::string ProxySQL_TSDB::get_series_key(const std::string& metric, const std::
     for (auto const& [name, value] : labels) {
         key += "__" + name + "_" + value;
     }
+
+    // Sanitize dangerous characters
     std::replace(key.begin(), key.end(), ':', '_');
     std::replace(key.begin(), key.end(), '/', '_');
     std::replace(key.begin(), key.end(), '.', '_');
+    std::replace(key.begin(), key.end(), '\\', '_');  // Windows path separator
+
+    // Replace double dots to prevent path traversal
+    size_t pos = 0;
+    while ((pos = key.find("..", pos)) != std::string::npos) {
+        key.replace(pos, 2, "__");
+        pos += 2;
+    }
+
+    // Limit key length to prevent filesystem issues (POSIX filename limit)
+    if (key.length() > 255) {
+        key = key.substr(0, 255);
+    }
+
     return key;
 }
 
@@ -260,7 +294,18 @@ std::string ProxySQL_TSDB::get_series_key(const std::string& metric, const std::
  */
 void ProxySQL_TSDB::sampler_loop() {
     while (!stop_threads) {
-        if (config.enabled && GloVars.prometheus_registry) {
+        bool enabled;
+        int sample_interval;
+        std::string digest_mode;
+
+        {
+            std::lock_guard<std::mutex> lock(config_mutex);
+            enabled = config.enabled;
+            sample_interval = config.sample_interval_seconds;
+            digest_mode = config.digest_mode;
+        }
+
+        if (enabled && GloVars.prometheus_registry) {
             auto metrics = GloVars.prometheus_registry->Collect();
             long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             for (const auto& family : metrics) {
@@ -279,33 +324,54 @@ void ProxySQL_TSDB::sampler_loop() {
                     }
                 }
             }
-            
+
             // Top-K Query Digest Sampling
-            if (config.digest_mode == "1" && GloAdmin && GloAdmin->statsdb) {
+            int digest_topk;
+            {
+                std::lock_guard<std::mutex> lock(config_mutex);
+                digest_topk = config.digest_topk;
+            }
+            if (digest_mode == "1" && GloAdmin && GloAdmin->statsdb) {
                 char query[256];
-                sprintf(query, "SELECT hostgroup, schemaname, username, digest, count_star, sum_time, sum_rows_affected, sum_rows_sent FROM stats_mysql_query_digest ORDER BY sum_time DESC LIMIT %d", config.digest_topk);
+                sprintf(query, "SELECT hostgroup, schemaname, username, digest, count_star, sum_time, sum_rows_affected, sum_rows_sent FROM stats_mysql_query_digest ORDER BY sum_time DESC LIMIT %d", digest_topk);
                 char *err_msg = NULL;
                 int cols=0, rows=0;
                 SQLite3_result *resultset = NULL;
                 GloAdmin->statsdb->execute_statement(query, &err_msg, &cols, &rows, &resultset);
                 if (resultset) {
                     for (int i=0; i<rows; i++) {
+                        // Add NULL checks for each field
+                        const char *hostgroup = resultset->rows[i]->fields[0];
+                        const char *schema = resultset->rows[i]->fields[1];
+                        const char *user = resultset->rows[i]->fields[2];
+                        const char *digest = resultset->rows[i]->fields[3];
+                        const char *count_star = resultset->rows[i]->fields[4];
+                        const char *sum_time = resultset->rows[i]->fields[5];
+                        const char *rows_affected = resultset->rows[i]->fields[6];
+                        const char *rows_sent = resultset->rows[i]->fields[7];
+
+                        // Skip if required fields are NULL
+                        if (!hostgroup || !schema || !user || !digest) {
+                            proxy_warning("TSDB Sampler: NULL required field in query digest result, skipping row %d\n", i);
+                            continue;
+                        }
+
                         std::map<std::string, std::string> labels;
-                        labels["hostgroup"] = resultset->rows[i]->fields[0];
-                        labels["schema"] = resultset->rows[i]->fields[1];
-                        labels["user"] = resultset->rows[i]->fields[2];
-                        labels["digest"] = resultset->rows[i]->fields[3];
-                        
-                        this->write("proxysql_query_digest_count", labels, now, atof(resultset->rows[i]->fields[4]));
-                        this->write("proxysql_query_digest_sum_time_us", labels, now, atof(resultset->rows[i]->fields[5]));
-                        this->write("proxysql_query_digest_rows_affected", labels, now, atof(resultset->rows[i]->fields[6]));
-                        this->write("proxysql_query_digest_rows_sent", labels, now, atof(resultset->rows[i]->fields[7]));
+                        labels["hostgroup"] = hostgroup;
+                        labels["schema"] = schema;
+                        labels["user"] = user;
+                        labels["digest"] = digest;
+
+                        this->write("proxysql_query_digest_count", labels, now, count_star ? atof(count_star) : 0);
+                        this->write("proxysql_query_digest_sum_time_us", labels, now, sum_time ? atof(sum_time) : 0);
+                        this->write("proxysql_query_digest_rows_affected", labels, now, rows_affected ? atof(rows_affected) : 0);
+                        this->write("proxysql_query_digest_rows_sent", labels, now, rows_sent ? atof(rows_sent) : 0);
                     }
                     delete resultset;
                 }
             }
         }
-        std::this_thread::sleep_for(std::chrono::seconds(config.sample_interval_seconds));
+        std::this_thread::sleep_for(std::chrono::seconds(sample_interval));
     }
 }
 
@@ -360,7 +426,20 @@ static int tcp_connect(const char *host, int port, int timeout_ms) {
  */
 void ProxySQL_TSDB::monitor_loop() {
     while (!stop_threads) {
-        if (config.enabled && config.monitor_enabled && GloAdmin && GloAdmin->admindb) {
+        bool enabled;
+        bool monitor_enabled;
+        int monitor_interval;
+        int monitor_connect_timeout;
+
+        {
+            std::lock_guard<std::mutex> lock(config_mutex);
+            enabled = config.enabled;
+            monitor_enabled = config.monitor_enabled;
+            monitor_interval = config.monitor_interval_seconds;
+            monitor_connect_timeout = config.monitor_connect_timeout_ms;
+        }
+
+        if (enabled && monitor_enabled && GloAdmin && GloAdmin->admindb) {
             char *err_msg = NULL;
             int cols=0, rows=0;
             SQLite3_result *resultset = NULL;
@@ -368,19 +447,29 @@ void ProxySQL_TSDB::monitor_loop() {
             if (resultset) {
                 long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                 for (int i=0; i<rows; i++) {
-                    std::string hg = resultset->rows[i]->fields[0];
-                    std::string host = resultset->rows[i]->fields[1];
-                    int port = atoi(resultset->rows[i]->fields[2]);
-                    
+                    // Add NULL checks
+                    const char *hg_field = resultset->rows[i]->fields[0];
+                    const char *host_field = resultset->rows[i]->fields[1];
+                    const char *port_field = resultset->rows[i]->fields[2];
+
+                    if (!hg_field || !host_field || !port_field) {
+                        proxy_warning("TSDB Monitor: NULL field in runtime_mysql_servers, skipping row %d\n", i);
+                        continue;
+                    }
+
+                    std::string hg = hg_field;
+                    std::string host = host_field;
+                    int port = atoi(port_field);
+
                     std::map<std::string, std::string> labels;
                     labels["hostgroup"] = hg;
                     labels["endpoint"] = host + ":" + std::to_string(port);
-                    
+
                     auto start = std::chrono::steady_clock::now();
-                    int res = tcp_connect(host.c_str(), port, config.monitor_connect_timeout_ms);
+                    int res = tcp_connect(host.c_str(), port, monitor_connect_timeout);
                     auto end = std::chrono::steady_clock::now();
                     double duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-                    
+
                     this->write("backend_probe_up", labels, now, (res == 0 ? 1.0 : 0.0));
                     if (res == 0) {
                         this->write("backend_probe_connect_ms", labels, now, duration_ms);
@@ -389,7 +478,7 @@ void ProxySQL_TSDB::monitor_loop() {
                 delete resultset;
             }
         }
-        std::this_thread::sleep_for(std::chrono::seconds(config.monitor_interval_seconds));
+        std::this_thread::sleep_for(std::chrono::seconds(monitor_interval));
     }
 }
 
@@ -454,36 +543,116 @@ ProxySQL_TSDB::status_t ProxySQL_TSDB::get_status() {
  * @return true if variable found and updated, false otherwise.
  */
 bool ProxySQL_TSDB::set_variable(const char *name, const char *value) {
+    // Validate numeric values before taking lock
+    if (!strcasecmp(name, "retention_hours")) {
+        int val = atoi(value);
+        if (val < 1 || val > 8760) {
+            proxy_error("TSDB: retention_hours must be between 1 and 8760 (1 hour to 1 year), got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.retention_hours = val;
+        return true;
+    }
+    if (!strcasecmp(name, "sample_interval_seconds")) {
+        int val = atoi(value);
+        if (val < 1 || val > 3600) {
+            proxy_error("TSDB: sample_interval_seconds must be between 1 and 3600 (1 second to 1 hour), got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.sample_interval_seconds = val;
+        return true;
+    }
+    if (!strcasecmp(name, "raw_window_minutes")) {
+        int val = atoi(value);
+        if (val <= 0) {
+            proxy_error("TSDB: raw_window_minutes must be > 0, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.raw_window_minutes = val;
+        return true;
+    }
+    if (!strcasecmp(name, "rollup_interval_seconds")) {
+        int val = atoi(value);
+        if (val < 1) {
+            proxy_error("TSDB: rollup_interval_seconds must be >= 1, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.rollup_interval_seconds = val;
+        return true;
+    }
+    if (!strcasecmp(name, "max_series")) {
+        int val = atoi(value);
+        if (val < 1) {
+            proxy_error("TSDB: max_series must be >= 1, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.max_series = val;
+        return true;
+    }
+    if (!strcasecmp(name, "max_disk_mb")) {
+        int val = atoi(value);
+        if (val < 1) {
+            proxy_error("TSDB: max_disk_mb must be >= 1, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.max_disk_mb = val;
+        return true;
+    }
+    if (!strcasecmp(name, "digest_topk")) {
+        int val = atoi(value);
+        if (val < 1) {
+            proxy_error("TSDB: digest_topk must be >= 1, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.digest_topk = val;
+        return true;
+    }
+    if (!strcasecmp(name, "monitor-interval_seconds")) {
+        int val = atoi(value);
+        if (val < 1) {
+            proxy_error("TSDB: monitor-interval_seconds must be >= 1, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.monitor_interval_seconds = val;
+        return true;
+    }
+    if (!strcasecmp(name, "monitor-connect_timeout_ms")) {
+        int val = atoi(value);
+        if (val < 1) {
+            proxy_error("TSDB: monitor-connect_timeout_ms must be >= 1, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.monitor_connect_timeout_ms = val;
+        return true;
+    }
+    if (!strcasecmp(name, "monitor-max_concurrent_probes")) {
+        int val = atoi(value);
+        if (val < 1) {
+            proxy_error("TSDB: monitor-max_concurrent_probes must be >= 1, got: %d\n", val);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(config_mutex);
+        config.monitor_max_concurrent_probes = val;
+        return true;
+    }
+
+    // Non-numeric or boolean variables - take lock directly
+    std::lock_guard<std::mutex> lock(config_mutex);
     if (!strcasecmp(name, "enabled")) {
         config.enabled = (!strcasecmp(value, "true") || !strcmp(value, "1"));
         return true;
     }
     if (!strcasecmp(name, "data_dir")) {
         config.data_dir = value;
-        return true;
-    }
-    if (!strcasecmp(name, "retention_hours")) {
-        config.retention_hours = atoi(value);
-        return true;
-    }
-    if (!strcasecmp(name, "sample_interval_seconds")) {
-        config.sample_interval_seconds = atoi(value);
-        return true;
-    }
-    if (!strcasecmp(name, "raw_window_minutes")) {
-        config.raw_window_minutes = atoi(value);
-        return true;
-    }
-    if (!strcasecmp(name, "rollup_interval_seconds")) {
-        config.rollup_interval_seconds = atoi(value);
-        return true;
-    }
-    if (!strcasecmp(name, "max_series")) {
-        config.max_series = atoi(value);
-        return true;
-    }
-    if (!strcasecmp(name, "max_disk_mb")) {
-        config.max_disk_mb = atoi(value);
         return true;
     }
     if (!strcasecmp(name, "fsync_mode")) {
@@ -494,28 +663,12 @@ bool ProxySQL_TSDB::set_variable(const char *name, const char *value) {
         config.digest_mode = value;
         return true;
     }
-    if (!strcasecmp(name, "digest_topk")) {
-        config.digest_topk = atoi(value);
-        return true;
-    }
     if (!strcasecmp(name, "monitor-enabled")) {
         config.monitor_enabled = (!strcasecmp(value, "true") || !strcmp(value, "1"));
         return true;
     }
-    if (!strcasecmp(name, "monitor-interval_seconds")) {
-        config.monitor_interval_seconds = atoi(value);
-        return true;
-    }
-    if (!strcasecmp(name, "monitor-connect_timeout_ms")) {
-        config.monitor_connect_timeout_ms = atoi(value);
-        return true;
-    }
     if (!strcasecmp(name, "monitor-ping_enabled")) {
         config.monitor_ping_enabled = (!strcasecmp(value, "true") || !strcmp(value, "1"));
-        return true;
-    }
-    if (!strcasecmp(name, "monitor-max_concurrent_probes")) {
-        config.monitor_max_concurrent_probes = atoi(value);
         return true;
     }
     if (!strcasecmp(name, "ui-enabled")) {
@@ -537,6 +690,7 @@ bool ProxySQL_TSDB::set_variable(const char *name, const char *value) {
  * @return char* String representation of the value.
  */
 char* ProxySQL_TSDB::get_variable(const char *name) {
+    std::lock_guard<std::mutex> lock(config_mutex);
     char intbuf[64];
     if (!strcasecmp(name, "enabled")) return strdup(config.enabled ? "true" : "false");
     if (!strcasecmp(name, "data_dir")) return strdup(config.data_dir.c_str());
@@ -570,4 +724,9 @@ bool ProxySQL_TSDB::has_variable(const char *name) {
         if (!strcasecmp(name, tsdb_variable_names[i])) return true;
     }
     return false;
+}
+
+bool ProxySQL_TSDB::is_ui_enabled() {
+    std::lock_guard<std::mutex> lock(config_mutex);
+    return config.ui_enabled;
 }

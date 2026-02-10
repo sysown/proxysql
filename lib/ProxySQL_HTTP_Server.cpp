@@ -1,6 +1,8 @@
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
+#include <chrono>       // std::chrono
+#include <sstream>      // std::stringstream
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -448,6 +450,13 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		return MHD_NO;              /* unexpected method */
 
 	if (strcmp(url,"/api/tsdb/status")==0) {
+		// Check if TSDB is enabled and UI is enabled
+		if (!GloTSDB || !GloTSDB->is_ui_enabled()) {
+			response = MHD_create_response_from_buffer(0, (void*)"", MHD_RESPMEM_PERSISTENT);
+			ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
+			MHD_destroy_response(response);
+			return ret;
+		}
 		json j;
 		if (GloTSDB) {
 			ProxySQL_TSDB::status_t status = GloTSDB->get_status();
@@ -464,6 +473,13 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	}
 
 	if (strcmp(url,"/api/tsdb/query")==0) {
+		// Check if TSDB is enabled and UI is enabled (also fixes NULL pointer bug)
+		if (!GloTSDB || !GloTSDB->is_ui_enabled()) {
+			response = MHD_create_response_from_buffer(0, (void*)"", MHD_RESPMEM_PERSISTENT);
+			ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
+			MHD_destroy_response(response);
+			return ret;
+		}
 		const char *metric = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "metric");
 		const char *from_s = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "from");
 		const char *to_s = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "to");
@@ -497,10 +513,85 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	}
 
 	if (strcmp(url,"/ui/")==0 || strcmp(url,"/ui")==0) {
+		// Check if TSDB is enabled and UI is enabled
+		if (!GloTSDB || !GloTSDB->is_ui_enabled()) {
+			response = MHD_create_response_from_buffer(0, (void*)"", MHD_RESPMEM_PERSISTENT);
+			ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
+			MHD_destroy_response(response);
+			return ret;
+		}
 		response = MHD_create_response_from_buffer(strlen(tsdb_ui_html), (void *) tsdb_ui_html, MHD_RESPMEM_PERSISTENT);
 		MHD_add_response_header(response, "Content-Type", "text/html");
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 		MHD_destroy_response (response);
+		return ret;
+	}
+
+	// Prometheus exporter for TSDB data
+	// Syntax: /api/tsdb/metrics?metric=<name>&from=<timestamp>&to=<timestamp>
+	if (strcmp(url,"/api/tsdb/metrics")==0) {
+		if (!GloTSDB || !GloTSDB->is_ui_enabled()) {
+			response = MHD_create_response_from_buffer(0, (void*)"", MHD_RESPMEM_PERSISTENT);
+			ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
+			MHD_destroy_response(response);
+			return ret;
+		}
+
+		// Parse query parameters
+		const char *metric = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "metric");
+		const char *from_s = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "from");
+		const char *to_s = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "to");
+
+		if (!metric) {
+			// No metric specified - return empty
+			response = MHD_create_response_from_buffer(0, (void*)"", MHD_RESPMEM_PERSISTENT);
+			ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+			MHD_destroy_response(response);
+			return ret;
+		}
+
+		// Default time range: last 5 minutes
+		long long to = atoll(to_s ? to_s : "0");
+		long long from = atoll(from_s ? from_s : "0");
+		if (to == 0) {
+			to = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::system_clock::now().time_since_epoch()).count();
+		}
+		if (from == 0) {
+			from = to - 300000; // 5 minutes
+		}
+
+		// Query TSDB
+		std::map<std::string, std::string> labels;
+		auto query_results = GloTSDB->query(metric, labels, from, to, 0, "");
+
+		// Format as Prometheus text format
+		std::stringstream output;
+		for (const auto& res : query_results) {
+			// Build label string
+			std::string label_str = "";
+			if (!res.labels.empty()) {
+				label_str = "{";
+				bool first = true;
+				for (const auto& lbl : res.labels) {
+					if (!first) label_str += ",";
+					label_str += lbl.first + "=\"" + lbl.second + "\"";
+					first = false;
+				}
+				label_str += "}";
+			}
+
+			// Output each point
+			for (const auto& pt : res.points) {
+				output << metric << label_str << " " << pt.value << " " << pt.timestamp << "\n";
+			}
+		}
+
+		string s = output.str();
+		response = MHD_create_response_from_buffer(s.length(), (void*)s.c_str(), MHD_RESPMEM_MUST_COPY);
+		MHD_add_response_header(response, "Content-Type", "text/plain");
+		ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+		MHD_destroy_response(response);
 		return ret;
 	}
 
