@@ -764,13 +764,13 @@ int calculate_percentile_from_histogram(
 	const std::vector<int>& thresholds,
 	double percentile
 ) {
-	int total = 0;
+	long long total = 0;
 	for (int b : buckets) total += b;
 
 	if (total == 0) return 0;
 
-	int target = (int)(total * percentile);
-	int cumulative = 0;
+	long long target = (long long)(total * percentile);
+	long long cumulative = 0;
 
 	for (size_t i = 0; i < buckets.size() && i < thresholds.size(); i++) {
 		cumulative += buckets[i];

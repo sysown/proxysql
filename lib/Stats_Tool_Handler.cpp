@@ -1389,8 +1389,13 @@ json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
 		size_t colon = server.find(':');
 		if (colon != std::string::npos) {
 			std::string host = server.substr(0, colon);
-			std::string port = server.substr(colon + 1);
-			sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + port;
+			std::string port_str = server.substr(colon + 1);
+			try {
+				int port = std::stoi(port_str);
+				sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + std::to_string(port);
+			} catch (...) {
+				// Invalid port - skip server filter
+			}
 		}
 	}
 	if (!status.empty()) {
@@ -2556,8 +2561,13 @@ json Stats_Tool_Handler::handle_show_connection_history(const json& arguments) {
 			size_t colon = server.find(':');
 			if (colon != std::string::npos) {
 				std::string host = server.substr(0, colon);
-				std::string port = server.substr(colon + 1);
-				sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + port;
+				std::string port_str = server.substr(colon + 1);
+				try {
+					int port = std::stoi(port_str);
+					sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + std::to_string(port);
+				} catch (...) {
+					// Invalid port - skip server filter
+				}
 			}
 		}
 

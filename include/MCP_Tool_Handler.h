@@ -9,6 +9,8 @@
 using json = nlohmann::json;
 #define PROXYJSON
 
+class SQLite3_result;
+
 /**
  * @brief Base class for all MCP Tool Handlers
  *

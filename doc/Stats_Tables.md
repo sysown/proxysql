@@ -507,7 +507,7 @@ This table uses a key-value format where each row is a different metric. The var
 | `MySQL_Logger_circularBufferEventsDroppedCount` | Events dropped from circular buffer | Counter |
 | `MySQL_Logger_circularBufferEventsSize` | Current circular buffer size | Gauge |
 
-**Source References** {#source-references}
+#### Source References
 
 Variables are aggregated from these code locations:
 - `MySQL_Threads_Handler::SQL3_GlobalStatus()` in `lib/MySQL_Thread.cpp`

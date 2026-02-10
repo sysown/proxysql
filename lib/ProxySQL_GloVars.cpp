@@ -227,6 +227,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #ifdef PROXYSQLCLICKHOUSE
 	global.clickhouse_server=false;
 #endif /* PROXYSQLCLICKHOUSE */
+#ifdef PROXYSQLGENAI
+	global.genai=false;
+#endif /* PROXYSQLGENAI */
 	global.gr_bootstrap_mode = 0;
 	global.gr_bootstrap_uri = nullptr;
 	global.gr_bootstrap_account = nullptr;
