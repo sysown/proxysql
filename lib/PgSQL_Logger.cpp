@@ -1028,7 +1028,6 @@ void PgSQL_Logger::flush() {
  	const uint64_t current_time = monotonic_time();
 
  	// eventslog
- 	bool flush_eventslog = false;
  	if (is_events_logfile_open()) {
  		if (log_ctx->events.size() > 0 &&
 			(current_time - log_ctx->events.get_last_flush_time()) > static_cast<uint64_t>(pgsql_thread___eventslog_flush_timeout) * 1000) {
@@ -1046,7 +1045,6 @@ void PgSQL_Logger::flush() {
  	}
 
  	// auditlogs
- 	bool flush_auditlog = false;
  	if (is_audit_logfile_open()) {
  		if (log_ctx->audit.size() > 0 &&
 			(current_time - log_ctx->audit.get_last_flush_time()) > static_cast<uint64_t>(pgsql_thread___auditlog_flush_timeout) * 1000) {

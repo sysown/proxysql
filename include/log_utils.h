@@ -121,7 +121,8 @@ public:
 	/**
 	 * @brief Flushes the buffer to an output file stream.
 	 * 
-	 * Writes the entire contents of the buffer to the provided file stream and resets the buffer.
+	 * Writes the entire contents of the buffer to the provided file stream.
+	 * The caller is responsible for resetting the buffer after flushing.
 	 * 
 	 * @param logfile The output file stream to write to.
 	 */

@@ -94,11 +94,11 @@ bool flush_and_rotate(
 		buffer.flush_to_file(logfile);
 		current_log_size += buffer.size();
 		flushed = true;
+		logfile->flush();
 		if (current_log_size > max_log_file_size && rotate_fn) {
 			rotate_fn();
 			current_log_size = 0;
 		}
-		logfile->flush();
 	}
 	unlock_fn();
 	if (flushed) {

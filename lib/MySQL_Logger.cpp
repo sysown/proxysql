@@ -1355,6 +1355,7 @@ void MySQL_Logger::events_open_log_unlocked() {
 			metaEvent.write(&log_ctx->events, nullptr);
  			log_ctx->events.flush_to_file(events.logfile);
  			events.current_log_size += log_ctx->events.size();
+			log_ctx->events.reset(monotonic_time());
 		}
 	}
 	catch (const std::ofstream::failure&) {
