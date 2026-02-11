@@ -365,8 +365,13 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_default_log",
 	(char *)"eventslog_format",
 	(char *)"eventslog_stmt_parameters",
+	(char *)"eventslog_flush_timeout",
+ 	(char *)"eventslog_flush_size",
+ 	(char *)"eventslog_rate_limit",
 	(char *)"auditlog_filename",
 	(char *)"auditlog_filesize",
+	(char *)"auditlog_flush_timeout",
+ 	(char *)"auditlog_flush_size",
 	//(char *)"default_charset", // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 	(char *)"handle_unknown_charset",
 	(char *)"free_connections_pct",
@@ -1130,8 +1135,13 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.eventslog_default_log=0;
 	variables.eventslog_format=1;
 	variables.eventslog_stmt_parameters=0;
+	variables.eventslog_flush_timeout=1000;
+ 	variables.eventslog_flush_size=4096;
+ 	variables.eventslog_rate_limit=1;
 	variables.auditlog_filename=strdup((char *)"");
 	variables.auditlog_filesize=100*1024*1024;
+	variables.auditlog_flush_timeout=1000;
+ 	variables.auditlog_flush_size=4096;
 	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
 	// major upgrade in 2.0.0
 	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
@@ -1802,6 +1812,8 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				// if we are switching format, we need to switch file too
 				if (GloMyLogger) {
 					proxy_info("Switching query logging format from %d to %d\n", variables.eventslog_format , intv);
+					// write existing logs (if any) to file before switching the file
+					GloMyLogger->flush();
 					GloMyLogger->flush_log();
 				}
 				variables.eventslog_format=intv;
@@ -1811,6 +1823,63 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"eventslog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("mysql-eventslog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("mysql-eventslog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_rate_limit")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 1) {
+ 			variables.eventslog_rate_limit=intv;
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"auditlog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("mysql-auditlog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+	if (!strcasecmp(name,"auditlog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("mysql-auditlog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
 	if (!strcasecmp(name,"default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -2372,6 +2441,11 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
+		VariablesPointers_int["eventslog_flush_timeout"] = make_tuple(&variables.eventslog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["eventslog_flush_size"] = make_tuple(&variables.eventslog_flush_size, 0, 0, true);
+ 		VariablesPointers_int["eventslog_rate_limit"] = make_tuple(&variables.eventslog_rate_limit, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_timeout"] = make_tuple(&variables.auditlog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_size"] = make_tuple(&variables.auditlog_flush_size, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
 		VariablesPointers_int["select_version_forwarding"] = make_tuple(&variables.select_version_forwarding, 0, 3, false);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
@@ -4362,9 +4436,14 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(eventslog_default_log);
 	REFRESH_VARIABLE_INT(eventslog_format);
 	REFRESH_VARIABLE_INT(eventslog_stmt_parameters);
+	REFRESH_VARIABLE_INT(eventslog_flush_timeout);
+ 	REFRESH_VARIABLE_INT(eventslog_flush_size);
+ 	REFRESH_VARIABLE_INT(eventslog_rate_limit);
 	REFRESH_VARIABLE_CHAR(eventslog_filename);
 	REFRESH_VARIABLE_INT(auditlog_filesize);
 	REFRESH_VARIABLE_CHAR(auditlog_filename);
+	REFRESH_VARIABLE_INT(auditlog_flush_timeout);
+ 	REFRESH_VARIABLE_INT(auditlog_flush_size);
 	GloMyLogger->events_set_base_filename(); // both filename and filesize are set here
 	GloMyLogger->audit_set_base_filename(); // both filename and filesize are set here
 	REFRESH_VARIABLE_CHAR(default_schema);

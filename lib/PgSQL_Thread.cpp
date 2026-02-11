@@ -293,8 +293,13 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"eventslog_filesize",
 	(char*)"eventslog_default_log",
 	(char*)"eventslog_format",
+	(char*)"eventslog_flush_timeout",
+ 	(char*)"eventslog_flush_size",
+ 	(char*)"eventslog_rate_limit",
 	(char*)"auditlog_filename",
 	(char*)"auditlog_filesize",
+	(char*)"auditlog_flush_timeout",
+ 	(char*)"auditlog_flush_size",
 	//(char *)"default_charset", // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 	(char*)"handle_unknown_charset",
 	(char*)"free_connections_pct",
@@ -1025,8 +1030,13 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.eventslog_filesize = 100 * 1024 * 1024;
 	variables.eventslog_default_log = 0;
 	variables.eventslog_format = 1;
+	variables.eventslog_flush_timeout = 1000;
+ 	variables.eventslog_flush_size = 4096;
+ 	variables.eventslog_rate_limit = 1;
 	variables.auditlog_filename = strdup((char*)"");
 	variables.auditlog_filesize = 100 * 1024 * 1024;
+	variables.auditlog_flush_timeout = 1000;
+ 	variables.auditlog_flush_size = 4096;
 	variables.poll_timeout = 2000;
 	variables.poll_timeout_on_failure = 100;
 	variables.have_compress = true;
@@ -1648,6 +1658,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 				// if we are switching format, we need to switch file too
 				if (GloPgSQL_Logger) {
 					proxy_info("Switching query logging format from %d to %d\n", variables.eventslog_format, intv);
+					// write existing logs (if any) to file before switching the file
+ 					GloPgSQL_Logger->flush();
 					GloPgSQL_Logger->flush_log();
 				}
 				variables.eventslog_format = intv;
@@ -1658,6 +1670,63 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"eventslog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("pgsql-eventslog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.eventslog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("pgsql-eventslog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"eventslog_rate_limit")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 1) {
+ 			variables.eventslog_rate_limit=intv;
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"auditlog_flush_timeout")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_timeout=intv;
+			if (intv > 5 * 60 * 1000) {
+ 				proxy_warning("pgsql-auditlog_flush_timeout is set to a high value: %dms\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
+ 	if (!strcasecmp(name,"auditlog_flush_size")) {
+ 		int intv=atoi(value);
+ 		if (intv >= 0) {
+ 			variables.auditlog_flush_size=intv;
+ 			if (intv > 10 * 1024 * 1024) {
+ 				proxy_warning("pgsql-auditlog_flush_size is set to a high value: %d\n", intv);
+ 			}
+ 			return true;
+ 		} else {
+ 			return false;
+ 		}
+ 	}
 	if (!strcasecmp(name, "default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -2166,6 +2235,11 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
+		VariablesPointers_int["eventslog_flush_timeout"] = make_tuple(&variables.eventslog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["eventslog_flush_size"] = make_tuple(&variables.eventslog_flush_size, 0, 0, true);
+ 		VariablesPointers_int["eventslog_rate_limit"] = make_tuple(&variables.eventslog_rate_limit, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_timeout"] = make_tuple(&variables.auditlog_flush_timeout, 0, 0, true);
+ 		VariablesPointers_int["auditlog_flush_size"] = make_tuple(&variables.auditlog_flush_size, 0, 0, true);
 		VariablesPointers_int["wait_timeout"] = make_tuple(&variables.wait_timeout, 0, 0, true);
 		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
 
@@ -3911,10 +3985,15 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
 	pgsql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
 	pgsql_thread___eventslog_format = GloPTH->get_variable_int((char*)"eventslog_format");
+	pgsql_thread___eventslog_flush_timeout = GloPTH->get_variable_int((char*)"eventslog_flush_timeout");
+ 	pgsql_thread___eventslog_flush_size = GloPTH->get_variable_int((char*)"eventslog_flush_size");
+ 	pgsql_thread___eventslog_rate_limit = GloPTH->get_variable_int((char*)"eventslog_rate_limit");
 	pgsql_thread___eventslog_filename = GloPTH->get_variable_string((char*)"eventslog_filename");
 	if (pgsql_thread___auditlog_filename) free(pgsql_thread___auditlog_filename);
 	pgsql_thread___auditlog_filesize = GloPTH->get_variable_int((char*)"auditlog_filesize");
 	pgsql_thread___auditlog_filename = GloPTH->get_variable_string((char*)"auditlog_filename");
+	pgsql_thread___auditlog_flush_timeout = GloPTH->get_variable_int((char*)"auditlog_flush_timeout");
+ 	pgsql_thread___auditlog_flush_size = GloPTH->get_variable_int((char*)"auditlog_flush_size");
 
 	GloPgSQL_Logger->events_set_base_filename(); // both filename and filesize are set here
 	GloPgSQL_Logger->audit_set_base_filename(); // both filename and filesize are set here

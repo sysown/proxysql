@@ -11,6 +11,8 @@
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
+class LogBuffer;
+class LogBufferThreadContext;
 class MySQL_Logger;
 
 struct p_ml_counter {
@@ -118,50 +120,48 @@ public:
 	~MySQL_Event();
 
 	/**
-	 * @brief Writes the event data to a file stream.
-	 * @param f A pointer to the file stream.
-	 * @param sess A pointer to the MySQL_Session object.
-	 * @return The total number of bytes written.
-	 *
-	 * This function writes the event data to the specified file stream based on the event type and the configured log format.
-	 */
-	uint64_t write(std::fstream* f, MySQL_Session* sess);
+	 * @brief Writes the event data to a LogBuffer.
+ 	 * @param f A pointer to LogBuffer to write to.
+ 	 * @param sess A pointer to the MySQL_Session object.
+ 	 * @return The total number of bytes written.
+ 	 *
+ 	 * This function writes the event data to the specified LogBuffer based on the event type and the configured log format.
+ 	 */
+ 	uint64_t write(LogBuffer* f, MySQL_Session* sess);
 
 	/**
-	 * @brief Writes the event data in binary format (format 1) to a file stream.
-	 * @param f A pointer to the file stream to write to. Must not be NULL.
-	 * @return The total number of bytes written to the stream.
-	 *
-	 * This function serializes the event data into a binary format according to the MySQL event log format 1 specification.
-	 * It encodes lengths using MySQL's length encoding scheme.
-	 * The function writes the event type, thread ID, username, schema name, client address, hostgroup ID (if available), server address (if available), timestamps, client statement ID (if applicable), affected rows, last insert ID, rows sent, query digest, and query string to the file stream.
-	 * The function writes all fields as defined by the MySQL event log format.
-	 * It handles variable-length fields using MySQL's length encoding, which means that the length of each field is written before the field data itself.
-	 * The function carefully handles potential errors during file writing operations.
-	 */
-	uint64_t write_query_format_1(std::fstream* f);
-
+ 	 * @brief Writes the event data in binary format (format 1) to a LogBuffer.
+ 	 * @param f A pointer to the LogBuffer to write to.
+ 	 * @return The total number of bytes written.
+ 	 *
+ 	 * This function serializes the event data into a binary format according to the MySQL event log format 1 specification.
+ 	 * It encodes lengths using MySQL's length encoding scheme.
+ 	 * The function writes the event type, thread ID, username, schema name, client address, hostgroup ID (if available), server address (if available), timestamps, client statement ID (if applicable), affected rows, last insert ID, rows sent, query digest, and query string to the LogBuffer.
+ 	 * The function writes all fields as defined by the MySQL event log format.
+ 	 * It handles variable-length fields using MySQL's length encoding, which means that the length of each field is written before the field data itself.
+ 	 */
+ 	uint64_t write_query_format_1(LogBuffer* f);
 
 	/**
-	 * @brief Writes the event data in JSON format (format 2) to a file stream.
-	 * @param f A pointer to the file stream to write to. Must not be NULL.
-	 * @return The total number of bytes written to the stream (always 0 in the current implementation).
+	 * @brief Writes the event data in JSON format (format 2) to a LogBuffer.
+ 	 * @param f A pointer to the LogBuffer to write to. Must not be NULL.
+ 	 * @return The total number of bytes written (always 0 in the current implementation).
 	 *
 	 * This function serializes the event data into a JSON format.
 	 * It converts various data fields into a JSON object and writes this object to the file stream.
 	 * The function uses the nlohmann::json library for JSON serialization.
 	 * This function currently always returns 0.
 	 * The function constructs a JSON object containing relevant event information such as the hostgroup ID, thread ID, event type, username, schema name, client and server addresses, affected rows, last insert ID, rows sent, query string, timestamps, query digest, and client statement ID (if applicable).
-	 * After constructing the JSON object, it serializes it into a string using the `dump()` method of the nlohmann::json library and writes the resulting string to the output file stream.
+	 * After constructing the JSON object, it serializes it into a string using the `dump()` method of the nlohmann::json library and writes the resulting string to the LogBuffer.
 	 */
-	uint64_t write_query_format_2_json(std::fstream* f);
+	uint64_t write_query_format_2_json(LogBuffer* f);
 
 	/**
-	 * @brief Writes authentication-related event data to a file stream.
-	 * @param f A pointer to the file stream.
+	 * @brief Writes authentication-related event data to a LogBuffer.
+ 	 * @param f A pointer to the LogBuffer to write to.
 	 * @param sess A pointer to the MySQL_Session object.
 	 */
-	void write_auth(std::fstream* f, MySQL_Session* sess);
+	void write_auth(LogBuffer* f, MySQL_Session* sess);
 
 	/**
 	 * @brief Sets the client statement ID for the event.
@@ -333,8 +333,10 @@ private:
 		char* base_filename;       ///< Base filename for event log files. Memory managed by the class.
 		char* datadir;             ///< Directory for event log files. Memory managed by the class.
 		unsigned int log_file_id;  ///< ID of the current event log file.
+		unsigned int current_log_size; ///< Current size of an event log file in bytes.
 		unsigned int max_log_file_size; ///< Maximum size of an event log file in bytes.
 		std::fstream* logfile;     ///< File stream for event logging.
+		std::atomic<bool> logfile_open{false}; ///< Atomic flag indicating if the logfile is currently open.
 	} events;
 
 	/**
@@ -345,8 +347,10 @@ private:
 		char* base_filename;       ///< Base filename for audit log files. Memory managed by the class.
 		char* datadir;             ///< Directory for audit log files. Memory managed by the class.
 		unsigned int log_file_id;  ///< ID of the current audit log file.
+		unsigned int current_log_size; ///< Current size of an audit log file in bytes.
 		unsigned int max_log_file_size; ///< Maximum size of an audit log file in bytes.
 		std::fstream* logfile;     ///< File stream for audit logging.
+		std::atomic<bool> logfile_open{false}; ///< Atomic flag indicating if the logfile is currently open.
 	} audit;
 
 	/**
@@ -394,6 +398,40 @@ private:
 #else
 	rwlock_t rwlock;             ///< rwlock for thread safety.
 #endif
+
+	// Map to store per-thread logging contexts (one context per thread handles both events and audit)
+ 	std::unordered_map<pthread_t, std::unique_ptr<LogBufferThreadContext>> log_thread_contexts;
+ 	std::mutex log_thread_contexts_lock; ///< Mutex to protect the context map
+
+ 	/**
+ 	 * @brief Retrieves the logging context for the current thread.
+ 	 * @return Pointer to the thread's LogBufferThreadContext containing both event and audit state.
+ 	 */
+ 	LogBufferThreadContext* get_log_thread_context();
+
+ 	/**
+ 	 * @brief Checks if the events logfile is open.
+ 	 * @return True if the logfile is open, false otherwise.
+ 	 */
+ 	bool is_events_logfile_open() const;
+
+ 	/**
+ 	 * @brief Sets the open state of the events logfile.
+ 	 * @param open The new state (true for open, false for closed).
+ 	 */
+ 	void set_events_logfile_open(bool open);
+
+ 	/**
+ 	 * @brief Checks if the audit logfile is open.
+ 	 * @return True if the logfile is open, false otherwise.
+ 	 */
+ 	bool is_audit_logfile_open() const;
+
+ 	/**
+ 	 * @brief Sets the open state of the audit logfile.
+ 	 * @param open The new state (true for open, false for closed).
+ 	 */
+ 	void set_audit_logfile_open(bool open);
 
 	/**
 	 * @brief Closes the event log file.  This function should only be called while holding the write lock.
