@@ -72,7 +72,7 @@ NOTE: You can click on the variable name to jump to its definition
 | [mysql-eventslog_format](#mysql-eventslog_format)                                                       | 1                           |
 | [mysql-eventslog_stmt_parameters](#mysql-eventslog_stmt_parameters)                                     | 0                           |
 | [mysql-eventslog_flush_timeout](#mysql-eventslog_flush_timeout)                                         | 1000                        |
-| [mysql-eventslog_flush_size](#mysql-eventslog_flush_size)                                               | 256                         |
+| [mysql-eventslog_flush_size](#mysql-eventslog_flush_size)                                               | 4096                        |
 | [mysql-eventslog_rate_limit](#mysql-eventslog_rate_limit)                                               | 1                           |
 | [mysql-firewall_whitelist_enabled](#mysql-firewall_whitelist_enabled)                                   | false                       |
 | [mysql-firewall_whitelist_errormsg](#mysql-firewall_whitelist_errormsg)                                 | Firewall blocked this query |
@@ -1209,7 +1209,7 @@ the presence of large blobs, this variable controls if parameters need to be log
 | **Permitted Values** | **Type**    | Integer (milliseconds)        |
 |                      | **Default** | 1000                          |
 |                      | **Minimum** | 0                             |
-|                      | **Maximum** | 60000                         |
+|                      | **Maximum** |                               |
 
 This variable defines the flush timeout to write the buffered event log entries to the 
 events log file (see [Query Logging][34]). The default value is 1000 (1 second).
@@ -1221,13 +1221,13 @@ events log file (see [Query Logging][34]). The default value is 1000 (1 second).
 | **System Variable**  | **Name**    | mysql-eventslog_flush_size |
 |                      | **Dynamic** | Yes                        |
 | **Permitted Values** | **Type**    | Integer (bytes)            |
-|                      | **Default** | 256                        |
+|                      | **Default** | 4096                       |
 |                      | **Minimum** | 0                          |
-|                      | **Maximum** | 1048576                    |
+|                      | **Maximum** |                            |
 
 This variable defines the flush size to write the buffered event log entries to the
 events log file (see [Query Logging][34]). If the size of the buffer goes beyond this value,
-the contents of the buffer are written to the file. The default value is 256.
+the contents of the buffer are written to the file. The default value is 4096.
 
 ### `mysql-eventslog_rate_limit`
 
@@ -1237,7 +1237,7 @@ the contents of the buffer are written to the file. The default value is 256.
 |                      | **Dynamic** | Yes                        |
 | **Permitted Values** | **Type**    | Integer                    |
 |                      | **Default** | 1                          |
-|                      | **Minimum** |                            |
+|                      | **Minimum** | 1                          |
 |                      | **Maximum** |                            |
 
 This variable defines the sampling rate for event logs (see [Query Logging][34]). To log all

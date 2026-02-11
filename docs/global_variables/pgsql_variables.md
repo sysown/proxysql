@@ -46,7 +46,7 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-eventslog_filesize](#pgsql-eventslog_filesize)                 | 104857600     |
 | [pgsql-eventslog_format](#pgsql-eventslog_format)                     | 1             |
 | [pgsql-eventslog_flush_timeout](#pgsql-eventslog_flush_timeout)       | 1000          |
-| [pgsql-eventslog_flush_size](#pgsql-eventslog_flush_size)             | 256           |
+| [pgsql-eventslog_flush_size](#pgsql-eventslog_flush_size)             | 4096          |
 | [pgsql-eventslog_rate_limit](#pgsql-eventslog_rate_limit)             | 1             |
 | [pgsql-firewall_whitelist_enabled](#pgsql-firewall_whitelist_enabled) | false         |
 | [pgsql-free_connections_pct](#pgsql-free_connections_pct)             | 10            |
@@ -508,7 +508,7 @@ Timeout for writting logs to the PostgreSQL events log.
 | **Permitted Values** | **Type**    | Integer (milliseconds)        |
 |                      | **Default** | 1000                          |
 |                      | **Minimum** | 0                             |
-|                      | **Maximum** | 60000                         |
+|                      | **Maximum** |                               |
 
 **Description**: This variable defines the flush timeout to write the buffered event log entries to the 
 events log file. The default value is 1000 (1 second).
@@ -522,13 +522,13 @@ Size threshold for writting logs to the PostgreSQL events log.
 | **System Variable**  | **Name**    | pgsql-eventslog_flush_size |
 |                      | **Dynamic** | Yes                        |
 | **Permitted Values** | **Type**    | Integer (bytes)            |
-|                      | **Default** | 256                        |
+|                      | **Default** | 4096                       |
 |                      | **Minimum** | 0                          |
-|                      | **Maximum** | 1048576                    |
+|                      | **Maximum** |                            |
 
 **Description**: This variable defines the flush size to write the buffered event log entries to the
 events log file. If the size of the buffer goes beyond this value,
-the contents of the buffer are written to the file. The default value is 256.
+the contents of the buffer are written to the file. The default value is 4096.
 
 ### `pgsql-eventslog_rate_limit`
 
@@ -540,7 +540,7 @@ Sampling rate for the PostgreSQL events log.
 |                      | **Dynamic** | Yes                        |
 | **Permitted Values** | **Type**    | Integer                    |
 |                      | **Default** | 1                          |
-|                      | **Minimum** |                            |
+|                      | **Minimum** | 1                          |
 |                      | **Maximum** |                            |
 
 **Description**: This variable defines the sampling rate for event logs. To log all
