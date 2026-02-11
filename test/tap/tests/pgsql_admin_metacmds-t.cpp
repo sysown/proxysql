@@ -134,6 +134,21 @@ void test_psql_version_and_info(const CommandLine& cl) {
 	ok(has_connection_info, "\\conninfo: returned connection information");
 }
 
+void test_psql_buffer_overflow_protection(const CommandLine& cl) {
+	// Test for potential buffer overflow with many quotes
+	std::string long_pattern = std::string(100, '\'');
+	std::string cmd = build_psql_cmd(cl, ("\\dt " + long_pattern).c_str());
+	std::string output = exec(cmd.c_str());
+
+	diag("Buffer overflow test output: %s", output.c_str());
+
+	// Should either return no results or error gracefully, not crash
+	bool handled_safely = output.find("ERROR") != std::string::npos ||
+		output.find("No matching relations") != std::string::npos ||
+		output.find("Did not find any relation") != std::string::npos;
+	ok(handled_safely, "Buffer overflow protection: long pattern with quotes handled safely");
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -156,7 +171,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	plan(9);
+	plan(10);
 
 	// Test connection first
 	std::string test_cmd = build_psql_cmd(cl, "\\conninfo");
@@ -178,6 +193,6 @@ int main(int argc, char** argv) {
 	test_psql_list_all_relations(cl);
 	test_psql_sql_injection_protection(cl);
 	test_psql_version_and_info(cl);
-
+	test_psql_buffer_overflow_protection(cl);
 	return exit_status();
 }

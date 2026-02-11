@@ -337,6 +337,8 @@ static bool extract_psql_pattern(const char* query, char* pattern_buf, size_t bu
 	if (like_pos) {
 		like_pos += 4; // Skip "LIKE"
 		while (*like_pos && *like_pos == ' ') like_pos++;
+		// Skip opening quote if present
+		if (*like_pos == '\'') like_pos++;
 		pattern = like_pos;
 	}
 	// Check for OPERATOR operator
