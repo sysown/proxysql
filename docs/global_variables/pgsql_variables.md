@@ -15,7 +15,7 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-auditlog_filename](#pgsql-auditlog_filename)                   | NULL          |
 | [pgsql-auditlog_filesize](#pgsql-auditlog_filesize)                   | 104857600     |
 | [pgsql-auditlog_flush_timeout](#pgsql-auditlog_flush_timeout)         | 1000          |
-| [pgsql-auditlog_flush_size](#pgsql-auditlog_flush_size)               | 256           |
+| [pgsql-auditlog_flush_size](#pgsql-auditlog_flush_size)               | 4096          |
 | [pgsql-aurora_max_lag_ms_only_read_from_replicas](#pgsql-aurora_max_lag_ms_only_read_from_replicas) | 2 |
 | [pgsql-authentication_method](#pgsql-authentication_method)           | 3             |
 | [pgsql-auto_increment_delay_multiplex](#pgsql-auto_increment_delay_multiplex) | 5     |
@@ -152,7 +152,7 @@ Timeout for writting logs to PostgreSQL audit log file.
 | **Permitted Values** | **Type**    | Integer (milliseconds)       |
 |                      | **Default** | 1000                         |
 |                      | **Minimum** | 0                            |
-|                      | **Maximum** | 60000                        |
+|                      | **Maximum** |                              |
 
 **Description**: Specifies the timeout to write the buffered audit log entries to the 
 audit log file. The default value is 1000 (1 second).
@@ -166,13 +166,13 @@ Size threshold for writting logs to PostgreSQL audit log file.
 | **System Variable**  | **Name**    | pgsql-auditlog_flush_size  |
 |                      | **Dynamic** | Yes                        |
 | **Permitted Values** | **Type**    | Integer (bytes)            |
-|                      | **Default** | 256                        |
+|                      | **Default** | 4096                       |
 |                      | **Minimum** | 0                          |
-|                      | **Maximum** | 1048576                    |
+|                      | **Maximum** |                            |
 
 **Description**: This variable defines the flush size to write the buffered audit log entries to the
 audit log file. If the size of the buffer goes beyond this value,
-the contents of the buffer are written to the file. The default value is 256.
+the contents of the buffer are written to the file. The default value is 4096.
 
 ### `pgsql-aurora_max_lag_ms_only_read_from_replicas`
 

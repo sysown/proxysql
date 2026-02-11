@@ -16,7 +16,7 @@ NOTE: You can click on the variable name to jump to its definition
 | [mysql-auditlog_filename](#mysql-auditlog_filename)                                                     |                             |
 | [mysql-auditlog_filesize](#mysql-auditlog_filesize)                                                     | 100MB                       |
 | [mysql-auditlog_flush_timeout](#mysql-auditlog_flush_timeout)                                           | 1000                        |
-| [mysql-auditlog_flush_size](#mysql-auditlog_flush_size)                                                 | 256                         |
+| [mysql-auditlog_flush_size](#mysql-auditlog_flush_size)                                                 | 4096                        |
 | [mysql-aurora_max_lag_ms_only_read_from_replicas](#mysql-aurora_max_lag_ms_only_read_from_replicas)     | 2                           |
 | [mysql-auto_increment_delay_multiplex](#mysql-auto_increment_delay_multiplex)                           | 5                           |
 | [mysql-auto_increment_delay_multiplex_timeout_ms](#mysql-auto_increment_delay_multiplex_timeout_ms)     | 10000                       |
@@ -232,7 +232,7 @@ current file will be closed and a new file will be created. The default value is
 | **Permitted Values** | **Type**    | Integer (milliseconds)       |
 |                      | **Default** | 1000                         |
 |                      | **Minimum** | 0                            |
-|                      | **Maximum** | 60000                        |
+|                      | **Maximum** |                              |
 
 This variable defines the flush timeout to write the buffered audit log entries to the 
 audit log file (see [Audit Log][3]). The default value is 1000 (1 second).
@@ -244,13 +244,13 @@ audit log file (see [Audit Log][3]). The default value is 1000 (1 second).
 | **System Variable**  | **Name**    | mysql-auditlog_flush_size  |
 |                      | **Dynamic** | Yes                        |
 | **Permitted Values** | **Type**    | Integer (bytes)            |
-|                      | **Default** | 256                        |
+|                      | **Default** | 4096                       |
 |                      | **Minimum** | 0                          |
-|                      | **Maximum** | 1048576                    |
+|                      | **Maximum** |                            |
 
 This variable defines the flush size to write the buffered audit log entries to the
 audit log file (see [Audit Log][3]). If the size of the buffer goes beyond this value,
-the contents of the buffer are written to the file. The default value is 256.
+the contents of the buffer are written to the file. The default value is 4096.
 
 ### `mysql-aurora_max_lag_ms_only_read_from_replicas`
 
