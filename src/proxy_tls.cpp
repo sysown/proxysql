@@ -216,9 +216,9 @@ X509 * proxy_read_x509(const char *filen, bool bootstrap, std::string& msg) {
 
 // return 0 un success
 int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, bool bootstrap, std::string& msg) {
-	X509 *x1;
-	X509 *x2;
-	EVP_PKEY *pk;
+	X509 *x1 = NULL;
+	X509 *x2 = NULL;
+	EVP_PKEY *pk = NULL;
 
 	// relative path to datadir of ssl files
 	const char * ssl_key_rp = (const char *)"proxysql-key.pem";
@@ -302,7 +302,7 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 			}
 			if (EVP_PKEY_generate(ctx, &pk) <= 0) {
-				proxy_error("Unable to generate RSA key\n");
+				proxy_error("Unable to generate RSA key: %s\n", ERR_error_string(ERR_get_error(), NULL));
 				EVP_PKEY_CTX_free(ctx);
 				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 			}
@@ -469,4 +469,3 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 	BIO_free(bio_err);
 	return ret;
 }
-
