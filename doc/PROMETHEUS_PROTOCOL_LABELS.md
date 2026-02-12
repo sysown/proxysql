@@ -46,7 +46,7 @@ This follows prometheus best practices where metrics that represent different en
 
 | File | Lines Changed | Description |
 |------|--------------|-------------|
-| `lib/MySQL_HostGroups_Manager.cpp` | +25/-10 | Added `protocol="mysql"` labels to PgHGM metrics |
+| `lib/MySQL_HostGroups_Manager.cpp` | +25/-10 | Added `protocol="mysql"` labels to MyHGM metrics |
 | `lib/MySQL_Thread.cpp` | +340/-71 | Added `protocol="mysql"` labels to 65 MTH metrics |
 | `lib/PgSQL_HostGroups_Manager.cpp` | +25/-10 | Added `protocol="pgsql"` labels to PgHGM metrics |
 | `lib/PgSQL_Thread.cpp` | +310/-42 | Added `protocol="pgsql"` labels to 60 PTH metrics |
