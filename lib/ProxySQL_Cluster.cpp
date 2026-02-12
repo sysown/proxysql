@@ -2221,18 +2221,18 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_hostgroup_attributes table\n");
 						proxy_info("Cluster: Writing mysql_hostgroup_attributes table\n");
 						GloAdmin->admindb->execute("DELETE FROM mysql_hostgroup_attributes");
-						{
-							const char* q = (const char*)"INSERT INTO mysql_hostgroup_attributes ( "
-								"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
-								"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
-								"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
-								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-							sqlite3_stmt *statement1 = NULL;
-							int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
-							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							{
+								const char* q = (const char*)"INSERT INTO mysql_hostgroup_attributes ( "
+									"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
+									"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
+									"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
+									"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+								auto [rc, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+								ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								sqlite3_stmt *statement1 = statement1_unique.get();
 
-							while ((row = mysql_fetch_row(results[5]))) {
-								rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_id
+								while ((row = mysql_fetch_row(results[5]))) {
+									rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_id
 								rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_num_online_servers
 								rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // autocommit
 								rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // free_connections_pct
@@ -2244,12 +2244,11 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 								rc=(*proxy_sqlite3_bind_text)(statement1, 10,row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_settings
 								rc=(*proxy_sqlite3_bind_text)(statement1, 11, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // servers_defaults
 								rc=(*proxy_sqlite3_bind_text)(statement1, 12, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
-								SAFE_SQLITE3_STEP2(statement1);
-								rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-								rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									SAFE_SQLITE3_STEP2(statement1);
+									rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								}
 							}
-							(*proxy_sqlite3_finalize)(statement1);
-						}
 
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_hostgroup_attributes'\n");
 						proxy_info("Dumping fetched 'mysql_hostgroup_attributes'\n");
@@ -2261,14 +2260,14 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_servers_ssl_params table\n");
 						proxy_info("Cluster: Writing mysql_servers_ssl_params table\n");
 						GloAdmin->admindb->execute("DELETE FROM mysql_servers_ssl_params");
-						{
-							const char* q = (const char*)"INSERT INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-							sqlite3_stmt *statement1 = NULL;
-							int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
-							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							{
+								const char* q = (const char*)"INSERT INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+								auto [rc, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+								ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								sqlite3_stmt *statement1 = statement1_unique.get();
 
-							while ((row = mysql_fetch_row(results[6]))) {
-								rc=(*proxy_sqlite3_bind_text)(statement1,  1,  row[0],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostname
+								while ((row = mysql_fetch_row(results[6]))) {
+									rc=(*proxy_sqlite3_bind_text)(statement1,  1,  row[0],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostname
 								rc=(*proxy_sqlite3_bind_int64)(statement1, 2,  atol(row[1]));                  ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // port
 								rc=(*proxy_sqlite3_bind_text)(statement1,  3,  row[2],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
 								rc=(*proxy_sqlite3_bind_text)(statement1,  4,  row[3],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_ca
@@ -2280,12 +2279,11 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 								rc=(*proxy_sqlite3_bind_text)(statement1,  10, row[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_cipher
 								rc=(*proxy_sqlite3_bind_text)(statement1,  11, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // tls_version
 								rc=(*proxy_sqlite3_bind_text)(statement1,  12, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
-								SAFE_SQLITE3_STEP2(statement1);
-								rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-								rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									SAFE_SQLITE3_STEP2(statement1);
+									rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								}
 							}
-							(*proxy_sqlite3_finalize)(statement1);
-						}
 
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_servers_ssl_params'\n");
 						proxy_info("Dumping fetched 'mysql_servers_ssl_params'\n");

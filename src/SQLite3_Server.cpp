@@ -1434,17 +1434,19 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	char buf[1024];
 	sprintf(buf, (char *)"SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
 	sessdb->execute_statement(buf, &error , &cols , &affected_rows , &resultset);
-	if (resultset->rows_count==0) {
-		//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
-		sqlite3_stmt *statement=NULL;
-		int rc;
-		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-		rc = sessdb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, sessdb);
-		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
-			string serverid = "";
-			serverid = "127.1." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
+		if (resultset->rows_count==0) {
+			//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
+			sqlite3_stmt *statement=NULL;
+			int rc;
+			char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+			//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
+			auto [stmt_rc, statement_unique] = sessdb->prepare_v2(query);
+			rc = stmt_rc;
+			statement = statement_unique.get();
+			ASSERT_SQLITE_OK(rc, sessdb);
+			for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
+				string serverid = "";
+				serverid = "127.1." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
 //			fprintf(stderr,"%d , %s:3306 \n", hg_id , serverid.c_str());
 
 			rc=(*proxy_sqlite3_bind_int64)(statement, 1, hg_id); ASSERT_SQLITE_OK(rc, sessdb);
@@ -1460,14 +1462,13 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 
 			rc=(*proxy_sqlite3_bind_text)(statement, 11, (char *)"DISABLED", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 
-			SAFE_SQLITE3_STEP2(statement);
-			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, sessdb);
-			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, sessdb);
+				SAFE_SQLITE3_STEP2(statement);
+				rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, sessdb);
+				rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, sessdb);
+			}
 		}
-		(*proxy_sqlite3_finalize)(statement);
+		sessdb->execute("COMMIT");
 	}
-	sessdb->execute("COMMIT");
-}
 #endif // TEST_GALERA
 
 #ifdef TEST_AURORA
@@ -1534,7 +1535,9 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 	sqlite3_stmt* stmt = NULL;
     const char query[] { "INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5, ?6)" };
 
-	rc = sessdb->prepare_v2(query, &stmt);
+	auto [stmt_rc, stmt_unique] = sessdb->prepare_v2(query);
+	rc = stmt_rc;
+	stmt = stmt_unique.get();
 	ASSERT_SQLITE_OK(rc, sessdb);
 
 #ifndef TEST_AURORA_RANDOM
@@ -1616,9 +1619,8 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 			}
 		}
 
-		(*proxy_sqlite3_finalize)(stmt);
-		delete resultset;
-	} else {
+			delete resultset;
+		} else {
 		// We just re-generate deterministic 'SESSION_IDS', preserving 'MASTER_SESSION_ID' values:
 		// 'SESSION_IDS' are preserved, 'MASTER_SESSION_ID' or others.
 		for (SQLite3_row* row : host_status->rows) {
@@ -1692,8 +1694,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 		float cpu = get_rand_cpu();
 		bind_query_params(sessdb, stmt, serverid, aurora_domain, sessionid, cpu, lut, lag_ms);
 	}
-	(*proxy_sqlite3_finalize)(stmt);
-#endif // TEST_AURORA_RANDOM
+	#endif // TEST_AURORA_RANDOM
 }
 #endif // TEST_AURORA
 

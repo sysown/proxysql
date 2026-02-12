@@ -933,7 +933,6 @@ CREATE TABLE stats_mysql_processlist (
 	}
 	// RAII auto-finalizes statement1 and statement32
 	statsdb->execute("COMMIT");
-	delete resultset;
 }
 
 void ProxySQL_Admin::stats___pgsql_processlist() {
@@ -1075,7 +1074,6 @@ void ProxySQL_Admin::stats___pgsql_processlist() {
 	}
 	// RAII auto-finalizes statement1 and statement32
 	statsdb->execute("COMMIT");
-	delete resultset;
 }
 
 void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
@@ -1441,8 +1439,9 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 		//sqlite3 *mydb3=statsdb->get_db();
 		char *query1=NULL;
 		query1=(char *)"INSERT INTO stats_proxysql_servers_checksums VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = statsdb->prepare_v2(query1, &statement1);
+		auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+		rc = rc1;
+		statement1 = statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, statsdb);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r1=*it;
@@ -1459,7 +1458,6 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
-		(*proxy_sqlite3_finalize)(statement1);
 	}
 	statsdb->execute("COMMIT");
 	delete resultset;
@@ -1478,8 +1476,9 @@ void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 		//sqlite3 *mydb3=statsdb->get_db();
 		char *query1=NULL;
 		query1=(char *)"INSERT INTO stats_proxysql_servers_metrics VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = statsdb->prepare_v2(query1, &statement1);
+		auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+		rc = rc1;
+		statement1 = statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, statsdb);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r1=*it;
@@ -1497,7 +1496,6 @@ void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
-		(*proxy_sqlite3_finalize)(statement1);
 	}
 	statsdb->execute("COMMIT");
 	delete resultset;
@@ -1532,9 +1530,13 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 	sqlite3_stmt* statement32 = nullptr;
 	int rc = 0;
 
-	rc = statsdb->prepare_v2(query1, &statement1);
+	auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
-	rc = statsdb->prepare_v2(query32, &statement32);
+	auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
+	rc = rc2;
+	statement32 = statement32_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
 
 	int row_idx = 0;
@@ -1573,9 +1575,6 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
-
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
@@ -1593,7 +1592,9 @@ void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 		: "INSERT INTO stats_mcp_query_tools_counters VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 
 	sqlite3_stmt* statement = NULL;
-	int rc = statsdb->prepare_v2(query_str, &statement);
+	auto [rc1, statement_unique] = statsdb->prepare_v2(query_str);
+	int rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
 
 	if (reset) {
@@ -1658,7 +1659,6 @@ void ProxySQL_Admin::stats___mcp_query_tools_counters(bool reset) {
 		}
 	}
 
-	(*proxy_sqlite3_finalize)(statement);
 	statsdb->execute("COMMIT");
 }
 #endif /* PROXYSQLGENAI */
@@ -1686,9 +1686,13 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 		query32 = (char *)query32s.c_str();
 	}
 
-	rc = statsdb->prepare_v2(query1, &statement1);
+	auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
-	rc = statsdb->prepare_v2(query32, &statement32);
+	auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
+	rc = rc2;
+	statement32 = statement32_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
 	int row_idx=0;
 	int num_rows = resultset ? resultset->rows_count : digest_umap->size();
@@ -1772,8 +1776,6 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 		else
 			it++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	if (reset) {
 		if (copy) {
 			statsdb->execute("INSERT INTO stats_mysql_query_digest SELECT * FROM stats_mysql_query_digest_reset");
@@ -1947,7 +1949,9 @@ void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
 	statsdb->execute("DELETE FROM stats_mysql_client_host_cache_reset");
 	statsdb->execute("DELETE FROM stats_mysql_client_host_cache");
 
-	rc = statsdb->prepare_v2(query, &statement);
+	auto [rc1, statement_unique] = statsdb->prepare_v2(query);
+	rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
 
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -1961,8 +1965,6 @@ void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
 		rc=(*proxy_sqlite3_clear_bindings)(statement);
 		rc=(*proxy_sqlite3_reset)(statement);
 	}
-
-	(*proxy_sqlite3_finalize)(statement);
 
 	if (reset) {
 		statsdb->execute("INSERT INTO stats_mysql_client_host_cache SELECT * FROM stats_mysql_client_host_cache_reset");
@@ -1993,7 +1995,9 @@ void ProxySQL_Admin::stats___pgsql_client_host_cache(bool reset) {
 	statsdb->execute("DELETE FROM stats_pgsql_client_host_cache_reset");
 	statsdb->execute("DELETE FROM stats_pgsql_client_host_cache");
 
-	rc = statsdb->prepare_v2(query, &statement);
+	auto [rc1, statement_unique] = statsdb->prepare_v2(query);
+	rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
 
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
@@ -2007,8 +2011,6 @@ void ProxySQL_Admin::stats___pgsql_client_host_cache(bool reset) {
 		rc = (*proxy_sqlite3_clear_bindings)(statement);
 		rc = (*proxy_sqlite3_reset)(statement);
 	}
-
-	(*proxy_sqlite3_finalize)(statement);
 
 	if (reset) {
 		statsdb->execute("INSERT INTO stats_pgsql_client_host_cache SELECT * FROM stats_pgsql_client_host_cache_reset");
@@ -2291,11 +2293,13 @@ void ProxySQL_Admin::stats___mysql_gtid_executed() {
 		query32s = "INSERT INTO stats_mysql_gtid_executed VALUES " + generate_multi_rows_query(32,4);
 		query32 = (char *)query32s.c_str();
 
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = statsdb->prepare_v2(query1, &statement1);
+		auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+		rc = rc1;
+		statement1 = statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, statsdb);
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-		rc = statsdb->prepare_v2(query32, &statement32);
+		auto [rc2, statement32_unique] = statsdb->prepare_v2(query32);
+		rc = rc2;
+		statement32 = statement32_unique.get();
 		ASSERT_SQLITE_OK(rc, statsdb);
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
@@ -2324,8 +2328,6 @@ void ProxySQL_Admin::stats___mysql_gtid_executed() {
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 		delete resultset;
 		resultset = NULL;
 	}
@@ -2772,7 +2774,9 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 	// Use prepared statement to prevent SQL injection
 	const char* query_str = "INSERT INTO stats_mcp_query_rules VALUES (?1, ?2)";
 	sqlite3_stmt* statement = nullptr;
-	int rc = statsdb->prepare_v2(query_str, &statement);
+	auto [rc1, statement_unique] = statsdb->prepare_v2(query_str);
+	int rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, statsdb);
 
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
@@ -2787,7 +2791,6 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb);
 	}
 
-	(*proxy_sqlite3_finalize)(statement);
 	statsdb->execute("COMMIT");
 	delete resultset;
 }

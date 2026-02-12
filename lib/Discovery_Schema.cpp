@@ -656,7 +656,8 @@ int Discovery_Schema::create_run(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "INSERT INTO runs(source_dsn, mysql_version, notes) VALUES(?1, ?2 ,  ?3);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_text)(stmt, 1, source_dsn.c_str(), -1, SQLITE_TRANSIENT);
@@ -665,7 +666,6 @@ int Discovery_Schema::create_run(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int run_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return run_id;
 }
@@ -674,14 +674,14 @@ int Discovery_Schema::finish_run(int run_id, const std::string& notes) {
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "UPDATE runs SET finished_at = datetime('now') ,  notes = ?1 WHERE run_id = ?2;";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_text)(stmt, 1, notes.c_str(), -1, SQLITE_TRANSIENT);
 	(*proxy_sqlite3_bind_int)(stmt, 2, run_id);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }
@@ -727,7 +727,8 @@ int Discovery_Schema::create_agent_run(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "INSERT INTO agent_runs(run_id, model_name, prompt_hash, budget_json) VALUES(?1, ?2, ?3 ,  ?4);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare agent_runs insert: %s\n", (*proxy_sqlite3_errstr)(rc));
 		return -1;
@@ -747,8 +748,6 @@ int Discovery_Schema::create_agent_run(
 		}
 	} while (step_rc == SQLITE_LOCKED || step_rc == SQLITE_BUSY);
 
-	(*proxy_sqlite3_finalize)(stmt);
-
 	if (step_rc != SQLITE_DONE) {
 		proxy_error("Failed to insert into agent_runs (run_id=%d): %s\n", run_id, (*proxy_sqlite3_errstr)(step_rc));
 		return -1;
@@ -767,7 +766,8 @@ int Discovery_Schema::finish_agent_run(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "UPDATE agent_runs SET finished_at = datetime('now'), status = ?1 ,  error = ?2 WHERE agent_run_id = ?3;";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_text)(stmt, 1, status.c_str(), -1, SQLITE_TRANSIENT);
@@ -775,7 +775,6 @@ int Discovery_Schema::finish_agent_run(
 	(*proxy_sqlite3_bind_int)(stmt, 3, agent_run_id);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }
@@ -848,7 +847,8 @@ int Discovery_Schema::insert_schema(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "INSERT INTO schemas(run_id, schema_name, charset, collation) VALUES(?1, ?2, ?3 ,  ?4);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
@@ -858,7 +858,6 @@ int Discovery_Schema::insert_schema(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int schema_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return schema_id;
 }
@@ -888,7 +887,8 @@ int Discovery_Schema::insert_object(
 		"  data_length, index_length, create_time, update_time, object_comment ,  definition_sql"
 		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11 ,  ?12);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
@@ -906,7 +906,6 @@ int Discovery_Schema::insert_object(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int object_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return object_id;
 }
@@ -937,7 +936,8 @@ int Discovery_Schema::insert_column(
 		"  is_indexed, is_time ,  is_id_like"
 		") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15 ,  ?16);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, object_id);
@@ -959,7 +959,6 @@ int Discovery_Schema::insert_column(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int column_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return column_id;
 }
@@ -977,7 +976,8 @@ int Discovery_Schema::insert_index(
 		"INSERT INTO indexes(object_id, index_name, is_unique, is_primary, index_type ,  cardinality) "
 		"VALUES(?1, ?2, ?3, ?4, ?5 ,  ?6);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, object_id);
@@ -989,7 +989,6 @@ int Discovery_Schema::insert_index(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int index_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return index_id;
 }
@@ -1006,7 +1005,8 @@ int Discovery_Schema::insert_index_column(
 		"INSERT INTO index_columns(index_id, seq_in_index, column_name, sub_part ,  collation) "
 		"VALUES(?1, ?2, ?3, ?4 ,  ?5);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, index_id);
@@ -1016,7 +1016,6 @@ int Discovery_Schema::insert_index_column(
 	(*proxy_sqlite3_bind_text)(stmt, 5, collation.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }
@@ -1035,7 +1034,8 @@ int Discovery_Schema::insert_foreign_key(
 		"INSERT INTO foreign_keys(run_id, child_object_id, fk_name, parent_schema_name, parent_object_name, on_update ,  on_delete) "
 		"VALUES(?1, ?2, ?3, ?4, ?5, ?6 ,  ?7);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
@@ -1048,7 +1048,6 @@ int Discovery_Schema::insert_foreign_key(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int fk_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return fk_id;
 }
@@ -1064,7 +1063,8 @@ int Discovery_Schema::insert_foreign_key_column(
 		"INSERT INTO foreign_key_columns(fk_id, seq, child_column ,  parent_column) "
 		"VALUES(?1, ?2, ?3 ,  ?4);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, fk_id);
@@ -1073,7 +1073,6 @@ int Discovery_Schema::insert_foreign_key_column(
 	(*proxy_sqlite3_bind_text)(stmt, 4, parent_column.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }
@@ -1113,7 +1112,8 @@ int Discovery_Schema::upsert_profile(
 		"ON CONFLICT(run_id, object_id ,  profile_kind) DO UPDATE SET "
 		"  profile_json = ?4 ,  updated_at = datetime('now');";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, run_id);
@@ -1122,7 +1122,6 @@ int Discovery_Schema::upsert_profile(
 	(*proxy_sqlite3_bind_text)(stmt, 4, profile_json.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }
@@ -1232,13 +1231,13 @@ int Discovery_Schema::rebuild_fts_index(int run_id) {
 			}
 
 			// Insert into FTS
-			int rc;
 			sqlite3_stmt* fts_stmt = NULL;
 			const char* fts_sql =
 				"INSERT INTO fts_objects(object_key, schema_name, object_name, object_type, comment, columns_blob, definition_sql ,  tags) "
 				"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7 ,  ?8);";
 
-			rc = db->prepare_v2(fts_sql, &fts_stmt);
+			auto [rc, fts_stmt_unique] = db->prepare_v2(fts_sql);
+			fts_stmt = fts_stmt_unique.get();
 			if (rc == SQLITE_OK) {
 				(*proxy_sqlite3_bind_text)(fts_stmt, 1, object_key.c_str(), -1, SQLITE_TRANSIENT);
 				(*proxy_sqlite3_bind_text)(fts_stmt, 2, schema_name.c_str(), -1, SQLITE_TRANSIENT);
@@ -1250,7 +1249,6 @@ int Discovery_Schema::rebuild_fts_index(int run_id) {
 				(*proxy_sqlite3_bind_text)(fts_stmt, 8, tags.c_str(), -1, SQLITE_TRANSIENT);
 
 				SAFE_SQLITE3_STEP2(fts_stmt);
-				(*proxy_sqlite3_finalize)(fts_stmt);
 			}
 		}
 		delete resultset;
@@ -1668,7 +1666,8 @@ int Discovery_Schema::append_agent_event(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "INSERT INTO agent_events(agent_run_id, event_type, payload_json) VALUES(?1, ?2 ,  ?3);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
@@ -1677,7 +1676,6 @@ int Discovery_Schema::append_agent_event(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int event_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return event_id;
 }
@@ -1698,7 +1696,8 @@ int Discovery_Schema::upsert_llm_summary(
 		"ON CONFLICT(agent_run_id ,  object_id) DO UPDATE SET "
 		"  summary_json = ?4, confidence = ?5, status = ?6 ,  sources_json = ?7;";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
@@ -1710,13 +1709,13 @@ int Discovery_Schema::upsert_llm_summary(
 	(*proxy_sqlite3_bind_text)(stmt, 7, sources_json.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
 	stmt = NULL;
 	sql = "INSERT OR REPLACE INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'summary', ?2, 'Object Summary', ?3, '');";
-	rc = db->prepare_v2(sql, &stmt);
-	if (rc == SQLITE_OK) {
+	auto [fts_rc, fts_stmt_unique] = db->prepare_v2(sql);
+	stmt = fts_stmt_unique.get();
+	if (fts_rc == SQLITE_OK) {
 		// Create composite key for unique identification
 		char key_buf[64];
 		snprintf(key_buf, sizeof(key_buf), "summary_%d_%d", agent_run_id, object_id);
@@ -1727,7 +1726,6 @@ int Discovery_Schema::upsert_llm_summary(
 		(*proxy_sqlite3_bind_text)(stmt, 2, key_buf, -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(stmt, 3, summary_json.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(stmt);
-		(*proxy_sqlite3_finalize)(stmt);
 	}
 
 	return 0;
@@ -1792,7 +1790,8 @@ int Discovery_Schema::upsert_llm_relationship(
 		"ON CONFLICT(agent_run_id, child_object_id, child_column, parent_object_id, parent_column ,  rel_type) "
 		"DO UPDATE SET confidence = ?8 ,  evidence_json = ?9;";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
@@ -1806,7 +1805,6 @@ int Discovery_Schema::upsert_llm_relationship(
 	(*proxy_sqlite3_bind_text)(stmt, 9, evidence_json.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }
@@ -1826,7 +1824,8 @@ int Discovery_Schema::upsert_llm_domain(
 		"ON CONFLICT(agent_run_id ,  domain_key) DO UPDATE SET "
 		"  title = ?4, description = ?5 ,  confidence = ?6;";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
@@ -1838,13 +1837,13 @@ int Discovery_Schema::upsert_llm_domain(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int domain_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
 	stmt = NULL;
 	sql = "INSERT OR REPLACE INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'domain', ?2, ?3, ?4, '');";
-	rc = db->prepare_v2(sql, &stmt);
-	if (rc == SQLITE_OK) {
+	auto [fts_rc, fts_stmt_unique] = db->prepare_v2(sql);
+	stmt = fts_stmt_unique.get();
+	if (fts_rc == SQLITE_OK) {
 		// Use domain_id or a hash of domain_key as rowid
 		int rowid = domain_id > 0 ? domain_id : std::hash<std::string>{}(domain_key) % 1000000000;
 		(*proxy_sqlite3_bind_int)(stmt, 1, rowid);
@@ -1852,7 +1851,6 @@ int Discovery_Schema::upsert_llm_domain(
 		(*proxy_sqlite3_bind_text)(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(stmt, 4, description.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(stmt);
-		(*proxy_sqlite3_finalize)(stmt);
 	}
 
 	return domain_id;
@@ -1899,7 +1897,8 @@ int Discovery_Schema::set_domain_members(
 			sqlite3_stmt* stmt = NULL;
 			const char* ins_sql = "INSERT INTO llm_domain_members(domain_id, object_id, role, confidence) VALUES(?1, ?2, ?3 ,  ?4);";
 
-			int rc = db->prepare_v2(ins_sql, &stmt);
+			auto [rc, stmt_unique] = db->prepare_v2(ins_sql);
+			stmt = stmt_unique.get();
 			if (rc == SQLITE_OK) {
 				(*proxy_sqlite3_bind_int)(stmt, 1, domain_id);
 				(*proxy_sqlite3_bind_int)(stmt, 2, object_id);
@@ -1907,7 +1906,6 @@ int Discovery_Schema::set_domain_members(
 				(*proxy_sqlite3_bind_double)(stmt, 4, confidence);
 
 				SAFE_SQLITE3_STEP2(stmt);
-				(*proxy_sqlite3_finalize)(stmt);
 			}
 		}
 	} catch (...) {
@@ -1937,7 +1935,8 @@ int Discovery_Schema::upsert_llm_metric(
 		"ON CONFLICT(agent_run_id ,  metric_key) DO UPDATE SET "
 		"  title = ?4, description = ?5, domain_key = ?6, grain = ?7, unit = ?8, sql_template = ?9, depends_json = ?10 ,  confidence = ?11;";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
@@ -1954,13 +1953,13 @@ int Discovery_Schema::upsert_llm_metric(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int metric_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index (use INSERT OR REPLACE for upsert semantics)
 	stmt = NULL;
 	sql = "INSERT OR REPLACE INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'metric', ?2, ?3, ?4, ?5);";
-	rc = db->prepare_v2(sql, &stmt);
-	if (rc == SQLITE_OK) {
+	auto [fts_rc, fts_stmt_unique] = db->prepare_v2(sql);
+	stmt = fts_stmt_unique.get();
+	if (fts_rc == SQLITE_OK) {
 		// Use metric_id or a hash of metric_key as rowid
 		int rowid = metric_id > 0 ? metric_id : std::hash<std::string>{}(metric_key) % 1000000000;
 		(*proxy_sqlite3_bind_int)(stmt, 1, rowid);
@@ -1969,7 +1968,6 @@ int Discovery_Schema::upsert_llm_metric(
 		(*proxy_sqlite3_bind_text)(stmt, 4, description.c_str(), -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(stmt, 5, domain_key.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(stmt);
-		(*proxy_sqlite3_finalize)(stmt);
 	}
 
 	return metric_id;
@@ -1990,7 +1988,8 @@ int Discovery_Schema::add_question_template(
 		"INSERT INTO llm_question_templates(agent_run_id, run_id, title, question_nl, template_json, example_sql, related_objects, confidence) "
 		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
@@ -2004,20 +2003,19 @@ int Discovery_Schema::add_question_template(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int template_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index
 	stmt = NULL;
 	sql = "INSERT INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'question_template', ?2, ?3, ?4, '');";
-	rc = db->prepare_v2(sql, &stmt);
-	if (rc == SQLITE_OK) {
+	auto [fts_rc, fts_stmt_unique] = db->prepare_v2(sql);
+	stmt = fts_stmt_unique.get();
+	if (fts_rc == SQLITE_OK) {
 		std::string key_str = std::to_string(template_id);
 		(*proxy_sqlite3_bind_int)(stmt, 1, template_id);
 		(*proxy_sqlite3_bind_text)(stmt, 2, key_str.c_str(), -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(stmt, 4, question_nl.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(stmt);
-		(*proxy_sqlite3_finalize)(stmt);
 	}
 
 	return template_id;
@@ -2038,7 +2036,8 @@ int Discovery_Schema::add_llm_note(
 		"INSERT INTO llm_notes(agent_run_id, run_id, scope, object_id, domain_key, title, body ,  tags_json) "
 		"VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7 ,  ?8);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
 	(*proxy_sqlite3_bind_int)(stmt, 1, agent_run_id);
@@ -2056,13 +2055,13 @@ int Discovery_Schema::add_llm_note(
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int note_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
-	(*proxy_sqlite3_finalize)(stmt);
 
 	// Insert into FTS index
 	stmt = NULL;
 	sql = "INSERT INTO fts_llm(rowid, kind, key, title, body, tags) VALUES(?1, 'note', ?2, ?3, ?4, ?5);";
-	rc = db->prepare_v2(sql, &stmt);
-	if (rc == SQLITE_OK) {
+	auto [fts_rc, fts_stmt_unique] = db->prepare_v2(sql);
+	stmt = fts_stmt_unique.get();
+	if (fts_rc == SQLITE_OK) {
 		std::string key_str = std::to_string(note_id);
 		(*proxy_sqlite3_bind_int)(stmt, 1, note_id);
 		(*proxy_sqlite3_bind_text)(stmt, 2, key_str.c_str(), -1, SQLITE_TRANSIENT);
@@ -2070,7 +2069,6 @@ int Discovery_Schema::add_llm_note(
 		(*proxy_sqlite3_bind_text)(stmt, 4, body.c_str(), -1, SQLITE_TRANSIENT);
 		(*proxy_sqlite3_bind_text)(stmt, 5, tags_json.c_str(), -1, SQLITE_TRANSIENT);
 		SAFE_SQLITE3_STEP2(stmt);
-		(*proxy_sqlite3_finalize)(stmt);
 	}
 
 	return note_id;
@@ -2285,7 +2283,8 @@ int Discovery_Schema::log_llm_search(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "INSERT INTO llm_search_log(run_id, query, lmt) VALUES(?1, ?2 ,  ?3);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK || !stmt) {
 		proxy_error("Failed to prepare llm_search_log insert: %d\n", rc);
 		return -1;
@@ -2296,7 +2295,6 @@ int Discovery_Schema::log_llm_search(
 	(*proxy_sqlite3_bind_int)(stmt, 3, lmt);
 
 	rc = (*proxy_sqlite3_step)(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	if (rc != SQLITE_DONE) {
 		proxy_error("Failed to insert llm_search_log: %d\n", rc);
@@ -2314,7 +2312,8 @@ int Discovery_Schema::log_rag_search_fts(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "INSERT INTO rag_search_log(query, k, filters) VALUES(?1, ?2 ,  ?3);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK || !stmt) {
 		proxy_error("Failed to prepare rag_search_log insert: %d\n", rc);
 		return -1;
@@ -2325,7 +2324,6 @@ int Discovery_Schema::log_rag_search_fts(
 	(*proxy_sqlite3_bind_text)(stmt, 3, filters.c_str(), -1, SQLITE_TRANSIENT);
 
 	rc = (*proxy_sqlite3_step)(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	if (rc != SQLITE_DONE) {
 		proxy_error("Failed to insert rag_search_log: %d\n", rc);
@@ -2346,7 +2344,8 @@ int Discovery_Schema::log_query_tool_call(
 	sqlite3_stmt* stmt = NULL;
 	const char* sql = "INSERT INTO query_tool_calls(tool_name, schema, run_id, start_time, execution_time, error) VALUES(?1, ?2, ?3, ?4, ?5, ?6);";
 
-	int rc = db->prepare_v2(sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK || !stmt) {
 		proxy_error("Failed to prepare query_tool_calls insert: %d\n", rc);
 		return -1;
@@ -2372,7 +2371,6 @@ int Discovery_Schema::log_query_tool_call(
 	}
 
 	rc = (*proxy_sqlite3_step)(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	if (rc != SQLITE_DONE) {
 		proxy_error("Failed to insert query_tool_calls: %d\n", rc);

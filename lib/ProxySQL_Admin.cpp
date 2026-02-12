@@ -6777,13 +6777,20 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 	char *q_stmt1_b=NULL;
 	sqlite3_stmt *f_statement1=NULL;
 	sqlite3_stmt *b_statement1=NULL;
+	stmt_unique_ptr f_statement1_unique {};
+	stmt_unique_ptr b_statement1_unique {};
 	if (_runtime) {
-		int rc;
 		q_stmt1_f=qfr_stmt1;
 		q_stmt1_b=qbr_stmt1;
-		rc = admindb->prepare_v2(q_stmt1_f, &f_statement1);
+		auto [rc_f, prepared_f_statement1] = admindb->prepare_v2(q_stmt1_f);
+		rc = rc_f;
+		f_statement1_unique = std::move(prepared_f_statement1);
+		f_statement1 = f_statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
-		rc = admindb->prepare_v2(q_stmt1_b, &b_statement1);
+		auto [rc_b, prepared_b_statement1] = admindb->prepare_v2(q_stmt1_b);
+		rc = rc_b;
+		b_statement1_unique = std::move(prepared_b_statement1);
+		b_statement1 = b_statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 	}
 	for (i=0; i<num_users; i++) {
@@ -6826,10 +6833,6 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 		free(ad->password); // this is not initialized with dump_all_users( , false)
 		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
 		free(ad);
-	}
-	if (_runtime) {
-		(*proxy_sqlite3_finalize)(f_statement1);
-		(*proxy_sqlite3_finalize)(b_statement1);
 	}
 	free(ads);
 }
@@ -7056,7 +7059,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			query=(char *)"INSERT INTO mysql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 		}
 
-		rc = admindb->prepare_v2(query, &statement);
+		auto [rc1, statement_unique] = admindb->prepare_v2(query);
+		rc = rc1;
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -7075,7 +7080,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
-		(*proxy_sqlite3_finalize)(statement);
 	}
 	if(resultset) delete resultset;
 	resultset = NULL;
@@ -7100,7 +7104,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			query=(char *)"INSERT INTO mysql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 		}
 
-		rc = admindb->prepare_v2(query, &statement);
+		auto [rc1, statement_unique] = admindb->prepare_v2(query);
+		rc = rc1;
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -7119,7 +7125,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
-		(*proxy_sqlite3_finalize)(statement);
 	}
 	if(resultset) delete resultset;
 	resultset = NULL;
@@ -7145,7 +7150,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
 		}
 
-		rc = admindb->prepare_v2(query, &statement);
+		auto [rc1, statement_unique] = admindb->prepare_v2(query);
+		rc = rc1;
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -7169,7 +7176,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
-		(*proxy_sqlite3_finalize)(statement);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
@@ -7190,7 +7196,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		if (_runtime)
 			StrQuery += "runtime_";
 		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
+		auto [rc1, statement_unique] = admindb->prepare_v2(StrQuery.c_str());
+		rc = rc1;
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -7211,7 +7219,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
-		(*proxy_sqlite3_finalize)(statement);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
@@ -7232,7 +7239,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		if (_runtime)
 			StrQuery += "runtime_";
 		StrQuery += "mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
+		auto [rc1, statement_unique] = admindb->prepare_v2(StrQuery.c_str());
+		rc = rc1;
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -7254,7 +7263,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
-		(*proxy_sqlite3_finalize)(statement);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
@@ -7293,11 +7301,13 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			query32s = "INSERT INTO pgsql_servers VALUES " + generate_multi_rows_query(32, 11);
 			query32 = (char*)query32s.c_str();
 		}
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = admindb->prepare_v2(query1, &statement1);
+		auto [rc1, statement1_unique] = admindb->prepare_v2(query1);
+		rc = rc1;
+		statement1 = statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-		rc = admindb->prepare_v2(query32, &statement32);
+		auto [rc2, statement32_unique] = admindb->prepare_v2(query32);
+		rc = rc2;
+		statement32 = statement32_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 		int row_idx = 0;
 		int max_bulk_row_idx = resultset->rows_count / 32;
@@ -7341,8 +7351,6 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 	}
 	if (resultset) delete resultset;
 	resultset = NULL;
@@ -7403,7 +7411,9 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 		if (_runtime)
 			StrQuery += "runtime_";
 		StrQuery += "pgsql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
+		auto [rc1, statement_unique] = admindb->prepare_v2(StrQuery.c_str());
+		rc = rc1;
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 		//proxy_info("New pgsql_aws_aurora_hostgroups table\n");
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
@@ -7425,7 +7435,6 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
 			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
-		(*proxy_sqlite3_finalize)(statement);
 	}
 	if (resultset) delete resultset;
 	resultset = NULL;
@@ -8595,9 +8604,13 @@ void ProxySQL_Admin::save_proxysql_servers_runtime_to_database(bool _runtime) {
 			query32 = (char *)query32s.c_str();
 		}
 
-		rc = admindb->prepare_v2(query1, &statement1);
+		auto [rc1, statement1_unique] = admindb->prepare_v2(query1);
+		rc = rc1;
+		statement1 = statement1_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
-		rc = admindb->prepare_v2(query32, &statement32);
+		auto [rc2, statement32_unique] = admindb->prepare_v2(query32);
+		rc = rc2;
+		statement32 = statement32_unique.get();
 		ASSERT_SQLITE_OK(rc, admindb);
 
 		int row_idx=0;
@@ -8627,8 +8640,6 @@ void ProxySQL_Admin::save_proxysql_servers_runtime_to_database(bool _runtime) {
 			}
 			row_idx++;
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement32);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
@@ -8675,7 +8686,9 @@ void ProxySQL_Admin::dump_coredump_filter_values_table() {
 	int rc;
 	const char *query = "REPLACE INTO runtime_coredump_filters VALUES (?1,?2)";
 	sqlite3_stmt *stmt = NULL;
-	rc = admindb->prepare_v2(query,&stmt);
+	auto [rc1, stmt_unique] = admindb->prepare_v2(query);
+	rc = rc1;
+	stmt = stmt_unique.get();
 	ASSERT_SQLITE_OK(rc, admindb);
 	admindb->execute((char *)"BEGIN");
 	admindb->execute((char *)"DELETE FROM runtime_coredump_filters");
@@ -8692,7 +8705,6 @@ void ProxySQL_Admin::dump_coredump_filter_values_table() {
 		free(lineno);
 	}
 	admindb->execute((char *)"COMMIT");
-	(*proxy_sqlite3_finalize)(stmt);
 }
 
 #ifdef TEST_GALERA
@@ -8706,7 +8718,9 @@ void ProxySQL_Admin::enable_galera_testing() {
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 2271 AND 2300");
 	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
 
-	rc = admindb->prepare_v2(query, &statement);
+	auto [rc1, statement_unique] = admindb->prepare_v2(query);
+	rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, admindb);
 	for (unsigned int j=1; j<4; j++) {
 		proxy_info("Admin is enabling Galera Testing using SQLite3 Server and writer_HG %d\n" , 2260+j*10+1);
@@ -8724,7 +8738,6 @@ void ProxySQL_Admin::enable_galera_testing() {
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
 	}
-	(*proxy_sqlite3_finalize)(statement);
 	admindb->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (2271, 2272, 2273, 2274, 0, 1, 1, 0, 'Automated Galera Testing Cluster 1')");
 	admindb->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (2281, 2282, 2283, 2284, 0, 1, 1, 0, 'Automated Galera Testing Cluster 2')");
 	admindb->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (2291, 2292, 2293, 2294, 0, 1, 1, 0, 'Automated Galera Testing Cluster 3')");
@@ -8749,7 +8762,9 @@ void ProxySQL_Admin::enable_aurora_testing_populate_mysql_servers() {
 	unsigned int num_aurora_servers = GloSQLite3Server->num_aurora_servers[0];
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 1271 AND 1276");
 	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
-	int rc = admindb->prepare_v2(query, &statement);
+	auto [rc1, statement_unique] = admindb->prepare_v2(query);
+	int rc = rc1;
+	statement = statement_unique.get();
 	ASSERT_SQLITE_OK(rc, admindb);
 	for (unsigned int j=1; j<4; j++) {
 		proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs 127%d and 127%d\n" , j*2-1 , j*2);
@@ -8777,7 +8792,6 @@ void ProxySQL_Admin::enable_aurora_testing_populate_mysql_servers() {
 			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
 	}
-	(*proxy_sqlite3_finalize)(statement);
 }
 
 void ProxySQL_Admin::enable_aurora_testing_populate_mysql_aurora_hostgroups() {

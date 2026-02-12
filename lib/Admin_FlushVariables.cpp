@@ -334,13 +334,18 @@ void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, 
 	int rc;
 	sqlite3_stmt* statement1 = NULL;
 	sqlite3_stmt* statement2 = NULL;
-	//sqlite3 *mydb3=db->get_db();
-	rc = db->prepare_v2(a, &statement1);
+	auto [rc1, statement1_unique] = db->prepare_v2(a);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, db);
+	stmt_unique_ptr statement2_unique {};
 	if (runtime) {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'");
 		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-		rc = db->prepare_v2(b, &statement2);
+		auto [rc2, prepared_statement2] = db->prepare_v2(b);
+		rc = rc2;
+		statement2_unique = std::move(prepared_statement2);
+		statement2 = statement2_unique.get();
 		ASSERT_SQLITE_OK(rc, db);
 	}
 	if (use_lock) {
@@ -372,9 +377,6 @@ void ProxySQL_Admin::flush_pgsql_variables___runtime_to_database(SQLite3DB* db, 
 		db->execute("COMMIT");
 		GloPTH->wrunlock();
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	if (runtime)
-		(*proxy_sqlite3_finalize)(statement2);
 	for (int i = 0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
@@ -1010,12 +1012,18 @@ void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, 
 	int rc;
 	sqlite3_stmt* statement1 = NULL;
 	sqlite3_stmt* statement2 = NULL;
-	rc = db->prepare_v2(a, &statement1);
+	auto [rc1, statement1_unique] = db->prepare_v2(a);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, db);
+	stmt_unique_ptr statement2_unique {};
 	if (runtime) {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'genai-%'");
 		b = (char*)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
-		rc = db->prepare_v2(b, &statement2);
+		auto [rc2, prepared_statement2] = db->prepare_v2(b);
+		rc = rc2;
+		statement2_unique = std::move(prepared_statement2);
+		statement2 = statement2_unique.get();
 		ASSERT_SQLITE_OK(rc, db);
 	}
 	if (use_lock) {
@@ -1047,9 +1055,6 @@ void ProxySQL_Admin::flush_genai_variables___runtime_to_database(SQLite3DB* db, 
 		db->execute("COMMIT");
 		GloGATH->wrunlock();
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	if (runtime)
-		(*proxy_sqlite3_finalize)(statement2);
 	for (int i = 0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
@@ -1145,13 +1150,19 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	int rc;
 	sqlite3_stmt *statement1 = NULL;
 	sqlite3_stmt *statement2 = NULL;
-	rc = db->prepare_v2(a, &statement1);
+	auto [rc1, statement1_unique] = db->prepare_v2(a);
+	rc = rc1;
+	statement1 = statement1_unique.get();
 	ASSERT_SQLITE_OK(rc, db);
+	stmt_unique_ptr statement2_unique {};
 	if (runtime)  {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 
-		rc = db->prepare_v2(b, &statement2);
+		auto [rc2, prepared_statement2] = db->prepare_v2(b);
+		rc = rc2;
+		statement2_unique = std::move(prepared_statement2);
+		statement2 = statement2_unique.get();
 		ASSERT_SQLITE_OK(rc, db);
 	}
 	if (use_lock) {
@@ -1183,9 +1194,6 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		db->execute("COMMIT");
 		GloMTH->wrunlock();
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	if (runtime)
-		(*proxy_sqlite3_finalize)(statement2);
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
