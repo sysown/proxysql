@@ -228,9 +228,9 @@ public:
 #ifdef IDLE_THREADS
 	PtrArray* idle_mysql_sessions;
 	PtrArray* resume_mysql_sessions;
-	CopyCmdMatcher *copy_cmd_matcher;
 	pgsql_conn_exchange_t myexchange;
 #endif // IDLE_THREADS
+	CopyCmdMatcher *copy_cmd_matcher;
 
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
