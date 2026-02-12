@@ -2174,8 +2174,7 @@ void ProxySQL_Admin::stats___pgsql_errors(bool reset) {
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
+	// RAII auto-finalizes statement1 and statement32
 	statsdb->execute("COMMIT");
 }
 
@@ -2575,8 +2574,7 @@ int ProxySQL_Admin::stats___save_pgsql_query_digest_to_sqlite(
 		else
 			it++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
+	// RAII auto-finalizes statement1 and statement32
 	if (reset) {
 		if (copy) {
 			statsdb->execute("INSERT INTO stats_pgsql_query_digest SELECT * FROM stats_pgsql_query_digest_reset");
