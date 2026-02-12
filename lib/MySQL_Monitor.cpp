@@ -244,6 +244,7 @@ public:
 	void put_connection(char *hostname, MySQL_Monitor_State_Data* mmsd);
 	void purge_some_connections();
 	void purge_all_connections();
+	void destroy_mysql_connection(MySQL_Monitor_State_Data* mmsd);
 	MySQL_Monitor_Connection_Pool() {
 		servers = std::unique_ptr<PtrArray>(new PtrArray());
 #ifdef DEBUG
@@ -268,7 +269,7 @@ public:
 			if (my1 == nullptr) continue;
 			assert(my!=my1);
 		}
-		proxy_debug(PROXY_DEBUG_MONITOR, 7, 
+		proxy_debug(PROXY_DEBUG_MONITOR, 7,
 			"Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
 		conns->add(my);
 		pthread_mutex_unlock(&m2);
@@ -298,7 +299,7 @@ public:
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			if (my1 == my) {
 				conns->remove_index_fast(i);
-				proxy_debug(PROXY_DEBUG_MONITOR, 7, 
+				proxy_debug(PROXY_DEBUG_MONITOR, 7,
 					"Un-registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
 				pthread_mutex_unlock(&m2);
 				return;
@@ -332,6 +333,16 @@ void MySQL_Monitor_Connection_Pool::purge_all_connections() {
 	conns->reset();
 	pthread_mutex_unlock(&m2);
 #endif
+}
+
+void MySQL_Monitor_Connection_Pool::destroy_mysql_connection(MySQL_Monitor_State_Data* mmsd) {
+	if (mmsd->mysql) {
+		conn_unregister(mmsd);
+		proxy_debug(PROXY_DEBUG_MONITOR, 7,
+			"Destroying MYSQL with FD %d from mmsd %p and MYSQL %p\n", mmsd->mysql->net.fd, mmsd, mmsd->mysql);
+		close_mysql(mmsd->mysql);
+		mmsd->mysql=NULL;
+	}
 }
 
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd) {
@@ -403,6 +414,9 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 }
 
 void MySQL_Monitor_Connection_Pool::put_connection(char* hostname, MySQL_Monitor_State_Data* mmsd) {
+	
+	if (!mmsd->mysql) return;
+	
 	unsigned long long now = monotonic_time();
 	int port = mmsd->port;
 	MYSQL* my = mmsd->mysql;
@@ -1394,8 +1408,10 @@ void * monitor_connect_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsd
 	} else {
 		connect_success = true;
 	}
-	mysql_close(mmsd->mysql);
-	mmsd->mysql=NULL;
+	if (mmsd->mysql) {
+		mysql_close(mmsd->mysql);
+		mmsd->mysql=NULL;
+	}
 	if (connect_success) {
 		__sync_fetch_and_add(&GloMyMon->connect_check_OK,1);
 	} else {
@@ -1463,8 +1479,6 @@ void * monitor_ping_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsds) 
 	} else {
 		if (crc==false) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
-			mmsd->mysql=NULL;
 		}
 	}
 
@@ -1510,16 +1524,13 @@ __fast_exit_monitor_ping_thread:
 #else
 			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		} else {
 			if (crc) {
 				bool rc=mmsd->set_wait_timeout();
 				if (rc) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
 #ifdef DEBUG
 					proxy_error("Error on: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
@@ -1527,16 +1538,12 @@ __fast_exit_monitor_ping_thread:
 					proxy_error("Error on server %s:%d : %s\n", mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-					mysql_close(mmsd->mysql); // set_wait_timeout failed
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 				}
-				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			}
 		}
 	}
@@ -1589,56 +1596,56 @@ __exit_set_wait_timeout:
 }
 
 bool MySQL_Monitor_State_Data::create_new_connection() {
-		mysql=mysql_init(NULL);
-		assert(mysql);
-		std::unique_ptr<MySQLServers_SslParams> ssl_params { nullptr };
-		if (use_ssl && port) {
-			ssl_params = std::unique_ptr<MySQLServers_SslParams>(
-				MyHGM->get_Server_SSL_Params(hostname, port, mysql_thread___monitor_username)
+	mysql=mysql_init(NULL);
+	assert(mysql);
+	std::unique_ptr<MySQLServers_SslParams> ssl_params { nullptr };
+	if (use_ssl && port) {
+		ssl_params = std::unique_ptr<MySQLServers_SslParams>(
+			MyHGM->get_Server_SSL_Params(hostname, port, mysql_thread___monitor_username)
+		);
+		MySQL_Connection::set_ssl_params(mysql, ssl_params.get());
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+	}
+	unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
+	if (timeout==0) timeout=1;
+	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_monitor");
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
+	MYSQL *myrc=NULL;
+	if (port) {
+		myrc=mysql_real_connect(mysql, MySQL_Monitor::dns_lookup(hostname).c_str(), mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
+	} else {
+		myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
+	}
+	if (myrc==NULL) {
+		mysql_error_msg=strdup(mysql_error(mysql));
+		int myerrno=mysql_errno(mysql);
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
+		if (ssl_params != NULL && myerrno == 2026) {
+			proxy_error("Failed to connect to server %s:%d . SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
+				( port ? hostname : "localhost" ) , port ,
+				ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
+				ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
 			);
-			MySQL_Connection::set_ssl_params(mysql, ssl_params.get());
-			mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 		}
-		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
-		if (timeout==0) timeout=1;
-		mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_monitor");
-		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
-		MYSQL *myrc=NULL;
-		if (port) {
-			myrc=mysql_real_connect(mysql, MySQL_Monitor::dns_lookup(hostname).c_str(), mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
+		if (myerrno < 2000) {
+			mysql_close(mysql);
 		} else {
-			myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
+			close_mysql(mysql);
 		}
-		if (myrc==NULL) {
-			mysql_error_msg=strdup(mysql_error(mysql));
-			int myerrno=mysql_errno(mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
-			if (ssl_params != NULL && myerrno == 2026) {
-				proxy_error("Failed to connect to server %s:%d . SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
-					( port ? hostname : "localhost" ) , port ,
-					ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
-					ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
-				);
-			}
-			if (myerrno < 2000) {
-				mysql_close(mysql);
-			} else {
-				close_mysql(mysql);
-			}
-			mysql = NULL;
-			return false;
-		} else {
-			// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
-			mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
-			int f=fcntl(mysql->net.fd, F_GETFL);
+		mysql = NULL;
+		return false;
+	} else {
+		// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
+		mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+		int f=fcntl(mysql->net.fd, F_GETFL);
 #ifdef FD_CLOEXEC
-			// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
-			fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK|FD_CLOEXEC);
+		// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
+		fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK|FD_CLOEXEC);
 #else
-			fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
+		fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
 #endif /* FD_CLOEXEC */
-			MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
+		MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
 	}
 	return true;
 }
@@ -1874,15 +1881,12 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		if (mmsd->mysql) {
 			proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql);
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 	} else {
 		if (crc==false) {
 			if (mmsd->mysql) {
 				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-				mmsd->mysql=NULL;
 			}
 		}
 	}
@@ -1892,9 +1896,7 @@ __fast_exit_monitor_read_only_thread:
 		if (mmsd->mysql_error_msg) {
 			proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		} else {
 			if (crc) {
 				bool rc=mmsd->set_wait_timeout();
@@ -1903,16 +1905,12 @@ __fast_exit_monitor_read_only_thread:
 				} else {
 					proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-					mysql_close(mmsd->mysql); // set_wait_timeout failed
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 				}
-				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			}
 		}
 	}
@@ -2025,14 +2023,11 @@ void * monitor_group_replication_thread(const std::vector<MySQL_Monitor_State_Da
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 		if (mmsd->mysql) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql);
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 	} else {
 		if (crc==false) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql=NULL;
 		}
 	}
 
@@ -2231,15 +2226,12 @@ __end_process_group_replication_result2:
 		if (mmsd->mysql) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql);
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 	} else {
 		if (crc==false) {
 			if (mmsd->mysql) {
 				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-				mmsd->mysql=NULL;
 			}
 		}
 	}
@@ -2249,9 +2241,7 @@ __fast_exit_monitor_group_replication_thread:
 		if (mmsd->mysql_error_msg) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		} else {
 			if (crc) {
 				bool rc=mmsd->set_wait_timeout();
@@ -2260,16 +2250,12 @@ __fast_exit_monitor_group_replication_thread:
 				} else {
 					proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-					mysql_close(mmsd->mysql); // set_wait_timeout failed
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 				}
-				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			}
 		}
 	}
@@ -2394,24 +2380,18 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 		if (mmsd->mysql) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql);
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 	} else {
 		if (crc==false) {
 #ifdef TEST_GALERA
 			if ( rand()%3 == 0) { // drop the connection once every 3 checks
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			} else {
 				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-				mmsd->mysql=NULL;
 			}
 #else
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql=NULL;
 #endif // TEST_GALERA
 		}
 	}
@@ -2632,15 +2612,12 @@ __end_process_galera_result2:
 		if (mmsd->mysql) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql);
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 	} else {
 		if (crc==false) {
 			if (mmsd->mysql) {
 				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-				mmsd->mysql=NULL;
 			}
 		}
 	}
@@ -2650,9 +2627,7 @@ __fast_exit_monitor_galera_thread:
 		if (mmsd->mysql_error_msg) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		} else {
 			if (crc) {
 				bool rc=mmsd->set_wait_timeout();
@@ -2661,16 +2636,12 @@ __fast_exit_monitor_galera_thread:
 				} else {
 					proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-					mysql_close(mmsd->mysql); // set_wait_timeout failed
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 				}
-				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			}
 		}
 	}
@@ -2809,16 +2780,10 @@ void * monitor_replication_lag_thread(const std::vector<MySQL_Monitor_State_Data
 		unsigned long long now=monotonic_time();
 		proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (now-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 #endif // DEBUG
-		if (mmsd->mysql) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql);
-			mmsd->mysql=NULL;
-		}
+		GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 	} else {
 		if (crc==false) {
-			//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql=NULL;
 		}
 	}
 
@@ -2979,15 +2944,11 @@ __exit_monitor_replication_lag_thread:
 			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql);
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 	} else {
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
-			mmsd->mysql=NULL;
 		}
 	}
 __fast_exit_monitor_replication_lag_thread:
@@ -3001,26 +2962,21 @@ __fast_exit_monitor_replication_lag_thread:
 			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		} else {
 			if (crc) {
 				bool rc=mmsd->set_wait_timeout();
 				if (rc) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
 #ifdef DEBUG
 					proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);	
 #else
 					proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-					mysql_close(mmsd->mysql); // set_wait_timeout failed
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 				}
-				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 #ifdef DEBUG
 				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
@@ -3028,9 +2984,7 @@ __fast_exit_monitor_replication_lag_thread:
 				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			}
 		}
 	}
@@ -4056,10 +4010,7 @@ void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
 			//  1. Connection failed to be created, 'task_result' should be 'TASK_RESULT_UNKNOWN'. No
 			//     unregister needed.
 			//  2. Fetching operation failed, the async fetching handler already handled the 'unregister'.
-			if (mmsd->get_task_result() == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			}
-			mysql_close(mmsd->mysql);
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		} else {
 			if (mmsd->created_conn) {
 				bool rc = mmsd->set_wait_timeout();
@@ -4073,15 +4024,12 @@ void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
 					MyHGM->p_update_mysql_error_counter(
 						p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
 					);
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-					mysql_close(mmsd->mysql);
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 				}
 			} else {
 				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
 			}
 		}
-
-		mmsd->mysql=NULL;
 	}
 }
 
@@ -6446,7 +6394,6 @@ __exit_monitor_aws_aurora_HG_thread:
 			if (crc==false) {
 				if (mmsd->mysql) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-					mmsd->mysql=NULL;
 				}
 			}
 		}
@@ -6460,9 +6407,7 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			mmsd->mysql=NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		} else {
 			if (crc) {
 				bool rc=mmsd->set_wait_timeout();
@@ -6471,16 +6416,12 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 				} else {
 					proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-					mysql_close(mmsd->mysql); // set_wait_timeout failed
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 				}
-				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			}
 		}
 	}
@@ -7115,7 +7056,7 @@ public:
 
 		if (len_ == 0) return false;
 
-		// Snapshot the number of tasks that are currently queued for this event loop iteration. 
+		// Snapshot the number of tasks that are currently queued for this event loop iteration.
 		// len_ will change as tasks complete and are removed below.
 		const unsigned int total_tasks = len_;
 
@@ -7137,6 +7078,7 @@ public:
 		while (len_) {
 
 			if (GloMyMon->shutdown) {
+				proxy_error("Monitor event loop interrupted by shutdown with %u tasks remaining. Connections will be cleaned up.\n", len_);
 				return false;
 			}
 
@@ -7172,6 +7114,7 @@ public:
 				if (errno == EINTR) {
 					continue;
 				} else {
+					proxy_error("Monitor event loop poll() failed with error %d (%s) with %u tasks remaining. Aborting monitoring cycle.\n", errno, strerror(errno), len_);
 					return false;
 				}
 			}
@@ -7181,10 +7124,7 @@ public:
 			for (unsigned int i = 0; i < len_;) {
 
 				if (mmsds_[i]->task_handler(fds_[i].revents, fds_[i].events) != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING) {
-#ifdef DEBUG
-					if (mmsds_[i]->get_task_result() != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS)
-						GloMyMon->My_Conn_Pool->conn_unregister(mmsds_[i]);
-#endif // DEBUG
+
 					ready_tasks.push_back(mmsds_[i]);
 					remove_index_fast(i);
 
@@ -7194,6 +7134,7 @@ public:
 					if (tasks_to_process_count == 0 || len_ == 0) {
 						proxy_debug(PROXY_DEBUG_MONITOR, 7, "Phase 2: Starting processing of %zu ready tasks\n", ready_tasks.size());
 						if (process_ready_task_callback_arg.process_ready_tasks(ready_tasks) == false) {
+							proxy_error("Monitor event loop process_ready_tasks() failed. %u tasks remaining unprocessed in poll.\n", len_);
 							return false;
 						}
 						ready_tasks.clear();
@@ -7372,7 +7313,6 @@ void* monitor_ping_process_ready_task_thread(const std::vector<MySQL_Monitor_Sta
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			__sync_fetch_and_add(&GloMyMon->ping_check_OK, 1);
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql = NULL;
 		} else {
 			__sync_fetch_and_add(&GloMyMon->ping_check_ERR, 1);
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
@@ -7387,8 +7327,7 @@ void* monitor_ping_process_ready_task_thread(const std::vector<MySQL_Monitor_Sta
 					(mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port,
 					(mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 			}
-			mysql_close(mmsd->mysql);
-			mmsd->mysql = NULL;
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 
 		if (GloMyMon->shutdown)
@@ -7603,7 +7542,6 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			__sync_fetch_and_add(&read_only_check_OK, 1);
 			My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql = NULL;
 		} else {
 			__sync_fetch_and_add(&read_only_check_ERR, 1);
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
@@ -7617,11 +7555,8 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-//#ifdef DEBUG
-//			My_Conn_Pool->conn_unregister(mmsd);
-//#endif // DEBUG
-			mysql_close(mmsd->mysql);
-			mmsd->mysql = NULL;
+
+			My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 
 		if (shutdown == true) {
@@ -7826,7 +7761,6 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql = NULL;
 		} else {
 
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
@@ -7840,11 +7774,7 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-//#ifdef DEBUG
-//			My_Conn_Pool->conn_unregister(mmsd);
-//#endif // DEBUG
-			mysql_close(mmsd->mysql);
-			mmsd->mysql = NULL;
+			My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 
 		if (shutdown == true) {
@@ -8074,7 +8004,6 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			__sync_fetch_and_add(&replication_lag_check_OK, 1);
 			My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql = NULL;
 		} else {
 			__sync_fetch_and_add(&replication_lag_check_ERR, 1);
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
@@ -8088,11 +8017,7 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-//#ifdef DEBUG
-//			My_Conn_Pool->conn_unregister(mmsd);
-//#endif
-			mysql_close(mmsd->mysql);
-			mmsd->mysql = NULL;
+			My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 
 		if (shutdown == true) {
@@ -8293,16 +8218,12 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 
 #ifdef TEST_GALERA
 			if (rand() % 3 == 0) { // drop the connection once every 3 checks
-				My_Conn_Pool->conn_unregister(mmsd);
-				mysql_close(mmsd->mysql);
-				mmsd->mysql = NULL;
+				My_Conn_Pool->destroy_mysql_connection(mmsd);
 			} else {
 				My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-				mmsd->mysql = NULL;
 			}
 #else
 			My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
-			mmsd->mysql = NULL;
 #endif
 		} else {
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
@@ -8317,11 +8238,7 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-//#ifdef DEBUG
-//			My_Conn_Pool->conn_unregister(mmsd);
-//#endif // DEBUG
-			mysql_close(mmsd->mysql);
-			mmsd->mysql = NULL;
+			My_Conn_Pool->destroy_mysql_connection(mmsd);
 		}
 
 		if (shutdown == true) {
