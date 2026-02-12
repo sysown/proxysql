@@ -488,6 +488,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_queries_backends_bytes_total",
 			"Total number of bytes (sent|received) in backend connections.",
 			metric_tags {
+				{ "protocol", "pgsql" },
 				{ "traffic_flow", "sent" }
 			}
 		),
@@ -496,6 +497,7 @@ th_metrics_map = std::make_tuple(
 			"proxysql_queries_backends_bytes_total",
 			"Total number of bytes (sent|received) in backend connections.",
 			metric_tags {
+				{ "protocol", "pgsql" },
 				{ "traffic_flow", "received" }
 			}
 		),
@@ -507,6 +509,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_queries_frontends_bytes_total",
 		"Total number of bytes (sent|received) in frontend connections.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "traffic_flow", "sent" }
 		}
 	),
@@ -515,6 +518,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_queries_frontends_bytes_total",
 		"Total number of bytes (sent|received) in frontend connections.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "traffic_flow", "received" }
 		}
 	),
@@ -524,13 +528,13 @@ th_metrics_map = std::make_tuple(
 		p_th_counter::query_processor_time_nsec,
 		"proxysql_query_processor_time_seconds_total",
 		"The time spent inside the \"Query Processor\" to determine what action needs to be taken with the query (internal module).",
-		metric_tags {}
+		metric_tags { { "protocol", "pgsql" } }
 	),
 	std::make_tuple(
 		p_th_counter::backend_query_time_nsec,
 		"proxysql_backend_query_time_seconds_total",
 		"Time spent making network calls to communicate with the backends.",
-		metric_tags {}
+		metric_tags { { "protocol", "pgsql" } }
 	),
 
 	// ====================================================================
@@ -539,6 +543,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_com_backend_stmt_total",
 		"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "op", "prepare" }
 		}
 	),
@@ -547,6 +552,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_com_backend_stmt_total",
 		"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "op", "execute" }
 		}
 	),
@@ -555,6 +561,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_com_backend_stmt_total",
 		"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "op", "close" }
 		}
 	),
@@ -566,6 +573,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_com_frontend_stmt_total",
 		"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "op", "prepare" }
 		}
 	),
@@ -574,6 +582,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_com_frontend_stmt_total",
 		"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "op", "execute" }
 		}
 	),
@@ -582,6 +591,7 @@ th_metrics_map = std::make_tuple(
 		"proxysql_com_frontend_stmt_total",
 		"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 		metric_tags {
+			{ "protocol", "pgsql" },
 			{ "op", "close" }
 		}
 	),
@@ -591,25 +601,33 @@ th_metrics_map = std::make_tuple(
 		p_th_counter::questions,
 		"proxysql_questions_total",
 		"The total number of client requests / statements executed.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::slow_queries,
 		"proxysql_slow_queries_total",
-		"The total number of queries with an execution time greater than \"mysql-long_query_time\" milliseconds.",
-		metric_tags {}
+		"The total number of queries with an execution time greater than \"pgsql-long_query_time\" milliseconds.",
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::gtid_consistent_queries,
 		"proxysql_gtid_consistent_queries_total",
 		"Total queries with GTID consistent read.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::gtid_session_collected,
 		"proxysql_gtid_session_collected_total",
 		"Total queries with GTID session state.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 
 	// ====================================================================
@@ -617,25 +635,33 @@ th_metrics_map = std::make_tuple(
 		p_th_counter::connpool_get_conn_latency_awareness,
 		"proxysql_connpool_get_conn_success_latency_awareness_total",
 		"The connection was picked using the latency awareness algorithm.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::connpool_get_conn_immediate,
 		"proxysql_connpool_get_conn_success_immediate_total",
 		"The connection is provided from per-thread cache.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::connpool_get_conn_success,
 		"proxysql_connpool_get_conn_success_total",
 		"The session is able to get a connection, either from per-thread cache or connection pool.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::connpool_get_conn_failure,
 		"proxysql_connpool_get_conn_failure_total",
 		"The connection pool cannot provide any connection.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	// ====================================================================
 
@@ -643,103 +669,137 @@ th_metrics_map = std::make_tuple(
 		p_th_counter::generated_error_packets,
 		"proxysql_generated_error_packets_total",
 		"Total generated error packets.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::max_connect_timeouts,
 		"proxysql_max_connect_timeouts_total",
 		"Maximum connection timeout reached when trying to connect to backend sever.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::backend_lagging_during_query,
 		"proxysql_backend_lagging_during_query_total",
 		"Query failed because server was shunned due to lag.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::backend_offline_during_query,
 		"proxysql_backend_offline_during_query_total",
 		"Query failed because server was offline.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::queries_with_max_lag_ms,
 		"proxysql_queries_with_max_lag_total",
 		"Received queries that have a 'max_lag' attribute.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::queries_with_max_lag_ms__delayed,
 		"proxysql_queries_with_max_lag__delayed_total",
 		"Query delayed because no connection was selected due to 'max_lag' annotation.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::queries_with_max_lag_ms__total_wait_time_us,
 		"proxysql_queries_with_max_lag__total_wait_time_total",
 		"Total waited time due to connection selection because of 'max_lag' annotation.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::mysql_unexpected_frontend_com_quit,
 		"proxysql_mysql_unexpected_frontend_com_quit_total",
 		"Unexpected 'COM_QUIT' received from the client.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::hostgroup_locked_set_cmds,
 		"proxysql_hostgroup_locked_set_cmds_total",
 		"Total number of connections that have been locked in a hostgroup.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::hostgroup_locked_queries,
 		"proxysql_hostgroup_locked_queries_total",
 		"Query blocked because connection is locked into some hostgroup but is trying to reach other.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::mysql_unexpected_frontend_packets,
 		"proxysql_mysql_unexpected_frontend_packets_total",
 		"Unexpected packet received from client.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::aws_aurora_replicas_skipped_during_query,
 		"proxysql_aws_aurora_replicas_skipped_during_query_total",
 		"Replicas skipped due to current lag being higher than 'max_lag' annotation.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::automatic_detected_sql_injection,
 		"proxysql_automatic_detected_sql_injection_total",
 		"Blocked a detected 'sql injection' attempt.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::mysql_whitelisted_sqli_fingerprint,
 		"proxysql_mysql_whitelisted_sqli_fingerprint_total",
 		"Detected a whitelisted 'sql injection' fingerprint.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::mysql_killed_backend_connections,
 		"proxysql_mysql_killed_backend_connections_total",
 		"Number of backend connection killed.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::mysql_killed_backend_queries,
 		"proxysql_mysql_killed_backend_queries_total",
 		"Killed backend queries.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_counter::client_host_error_killed_connections,
 		"proxysql_client_host_error_killed_connections",
 		"Killed client connections because address exceeded 'client_host_error_counts'.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	)
 	},
 	th_gauge_vector{
@@ -747,140 +807,186 @@ th_metrics_map = std::make_tuple(
 			p_th_gauge::active_transactions,
 			"proxysql_active_transactions",
 			"Provides a count of how many client connection are currently processing a transaction.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::client_connections_non_idle,
 			"proxysql_client_connections_non_idle",
 			"Number of client connections that are currently handled by the main worker threads.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::client_connections_hostgroup_locked,
 			"proxysql_client_connections_hostgroup_locked",
 			"Number of client connection locked to a specific hostgroup.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::mysql_backend_buffers_bytes,
 			"proxysql_mysql_backend_buffers_bytes",
 			"Buffers related to backend connections if \"fast_forward\" is used (0 means fast_forward is not used).",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::mysql_frontend_buffers_bytes,
 			"proxysql_mysql_frontend_buffers_bytes",
 			"Buffers related to frontend connections (read/write buffers and other queues).",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::mysql_session_internal_bytes,
 			"proxysql_mysql_session_internal_bytes",
 			"Other memory used by ProxySQL to handle MySQL Sessions.",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::mirror_concurrency,
 			"proxysql_mirror_concurrency",
 			"Mirror current concurrency",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::mirror_queue_lengths,
 			"proxysql_mirror_queue_lengths",
 			"Mirror queue length",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 		std::make_tuple(
 			p_th_gauge::mysql_thread_workers,
 			"proxysql_mysql_thread_workers",
 			"Number of MySQL Thread workers i.e. 'mysql-threads'",
-			metric_tags {}
+			metric_tags {
+				{ "protocol", "pgsql" }
+			}
 		),
 	// global_variables
 	std::make_tuple(
 		p_th_gauge::mysql_wait_timeout,
 		"proxysql_mysql_wait_timeout",
 		"If a proxy session has been idle for more than this threshold, the proxy will kill the session.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_max_connections,
 		"proxysql_mysql_max_connections",
 		"The maximum number of client connections that the proxy can handle.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_enabled,
 		"proxysql_mysql_monitor_enabled",
 		"Enables or disables MySQL Monitor.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_ping_interval,
 		"proxysql_mysql_monitor_ping_interval",
 		"How frequently a ping check is performed, in seconds.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_ping_timeout,
 		"proxysql_mysql_monitor_ping_timeout_seconds",
 		"Ping timeout in seconds.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_ping_max_failures,
 		"proxysql_mysql_monitor_ping_max_failures",
 		"Reached maximum ping attempts from monitor.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple (
 		p_th_gauge::mysql_monitor_aws_rds_topology_discovery_interval,
 		"proxysql_mysql_monitor_aws_rds_topology_discovery_interval",
 		"How frequently a topology discovery is performed, e.g. a value of 500 means one topology discovery every 500 read-only checks ",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_read_only_interval,
 		"proxysql_mysql_monitor_read_only_interval_seconds",
 		"How frequently a read only check is performed, in seconds.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_read_only_timeout,
 		"proxysql_mysql_monitor_read_only_timeout_seconds",
 		"Read only check timeout in seconds.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_writer_is_also_reader,
 		"proxysql_mysql_monitor_writer_is_also_reader",
 		"Encodes different behaviors for nodes depending on their 'READ_ONLY' flag value.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_replication_lag_group_by_host,
 		"proxysql_monitor_replication_lag_group_by_host",
 		"Encodes different replication lag check if the same server is in multiple hostgroups.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_replication_lag_interval,
 		"proxysql_mysql_monitor_replication_lag_interval_seconds",
 		"How frequently a replication lag check is performed, in seconds.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_replication_lag_timeout,
 		"proxysql_mysql_monitor_replication_lag_timeout_seconds",
 		"Replication lag check timeout in seconds.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	),
 	std::make_tuple(
 		p_th_gauge::mysql_monitor_history,
 		"proxysql_mysql_monitor_history_timeout_seconds",
 		"The duration for which the events for the checks made by the Monitor module are kept, in seconds.",
-		metric_tags {}
+		metric_tags {
+			{ "protocol", "pgsql" }
+		}
 	)
 	}
 );
