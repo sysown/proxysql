@@ -660,18 +660,19 @@ void ProxySQL_Admin::flush_sqliteserver_variables___runtime_to_database(SQLite3D
   } else {
     a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"sqliteserver-%s\",\"%s\")";
   }
-  int l=strlen(a)+200;
 	GloSQLite3Server->wrlock();
 	char **varnames=GloSQLite3Server->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloSQLite3Server->get_variable(varnames[i]);
-		l+=( varnames[i] ? strlen(varnames[i]) : 6);
-		l+=( val ? strlen(val) : 6);
+		const char* safe_val = (val ? val : "(null)");
+		size_t l = strlen(a) + 200;
+		l += (varnames[i] ? strlen(varnames[i]) : 6);
+		l += strlen(safe_val);
 		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		snprintf(query, l, a, varnames[i], safe_val);
 		if (runtime) {
 			db->execute(query);
-			sprintf(query, b, varnames[i], val);
+			snprintf(query, l, b, varnames[i], safe_val);
 		}
 		db->execute(query);
 		if (val)
@@ -1259,18 +1260,19 @@ void ProxySQL_Admin::flush_ldap_variables___runtime_to_database(SQLite3DB *db, b
   } else {
     a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"ldap-%s\",\"%s\")";
   }
-  int l=strlen(a)+200;
 	GloMyLdapAuth->wrlock();
 	char **varnames=GloMyLdapAuth->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMyLdapAuth->get_variable(varnames[i]);
-		l+=( varnames[i] ? strlen(varnames[i]) : 6);
-		l+=( val ? strlen(val) : 6);
+		const char* safe_val = (val ? val : "(null)");
+		size_t l = strlen(a) + 200;
+		l += (varnames[i] ? strlen(varnames[i]) : 6);
+		l += strlen(safe_val);
 		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		snprintf(query, l, a, varnames[i], safe_val);
 		if (runtime) {
 			db->execute(query);
-			sprintf(query, b, varnames[i], val);
+			snprintf(query, l, b, varnames[i], safe_val);
 		}
 		db->execute(query);
 		if (val)
@@ -1323,18 +1325,18 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
   } else {
     a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"admin-%s\",\"%s\")";
   }
-  int l=strlen(a)+200;
-
 	char **varnames=get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=get_variable(varnames[i]);
-		l+=( varnames[i] ? strlen(varnames[i]) : 6);
-		l+=( val ? strlen(val) : 6);
+		const char* safe_val = (val ? val : "(null)");
+		size_t l = strlen(a) + 200;
+		l += (varnames[i] ? strlen(varnames[i]) : 6);
+		l += strlen(safe_val);
 		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		snprintf(query, l, a, varnames[i], safe_val);
 		db->execute(query);
 		if (runtime) {
-			sprintf(query, b, varnames[i], val);
+			snprintf(query, l, b, varnames[i], safe_val);
 			db->execute(query);
 		}
 		if (val)

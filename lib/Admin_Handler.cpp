@@ -1033,7 +1033,7 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			size_t buff_len = strlen(err_msg_fmt) + strlen(var_name) + 1;
 			char *buff = (char *) malloc(buff_len);
 			snprintf(buff, buff_len, err_msg_fmt, var_name);
-			SPA->send_ok_msg_to_client(sess, buff, 0, query_no_space);
+			SPA->send_error_msg_to_client(sess, buff);
 			free(buff);
 			run_query = false;
 		} else {
