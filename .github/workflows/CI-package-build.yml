@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   run:
-    uses: sysown/proxysql/.github/workflows/ci-package-build.yml@GH-Actions
+    uses: ${{ github.repository }}/.github/workflows/ci-package-build.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
