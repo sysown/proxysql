@@ -40,6 +40,9 @@ CommandLine::~CommandLine() {
 	if (admin_password)
 		free(admin_password);
 
+	if (mcp_auth_token)
+		free(mcp_auth_token);
+
 	if (mysql_host)
 		free(mysql_host);
 	if (mysql_username)
@@ -234,6 +237,20 @@ int CommandLine::getEnv() {
 		value = getenv("TAP_ADMINPASSWORD");
 		if (value)
 			replace_str_field(&this->admin_password, value);
+	}
+
+	{
+		// proxysql mcp connection
+		value = getenv("TAP_MCP_PORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				mcp_port = env_port;
+		}
+
+		value = getenv("TAP_MCP_AUTH_TOKEN");
+		if (value)
+			replace_str_field(&this->mcp_auth_token, value);
 	}
 
 	{

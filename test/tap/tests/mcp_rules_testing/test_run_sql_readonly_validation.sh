@@ -2,6 +2,9 @@
 #
 # test_run_sql_readonly_validation.sh - Test run_sql_readonly Query Validation
 #
+# DEPRECATED: This shell script is deprecated in favor of the C++ TAP test.
+# Please use: test/tap/tests/mcp_query_run_sql_readonly-t
+#
 # This script tests that the run_sql_readonly tool properly validates
 # queries and rejects non-SELECT queries.
 #
