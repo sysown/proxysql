@@ -14,7 +14,7 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    uses: sysown/proxysql/.github/workflows/ci-taptests.yml@GH-Actions
+    uses: mirostauder/proxysql/.github/workflows/ci-taptests.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}

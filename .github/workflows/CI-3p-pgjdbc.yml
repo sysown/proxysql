@@ -21,7 +21,7 @@ jobs:
     if: |
       (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) &&
       ! startsWith((github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name), 'v2.')
-    uses: sysown/proxysql/.github/workflows/ci-3p-pgjdbc.yml@GH-Actions
+    uses: mirostauder/proxysql/.github/workflows/ci-3p-pgjdbc.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
