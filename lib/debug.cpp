@@ -44,7 +44,13 @@ struct DebugLogEntry {
 };
 
 static const size_t limitSize = 100;
-static std::vector<DebugLogEntry> log_buffer = {};
+/*
+ * NOTE: Intentionally leaked.
+ * During fast shutdown paths we can call exit() while worker threads are still
+ * emitting debug logs. A static std::vector would be destroyed by exit handlers
+ * and could race with concurrent push_back(), causing use-after-free.
+ */
+static std::vector<DebugLogEntry>* log_buffer = new std::vector<DebugLogEntry>();
 
 
 /**
@@ -60,7 +66,7 @@ static std::vector<DebugLogEntry> log_buffer = {};
 void sync_log_buffer_to_disk(SQLite3DB *db) {
 	int rc;
 	db->execute("BEGIN TRANSACTION");
-	for (const auto& entry : log_buffer) {
+	for (const auto& entry : *log_buffer) {
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, entry.time); ASSERT_SQLITE_OK(rc, db);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, entry.lapse);ASSERT_SQLITE_OK(rc, db);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, entry.thr); ASSERT_SQLITE_OK(rc, db);
@@ -78,7 +84,7 @@ void sync_log_buffer_to_disk(SQLite3DB *db) {
 		rc=(*proxy_sqlite3_reset)(statement1); // ASSERT_SQLITE_OK(rc, db);
 	}
 	db->execute("COMMIT");
-	log_buffer.clear();
+	log_buffer->clear();
 }
 
 /**
@@ -279,14 +285,14 @@ void proxy_debug_func(
 			entry.verbosity = verbosity;
 			entry.message = origdebugbuff;
 			entry.backtrace = longdebugbuff2;
-			log_buffer.push_back(entry);
+			log_buffer->push_back(entry);
 			// we now batch writes
 			// note1: in case of crash, the database will have some missing entries,
 			// but the entries can be read in `log_buffer` in the core dump
 			// note2: also in case of shutdown , `log_buffer` will have entries that won't be saved.
 			// if we really want *all* entries, we could just call sync_log_buffer_to_disk() on shutdown
 			if (
-				(log_buffer.size() >= limitSize)
+				(log_buffer->size() >= limitSize)
 				||
 				(entry.file == "ProxySQL_Admin.cpp" && entry.funct == "flush_logs")
 			) {
