@@ -306,6 +306,7 @@ char *s_strdup(char *s) {
 
 int admin_load_main_=0;
 bool admin_nostart_=false;
+static volatile int admin_client_threads_active = 0;
 
 int __admin_refresh_interval=0;
 
@@ -2078,6 +2079,7 @@ void *child_mysql(void *arg) {
 			__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
 		}
 	}
+	__sync_fetch_and_add(&admin_client_threads_active, 1);
 
 	arg_proxysql_adm*myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
@@ -2138,6 +2140,9 @@ void *child_mysql(void *arg) {
 	//free(arg->addr); // do not free
 	free(arg);
 
+	if (__sync_fetch_and_add(&glovars.shutdown,0) != 0) {
+		goto __exit_child_mysql;
+	}
 	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
@@ -2183,6 +2188,7 @@ void *child_mysql(void *arg) {
 __exit_child_mysql:
 	delete mysql_thr;
 
+	__sync_fetch_and_sub(&admin_client_threads_active, 1);
 	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
 
 	return NULL;
@@ -2198,6 +2204,7 @@ void* child_postgres(void* arg) {
 			__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, tmp_stack_size);
 		}
 	}
+	__sync_fetch_and_add(&admin_client_threads_active, 1);
 
 	arg_proxysql_adm* myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
@@ -2250,6 +2257,9 @@ void* child_postgres(void* arg) {
 	//free(arg->addr); // do not free
 	free(arg);
 
+	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0) {
+		goto __exit_child_postgres;
+	}
 	myds->DSS = STATE_SERVER_HANDSHAKE;
 	sess->status = CONNECTING_CLIENT;
 
@@ -2300,6 +2310,7 @@ void* child_postgres(void* arg) {
 __exit_child_postgres:
 	delete pgsql_thr;
 
+	__sync_fetch_and_sub(&admin_client_threads_active, 1);
 	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads, tmp_stack_size);
 
 	return NULL;
@@ -2398,8 +2409,11 @@ void * admin_main_loop(void *arg) {
 			admin_nostart_=false;
 			pthread_mutex_unlock(&GloVars.global.start_mutex);
 		}
+		if (__sync_fetch_and_add(&glovars.shutdown,0) != 0 || *shutdown != 0) {
+			break;
+		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
-        // poll() timeout, try again
+			// poll() timeout, try again
 			goto __end_while_pool;
 		}
 		for (i=1;i<nfds;i++) {
@@ -2413,6 +2427,18 @@ void * admin_main_loop(void *arg) {
 				passarg->addr_size = sizeof(custom_sockaddr);
 				memset(passarg->addr, 0, sizeof(custom_sockaddr));
 				passarg->client_t = accept(fds[i].fd, (struct sockaddr*)passarg->addr, &passarg->addr_size);
+				if (passarg->client_t < 0) {
+					free(passarg->addr);
+					free(passarg);
+					continue;
+				}
+				if (__sync_fetch_and_add(&glovars.shutdown,0) != 0 || *shutdown != 0) {
+					::shutdown(passarg->client_t, SHUT_RDWR);
+					close(passarg->client_t);
+					free(passarg->addr);
+					free(passarg);
+					continue;
+				}
 //		printf("Connected: %s:%d  sock=%d\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port), client_t);
 				pthread_attr_getstacksize (&attr, &stacks);
 //		printf("Default stack size = %d\n", stacks);
@@ -2976,6 +3002,9 @@ void ProxySQL_Admin::admin_shutdown() {
 	}
 	AdminHTTPServer = NULL;
 	pthread_join(admin_thr, NULL);
+	while (__sync_fetch_and_add(&admin_client_threads_active, 0) != 0) {
+		usleep(1000);
+	}
 	delete admindb;
 	delete statsdb;
 	delete configdb;
@@ -8858,4 +8887,3 @@ void ProxySQL_Admin::enable_replicationlag_testing() {
 	mysql_servers_wrunlock();
 }
 #endif // TEST_REPLICATIONLAG
-
