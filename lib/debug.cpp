@@ -21,6 +21,7 @@ static pthread_mutex_t debug_mutex;
 static pthread_rwlock_t filters_rwlock;
 static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
+static stmt_unique_ptr statement1_unique {};
 static unsigned int debug_output = 1;
 
 
@@ -44,7 +45,13 @@ struct DebugLogEntry {
 };
 
 static const size_t limitSize = 100;
-static std::vector<DebugLogEntry> log_buffer = {};
+/*
+ * NOTE: Intentionally leaked.
+ * During fast shutdown paths we can call exit() while worker threads are still
+ * emitting debug logs. A static std::vector would be destroyed by exit handlers
+ * and could race with concurrent push_back(), causing use-after-free.
+ */
+static std::vector<DebugLogEntry>* log_buffer = new std::vector<DebugLogEntry>();
 
 
 /**
@@ -60,7 +67,7 @@ static std::vector<DebugLogEntry> log_buffer = {};
 void sync_log_buffer_to_disk(SQLite3DB *db) {
 	int rc;
 	db->execute("BEGIN TRANSACTION");
-	for (const auto& entry : log_buffer) {
+	for (const auto& entry : *log_buffer) {
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, entry.time); ASSERT_SQLITE_OK(rc, db);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, entry.lapse);ASSERT_SQLITE_OK(rc, db);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, entry.thr); ASSERT_SQLITE_OK(rc, db);
@@ -78,7 +85,7 @@ void sync_log_buffer_to_disk(SQLite3DB *db) {
 		rc=(*proxy_sqlite3_reset)(statement1); // ASSERT_SQLITE_OK(rc, db);
 	}
 	db->execute("COMMIT");
-	log_buffer.clear();
+	log_buffer->clear();
 }
 
 /**
@@ -250,12 +257,15 @@ void proxy_debug_func(
 		}
 	} else {
 		SQLite3DB *db = debugdb_disk;
-		int rc = 0;
-		if (statement1==NULL) {
-			const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
-			rc=db->prepare_v2(a, &statement1);
-			ASSERT_SQLITE_OK(rc, db);
-		}
+			int rc = 0;
+			if (statement1==NULL) {
+				const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
+				auto [stmt_rc, prepared_statement_unique] = db->prepare_v2(a);
+				rc = stmt_rc;
+				ASSERT_SQLITE_OK(rc, db);
+				statement1_unique = std::move(prepared_statement_unique);
+				statement1 = statement1_unique.get();
+			}
 		if (debug_output == 1 || debug_output == 3) {
 			// to stderr
 			if (longdebugbuff[0] != 0) {
@@ -279,14 +289,14 @@ void proxy_debug_func(
 			entry.verbosity = verbosity;
 			entry.message = origdebugbuff;
 			entry.backtrace = longdebugbuff2;
-			log_buffer.push_back(entry);
+			log_buffer->push_back(entry);
 			// we now batch writes
 			// note1: in case of crash, the database will have some missing entries,
 			// but the entries can be read in `log_buffer` in the core dump
 			// note2: also in case of shutdown , `log_buffer` will have entries that won't be saved.
 			// if we really want *all* entries, we could just call sync_log_buffer_to_disk() on shutdown
 			if (
-				(log_buffer.size() >= limitSize)
+				(log_buffer->size() >= limitSize)
 				||
 				(entry.file == "ProxySQL_Admin.cpp" && entry.funct == "flush_logs")
 			) {

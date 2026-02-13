@@ -933,18 +933,15 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	}
 	int rc;
 	mydb->execute("DELETE FROM pgsql_servers_incoming");
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement32=NULL;
-	//sqlite3 *mydb3=mydb->get_db();
 	char *query1=(char *)"INSERT INTO pgsql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 	std::string query32s = "INSERT INTO pgsql_servers_incoming VALUES " + generate_multi_rows_query(32,11);
 	char *query32 = (char *)query32s.c_str();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-	rc = mydb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, mydb);
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-	rc = mydb->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	auto [rc2, statement32_unique] = mydb->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, mydb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 	MySerStatus status1=MYSQL_SERVER_STATUS_ONLINE;
 	int row_idx=0;
 	int max_bulk_row_idx=resultset->rows_count/32;
@@ -1001,8 +998,6 @@ int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	return 0;
 }
 
@@ -1383,17 +1378,14 @@ bool PgSQL_HostGroups_Manager::commit(
 		}
 		// optimization #829
 		int rc;
-		sqlite3_stmt *statement1=NULL;
-		sqlite3_stmt *statement2=NULL;
-		//sqlite3 *mydb3=mydb->get_db();
 		char *query1=(char *)"UPDATE pgsql_servers SET mem_pointer = ?1 WHERE hostgroup_id = ?2 AND hostname = ?3 AND port = ?4";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-		rc = mydb->prepare_v2(query1, &statement1);
-		ASSERT_SQLITE_OK(rc, mydb);
+		auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+		ASSERT_SQLITE_OK(rc1, mydb);
 		char *query2=(char *)"UPDATE pgsql_servers SET weight = ?1 , status = ?2 , compression = ?3 , max_connections = ?4 , max_replication_lag = ?5 , use_ssl = ?6 , max_latency_ms = ?7 , comment = ?8 WHERE hostgroup_id = ?9 AND hostname = ?10 AND port = ?11";
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query2, -1, &statement2, 0);
-		rc = mydb->prepare_v2(query2, &statement2);
-		ASSERT_SQLITE_OK(rc, mydb);
+		auto [rc2, statement2_unique] = mydb->prepare_v2(query2);
+		ASSERT_SQLITE_OK(rc2, mydb);
+		sqlite3_stmt *statement1 = statement1_unique.get();
+		sqlite3_stmt *statement2 = statement2_unique.get();
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -1490,8 +1482,7 @@ bool PgSQL_HostGroups_Manager::commit(
 				}
 			}
 		}
-		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement2);
+		// RAII auto-finalizes statement1 and statement2
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers_incoming\n");
@@ -1631,20 +1622,17 @@ void PgSQL_HostGroups_Manager::purge_pgsql_servers_table() {
 
 void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement32=NULL;
-
 	PtrArray *lst=new PtrArray();
 	//sqlite3 *mydb3=mydb->get_db();
 	char *query1=(char *)"INSERT INTO pgsql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
-	rc = mydb->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc1, statement1_unique] = mydb->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, mydb);
 	std::string query32s = "INSERT INTO pgsql_servers VALUES " + generate_multi_rows_query(32,12);
 	char *query32 = (char *)query32s.c_str();
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query32, -1, &statement32, 0);
-	rc = mydb->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc2, statement32_unique] = mydb->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, mydb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		if (_onlyhg==NULL) {
@@ -1732,8 +1720,6 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		char *error=NULL;
 		int cols=0;
@@ -3854,17 +3840,15 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 		return;
 	}
 	int rc;
-	sqlite3_stmt *statement=NULL;
-
 	const char * query=(const char *)"INSERT INTO pgsql_hostgroup_attributes ( "
 		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
 		"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
 		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-	rc = mydb->prepare_v2(query, &statement);
-	ASSERT_SQLITE_OK(rc, mydb);
+	auto [rc1, statement_unique] = mydb->prepare_v2(query);
+	ASSERT_SQLITE_OK(rc1, mydb);
+	sqlite3_stmt *statement = statement_unique.get();
 	proxy_info("New pgsql_hostgroup_attributes table\n");
 	bool current_configured[MyHostGroups->len];
 	// set configured = false to all

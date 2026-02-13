@@ -2815,12 +2815,10 @@ PgSQL_Thread::~PgSQL_Thread() {
 		match_regexes = NULL;
 	}
 
-#ifdef IDLE_THREADS
 	if (copy_cmd_matcher) {
 		delete copy_cmd_matcher;
 		copy_cmd_matcher = NULL;
 	}
-#endif
 
 	if (thr_SetParser != NULL) {
 		delete thr_SetParser;
@@ -2875,9 +2873,7 @@ bool PgSQL_Thread::init() {
 	match_regexes[2] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 	match_regexes[3] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)`?(client_encoding|names)`?( *)(|=|TO)( *)");
 
-#ifdef IDLE_THREADS
 	copy_cmd_matcher = new CopyCmdMatcher();
-#endif
 
 	return true;
 }
@@ -4120,9 +4116,7 @@ PgSQL_Thread::PgSQL_Thread() {
 		status_variables.stvar[i] = 0;
 	}
 	match_regexes = NULL;
-#ifdef IDLE_THREADS
 	copy_cmd_matcher = NULL;
-#endif
 
 	variables.min_num_servers_lantency_awareness = 1000;
 	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
