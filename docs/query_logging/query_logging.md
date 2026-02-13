@@ -47,7 +47,7 @@ If you changed the variable `mysql-eventslog_format` to `2` (logging queries in 
 and/or you would only like to log queries matching certain criteria, you need additional query rules in the
 following manner: If you don't trust Bob, you can log all of Bob's queries:
 
-```sql
+```sqlhttps://proxysql.com/documentation/global-variables/mysql-variables/#mysql-auditlog_filename
 INSERT INTO mysql_query_rules (rule_id, active, username, log, apply) VALUES (1, 1, 'Bob', 1, 0);
 ```
 
@@ -128,6 +128,48 @@ Example of JSON logging:
 {"client":"127.0.0.1:39960","digest":"0x1E180DC9CAA12D69","duration_us":240,"endtime":"2019-07-14 18:06:04.011697","endtime_timestamp_us":1563091564011697,"event":"COM_STMT_EXECUTE","hostgroup_id":0,"query":"SELECT id,id2 FROM test1 WHERE id= ?","rows_affected":0,"rows_sent":0,"schemaname":"test","server":"127.0.0.1:3306","starttime":"2019-07-14 18:06:04.011457","starttime_timestamp_us":1563091564011457,"thread_id":4,"username":"sbtest"}
 {"client":"127.0.0.1:39960","digest":"0x98A2503010E9E4C8","duration_us":0,"endtime":"2019-07-14 18:06:04.011912","endtime_timestamp_us":1563091564011912,"event":"COM_STMT_PREPARE","hostgroup_id":-1,"query":"SELECT id,id2 FROM test1 WHERE id < ?","rows_affected":0,"rows_sent":0,"schemaname":"test","starttime":"2019-07-14 18:06:04.011912","starttime_timestamp_us":1563091564011912,"thread_id":4,"username":"sbtest"}
 {"client":"127.0.0.1:39960","digest":"0x98A2503010E9E4C8","duration_us":1492,"endtime":"2019-07-14 18:06:04.013779","endtime_timestamp_us":1563091564013779,"event":"COM_STMT_EXECUTE","hostgroup_id":0,"query":"SELECT id,id2 FROM test1 WHERE id < ?","rows_affected":0,"rows_sent":4099,"schemaname":"test","server":"127.0.0.1:3306","starttime":"2019-07-14 18:06:04.012287","starttime_timestamp_us":1563091564012287,"thread_id":4,"username":"sbtest"}
+```
+
+## Sampling
+
+A new variable `mysql-eventslog_rate_limit` is introduced to control the sampling rate for event logs. When set to `1` (default),
+all events are logged to the file. When set to a value greater than `1`, the number of events logged to the file will be
+approximately equal to `1/N`, where `N` is the value set for the variable.
+
+**To log all events (default)**
+
+```sql
+SET mysql-eventslog_rate_limit=1;
+LOAD MYSQL VARIABLES TO RUNTIME;
+SAVE MYSQL VARIABLES TO DISK;
+```
+
+**To log events at a certain sampling rate**
+
+```sql
+SET mysql-eventslog_rate_limit=100;
+LOAD MYSQL VARIABLES TO RUNTIME;
+SAVE MYSQL VARIABLES TO DISK;
+```
+
+## Logging at high RPS
+
+Logging queries at high throughput often requires tuning `mysql-eventslog_flush_timeout` and `mysql-eventslog_flush_size`.
+These variables determine when the log entries stored in temporary buffers are flushed to the file on disk.
+
+**Time based flush**
+
+`mysql-eventslog_flush_timeout` triggers a flush when the time elapsed since the last flush exceeds the specified timeout value.
+
+**Size based flush**
+
+`mysql-eventslog_flush_size` triggers a flush when the buffer size (in bytes) exceeds the specified limit. Note that each worker thread maintains its own temporary buffer for log entries. Therefore, this variable should be tuned based on the available hardware resources. Increasing this value will increase memory consumption, roughly calculated as the number of worker threads multiplied by the flush size.
+
+```sql
+SET mysql-eventslog_flush_timeout=5000;
+SET mysql-eventslog_flush_size=16*1024;
+LOAD MYSQL VARIABLES TO RUNTIME;
+SAVE MYSQL VARIABLES TO DISK;
 ```
 
 ## Related Issues and Feature Requests

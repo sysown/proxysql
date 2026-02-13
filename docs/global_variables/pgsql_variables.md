@@ -14,6 +14,8 @@ NOTE: You can click on the variable name to jump to its definition
 | --------------------------------------------------------------------- | ------------- |
 | [pgsql-auditlog_filename](#pgsql-auditlog_filename)                   | NULL          |
 | [pgsql-auditlog_filesize](#pgsql-auditlog_filesize)                   | 104857600     |
+| [pgsql-auditlog_flush_timeout](#pgsql-auditlog_flush_timeout)         | 1000          |
+| [pgsql-auditlog_flush_size](#pgsql-auditlog_flush_size)               | 4096          |
 | [pgsql-aurora_max_lag_ms_only_read_from_replicas](#pgsql-aurora_max_lag_ms_only_read_from_replicas) | 2 |
 | [pgsql-authentication_method](#pgsql-authentication_method)           | 3             |
 | [pgsql-auto_increment_delay_multiplex](#pgsql-auto_increment_delay_multiplex) | 5     |
@@ -43,6 +45,9 @@ NOTE: You can click on the variable name to jump to its definition
 | [pgsql-eventslog_filename](#pgsql-eventslog_filename)                 | NULL          |
 | [pgsql-eventslog_filesize](#pgsql-eventslog_filesize)                 | 104857600     |
 | [pgsql-eventslog_format](#pgsql-eventslog_format)                     | 1             |
+| [pgsql-eventslog_flush_timeout](#pgsql-eventslog_flush_timeout)       | 1000          |
+| [pgsql-eventslog_flush_size](#pgsql-eventslog_flush_size)             | 4096          |
+| [pgsql-eventslog_rate_limit](#pgsql-eventslog_rate_limit)             | 1             |
 | [pgsql-firewall_whitelist_enabled](#pgsql-firewall_whitelist_enabled) | false         |
 | [pgsql-free_connections_pct](#pgsql-free_connections_pct)             | 10            |
 | [pgsql-handle_unknown_charset](#pgsql-handle_unknown_charset)         | 1             |
@@ -134,6 +139,40 @@ Maximum size of the PostgreSQL audit log file.
 |                      | **Maximum** | 1073741824             |
 
 **Description**: Specifies the size limit for individual PostgreSQL audit log files before they are rotated.
+
+
+### `pgsql-auditlog_flush_timeout`
+
+Timeout for writing logs to PostgreSQL audit log file.
+
+|                      |             |                              |
+| -------------------- | ----------- | ---------------------------- |
+| **System Variable**  | **Name**    | pgsql-auditlog_flush_timeout |
+|                      | **Dynamic** | Yes                          |
+| **Permitted Values** | **Type**    | Integer (milliseconds)       |
+|                      | **Default** | 1000                         |
+|                      | **Minimum** | 0                            |
+|                      | **Maximum** |                              |
+
+**Description**: Specifies the timeout to write the buffered audit log entries to the 
+audit log file. The default value is 1000 (1 second).
+
+### `pgsql-auditlog_flush_size`
+
+Size threshold for writing logs to PostgreSQL audit log file.
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | pgsql-auditlog_flush_size  |
+|                      | **Dynamic** | Yes                        |
+| **Permitted Values** | **Type**    | Integer (bytes)            |
+|                      | **Default** | 4096                       |
+|                      | **Minimum** | 0                          |
+|                      | **Maximum** |                            |
+
+**Description**: This variable defines the flush size to write the buffered audit log entries to the
+audit log file. If the size of the buffer goes beyond this value,
+the contents of the buffer are written to the file. The default value is 4096.
 
 ### `pgsql-aurora_max_lag_ms_only_read_from_replicas`
 
@@ -457,6 +496,56 @@ Format of the PostgreSQL events log.
 | **Maximum**          | **1**       |                       |
 
 **Description**: Sets the logging format for PostgreSQL events. Currently, only format `1` (Binary) is supported.
+
+### `pgsql-eventslog_flush_timeout`
+
+Timeout for writing logs to the PostgreSQL events log.
+
+|                      |             |                               |
+| -------------------- | ----------- | ----------------------------- |
+| **System Variable**  | **Name**    | pgsql-eventslog_flush_timeout |
+|                      | **Dynamic** | Yes                           |
+| **Permitted Values** | **Type**    | Integer (milliseconds)        |
+|                      | **Default** | 1000                          |
+|                      | **Minimum** | 0                             |
+|                      | **Maximum** |                               |
+
+**Description**: This variable defines the flush timeout to write the buffered event log entries to the 
+events log file. The default value is 1000 (1 second).
+
+### `pgsql-eventslog_flush_size`
+
+Size threshold for writing logs to the PostgreSQL events log.
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | pgsql-eventslog_flush_size |
+|                      | **Dynamic** | Yes                        |
+| **Permitted Values** | **Type**    | Integer (bytes)            |
+|                      | **Default** | 4096                       |
+|                      | **Minimum** | 0                          |
+|                      | **Maximum** |                            |
+
+**Description**: This variable defines the flush size to write the buffered event log entries to the
+events log file. If the size of the buffer goes beyond this value,
+the contents of the buffer are written to the file. The default value is 4096.
+
+### `pgsql-eventslog_rate_limit`
+
+Sampling rate for the PostgreSQL events log.
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | pgsql-eventslog_rate_limit |
+|                      | **Dynamic** | Yes                        |
+| **Permitted Values** | **Type**    | Integer                    |
+|                      | **Default** | 1                          |
+|                      | **Minimum** | 1                          |
+|                      | **Maximum** |                            |
+
+**Description**: This variable defines the sampling rate for event logs. To log all
+events, set this variable to 1. If the variable is set to N, where N > 1, the number of logs written to the file
+will be approximately equal to 1/N. The default value is 1.
 
 ### `pgsql-firewall_whitelist_enabled`
 

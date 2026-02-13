@@ -14,7 +14,9 @@ NOTE: You can click on the variable name to jump to its definition
 | ------------------------------------------------------------------------------------------------------- | --------------------------- |
 | [mysql-add_ldap_user_comment](#mysql-add_ldap_user_comment)                                             |                             |
 | [mysql-auditlog_filename](#mysql-auditlog_filename)                                                     |                             |
-| [mysql-auditlog_filesize](#mysql-auditlog_filename)                                                     | 100MB                       |
+| [mysql-auditlog_filesize](#mysql-auditlog_filesize)                                                     | 100MB                       |
+| [mysql-auditlog_flush_timeout](#mysql-auditlog_flush_timeout)                                           | 1000                        |
+| [mysql-auditlog_flush_size](#mysql-auditlog_flush_size)                                                 | 4096                        |
 | [mysql-aurora_max_lag_ms_only_read_from_replicas](#mysql-aurora_max_lag_ms_only_read_from_replicas)     | 2                           |
 | [mysql-auto_increment_delay_multiplex](#mysql-auto_increment_delay_multiplex)                           | 5                           |
 | [mysql-auto_increment_delay_multiplex_timeout_ms](#mysql-auto_increment_delay_multiplex_timeout_ms)     | 10000                       |
@@ -69,6 +71,9 @@ NOTE: You can click on the variable name to jump to its definition
 | [mysql-eventslog_filesize](#mysql-eventslog_filesize)                                                   | 104857600                   |
 | [mysql-eventslog_format](#mysql-eventslog_format)                                                       | 1                           |
 | [mysql-eventslog_stmt_parameters](#mysql-eventslog_stmt_parameters)                                     | 0                           |
+| [mysql-eventslog_flush_timeout](#mysql-eventslog_flush_timeout)                                         | 1000                        |
+| [mysql-eventslog_flush_size](#mysql-eventslog_flush_size)                                               | 4096                        |
+| [mysql-eventslog_rate_limit](#mysql-eventslog_rate_limit)                                               | 1                           |
 | [mysql-firewall_whitelist_enabled](#mysql-firewall_whitelist_enabled)                                   | false                       |
 | [mysql-firewall_whitelist_errormsg](#mysql-firewall_whitelist_errormsg)                                 | Firewall blocked this query |
 | [mysql-forward_autocommit](#mysql-forward_autocommit)                                                   | false                       |
@@ -217,6 +222,35 @@ progressive number. Files are automatically rotated based on the value of [mysql
 
 This variable defines the maximum file size of the audit log file (see [mysql-auditlog_filename][5]) when the
 current file will be closed and a new file will be created. The default value is 104857600 (100MB)
+
+### `mysql-auditlog_flush_timeout`
+
+|                      |             |                              |
+| -------------------- | ----------- | ---------------------------- |
+| **System Variable**  | **Name**    | mysql-auditlog_flush_timeout |
+|                      | **Dynamic** | Yes                          |
+| **Permitted Values** | **Type**    | Integer (milliseconds)       |
+|                      | **Default** | 1000                         |
+|                      | **Minimum** | 0                            |
+|                      | **Maximum** |                              |
+
+This variable defines the flush timeout to write the buffered audit log entries to the 
+audit log file (see [Audit Log][3]). The default value is 1000 (1 second).
+
+### `mysql-auditlog_flush_size`
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | mysql-auditlog_flush_size  |
+|                      | **Dynamic** | Yes                        |
+| **Permitted Values** | **Type**    | Integer (bytes)            |
+|                      | **Default** | 4096                       |
+|                      | **Minimum** | 0                          |
+|                      | **Maximum** |                            |
+
+This variable defines the flush size to write the buffered audit log entries to the
+audit log file (see [Audit Log][3]). If the size of the buffer goes beyond this value,
+the contents of the buffer are written to the file. The default value is 4096.
 
 ### `mysql-aurora_max_lag_ms_only_read_from_replicas`
 
@@ -1165,6 +1199,50 @@ See also [Query Logging][34]
 
 Due to the potential overhead of logging prepared statements parameters, especially in `JSON` format and in
 the presence of large blobs, this variable controls if parameters need to be logged or not.
+
+### `mysql-eventslog_flush_timeout`
+
+|                      |             |                               |
+| -------------------- | ----------- | ----------------------------- |
+| **System Variable**  | **Name**    | mysql-eventslog_flush_timeout |
+|                      | **Dynamic** | Yes                           |
+| **Permitted Values** | **Type**    | Integer (milliseconds)        |
+|                      | **Default** | 1000                          |
+|                      | **Minimum** | 0                             |
+|                      | **Maximum** |                               |
+
+This variable defines the flush timeout to write the buffered event log entries to the 
+events log file (see [Query Logging][34]). The default value is 1000 (1 second).
+
+### `mysql-eventslog_flush_size`
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | mysql-eventslog_flush_size |
+|                      | **Dynamic** | Yes                        |
+| **Permitted Values** | **Type**    | Integer (bytes)            |
+|                      | **Default** | 4096                       |
+|                      | **Minimum** | 0                          |
+|                      | **Maximum** |                            |
+
+This variable defines the flush size to write the buffered event log entries to the
+events log file (see [Query Logging][34]). If the size of the buffer goes beyond this value,
+the contents of the buffer are written to the file. The default value is 4096.
+
+### `mysql-eventslog_rate_limit`
+
+|                      |             |                            |
+| -------------------- | ----------- | -------------------------- |
+| **System Variable**  | **Name**    | mysql-eventslog_rate_limit |
+|                      | **Dynamic** | Yes                        |
+| **Permitted Values** | **Type**    | Integer                    |
+|                      | **Default** | 1                          |
+|                      | **Minimum** | 1                          |
+|                      | **Maximum** |                            |
+
+This variable defines the sampling rate for event logs (see [Query Logging][34]). To log all
+events, set this variable to 1. If the variable is set to N, where N > 1, the number of logs written to the file
+will be approximately equal to 1/N. The default value is 1.
 
 ### `mysql-firewall_whitelist_enabled`
 
