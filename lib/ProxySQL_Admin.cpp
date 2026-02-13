@@ -5372,9 +5372,12 @@ void ProxySQL_Admin::flush_debug_filters_database_to_runtime(SQLite3DB *db) {
 		std::set<std::string> filters;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
+			// Validate that no fields are NULL to avoid undefined behavior
+			if (r->fields[0] == NULL || r->fields[1] == NULL || r->fields[2] == NULL) {
+				continue;
+			}
 			std::string key; // we create a string with the row
 			// remember the format is filename:line:funct
-			// no column can be null
 			key = r->fields[0];
 			key += ":";
 			key += r->fields[1];

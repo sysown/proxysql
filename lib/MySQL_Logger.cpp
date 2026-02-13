@@ -1505,18 +1505,22 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	char *sa=(char *)""; // default
 	if (myds) {
 		if (myds->myconn) {
-			sa=myds->myconn->parent->address;
+			if (myds->myconn->parent) {
+				sa=myds->myconn->parent->address;
+			}
 		}
 	}
 	sl+=strlen(sa);
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		sa=(char *)malloc(sl+9);
 		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 	if (sl) {
 		int hid=-1;
-		hid=myds->myconn->parent->myhgc->hid;
+		if (myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->myhgc) {
+			hid=myds->myconn->parent->myhgc->hid;
+		}
 		me.set_server(hid,sa,sl);
 	}
 

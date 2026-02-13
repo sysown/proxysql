@@ -180,6 +180,11 @@ void proxy_debug_func(
 ) {
 	int saved_errno = errno;
 	assert(module<PROXY_DEBUG_UNKNOWN);
+	// Safety check: ensure debug struct is initialized
+	if (GloVars.global.gdbg_lvl == NULL) {
+		errno = saved_errno;
+		return;
+	}
 	if (pretime == 0) { // never initialized
 		pretime=realtime_time();
 	}
