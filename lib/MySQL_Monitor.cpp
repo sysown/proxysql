@@ -258,6 +258,7 @@ public:
 		pthread_mutex_destroy(&m2);
 #endif // DEBUG
 	}
+
 	void conn_register(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
@@ -290,7 +291,7 @@ public:
 	 *     task-handler if it determines that the retrieved data is malformed. See handle_mmsd_mysql_conn.
 	 * @param mmsd The 'mmsd' which conn should be unregistered.
 	 */
-	void conn_unregister(MySQL_Monitor_State_Data *mmsd) {
+	void conn_unregister(MySQL_Monitor_State_Data *mmsd, bool to_assert = true) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
 		pthread_mutex_lock(&m2);
@@ -306,7 +307,7 @@ public:
 			}
 		}
 		// LCOV_EXCL_START
-		assert(0);
+		if (to_assert) assert(0);
 		// LCOV_EXCL_STOP
 #endif // DEBUG
 		// LCOV_EXCL_START
@@ -337,7 +338,9 @@ void MySQL_Monitor_Connection_Pool::purge_all_connections() {
 
 void MySQL_Monitor_Connection_Pool::destroy_mysql_connection(MySQL_Monitor_State_Data* mmsd) {
 	if (mmsd->mysql) {
+#ifdef DEBUG
 		conn_unregister(mmsd);
+#endif
 		proxy_debug(PROXY_DEBUG_MONITOR, 7,
 			"Destroying MYSQL with FD %d from mmsd %p and MYSQL %p\n", mmsd->mysql->net.fd, mmsd, mmsd->mysql);
 		close_mysql(mmsd->mysql);
@@ -616,8 +619,18 @@ MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 	if (result) {
 		mysql_free_result(result);
 	}
+
+  // DEBUG: Connection pool state validation
+  // During shutdown: connections are properly cleaned up via conn_unregister
+  // During normal operation: connection should NOT be in the pool (it should have been
+  // returned via put_connection() or destroyed before reaching this destructor).
+  // This check catches bugs where a connection is destroyed while still in the pool.
+#ifdef DEBUG
+	if (mysql) {
+		GloMyMon->My_Conn_Pool->conn_unregister(this, !GloMyMon->shutdown);
+	}
+#endif
 	
-	//assert(mysql==NULL); // if mysql is not NULL, there is a bug
 	if (mysql) {
 		close_mysql(mysql);
 	}
@@ -6991,7 +7004,7 @@ public:
 		MySQL_Monitor* mysql_monitor_;
 	};
 
-	Monitor_Poll(unsigned int capacity, bool owns_task_memory = false) {
+	explicit Monitor_Poll(unsigned int capacity, bool owns_task_memory = false) {
 		len_ = 0;
 		owns_task_memory_ = owns_task_memory; // if true, this object takes ownership of task memory and will delete unprocessed tasks on destruction
 		capacity_ = capacity;
@@ -7074,11 +7087,24 @@ public:
 		std::vector<MySQL_Monitor_State_Data*> ready_tasks;
 		ready_tasks.reserve(tasks_to_process_count);
 
+		auto cleanup_ready_tasks = [&ready_tasks, this]() {
+			for (auto* task : ready_tasks) {
+				if (task->mysql) {
+					GloMyMon->My_Conn_Pool->destroy_mysql_connection(task);
+				}
+				if (owns_task_memory_) {
+					delete task;
+				}
+			}
+			ready_tasks.clear();
+		};
+
 		unsigned int total_sent = 0;
 		while (len_) {
 
 			if (GloMyMon->shutdown) {
 				proxy_error("Monitor event loop interrupted by shutdown with %u tasks remaining. Connections will be cleaned up.\n", len_);
+				cleanup_ready_tasks();
 				return false;
 			}
 
@@ -7105,7 +7131,7 @@ public:
 
 			proxy_debug(PROXY_DEBUG_MONITOR, 7,
 				"Phase 1: armed %u sockets (this batch), total armed=%u, total tasks=%u\n",
-					sockets_armed, total_sent, total_tasks);
+				sockets_armed, total_sent, total_tasks);
 			
 			// If we sent all tasks, use the caller poll timeout; otherwise poll immediately (timeout=0)
 			int poll_timeout = (total_sent == total_tasks) ? poll_timeout_ms : 0;
@@ -7115,6 +7141,7 @@ public:
 					continue;
 				} else {
 					proxy_error("Monitor event loop poll() failed with error %d (%s) with %u tasks remaining. Aborting monitoring cycle.\n", errno, strerror(errno), len_);
+					cleanup_ready_tasks();
 					return false;
 				}
 			}
@@ -7133,7 +7160,10 @@ public:
 					// Flush the batch when threshold reached or no more tasks remain.
 					if (tasks_to_process_count == 0 || len_ == 0) {
 						proxy_debug(PROXY_DEBUG_MONITOR, 7, "Phase 2: Starting processing of %zu ready tasks\n", ready_tasks.size());
+
+						// it is responsibility of the callback to ensure all tasks passed to it are processed (either successfully or unsuccessfully) and cleaned up. 
 						if (process_ready_task_callback_arg.process_ready_tasks(ready_tasks) == false) {
+							ready_tasks.clear();
 							proxy_error("Monitor event loop process_ready_tasks() failed. %u tasks remaining unprocessed in poll.\n", len_);
 							return false;
 						}
@@ -7177,6 +7207,9 @@ private:
 	void cleanup_unprocessed_tasks() {
 		if (len_ == 0) return;
 		for (unsigned int i = 0; i < len_; ++i) {
+			if (mmsds_[i]->mysql) {
+				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsds_[i]);
+			}
 			delete mmsds_[i];
 			mmsds_[i] = nullptr;
 		}
@@ -7404,7 +7437,7 @@ void MySQL_Monitor::monitor_ping_async(SQLite3_result* resultset) {
 
 		if (mmsd->mysql) {
 			// Register the task; don't dispatch it yet.
-			monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.release());
+			monitor_poll.add((POLLIN | POLLOUT | POLLPRI), mmsd.release());
 		} else {
 			WorkItem<MySQL_Monitor_State_Data>* item
 				= new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_ping_thread);
