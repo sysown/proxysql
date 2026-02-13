@@ -241,6 +241,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
+	status=0;
+	fd=-1;
 
 	revents = 0;
 

@@ -239,6 +239,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	connect_tries = 0;
 	poll_fds_idx = -1;
 	//resultset_length = 0;
+	fd = -1;
 
 	revents = 0;
 
