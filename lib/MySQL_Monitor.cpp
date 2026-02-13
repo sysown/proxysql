@@ -1339,6 +1339,11 @@ void * monitor_connect_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsd
 	assert(!mmsds.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = mmsds.front();
+	// Wait for GloMTH to be initialized
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
