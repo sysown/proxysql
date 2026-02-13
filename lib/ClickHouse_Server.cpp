@@ -11,6 +11,7 @@
 #include "MySQL_Logger.hpp"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
+#include "proxysql_utils.h"
 
 #include <search.h>
 #include <stdlib.h>
@@ -1387,11 +1388,8 @@ static void *child_mysql(void *arg) {
 	nfds_t nfds=1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread *mysql_thr=new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 

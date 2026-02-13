@@ -1049,10 +1049,8 @@ static void *child_mysql(void *arg) {
 	nfds_t nfds=1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	if (!GloMTH) return NULL;
 	MySQL_Thread *mysql_thr=new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();

@@ -1519,7 +1519,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	sl+=strlen(sa);
 	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		snprintf(sa, sl+9, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 	if (sl) {
@@ -1562,7 +1562,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
 	}
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		free(sa);
 	}
 }
@@ -1676,15 +1676,13 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 */
 	int sl=0;
 	char *sa=(char *)""; // default
-	if (myds) {
-		if (myds->myconn) {
-			sa=myds->myconn->parent->address;
-		}
+	if (myds && myds->myconn && myds->myconn->parent) {
+		sa=myds->myconn->parent->address;
 	}
 	sl+=strlen(sa);
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		snprintf(sa, sl+9, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 
@@ -1710,7 +1708,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
 	}
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		free(sa);
 	}
 }

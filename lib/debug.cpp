@@ -524,10 +524,9 @@ void print_backtrace(void)
 }
 
 #ifdef DEBUG
-void init_debug_struct() {	
+void init_debug_struct() {
 	int i;
 	pthread_mutex_init(&debug_mutex,NULL);
-	pthread_rwlock_init(&filters_rwlock, NULL);
 	GloVars.global.gdbg_lvl= (debug_level *) malloc(PROXY_DEBUG_UNKNOWN*sizeof(debug_level));
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		GloVars.global.gdbg_lvl[i].module=(enum debug_module)i;

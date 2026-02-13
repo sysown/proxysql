@@ -778,10 +778,8 @@ void * monitor_connect_pthread(void *arg) {
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
 	set_thread_name("MonitorConnect", GloVars.set_thread_name);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	GloMyMon->monitor_connect();
 	return NULL;
 }
@@ -792,10 +790,8 @@ void * monitor_ping_pthread(void *arg) {
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
 	set_thread_name("MonitorPing", GloVars.set_thread_name);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	GloMyMon->monitor_ping();
 	return NULL;
 }
@@ -806,10 +802,8 @@ void * monitor_read_only_pthread(void *arg) {
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
 	set_thread_name("MonitorReadOnly", GloVars.set_thread_name);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	GloMyMon->monitor_read_only();
 	return NULL;
 }
@@ -820,10 +814,8 @@ void * monitor_group_replication_pthread(void *arg) {
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
 	set_thread_name("MonitorGR", GloVars.set_thread_name);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	// GloMyMon->monitor_group_replication();
 	GloMyMon->monitor_group_replication_2();
 	return NULL;
@@ -835,10 +827,8 @@ void * monitor_galera_pthread(void *arg) {
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
 	set_thread_name("MonitorGalera", GloVars.set_thread_name);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	GloMyMon->monitor_galera();
 	return NULL;
 }
@@ -849,10 +839,8 @@ void * monitor_aws_aurora_pthread(void *arg) {
 //	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 //#endif
 	set_thread_name("MonitorAurora", GloVars.set_thread_name);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	GloMyMon->monitor_aws_aurora();
 	return NULL;
 }
@@ -863,10 +851,8 @@ void * monitor_replication_lag_pthread(void *arg) {
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
 	set_thread_name("MonitReplicLag", GloVars.set_thread_name);
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	GloMyMon->monitor_replication_lag();
 	return NULL;
 }
@@ -1340,11 +1326,8 @@ void * monitor_connect_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsd
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = mmsds.front();
 	// Wait for GloMTH to be initialized
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
@@ -1403,11 +1386,8 @@ void * monitor_ping_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsds) 
 	assert(!mmsds.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = mmsds.front();
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
@@ -1640,11 +1620,8 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 	mysql_close(mysql_init(NULL));
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd = data.front();
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
@@ -1922,11 +1899,8 @@ void * monitor_group_replication_thread(const std::vector<MySQL_Monitor_State_Da
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
@@ -2278,11 +2252,8 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
@@ -2683,11 +2654,8 @@ void * monitor_replication_lag_thread(const std::vector<MySQL_Monitor_State_Data
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
@@ -3048,11 +3016,8 @@ __fast_exit_monitor_replication_lag_thread:
 
 void * MySQL_Monitor::monitor_connect() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -3177,11 +3142,8 @@ __sleep_monitor_connect_loop:
 void * MySQL_Monitor::monitor_ping() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 //	struct event_base *libevent_base;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -3529,11 +3491,8 @@ bool MySQL_Monitor::is_aws_rds_multi_az_db_cluster_topology(const std::vector<MY
 void * MySQL_Monitor::monitor_read_only() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -4157,10 +4116,8 @@ void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
  * @return The created and initialized 'MySQL_Thread'.
  */
 unique_ptr<MySQL_Thread> init_mysql_thread_struct() {
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	if (!GloMTH) return NULL;
 	unique_ptr<MySQL_Thread> mysql_thr { new MySQL_Thread() };
 	mysql_thr->curtime = monotonic_time();
@@ -4407,11 +4364,8 @@ void* MySQL_Monitor::monitor_group_replication_2() {
 void * MySQL_Monitor::monitor_group_replication() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 //	struct event_base *libevent_base;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -4518,11 +4472,8 @@ __sleep_monitor_group_replication:
 void * MySQL_Monitor::monitor_galera() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 //	struct event_base *libevent_base;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -4593,11 +4544,8 @@ __sleep_monitor_galera:
 void * MySQL_Monitor::monitor_replication_lag() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -5167,10 +5115,8 @@ void* MySQL_Monitor::monitor_dns_cache() {
 
 
 void * MySQL_Monitor::run() {
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -6062,11 +6008,8 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	set_thread_name("MonitorAuroraHG", GloVars.set_thread_name);
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -6520,11 +6463,8 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 
 void * MySQL_Monitor::monitor_aws_aurora() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	while (GloMTH==NULL) {
-		usleep(50000);
-	}
-	usleep(100000);
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	// Wait for GloMTH to be initialized
+	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
