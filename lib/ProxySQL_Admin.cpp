@@ -2371,9 +2371,6 @@ void * admin_main_loop(void *arg) {
 	__sync_fetch_and_add(&admin_load_main_,1);
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
-		//int *client;
-		//int client_t;
-		//socklen_t addr_size = sizeof(addr);
 		pthread_t child;
 		size_t stacks;
 		unsigned long long curtime=monotonic_time();
@@ -2406,13 +2403,9 @@ void * admin_main_loop(void *arg) {
 				passarg->addr_size = sizeof(custom_sockaddr);
 				memset(passarg->addr, 0, sizeof(custom_sockaddr));
 				passarg->client_t = accept(fds[i].fd, (struct sockaddr*)passarg->addr, &passarg->addr_size);
-//		printf("Connected: %s:%d  sock=%d\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port), client_t);
 				pthread_attr_getstacksize (&attr, &stacks);
-//		printf("Default stack size = %d\n", stacks);
 				pthread_mutex_lock (&sock_mutex);
-				//client=(int *)malloc(sizeof(int));
-				//*client= client_t;
-				//if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
+
 				if ( pthread_create(&child, &attr, child_func[callback_func[i]], passarg) != 0 ) {
 					// LCOV_EXCL_START
 					perror("pthread_create");
@@ -2438,12 +2431,15 @@ __end_while_pool:
 					if (resultset) {
 						SQLite3_result * resultset2 = NULL;
 
-					// In debug, run the code to generate metrics so that it can be tested even if the web interface plugin isn't loaded.
-					#ifdef DEBUG
-						if (true) {
-					#else
-						if (GloVars.web_interface_plugin) {
-					#endif
+						// In debug, run the code to generate metrics so that it can be tested even if
+						// the 'web_interface_plugin' isn't loaded.
+						if (
+							#ifdef DEBUG
+								true
+							#else
+								GloVars.web_interface_plugin
+							#endif
+						) {
 							resultset2 = MyHGM->SQL3_Connection_Pool(false);
 						}
 						GloProxyStats->MyHGM_Handler_sets(resultset, resultset2);
@@ -2501,7 +2497,7 @@ __end_while_pool:
 			nfds++;
 			unsigned int j;
 			i=0; j=0;
-			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
+			for (j=0; j < S_amll.ifaces_mysql->ifaces->len && GloVars.global.mysql_admin; j++) {
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
 				bool is_ipv6 = false;
 				char *h = NULL;
@@ -2525,7 +2521,7 @@ __end_while_pool:
 #else
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 #endif
-				//if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
+
 				if (s > 0) {
 					fds[nfds].fd = s;
 					fds[nfds].events = POLLIN;
@@ -2541,7 +2537,7 @@ __end_while_pool:
 			}
 
 			i = 0; j = 0;
-			for (; j < S_amll.ifaces_pgsql->ifaces->len; j++) {
+			for (; j < S_amll.ifaces_pgsql->ifaces->len && GloVars.global.pgsql_admin; j++) {
 				char* add = NULL; char* port = NULL; char* sn = (char*)S_amll.ifaces_pgsql->ifaces->index(j);
 				bool is_ipv6 = false;
 				char* h = NULL;
@@ -2566,7 +2562,7 @@ __end_while_pool:
 #else
 				int s = (atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 #endif
-				//if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
+
 				if (s > 0) {
 					fds[nfds].fd = s;
 					fds[nfds].events = POLLIN;
@@ -2584,7 +2580,7 @@ __end_while_pool:
 		}
 
 	}
-	//if (__sync_add_and_fetch(shutdown,0)==0) __sync_add_and_fetch(shutdown,1);
+
 	for (i=0; i<nfds; i++) {
 		char *add=NULL; char *port=NULL;
 		close(fds[i].fd);

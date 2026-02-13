@@ -197,6 +197,10 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
+	global.mysql_workers=true;
+	global.pgsql_workers=true;
+	global.mysql_admin=true;
+	global.pgsql_admin=true;
 	global.my_monitor=true;
 	global.pg_monitor=true;
 #ifdef IDLE_THREADS
@@ -262,6 +266,12 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #endif /* DEBUG */
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not start Monitor Module",(const char *)"-M",(const char *)"--no-monitor");
+	opt->add((const char *)"",0,1,0,(const char *)"Do not start MySQL Monitor Module",(const char *)"--mysql-monitor");
+	opt->add((const char *)"",0,1,0,(const char *)"Do not start PgSQL Monitor Module",(const char *)"--pgsql-monitor");
+	opt->add((const char *)"",0,1,0,(const char *)"Do not start MySQL Worker Threads",(const char *)"--mysql-workers");
+	opt->add((const char *)"",0,1,0,(const char *)"Do not start PgSQL Worker Threads",(const char *)"--pgsql-workers");
+	opt->add((const char *)"",0,1,0,(const char *)"Do not start MySQL Admin Module",(const char *)"--mysql-admin");
+	opt->add((const char *)"",0,1,0,(const char *)"Do not start PgSQL Admin Module",(const char *)"--pgsql-admin");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 #ifdef SO_REUSEPORT
 	opt->add((const char *)"",0,0,0,(const char *)"Use SO_REUSEPORT",(const char *)"-r",(const char *)"--reuseport");
@@ -490,6 +500,60 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 	if (opt->isSet("-M")) {
 		global.my_monitor=false;
 		global.pg_monitor=false;
+	}
+
+	if (opt->isSet("--mysql-monitor")) {
+		string val {};
+		opt->get("--mysql-monitor")->getString(val);
+
+		if (val == "false" || val == "0") {
+			global.my_monitor = false;
+		}
+	}
+
+	if (opt->isSet("--pgsql-monitor")) {
+		string val {};
+		opt->get("--pgsql-monitor")->getString(val);
+
+		if (val == "false" || val == "0") {
+			global.pg_monitor = false;
+		}
+	}
+
+	if (opt->isSet("--mysql-workers")) {
+		string val {};
+		opt->get("--mysql-workers")->getString(val);
+
+		if (val == "false" || val == "0") {
+			global.mysql_workers = false;
+		}
+	}
+
+	if (opt->isSet("--pgsql-workers")) {
+		string val {};
+		opt->get("--pgsql-workers")->getString(val);
+
+		if (val == "false" || val == "0") {
+			global.pgsql_workers = false;
+		}
+	}
+
+	if (opt->isSet("--mysql-admin")) {
+		string val {};
+		opt->get("--mysql-admin")->getString(val);
+
+		if (val == "false" || val == "0") {
+			global.mysql_admin = false;
+		}
+	}
+
+	if (opt->isSet("--pgsql-admin")) {
+		string val {};
+		opt->get("--pgsql-admin")->getString(val);
+
+		if (val == "false" || val == "0") {
+			global.pgsql_admin = false;
+		}
 	}
 
 #ifdef SO_REUSEPORT

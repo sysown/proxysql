@@ -693,10 +693,21 @@ void* unified_query_cache_purge_thread(void *arg) {
 	return NULL;
 }
 
-/*void* pgsql_shared_query_cache_funct(void* arg) {
-	GloPgQC->purgeHash_thread(NULL);
-	return NULL;
-}*/
+template <typename T>
+void update_global_variable(const string& name, T& var) {
+	const Setting& root { GloVars.confFile->cfg.getRoot() };
+
+	if (root.exists(name)==true) {
+		T new_val {};
+		bool rc { root.lookupValue(name, new_val) };
+
+		if (rc == true) {
+			var = new_val;
+		} else {
+			proxy_error("The config file is configured with an invalid '%s'\n", name.c_str());
+		}
+	}
+}
 
 void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.errorlog = NULL;
@@ -752,27 +763,17 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				}
 			}
 		}
+
 		// if cluster_sync_interfaces is true, interfaces variables are synced too
-		if (root.exists("cluster_sync_interfaces")==true) {
-			bool value_bool;
-			bool rc;
-			rc=root.lookupValue("cluster_sync_interfaces", value_bool);
-			if (rc==true) {
-				GloVars.cluster_sync_interfaces=value_bool;
-			} else {
-				proxy_error("The config file is configured with an invalid cluster_sync_interfaces\n");
-			}
-		}
-		if (root.exists("set_thread_name")==true) {
-			bool value_bool;
-			bool rc;
-			rc=root.lookupValue("set_thread_name", value_bool);
-			if (rc==true) {
-				GloVars.set_thread_name=value_bool;
-			} else {
-				proxy_error("The config file is configured with an invalid set_thread_name\n");
-			}
-		}
+		update_global_variable("cluster_sync_interfaces", GloVars.cluster_sync_interfaces);
+		update_global_variable("set_thread_name", GloVars.set_thread_name);
+		update_global_variable("mysql-workers", GloVars.global.mysql_workers);
+		update_global_variable("pgsql-workers", GloVars.global.pgsql_workers);
+		update_global_variable("mysql-admin", GloVars.global.mysql_admin);
+		update_global_variable("pgsql-admin", GloVars.global.pgsql_admin);
+		update_global_variable("mysql-monitor", GloVars.global.my_monitor);
+		update_global_variable("pgsql-monitor", GloVars.global.pg_monitor);
+
 		if (root.exists("pidfile")==true) {
 			string pidfile_path;
 			bool rc;
@@ -907,6 +908,20 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 
 	GloVars.confFile->ReadGlobals();
 	GloVars.process_opts_post();
+
+	// Coherence check on global variables status
+	if (!GloVars.global.mysql_admin && !GloVars.global.pgsql_admin) {
+		proxy_info("All Admin interfaces, MySQL and PostgreSQL, disabled by config\n");
+	}
+	if (!GloVars.global.mysql_workers && !GloVars.global.pgsql_workers) {
+		proxy_info("All worker threads, MySQL and PostgreSQL, disabled by config\n");
+	}
+	if (!GloVars.global.my_monitor && !GloVars.global.pg_monitor) {
+		proxy_info("All Monitoring, MySQL and PostgreSQL, disabled by config\n");
+	}
+	if (!GloVars.global.pgsql_workers && !GloVars.global.pgsql_admin && !GloVars.global.pg_monitor) {
+		proxy_info("PostgreSQL support fully disabled by config\n");
+	}
 }
 
 void ProxySQL_Main_init_main_modules() {
@@ -980,6 +995,41 @@ void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->init(bootstrap_info);
 	GloAdmin->print_version();
+
+	// Synchronize monitor enabled variables with global settings
+	//
+	// The CLI arguments --mysql-monitor and --pgsql-monitor correctly set the internal
+	// global variables GloVars.global.my_monitor and GloVars.global.pg_monitor, which
+	// control whether monitor threads are started. However, these internal variables
+	// are not automatically synchronized with the admin interface variables
+	// mysql-monitor_enabled and pgsql-monitor_enabled that users can query via
+	// SELECT variable_value FROM global_variables WHERE variable_name='mysql-monitor_enabled'.
+	//
+	// Without this synchronization, the admin interface would incorrectly show
+	// mysql-monitor_enabled=true and pgsql-monitor_enabled=true even when the
+	// monitor modules are disabled via CLI arguments, breaking user expectations
+	// and automated testing that relies on these admin interface variables.
+	//
+	// This code ensures that the admin interface variables accurately reflect the
+	// actual monitor module state as controlled by CLI arguments.
+	{
+		char query[256];
+		// Set mysql-monitor_enabled based on global.my_monitor
+		snprintf(query, sizeof(query),
+			"INSERT OR REPLACE INTO global_variables VALUES('mysql-monitor_enabled','%s')",
+			GloVars.global.my_monitor ? "true" : "false");
+		GloAdmin->admindb->execute(query);
+
+		// Set pgsql-monitor_enabled based on global.pg_monitor
+		snprintf(query, sizeof(query),
+			"INSERT OR REPLACE INTO global_variables VALUES('pgsql-monitor_enabled','%s')",
+			GloVars.global.pg_monitor ? "true" : "false");
+		GloAdmin->admindb->execute(query);
+
+		proxy_info("Monitor variables synchronized: mysql-monitor_enabled=%s, pgsql-monitor_enabled=%s\n",
+			GloVars.global.my_monitor ? "true" : "false",
+			GloVars.global.pg_monitor ? "true" : "false");
+	}
 	if (binary_sha1) {
 		proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
 	}
@@ -1025,7 +1075,7 @@ void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 		proxy_warning("proxysql instance running without --idle-threads : enabling it can potentially improve performance\n");
 	}
 #endif // IDLE_THREADS
-	for (i=0; i<GloMTH->num_threads; i++) {
+	for (i=0; i < GloMTH->num_threads && GloVars.global.mysql_workers; i++) {
 		GloMTH->create_thread(i,mysql_worker_thread_func, false);
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
@@ -1049,7 +1099,7 @@ void ProxySQL_Main_init_PgSQL_Threads_Handler_module() {
 		proxy_warning("proxysql instance running without --idle-threads : enabling it can potentially improve performance\n");
 	}
 #endif // IDLE_THREADS
-	for (i = 0; i < GloPTH->num_threads; i++) {
+	for (i = 0; i < GloPTH->num_threads && GloVars.global.pgsql_workers; i++) {
 		GloPTH->create_thread(i, pgsql_worker_thread_func, false);
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
