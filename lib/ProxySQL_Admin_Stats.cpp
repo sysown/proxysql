@@ -933,6 +933,7 @@ CREATE TABLE stats_mysql_processlist (
 	}
 	// RAII auto-finalizes statement1 and statement32
 	statsdb->execute("COMMIT");
+	delete resultset;
 }
 
 void ProxySQL_Admin::stats___pgsql_processlist() {
@@ -1074,6 +1075,7 @@ void ProxySQL_Admin::stats___pgsql_processlist() {
 	}
 	// RAII auto-finalizes statement1 and statement32
 	statsdb->execute("COMMIT");
+	delete resultset;
 }
 
 void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
