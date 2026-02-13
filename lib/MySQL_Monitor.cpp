@@ -619,17 +619,6 @@ MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 	if (result) {
 		mysql_free_result(result);
 	}
-
-  // DEBUG: Connection pool state validation
-  // During shutdown: connections are properly cleaned up via conn_unregister
-  // During normal operation: connection should NOT be in the pool (it should have been
-  // returned via put_connection() or destroyed before reaching this destructor).
-  // This check catches bugs where a connection is destroyed while still in the pool.
-#ifdef DEBUG
-	if (mysql) {
-		GloMyMon->My_Conn_Pool->conn_unregister(this, !GloMyMon->shutdown);
-	}
-#endif
 	
 	if (mysql) {
 		close_mysql(mysql);
@@ -7780,6 +7769,16 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 30, 50, &MySQL_Monitor::monitor_read_only_process_ready_tasks, this);
 
 	if (monitor_poll.event_loop(mysql_thread___monitor_read_only_timeout, args) == false) {
+#ifdef DEBUG
+		for (auto& mmsd : mmsds) {
+			if (mmsd->mysql) {
+				// DEBUG: Cleanup after failure - must destroy (not just close) to unregister
+				// from debug tracking. If MYSQL* is reused later, conn_register() could
+				// assert on finding the same pointer still in the tracking pool.
+				My_Conn_Pool->destroy_mysql_connection(mmsd.get());
+			}
+		}
+#endif
 		return;
 	}
 }
@@ -7986,6 +7985,16 @@ void MySQL_Monitor::monitor_group_replication_async() {
 	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 30, 50, &MySQL_Monitor::monitor_group_replication_process_ready_tasks, this);
 
 	if (monitor_poll.event_loop(mysql_thread___monitor_groupreplication_healthcheck_timeout, args) == false) {
+#ifdef DEBUG
+		for (auto& mmsd : mmsds) {
+			if (mmsd->mysql) {
+				// DEBUG: Cleanup after failure - must destroy (not just close) to unregister
+				// from debug tracking. If MYSQL* is reused later, conn_register() could
+				// assert on finding the same pointer still in the tracking pool.
+				My_Conn_Pool->destroy_mysql_connection(mmsd.get());
+			}
+		}
+#endif
 		return;
 	}
 }
@@ -8017,6 +8026,16 @@ void MySQL_Monitor::monitor_gr_async_actions_handler(
 	);
 
 	if (monitor_poll.event_loop(mysql_thread___monitor_groupreplication_healthcheck_timeout, args) == false) {
+#ifdef DEBUG
+		for (auto& mmsd : mmsds) {
+			if (mmsd->mysql) {
+				// DEBUG: Cleanup after failure - must destroy (not just close) to unregister
+				// from debug tracking. If MYSQL* is reused later, conn_register() could
+				// assert on finding the same pointer still in the tracking pool.
+				My_Conn_Pool->destroy_mysql_connection(mmsd.get());
+			}
+		}
+#endif
 		return;
 	}
 }
@@ -8235,6 +8254,16 @@ void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
 	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 30, 50, &MySQL_Monitor::monitor_replication_lag_process_ready_tasks, this);
 
 	if (monitor_poll.event_loop(mysql_thread___monitor_replication_lag_timeout, args) == false) {
+#ifdef DEBUG
+		for (auto& mmsd : mmsds) {
+			if (mmsd->mysql) {
+				// DEBUG: Cleanup after failure - must destroy (not just close) to unregister
+				// from debug tracking. If MYSQL* is reused later, conn_register() could
+				// assert on finding the same pointer still in the tracking pool.
+				My_Conn_Pool->destroy_mysql_connection(mmsd.get());
+			}
+		}
+#endif
 		return;
 	}
 }
@@ -8540,6 +8569,16 @@ void MySQL_Monitor::monitor_galera_async() {
 	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 30, 50, &MySQL_Monitor::monitor_galera_process_ready_tasks, this);
 
 	if (monitor_poll.event_loop(mysql_thread___monitor_galera_healthcheck_timeout, args) == false) {
+#ifdef DEBUG
+		for (auto& mmsd : mmsds) {
+			if (mmsd->mysql) {
+				// DEBUG: Cleanup after failure - must destroy (not just close) to unregister
+				// from debug tracking. If MYSQL* is reused later, conn_register() could
+				// assert on finding the same pointer still in the tracking pool.
+				My_Conn_Pool->destroy_mysql_connection(mmsd.get());
+			}
+		}
+#endif
 		return;
 	}
 }
