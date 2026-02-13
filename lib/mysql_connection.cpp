@@ -2759,9 +2759,11 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(const query_details_t& q)
 				std::find_if(keep_mult_vars.begin(), keep_mult_vars.end(),
 					[&v] (const string_view& vn) {
 						if (v.first.rfind("@") == 0) {
-							return v.first.rfind(vn.data(), 1, v.first.size() - 1) != std::string::npos;
+							return (v.first.size() - 1 == vn.size())
+								&& strcasecmp(v.first.c_str() + 1, vn.data()) == 0;
 						} else {
-							return v.first == vn;
+							return (v.first.size() == vn.size())
+								&& strcasecmp(v.first.c_str(), vn.data()) == 0;
 						}
 					}
 				)
