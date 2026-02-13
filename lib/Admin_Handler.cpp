@@ -310,6 +310,135 @@ const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 
 extern unordered_map<string,std::tuple<string, vector<string>, vector<string>>> load_save_disk_commands;
 
+// Helper function: Extract pattern from c.relname OPERATOR or LIKE clause
+// Returns true if pattern was found, false otherwise
+// pattern_buf must be at least 128 bytes
+// Note: Returns raw unescaped pattern - escaping happens in convert_regex_to_like
+static bool extract_psql_pattern(const char* query, char* pattern_buf, size_t buf_size) {
+	if (!query || !pattern_buf || buf_size < 128) return false;
+
+	pattern_buf[0] = '\0';
+
+	// Look for pattern in c.relname
+	const char* relname_pos = strcasestr(query, "c.relname");
+	if (!relname_pos) return false;
+
+	// Skip to the operator or LIKE keyword
+	const char* value_pos = relname_pos + strlen("c.relname");
+	while (*value_pos && *value_pos == ' ') value_pos++;
+
+	// Safety check: ensure we haven't gone past end of string
+	if (!*value_pos) return false;
+
+	const char* pattern = nullptr;
+
+	// Check for LIKE operator first
+	const char* like_pos = strcasestr(value_pos, "LIKE");
+	if (like_pos) {
+		like_pos += 4; // Skip "LIKE"
+		while (*like_pos && *like_pos == ' ') like_pos++;
+		// Skip opening quote if present
+		if (*like_pos == '\'') like_pos++;
+		pattern = like_pos;
+	}
+	// Check for OPERATOR operator
+	else if (strcasestr(value_pos, "OPERATOR")) {
+		const char* op_pos = strcasestr(value_pos, "OPERATOR");
+		if (op_pos) {
+			const char* value_start = strchr(op_pos, '\'');
+			if (value_start) {
+				value_start++;
+				pattern = value_start;
+			}
+		}
+	}
+
+	if (!pattern) return false;
+
+	// Skip leading spaces
+	while (*pattern && *pattern == ' ') pattern++;
+
+	// Find end of pattern (first quote or newline)
+	const char* end = pattern;
+	size_t max_len = buf_size - 1; // Reserve one byte for null terminator
+	while (*end && *end != '\'' && *end != '\n' && (size_t)(end - pattern) < max_len) end++;
+
+	// Copy raw pattern to buffer (no escaping here - happens in convert_regex_to_like)
+	size_t len = end - pattern;
+	if (len > 0 && len < buf_size) {
+		memcpy(pattern_buf, pattern, len);
+		pattern_buf[len] = '\0';
+		return true;
+	}
+
+	return false;
+}
+// Helper function: Convert PostgreSQL regex pattern to SQLite LIKE pattern
+// Handles: ^, $, (), and .* to % conversion
+// Also escapes single quotes for SQL safety
+// dst_size should be at least 128 (twice src size for potential escaping)
+static void convert_regex_to_like(char* dst, const char* src, size_t dst_size) {
+	if (!dst || !src || dst_size < 128) return;
+
+	char* dst_end = dst + dst_size - 1;
+
+	// Skip ^ at start
+	if (*src == '^') src++;
+
+	// Copy pattern, converting regex to LIKE
+	while (*src && dst < dst_end - 1) { // Reserve space for potential escape
+		if (*src == '.' && *(src + 1) == '*') {
+			*dst++ = '%';
+			src += 2;
+		}
+		else if (*src == '$' && (*(src + 1) == '\0' || *(src + 1) == '\'')) {
+			// Skip $ at end
+			break;
+		}
+		else if (*src == '(' || *src == ')') {
+			// Skip regex grouping parentheses
+			src++;
+		}
+		else if (*src == '\'') {
+			// Escape single quotes for SQL safety (double them)
+			*dst++ = '\'';
+			*dst++ = '\'';
+			src++;
+		}
+		else {
+			*dst++ = *src++;
+		}
+	}
+	*dst = '\0';
+}
+
+// Unified handler for \dt, \di, \dv commands
+// sqlite_type: "table", "index", or "view"
+// columns: columns to SELECT (e.g., "name" or "name, tbl_name")
+static void handle_psql_list_command(const char* query_no_space, char** query, unsigned int* query_length,
+	const char* sqlite_type, const char* columns) {
+	// Check for pattern in WHERE clause
+	const char* where_clause = strcasestr(query_no_space, "WHERE");
+	char pattern_buf[128] = { 0 };
+	char converted_pattern[256] = { 0 };
+	char buf[512] = { 0 };
+
+	if (where_clause && extract_psql_pattern(where_clause, pattern_buf, sizeof(pattern_buf))) {
+		convert_regex_to_like(converted_pattern, pattern_buf, sizeof(converted_pattern));
+		// Build query with pattern - note: converted_pattern is already escaped
+		snprintf(buf, sizeof(buf), "SELECT %s FROM sqlite_master WHERE type='%s' AND name NOT LIKE 'sqlite_%%' AND name LIKE '%s' ORDER BY name",
+			columns, sqlite_type, converted_pattern);
+	}
+	else {
+		// Build query without pattern
+		snprintf(buf, sizeof(buf), "SELECT %s FROM sqlite_master WHERE type='%s' AND name NOT LIKE 'sqlite_%%' ORDER BY name",
+			columns, sqlite_type);
+	}
+
+	*query = l_strdup(buf);
+	*query_length = strlen(*query) + 1;
+}
+
 bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length) {
 	for (std::vector<std::string>::const_iterator it=cmds.begin(); it!=cmds.end(); ++it) {
 		if ((unsigned int)query_no_space_length==it->length() && !strncasecmp(it->c_str(), query_no_space, query_no_space_length)) {
@@ -4104,6 +4233,67 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 		run_query = false;
 		goto __run_query;
+	}
+
+
+	// Handle PostgreSQL meta commands expanded by psql client
+	// These commands are intercepted and converted to appropriate SQLite queries
+	if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		if (query_no_space_length >= strlen("SELECT") && !strncasecmp("SELECT", query_no_space, strlen("SELECT"))) {
+			// \l, \l+ : List databases
+			// psql: SELECT ... FROM pg_catalog.pg_database ...
+			// sqlite: PRAGMA DATABASE_LIST
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_database") != nullptr ||
+				strcasestr(query_no_space, "FROM pg_database") != nullptr) {
+				l_free(query_length, query);
+				query = l_strdup("PRAGMA DATABASE_LIST");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \d : List all relations (without table name)
+			// psql: SELECT ... FROM pg_catalog.pg_class c ... WHERE c.relkind IN ('r','p','v','m','S','f','')
+			// sqlite: SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') ...
+			// Note: \d includes 'v' (views) in relkind, \dt does not
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('r','p','v'") != nullptr) {
+
+				l_free(query_length, query);
+				// List all relations
+				query = l_strdup("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') AND name NOT LIKE 'sqlite_%' ORDER BY type, name");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \dt [pattern] : List tables (with optional pattern)
+			// psql: SELECT ... FROM pg_catalog.pg_class c ... WHERE c.relkind IN ('r','p', ...)
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('r'") != nullptr) {
+				l_free(query_length, query);
+				handle_psql_list_command(query_no_space, &query, &query_length, "table", "name");
+				goto __run_query;
+			}
+
+			// \di [pattern] : List indexes (with optional pattern)
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				 strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('i'") != nullptr) {
+				l_free(query_length, query);
+				handle_psql_list_command(query_no_space, &query, &query_length, "index", "name, tbl_name");
+				goto __run_query;
+			}
+
+			// \dv [pattern] : List views (with optional pattern)
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				 strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('v'") != nullptr) {
+				l_free(query_length, query);
+				handle_psql_list_command(query_no_space, &query, &query_length, "view", "name");
+				goto __run_query;
+			}
+		}
 	}
 
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
