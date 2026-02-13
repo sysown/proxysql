@@ -21,6 +21,7 @@ static pthread_mutex_t debug_mutex;
 static pthread_rwlock_t filters_rwlock;
 static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
+static stmt_unique_ptr statement1_unique {};
 static unsigned int debug_output = 1;
 
 
@@ -256,12 +257,15 @@ void proxy_debug_func(
 		}
 	} else {
 		SQLite3DB *db = debugdb_disk;
-		int rc = 0;
-		if (statement1==NULL) {
-			const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
-			rc=db->prepare_v2(a, &statement1);
-			ASSERT_SQLITE_OK(rc, db);
-		}
+			int rc = 0;
+			if (statement1==NULL) {
+				const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
+				auto [stmt_rc, prepared_statement_unique] = db->prepare_v2(a);
+				rc = stmt_rc;
+				ASSERT_SQLITE_OK(rc, db);
+				statement1_unique = std::move(prepared_statement_unique);
+				statement1 = statement1_unique.get();
+			}
 		if (debug_output == 1 || debug_output == 3) {
 			// to stderr
 			if (longdebugbuff[0] != 0) {

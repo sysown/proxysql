@@ -1463,7 +1463,7 @@ const char CHECK_HOST_ERR_LIMIT_QUERY[] {
 		" COUNT(*) = ?"
 };
 
-thread_local sqlite3_stmt* CHECK_HOST_ERR_LIMIT_STMT { nullptr };
+thread_local stmt_unique_ptr CHECK_HOST_ERR_LIMIT_STMT {};
 
 void shunn_non_resp_srv(SQLite3DB* db, state_t& state) {
 	ping_params_t* params { static_cast<ping_params_t*>(state.task.op_st.op_params.get()) };
@@ -1473,17 +1473,20 @@ void shunn_non_resp_srv(SQLite3DB* db, state_t& state) {
 	int port { srv.port };
 	int32_t max_fails { params->max_failures };
 
-	if (CHECK_HOST_ERR_LIMIT_STMT == nullptr) {
-		int rc = db->prepare_v2(CHECK_HOST_ERR_LIMIT_QUERY, &CHECK_HOST_ERR_LIMIT_STMT);
+	if (!CHECK_HOST_ERR_LIMIT_STMT) {
+		auto [rc, stmt_unique] = db->prepare_v2(CHECK_HOST_ERR_LIMIT_QUERY);
 		ASSERT_SQLITE_OK(rc, db);
+		CHECK_HOST_ERR_LIMIT_STMT = std::move(stmt_unique);
 	}
 
-	sqlite_bind_text(CHECK_HOST_ERR_LIMIT_STMT, 1, addr);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 2, port);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 3, max_fails);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 4, max_fails);
+	sqlite3_stmt* check_host_err_limit_stmt = CHECK_HOST_ERR_LIMIT_STMT.get();
 
-	unique_ptr<SQLite3_result> limit_set { sqlite_fetch_and_clear(CHECK_HOST_ERR_LIMIT_STMT) };
+	sqlite_bind_text(check_host_err_limit_stmt, 1, addr);
+	sqlite_bind_int(check_host_err_limit_stmt, 2, port);
+	sqlite_bind_int(check_host_err_limit_stmt, 3, max_fails);
+	sqlite_bind_int(check_host_err_limit_stmt, 4, max_fails);
+
+	unique_ptr<SQLite3_result> limit_set { sqlite_fetch_and_clear(check_host_err_limit_stmt) };
 
 	if (limit_set && limit_set->rows_count) {
 		bool shunned { PgHGM->shun_and_killall(addr, port) };
@@ -1512,22 +1515,25 @@ const char HOST_FETCH_UPD_LATENCY_QUERY[] {
 	" GROUP BY hostname, port"
 };
 
-thread_local sqlite3_stmt* FETCH_HOST_LATENCY_STMT { nullptr };
+thread_local stmt_unique_ptr FETCH_HOST_LATENCY_STMT {};
 
 void update_srv_latency(SQLite3DB* db, state_t& state) {
 	const mon_srv_t& srv { state.task.op_st.srv_info };
 	char* addr { const_cast<char*>(srv.addr.c_str()) };
 	int port { srv.port };
 
-	if (FETCH_HOST_LATENCY_STMT == nullptr) {
-		int rc = db->prepare_v2(HOST_FETCH_UPD_LATENCY_QUERY, &FETCH_HOST_LATENCY_STMT);
+	if (!FETCH_HOST_LATENCY_STMT) {
+		auto [rc, stmt_unique] = db->prepare_v2(HOST_FETCH_UPD_LATENCY_QUERY);
 		ASSERT_SQLITE_OK(rc, db);
+		FETCH_HOST_LATENCY_STMT = std::move(stmt_unique);
 	}
 
-	sqlite_bind_text(FETCH_HOST_LATENCY_STMT, 1, addr);
-	sqlite_bind_int(FETCH_HOST_LATENCY_STMT, 2, port);
+	sqlite3_stmt* fetch_host_latency_stmt = FETCH_HOST_LATENCY_STMT.get();
 
-	unique_ptr<SQLite3_result> resultset { sqlite_fetch_and_clear(FETCH_HOST_LATENCY_STMT) };
+	sqlite_bind_text(fetch_host_latency_stmt, 1, addr);
+	sqlite_bind_int(fetch_host_latency_stmt, 2, port);
+
+	unique_ptr<SQLite3_result> resultset { sqlite_fetch_and_clear(fetch_host_latency_stmt) };
 
 	if (resultset && resultset->rows_count) {
 		for (const SQLite3_row* srv : resultset->rows) {
@@ -1928,8 +1934,8 @@ void* worker_thread(void* args) {
 		}
 	}
 
-	sqlite_finalize_statement(CHECK_HOST_ERR_LIMIT_STMT);
-	sqlite_finalize_statement(FETCH_HOST_LATENCY_STMT);
+	CHECK_HOST_ERR_LIMIT_STMT.reset();
+	FETCH_HOST_LATENCY_STMT.reset();
 
 	return NULL;
 }
