@@ -119,8 +119,8 @@ int main(int argc, char** argv) {
 	}
 
 	// Setup 3: Configure MCP MySQL connection parameters
-	MYSQL_QUERY_T(admin, "SET mcp-mysql_host='" + std::string(cl.mysql_host) + "'");
-	MYSQL_QUERY_T(admin, "SET mcp-mysql_port=" + std::to_string(cl.mysql_port));
+	MYSQL_QUERY_T(admin, "SET mcp-mysql_hosts='" + std::string(cl.mysql_host) + "'");
+	MYSQL_QUERY_T(admin, "SET mcp-mysql_ports=" + std::to_string(cl.mysql_port));
 	MYSQL_QUERY_T(admin, "SET mcp-mysql_username='" + std::string(cl.mysql_username) + "'");
 	MYSQL_QUERY_T(admin, "SET mcp-mysql_password='" + std::string(cl.mysql_password) + "'");
 	MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES TO RUNTIME");
@@ -141,13 +141,10 @@ int main(int argc, char** argv) {
 	// Allowed Query Tests (9 tests) - should be ALLOWED
 	// ====================================================================
 
-	// Note: The following tests are currently failing. Commenting out 
-	//       these tests until the root cause is identified and fixed.
-	//
-	// diag("--- Testing allowed queries (should be ALLOWED) ---");
-	// for (const auto& test : allowed_queries) {
-	// 	test_query_allowed(*mcp, test.name, test.sql);
-	// }
+	diag("--- Testing allowed queries (should be ALLOWED) ---");
+	for (const auto& test : allowed_queries) {
+		test_query_allowed(*mcp, test.name, test.sql);
+	}
 
 	// ====================================================================
 	// Cleanup Phase
@@ -214,7 +211,7 @@ void test_query_rejected(MCPClient& mcp, const std::string& test_name,
 
 void test_query_allowed(MCPClient& mcp, const std::string& test_name,
                        const std::string& sql) {
-	json args = {{"sql", sql}};
+	json args = {{"sql", sql}, {"schema", "test"}};
 	MCPResponse resp = mcp.call_tool("query", "run_sql_readonly", args);
 
 	// Prepare values before ok() - avoid operators in ok()

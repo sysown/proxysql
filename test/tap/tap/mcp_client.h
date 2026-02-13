@@ -3,7 +3,6 @@
 
 #include <string>
 #include <memory>
-#include <map>
 #include <curl/curl.h>
 #include "json.hpp"
 
@@ -43,7 +42,7 @@ enum class MCPErrorType {
  *   if (resp.is_success()) {
  *       json& data = resp.get_result();
  *   } else if (resp.is_jsonrpc_error()) {
- *       diag("Tool error: %s (code %d)", resp.get_error_message(), resp.get_error_code());
+ *       diag("Tool error: %s (code %d)", resp.get_error_message().c_str(), resp.get_error_code());
  *   }
  */
 class MCPResponse {
@@ -214,17 +213,18 @@ private:
  * Configuration sources (in order of precedence):
  *   1. Constructor parameters
  *   2. Setter methods
- *   3. Environment variables (TAP_ADMINHOST, TAP_MCPPORT)
- *   4. Defaults (127.0.0.1, 6071)
+ *   3. Defaults (127.0.0.1:6071)
  *
  * Usage:
- *   MCPClient mcp;  // Uses environment variables or defaults
+ *   CommandLine cl;
+ *   cl.getEnv();  // Reads TAP_ADMINHOST, TAP_MCP_PORT from environment
+ *   MCPClient mcp(cl.host, cl.mcp_port);  // Pass values from CommandLine
  *
  *   json args = {{"query", "mysql"}, {"k", 10}};
  *   MCPResponse resp = mcp.call_tool("rag", "rag.search_fts", args);
  *
  *   if (resp.is_success()) {
- *       std::cout << (*resp.result)["results"] << std::endl;
+ *       std::cout << resp.get_result()["results"] << std::endl;
  *   }
  */
 class MCPClient {
@@ -236,13 +236,13 @@ public:
     /**
      * @brief Construct MCP Client with optional configuration
      *
-     * All parameters are optional. If not provided, values are read from:
-     *   - host: TAP_ADMINHOST environment variable (default: 127.0.0.1)
-     *   - port: TAP_MCPPORT environment variable (default: 6071)
+     * All parameters are optional. If not provided, defaults are used:
+     *   - host: defaults to "127.0.0.1"
+     *   - port: defaults to 6071
      *   - timeout_ms: defaults to 30000 (30 seconds)
      *
-     * @param host MCP server hostname (empty = use environment/default)
-     * @param port MCP server port (0 = use environment/default)
+     * @param host MCP server hostname (empty = use default "127.0.0.1")
+     * @param port MCP server port (0 = use default 6071)
      * @param timeout_ms Request timeout in milliseconds (default: 30000)
      *
      * @throws std::runtime_error if libcurl initialization fails
@@ -288,8 +288,7 @@ public:
      * @brief Set authentication token for all MCP endpoints
      *
      * Token is added as HTTP header: "Authorization: Bearer <token>"
-     * Applies to all endpoints (config, query, admin, stats, rag, ai, cache).
-     * To clear tokens, pass an empty string.
+     * Applies to all endpoints. To clear token, pass an empty string.
      *
      * @param token Authentication token (empty string to clear)
      */
@@ -407,7 +406,7 @@ private:
     std::string last_error_;           ///< Last error message
     std::string base_url_;             ///< Full base URL
     unsigned int request_id_;          ///< JSON-RPC request ID counter
-    std::map<std::string, std::string> auth_tokens_; ///< Per-endpoint auth tokens
+    std::string auth_token_;           ///< Authentication token for all endpoints
 
     // ========================================================================
     // Private Methods

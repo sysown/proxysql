@@ -18,15 +18,13 @@ MCPClient::MCPClient(
     , timeout_ms_(timeout_ms)
     , request_id_(1)
 {
-    // Get defaults from environment if not provided
+    // Apply defaults if not provided
     if (host_.empty()) {
-        const char* env_host = getenv("TAP_ADMINHOST");
-        host_ = env_host ? env_host : "127.0.0.1";
+        host_ = "127.0.0.1";
     }
 
     if (port_ == 0) {
-        const char* env_port = getenv("TAP_MCPPORT");
-        port_ = env_port ? atoi(env_port) : 6071;
+        port_ = 6071;
     }
 
     // Initialize curl
@@ -65,16 +63,7 @@ void MCPClient::set_timeout(long timeout_ms) {
 }
 
 void MCPClient::set_auth_token(const std::string& token) {
-    if (token.empty()) {
-        // Clear all tokens
-        auth_tokens_.clear();
-    } else {
-        // Apply token to all known endpoints
-        const char* endpoints[] = {"config", "query", "admin", "stats", "rag", "ai", "cache"};
-        for (const char* ep : endpoints) {
-            auth_tokens_[ep] = token;
-        }
-    }
+    auth_token_ = token;
 }
 
 std::string MCPClient::get_connection_info() const {
@@ -144,10 +133,8 @@ MCPResponse MCPClient::parse_response(const std::string& raw_response, long http
 
     // 2. Try to parse response body as JSON
     json j;
-    bool is_valid_json = false;
     try {
         j = json::parse(raw_response);
-        is_valid_json = true;
     } catch (const json::parse_error& e) {
         // Not valid JSON
         if (http_code != 200) {
@@ -311,9 +298,8 @@ MCPResponse MCPClient::call_tool(
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
     // Add authentication token if configured
-    auto auth_it = auth_tokens_.find(endpoint);
-    if (auth_it != auth_tokens_.end()) {
-        std::string auth_header = "Authorization: Bearer " + auth_it->second;
+    if (!auth_token_.empty()) {
+        std::string auth_header = "Authorization: Bearer " + auth_token_;
         headers = curl_slist_append(headers, auth_header.c_str());
     }
 
