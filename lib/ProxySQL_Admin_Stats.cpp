@@ -227,9 +227,9 @@ void ProxySQL_Admin::stats___memory_metrics() {
 	}
 	(*proxy_sqlite3_status64)(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
 	vn=(char *)"SQLite3_memory_bytes";
-	sprintf(bu,"%lld",current);
+	snprintf(bu, sizeof(bu),"%lld",current);
 	query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-	sprintf(query,a,vn,bu);
+	snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 	statsdb->execute(query);
 	free(query);
 #ifndef NOJEM
@@ -249,39 +249,39 @@ void ProxySQL_Admin::stats___memory_metrics() {
 //		size_t rss_bytes = resident - allocated;
 //		float metadata_pct = ((float)metadata / resident)*100;
 		vn=(char *)"jemalloc_resident";
-		sprintf(bu,"%lu",resident);
+		snprintf(bu, sizeof(bu),"%lu",resident);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn=(char *)"jemalloc_active";
-		sprintf(bu,"%lu",active);
+		snprintf(bu, sizeof(bu),"%lu",active);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn=(char *)"jemalloc_allocated";
-		sprintf(bu,"%lu",allocated);
+		snprintf(bu, sizeof(bu),"%lu",allocated);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn=(char *)"jemalloc_mapped";
-		sprintf(bu,"%lu",mapped);
+		snprintf(bu, sizeof(bu),"%lu",mapped);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn=(char *)"jemalloc_metadata";
-		sprintf(bu,"%lu",metadata);
+		snprintf(bu, sizeof(bu),"%lu",metadata);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn=(char *)"jemalloc_retained";
-		sprintf(bu,"%lu",retained);
+		snprintf(bu, sizeof(bu),"%lu",retained);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -290,9 +290,9 @@ void ProxySQL_Admin::stats___memory_metrics() {
 		if (GloMyAuth) {
 			unsigned long mu = GloMyAuth->memory_usage();
 			vn=(char *)"Auth_memory";
-			sprintf(bu,"%lu",mu);
+			snprintf(bu, sizeof(bu),"%lu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query,a,vn,bu);
+			snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
@@ -301,36 +301,36 @@ void ProxySQL_Admin::stats___memory_metrics() {
 		if (GloMyQPro) {
 			unsigned long long mu = GloMyQPro->get_query_digests_total_size();
 			vn=(char *)"mysql_query_digest_memory";
-			sprintf(bu,"%llu",mu);
+			snprintf(bu, sizeof(bu),"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query,a,vn,bu);
+			snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
 		if (GloMyQPro) {
 			unsigned long long mu = GloMyQPro->get_rules_mem_used();
 			vn=(char *)"mysql_query_rules_memory";
-			sprintf(bu,"%llu",mu);
+			snprintf(bu, sizeof(bu),"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query,a,vn,bu);
+			snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
 		if (GloPgQPro) {
 			unsigned long long mu = GloPgQPro->get_query_digests_total_size();
 			vn = (char*)"pgsql_query_digest_memory";
-			sprintf(bu, "%llu", mu);
+			snprintf(bu, sizeof(bu), "%llu", mu);
 			query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-			sprintf(query, a, vn, bu);
+			snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
 		if (GloPgQPro) {
 			unsigned long long mu = GloPgQPro->get_rules_mem_used();
 			vn = (char*)"pgsql_query_rules_memory";
-			sprintf(bu, "%llu", mu);
+			snprintf(bu, sizeof(bu), "%llu", mu);
 			query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-			sprintf(query, a, vn, bu);
+			snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
@@ -339,15 +339,15 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			uint64_t prep_stmt_backend_mem_usage;
 			GloMyStmt->get_memory_usage(prep_stmt_metadata_mem_usage, prep_stmt_backend_mem_usage);
 			vn = (char*)"prepare_statement_metadata_memory";
-			sprintf(bu, "%lu", prep_stmt_metadata_mem_usage);
+			snprintf(bu, sizeof(bu), "%lu", prep_stmt_metadata_mem_usage);
 			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query, a, vn, bu);
+			snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 			vn = (char*)"prepare_statement_backend_memory";
-			sprintf(bu, "%lu", prep_stmt_backend_mem_usage);
+			snprintf(bu, sizeof(bu), "%lu", prep_stmt_backend_mem_usage);
 			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query, a, vn, bu);
+			snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
@@ -355,30 +355,30 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			unsigned long long mu = 0;
 			mu = GloMyQPro->get_firewall_memory_users_table();
 			vn=(char *)"mysql_firewall_users_table";
-			sprintf(bu,"%llu",mu);
+			snprintf(bu, sizeof(bu),"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query,a,vn,bu);
+			snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 			mu = GloMyQPro->get_firewall_memory_users_config();
 			vn=(char *)"mysql_firewall_users_config";
-			sprintf(bu,"%llu",mu);
+			snprintf(bu, sizeof(bu),"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query,a,vn,bu);
+			snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 			mu = GloMyQPro->get_firewall_memory_rules_table();
 			vn=(char *)"mysql_firewall_rules_table";
-			sprintf(bu,"%llu",mu);
+			snprintf(bu, sizeof(bu),"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query,a,vn,bu);
+			snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 			mu = GloMyQPro->get_firewall_memory_rules_config();
 			vn=(char *)"mysql_firewall_rules_config";
-			sprintf(bu,"%llu",mu);
+			snprintf(bu, sizeof(bu),"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-			sprintf(query,a,vn,bu);
+			snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
@@ -387,23 +387,23 @@ void ProxySQL_Admin::stats___memory_metrics() {
 		unsigned long mu;
 		mu =  __sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads,0);
 		vn=(char *)"stack_memory_mysql_threads";
-		sprintf(bu,"%lu",mu);
+		snprintf(bu, sizeof(bu),"%lu",mu);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		mu =  __sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads,0);
 		vn=(char *)"stack_memory_admin_threads";
-		sprintf(bu,"%lu",mu);
+		snprintf(bu, sizeof(bu),"%lu",mu);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		mu =  __sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads,0);
 		vn=(char *)"stack_memory_cluster_threads";
-		sprintf(bu,"%lu",mu);
+		snprintf(bu, sizeof(bu),"%lu",mu);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
-		sprintf(query,a,vn,bu);
+		snprintf(query, strlen(a)+strlen(vn)+strlen(bu)+16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -494,17 +494,17 @@ const void sqlite3_global_stats_row_step(
 	char buf[32] = { 0 };
 
 	if constexpr (std::is_same_v<T, int32_t>)  {
-		sprintf(buf, "%d", val);
+		snprintf(buf, sizeof(buf), "%d", val);
 	} else if constexpr (std::is_same_v<T, uint64_t>) {
-		sprintf(buf, "%lu", (unsigned long)val);
+		snprintf(buf, sizeof(buf), "%lu", (unsigned long)val);
 	} else if constexpr (std::is_same_v<T, unsigned long>) {
-		sprintf(buf, "%lu", val);
+		snprintf(buf, sizeof(buf), "%lu", val);
 	} else if constexpr (std::is_same_v<T, unsigned long long>) {
-		sprintf(buf, "%llu", val);
+		snprintf(buf, sizeof(buf), "%llu", val);
 	} else if constexpr (std::is_same_v<T, long long>) {
-		sprintf(buf, "%lld", val);
+		snprintf(buf, sizeof(buf), "%lld", val);
 	} else if constexpr (std::is_same_v<T, bool>) {
-		sprintf(buf, "%s", val ? "true" : "false");
+		snprintf(buf, sizeof(buf), "%s", val ? "true" : "false");
 	} else {
 		static_assert(always_false<T>, "Non-exhaustive switch");
 	}
@@ -639,7 +639,7 @@ void ProxySQL_Admin::stats___pgsql_global() {
 			arg_len += strlen(r->fields[i]);
 		}
 		char* query = (char*)malloc(strlen(a) + arg_len + 32);
-		sprintf(query, a, r->fields[0], r->fields[1]);
+		snprintf(query, strlen(a) + arg_len + 32, a, r->fields[0], r->fields[1]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -655,7 +655,7 @@ void ProxySQL_Admin::stats___pgsql_global() {
 				arg_len += strlen(r->fields[i]);
 			}
 			char* query = (char*)malloc(strlen(a) + arg_len + 32);
-			sprintf(query, a, r->fields[0], r->fields[1]);
+			snprintf(query, strlen(a) + arg_len + 32, a, r->fields[0], r->fields[1]);
 			statsdb->execute(query);
 			free(query);
 		}
@@ -670,17 +670,17 @@ void ProxySQL_Admin::stats___pgsql_global() {
 	char* vn = NULL;
 	char* query = NULL;
 	vn = (char*)"SQLite3_memory_bytes";
-	sprintf(bu, "%lld", current);
+	snprintf(bu, sizeof(bu), "%lld", current);
 	query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-	sprintf(query, a, vn, bu);
+	snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 	statsdb->execute(query);
 	free(query);
 
 	unsigned long long connpool_mem = PgHGM->Get_Memory_Stats();
 	vn = (char*)"ConnPool_memory_bytes";
-	sprintf(bu, "%llu", connpool_mem);
+	snprintf(bu, sizeof(bu), "%llu", connpool_mem);
 	query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-	sprintf(query, a, vn, bu);
+	snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 	statsdb->execute(query);
 	free(query);
 
@@ -693,39 +693,39 @@ void ProxySQL_Admin::stats___pgsql_global() {
 		uint64_t stmt_server_active_total = 0;
 		GloPgStmt->get_metrics(&stmt_client_active_unique, &stmt_client_active_total, &stmt_max_stmt_id, &stmt_cached, &stmt_server_active_unique, &stmt_server_active_total);
 		vn = (char*)"Stmt_Client_Active_Total";
-		sprintf(bu, "%lu", stmt_client_active_total);
+		snprintf(bu, sizeof(bu), "%lu", stmt_client_active_total);
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn = (char*)"Stmt_Client_Active_Unique";
-		sprintf(bu, "%lu", stmt_client_active_unique);
+		snprintf(bu, sizeof(bu), "%lu", stmt_client_active_unique);
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn = (char*)"Stmt_Server_Active_Total";
-		sprintf(bu, "%lu", stmt_server_active_total);
+		snprintf(bu, sizeof(bu), "%lu", stmt_server_active_total);
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn = (char*)"Stmt_Server_Active_Unique";
-		sprintf(bu, "%lu", stmt_server_active_unique);
+		snprintf(bu, sizeof(bu), "%lu", stmt_server_active_unique);
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn = (char*)"Stmt_Max_Stmt_id";
-		sprintf(bu, "%lu", stmt_max_stmt_id);
+		snprintf(bu, sizeof(bu), "%lu", stmt_max_stmt_id);
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 		vn = (char*)"Stmt_Cached";
-		sprintf(bu, "%lu", stmt_cached);
+		snprintf(bu, sizeof(bu), "%lu", stmt_cached);
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -738,7 +738,7 @@ void ProxySQL_Admin::stats___pgsql_global() {
 				arg_len += strlen(r->fields[i]);
 			}
 			char* query = (char*)malloc(strlen(a) + arg_len + 32);
-			sprintf(query, a, r->fields[0], r->fields[1]);
+			snprintf(query, strlen(a) + arg_len + 32, a, r->fields[0], r->fields[1]);
 			statsdb->execute(query);
 			free(query);
 		}
@@ -756,7 +756,7 @@ void ProxySQL_Admin::stats___pgsql_global() {
 					arg_len += strlen(r->fields[i]);
 				}
 				char* query = (char*)malloc(strlen(a) + arg_len + 32);
-				sprintf(query, a, r->fields[0], r->fields[1]);
+				snprintf(query, strlen(a) + arg_len + 32, a, r->fields[0], r->fields[1]);
 				statsdb->execute(query);
 				free(query);
 			}
@@ -768,17 +768,17 @@ void ProxySQL_Admin::stats___pgsql_global() {
 	if (GloPgQPro) {
 		unsigned long long mu = GloPgQPro->get_new_req_conns_count();
 		vn = (char*)"new_req_conns_count";
-		sprintf(bu, "%llu", mu);
+		snprintf(bu, sizeof(bu), "%llu", mu);
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 	}
 	{
 		vn = (char*)"pgsql_listener_paused";
-		sprintf(bu, "%s", (admin_proxysql_pgsql_paused == true ? "true" : "false"));
+		snprintf(bu, sizeof(bu), "%s", (admin_proxysql_pgsql_paused == true ? "true" : "false"));
 		query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);
-		sprintf(query, a, vn, bu);
+		snprintf(query, strlen(a) + strlen(vn) + strlen(bu) + 16, a, vn, bu);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1091,7 +1091,7 @@ void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
 			arg_len+=strlen(r->fields[i]);
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11],r->fields[12],r->fields[13]);
+		snprintf(query, strlen(a)+arg_len+32, a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11],r->fields[12],r->fields[13]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1117,7 +1117,7 @@ void ProxySQL_Admin::stats___pgsql_connection_pool(bool _reset) {
 			arg_len += strlen(r->fields[i]);
 		}
 		char* query = (char*)malloc(strlen(a) + arg_len + 32);
-		sprintf(query, a, r->fields[0], r->fields[1], r->fields[2], r->fields[3], r->fields[4], r->fields[5], r->fields[6], r->fields[7], r->fields[8], r->fields[9], r->fields[10], r->fields[11], r->fields[12]);
+		snprintf(query, strlen(a) + arg_len + 32, a, r->fields[0], r->fields[1], r->fields[2], r->fields[3], r->fields[4], r->fields[5], r->fields[6], r->fields[7], r->fields[8], r->fields[9], r->fields[10], r->fields[11], r->fields[12]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1340,7 +1340,7 @@ void ProxySQL_Admin::stats___mysql_commands_counters() {
 			arg_len+=strlen(r->fields[i]);
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11],r->fields[12],r->fields[13],r->fields[14]);
+		snprintf(query, strlen(a)+arg_len+32, a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11],r->fields[12],r->fields[13],r->fields[14]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1362,7 +1362,7 @@ void ProxySQL_Admin::stats___pgsql_commands_counters() {
 			arg_len += strlen(r->fields[i]);
 		}
 		char* query = (char*)malloc(strlen(a) + arg_len + 32);
-		sprintf(query, a, r->fields[0], r->fields[1], r->fields[2], r->fields[3], r->fields[4], r->fields[5], r->fields[6], r->fields[7], r->fields[8], r->fields[9], r->fields[10], r->fields[11], r->fields[12], r->fields[13], r->fields[14]);
+		snprintf(query, strlen(a) + arg_len + 32, a, r->fields[0], r->fields[1], r->fields[2], r->fields[3], r->fields[4], r->fields[5], r->fields[6], r->fields[7], r->fields[8], r->fields[9], r->fields[10], r->fields[11], r->fields[12], r->fields[13], r->fields[14]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1384,7 +1384,7 @@ void ProxySQL_Admin::stats___mysql_query_rules() {
 			arg_len+=strlen(r->fields[i]);
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[0],r->fields[1]);
+		snprintf(query, strlen(a)+arg_len+32, a,r->fields[0],r->fields[1]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1406,7 +1406,7 @@ void ProxySQL_Admin::stats___pgsql_query_rules() {
 			arg_len += strlen(r->fields[i]);
 		}
 		char* query = (char*)malloc(strlen(a) + arg_len + 32);
-		sprintf(query, a, r->fields[0], r->fields[1]);
+		snprintf(query, strlen(a) + arg_len + 32, a, r->fields[0], r->fields[1]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1712,7 +1712,7 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 		SQLite3_row *row  = resultset ? resultset->rows[i] : NULL;
 		char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
 		if (!resultset) {
-			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)qds->digest);
+			snprintf(digest_hex_str, sizeof(digest_hex_str), "0x%016llX", (long long unsigned int)qds->digest);
 		}
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
@@ -1876,7 +1876,7 @@ int ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 	// RAII auto-finalizes statement1 and statement32
 /*
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[10],r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9]);
+		snprintf(query, strlen(a)+arg_len+32, a,r->fields[10],r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9]);
 		statsdb->execute(query);
 		free(query);
 	}
