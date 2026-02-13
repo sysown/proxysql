@@ -147,7 +147,7 @@ int mysql_yylex (union MYSQL_YYSTYPE *yylval_param, MYSQL_YYLTYPE* yyloc, yyscan
 %type <node_val> show_what show_full_modifier show_from_or_in
 
 %type <node_val> subquery derived_table
-%type <node_val> input_stmt_list input_stmt // Type for the start symbol (parsing entrypoint)
+%type <node_val> input_stmt empty_stmts
 
 // For INSERT statement enhancements
 %type <node_val> opt_column_list column_list_item_list column_list_item
@@ -187,42 +187,25 @@ int mysql_yylex (union MYSQL_YYSTYPE *yylval_param, MYSQL_YYLTYPE* yyloc, yyscan
 %%
 
 input_stmt_list:
-	TOKEN_SEMICOLON {
-		auto input = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_INPUT_STATEMENT_LIST);
-		MySQLParser::AstNode* e { new MySQLParser::AstNode(MySQLParser::NodeType::NODE_EMPTY_STATEMENT) };
-		input->add_child(e);
-		parser_context->internal_set_ast(input);
+	input_stmt {
+		if (!parser_context->ast_root_) {
+			auto input = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_INPUT_STATEMENT_LIST);
+			parser_context->internal_set_ast(input);
 
-		// See NOTE on %destructor defs
-		$$ = nullptr;
-	}
-	| input_stmt {
-		auto input = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_INPUT_STATEMENT_LIST);
-		input->add_child($1);
-		parser_context->internal_set_ast(input);
-
-		// See NOTE on %destructor defs
-		$$ = nullptr;
+			parser_context->ast_root_->add_child($1);
+		} else {
+			parser_context->ast_root_->add_child($1);
+		}
 	}
 	| input_stmt_list TOKEN_SEMICOLON input_stmt {
-		parser_context->ast_root_->add_child($1);
 		parser_context->ast_root_->add_child($3);
-
-		// See NOTE on %destructor defs
-		$$ = nullptr;
-	}
-	| input_stmt_list TOKEN_SEMICOLON {
-		// auto input = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_EMPTY_STATEMENT);
-		// parser_context->ast_root_->add_child(input);
-
-		// See NOTE on %destructor defs
-		$$ = $1;
 	}
 	;
 
 // New start rule definition:
 input_stmt:
-	statement { $$ = $1; }
+	{ $$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_EMPTY_STATEMENT); } /* empty */
+	| statement { $$ = $1; }
 	;
 
 statement:
