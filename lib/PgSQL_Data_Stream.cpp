@@ -256,6 +256,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	encrypted = false;
 	switching_auth_stage = 0;
 	switching_auth_type = 0;
+	tmp_charset = 0;
 	x509_subject_alt_name = NULL;
 	ssl = NULL;
 	rbio_ssl = NULL;
