@@ -346,6 +346,7 @@ union MYSQL_YYSTYPE;
 	"\\0"                 { *(yylval_param->str_val) += "\0"; }
 	"\\Z"                 { *(yylval_param->str_val) += "\x1a"; } /* Ctrl+Z */
 	"''"                  { *(yylval_param->str_val) += "'"; } /* SQL standard for literal single quote */
+	[\\.]                 { *(yylval_param->str_val) += yytext + 1; }
 	"'"                   {
 		*(yylval_param->str_val) += "'";
 		yylloc->first_column -= yylval_param->str_val->size() - 1;
@@ -374,6 +375,7 @@ union MYSQL_YYSTYPE;
 	"\\0"                 { *(yylval_param->str_val) += "\0"; }
 	"\\Z"                 { *(yylval_param->str_val) += "\x1a"; }
 	"\"\""                { *(yylval_param->str_val) += "\""; } /* SQL standard for literal double quote */
+	[\\.]                 { *(yylval_param->str_val) += yytext + 1; }
 	"\""                  {
 		*(yylval_param->str_val) += "\"";
 		yylloc->first_column -= yylval_param->str_val->size() - 1;
