@@ -1,6 +1,5 @@
 #include <chrono>
 #include <random>
-#include <pthread.h>
 #include "log_utils.h"
 
 

@@ -1218,14 +1218,16 @@ MySQL_Logger::~MySQL_Logger() {
  				flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
  					[this]() { wrlock(); },
  					[this]() { wrunlock(); },
- 					nullptr
+ 					nullptr,
+					0
  				);
  			}
  			if (!log_ctx->audit.empty()) {
  				flush_and_rotate(log_ctx->audit, audit.logfile, audit.current_log_size, audit.max_log_file_size,
  					[this]() { wrlock(); },
  					[this]() { wrunlock(); },
- 					nullptr
+ 					nullptr,
+					0
  				);
  			}
  		}

@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <functional>
-
+#include <pthread.h>
 
 /**
  * @brief Manages a string buffer and a flush timestamp for logging.
