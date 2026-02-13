@@ -55,6 +55,11 @@ export SOURCE_DATE_EPOCH
 ###     ```
 ###
 ### ** to use on-demand coredump generation feature, compile code without ASAN option (WITHASAN=0).
+###
+### NOTES for Valgrind:
+### When running Valgrind, SQLite's internal memory allocator may cause false
+### positives in pcache*, memjrnl*, and sqlite3Btree* functions. To avoid this,
+### rebuild SQLite with -USQLITE_ENABLE_MEMORY_MANAGEMENT in deps/Makefile
 
 O0 := -O0
 O2 := -O2
