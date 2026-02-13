@@ -465,10 +465,18 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 }
 
 string trim(string&& s) {
-	s.erase(0, s.find_first_not_of(" \n\r\t"));
-	s.erase(s.find_last_not_of(" \n\r\t") + 1);
+	const auto first { s.find_first_not_of(" \n\r\t") };
 
-	return s;
+	if (first == string::npos) {
+		return {};
+	} else {
+		const auto last { s.find_last_not_of(" \n\r\t") };
+
+		s.erase(last + 1);
+		s.erase(0, first);
+
+		return s;
+	}
 }
 
 std::string generate_multi_rows_query(int rows, int params) {

@@ -2725,10 +2725,10 @@ vector<string_view> split_view(const string_view& str, const char* delim) {
 }
 
 string_view trim(const string_view& s) {
-	size_t s_pos { s.find_first_not_of(" \n\r\t") };
-	size_t f_pos { s.find_last_not_of(" \n\r\t") };
+	const size_t s_pos { s.find_first_not_of(" \n\r\t") };
+	const size_t f_pos { s.find_last_not_of(" \n\r\t") };
 
-	return s.substr(s_pos == std::string_view::npos ? 0 : s_pos, f_pos + 1);
+	return s.substr(s_pos == std::string_view::npos ? 0 : s_pos, f_pos - s_pos + 1);
 }
 
 vector<string_view> get_keep_mult_vars(const char* keep_mult_vars) {
