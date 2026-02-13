@@ -18,7 +18,7 @@ using std::unordered_map;
 
 __thread unsigned long long pretime=0;
 static pthread_mutex_t debug_mutex;
-static pthread_rwlock_t filters_rwlock;
+static pthread_rwlock_t filters_rwlock = PTHREAD_RWLOCK_INITIALIZER;
 static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
 static stmt_unique_ptr statement1_unique {};
