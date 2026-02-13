@@ -353,6 +353,8 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	thread_id=_thread_id;
 	username=_username;
 	schemaname=_schemaname;
+	username_len=0;
+	schemaname_len=0;
 	start_time=_start_time;
 	end_time=_end_time;
 	query_digest=_query_digest;
@@ -361,6 +363,7 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	et=_et;
 	hid=UINT64_MAX;
 	server=NULL;
+	server_len=0;
 	extra_info = NULL;
 	have_affected_rows=false;
 	affected_rows=0;

@@ -31,15 +31,15 @@ static unsigned int debug_output = 1;
 
 
 struct DebugLogEntry {
-	unsigned long long time;
-	unsigned long long lapse;
-	int thr;
+	unsigned long long time = 0;
+	unsigned long long lapse = 0;
+	int thr = 0;
 	std::string file;
-	int line;
+	int line = 0;
 	std::string funct;
-	int module;
+	int module = 0;
 	std::string modname;
-	int verbosity;
+	int verbosity = 0;
 	std::string message;
 	std::string backtrace;
 };
@@ -178,20 +178,19 @@ void proxy_debug_func(
 	const char *fmt,
 	...
 ) {
-	int saved_errno = errno;
 	assert(module<PROXY_DEBUG_UNKNOWN);
 	// Safety check: ensure debug struct is initialized
 	if (GloVars.global.gdbg_lvl == NULL) {
-		errno = saved_errno;
 		return;
 	}
 	if (pretime == 0) { // never initialized
 		pretime=realtime_time();
 	}
 	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity) {
-		errno = saved_errno;
 		return;
 	}
+	// Save errno only after passing early return checks
+	int saved_errno = errno;
 	// check if the entry must be filtered
 	if (filter_debug_entry(__file, __line, __func)) {
 		errno = saved_errno;
