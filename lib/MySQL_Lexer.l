@@ -68,7 +68,7 @@ union MYSQL_YYSTYPE;
 
 				strncpy(ver + 2, yytext + 4, 4);
 			} else if (ver_len == 6) {
-				strncpy(ver, yytext, 6);
+				strncpy(ver, yytext + 3, 6);
 			}
 
 			int cmp = strcasecmp(parser->get_opts().srv_ver, ver);
