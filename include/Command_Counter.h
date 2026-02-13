@@ -3,10 +3,9 @@
 
 class Command_Counter {
 public:
-	Command_Counter(int cmd_idx, int col_count, char** cmd_desc) : _counters{}, _total_time(0), _cmd_idx(cmd_idx), 
+	Command_Counter(int cmd_idx, int col_count, char** cmd_desc) : _total_time(0), _cmd_idx(cmd_idx),
 		_col_count(col_count), _cmd_desc(cmd_desc) {
-
-		//memset(_counters, 0, sizeof(_counters));
+		memset(_counters, 0, sizeof(_counters));
 	}
 	void add_and_reset(Command_Counter* cc) {
 		for (int j = 0; j < static_cast<int>(sizeof(_counters)/sizeof(_counters[0])); j++) {
