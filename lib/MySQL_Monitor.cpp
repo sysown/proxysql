@@ -1403,6 +1403,10 @@ void * monitor_ping_thread(const std::vector<MySQL_Monitor_State_Data*>& mmsds) 
 	assert(!mmsds.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = mmsds.front();
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1636,6 +1640,10 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 	mysql_close(mysql_init(NULL));
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd = data.front();
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1914,10 +1922,14 @@ void * monitor_group_replication_thread(const std::vector<MySQL_Monitor_State_Da
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -2266,10 +2278,14 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -2667,6 +2683,10 @@ void * monitor_replication_lag_thread(const std::vector<MySQL_Monitor_State_Data
 	assert(!data.empty());
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd = data.front();
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
