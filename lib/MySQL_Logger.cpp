@@ -358,6 +358,8 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	start_time=_start_time;
 	end_time=_end_time;
 	query_digest=_query_digest;
+	query_ptr=NULL;
+	query_len=0;
 	client=_client;
 	client_len=_client_len;
 	et=_et;
@@ -377,6 +379,7 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	errmsg = nullptr;
 	myerrno = 0;
 	free_on_delete = false; // by default, this is false. This because pointers do not belong to this object
+	memset(buf, 0, sizeof(buf));
 }
 
 MySQL_Event::MySQL_Event(const MySQL_Event &other) {
