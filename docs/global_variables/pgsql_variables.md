@@ -143,7 +143,7 @@ Maximum size of the PostgreSQL audit log file.
 
 ### `pgsql-auditlog_flush_timeout`
 
-Timeout for writting logs to PostgreSQL audit log file.
+Timeout for writing logs to PostgreSQL audit log file.
 
 |                      |             |                              |
 | -------------------- | ----------- | ---------------------------- |
@@ -159,7 +159,7 @@ audit log file. The default value is 1000 (1 second).
 
 ### `pgsql-auditlog_flush_size`
 
-Size threshold for writting logs to PostgreSQL audit log file.
+Size threshold for writing logs to PostgreSQL audit log file.
 
 |                      |             |                            |
 | -------------------- | ----------- | -------------------------- |
@@ -499,7 +499,7 @@ Format of the PostgreSQL events log.
 
 ### `pgsql-eventslog_flush_timeout`
 
-Timeout for writting logs to the PostgreSQL events log.
+Timeout for writing logs to the PostgreSQL events log.
 
 |                      |             |                               |
 | -------------------- | ----------- | ----------------------------- |
@@ -515,7 +515,7 @@ events log file. The default value is 1000 (1 second).
 
 ### `pgsql-eventslog_flush_size`
 
-Size threshold for writting logs to the PostgreSQL events log.
+Size threshold for writing logs to the PostgreSQL events log.
 
 |                      |             |                            |
 | -------------------- | ----------- | -------------------------- |

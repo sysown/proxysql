@@ -134,7 +134,7 @@ Example of JSON logging:
 
 A new variable `mysql-eventslog_rate_limit` is introduced to control the sampling rate for event logs. When set to `1` (default),
 all events are logged to the file. When set to a value greater than `1`, the number of events logged to the file will be
-approximately equal to `1/N`, where `N` is the value set for the variable. 
+approximately equal to `1/N`, where `N` is the value set for the variable.
 
 **To log all events (default)**
 
