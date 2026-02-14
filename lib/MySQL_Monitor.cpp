@@ -573,6 +573,7 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task
 	mysql = NULL;
 	result = NULL;
 	mysql_error_msg = NULL;
+	mondb = NULL;
 	hostname = strdup(h);
 	port = p;
 	use_ssl = _use_ssl;
