@@ -792,7 +792,6 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
 
 	public:
-	std::mutex galera_set_writer_mutex;
 	/**
 	 * @brief Mutex used to guard 'mysql_servers_to_monitor' resulset.
 	 */
@@ -911,15 +910,22 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	bool is_locked = false;
 #endif
 #endif // 0
-	int servers_add(SQLite3_result *resultset);
+	int servers_add_locked(SQLite3_result *resultset);
 	/**
 	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.
 	 * @param servers_v2_hash The 'raw_checksum' from 'MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS' or peer node.
 	 * @return Checksum computed using the provided hash, and 'mysql_servers' config tables hashes.
 	 */
 	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
-	bool commit();
-	bool commit(
+	inline bool commit();
+	inline bool commit_locked();
+	inline bool commit(
+		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
+		bool only_commit_runtime_mysql_servers = true,
+		bool update_version = false
+	);
+	bool commit_locked(
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers = true,
@@ -992,7 +998,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @param The resulset to be stored replacing the current one.
 	 */
 
-	void save_incoming_mysql_table(SQLite3_result *, const string&);
+	void save_incoming_mysql_table_locked(SQLite3_result *, const string&);
 	SQLite3_result* get_current_mysql_table(const string& name);
 
 	//SQLite3_result * execute_query(char *query, char **error);
