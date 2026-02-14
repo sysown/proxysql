@@ -589,10 +589,18 @@ int MySQL_Data_Stream::read_from_net() {
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 4, 0);
 				if (r == 4) {
-					// let's try to read a whole packet
-					mysql_hdr Hdr;
-					memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
-					r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					// Check for PROXY protocol before treating as MySQL header
+					// PROXY protocol starts with "PROXY " (6 bytes), but we only have 4 bytes here
+					// If first 4 bytes are "PROX", don't interpret as MySQL header
+					if (strncmp((char *)queueIN.buffer, "PROX", 4) == 0) {
+						// PROXY protocol detected - read more data without MySQL header parsing
+						r += recv(fd, queue_w_ptr(queueIN)+4, s-4, 0);
+					} else {
+						// let's try to read a whole packet
+						mysql_hdr Hdr;
+						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					}
 				}
 			} else {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
