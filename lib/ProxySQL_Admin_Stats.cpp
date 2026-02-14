@@ -1387,15 +1387,15 @@ void ProxySQL_Admin::stats___mysql_query_rules() {
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_query_rules");
-	char *a=(char *)"INSERT INTO stats_mysql_query_rules VALUES (\"%s\",\"%s\")";
+	char *a=(char *)"INSERT INTO stats_mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\")";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
-		for (int i=0; i<2; i++) {
+		for (int i=0; i<4; i++) {
 			arg_len+=strlen(r->fields[i]);
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[0],r->fields[1]);
+		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3]);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -1409,15 +1409,15 @@ void ProxySQL_Admin::stats___pgsql_query_rules() {
 	if (resultset == NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_pgsql_query_rules");
-	char* a = (char*)"INSERT INTO stats_pgsql_query_rules VALUES (\"%s\",\"%s\")";
+	char* a = (char*)"INSERT INTO stats_pgsql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\")";
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
 		int arg_len = 0;
-		for (int i = 0; i < 2; i++) {
+		for (int i = 0; i < 4; i++) {
 			arg_len += strlen(r->fields[i]);
 		}
 		char* query = (char*)malloc(strlen(a) + arg_len + 32);
-		sprintf(query, a, r->fields[0], r->fields[1]);
+		sprintf(query, a, r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
 		statsdb->execute(query);
 		free(query);
 	}

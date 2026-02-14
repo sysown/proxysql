@@ -4687,15 +4687,15 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	//char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	char *a=NULL;
 	if (_runtime) {
-		a=(char *)"INSERT INTO runtime_mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		a=(char *)"INSERT INTO runtime_mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, max_rate, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	} else {
-		a=(char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		a=(char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, max_rate, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	}
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
-		char *buffs[35]; // number of fields
-		for (int i=0; i<35; i++) {
+		char *buffs[36]; // number of fields
+		for (int i=0; i<36; i++) {
 			if (r->fields[i]) {
 				char *o=escape_string_single_quotes(r->fields[i],false);
 				int l=strlen(o)+4;
@@ -4713,6 +4713,7 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 			}
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
+        fprintf(stderr,"save_mysql_query_rules_from_runtime: %s\n",buffs[34]);
 
 		sprintf(query,a,
 			buffs[0],
@@ -4727,7 +4728,7 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 			buffs[9], // match_digest
 			buffs[10], // match_pattern
 			r->fields[11], // negate
-      buffs[12], // re_modifiers
+			buffs[12], // re_modifiers
 			( strcmp(r->fields[13],"-1")==0 ? "NULL" : r->fields[13] ), // flagOUT
 			buffs[14], // replace_pattern
 			( strcmp(r->fields[15],"-1")==0 ? "NULL" : r->fields[15] ), // destination_hostgroup
@@ -4749,11 +4750,12 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 			( strcmp(r->fields[31],"-1")==0 ? "NULL" : r->fields[31] ), // log
 			( strcmp(r->fields[32],"-1")==0 ? "NULL" : r->fields[32] ), // apply
 			buffs[33], // attributes
-			buffs[34]  // comment
+			( strcmp(r->fields[34],"-1")==0 ? "NULL" : r->fields[34] ), // max_rate
+			buffs[35]  // comment
 		);
 		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
-		for (int i=0; i<35; i++) {
+		for (int i=0; i<36; i++) {
 			free(buffs[i]);
 		}
 		free(query);
@@ -4773,15 +4775,15 @@ void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
 	//char *a=(char *)"INSERT INTO pgsql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	char* a = NULL;
 	if (_runtime) {
-		a = (char*)"INSERT INTO runtime_pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		a = (char*)"INSERT INTO runtime_pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, max_rate, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	} else {
-		a = (char*)"INSERT INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		a = (char*)"INSERT INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, max_rate, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	}
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
 		int arg_len = 0;
-		char* buffs[34]; // number of fields
-		for (int i = 0; i < 34; i++) {
+		char* buffs[35]; // number of fields
+		for (int i = 0; i < 35; i++) {
 			if (r->fields[i]) {
 				char* o = escape_string_single_quotes(r->fields[i], false);
 				int l = strlen(o) + 4;
@@ -4835,11 +4837,12 @@ void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
 			(strcmp(r->fields[30], "-1") == 0 ? "NULL" : r->fields[30]), // log
 			(strcmp(r->fields[31], "-1") == 0 ? "NULL" : r->fields[31]), // apply
 			buffs[32], // attributes
-			buffs[33]  // comment
+            ( strcmp(r->fields[33],"-1")==0 ? "NULL" : r->fields[33] ), // max_rate
+			buffs[34]  // comment
 		);
 		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
-		for (int i = 0; i < 34; i++) {
+		for (int i = 0; i < 35; i++) {
 			free(buffs[i]);
 		}
 		free(query);
@@ -8086,7 +8089,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	int affected_rows=0;
 	if (GloMyQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM main.mysql_query_rules WHERE active=1 ORDER BY rule_id";
+	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, max_rate, comment FROM main.mysql_query_rules WHERE active=1 ORDER BY rule_id";
 	if (SQLite3_query_rules_resultset==NULL) {
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	} else {
@@ -8232,7 +8235,8 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 				(r->fields[30]==NULL ? -1 : atol(r->fields[30])),	// log
 				(atoi(r->fields[31])==1 ? true : false),
 				r->fields[32], // attributes
-				r->fields[33]  // comment
+				(r->fields[33]==NULL ? -1 : atol(r->fields[33])),	// max_rate
+				r->fields[34]  // comment
 			);
 			GloMyQPro->insert(nqpr, false);
 		}
@@ -8284,7 +8288,7 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	int affected_rows = 0;
 	if (GloPgQPro == NULL) return (char*)"Global Query Processor not started: command impossible to run";
 	SQLite3_result* resultset = NULL;
-	char* query = (char*)"SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment FROM main.pgsql_query_rules WHERE active=1 ORDER BY rule_id";
+	char* query = (char*)"SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, max_rate, comment FROM main.pgsql_query_rules WHERE active=1 ORDER BY rule_id";
 	if (SQLite3_query_rules_resultset == NULL) {
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	}
@@ -8436,7 +8440,8 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 					(r->fields[29] == NULL ? -1 : atol(r->fields[29])),	// log
 					(atoi(r->fields[30]) == 1 ? true : false),
 					r->fields[31], // attributes
-					r->fields[32]  // comment
+					(r->fields[32] == NULL ? -1 : atol(r->fields[32])), // max_rate	
+					r->fields[33]  // comment
 				);
 				GloPgQPro->insert(nqpr, false);
 			}

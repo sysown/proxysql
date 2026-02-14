@@ -138,6 +138,14 @@ typedef struct _Query_Processor_rule_t {
 	std::vector<int>* flagOUT_ids;
 	std::vector<int>* flagOUT_weights;
 	int flagOUT_weights_total;
+
+    // rule throttling related variables
+    int number_hits_last_sec;  // Number of hits within the last sec
+    int current_throttled;     // Number of queries currently throttled
+    int last_sec;  // last_sec, unix epoch
+    uint64_t num_throttle;  // number of times the rule throttling was enforced
+    uint64_t ms_throttled;  // number of milliseconds throttled
+    int max_rate;  // Max rate, hits/s, 0 means unlimited
 } QP_rule_t;
 
 class Query_Processor_Output {
