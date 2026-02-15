@@ -277,7 +277,7 @@ jobs:
         source ./env.sh
         
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        sed 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
+        sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
         ./docker-compose-init.bash
 
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
@@ -321,7 +321,7 @@ jobs:
         killall proxysql
         
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        sed 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
+        sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
         ./docker-compose-destroy.bash
         
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57

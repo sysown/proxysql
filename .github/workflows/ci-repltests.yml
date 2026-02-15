@@ -80,7 +80,7 @@ jobs:
     - name: Docker-hoster
       run: |
         cd jenkins-build-scripts/infra-docker-hoster
-        sed 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
+        sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
         docker compose up -d
 
     - name: Replication-tests

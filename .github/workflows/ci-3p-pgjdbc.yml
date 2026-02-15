@@ -105,7 +105,7 @@ jobs:
         #git config user.name "GH-Actions"
         #git rebase main -f -s recursive -X theirs
 
-        sed 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml
+        sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml
         
         # use cached build
         rm -rf ./proxysql && mv ../proxysql . || true
