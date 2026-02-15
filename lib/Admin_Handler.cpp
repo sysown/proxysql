@@ -1030,14 +1030,26 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL KILL command\n");
+	#ifdef DEBUG
+		// In debug builds prefer coordinated shutdown to avoid teardown races.
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		return false;
+	#else
 		exit(EXIT_SUCCESS);
+	#endif
 	}
 
 	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN") && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
 		// in 2.1 , PROXYSQL SHUTDOWN behaves like PROXYSQL KILL : quick exit
 		// the former PROXYQL SHUTDOWN is now replaced with PROXYSQL SHUTDOWN SLOW
 		proxy_info("Received PROXYSQL SHUTDOWN command\n");
+	#ifdef DEBUG
+		// In debug builds prefer coordinated shutdown to avoid teardown races.
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		return false;
+	#else
 		exit(EXIT_SUCCESS);
+	#endif
 	}
 
 	return true;
@@ -1150,7 +1162,7 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			size_t buff_len = strlen(err_msg_fmt) + strlen(var_name) + 1;
 			char *buff = (char *) malloc(buff_len);
 			snprintf(buff, buff_len, err_msg_fmt, var_name);
-			SPA->send_ok_msg_to_client(sess, buff, 0, query_no_space);
+			SPA->send_error_msg_to_client(sess, buff);
 			free(buff);
 			run_query = false;
 		} else {
@@ -4716,4 +4728,3 @@ __run_query:
 // Explicitly instantiate the required template class and member functions
 template void admin_session_handler<MySQL_Session>(MySQL_Session* sess, void *_pa, PtrSize_t *pkt);
 template void admin_session_handler<PgSQL_Session>(PgSQL_Session* sess, void *_pa, PtrSize_t *pkt);
-

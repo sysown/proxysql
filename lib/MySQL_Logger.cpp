@@ -353,14 +353,19 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	thread_id=_thread_id;
 	username=_username;
 	schemaname=_schemaname;
+	username_len=0;
+	schemaname_len=0;
 	start_time=_start_time;
 	end_time=_end_time;
 	query_digest=_query_digest;
+	query_ptr=NULL;
+	query_len=0;
 	client=_client;
 	client_len=_client_len;
 	et=_et;
 	hid=UINT64_MAX;
 	server=NULL;
+	server_len=0;
 	extra_info = NULL;
 	have_affected_rows=false;
 	affected_rows=0;
@@ -374,6 +379,7 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	errmsg = nullptr;
 	myerrno = 0;
 	free_on_delete = false; // by default, this is false. This because pointers do not belong to this object
+	memset(buf, 0, sizeof(buf));
 }
 
 MySQL_Event::MySQL_Event(const MySQL_Event &other) {
@@ -1505,18 +1511,22 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	char *sa=(char *)""; // default
 	if (myds) {
 		if (myds->myconn) {
-			sa=myds->myconn->parent->address;
+			if (myds->myconn->parent) {
+				sa=myds->myconn->parent->address;
+			}
 		}
 	}
 	sl+=strlen(sa);
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		snprintf(sa, sl+9, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 	if (sl) {
 		int hid=-1;
-		hid=myds->myconn->parent->myhgc->hid;
+		if (myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->myhgc) {
+			hid=myds->myconn->parent->myhgc->hid;
+		}
 		me.set_server(hid,sa,sl);
 	}
 
@@ -1552,7 +1562,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
 	}
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		free(sa);
 	}
 }
@@ -1666,15 +1676,13 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 */
 	int sl=0;
 	char *sa=(char *)""; // default
-	if (myds) {
-		if (myds->myconn) {
-			sa=myds->myconn->parent->address;
-		}
+	if (myds && myds->myconn && myds->myconn->parent) {
+		sa=myds->myconn->parent->address;
 	}
 	sl+=strlen(sa);
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		snprintf(sa, sl+9, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 
@@ -1700,7 +1708,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
 	}
-	if (sl && myds->myconn->parent->port) {
+	if (sl && myds && myds->myconn && myds->myconn->parent && myds->myconn->parent->port) {
 		free(sa);
 	}
 }
@@ -1859,8 +1867,6 @@ void MySQL_Logger_CircularBuffer::setBufferSize(size_t newSize) {
 
 void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& tableName, size_t numEvents, std::vector<MySQL_Event*>::const_iterator begin){
 	int rc = 0;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement32=NULL;
 	char *query1=NULL;
 	char *query32=NULL;
 	const int numcols = 19;
@@ -1873,10 +1879,12 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 	query32s = "INSERT INTO " + tableName + coldefs + " VALUES " + generate_multi_rows_query(32, numcols);
 	query1  = (char *)query1s.c_str();
 	query32 = (char *)query32s.c_str();
-	rc = db->prepare_v2(query1, &statement1);
-	ASSERT_SQLITE_OK(rc, db);
-	rc = db->prepare_v2(query32, &statement32);
-	ASSERT_SQLITE_OK(rc, db);
+	auto [rc1, statement1_unique] = db->prepare_v2(query1);
+	ASSERT_SQLITE_OK(rc1, db);
+	auto [rc2, statement32_unique] = db->prepare_v2(query32);
+	ASSERT_SQLITE_OK(rc2, db);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement32 = statement32_unique.get();
 
 	char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
 
@@ -1944,8 +1952,6 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 		}
 		row_idx++;
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement32);
 	db->execute("COMMIT");
 }
 

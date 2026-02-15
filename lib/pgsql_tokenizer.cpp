@@ -391,7 +391,7 @@ static inline char* get_result_buffer(int len, char* buf) {
 	char* r = NULL;
 
 	if (buf == NULL) {
-		r = (char *) malloc(len + SIZECHAR);
+		r = (char *) calloc(len + SIZECHAR, sizeof(char));
 	} else {
 		r = buf;
 	}

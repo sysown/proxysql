@@ -107,8 +107,7 @@ PgSQL_Query_Info::PgSQL_Query_Info() {
 	PgQueryCmd=PGSQL_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
-	QueryParserArgs.digest_text=NULL;
-	QueryParserArgs.first_comment=NULL;
+	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	have_affected_rows=false; // if affected rows is set, last_insert_id is set too
 	waiting_since = 0;
 	affected_rows=0;
@@ -127,8 +126,7 @@ void PgSQL_Query_Info::begin(unsigned char *_p, int len, bool header) {
 	PgQueryCmd=PGSQL_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
-	QueryParserArgs.digest_text=NULL;
-	QueryParserArgs.first_comment=NULL;
+	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	start_time=sess->thread->curtime;
 	init(_p, len, header);
 	if (pgsql_thread___commands_stats || pgsql_thread___query_digests) {

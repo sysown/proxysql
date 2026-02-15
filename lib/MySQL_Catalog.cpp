@@ -202,7 +202,8 @@ int MySQL_Catalog::upsert(
 		"  links = ?6 , "
 		"  updated_at = strftime('%s' ,  'now')";
 
-	int rc = db->prepare_v2(upsert_sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(upsert_sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare catalog upsert: %d\n", rc);
 		return -1;
@@ -216,7 +217,6 @@ int MySQL_Catalog::upsert(
 	(*proxy_sqlite3_bind_text)(stmt, 6, links.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Catalog upsert: schema=%s, kind=%s ,  key=%s\n", schema.c_str(), kind.c_str(), key.c_str());
 	return 0;
@@ -244,7 +244,8 @@ int MySQL_Catalog::get(
 		"SELECT document FROM catalog "
 		"WHERE schema = ?1 AND kind = ?2 AND key = ?3";
 
-	int rc = db->prepare_v2(get_sql, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(get_sql);
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare catalog get: %d\n", rc);
 		return -1;
@@ -261,11 +262,9 @@ int MySQL_Catalog::get(
 		if (doc) {
 			document = doc;
 		}
-		(*proxy_sqlite3_finalize)(stmt);
 		return 0;
 	}
 
-	(*proxy_sqlite3_finalize)(stmt);
 	return -1;
 }
 
@@ -339,7 +338,8 @@ std::string MySQL_Catalog::search(
 
 	// Prepare the statement
 	sqlite3_stmt* stmt = NULL;
-	int rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql.str().c_str());
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare catalog search: %d\n", rc);
 		return "[]";
@@ -394,8 +394,6 @@ std::string MySQL_Catalog::search(
 		results.push_back(entry);
 	}
 
-	(*proxy_sqlite3_finalize)(stmt);
-
 	if (step_rc != SQLITE_DONE) {
 		proxy_error("Catalog search error: step_rc=%d\n", step_rc);
 	}
@@ -433,10 +431,11 @@ std::string MySQL_Catalog::list(
 		count_sql << " AND kind = ?";
 	}
 
-	sqlite3_stmt* count_stmt = NULL;
 	int total = 0;
-	int rc = db->prepare_v2(count_sql.str().c_str(), &count_stmt);
-	if (rc == SQLITE_OK) {
+	sqlite3_stmt* count_stmt = NULL;
+	auto [count_rc, count_stmt_unique] = db->prepare_v2(count_sql.str().c_str());
+	count_stmt = count_stmt_unique.get();
+	if (count_rc == SQLITE_OK) {
 		int param_idx = 1;
 		if (has_schema) {
 			(*proxy_sqlite3_bind_text)(count_stmt, param_idx++, schema.c_str(), -1, SQLITE_TRANSIENT);
@@ -448,7 +447,6 @@ std::string MySQL_Catalog::list(
 		if ((*proxy_sqlite3_step)(count_stmt) == SQLITE_ROW) {
 			total = (*proxy_sqlite3_column_int)(count_stmt, 0);
 		}
-		(*proxy_sqlite3_finalize)(count_stmt);
 	}
 
 	// Build main query with prepared statement to prevent SQL injection
@@ -463,7 +461,8 @@ std::string MySQL_Catalog::list(
 	sql << " ORDER BY schema, kind ,  key ASC LIMIT ? OFFSET ?";
 
 	sqlite3_stmt* stmt = NULL;
-	rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql.str().c_str());
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare catalog list: %d\n", rc);
 		nlohmann::json result;
@@ -515,8 +514,6 @@ std::string MySQL_Catalog::list(
 
 		results.push_back(entry);
 	}
-
-	(*proxy_sqlite3_finalize)(stmt);
 
 	if (step_rc != SQLITE_DONE) {
 		proxy_error("Catalog list error: step_rc=%d\n", step_rc);
@@ -597,7 +594,8 @@ int MySQL_Catalog::remove(
 	sql << " AND kind = ? AND key = ?";
 
 	sqlite3_stmt* stmt = NULL;
-	int rc = db->prepare_v2(sql.str().c_str(), &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(sql.str().c_str());
+	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare catalog remove: %d\n", rc);
 		return -1;
@@ -612,7 +610,6 @@ int MySQL_Catalog::remove(
 	(*proxy_sqlite3_bind_text)(stmt, param_idx++, key.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
-	(*proxy_sqlite3_finalize)(stmt);
 
 	return 0;
 }

@@ -267,6 +267,8 @@ endif
 mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
 
 
+# NOTE: When running Valgrind on ProxySQL, remove -DSQLITE_ENABLE_MEMORY_MANAGEMENT
+# to avoid false positives in SQLite's internal memory allocator (pcache*, memjrnl*, etc.)
 sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
