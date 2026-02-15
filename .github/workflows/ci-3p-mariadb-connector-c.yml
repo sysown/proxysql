@@ -62,7 +62,6 @@ jobs:
         sparse-checkout: |
           common
           libs
-          infra-docker-hoster
           test_${{ env.TESTNAME }}
 #          proxysql
 
@@ -102,10 +101,14 @@ jobs:
         #git config user.email "GH-Actions@proxysql.com"
         #git config user.name "GH-Actions"
         #git rebase main -f -s recursive -X theirs
+
+        sed 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml
         
         # use cached build
         rm -rf ./proxysql && mv ../proxysql . || true
-        
+        ls -l proxysql/binaries/
+        git -C ./proxysql describe --long --abbrev=7 
+
         # extend timout
         cd test_${{ env.TESTNAME }}
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
