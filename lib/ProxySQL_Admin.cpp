@@ -1610,7 +1610,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mysql_users)
 			stats___mysql_users();
 		if (stats_tsdb)
-			GloProxyStats->stats___tsdb();
+			stats___tsdb();
 		if (stats_pgsql_users)
 			stats___pgsql_users();
 		if (stats_mysql_gtid_executed)
@@ -3004,6 +3004,26 @@ void ProxySQL_Admin::init_genai_variables() {
 	flush_genai_variables___database_to_runtime(admindb, true);
 }
 #endif /* PROXYSQLGENAI */
+
+void ProxySQL_Admin::init_tsdb_variables() {
+	char **tsdb_vars = GloProxyStats->get_variables_list();
+	char *a = (char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+	for (int i=0; tsdb_vars[i]; i++) {
+		char *val = GloProxyStats->get_variable(tsdb_vars[i]);
+		if (val) {
+			size_t l = strlen(a) + strlen(tsdb_vars[i]) + strlen(val) + 10;
+			char *query = (char *)malloc(l);
+			snprintf(query, l, a, tsdb_vars[i], val);
+			configdb->execute(query); // persistent
+			admindb->execute(query);  // memory
+			free(query);
+			free(val);
+		}
+		free(tsdb_vars[i]);
+	}
+	free(tsdb_vars);
+	load_tsdb_variables_to_runtime();
+}
 
 void ProxySQL_Admin::admin_shutdown() {
 	int i;

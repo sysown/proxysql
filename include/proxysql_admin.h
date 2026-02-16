@@ -688,6 +688,7 @@ class ProxySQL_Admin {
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 	// TSDB
+	void init_tsdb_variables();
 	void load_tsdb_variables_to_runtime();
 	void save_tsdb_variables_from_runtime();
 
@@ -716,6 +717,7 @@ class ProxySQL_Admin {
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
 	void stats___mysql_global();
+	void stats___tsdb();
 	void stats___mysql_users();
 
 	void stats___pgsql_global();

@@ -186,7 +186,6 @@ class ProxySQL_Statistics {
 #ifndef NOJEM
 	void system_memory_sets();
 #endif
-	void stats___tsdb();
 	void MySQL_Query_Cache_sets(SQLite3_result *);
 	SQLite3_result * get_mysql_metrics(int interval);
 	SQLite3_result * get_myhgm_metrics(int interval);

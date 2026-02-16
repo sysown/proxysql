@@ -235,7 +235,6 @@ void ProxySQL_Statistics::init() {
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_status_variables", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_status_variables_lookup", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP);
 
-	insert_into_tables_defs(tables_defs_statsdb_mem,"stats_tsdb", STATS_SQLITE_TABLE_TSDB);
 
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_events", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS);
 
@@ -1861,21 +1860,4 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
         }
         delete resultset;
     }
-}
-
-void ProxySQL_Statistics::stats___tsdb() {
-    tsdb_status_t status = get_tsdb_status();
-    char query[512];
-    statsdb_mem->execute("DELETE FROM stats_tsdb");
-    
-    auto insert_stat = [&](const char* name, unsigned long long value) {
-        snprintf(query, sizeof(query), "INSERT INTO stats_tsdb VALUES ('%s', '%llu')", name, value);
-        statsdb_mem->execute(query);
-    };
-
-    insert_stat("Total_Series", status.total_series);
-    insert_stat("Total_Datapoints", status.total_datapoints);
-    insert_stat("Disk_Size_Bytes", status.disk_size_bytes);
-    insert_stat("Oldest_Datapoint_TS", status.oldest_datapoint);
-    insert_stat("Newest_Datapoint_TS", status.newest_datapoint);
 }
