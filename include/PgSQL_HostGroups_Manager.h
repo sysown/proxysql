@@ -107,6 +107,13 @@ class PgSQL_SrvC;
 class PgSQL_SrvList;
 class PgSQL_HGC;
 
+// Forward declaration for WebUI monitoring metrics collector
+namespace ProxySQL {
+namespace Monitoring {
+class MetricsCollector;
+}
+}
+
 class PgSQL_Errors_stats {
 public:
 	PgSQL_Errors_stats(int _hostgroup, const char* _hostname, int _port, const char* _username, const char* _address, const char* _dbname,
@@ -571,6 +578,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	);
 
 	public:
+	// Friend declaration for WebUI monitoring metrics collector
+	friend class ProxySQL::Monitoring::MetricsCollector;
+
 	/**
 	 * @brief Mutex used to guard 'pgsql_servers_to_monitor' resulset.
 	 */
