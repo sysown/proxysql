@@ -234,6 +234,22 @@ Current execution support:
 - `mysql` targets: `list_tables`, `run_sql_readonly`, `explain_sql`
 - `pgsql` targets: `list_tables`, `run_sql_readonly`, `explain_sql`
 
+#### MCP Query Rules and Stats
+
+MCP query rules support routing-aware filters so one endpoint can enforce different policies per logical target:
+
+- `username`: backend DB username from the resolved auth profile
+- `target_id`: logical MCP target selected by the client (or resolved default target)
+- `schemaname`: optional schema/database context
+- `tool_name`: MCP tool name (for example `run_sql_readonly`)
+
+The runtime and stats views expose these fields:
+
+- `runtime_mcp_query_rules`: includes `username` and `target_id` columns
+- `stats_mcp_query_rules`: includes `rule_id`, `username`, `target_id`, `hits`
+
+This allows policy verification and hit analysis per logical route without exposing backend host/protocol details to MCP clients.
+
 ---
 
 #### `/mcp/admin` - Administration Endpoint

@@ -38,6 +38,7 @@ Discovery_Schema::~Discovery_Schema() {
 			delete (re2::RE2*)rule->regex_engine;
 		}
 		free(rule->username);
+		free(rule->target_id);
 		free(rule->schemaname);
 		free(rule->tool_name);
 		free(rule->match_pattern);
@@ -2391,8 +2392,8 @@ int Discovery_Schema::log_query_tool_call(
 //
 // Args:
 //   resultset: SQLite result set containing rule definitions from the database
-//               Must contain 17 columns in the correct order:
-//               rule_id, active, username, schemaname, tool_name, match_pattern,
+//               Must contain 18 columns in the correct order:
+//               rule_id, active, username, target_id, schemaname, tool_name, match_pattern,
 //               negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern,
 //               timeout_ms, error_msg, OK_msg, log, apply, comment
 //
@@ -2419,6 +2420,7 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 			delete (re2::RE2*)rule->regex_engine;
 		}
 		free(rule->username);
+		free(rule->target_id);
 		free(rule->schemaname);
 		free(rule->tool_name);
 		free(rule->match_pattern);
@@ -2431,16 +2433,16 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 	mcp_query_rules.clear();
 
 	// Load new rules from resultset
-	// Column order: rule_id, active, username, schemaname, tool_name, match_pattern,
+	// Column order: rule_id, active, username, target_id, schemaname, tool_name, match_pattern,
 	//               negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern,
 	//               timeout_ms, error_msg, OK_msg, log, apply, comment
-	// Expected: 17 columns (fields[0] through fields[16])
+	// Expected: 18 columns (fields[0] through fields[17])
 	for (unsigned int i = 0; i < resultset->rows_count; i++) {
 		SQLite3_row* row = resultset->rows[i];
 
 		// Validate column count before accessing fields
-		if (row->cnt < 17) {
-			proxy_error("Invalid row format in mcp_query_rules: expected 17 columns, got %d. Skipping row %u.\n",
+		if (row->cnt < 18) {
+			proxy_error("Invalid row format in mcp_query_rules: expected 18 columns, got %d. Skipping row %u.\n",
 				row->cnt, i);
 			continue;
 		}
@@ -2450,13 +2452,14 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 		rule->rule_id = atoi(row->fields[0]);           // rule_id
 		rule->active = atoi(row->fields[1]) != 0;       // active
 		rule->username = row->fields[2] ? strdup(row->fields[2]) : NULL;  // username
-		rule->schemaname = row->fields[3] ? strdup(row->fields[3]) : NULL;  // schemaname
-		rule->tool_name = row->fields[4] ? strdup(row->fields[4]) : NULL;  // tool_name
-		rule->match_pattern = row->fields[5] ? strdup(row->fields[5]) : NULL;  // match_pattern
-		rule->negate_match_pattern = row->fields[6] ? atoi(row->fields[6]) != 0 : false;  // negate_match_pattern
+		rule->target_id = row->fields[3] ? strdup(row->fields[3]) : NULL;  // target_id
+		rule->schemaname = row->fields[4] ? strdup(row->fields[4]) : NULL;  // schemaname
+		rule->tool_name = row->fields[5] ? strdup(row->fields[5]) : NULL;  // tool_name
+		rule->match_pattern = row->fields[6] ? strdup(row->fields[6]) : NULL;  // match_pattern
+		rule->negate_match_pattern = row->fields[7] ? atoi(row->fields[7]) != 0 : false;  // negate_match_pattern
 		// re_modifiers: Parse VARCHAR value - "CASELESS" maps to 1, otherwise parse as int
-		if (row->fields[7]) {
-			std::string mod = row->fields[7];
+		if (row->fields[8]) {
+			std::string mod = row->fields[8];
 			if (mod == "CASELESS") {
 				rule->re_modifiers = 1;
 			} else if (mod == "0") {
@@ -2467,15 +2470,15 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 		} else {
 			rule->re_modifiers = 1;  // default CASELESS
 		}
-		rule->flagIN = row->fields[8] ? atoi(row->fields[8]) : 0;  // flagIN
-		rule->flagOUT = row->fields[9] ? atoi(row->fields[9]) : 0;  // flagOUT
-		rule->replace_pattern = row->fields[10] ? strdup(row->fields[10]) : NULL;  // replace_pattern
-		rule->timeout_ms = row->fields[11] ? atoi(row->fields[11]) : 0;  // timeout_ms
-		rule->error_msg = row->fields[12] ? strdup(row->fields[12]) : NULL;  // error_msg
-		rule->ok_msg = row->fields[13] ? strdup(row->fields[13]) : NULL;  // OK_msg
-		rule->log = row->fields[14] ? atoi(row->fields[14]) != 0 : false;  // log
-		rule->apply = row->fields[15] ? atoi(row->fields[15]) != 0 : true;  // apply
-		rule->comment = row->fields[16] ? strdup(row->fields[16]) : NULL;  // comment
+		rule->flagIN = row->fields[9] ? atoi(row->fields[9]) : 0;  // flagIN
+		rule->flagOUT = row->fields[10] ? atoi(row->fields[10]) : 0;  // flagOUT
+		rule->replace_pattern = row->fields[11] ? strdup(row->fields[11]) : NULL;  // replace_pattern
+		rule->timeout_ms = row->fields[12] ? atoi(row->fields[12]) : 0;  // timeout_ms
+		rule->error_msg = row->fields[13] ? strdup(row->fields[13]) : NULL;  // error_msg
+		rule->ok_msg = row->fields[14] ? strdup(row->fields[14]) : NULL;  // OK_msg
+		rule->log = row->fields[15] ? atoi(row->fields[15]) != 0 : false;  // log
+		rule->apply = row->fields[16] ? atoi(row->fields[16]) != 0 : true;  // apply
+		rule->comment = row->fields[17] ? strdup(row->fields[17]) : NULL;  // comment
 		// Note: hits is in-memory only, not loaded from table
 
 		// Compile regex if match_pattern exists
@@ -2519,14 +2522,17 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 // Rule Processing Flow:
 //   1. Skip inactive rules
 //   2. Check flagIN match
-//   3. Check username match (currently skipped as username not available in MCP context)
-//   4. Check schemaname match
-//   5. Check tool_name match
-//   6. Check match_pattern against the query (regex)
-//   7. If match: increment hits, apply actions, set flagOUT, and stop if apply=true
+//   3. Check username match
+//   4. Check target_id match
+//   5. Check schemaname match
+//   6. Check tool_name match
+//   7. Check match_pattern against the query (regex)
+//   8. If match: increment hits, apply actions, set flagOUT, and stop if apply=true
 //
 // Args:
 //   tool_name: The name of the MCP tool being called
+//   username: Backend username resolved from target auth profile
+//   target_id: Resolved logical target identifier
 //   schemaname: The schema/database context for the query
 //   arguments: The JSON arguments passed to the tool
 //   original_query: The original SQL query string
@@ -2550,6 +2556,8 @@ void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
 //
 MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 	const std::string& tool_name,
+	const std::string& username,
+	const std::string& target_id,
 	const std::string& schemaname,
 	const nlohmann::json& arguments,
 	const std::string& original_query
@@ -2571,14 +2579,17 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 
 		// Check username match
 		if (rule->username) {
-			// For now, we don't have username in MCP context, skip if set
-			// TODO: Add username matching when available
-			continue;
+			if (username.empty() || strcmp(rule->username, username.c_str()) != 0) continue;
+		}
+
+		// Check target_id match
+		if (rule->target_id) {
+			if (target_id.empty() || strcmp(rule->target_id, target_id.c_str()) != 0) continue;
 		}
 
 		// Check schemaname match
 		if (rule->schemaname) {
-			if (!schemaname.empty() && strcmp(rule->schemaname, schemaname.c_str()) != 0) {
+			if (schemaname.empty() || strcmp(rule->schemaname, schemaname.c_str()) != 0) {
 				continue;
 			}
 		}
@@ -2691,18 +2702,19 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 // Note: The hits counter is NOT included (use get_stats_mcp_query_rules() for that).
 //
 // Returns:
-//   SQLite3_result*: Result set with 17 columns (no hits column)
+//   SQLite3_result*: Result set with 18 columns (no hits column)
 //
 // Thread Safety:
 //   Uses read lock on mcp_rules_lock
 //
 SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
-	SQLite3_result* result = new SQLite3_result(17);
+	SQLite3_result* result = new SQLite3_result(18);
 
-	// Define columns (17 columns - same for mcp_query_rules and runtime_mcp_query_rules)
+	// Define columns (18 columns - same for mcp_query_rules and runtime_mcp_query_rules)
 	result->add_column_definition(SQLITE_TEXT, "rule_id");
 	result->add_column_definition(SQLITE_TEXT, "active");
 	result->add_column_definition(SQLITE_TEXT, "username");
+	result->add_column_definition(SQLITE_TEXT, "target_id");
 	result->add_column_definition(SQLITE_TEXT, "schemaname");
 	result->add_column_definition(SQLITE_TEXT, "tool_name");
 	result->add_column_definition(SQLITE_TEXT, "match_pattern");
@@ -2722,30 +2734,31 @@ SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
 
 	for (size_t i = 0; i < mcp_query_rules.size(); i++) {
 		MCP_Query_Rule* rule = mcp_query_rules[i];
-		char** pta = (char**)malloc(sizeof(char*) * 17);
+		char** pta = (char**)malloc(sizeof(char*) * 18);
 
 		pta[0] = strdup(std::to_string(rule->rule_id).c_str());           // rule_id
 		pta[1] = strdup(std::to_string(rule->active ? 1 : 0).c_str());    // active
 		pta[2] = rule->username ? strdup(rule->username) : NULL;         // username
-		pta[3] = rule->schemaname ? strdup(rule->schemaname) : NULL;      // schemaname
-		pta[4] = rule->tool_name ? strdup(rule->tool_name) : NULL;         // tool_name
-		pta[5] = rule->match_pattern ? strdup(rule->match_pattern) : NULL;  // match_pattern
-		pta[6] = strdup(std::to_string(rule->negate_match_pattern ? 1 : 0).c_str());  // negate_match_pattern
-		pta[7] = strdup(std::to_string(rule->re_modifiers).c_str());      // re_modifiers
-		pta[8] = strdup(std::to_string(rule->flagIN).c_str());            // flagIN
-		pta[9] = strdup(std::to_string(rule->flagOUT).c_str());           // flagOUT
-		pta[10] = rule->replace_pattern ? strdup(rule->replace_pattern) : NULL;  // replace_pattern
-		pta[11] = strdup(std::to_string(rule->timeout_ms).c_str());       // timeout_ms
-		pta[12] = rule->error_msg ? strdup(rule->error_msg) : NULL;      // error_msg
-		pta[13] = rule->ok_msg ? strdup(rule->ok_msg) : NULL;            // OK_msg
-		pta[14] = strdup(std::to_string(rule->log ? 1 : 0).c_str());      // log
-		pta[15] = strdup(std::to_string(rule->apply ? 1 : 0).c_str());    // apply
-		pta[16] = rule->comment ? strdup(rule->comment) : NULL;          // comment
+		pta[3] = rule->target_id ? strdup(rule->target_id) : NULL;        // target_id
+		pta[4] = rule->schemaname ? strdup(rule->schemaname) : NULL;      // schemaname
+		pta[5] = rule->tool_name ? strdup(rule->tool_name) : NULL;        // tool_name
+		pta[6] = rule->match_pattern ? strdup(rule->match_pattern) : NULL;  // match_pattern
+		pta[7] = strdup(std::to_string(rule->negate_match_pattern ? 1 : 0).c_str());  // negate_match_pattern
+		pta[8] = strdup(std::to_string(rule->re_modifiers).c_str());      // re_modifiers
+		pta[9] = strdup(std::to_string(rule->flagIN).c_str());            // flagIN
+		pta[10] = strdup(std::to_string(rule->flagOUT).c_str());          // flagOUT
+		pta[11] = rule->replace_pattern ? strdup(rule->replace_pattern) : NULL;  // replace_pattern
+		pta[12] = strdup(std::to_string(rule->timeout_ms).c_str());       // timeout_ms
+		pta[13] = rule->error_msg ? strdup(rule->error_msg) : NULL;       // error_msg
+		pta[14] = rule->ok_msg ? strdup(rule->ok_msg) : NULL;             // OK_msg
+		pta[15] = strdup(std::to_string(rule->log ? 1 : 0).c_str());      // log
+		pta[16] = strdup(std::to_string(rule->apply ? 1 : 0).c_str());    // apply
+		pta[17] = rule->comment ? strdup(rule->comment) : NULL;           // comment
 
 		result->add_row(pta);
 
 		// Free the row data
-		for (int j = 0; j < 17; j++) {
+		for (int j = 0; j < 18; j++) {
 			if (pta[j]) {
 				free(pta[j]);
 			}
@@ -2764,31 +2777,35 @@ SQLite3_result* Discovery_Schema::get_mcp_query_rules() {
 // This is used to populate the stats_mcp_query_rules table.
 //
 // Returns:
-//   SQLite3_result*: Result set with 2 columns (rule_id, hits)
+//   SQLite3_result*: Result set with 4 columns (rule_id, username, target_id, hits)
 //
 // Thread Safety:
 //   Uses read lock on mcp_rules_lock
 //
 SQLite3_result* Discovery_Schema::get_stats_mcp_query_rules() {
-	SQLite3_result* result = new SQLite3_result(2);
+	SQLite3_result* result = new SQLite3_result(4);
 
 	// Define columns
 	result->add_column_definition(SQLITE_TEXT, "rule_id");
+	result->add_column_definition(SQLITE_TEXT, "username");
+	result->add_column_definition(SQLITE_TEXT, "target_id");
 	result->add_column_definition(SQLITE_TEXT, "hits");
 
 	pthread_rwlock_rdlock(&mcp_rules_lock);
 
 	for (size_t i = 0; i < mcp_query_rules.size(); i++) {
 		MCP_Query_Rule* rule = mcp_query_rules[i];
-		char** pta = (char**)malloc(sizeof(char*) * 2);
+		char** pta = (char**)malloc(sizeof(char*) * 4);
 
 		pta[0] = strdup(std::to_string(rule->rule_id).c_str());
-		pta[1] = strdup(std::to_string(rule->hits).c_str());
+		pta[1] = rule->username ? strdup(rule->username) : NULL;
+		pta[2] = rule->target_id ? strdup(rule->target_id) : NULL;
+		pta[3] = strdup(std::to_string(rule->hits).c_str());
 
 		result->add_row(pta);
 
 		// Free the row data
-		for (int j = 0; j < 2; j++) {
+		for (int j = 0; j < 4; j++) {
 			if (pta[j]) {
 				free(pta[j]);
 			}

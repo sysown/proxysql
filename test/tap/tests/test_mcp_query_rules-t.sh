@@ -406,6 +406,14 @@ fn_run_test "Phase 7: Rule Evaluation - Rewrite Action" "${MCP_TESTS_DIR}/test_p
 echo "msg: # Starting Phase 9: Rule Evaluation - OK Message Action"
 fn_run_test "Phase 9: Rule Evaluation - OK Message Action" "${MCP_TESTS_DIR}/test_phase9_eval_okmsg.sh"
 
+# Phase 10: Rule Evaluation Tests - explain_sql
+echo "msg: # Starting Phase 10: Rule Evaluation - explain_sql"
+fn_run_test "Phase 10: Rule Evaluation - explain_sql" "${MCP_TESTS_DIR}/test_phase10_eval_explain.sh"
+
+# Phase 11: pgsql target integration (skips if no pgsql target is configured)
+echo "msg: # Starting Phase 11: pgsql target integration"
+fn_run_test "Phase 11: pgsql target integration" "${MCP_TESTS_DIR}/test_phase11_pgsql_target.sh"
+
 # Query Tool Validation Tests
 echo "msg: #"
 echo "msg: # Starting Query Tool Validation Tests"

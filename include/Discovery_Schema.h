@@ -26,6 +26,7 @@ struct MCP_Query_Rule {
 	int rule_id;
 	bool active;
 	char *username;
+	char *target_id;
 	char *schemaname;
 	char *tool_name;
 	char *match_pattern;
@@ -43,7 +44,7 @@ struct MCP_Query_Rule {
 	uint64_t hits;            // in-memory only, not persisted to table
 	void* regex_engine;      // compiled regex (RE2)
 
-	MCP_Query_Rule() : rule_id(0), active(false), username(NULL), schemaname(NULL),
+	MCP_Query_Rule() : rule_id(0), active(false), username(NULL), target_id(NULL), schemaname(NULL),
 	                   tool_name(NULL), match_pattern(NULL), negate_match_pattern(false),
 	                   re_modifiers(1), flagIN(0), flagOUT(0), replace_pattern(NULL),
 	                   timeout_ms(0), error_msg(NULL), ok_msg(NULL), log(false), apply(true),
@@ -849,6 +850,8 @@ public:
 	 */
 	MCP_Query_Processor_Output* evaluate_mcp_query_rules(
 		const std::string& tool_name,
+		const std::string& username,
+		const std::string& target_id,
 		const std::string& schemaname,
 		const nlohmann::json& arguments,
 		const std::string& original_query

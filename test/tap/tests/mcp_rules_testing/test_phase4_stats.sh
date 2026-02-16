@@ -71,7 +71,7 @@ main() {
         exec_admin "SELECT * FROM stats_mcp_query_rules LIMIT 5;"
 
     # Create test rules
-    exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES (100, 1, 'SELECT.*FROM.*test_table', 'Error 100', 1);" >/dev/null 2>&1
+    exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, username, target_id, match_pattern, error_msg, apply) VALUES (100, 1, '${MYSQL_USER}', '${MCP_TARGET_ID}', 'SELECT.*FROM.*test_table', 'Error 100', 1);" >/dev/null 2>&1
     exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES (101, 1, 'DROP TABLE', 'Error 101', 1);" >/dev/null 2>&1
     exec_admin_silent "LOAD MCP QUERY RULES TO RUNTIME;" >/dev/null 2>&1
 
@@ -92,25 +92,35 @@ main() {
         run_test "T4.3: Initial hit counts are non-negative" false
     fi
 
-    # Test 4.4: Check stats table schema (rule_id, hits columns)
+    # Test 4.4: Check stats table schema (rule_id, username, target_id, hits columns)
     SCHEMA_INFO=$(exec_admin "PRAGMA table_info(stats_mcp_query_rules);" 2>/dev/null)
-    if echo "${SCHEMA_INFO}" | grep -q "rule_id" && echo "${SCHEMA_INFO}" | grep -q "hits"; then
-        run_test "T4.4: Stats table has rule_id and hits columns" true
+    if echo "${SCHEMA_INFO}" | grep -q "rule_id" && \
+       echo "${SCHEMA_INFO}" | grep -q "username" && \
+       echo "${SCHEMA_INFO}" | grep -q "target_id" && \
+       echo "${SCHEMA_INFO}" | grep -q "hits"; then
+        run_test "T4.4: Stats table has rule_id/username/target_id/hits columns" true
     else
-        run_test "T4.4: Stats table has rule_id and hits columns" false
+        run_test "T4.4: Stats table has rule_id/username/target_id/hits columns" false
+    fi
+
+    RULE_100_META=$(exec_admin_silent "SELECT username || '|' || target_id FROM stats_mcp_query_rules WHERE rule_id = 100;")
+    if [ "${RULE_100_META}" = "${MYSQL_USER}|${MCP_TARGET_ID}" ]; then
+        run_test "T4.4: Rule 100 stats preserve username and target_id" true
+    else
+        run_test "T4.4: Rule 100 stats preserve username and target_id" false
     fi
 
     # Test 4.5: Query stats for specific rule_id
     run_test "T4.5: Query stats for specific rule_id" \
-        exec_admin "SELECT rule_id, hits FROM stats_mcp_query_rules WHERE rule_id = 100;"
+        exec_admin "SELECT rule_id, username, target_id, hits FROM stats_mcp_query_rules WHERE rule_id = 100;"
 
     # Test 4.6: Query stats for multiple rule_ids using IN
     run_test "T4.6: Query stats for multiple rules using IN" \
-        exec_admin "SELECT rule_id, hits FROM stats_mcp_query_rules WHERE rule_id IN (100, 101);"
+        exec_admin "SELECT rule_id, username, target_id, hits FROM stats_mcp_query_rules WHERE rule_id IN (100, 101);"
 
     # Test 4.7: Query stats for rule_id range
     run_test "T4.7: Query stats for rule_id range" \
-        exec_admin "SELECT rule_id, hits FROM stats_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
+        exec_admin "SELECT rule_id, username, target_id, hits FROM stats_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
 
     # Test 4.8: Check that non-existent rule returns NULL or empty
     NO_HITS=$(exec_admin_silent "SELECT hits FROM stats_mcp_query_rules WHERE rule_id = 9999;")
@@ -121,7 +131,7 @@ main() {
     fi
 
     # Test 4.9: Verify stats table is read-only (cannot directly insert)
-    exec_admin_silent "INSERT INTO stats_mcp_query_rules (rule_id, hits) VALUES (999, 100);" 2>/dev/null || true
+    exec_admin_silent "INSERT INTO stats_mcp_query_rules (rule_id, username, target_id, hits) VALUES (999, 'manual', 'manual', 100);" 2>/dev/null || true
     INSERT_CHECK=$(exec_admin_silent "SELECT COUNT(*) FROM stats_mcp_query_rules WHERE rule_id = 999;")
     if [ "${INSERT_CHECK:-0}" -eq 0 ]; then
         run_test "T4.9: Stats table is read-only (insert ignored)" true
@@ -132,7 +142,7 @@ main() {
 
     # Test 4.10: Test ORDER BY on hits column
     run_test "T4.10: Query stats ordered by hits" \
-        exec_admin "SELECT rule_id, hits FROM stats_mcp_query_rules WHERE rule_id IN (100, 101) ORDER BY hits DESC;"
+        exec_admin "SELECT rule_id, username, target_id, hits FROM stats_mcp_query_rules WHERE rule_id IN (100, 101) ORDER BY hits DESC;"
 
     # Test 4.11: Create additional rules and verify they appear in stats
     exec_admin_silent "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES (102, 1, 'SELECT.*FROM.*products', 'Error 102', 1);" >/dev/null 2>&1
@@ -208,7 +218,7 @@ main() {
     # Display current stats
     echo ""
     echo "Current stats for test rules:"
-    exec_admin "SELECT rule_id, hits FROM stats_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
+    exec_admin "SELECT rule_id, username, target_id, hits FROM stats_mcp_query_rules WHERE rule_id BETWEEN 100 AND 199 ORDER BY rule_id;"
 
     # Summary
     echo ""

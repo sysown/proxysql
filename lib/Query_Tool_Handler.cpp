@@ -1156,9 +1156,9 @@ json Query_Tool_Handler::get_tool_list() {
 
 	tools.push_back(create_tool_schema(
 		"explain_sql",
-		"Explain a query execution plan using EXPLAIN or EXPLAIN ANALYZE",
+		"Explain a query execution plan using EXPLAIN or EXPLAIN ANALYZE. Optional schema parameter switches database context before query execution. target_id routes to a logical backend target.",
 		{"sql"},
-		{{"target_id", "string"}}
+		{{"schema", "string"}, {"target_id", "string"}}
 	));
 
 	// ============================================================
@@ -2233,6 +2233,8 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			// ============================================================
 			MCP_Query_Processor_Output* qpo = catalog->evaluate_mcp_query_rules(
 				tool_name,
+				target->db_username,
+				target->target_id,
 				schema,
 				arguments,
 				sql
@@ -2333,6 +2335,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 	else if (tool_name == "explain_sql") {
 		std::string sql = json_string(arguments, "sql");
+		std::string schema = json_string(arguments, "schema");
 		std::string target_id = json_string(arguments, "target_id");
 		if (sql.empty()) {
 			result = create_error_response("sql is required");
@@ -2350,7 +2353,35 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				return result;
 			}
 
-			std::string query_result = execute_query("EXPLAIN " + sql, target->target_id);
+			// Reuse MCP query-rules pipeline for explain_sql too.
+			MCP_Query_Processor_Output* qpo = catalog->evaluate_mcp_query_rules(
+				tool_name,
+				target->db_username,
+				target->target_id,
+				schema,
+				arguments,
+				sql
+			);
+
+			if (qpo->OK_msg) {
+				result = create_success_response(qpo->OK_msg);
+				delete qpo;
+				return result;
+			}
+			if (qpo->error_msg) {
+				result = create_error_response(qpo->error_msg);
+				delete qpo;
+				return result;
+			}
+			if (qpo->new_query) {
+				sql = *qpo->new_query;
+			}
+			delete qpo;
+
+			std::string explain_query = "EXPLAIN " + sql;
+			std::string query_result = schema.empty()
+				? execute_query(explain_query, target->target_id)
+				: execute_query_with_schema(explain_query, schema, target->target_id);
 			try {
 				result = create_success_response(json::parse(query_result));
 			} catch (...) {

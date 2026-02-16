@@ -8000,7 +8000,7 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 	Discovery_Schema* catalog = qth->get_catalog();
 	if (!catalog) return (char*)"Discovery Schema catalog not initialized";
 
-	char* query = (char*)"SELECT rule_id, active, username, schemaname,"
+	char* query = (char*)"SELECT rule_id, active, username, target_id, schemaname,"
 		" tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
 		" replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment FROM"
 		" main.mcp_query_rules WHERE active=1 ORDER BY rule_id";
@@ -8058,23 +8058,23 @@ void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
 		admindb->execute("DELETE FROM mcp_query_rules");
 	}
 
-	// Get current rules from Discovery_Schema (same 17 columns for both tables)
+	// Get current rules from Discovery_Schema (same 18 columns for both tables)
 	SQLite3_result* resultset = catalog->get_mcp_query_rules();
 	if (resultset) {
 		char *a = NULL;
 		if (_runtime) {
-			a = (char *)"INSERT INTO runtime_mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+			a = (char *)"INSERT INTO runtime_mcp_query_rules (rule_id, active, username, target_id, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 		} else {
-			a = (char *)"INSERT INTO mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+			a = (char *)"INSERT INTO mcp_query_rules (rule_id, active, username, target_id, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 		}
-		int num_fields = 17; // same for both tables
+		int num_fields = 18; // same for both tables
 
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 
 			// Build query with escaped values
 			int arg_len = 0;
-			char* buffs[17];
+			char* buffs[18];
 			for (int i = 0; i < num_fields; i++) {
 				if (r->fields[i]) {
 					char* o = escape_string_single_quotes(r->fields[i], false);
@@ -8099,20 +8099,21 @@ void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
 				buffs[0],  // rule_id
 				buffs[1],  // active
 				buffs[2],  // username
-				buffs[3],  // schemaname
-				buffs[4],  // tool_name
-				buffs[5],  // match_pattern
-				buffs[6],  // negate_match_pattern
-				buffs[7],  // re_modifiers
-				buffs[8],  // flagIN
-				buffs[9],  // flagOUT
-				buffs[10], // replace_pattern
-				buffs[11], // timeout_ms
-				buffs[12], // error_msg
-				buffs[13], // OK_msg
-				buffs[14], // log
-				buffs[15], // apply
-				buffs[16]  // comment
+				buffs[3],  // target_id
+				buffs[4],  // schemaname
+				buffs[5],  // tool_name
+				buffs[6],  // match_pattern
+				buffs[7],  // negate_match_pattern
+				buffs[8],  // re_modifiers
+				buffs[9],  // flagIN
+				buffs[10], // flagOUT
+				buffs[11], // replace_pattern
+				buffs[12], // timeout_ms
+				buffs[13], // error_msg
+				buffs[14], // OK_msg
+				buffs[15], // log
+				buffs[16], // apply
+				buffs[17]  // comment
 			);
 
 			admindb->execute(query);
