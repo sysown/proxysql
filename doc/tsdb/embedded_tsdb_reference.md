@@ -20,11 +20,9 @@ LOAD TSDB VARIABLES TO RUNTIME;
 SAVE TSDB VARIABLES TO DISK;
 ```
 
-No dedicated `LOAD/SAVE TSDB VARIABLES ...` command exists.
-
 ## Tables
 
-### `statsdb_disk.tsdb_metrics`
+### `stats_history.tsdb_metrics`
 
 ```sql
 CREATE TABLE tsdb_metrics (
@@ -36,7 +34,7 @@ CREATE TABLE tsdb_metrics (
 ) WITHOUT ROWID;
 ```
 
-### `statsdb_disk.tsdb_metrics_hour`
+### `stats_history.tsdb_metrics_hour`
 
 ```sql
 CREATE TABLE tsdb_metrics_hour (
@@ -51,7 +49,7 @@ CREATE TABLE tsdb_metrics_hour (
 ) WITHOUT ROWID;
 ```
 
-### `statsdb_disk.tsdb_backend_health`
+### `stats_history.tsdb_backend_health`
 
 ```sql
 CREATE TABLE tsdb_backend_health (
@@ -78,7 +76,7 @@ CREATE TABLE tsdb_backend_health (
 
 ```sql
 SELECT metric_name, labels, value
-FROM statsdb_disk.tsdb_metrics
+FROM stats_history.tsdb_metrics
 WHERE timestamp > unixepoch() - 300
 ORDER BY timestamp DESC
 LIMIT 50;
@@ -86,14 +84,14 @@ LIMIT 50;
 
 ```sql
 SELECT datetime(bucket, 'unixepoch') AS hour, metric_name, avg_value, max_value, min_value, count
-FROM statsdb_disk.tsdb_metrics_hour
+FROM stats_history.tsdb_metrics_hour
 WHERE bucket > unixepoch() - 86400
 ORDER BY bucket;
 ```
 
 ```sql
 SELECT datetime(timestamp, 'unixepoch') AS ts, hostgroup, hostname, port, probe_up, connect_ms
-FROM statsdb_disk.tsdb_backend_health
+FROM stats_history.tsdb_backend_health
 WHERE timestamp > unixepoch() - 3600
 ORDER BY timestamp DESC;
 ```

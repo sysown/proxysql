@@ -20,13 +20,20 @@ It records Prometheus metrics and optional backend TCP probe health into `statsd
 
 ## Configuration Model
 
-TSDB settings are standard ADMIN variables and use the normal ADMIN load/save lifecycle:
+TSDB settings are standard global variables with the `tsdb-` prefix. They can be managed via standard `SET` commands or through the dedicated TSDB command set:
 
 - `SET tsdb-...`
 - `LOAD TSDB VARIABLES TO RUNTIME`
 - `SAVE TSDB VARIABLES TO DISK`
+- `SHOW TSDB VARIABLES`
+- `SHOW TSDB STATUS`
 
-There is no separate `LOAD/SAVE TSDB VARIABLES ...` command set.
+## UI and REST API
+
+A built-in dashboard is available at `/tsdb` on the ProxySQL HTTP Server (default port 6080).
+It provides a simple visualization of collected metrics.
+
+REST API endpoints are available under `/api/tsdb/` for external integrations.
 
 ## Variables
 

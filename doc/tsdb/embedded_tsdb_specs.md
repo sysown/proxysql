@@ -36,12 +36,18 @@ Embedded time-series storage in SQLite for ProxySQL runtime metrics and backend 
 
 ## Variable Semantics
 
-- All TSDB variables are TSDB variables (`tsdb-*`).
-- Applied through standard ADMIN commands only.
-- No dedicated `LOAD/SAVE TSDB VARIABLES` command set.
+- All TSDB variables are prefixed with `tsdb-`.
+- Managed via `SET` commands and the dedicated command set:
+  - `LOAD TSDB VARIABLES TO RUNTIME`
+  - `SAVE TSDB VARIABLES TO DISK`
+  - `SHOW TSDB VARIABLES`
 
 ## Current API Surface
 
 - C++ methods in `ProxySQL_Statistics` for insert, query, status, sampler/monitor loops.
 - SQL querying through `statsdb_disk.tsdb_*` tables.
-- No dedicated HTTP TSDB endpoint implementation at this time.
+- REST API endpoints:
+  - `/api/tsdb/metrics`
+  - `/api/tsdb/query`
+  - `/api/tsdb/status`
+- Web Dashboard at `/tsdb`.
