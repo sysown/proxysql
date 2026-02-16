@@ -3976,29 +3976,19 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			}
 		}
 #ifndef NOJEM
-			if (!strcasecmp(name,"stats_system_memory")) {
-				int intv=atoi(value);
-				if (intv >= 0 && intv <= 600) {
+		if (!strcasecmp(name,"stats_system_memory")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 600) {
 				intv = round_intv_to_time_interval(name, intv);
 				variables.stats_system_memory=intv;
 				GloProxyStats->variables.stats_system_memory=intv;
 				return true;
 			} else {
 				return false;
-				}
-			}
-#endif
-				return false;
-			}
-				return false;
-			}
-				return false;
-			}
-				return false;
-			}
-				return false;
 			}
 		}
+#endif
+	}
 	if (!strcasecmp(name,"mysql_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
