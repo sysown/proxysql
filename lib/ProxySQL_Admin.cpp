@@ -3445,6 +3445,13 @@ void ProxySQL_Admin::load_mcp_server() {
 				needs_restart = true;
 				restart_reason += "SSL mode";
 			}
+			if (GloMCPH->query_tool_handler == NULL) {
+				needs_restart = true;
+				if (!restart_reason.empty()) {
+					restart_reason += " ";
+				}
+				restart_reason += "tool handler initialization";
+			}
 
 			if (needs_restart) {
 				proxy_info("MCP: Configuration changed (%s), restarting server...\n", restart_reason.c_str());

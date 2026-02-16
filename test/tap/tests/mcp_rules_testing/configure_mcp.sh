@@ -195,12 +195,19 @@ configure_mcp_profiles() {
 
 # Load MCP variables/profiles/server tables to runtime
 load_to_runtime() {
-    log_step "Loading MCP variables to RUNTIME..."
-    if exec_admin_silent "LOAD MCP VARIABLES TO RUNTIME;" >/dev/null 2>&1; then
-        log_info "MCP variables loaded to RUNTIME"
+    log_step "Loading MySQL servers to RUNTIME..."
+    if exec_admin_silent "LOAD MYSQL SERVERS TO RUNTIME;" >/dev/null 2>&1; then
+        log_info "MySQL servers loaded to RUNTIME"
     else
-        log_error "Failed to load MCP variables to RUNTIME"
+        log_error "Failed to load MySQL servers to RUNTIME"
         return 1
+    fi
+
+    # Optional in MySQL-only setups, but required if pgsql MCP targets are configured.
+    if exec_admin_silent "LOAD PGSQL SERVERS TO RUNTIME;" >/dev/null 2>&1; then
+        log_info "PgSQL servers loaded to RUNTIME"
+    else
+        log_warn "LOAD PGSQL SERVERS TO RUNTIME failed (continuing)"
     fi
 
     log_step "Loading MCP profiles to RUNTIME..."
@@ -211,11 +218,12 @@ load_to_runtime() {
         return 1
     fi
 
-    log_step "Loading MySQL servers to RUNTIME..."
-    if exec_admin_silent "LOAD MYSQL SERVERS TO RUNTIME;" >/dev/null 2>&1; then
-        log_info "MySQL servers loaded to RUNTIME"
+    # Load MCP variables last so server startup sees runtime servers+profiles.
+    log_step "Loading MCP variables to RUNTIME..."
+    if exec_admin_silent "LOAD MCP VARIABLES TO RUNTIME;" >/dev/null 2>&1; then
+        log_info "MCP variables loaded to RUNTIME"
     else
-        log_error "Failed to load MySQL servers to RUNTIME"
+        log_error "Failed to load MCP variables to RUNTIME"
         return 1
     fi
 }

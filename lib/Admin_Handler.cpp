@@ -2542,6 +2542,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		 (!strncasecmp("LOAD MCP PROFILES ", query_no_space, 18)))) {
 
 		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		proxy_info("Received %s command\n", query_no_space);
 
 		const auto load_target_auth_map_from_runtime = [&]() -> bool {
 			char* error = NULL;
@@ -2656,6 +2657,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->send_error_msg_to_client(sess, (char *)"Failed to refresh MCP runtime profile map");
 				return false;
 			}
+			// Ensure MCP server/query handler reflects the newly loaded runtime profiles.
+			// This recovers cases where MCP server was started before profiles were available.
+			SPA->load_mcp_server();
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			return false;
 		}

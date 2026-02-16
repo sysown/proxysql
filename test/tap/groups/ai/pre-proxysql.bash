@@ -43,15 +43,46 @@ exec_admin() {
     mysql ${SSLOPT} -h"${ADMIN_HOST}" -P"${ADMIN_PORT}" -u"${ADMIN_USER}" -p"${ADMIN_PASS}" -e "$1" 2>&1 | sed '/^mysql: .*Warning/d'
 }
 
+compose() {
+    if docker compose version >/dev/null 2>&1; then
+        docker compose -f "${SCRIPT_DIR}/docker-compose.yml" "$@"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        docker-compose -f "${SCRIPT_DIR}/docker-compose.yml" "$@"
+    else
+        echo "[ERROR] docker compose is not available" >&2
+        exit 1
+    fi
+}
+
+create_mysql_monitor_user() {
+    echo "[INFO] AI pre-hook: creating MySQL monitor user monitor/monitor on backend ${TAP_MYSQLHOST}:${TAP_MYSQLPORT}"
+    mysql -h"${TAP_MYSQLHOST}" -P"${TAP_MYSQLPORT}" -u"${TAP_MYSQLUSERNAME}" -p"${TAP_MYSQLPASSWORD}" -e "\
+CREATE USER IF NOT EXISTS 'monitor'@'%' IDENTIFIED BY 'monitor'; \
+GRANT USAGE, PROCESS, REPLICATION CLIENT ON *.* TO 'monitor'@'%'; \
+FLUSH PRIVILEGES;"
+}
+
+create_pgsql_monitor_user() {
+    echo "[INFO] AI pre-hook: creating PostgreSQL monitor user monitor/monitor on backend ${AI_PGSQL_HOST}:${AI_PGSQL_PORT}"
+    local sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='monitor') THEN CREATE ROLE monitor LOGIN PASSWORD 'monitor'; END IF; END \$\$; GRANT pg_monitor TO monitor; GRANT CONNECT ON DATABASE postgres TO monitor; GRANT CONNECT ON DATABASE ${AI_PGSQL_DB} TO monitor;"
+    if command -v psql >/dev/null 2>&1; then
+        PGPASSWORD="${AI_PGSQL_PASSWORD}" psql -h "${AI_PGSQL_HOST}" -p "${AI_PGSQL_PORT}" -U "${AI_PGSQL_USER}" -d "${AI_PGSQL_DB}" -v ON_ERROR_STOP=1 -c "${sql}"
+    else
+        compose exec -T pgsql psql -U "${AI_PGSQL_USER}" -d "${AI_PGSQL_DB}" -v ON_ERROR_STOP=1 -c "${sql}"
+    fi
+}
+
 echo "[INFO] AI pre-hook: starting group-local containers"
 "${SCRIPT_DIR}/docker-compose-init.bash"
+create_mysql_monitor_user
+create_pgsql_monitor_user
 
 echo "[INFO] AI pre-hook: configuring ProxySQL MCP and backend routing"
 
 # Configure MCP runtime variables.
 exec_admin "SET mcp-port='${TAP_MCPPORT}';"
 exec_admin "SET mcp-use_ssl='true';"
-exec_admin "SET mcp-enabled='true';"
+exec_admin "SET mcp-enabled='false';"
 exec_admin "LOAD MCP VARIABLES TO RUNTIME; SAVE MCP VARIABLES TO DISK;"
 
 # Keep predictable hostgroups for both direct tests and MCP target routing.
@@ -80,6 +111,8 @@ exec_admin "INSERT INTO mcp_target_profiles (target_id, protocol, hostgroup_id, 
 exec_admin "INSERT INTO mcp_target_profiles (target_id, protocol, hostgroup_id, auth_profile_id, description, max_rows, timeout_ms, allow_explain, allow_discovery, active, comment) VALUES ('${MCP_PGSQL_TARGET_ID}', 'pgsql', ${MCP_PGSQL_HOSTGROUP_ID}, '${MCP_PGSQL_AUTH_PROFILE_ID}', 'AI local PostgreSQL target', 200, 5000, 1, 1, 1, 'ai local');"
 
 exec_admin "LOAD MCP PROFILES TO RUNTIME; SAVE MCP PROFILES TO DISK;"
+exec_admin "SET mcp-enabled='true';"
+exec_admin "LOAD MCP VARIABLES TO RUNTIME; SAVE MCP VARIABLES TO DISK;"
 
 sleep 2
 echo "[INFO] AI pre-hook completed"
