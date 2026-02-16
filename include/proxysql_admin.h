@@ -689,6 +689,7 @@ class ProxySQL_Admin {
 
 	// TSDB
 	void init_tsdb_variables();
+	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void load_tsdb_variables_to_runtime();
 	void save_tsdb_variables_from_runtime();
 

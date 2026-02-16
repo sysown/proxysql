@@ -1680,6 +1680,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
+				flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
 #ifdef PROXYSQLCLICKHOUSE
 				flush_clickhouse_variables___runtime_to_database(admindb, false, false, false, true);
 #endif /* PROXYSQLCLICKHOUSE */
@@ -3006,23 +3007,66 @@ void ProxySQL_Admin::init_genai_variables() {
 #endif /* PROXYSQLGENAI */
 
 void ProxySQL_Admin::init_tsdb_variables() {
-	char **tsdb_vars = GloProxyStats->get_variables_list();
-	char *a = (char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
-	for (int i=0; tsdb_vars[i]; i++) {
-		char *val = GloProxyStats->get_variable(tsdb_vars[i]);
-		if (val) {
-			size_t l = strlen(a) + strlen(tsdb_vars[i]) + strlen(val) + 10;
-			char *query = (char *)malloc(l);
-			snprintf(query, l, a, tsdb_vars[i], val);
-			configdb->execute(query); // persistent
-			admindb->execute(query);  // memory
-			free(query);
-			free(val);
-		}
-		free(tsdb_vars[i]);
-	}
-	free(tsdb_vars);
+	flush_tsdb_variables___runtime_to_database(configdb, false, false, false, false);
+	flush_tsdb_variables___runtime_to_database(admindb, false, true, false, false);
 	load_tsdb_variables_to_runtime();
+}
+
+void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
+	if (onlyifempty) {
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'tsdb-%'";
+		db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int matching_rows=0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				matching_rows+=atoi(r->fields[0]);
+			}
+		}
+		if (resultset) delete resultset;
+		if (matching_rows) {
+			return;
+		}
+	}
+	if (del) {
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'tsdb-%'");
+	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'");
+	}
+	char *a;
+	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+	if (replace) {
+		a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+	} else {
+		a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+	}
+	char **varnames = GloProxyStats->get_variables_list();
+	for (int i=0; varnames[i]; i++) {
+		char *val = GloProxyStats->get_variable(varnames[i]);
+		const char* safe_val = (val ? val : "");
+		size_t l = strlen(a) + 200;
+		l += strlen(varnames[i]);
+		l += strlen(safe_val);
+		char *query=(char *)malloc(l);
+		snprintf(query, l, a, varnames[i], safe_val);
+		db->execute(query);
+		if (runtime) {
+			snprintf(query, l, b, varnames[i], safe_val);
+			db->execute(query);
+		}
+		if (val) free(val);
+		free(query);
+		free(varnames[i]);
+	}
+	free(varnames);
 }
 
 void ProxySQL_Admin::admin_shutdown() {
@@ -8896,6 +8940,7 @@ void ProxySQL_Admin::load_tsdb_variables_to_runtime() {
 			const char *value = r->fields[1];
 			GloProxyStats->set_variable(name, value);
 		}
+		flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
 	}
 	if (resultset) delete resultset;
 }

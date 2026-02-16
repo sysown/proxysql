@@ -789,11 +789,11 @@ void ProxySQL_Admin::stats___pgsql_global() {
 void ProxySQL_Admin::stats___tsdb() {
 	ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
 	char query[512];
-	statsdb->execute("DELETE FROM stats_tsdb");
+	admindb->execute("DELETE FROM stats_tsdb");
 
 	auto insert_stat = [&](const char* name, unsigned long long value) {
-		snprintf(query, sizeof(query), "INSERT INTO stats_tsdb VALUES ('%s', '%llu')", name, value);
-		statsdb->execute(query);
+		snprintf(query, sizeof(query), "INSERT INTO stats_tsdb (Variable_Name, Variable_Value) VALUES ('%s', '%llu')", name, value);
+		admindb->execute(query);
 	};
 
 	insert_stat("Total_Series", status.total_series);

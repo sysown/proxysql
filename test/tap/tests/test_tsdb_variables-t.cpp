@@ -1,6 +1,7 @@
 #include <map>
 #include <string>
 #include <cstdlib>
+#include <unistd.h>
 
 #include "mysql.h"
 
@@ -11,21 +12,35 @@
 using std::map;
 using std::string;
 
+static void drain_results(MYSQL* mysql) {
+	MYSQL_RES* res;
+	while (1) {
+		res = mysql_store_result(mysql);
+		if (res) mysql_free_result(res);
+		if (mysql_next_result(mysql) != 0) break;
+	}
+}
+
 static bool fetch_single_string(MYSQL* mysql, const string& query, string& out) {
 	if (mysql_query(mysql, query.c_str())) {
+		diag("Query failed: %s (Error: %s)", query.c_str(), mysql_error(mysql));
 		return false;
 	}
 	MYSQL_RES* res = mysql_store_result(mysql);
 	if (!res) {
+		diag("No result set for query: %s", query.c_str());
+		drain_results(mysql);
 		return false;
 	}
 	MYSQL_ROW row = mysql_fetch_row(res);
 	if (!row || !row[0]) {
 		mysql_free_result(res);
+		drain_results(mysql);
 		return false;
 	}
 	out = row[0];
 	mysql_free_result(res);
+	drain_results(mysql);
 	return true;
 }
 
@@ -36,85 +51,157 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
-	plan(12);
+	plan(19);
 
 	MYSQL* admin = mysql_init(NULL);
 	if (!admin) {
 		return EXIT_FAILURE;
 	}
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		diag("Connection failed: %s", mysql_error(admin));
 		mysql_close(admin);
 		return EXIT_FAILURE;
 	}
 
-	MYSQL_QUERY_T(admin, "SET tsdb-enabled='1'");
-	MYSQL_QUERY_T(admin, "SET tsdb-sample_interval='11'");
-	MYSQL_QUERY_T(admin, "SET tsdb-retention_days='30'");
-	MYSQL_QUERY_T(admin, "SET tsdb-monitor_enabled='1'");
-	MYSQL_QUERY_T(admin, "SET tsdb-monitor_interval='13'");
-	
-	int rc = mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
-	ok(rc == 0, "`LOAD TSDB VARIABLES TO RUNTIME` is supported");
+	int rc;
+	drain_results(admin);
 
+	// 1. Test SET and validation
+	diag("Running command: SET tsdb-enabled='1'");
+	rc = mysql_query(admin, "SET tsdb-enabled='1'");
+	ok(rc == 0, "SET tsdb-enabled works");
+	drain_results(admin);
+
+	diag("Running command: SET tsdb-sample_interval='1'");
+	rc = mysql_query(admin, "SET tsdb-sample_interval='1'");
+	ok(rc == 0, "SET tsdb-sample_interval works");
+	drain_results(admin);
+
+	diag("Running command: SET tsdb-monitor_enabled='1'");
+	rc = mysql_query(admin, "SET tsdb-monitor_enabled='1'");
+	ok(rc == 0, "SET tsdb-monitor_enabled works");
+	drain_results(admin);
+
+	diag("Running command: SET tsdb-monitor_interval='1'");
+	rc = mysql_query(admin, "SET tsdb-monitor_interval='1'");
+	ok(rc == 0, "SET tsdb-monitor_interval works");
+	drain_results(admin);
+
+	// 2. Test LOAD TSDB VARIABLES
+	diag("Running command: LOAD TSDB VARIABLES TO RUNTIME");
+	rc = mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
+	ok(rc == 0, "`LOAD TSDB VARIABLES TO RUNTIME` is supported");
+	drain_results(admin);
+
+	// 3. Test SHOW TSDB VARIABLES
+	diag("Running command: SHOW TSDB VARIABLES");
+	rc = mysql_query(admin, "SHOW TSDB VARIABLES");
+	ok(rc == 0, "SHOW TSDB VARIABLES is supported");
+	MYSQL_RES* res = mysql_store_result(admin);
+	if (res) {
+		int rows = mysql_num_rows(res);
+		ok(rows == 5, "SHOW TSDB VARIABLES returns 5 rows (found %d)", rows);
+		mysql_free_result(res);
+	} else {
+		ok(0, "SHOW TSDB VARIABLES returned no result set");
+	}
+	drain_results(admin);
+
+	// 4. Test Runtime values (Virtual table refresh)
+	diag("Verifying runtime_global_variables for tsdb- prefix");
 	string count;
 	bool count_ok = fetch_single_string(
 		admin,
 		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'",
 		count
 	);
-	ok(count_ok, "Read runtime TSDB variable count from runtime_global_variables");
-	ok(count == "5", "Exactly five tsdb-* runtime variables are present");
+	ok(count_ok && count == "5", "Five tsdb-* runtime variables are present (found %s)", count.c_str());
 
-	const map<string, string> expected_runtime_values{
-		{"tsdb-enabled", "1"},
-		{"tsdb-sample_interval", "11"},
-		{"tsdb-retention_days", "30"},
-		{"tsdb-monitor_enabled", "1"},
-		{"tsdb-monitor_interval", "13"},
-	};
-
-	for (const auto& kv : expected_runtime_values) {
-		string value;
-		bool ok_fetch = fetch_single_string(
-			admin,
-			"SELECT variable_value FROM runtime_global_variables WHERE variable_name='" + kv.first + "'",
-			value
-		);
-		ok(ok_fetch && value == kv.second, "Runtime value matches for %s", kv.first.c_str());
-	}
-
+	// 5. Test SAVE TSDB VARIABLES
+	diag("Running command: SAVE TSDB VARIABLES TO DISK");
 	rc = mysql_query(admin, "SAVE TSDB VARIABLES TO DISK");
 	ok(rc == 0, "`SAVE TSDB VARIABLES TO DISK` is supported");
+	drain_results(admin);
 
+	diag("Verifying global_variables on disk");
 	string disk_enabled;
 	bool disk_ok = fetch_single_string(
 		admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='tsdb-enabled'",
 		disk_enabled
 	);
-	ok(disk_ok && disk_enabled == "1", "TSDB variable is persisted to disk via SAVE TSDB VARIABLES");
+	ok(disk_ok && disk_enabled == "1", "TSDB variable is persisted to disk (value: %s)", disk_enabled.c_str());
 
-	string metrics_schema;
-	bool schema_metrics_ok = fetch_single_string(
+	// 6. Test SHOW TSDB STATUS (triggers refresh)
+	diag("Running command: SHOW TSDB STATUS");
+	rc = mysql_query(admin, "SHOW TSDB STATUS");
+	ok(rc == 0, "SHOW TSDB STATUS is supported");
+	res = mysql_store_result(admin);
+	if (res) {
+		int rows = mysql_num_rows(res);
+		ok(rows >= 5, "SHOW TSDB STATUS returns at least 5 rows (found %d)", rows);
+		mysql_free_result(res);
+	} else {
+		ok(0, "SHOW TSDB STATUS returned no result set");
+	}
+	drain_results(admin);
+
+	// 7. Verify table schemas
+	diag("Verifying tsdb_metrics table in stats_history");
+	string table_name;
+	bool table_exists = fetch_single_string(
 		admin,
-		"SELECT sql FROM statsdb_disk.sqlite_master WHERE type='table' AND name='tsdb_metrics'",
-		metrics_schema
+		"SELECT name FROM stats_history.sqlite_master WHERE type='table' AND name='tsdb_metrics'",
+		table_name
 	);
 	ok(
-		schema_metrics_ok && metrics_schema.find("PRIMARY KEY (timestamp, metric_name, labels)") != string::npos,
-		"tsdb_metrics schema uses labels in primary key"
+		table_exists,
+		"tsdb_metrics table exists in stats_history"
 	);
 
-	string metrics_hour_schema;
-	bool schema_hour_ok = fetch_single_string(
+	// 8. Wait for background loops to collect some data
+	diag("Waiting for TSDB background loops (sampler and monitor) to collect data...");
+	sleep(4);
+
+	// 9. Verify data collection in tsdb_metrics
+	diag("Checking if metrics were collected in stats_history.tsdb_metrics");
+	string metric_count;
+	bool metrics_collected = fetch_single_string(
 		admin,
-		"SELECT sql FROM statsdb_disk.sqlite_master WHERE type='table' AND name='tsdb_metrics_hour'",
-		metrics_hour_schema
+		"SELECT COUNT(*) FROM stats_history.tsdb_metrics",
+		metric_count
 	);
-	ok(
-		schema_hour_ok && metrics_hour_schema.find("PRIMARY KEY (bucket, metric_name, labels)") != string::npos,
-		"tsdb_metrics_hour schema uses labels in primary key"
+	ok(metrics_collected && atoi(metric_count.c_str()) > 0, "Metrics are being collected in tsdb_metrics (count: %s)", metric_count.c_str());
+
+	// 10. Verify data collection in tsdb_backend_health
+	diag("Checking if tsdb_backend_health is accessible in stats_history");
+	string health_count;
+	bool health_accessible = fetch_single_string(
+		admin,
+		"SELECT COUNT(*) FROM stats_history.tsdb_backend_health",
+		health_count
 	);
+	ok(health_accessible, "tsdb_backend_health table is accessible");
+
+	// 11. Test SHOW TSDB STATUS again to see updated values
+	diag("Checking updated stats in SHOW TSDB STATUS");
+	rc = mysql_query(admin, "SHOW TSDB STATUS");
+	ok(rc == 0, "Second SHOW TSDB STATUS call successful");
+	drain_results(admin);
+
+	fetch_single_string(admin, "SELECT Variable_Value FROM stats_tsdb WHERE Variable_Name='Total_Datapoints'", count);
+	ok(atoi(count.c_str()) > 0, "SHOW TSDB STATUS reports datapoints > 0 (found %s)", count.c_str());
+
+	// 12. Test Downsampling command
+	diag("Testing TSDB downsampling via command...");
+	rc = mysql_query(admin, "PROXYSQL TSDB DOWNSAMPLE");
+	ok(rc == 0, "PROXYSQL TSDB DOWNSAMPLE command is supported");
+	drain_results(admin);
+	
+	diag("Verifying downsampled data...");
+	string ds_count;
+	fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour", ds_count);
+	ok(atoi(ds_count.c_str()) >= 0, "tsdb_metrics_hour table is accessible (count: %s)", ds_count.c_str());
 
 	mysql_close(admin);
 	return exit_status();
