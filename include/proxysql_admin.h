@@ -491,6 +491,10 @@ class ProxySQL_Admin {
 	void flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 	//
 
+	// TSDB
+	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+
 #ifdef PROXYSQLGENAI
 	// GenAI
 	void flush_genai_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
@@ -805,6 +809,10 @@ class ProxySQL_Admin {
 	void init_pgsql_variables();
 	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
+
+	// TSDB
+	void load_tsdb_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_tsdb_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void save_tsdb_variables_from_runtime() { flush_tsdb_variables___runtime_to_database(admindb, true, true, false); }
 
 #ifdef PROXYSQLGENAI
 	//GenAI

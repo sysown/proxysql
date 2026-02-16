@@ -93,6 +93,41 @@
 
 #define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS "CREATE TABLE history_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT , errno INT , error TEXT)"
 
+// Generic time-series metrics table
+#define STATSDB_SQLITE_TABLE_TSDB_METRICS \
+"CREATE TABLE tsdb_metrics (\"\
+    timestamp INT NOT NULL,\"\
+    metric_name TEXT NOT NULL,\"\
+    labels TEXT,\"\
+    value REAL,\"\
+    PRIMARY KEY (timestamp, metric_name)\"\
+) WITHOUT ROWID"
+
+// Hourly downsampled table
+#define STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR \
+"CREATE TABLE tsdb_metrics_hour (\"\
+    bucket INT NOT NULL,\"\
+    metric_name TEXT NOT NULL,\"\
+    labels TEXT,\"\
+    avg_value REAL,\"\
+    max_value REAL,\"\
+    min_value REAL,\"\
+    count INT,\"\
+    PRIMARY KEY (bucket, metric_name)\"\
+) WITHOUT ROWID"
+
+// Backend health monitoring table
+#define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
+"CREATE TABLE tsdb_backend_health (\"\
+    timestamp INT NOT NULL,\"\
+    hostgroup INT NOT NULL,\"\
+    hostname TEXT NOT NULL,\"\
+    port INT NOT NULL,\"\
+    probe_up INT NOT NULL,\"\
+    connect_ms INT,\"\
+    PRIMARY KEY (timestamp, hostgroup, hostname, port)\"\
+) WITHOUT ROWID"
+
 class ProxySQL_Statistics {
 	SQLite3DB *statsdb_mem; // internal statistics DB
 	std::vector<table_def_t *> *tables_defs_statsdb_mem;
@@ -109,6 +144,10 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_system_memory;
 #endif
 	unsigned long long next_timer_MySQL_Query_Cache;
+	// TSDB timers
+	unsigned long long next_timer_tsdb_sampler;
+	unsigned long long next_timer_tsdb_downsample;
+	unsigned long long next_timer_tsdb_monitor;
 	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);
 	void MySQL_Threads_Handler_sets_v2(SQLite3_result *);
 	void MyHGM_Handler_sets_v1(SQLite3_result *);
@@ -124,6 +163,12 @@ class ProxySQL_Statistics {
 #ifndef NOJEM
 		int stats_system_memory;
 #endif
+		// TSDB variables
+		int stats_tsdb_enabled;
+		int stats_tsdb_sample_interval;
+		int stats_tsdb_retention_days;
+		int stats_tsdb_monitor_enabled;
+		int stats_tsdb_monitor_interval;
 	} variables;
 	ProxySQL_Statistics();
 	~ProxySQL_Statistics();
@@ -163,6 +208,45 @@ class ProxySQL_Statistics {
 #endif
 	SQLite3_result * get_MySQL_Query_Cache_metrics(int interval);
 	void disk_upgrade_mysql_connections();
+
+	// TSDB methods
+	// Metric insertion
+	void insert_tsdb_metric(const std::string& metric_name,
+		const std::map<std::string, std::string>& labels,
+		double value,
+		time_t timestamp = time(NULL));
+	void insert_backend_health(int hostgroup,
+		const std::string& hostname,
+		int port,
+		bool probe_up,
+		int connect_ms,
+		time_t timestamp = time(NULL));
+	// Downsampling
+	void tsdb_downsample_metrics();
+	// Query interface with label filtering
+	SQLite3_result* query_tsdb_metrics(const std::string& metric_name,
+		const std::map<std::string, std::string>& label_filters,
+		time_t from,
+		time_t to,
+		const std::string& aggregation = "");
+	// Backend health queries
+	SQLite3_result* get_backend_health_metrics(time_t from, time_t to, int hostgroup = -1);
+	// Status
+	struct tsdb_status_t {
+		size_t total_series;
+		size_t total_datapoints;
+		size_t disk_size_bytes;
+		time_t oldest_datapoint;
+		time_t newest_datapoint;
+	};
+	tsdb_status_t get_tsdb_status();
+	// Timer checks
+	bool tsdb_sampler_timetoget(unsigned long long curtime);
+	bool tsdb_downsample_timetoget(unsigned long long curtime);
+	bool tsdb_monitor_timetoget(unsigned long long curtime);
+	// Main loops
+	void tsdb_sampler_loop();
+	void tsdb_monitor_loop();
 
 	/** 
 	 * @brief Retreives the variable id mapped to the provided variable name associated in the history_mysql_variables_lookup table.
