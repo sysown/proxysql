@@ -455,6 +455,10 @@ public:
 	PgSQL_DateStyle_t current_datestyle = {};
 	uint32_t cancel_secret_key;
 
+	// Describe mode state for \d tablename meta command
+	bool describe_mode{ false };
+	char describe_table_name[256]{ 0 };
+
 #ifdef DEBUG
 	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;
 #endif
