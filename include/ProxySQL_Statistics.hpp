@@ -98,9 +98,9 @@
 "CREATE TABLE tsdb_metrics (\"\
     timestamp INT NOT NULL,\"\
     metric_name TEXT NOT NULL,\"\
-    labels TEXT,\"\
+    labels TEXT NOT NULL DEFAULT '{}',\"\
     value REAL,\"\
-    PRIMARY KEY (timestamp, metric_name)\"\
+    PRIMARY KEY (timestamp, metric_name, labels)\"\
 ) WITHOUT ROWID"
 
 // Hourly downsampled table
@@ -108,12 +108,12 @@
 "CREATE TABLE tsdb_metrics_hour (\"\
     bucket INT NOT NULL,\"\
     metric_name TEXT NOT NULL,\"\
-    labels TEXT,\"\
+    labels TEXT NOT NULL DEFAULT '{}',\"\
     avg_value REAL,\"\
     max_value REAL,\"\
     min_value REAL,\"\
     count INT,\"\
-    PRIMARY KEY (bucket, metric_name)\"\
+    PRIMARY KEY (bucket, metric_name, labels)\"\
 ) WITHOUT ROWID"
 
 // Backend health monitoring table

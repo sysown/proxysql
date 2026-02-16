@@ -12,6 +12,53 @@ using json = nlohmann::json;
 
 #include <fcntl.h>
 #include <sys/times.h>
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <cmath>
+#include <sstream>
+#include <netdb.h>
+
+namespace {
+std::string escape_sql_string_literal(const std::string& value) {
+	std::string escaped;
+	escaped.reserve(value.size() + 8);
+	for (const char c : value) {
+		if (c == '\'') {
+			escaped += "''";
+		} else {
+			escaped += c;
+		}
+	}
+	return escaped;
+}
+
+bool valid_label_key(const std::string& key) {
+	if (key.empty()) {
+		return false;
+	}
+	for (const unsigned char c : key) {
+		if (!(std::isalnum(c) || c == '_' || c == '-' || c == ':')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+std::string format_prometheus_label_double(const double value) {
+	if (std::isnan(value)) {
+		return "nan";
+	}
+	if (std::isinf(value)) {
+		return value > 0 ? "+Inf" : "-Inf";
+	}
+	std::ostringstream oss;
+	oss.setf(std::ios::fmtflags(0), std::ios::floatfield);
+	oss.precision(17);
+	oss << value;
+	return oss.str();
+}
+} // namespace
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -55,6 +102,15 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 	next_timer_system_memory = 0;
 #endif
 	next_timer_MySQL_Query_Cache = 0;
+	next_timer_tsdb_sampler = 0;
+	next_timer_tsdb_downsample = 0;
+	next_timer_tsdb_monitor = 0;
+
+	variables.stats_tsdb_enabled = 0;
+	variables.stats_tsdb_sample_interval = 5;
+	variables.stats_tsdb_retention_days = 7;
+	variables.stats_tsdb_monitor_enabled = 0;
+	variables.stats_tsdb_monitor_interval = 10;
 }
 
 ProxySQL_Statistics::~ProxySQL_Statistics() {
@@ -131,6 +187,10 @@ void ProxySQL_Statistics::init() {
 
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_start_time ON history_mysql_query_events(start_time)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_query_digest ON history_mysql_query_events(query_digest)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_metric_time ON tsdb_metrics(metric_name, timestamp)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_hour_metric_bucket ON tsdb_metrics_hour(metric_name, bucket)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_time ON tsdb_backend_health(timestamp)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_host_time ON tsdb_backend_health(hostgroup, hostname, port, timestamp)");
 }
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
@@ -155,6 +215,40 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day in progress\n");
 		statsdb_disk->execute("ALTER TABLE mysql_connections_day ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day completed\n");
+	}
+
+	const char* tsdb_metrics_old =
+		"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, value REAL, PRIMARY KEY (timestamp, metric_name)) WITHOUT ROWID";
+	rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics", (char*)tsdb_metrics_old);
+	if (rci) {
+		proxy_warning("Detected legacy schema for tsdb_metrics\n");
+		statsdb_disk->execute("BEGIN IMMEDIATE");
+		statsdb_disk->execute("ALTER TABLE tsdb_metrics RENAME TO tsdb_metrics_old");
+		statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS);
+		statsdb_disk->execute(
+			"INSERT OR IGNORE INTO tsdb_metrics(timestamp, metric_name, labels, value) "
+			"SELECT timestamp, metric_name, COALESCE(labels,'{}'), value FROM tsdb_metrics_old"
+		);
+		statsdb_disk->execute("DROP TABLE tsdb_metrics_old");
+		statsdb_disk->execute("COMMIT");
+		proxy_warning("ONLINE UPGRADE of table tsdb_metrics completed\n");
+	}
+
+	const char* tsdb_metrics_hour_old =
+		"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name)) WITHOUT ROWID";
+	rci = statsdb_disk->check_table_structure((char*)"tsdb_metrics_hour", (char*)tsdb_metrics_hour_old);
+	if (rci) {
+		proxy_warning("Detected legacy schema for tsdb_metrics_hour\n");
+		statsdb_disk->execute("BEGIN IMMEDIATE");
+		statsdb_disk->execute("ALTER TABLE tsdb_metrics_hour RENAME TO tsdb_metrics_hour_old");
+		statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR);
+		statsdb_disk->execute(
+			"INSERT OR IGNORE INTO tsdb_metrics_hour(bucket, metric_name, labels, avg_value, max_value, min_value, count) "
+			"SELECT bucket, metric_name, COALESCE(labels,'{}'), avg_value, max_value, min_value, count FROM tsdb_metrics_hour_old"
+		);
+		statsdb_disk->execute("DROP TABLE tsdb_metrics_hour_old");
+		statsdb_disk->execute("COMMIT");
+		proxy_warning("ONLINE UPGRADE of table tsdb_metrics_hour completed\n");
 	}
 }
 
@@ -1217,7 +1311,7 @@ void ProxySQL_Statistics::insert_tsdb_metric(const std::string& metric_name,
     sqlite3 *mydb3 = statsdb_disk->get_db();
     sqlite3_stmt *statement = NULL;
 
-    const char* query = "INSERT INTO tsdb_metrics VALUES (?1, ?2, ?3, ?4)";
+    const char* query = "INSERT OR REPLACE INTO tsdb_metrics(timestamp, metric_name, labels, value) VALUES (?1, ?2, ?3, ?4)";
     int rc = (*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
     if (rc != SQLITE_OK) {
         proxy_error("Failed to prepare statement: %s\n", sqlite3_errmsg(mydb3));
@@ -1227,9 +1321,12 @@ void ProxySQL_Statistics::insert_tsdb_metric(const std::string& metric_name,
     // Convert labels map to JSON string
     json j_labels(labels);
     std::string labels_str = j_labels.dump();
+    if (labels_str.empty()) {
+        labels_str = "{}";
+    }
 
     rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp);
-    rc = (*proxy_sqlite3_bind_text)(statement, 2, metric_name.c_str(), -1, SQLITE_STATIC);
+    rc = (*proxy_sqlite3_bind_text)(statement, 2, metric_name.c_str(), -1, SQLITE_TRANSIENT);
     rc = (*proxy_sqlite3_bind_text)(statement, 3, labels_str.c_str(), -1, SQLITE_TRANSIENT);
     rc = (*proxy_sqlite3_bind_double)(statement, 4, value);
 
@@ -1248,7 +1345,7 @@ void ProxySQL_Statistics::insert_backend_health(int hostgroup,
     sqlite3 *mydb3 = statsdb_disk->get_db();
     sqlite3_stmt *statement = NULL;
 
-    const char* query = "INSERT INTO tsdb_backend_health VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+    const char* query = "INSERT OR REPLACE INTO tsdb_backend_health(timestamp, hostgroup, hostname, port, probe_up, connect_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
     int rc = (*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
     if (rc != SQLITE_OK) {
         proxy_error("Failed to prepare statement: %s\n", sqlite3_errmsg(mydb3));
@@ -1257,7 +1354,7 @@ void ProxySQL_Statistics::insert_backend_health(int hostgroup,
 
     rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp);
     rc = (*proxy_sqlite3_bind_int)(statement, 2, hostgroup);
-    rc = (*proxy_sqlite3_bind_text)(statement, 3, hostname.c_str(), -1, SQLITE_STATIC);
+    rc = (*proxy_sqlite3_bind_text)(statement, 3, hostname.c_str(), -1, SQLITE_TRANSIENT);
     rc = (*proxy_sqlite3_bind_int)(statement, 4, port);
     rc = (*proxy_sqlite3_bind_int)(statement, 5, probe_up ? 1 : 0);
     rc = (*proxy_sqlite3_bind_int)(statement, 6, connect_ms);
@@ -1268,6 +1365,7 @@ void ProxySQL_Statistics::insert_backend_health(int hostgroup,
 
 // TSDB Downsampling
 void ProxySQL_Statistics::tsdb_downsample_metrics() {
+    if (!variables.stats_tsdb_enabled) return;
     if (!statsdb_disk) return;
 
     time_t ts = time(NULL);
@@ -1308,17 +1406,24 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
         statsdb_disk->execute(buf);
     }
 
-    // Retention: delete raw data older than 7 days
+    const int retention_days = std::max(1, variables.stats_tsdb_retention_days);
+    // Retention: delete raw data older than configured days
     char delete_buf[256];
     snprintf(delete_buf, sizeof(delete_buf),
         "DELETE FROM tsdb_metrics WHERE timestamp < %ld",
-        ts - 86400 * 7);
+        ts - 86400 * retention_days);
     statsdb_disk->execute(delete_buf);
 
     // Retention: delete hourly data older than 1 year
     snprintf(delete_buf, sizeof(delete_buf),
         "DELETE FROM tsdb_metrics_hour WHERE bucket < %ld",
         ts - 86400 * 365);
+    statsdb_disk->execute(delete_buf);
+
+    // Retention: delete backend probe data older than configured days
+    snprintf(delete_buf, sizeof(delete_buf),
+        "DELETE FROM tsdb_backend_health WHERE timestamp < %ld",
+        ts - 86400 * retention_days);
     statsdb_disk->execute(delete_buf);
 }
 
@@ -1335,7 +1440,7 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
 
     // Count total series (unique metric_name + labels combinations)
     statsdb_disk->execute_statement(
-        "SELECT COUNT(DISTINCT metric_name || labels) FROM tsdb_metrics",
+        "SELECT COUNT(DISTINCT metric_name || CHAR(31) || labels) FROM tsdb_metrics",
         &error, &cols, &affected_rows, &resultset);
     if (resultset && resultset->rows_count > 0) {
         status.total_series = atol(resultset->rows[0]->fields[0]);
@@ -1367,11 +1472,20 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
         delete resultset;
     }
 
+    long long page_count = statsdb_disk->return_one_int((char*)"PRAGMA page_count");
+    long long page_size = statsdb_disk->return_one_int((char*)"PRAGMA page_size");
+    if (page_count > 0 && page_size > 0) {
+        status.disk_size_bytes = page_count * page_size;
+    }
+
     return status;
 }
 
 // TSDB Timer Checks
 bool ProxySQL_Statistics::tsdb_sampler_timetoget(unsigned long long curtime) {
+    if (!variables.stats_tsdb_enabled || variables.stats_tsdb_sample_interval <= 0) {
+        return false;
+    }
     if (curtime > next_timer_tsdb_sampler) {
         next_timer_tsdb_sampler = curtime + variables.stats_tsdb_sample_interval * 1000000;
         return true;
@@ -1380,14 +1494,20 @@ bool ProxySQL_Statistics::tsdb_sampler_timetoget(unsigned long long curtime) {
 }
 
 bool ProxySQL_Statistics::tsdb_downsample_timetoget(unsigned long long curtime) {
+    if (!variables.stats_tsdb_enabled) {
+        return false;
+    }
     if (curtime > next_timer_tsdb_downsample) {
-        next_timer_tsdb_downsample = curtime + 3600 * 1000000;  // Hourly
+        next_timer_tsdb_downsample = curtime + 3600ULL * 1000000ULL;  // Hourly
         return true;
     }
     return false;
 }
 
 bool ProxySQL_Statistics::tsdb_monitor_timetoget(unsigned long long curtime) {
+    if (!variables.stats_tsdb_enabled || !variables.stats_tsdb_monitor_enabled || variables.stats_tsdb_monitor_interval <= 0) {
+        return false;
+    }
     if (curtime > next_timer_tsdb_monitor) {
         next_timer_tsdb_monitor = curtime + variables.stats_tsdb_monitor_interval * 1000000;
         return true;
@@ -1404,86 +1524,90 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
         const std::string& aggregation) {
 
     if (!statsdb_disk) return NULL;
+    if (to < from) {
+        std::swap(from, to);
+    }
 
+    const bool use_hourly = (to - from > 86400);
+    const std::string agg = aggregation.empty() ? "raw" : aggregation;
     std::string query;
 
-    // Choose table based on time range
-    if (to - from > 86400) {  // > 1 day: use hourly table
-        query = "SELECT bucket, metric_name, labels, avg_value, max_value, min_value, count "
-                "FROM tsdb_metrics_hour WHERE metric_name = ?1 AND bucket BETWEEN ?2 AND ?3";
+    if (use_hourly) {
+        std::string value_expr = "avg_value";
+        if (agg == "max") {
+            value_expr = "max_value";
+        } else if (agg == "min") {
+            value_expr = "min_value";
+        } else if (agg == "count") {
+            value_expr = "count";
+        }
+        query =
+            "SELECT bucket AS ts, metric_name, labels, " + value_expr + " AS value "
+            "FROM tsdb_metrics_hour "
+            "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
+            "AND bucket BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
     } else {
-        query = "SELECT timestamp, metric_name, labels, value, NULL, NULL, 1 "
-                "FROM tsdb_metrics WHERE metric_name = ?1 AND timestamp BETWEEN ?2 AND ?3";
+        query =
+            "SELECT timestamp AS ts, metric_name, labels, value "
+            "FROM tsdb_metrics "
+            "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
+            "AND timestamp BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
     }
 
-    // Add label filters using JSON_EXTRACT
-    int param_idx = 4;
     for (const auto& kv : label_filters) {
-        query += " AND json_extract(labels, '$." + kv.first + "') = ?" + std::to_string(param_idx++);
+        if (!valid_label_key(kv.first)) {
+            proxy_error("Invalid TSDB label key: %s\n", kv.first.c_str());
+            return NULL;
+        }
+        query += " AND json_extract(labels, '$.\"" + kv.first + "\"')='" + escape_sql_string_literal(kv.second) + "'";
     }
 
-    query += " ORDER BY " + std::string(to - from > 86400 ? "bucket" : "timestamp");
+    query += std::string(" ORDER BY ") + (use_hourly ? "bucket" : "timestamp");
 
-    // Prepare and execute
-    sqlite3_stmt *statement = NULL;
-    sqlite3 *mydb3 = statsdb_disk->get_db();
-    int rc = (*proxy_sqlite3_prepare_v2)(mydb3, query.c_str(), -1, &statement, 0);
-    if (rc != SQLITE_OK) {
-        proxy_error("Failed to prepare statement: %s\n", sqlite3_errmsg(mydb3));
+    char* error = NULL;
+    int cols = 0;
+    int affected_rows = 0;
+    SQLite3_result* resultset = NULL;
+    statsdb_disk->execute_statement((char*)query.c_str(), &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("query_tsdb_metrics failed: %s -- sql: %s\n", error, query.c_str());
+        if (resultset) {
+            delete resultset;
+        }
         return NULL;
     }
-
-    // Bind parameters
-    rc = (*proxy_sqlite3_bind_text)(statement, 1, metric_name.c_str(), -1, SQLITE_STATIC);
-    rc = (*proxy_sqlite3_bind_int64)(statement, 2, from);
-    rc = (*proxy_sqlite3_bind_int64)(statement, 3, to);
-
-    param_idx = 4;
-    for (const auto& kv : label_filters) {
-        rc = (*proxy_sqlite3_bind_text)(statement, param_idx++, kv.second.c_str(), -1, SQLITE_TRANSIENT);
-    }
-
-    // Execute statement
-    SAFE_SQLITE3_STEP2(statement);
-    (*proxy_sqlite3_finalize)(statement);
-
-    // Return empty resultset - caller will query for actual data
-    return NULL;
+    return resultset;
 }
 
 // TSDB Backend Health Query
 SQLite3_result* ProxySQL_Statistics::get_backend_health_metrics(time_t from, time_t to, int hostgroup) {
     if (!statsdb_disk) return NULL;
-
-    std::string query = "SELECT timestamp, hostgroup, hostname, port, probe_up, connect_ms "
-                        "FROM tsdb_backend_health WHERE timestamp BETWEEN ?1 AND ?2";
-
-    if (hostgroup >= 0) {
-        query += " AND hostgroup = ?3";
+    if (to < from) {
+        std::swap(from, to);
     }
 
+    std::string query =
+        "SELECT timestamp, hostgroup, hostname, port, probe_up, connect_ms "
+        "FROM tsdb_backend_health "
+        "WHERE timestamp BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
+    if (hostgroup >= 0) {
+        query += " AND hostgroup = " + std::to_string(hostgroup);
+    }
     query += " ORDER BY timestamp";
 
-    sqlite3_stmt *statement = NULL;
-    sqlite3 *mydb3 = statsdb_disk->get_db();
-    int rc = (*proxy_sqlite3_prepare_v2)(mydb3, query.c_str(), -1, &statement, 0);
-    if (rc != SQLITE_OK) {
-        proxy_error("Failed to prepare statement: %s\n", sqlite3_errmsg(mydb3));
+    char* error = NULL;
+    int cols = 0;
+    int affected_rows = 0;
+    SQLite3_result* resultset = NULL;
+    statsdb_disk->execute_statement((char*)query.c_str(), &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("get_backend_health_metrics failed: %s -- sql: %s\n", error, query.c_str());
+        if (resultset) {
+            delete resultset;
+        }
         return NULL;
     }
-
-    rc = (*proxy_sqlite3_bind_int64)(statement, 1, from);
-    rc = (*proxy_sqlite3_bind_int64)(statement, 2, to);
-    if (hostgroup >= 0) {
-        rc = (*proxy_sqlite3_bind_int)(statement, 3, hostgroup);
-    }
-
-    // Execute statement
-    SAFE_SQLITE3_STEP2(statement);
-    (*proxy_sqlite3_finalize)(statement);
-
-    // Return empty resultset - caller will query for actual data
-    return NULL;
+    return resultset;
 }
 
 // TSDB Sampler Loop
@@ -1500,19 +1624,50 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
                 for (const auto& lp : metric.label) {
                     labels[lp.name] = lp.value;
                 }
-                double val = 0.0;
-                if (metric.counter.value > 0) {
-                    val = metric.counter.value;
-                } else if (metric.gauge.value > 0) {
-                    val = metric.gauge.value;
+                switch (family.type) {
+                    case prometheus::MetricType::Counter:
+                        insert_tsdb_metric(family.name, labels, metric.counter.value, now);
+                        break;
+                    case prometheus::MetricType::Gauge:
+                        insert_tsdb_metric(family.name, labels, metric.gauge.value, now);
+                        break;
+                    case prometheus::MetricType::Summary: {
+                        insert_tsdb_metric(family.name + "_count", labels, static_cast<double>(metric.summary.sample_count), now);
+                        insert_tsdb_metric(family.name + "_sum", labels, metric.summary.sample_sum, now);
+                        for (const auto& q : metric.summary.quantile) {
+                            std::map<std::string, std::string> q_labels(labels);
+                            q_labels["quantile"] = format_prometheus_label_double(q.quantile);
+                            insert_tsdb_metric(family.name, q_labels, q.value, now);
+                        }
+                        break;
+                    }
+                    case prometheus::MetricType::Histogram: {
+                        insert_tsdb_metric(family.name + "_count", labels, static_cast<double>(metric.histogram.sample_count), now);
+                        insert_tsdb_metric(family.name + "_sum", labels, metric.histogram.sample_sum, now);
+                        for (const auto& b : metric.histogram.bucket) {
+                            std::map<std::string, std::string> b_labels(labels);
+                            b_labels["le"] = format_prometheus_label_double(b.upper_bound);
+                            insert_tsdb_metric(
+                                family.name + "_bucket",
+                                b_labels,
+                                static_cast<double>(b.cumulative_count),
+                                now
+                            );
+                        }
+                        break;
+                    }
+                    case prometheus::MetricType::Info:
+                        insert_tsdb_metric(family.name, labels, metric.info.value, now);
+                        break;
+                    case prometheus::MetricType::Untyped:
+                    default:
+                        insert_tsdb_metric(family.name, labels, metric.untyped.value, now);
+                        break;
                 }
-                insert_tsdb_metric(family.name, labels, val, now);
             }
         }
     }
 
-    // Downsample if needed
-    tsdb_downsample_metrics();
 }
 
 // TSDB Monitor Loop
@@ -1524,46 +1679,60 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 
     char *err_msg = NULL;
     int cols = 0;
-    int rows = 0;
+    int affected_rows = 0;
     SQLite3_result *resultset = NULL;
     GloAdmin->admindb->execute_statement(
         "SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers",
-        &err_msg, &cols, &rows, &resultset);
+        &err_msg, &cols, &affected_rows, &resultset);
 
     if (resultset) {
         time_t now = time(NULL);
-        for (int i = 0; i < rows; i++) {
+        for (int i = 0; i < static_cast<int>(resultset->rows_count); i++) {
             int hg = atoi(resultset->rows[i]->fields[0]);
             const char* host = resultset->rows[i]->fields[1];
+            const std::string host_s = (host ? host : "");
             int port = atoi(resultset->rows[i]->fields[2]);
 
-            // TCP probe
-            int sock = socket(AF_INET, SOCK_STREAM, 0);
             bool probe_up = false;
             int connect_ms = -1;
 
-            if (sock >= 0) {
-                struct sockaddr_in addr;
-                memset(&addr, 0, sizeof(addr));
-                addr.sin_family = AF_INET;
-                addr.sin_port = htons(port);
-                if (inet_pton(AF_INET, host, &addr.sin_addr) > 0) {
-                    struct timeval tv;
-                    tv.tv_sec = 1;
-                    tv.tv_usec = 0;
-                    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-                    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            if (!host_s.empty()) {
+                struct addrinfo hints;
+                memset(&hints, 0, sizeof(hints));
+                hints.ai_socktype = SOCK_STREAM;
+                hints.ai_family = AF_UNSPEC;
 
-                    auto start = std::chrono::steady_clock::now();
-                    int res = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
-                    auto end = std::chrono::steady_clock::now();
-                    connect_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-                    probe_up = (res == 0);
+                struct addrinfo* res = NULL;
+                char port_str[16];
+                snprintf(port_str, sizeof(port_str), "%d", port);
+
+                if (getaddrinfo(host_s.c_str(), port_str, &hints, &res) == 0 && res) {
+                    for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
+                        int sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                        if (sock < 0) {
+                            continue;
+                        }
+                        struct timeval tv;
+                        tv.tv_sec = 1;
+                        tv.tv_usec = 0;
+                        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+                        auto start = std::chrono::steady_clock::now();
+                        int cres = connect(sock, ai->ai_addr, ai->ai_addrlen);
+                        auto end = std::chrono::steady_clock::now();
+                        connect_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                        close(sock);
+                        if (cres == 0) {
+                            probe_up = true;
+                            break;
+                        }
+                    }
+                    freeaddrinfo(res);
                 }
-                close(sock);
             }
 
-            insert_backend_health(hg, host, port, probe_up, connect_ms, now);
+            insert_backend_health(hg, host_s, port, probe_up, connect_ms, now);
         }
         delete resultset;
     }

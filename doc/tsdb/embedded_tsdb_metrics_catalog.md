@@ -1,31 +1,26 @@
 # Embedded TSDB Metrics Catalog
 
-The following metrics are curated and stored by the TSDB sampler.
+The TSDB sampler records all metric families exposed by the built-in Prometheus registry.
 
-## Traffic / Latency
-| Metric | Type | Description |
-| --- | --- | --- |
-| `proxysql_queries_total` | Counter | Total number of queries processed. |
-| `proxysql_query_errors_total` | Counter | Total number of query errors. |
-| `proxysql_query_latency_ms` | Gauge | p50, p95, and p99 query latency (derived). |
+## Family Coverage
 
-## Connections
-| Metric | Type | Description |
-| --- | --- | --- |
-| `proxysql_frontend_connections` | Gauge | Number of active client connections. |
-| `proxysql_backend_connections` | Gauge | Number of active backend connections (by hostgroup/backend). |
-| `proxysql_connection_pool_saturation` | Gauge | Percentage of pool usage. |
+- Counter
+- Gauge
+- Summary
+- Histogram
+- Info
+- Untyped
 
-## Backend Health (Probes)
-| Metric | Type | Description |
-| --- | --- | --- |
-| `backend_probe_up` | Gauge | 1 if backend is reachable, 0 otherwise. |
-| `backend_probe_connect_ms` | Gauge | TCP connection latency in ms. |
-| `backend_state` | Gauge | Current state of the backend (Enum). |
+## Stored Series Conventions
 
-## Proxy Health
-| Metric | Type | Description |
-| --- | --- | --- |
-| `proxysql_uptime_seconds` | Gauge | Uptime of the ProxySQL process. |
-| `proxysql_memory_bytes` | Gauge | Resident set size (RSS) memory usage. |
-| `tsdb_series_count` | Gauge | Number of active series in the TSDB. |
+- Counter/Gauge/Untyped/Info: stored as metric name exactly as exposed.
+- Summary:
+  - quantiles in `<metric>` with `quantile` label
+  - `<metric>_sum`
+  - `<metric>_count`
+- Histogram:
+  - buckets in `<metric>_bucket` with `le` label
+  - `<metric>_sum`
+  - `<metric>_count`
+
+Because the source registry can evolve, there is no fixed hardcoded metric list in TSDB code.

@@ -379,6 +379,11 @@ static char * admin_variables_names[]= {
 	(char *)"stats_mysql_query_digest_to_disk",
 	(char *)"stats_system_cpu",
 	(char *)"stats_system_memory",
+	(char *)"stats_tsdb_enabled",
+	(char *)"stats_tsdb_sample_interval",
+	(char *)"stats_tsdb_retention_days",
+	(char *)"stats_tsdb_monitor_enabled",
+	(char *)"stats_tsdb_monitor_interval",
 	(char *)"mysql_ifaces",
 	(char *)"pgsql_ifaces",
 	(char *)"telnet_admin_ifaces",
@@ -2511,11 +2516,20 @@ __end_while_pool:
 				GloProxyStats->system_cpu_sets();
 			}
 #ifndef NOJEM
-			if (GloProxyStats->system_memory_timetoget(curtime)) {
-				GloProxyStats->system_memory_sets();
-			}
+				if (GloProxyStats->system_memory_timetoget(curtime)) {
+					GloProxyStats->system_memory_sets();
+				}
 #endif
-		}
+				if (GloProxyStats->tsdb_sampler_timetoget(curtime)) {
+					GloProxyStats->tsdb_sampler_loop();
+				}
+				if (GloProxyStats->tsdb_downsample_timetoget(curtime)) {
+					GloProxyStats->tsdb_downsample_metrics();
+				}
+				if (GloProxyStats->tsdb_monitor_timetoget(curtime)) {
+					GloProxyStats->tsdb_monitor_loop();
+				}
+			}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
 			version=S_amll.get_version();
@@ -2804,6 +2818,11 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
 	variables.stats_system_cpu = 60;
 	variables.stats_system_memory = 60;
+	variables.stats_tsdb_enabled = 0;
+	variables.stats_tsdb_sample_interval = 5;
+	variables.stats_tsdb_retention_days = 7;
+	variables.stats_tsdb_monitor_enabled = 0;
+	variables.stats_tsdb_monitor_interval = 10;
 	GloProxyStats->variables.stats_mysql_connection_pool = 60;
 	GloProxyStats->variables.stats_mysql_connections = 60;
 	GloProxyStats->variables.stats_mysql_query_cache = 60;
@@ -2813,6 +2832,11 @@ ProxySQL_Admin::ProxySQL_Admin() :
 #ifndef NOJEM
 	GloProxyStats->variables.stats_system_memory = 60;
 #endif
+	GloProxyStats->variables.stats_tsdb_enabled = 0;
+	GloProxyStats->variables.stats_tsdb_sample_interval = 5;
+	GloProxyStats->variables.stats_tsdb_retention_days = 7;
+	GloProxyStats->variables.stats_tsdb_monitor_enabled = 0;
+	GloProxyStats->variables.stats_tsdb_monitor_interval = 10;
 
 	variables.restapi_enabled = false;
 	variables.restapi_enabled_old = false;
@@ -3618,6 +3642,26 @@ char * ProxySQL_Admin::get_variable(char *name) {
 			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_system_memory);
 			return strdup(intbuf);
 		}
+		if (!strcasecmp(name,"stats_tsdb_enabled")) {
+			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_enabled);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_tsdb_sample_interval")) {
+			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_sample_interval);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_tsdb_retention_days")) {
+			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_retention_days);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_tsdb_monitor_enabled")) {
+			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_monitor_enabled);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_tsdb_monitor_interval")) {
+			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_monitor_interval);
+			return strdup(intbuf);
+		}
 	}
 	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
@@ -3964,19 +4008,64 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			}
 		}
 #ifndef NOJEM
-		if (!strcasecmp(name,"stats_system_memory")) {
-			int intv=atoi(value);
-			if (intv >= 0 && intv <= 600) {
+			if (!strcasecmp(name,"stats_system_memory")) {
+				int intv=atoi(value);
+				if (intv >= 0 && intv <= 600) {
 				intv = round_intv_to_time_interval(name, intv);
 				variables.stats_system_memory=intv;
 				GloProxyStats->variables.stats_system_memory=intv;
 				return true;
 			} else {
 				return false;
+				}
+			}
+#endif
+			if (!strcasecmp(name, "stats_tsdb_enabled")) {
+				int intv = atoi(value);
+				if (intv == 0 || intv == 1) {
+					variables.stats_tsdb_enabled = intv;
+					GloProxyStats->variables.stats_tsdb_enabled = intv;
+					return true;
+				}
+				return false;
+			}
+			if (!strcasecmp(name, "stats_tsdb_sample_interval")) {
+				int intv = atoi(value);
+				if (intv >= 1 && intv <= 3600) {
+					variables.stats_tsdb_sample_interval = intv;
+					GloProxyStats->variables.stats_tsdb_sample_interval = intv;
+					return true;
+				}
+				return false;
+			}
+			if (!strcasecmp(name, "stats_tsdb_retention_days")) {
+				int intv = atoi(value);
+				if (intv >= 1 && intv <= 3650) {
+					variables.stats_tsdb_retention_days = intv;
+					GloProxyStats->variables.stats_tsdb_retention_days = intv;
+					return true;
+				}
+				return false;
+			}
+			if (!strcasecmp(name, "stats_tsdb_monitor_enabled")) {
+				int intv = atoi(value);
+				if (intv == 0 || intv == 1) {
+					variables.stats_tsdb_monitor_enabled = intv;
+					GloProxyStats->variables.stats_tsdb_monitor_enabled = intv;
+					return true;
+				}
+				return false;
+			}
+			if (!strcasecmp(name, "stats_tsdb_monitor_interval")) {
+				int intv = atoi(value);
+				if (intv >= 1 && intv <= 3600) {
+					variables.stats_tsdb_monitor_interval = intv;
+					GloProxyStats->variables.stats_tsdb_monitor_interval = intv;
+					return true;
+				}
+				return false;
 			}
 		}
-#endif
-	}
 	if (!strcasecmp(name,"mysql_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
