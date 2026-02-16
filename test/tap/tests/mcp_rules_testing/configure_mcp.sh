@@ -25,6 +25,9 @@ MYSQL_PORT="${MYSQL_PORT:-3307}"
 MYSQL_USER="${MYSQL_USER:-root}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD=test123}"  # Use = instead of :- to allow empty passwords
 MYSQL_DATABASE="${TEST_DB_NAME:-testdb}"
+MCP_TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
+MCP_AUTH_PROFILE_ID="${MCP_AUTH_PROFILE_ID:-tap_mysql_auth}"
+MCP_MYSQL_HOSTGROUP_ID="${MCP_MYSQL_HOSTGROUP_ID:-9100}"
 MCP_PORT="${MCP_PORT:-6071}"
 MCP_ENABLED="false"
 MCP_USE_SSL="true"  # Default to true for security
@@ -88,16 +91,25 @@ check_proxysql_admin() {
 # Check if MySQL is accessible
 check_mysql_connection() {
     log_step "Checking MySQL connection..."
-    if mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" \
-            -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
-            -e "SELECT 1" >/dev/null 2>&1; then
-        log_info "Connected to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}"
-        return 0
+    if [ -z "${MYSQL_PASSWORD}" ] || [ "${MYSQL_PASSWORD}" = "none" ]; then
+        if mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" \
+                -u "${MYSQL_USER}" \
+                -e "SELECT 1" >/dev/null 2>&1; then
+            log_info "Connected to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}"
+            return 0
+        fi
     else
-        log_error "Cannot connect to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}"
-        log_error "Please ensure MySQL is running and credentials are correct"
-        return 1
+        if mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" \
+                -u "${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+                -e "SELECT 1" >/dev/null 2>&1; then
+            log_info "Connected to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}"
+            return 0
+        fi
     fi
+
+    log_error "Cannot connect to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}"
+    log_error "Please ensure MySQL is running and credentials are correct"
+    return 1
 }
 
 # Configure MCP variables
@@ -109,11 +121,6 @@ configure_mcp() {
     local errors=0
 
     # Set each variable individually to catch errors
-    exec_admin_silent "SET mcp-mysql_hosts='${MYSQL_HOST}';" || { log_error "Failed to set mcp-mysql_hosts"; errors=$((errors + 1)); }
-    exec_admin_silent "SET mcp-mysql_ports='${MYSQL_PORT}';" || { log_error "Failed to set mcp-mysql_ports"; errors=$((errors + 1)); }
-    exec_admin_silent "SET mcp-mysql_user='${MYSQL_USER}';" || { log_error "Failed to set mcp-mysql_user"; errors=$((errors + 1)); }
-    exec_admin_silent "SET mcp-mysql_password='${MYSQL_PASSWORD}';" || { log_error "Failed to set mcp-mysql_password"; errors=$((errors + 1)); }
-    exec_admin_silent "SET mcp-mysql_schema='${MYSQL_DATABASE}';" || { log_error "Failed to set mcp-mysql_schema"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-port='${MCP_PORT}';" || { log_error "Failed to set mcp-port"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-use_ssl='${MCP_USE_SSL}';" || { log_error "Failed to set mcp-use_ssl"; errors=$((errors + 1)); }
     exec_admin_silent "SET mcp-enabled='${enable}';" || { log_error "Failed to set mcp-enabled"; errors=$((errors + 1)); }
@@ -124,23 +131,91 @@ configure_mcp() {
     fi
 
     log_info "MCP variables configured:"
-    echo "  mcp-mysql_hosts     = ${MYSQL_HOST}"
-    echo "  mcp-mysql_ports     = ${MYSQL_PORT}"
-    echo "  mcp-mysql_user      = ${MYSQL_USER}"
-    echo "  mcp-mysql_password  = ${MYSQL_PASSWORD}"
-    echo "  mcp-mysql_schema    = ${MYSQL_DATABASE}"
     echo "  mcp-port            = ${MCP_PORT}"
     echo "  mcp-use_ssl         = ${MCP_USE_SSL}"
     echo "  mcp-enabled         = ${enable}"
 }
 
-# Load MCP variables to runtime
+# Configure MCP auth/target profiles and ensure hostgroup backend exists
+configure_mcp_profiles() {
+    log_step "Configuring MCP auth/target profiles..."
+
+    local profile_password="${MYSQL_PASSWORD}"
+    if [ "${profile_password}" = "none" ]; then
+        profile_password=""
+    fi
+    local password_escaped
+    password_escaped=$(printf "%s" "${profile_password}" | sed "s/'/''/g")
+    local db_escaped
+    db_escaped=$(printf "%s" "${MYSQL_DATABASE}" | sed "s/'/''/g")
+    local user_escaped
+    user_escaped=$(printf "%s" "${MYSQL_USER}" | sed "s/'/''/g")
+    local host_escaped
+    host_escaped=$(printf "%s" "${MYSQL_HOST}" | sed "s/'/''/g")
+    local target_escaped
+    target_escaped=$(printf "%s" "${MCP_TARGET_ID}" | sed "s/'/''/g")
+    local auth_escaped
+    auth_escaped=$(printf "%s" "${MCP_AUTH_PROFILE_ID}" | sed "s/'/''/g")
+
+    if ! exec_admin_silent "DELETE FROM mcp_target_profiles WHERE target_id='${target_escaped}';" >/dev/null 2>&1; then
+        log_error "Failed to delete existing mcp_target_profiles row for ${MCP_TARGET_ID}"
+        return 1
+    fi
+    if ! exec_admin_silent "DELETE FROM mcp_auth_profiles WHERE auth_profile_id='${auth_escaped}';" >/dev/null 2>&1; then
+        log_error "Failed to delete existing mcp_auth_profiles row for ${MCP_AUTH_PROFILE_ID}"
+        return 1
+    fi
+
+    if ! exec_admin_silent "INSERT INTO mcp_auth_profiles (auth_profile_id, db_username, db_password, default_schema, use_ssl, ssl_mode, comment) VALUES ('${auth_escaped}', '${user_escaped}', '${password_escaped}', '${db_escaped}', 0, '', 'TAP MCP MySQL auth profile');" >/dev/null 2>&1; then
+        log_error "Failed to insert mcp_auth_profiles row"
+        return 1
+    fi
+
+    if ! exec_admin_silent "INSERT INTO mcp_target_profiles (target_id, protocol, hostgroup_id, auth_profile_id, description, max_rows, timeout_ms, allow_explain, allow_discovery, active, comment) VALUES ('${target_escaped}', 'mysql', ${MCP_MYSQL_HOSTGROUP_ID}, '${auth_escaped}', 'TAP MCP MySQL target', 200, 5000, 1, 1, 1, 'TAP test target');" >/dev/null 2>&1; then
+        log_error "Failed to insert mcp_target_profiles row"
+        return 1
+    fi
+
+    if ! exec_admin_silent "DELETE FROM mysql_servers WHERE hostgroup_id=${MCP_MYSQL_HOSTGROUP_ID};" >/dev/null 2>&1; then
+        log_error "Failed to clean mysql_servers hostgroup ${MCP_MYSQL_HOSTGROUP_ID}"
+        return 1
+    fi
+    if ! exec_admin_silent "INSERT INTO mysql_servers (hostgroup_id, hostname, port, status, weight, comment) VALUES (${MCP_MYSQL_HOSTGROUP_ID}, '${host_escaped}', ${MYSQL_PORT}, 'ONLINE', 1, 'TAP MCP backend');" >/dev/null 2>&1; then
+        log_error "Failed to insert backend into mysql_servers"
+        return 1
+    fi
+
+    log_info "MCP profiles configured:"
+    echo "  target_id           = ${MCP_TARGET_ID}"
+    echo "  auth_profile_id     = ${MCP_AUTH_PROFILE_ID}"
+    echo "  backend             = ${MYSQL_HOST}:${MYSQL_PORT}"
+    echo "  hostgroup_id        = ${MCP_MYSQL_HOSTGROUP_ID}"
+    echo "  default_schema      = ${MYSQL_DATABASE}"
+}
+
+# Load MCP variables/profiles/server tables to runtime
 load_to_runtime() {
     log_step "Loading MCP variables to RUNTIME..."
     if exec_admin_silent "LOAD MCP VARIABLES TO RUNTIME;" >/dev/null 2>&1; then
         log_info "MCP variables loaded to RUNTIME"
     else
         log_error "Failed to load MCP variables to RUNTIME"
+        return 1
+    fi
+
+    log_step "Loading MCP profiles to RUNTIME..."
+    if exec_admin_silent "LOAD MCP PROFILES TO RUNTIME;" >/dev/null 2>&1; then
+        log_info "MCP profiles loaded to RUNTIME"
+    else
+        log_error "Failed to load MCP profiles to RUNTIME"
+        return 1
+    fi
+
+    log_step "Loading MySQL servers to RUNTIME..."
+    if exec_admin_silent "LOAD MYSQL SERVERS TO RUNTIME;" >/dev/null 2>&1; then
+        log_info "MySQL servers loaded to RUNTIME"
+    else
+        log_error "Failed to load MySQL servers to RUNTIME"
         return 1
     fi
 }
@@ -261,6 +336,9 @@ Environment Variables:
   MYSQL_USER            MySQL user (default: root)
   MYSQL_PASSWORD        MySQL password (default: test123)
   TEST_DB_NAME          MySQL database (default: testdb)
+  MCP_TARGET_ID         Logical MCP target ID (default: tap_mysql_default)
+  MCP_AUTH_PROFILE_ID   MCP auth profile ID (default: tap_mysql_auth)
+  MCP_MYSQL_HOSTGROUP_ID MySQL hostgroup for TAP target (default: 9100)
   MCP_PORT              MCP server port (default: 6071)
   MCP_USE_SSL           MCP SSL mode (default: true)
   PROXYSQL_ADMIN_HOST   ProxySQL admin host (default: 127.0.0.1)
@@ -335,6 +413,14 @@ main() {
     if ! configure_mcp "${MCP_ENABLED}"; then
         log_error "Failed to configure MCP variables"
         exit 1
+    fi
+
+    # Configure profile-based routing only when MCP is enabled
+    if [ "${MCP_ENABLED}" = "true" ]; then
+        if ! configure_mcp_profiles; then
+            log_error "Failed to configure MCP profiles"
+            exit 1
+        fi
     fi
 
     # Load to runtime

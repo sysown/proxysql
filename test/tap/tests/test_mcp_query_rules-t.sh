@@ -197,29 +197,26 @@ fn_check_configure_mcp () {
 
 	echo "msg: #   Checking MCP status via ProxySQL Admin..."
 
-	# Check if MCP is already enabled
-	local mcp_enabled
-	mcp_enabled=$(fn_mysql_exec "${admin_host}" "${admin_port}" "${admin_user}" "${admin_pass}" \
-		"SELECT variable_value FROM global_variables WHERE variable_name='mcp-enabled';" \
-		2>/dev/null | tail -n 1)
-
-	if [ "${mcp_enabled}" = "true" ]; then
-		echo "msg: ok $DONE - MCP Configuration - Already enabled"
-		echo "msg: #   MCP server at ${admin_host}:${TAP_MCPPORT:-6071}"
-		return 0
-	fi
-
-	echo "msg: #   MCP not enabled, attempting to configure..."
+	echo "msg: #   Applying MCP test configuration (variables + profiles)..."
 
 	# Set environment variables for configure script
 	export PROXYSQL_ADMIN_HOST="${admin_host}"
 	export PROXYSQL_ADMIN_PORT="${admin_port}"
 	export PROXYSQL_ADMIN_USER="${admin_user}"
 	export PROXYSQL_ADMIN_PASSWORD="${admin_pass}"
+	export MYSQL_HOST="${TAP_MYSQLHOST:-127.0.0.1}"
+	export MYSQL_PORT="${TAP_MYSQLPORT:-3306}"
+	export MYSQL_USER="${TAP_MYSQLUSERNAME:-root}"
+	export MYSQL_PASSWORD="${TAP_MYSQLPASSWORD:-none}"
+	export TEST_DB_NAME="${TEST_DB_NAME:-testdb}"
+	export MCP_PORT="${TAP_MCPPORT:-6071}"
+	export MCP_TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
+	export MCP_AUTH_PROFILE_ID="${MCP_AUTH_PROFILE_ID:-tap_mysql_auth}"
+	export MCP_MYSQL_HOSTGROUP_ID="${MCP_MYSQL_HOSTGROUP_ID:-9100}"
 
-	# Try to configure MCP
+	# Always configure MCP so tests are deterministic even if MCP was pre-enabled.
 	local config_output
-	config_output=$(bash "${CONFIGURE_SCRIPT}" --enable -u $TAP_MYSQLUSERNAME -p $TAP_MYSQLPASSWORD -P $TAP_MYSQLPORT -d "${MYSQL_DATABASE:-testdb}" 2>&1)
+	config_output=$(bash "${CONFIGURE_SCRIPT}" --enable 2>&1)
 	local config_result=$?
 
 	if [ $config_result -eq 0 ]; then
