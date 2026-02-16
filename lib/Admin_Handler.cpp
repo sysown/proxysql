@@ -4527,6 +4527,20 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (query_no_space_length == strlen("SHOW TSDB VARIABLES") && !strncasecmp("SHOW TSDB VARIABLES", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'tsdb-%' ORDER BY variable_name");
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length == strlen("SHOW TSDB STATUS") && !strncasecmp("SHOW TSDB STATUS", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_tsdb ORDER BY Variable_name");
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+
 	if (query_no_space_length == strlen("SHOW PGSQL STATUS") && !strncasecmp("SHOW PGSQL STATUS", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_pgsql_global ORDER BY variable_name");

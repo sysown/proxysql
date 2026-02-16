@@ -2,6 +2,7 @@
 #define CLASS_PROXYSQL_STATISTICS_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "ProxySQL_Admin_Tables_Definitions.h"
 //#include "thread.h"
 //#include "wqueue.h"
 #include <vector>
@@ -185,6 +186,7 @@ class ProxySQL_Statistics {
 #ifndef NOJEM
 	void system_memory_sets();
 #endif
+	void stats___tsdb();
 	void MySQL_Query_Cache_sets(SQLite3_result *);
 	SQLite3_result * get_mysql_metrics(int interval);
 	SQLite3_result * get_myhgm_metrics(int interval);
