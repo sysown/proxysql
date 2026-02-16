@@ -103,15 +103,7 @@
 
 // Backend health monitoring table
 #define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
-"CREATE TABLE tsdb_backend_health (\"\
-    timestamp INT NOT NULL,\"\
-    hostgroup INT NOT NULL,\"\
-    hostname TEXT NOT NULL,\"\
-    port INT NOT NULL,\"\
-    probe_up INT NOT NULL,\"\
-    connect_ms INT,\"\
-    PRIMARY KEY (timestamp, hostgroup, hostname, port)\"\
-) WITHOUT ROWID"
+"CREATE TABLE tsdb_backend_health (timestamp INT NOT NULL, hostgroup INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, probe_up INT NOT NULL, connect_ms INT, PRIMARY KEY (timestamp, hostgroup, hostname, port)) WITHOUT ROWID"
 
 class ProxySQL_Statistics {
 	SQLite3DB *statsdb_mem; // internal statistics DB
