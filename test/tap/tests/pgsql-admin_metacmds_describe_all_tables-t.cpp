@@ -1,5 +1,5 @@
 /**
- * @file pgsql_describe_all_tables-t.cpp
+ * @file pgsql-describe_all_tables-t.cpp
  * @brief Comprehensive test for \d meta-command on all admin tables
  *
  * This test validates that \d works correctly on ALL admin tables by:

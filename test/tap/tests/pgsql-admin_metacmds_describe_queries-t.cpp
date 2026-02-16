@@ -1,6 +1,6 @@
 /**
- * @file pgsql_describe_concert-t.cpp
- * @brief Advanced concert testing for \d meta-command query sequence with data validation
+ * @file pgsql-describe_aueries-t.cpp
+ * @brief Advanced testing for \d meta-command query sequence with data validation
  *
  * This test validates each of the 8 queries in the \d tablename sequence
  * by executing them individually and checking the response format AND data accuracy.

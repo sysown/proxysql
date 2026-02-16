@@ -1,5 +1,5 @@
 /**
- * @file pgsql_admin_metacmds-t.cpp
+ * @file pgsql-admin_metacmds-t.cpp
  * @brief This test validates PostgreSQL psql meta-commands in the admin interface.
  * Uses actual psql client to test: \dt, \di, \dv, \d, \l commands
  */
