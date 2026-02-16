@@ -2,22 +2,22 @@
 
 ## Configuration Variables
 
-TSDB variables are ADMIN variables:
+TSDB variables are TSDB variables:
 
 | Variable | Type | Default | Range | Description |
 |---|---|---:|---|---|
-| `admin-stats_tsdb_enabled` | int | `0` | `0/1` | Master switch |
-| `admin-stats_tsdb_sample_interval` | int | `5` | `1..3600` | Prometheus sampling interval (seconds) |
-| `admin-stats_tsdb_retention_days` | int | `7` | `1..3650` | Raw/probe retention in days |
-| `admin-stats_tsdb_monitor_enabled` | int | `0` | `0/1` | Backend probe switch |
-| `admin-stats_tsdb_monitor_interval` | int | `10` | `1..3600` | Probe interval (seconds) |
+| `tsdb-enabled` | int | `0` | `0/1` | Master switch |
+| `tsdb-sample_interval` | int | `5` | `1..3600` | Prometheus sampling interval (seconds) |
+| `tsdb-retention_days` | int | `7` | `1..3650` | Raw/probe retention in days |
+| `tsdb-monitor_enabled` | int | `0` | `0/1` | Backend probe switch |
+| `tsdb-monitor_interval` | int | `10` | `1..3600` | Probe interval (seconds) |
 
 ### Apply Changes
 
 ```sql
-SET admin-stats_tsdb_enabled='1';
-LOAD ADMIN VARIABLES TO RUNTIME;
-SAVE ADMIN VARIABLES TO DISK;
+SET tsdb-enabled='1';
+LOAD TSDB VARIABLES TO RUNTIME;
+SAVE TSDB VARIABLES TO DISK;
 ```
 
 No dedicated `LOAD/SAVE TSDB VARIABLES ...` command exists.

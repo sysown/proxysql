@@ -148,6 +148,9 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_tsdb_sampler;
 	unsigned long long next_timer_tsdb_downsample;
 	unsigned long long next_timer_tsdb_monitor;
+	unsigned long long next_timer_tsdb_retention;
+	sqlite3_stmt *stmt_insert_tsdb_metric;
+	sqlite3_stmt *stmt_insert_backend_health;
 	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);
 	void MySQL_Threads_Handler_sets_v2(SQLite3_result *);
 	void MyHGM_Handler_sets_v1(SQLite3_result *);
@@ -164,17 +167,23 @@ class ProxySQL_Statistics {
 		int stats_system_memory;
 #endif
 		// TSDB variables
-		int stats_tsdb_enabled;
-		int stats_tsdb_sample_interval;
-		int stats_tsdb_retention_days;
-		int stats_tsdb_monitor_enabled;
-		int stats_tsdb_monitor_interval;
+		int tsdb_enabled;
+		int tsdb_sample_interval;
+		int tsdb_retention_days;
+		int tsdb_monitor_enabled;
+		int tsdb_monitor_interval;
 	} variables;
 	ProxySQL_Statistics();
 	~ProxySQL_Statistics();
 	SQLite3DB *statsdb_disk; // internal statistics DB
 	void init();
 	void print_version();
+
+	// Variable management
+	bool set_variable(const char *name, const char *value);
+	char *get_variable(const char *name);
+	char **get_variables_list();
+
 	bool MySQL_Threads_Handler_timetoget(unsigned long long);
 	bool mysql_query_digest_to_disk_timetoget(unsigned long long);
 	bool system_cpu_timetoget(unsigned long long);
@@ -223,6 +232,7 @@ class ProxySQL_Statistics {
 		time_t timestamp = time(NULL));
 	// Downsampling
 	void tsdb_downsample_metrics();
+	void tsdb_retention_cleanup();
 	// Query interface with label filtering
 	SQLite3_result* query_tsdb_metrics(const std::string& metric_name,
 		const std::map<std::string, std::string>& label_filters,
@@ -244,6 +254,7 @@ class ProxySQL_Statistics {
 	bool tsdb_sampler_timetoget(unsigned long long curtime);
 	bool tsdb_downsample_timetoget(unsigned long long curtime);
 	bool tsdb_monitor_timetoget(unsigned long long curtime);
+	bool tsdb_retention_timetoget(unsigned long long curtime);
 	// Main loops
 	void tsdb_sampler_loop();
 	void tsdb_monitor_loop();

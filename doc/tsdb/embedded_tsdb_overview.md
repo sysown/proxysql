@@ -22,22 +22,22 @@ It records Prometheus metrics and optional backend TCP probe health into `statsd
 
 TSDB settings are standard ADMIN variables and use the normal ADMIN load/save lifecycle:
 
-- `SET admin-stats_tsdb_...`
-- `LOAD ADMIN VARIABLES TO RUNTIME`
-- `SAVE ADMIN VARIABLES TO DISK`
+- `SET tsdb-...`
+- `LOAD TSDB VARIABLES TO RUNTIME`
+- `SAVE TSDB VARIABLES TO DISK`
 
 There is no separate `LOAD/SAVE TSDB VARIABLES ...` command set.
 
 ## Variables
 
-- `admin-stats_tsdb_enabled` (0/1)
-- `admin-stats_tsdb_sample_interval` (1..3600 seconds)
-- `admin-stats_tsdb_retention_days` (1..3650)
-- `admin-stats_tsdb_monitor_enabled` (0/1)
-- `admin-stats_tsdb_monitor_interval` (1..3600 seconds)
+- `tsdb-enabled` (0/1)
+- `tsdb-sample_interval` (1..3600 seconds)
+- `tsdb-retention_days` (1..3650)
+- `tsdb-monitor_enabled` (0/1)
+- `tsdb-monitor_interval` (1..3600 seconds)
 
 ## Retention
 
-- Raw metrics (`tsdb_metrics`): `admin-stats_tsdb_retention_days`
-- Backend probes (`tsdb_backend_health`): `admin-stats_tsdb_retention_days`
+- Raw metrics (`tsdb_metrics`): `tsdb-retention_days`
+- Backend probes (`tsdb_backend_health`): `tsdb-retention_days`
 - Hourly rollups (`tsdb_metrics_hour`): fixed 365 days

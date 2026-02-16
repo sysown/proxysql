@@ -379,11 +379,6 @@ static char * admin_variables_names[]= {
 	(char *)"stats_mysql_query_digest_to_disk",
 	(char *)"stats_system_cpu",
 	(char *)"stats_system_memory",
-	(char *)"stats_tsdb_enabled",
-	(char *)"stats_tsdb_sample_interval",
-	(char *)"stats_tsdb_retention_days",
-	(char *)"stats_tsdb_monitor_enabled",
-	(char *)"stats_tsdb_monitor_interval",
 	(char *)"mysql_ifaces",
 	(char *)"pgsql_ifaces",
 	(char *)"telnet_admin_ifaces",
@@ -2526,11 +2521,13 @@ __end_while_pool:
 				if (GloProxyStats->tsdb_downsample_timetoget(curtime)) {
 					GloProxyStats->tsdb_downsample_metrics();
 				}
-				if (GloProxyStats->tsdb_monitor_timetoget(curtime)) {
-					GloProxyStats->tsdb_monitor_loop();
-				}
-			}
-		if (S_amll.get_version()!=version) {
+				                                if (GloProxyStats->tsdb_monitor_timetoget(curtime)) {
+				                                        GloProxyStats->tsdb_monitor_loop();
+				                                }
+				                                if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
+				                                        GloProxyStats->tsdb_retention_cleanup();
+				                                }
+				                        }		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
 			version=S_amll.get_version();
 			for (i=1; i<nfds; i++) {
@@ -2755,6 +2752,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("mcp_query_rules",   "MCP QUERY RULES");
 	generate_load_save_disk_commands("mcp_variables",     "MCP VARIABLES");
 	generate_load_save_disk_commands("genai_variables",   "GENAI VARIABLES");
+	generate_load_save_disk_commands("tsdb_variables",    "TSDB VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
 	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
@@ -2818,11 +2816,6 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.stats_mysql_eventslog_sync_buffer_to_disk = 0;
 	variables.stats_system_cpu = 60;
 	variables.stats_system_memory = 60;
-	variables.stats_tsdb_enabled = 0;
-	variables.stats_tsdb_sample_interval = 5;
-	variables.stats_tsdb_retention_days = 7;
-	variables.stats_tsdb_monitor_enabled = 0;
-	variables.stats_tsdb_monitor_interval = 10;
 	GloProxyStats->variables.stats_mysql_connection_pool = 60;
 	GloProxyStats->variables.stats_mysql_connections = 60;
 	GloProxyStats->variables.stats_mysql_query_cache = 60;
@@ -2832,11 +2825,6 @@ ProxySQL_Admin::ProxySQL_Admin() :
 #ifndef NOJEM
 	GloProxyStats->variables.stats_system_memory = 60;
 #endif
-	GloProxyStats->variables.stats_tsdb_enabled = 0;
-	GloProxyStats->variables.stats_tsdb_sample_interval = 5;
-	GloProxyStats->variables.stats_tsdb_retention_days = 7;
-	GloProxyStats->variables.stats_tsdb_monitor_enabled = 0;
-	GloProxyStats->variables.stats_tsdb_monitor_interval = 10;
 
 	variables.restapi_enabled = false;
 	variables.restapi_enabled_old = false;
@@ -3642,26 +3630,6 @@ char * ProxySQL_Admin::get_variable(char *name) {
 			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_system_memory);
 			return strdup(intbuf);
 		}
-		if (!strcasecmp(name,"stats_tsdb_enabled")) {
-			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_enabled);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"stats_tsdb_sample_interval")) {
-			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_sample_interval);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"stats_tsdb_retention_days")) {
-			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_retention_days);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"stats_tsdb_monitor_enabled")) {
-			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_monitor_enabled);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"stats_tsdb_monitor_interval")) {
-			snprintf(intbuf, sizeof(intbuf),"%d",variables.stats_tsdb_monitor_interval);
-			return strdup(intbuf);
-		}
 	}
 	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
@@ -4020,49 +3988,14 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				}
 			}
 #endif
-			if (!strcasecmp(name, "stats_tsdb_enabled")) {
-				int intv = atoi(value);
-				if (intv == 0 || intv == 1) {
-					variables.stats_tsdb_enabled = intv;
-					GloProxyStats->variables.stats_tsdb_enabled = intv;
-					return true;
-				}
 				return false;
 			}
-			if (!strcasecmp(name, "stats_tsdb_sample_interval")) {
-				int intv = atoi(value);
-				if (intv >= 1 && intv <= 3600) {
-					variables.stats_tsdb_sample_interval = intv;
-					GloProxyStats->variables.stats_tsdb_sample_interval = intv;
-					return true;
-				}
 				return false;
 			}
-			if (!strcasecmp(name, "stats_tsdb_retention_days")) {
-				int intv = atoi(value);
-				if (intv >= 1 && intv <= 3650) {
-					variables.stats_tsdb_retention_days = intv;
-					GloProxyStats->variables.stats_tsdb_retention_days = intv;
-					return true;
-				}
 				return false;
 			}
-			if (!strcasecmp(name, "stats_tsdb_monitor_enabled")) {
-				int intv = atoi(value);
-				if (intv == 0 || intv == 1) {
-					variables.stats_tsdb_monitor_enabled = intv;
-					GloProxyStats->variables.stats_tsdb_monitor_enabled = intv;
-					return true;
-				}
 				return false;
 			}
-			if (!strcasecmp(name, "stats_tsdb_monitor_interval")) {
-				int intv = atoi(value);
-				if (intv >= 1 && intv <= 3600) {
-					variables.stats_tsdb_monitor_interval = intv;
-					GloProxyStats->variables.stats_tsdb_monitor_interval = intv;
-					return true;
-				}
 				return false;
 			}
 		}
@@ -8933,6 +8866,41 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_AURORA
+
+void ProxySQL_Admin::load_tsdb_variables_to_runtime() {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	// TSDB variables are in global_variables named 'tsdb-%'
+	if (flush_GENERIC_variables__retrieve__database_to_runtime("tsdb", error, cols, affected_rows, resultset) == true) {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			const char *name = r->fields[0];
+			const char *value = r->fields[1];
+			GloProxyStats->set_variable(name, value);
+		}
+	}
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::save_tsdb_variables_from_runtime() {
+	char **tsdb_vars = GloProxyStats->get_variables_list();
+	char *a = (char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+	for (int i=0; tsdb_vars[i]; i++) {
+		char *val = GloProxyStats->get_variable(tsdb_vars[i]);
+		if (val) {
+			size_t l = strlen(a) + strlen(tsdb_vars[i]) + strlen(val) + 10;
+			char *query = (char *)malloc(l);
+			snprintf(query, l, a, tsdb_vars[i], val);
+			admindb->execute(query);
+			free(query);
+			free(val);
+		}
+		free(tsdb_vars[i]);
+	}
+	free(tsdb_vars);
+}
 
 #ifdef TEST_GROUPREP
 void ProxySQL_Admin::enable_grouprep_testing() {

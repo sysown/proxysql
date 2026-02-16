@@ -975,7 +975,7 @@ void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	GloProxyCluster->init();
 	GloProxyCluster->print_version();
 	GloProxyStats = new ProxySQL_Statistics();
-	//GloProxyStats->init();
+	GloProxyStats->init();
 	GloProxyStats->print_version();
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->init(bootstrap_info);

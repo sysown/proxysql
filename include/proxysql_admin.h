@@ -328,11 +328,6 @@ class ProxySQL_Admin {
 		int stats_mysql_eventslog_sync_buffer_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
-		int stats_tsdb_enabled;
-		int stats_tsdb_sample_interval;
-		int stats_tsdb_retention_days;
-		int stats_tsdb_monitor_enabled;
-		int stats_tsdb_monitor_interval;
 		bool restapi_enabled;
 		bool restapi_enabled_old;
 		int restapi_port;
@@ -691,6 +686,10 @@ class ProxySQL_Admin {
 
 	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
+
+	// TSDB
+	void load_tsdb_variables_to_runtime();
+	void save_tsdb_variables_from_runtime();
 
 	void load_or_update_global_settings(SQLite3DB *);
 

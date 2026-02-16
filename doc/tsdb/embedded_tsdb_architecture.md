@@ -30,9 +30,9 @@
 
 ## Configuration Lifecycle
 
-TSDB configuration is part of ADMIN variables (`admin-stats_tsdb_*`) and is applied with:
+TSDB configuration is handled by a dedicated module (`tsdb-*`) and is applied with:
 
-- `LOAD ADMIN VARIABLES TO RUNTIME`
-- `SAVE ADMIN VARIABLES TO DISK`
+- `LOAD TSDB VARIABLES TO RUNTIME`
+- `SAVE TSDB VARIABLES TO DISK`
 
 No dedicated TSDB load/save command family is implemented.

@@ -24,19 +24,19 @@ Embedded time-series storage in SQLite for ProxySQL runtime metrics and backend 
 
 ## Sampling and Rollup
 
-- Sampler interval: `admin-stats_tsdb_sample_interval`
+- Sampler interval: `tsdb-sample_interval`
 - Rollup interval: hourly
 - Rollup SQL: `INSERT OR REPLACE ... GROUP BY bucket, metric_name, labels`
 
 ## Retention
 
-- Raw metrics retention: `admin-stats_tsdb_retention_days`
-- Backend probe retention: `admin-stats_tsdb_retention_days`
+- Raw metrics retention: `tsdb-retention_days`
+- Backend probe retention: `tsdb-retention_days`
 - Hourly rollup retention: 365 days
 
 ## Variable Semantics
 
-- All TSDB variables are ADMIN variables (`admin-stats_tsdb_*`).
+- All TSDB variables are TSDB variables (`tsdb-*`).
 - Applied through standard ADMIN commands only.
 - No dedicated `LOAD/SAVE TSDB VARIABLES` command set.
 

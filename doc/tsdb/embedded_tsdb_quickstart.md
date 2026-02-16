@@ -3,17 +3,17 @@
 ## 1. Enable TSDB
 
 ```sql
-SET admin-stats_tsdb_enabled='1';
-LOAD ADMIN VARIABLES TO RUNTIME;
-SAVE ADMIN VARIABLES TO DISK;
+SET tsdb-enabled='1';
+LOAD TSDB VARIABLES TO RUNTIME;
+SAVE TSDB VARIABLES TO DISK;
 ```
 
 Optional backend probe collection:
 
 ```sql
-SET admin-stats_tsdb_monitor_enabled='1';
-LOAD ADMIN VARIABLES TO RUNTIME;
-SAVE ADMIN VARIABLES TO DISK;
+SET tsdb-monitor_enabled='1';
+LOAD TSDB VARIABLES TO RUNTIME;
+SAVE TSDB VARIABLES TO DISK;
 ```
 
 ## 2. Verify Tables
@@ -54,5 +54,5 @@ ORDER BY timestamp DESC;
 
 ## Notes
 
-- TSDB settings are ADMIN variables (`admin-stats_tsdb_*`).
+- TSDB settings are TSDB variables (`tsdb-*`).
 - There are no `LOAD/SAVE TSDB VARIABLES` commands.

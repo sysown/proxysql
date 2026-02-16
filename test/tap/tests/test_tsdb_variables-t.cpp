@@ -47,34 +47,30 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
+	MYSQL_QUERY_T(admin, "SET tsdb-enabled='1'");
+	MYSQL_QUERY_T(admin, "SET tsdb-sample_interval='11'");
+	MYSQL_QUERY_T(admin, "SET tsdb-retention_days='30'");
+	MYSQL_QUERY_T(admin, "SET tsdb-monitor_enabled='1'");
+	MYSQL_QUERY_T(admin, "SET tsdb-monitor_interval='13'");
+	
 	int rc = mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
-	ok(rc != 0, "`LOAD TSDB VARIABLES TO RUNTIME` is rejected");
-
-	rc = mysql_query(admin, "SAVE TSDB VARIABLES TO DISK");
-	ok(rc != 0, "`SAVE TSDB VARIABLES TO DISK` is rejected");
-
-	MYSQL_QUERY_T(admin, "SET admin-stats_tsdb_enabled='1'");
-	MYSQL_QUERY_T(admin, "SET admin-stats_tsdb_sample_interval='11'");
-	MYSQL_QUERY_T(admin, "SET admin-stats_tsdb_retention_days='30'");
-	MYSQL_QUERY_T(admin, "SET admin-stats_tsdb_monitor_enabled='1'");
-	MYSQL_QUERY_T(admin, "SET admin-stats_tsdb_monitor_interval='13'");
-	MYSQL_QUERY_T(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	ok(rc == 0, "`LOAD TSDB VARIABLES TO RUNTIME` is supported");
 
 	string count;
 	bool count_ok = fetch_single_string(
 		admin,
-		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'admin-stats_tsdb_%'",
+		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'",
 		count
 	);
 	ok(count_ok, "Read runtime TSDB variable count from runtime_global_variables");
-	ok(count == "5", "Exactly five admin-stats_tsdb runtime variables are present");
+	ok(count == "5", "Exactly five tsdb-* runtime variables are present");
 
 	const map<string, string> expected_runtime_values{
-		{"admin-stats_tsdb_enabled", "1"},
-		{"admin-stats_tsdb_sample_interval", "11"},
-		{"admin-stats_tsdb_retention_days", "30"},
-		{"admin-stats_tsdb_monitor_enabled", "1"},
-		{"admin-stats_tsdb_monitor_interval", "13"},
+		{"tsdb-enabled", "1"},
+		{"tsdb-sample_interval", "11"},
+		{"tsdb-retention_days", "30"},
+		{"tsdb-monitor_enabled", "1"},
+		{"tsdb-monitor_interval", "13"},
 	};
 
 	for (const auto& kv : expected_runtime_values) {
@@ -87,14 +83,16 @@ int main() {
 		ok(ok_fetch && value == kv.second, "Runtime value matches for %s", kv.first.c_str());
 	}
 
-	MYSQL_QUERY_T(admin, "SAVE ADMIN VARIABLES TO DISK");
+	rc = mysql_query(admin, "SAVE TSDB VARIABLES TO DISK");
+	ok(rc == 0, "`SAVE TSDB VARIABLES TO DISK` is supported");
+
 	string disk_enabled;
 	bool disk_ok = fetch_single_string(
 		admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='admin-stats_tsdb_enabled'",
+		"SELECT variable_value FROM global_variables WHERE variable_name='tsdb-enabled'",
 		disk_enabled
 	);
-	ok(disk_ok && disk_enabled == "1", "TSDB admin variable is persisted to disk via SAVE ADMIN VARIABLES");
+	ok(disk_ok && disk_enabled == "1", "TSDB variable is persisted to disk via SAVE TSDB VARIABLES");
 
 	string metrics_schema;
 	bool schema_metrics_ok = fetch_single_string(
