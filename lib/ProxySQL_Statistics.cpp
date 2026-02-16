@@ -183,6 +183,16 @@ char **ProxySQL_Statistics::get_variables_list() {
     return list;
 }
 
+bool ProxySQL_Statistics::has_variable(const char *name) {
+    if (name == NULL) return false;
+    if (!strcasecmp(name, "enabled")) return true;
+    if (!strcasecmp(name, "sample_interval")) return true;
+    if (!strcasecmp(name, "retention_days")) return true;
+    if (!strcasecmp(name, "monitor_enabled")) return true;
+    if (!strcasecmp(name, "monitor_interval")) return true;
+    return false;
+}
+
 ProxySQL_Statistics::~ProxySQL_Statistics() {
 	if (stmt_insert_tsdb_metric) {
 		(*proxy_sqlite3_finalize)(stmt_insert_tsdb_metric);

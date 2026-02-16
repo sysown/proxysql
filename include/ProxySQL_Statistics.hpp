@@ -160,6 +160,7 @@ class ProxySQL_Statistics {
 	// Variable management
 	bool set_variable(const char *name, const char *value);
 	char *get_variable(const char *name);
+	bool has_variable(const char *name);
 	char **get_variables_list();
 
 	bool MySQL_Threads_Handler_timetoget(unsigned long long);
