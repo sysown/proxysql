@@ -15,7 +15,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <pthread.h>
+#include <algorithm>
 
 // Define the array of variable names for the MCP module
 static const char* mcp_thread_variables_names[] = {
@@ -403,6 +405,7 @@ int MCP_Threads_Handler::load_target_auth_map(SQLite3_result* resultset) {
 		MCP_Target_Auth_Context ctx;
 		ctx.target_id = row->fields[0];
 		ctx.protocol = row->fields[1];
+		std::transform(ctx.protocol.begin(), ctx.protocol.end(), ctx.protocol.begin(), ::tolower);
 		ctx.hostgroup_id = atoi(row->fields[2]);
 		ctx.auth_profile_id = row->fields[3];
 		ctx.max_rows = row->fields[4] ? atoi(row->fields[4]) : 200;

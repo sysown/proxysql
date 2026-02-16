@@ -16,6 +16,8 @@ using json = nlohmann::json;
 #include <vector>
 #include <map>
 #include <regex>
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 
 // MySQL client library
@@ -496,8 +498,8 @@ void Query_Tool_Handler::refresh_target_registry() {
 		std::ostringstream sql;
 		sql << "SELECT hostname, port FROM " << table_name
 		    << " WHERE hostgroup_id=" << hostgroup_id
-		    << " AND UPPER(status)='ONLINE'"
-		    << " ORDER BY weight DESC, hostname, port";
+		    << " AND (status IS NULL OR UPPER(status) <> 'OFFLINE_HARD')"
+		    << " ORDER BY CASE WHEN UPPER(COALESCE(status,''))='ONLINE' THEN 0 ELSE 1 END, weight DESC, hostname, port";
 		GloAdmin->admindb->execute_statement(sql.str().c_str(), &error, &cols, &affected_rows, &resultset);
 		if (error) {
 			proxy_warning("Query_Tool_Handler: endpoint resolution failed for %s/%d: %s\n",
@@ -526,6 +528,7 @@ void Query_Tool_Handler::refresh_target_registry() {
 		QueryTarget target;
 		target.target_id = ctx.target_id;
 		target.protocol = ctx.protocol;
+		std::transform(target.protocol.begin(), target.protocol.end(), target.protocol.begin(), ::tolower);
 		target.hostgroup_id = ctx.hostgroup_id;
 		target.auth_profile_id = ctx.auth_profile_id;
 		target.db_username = ctx.db_username;
@@ -541,10 +544,20 @@ void Query_Tool_Handler::refresh_target_registry() {
 				target.description = "Hostgroup " + std::to_string(target.hostgroup_id) +
 					" (" + std::to_string(backend_count) + " backend(s))";
 			}
+			if (!target.executable) {
+				proxy_warning(
+					"Query_Tool_Handler: target '%s' resolved backend %s:%d but has empty db_username\n",
+					target.target_id.c_str(), target.host.c_str(), target.port
+				);
+			}
 		} else {
 			if (target.description.empty()) {
 				target.description = "Hostgroup " + std::to_string(target.hostgroup_id) + " (no ONLINE backends)";
 			}
+			proxy_warning(
+				"Query_Tool_Handler: target '%s' has no eligible backend for protocol '%s' in hostgroup %d\n",
+				target.target_id.c_str(), target.protocol.c_str(), target.hostgroup_id
+			);
 		}
 
 		target_registry.push_back(target);
