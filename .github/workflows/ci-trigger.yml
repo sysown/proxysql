@@ -27,7 +27,7 @@ jobs:
         done
         echo "Got run id: '${RUNNAME1}|${RUNNAME2}' : '${RUNID}'"
         
-        echo "Trigger workflow_run[in_progress]: '${RUNNAME1|${RUNNAME2}'"
+        echo "Trigger workflow_run[in_progress]: '${RUNNAME1}|${RUNNAME2}'"
         sleep 5
         # this blocks until the run is finished
         gh -R ${{ github.repository }} run watch -i 30 ${RUNID} >/dev/null
