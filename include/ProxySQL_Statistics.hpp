@@ -95,26 +95,11 @@
 
 // Generic time-series metrics table
 #define STATSDB_SQLITE_TABLE_TSDB_METRICS \
-"CREATE TABLE tsdb_metrics (\"\
-    timestamp INT NOT NULL,\"\
-    metric_name TEXT NOT NULL,\"\
-    labels TEXT NOT NULL DEFAULT '{}',\"\
-    value REAL,\"\
-    PRIMARY KEY (timestamp, metric_name, labels)\"\
-) WITHOUT ROWID"
+"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', value REAL, PRIMARY KEY (timestamp, metric_name, labels)) WITHOUT ROWID"
 
 // Hourly downsampled table
 #define STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR \
-"CREATE TABLE tsdb_metrics_hour (\"\
-    bucket INT NOT NULL,\"\
-    metric_name TEXT NOT NULL,\"\
-    labels TEXT NOT NULL DEFAULT '{}',\"\
-    avg_value REAL,\"\
-    max_value REAL,\"\
-    min_value REAL,\"\
-    count INT,\"\
-    PRIMARY KEY (bucket, metric_name, labels)\"\
-) WITHOUT ROWID"
+"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name, labels)) WITHOUT ROWID"
 
 // Backend health monitoring table
 #define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
