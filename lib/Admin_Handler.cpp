@@ -4421,6 +4421,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 				// If we couldn't extract the table name, return error
 				error = l_strdup("could not extract table name from pattern");
+				proxy_error("Error: %s\n", error);
+				SPA->send_error_msg_to_client(sess, error);
 				run_query = false;
 				goto __run_query;
 			}
@@ -4470,6 +4472,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 				// Not in describe mode or no table name - return error
 				error = l_strdup("describe mode not initialized - first describe query not executed");
+				proxy_error("Error: %s\n", error);
+				SPA->send_error_msg_to_client(sess, error);
 				run_query = false;
 				goto __run_query;
 			}
@@ -4479,9 +4483,12 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			//       (SELECT pg_catalog.pg_collation c...) AS attcollation, a.attidentity, a.attgenerated
 			//       FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'tablename' ...
 			// We return all columns PostgreSQL expects, extracting real type from SQLite
+			// Key identifiers: pg_attribute a, a.attrelid =, a.attname, pg_get_expr
 			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_attribute a") != nullptr ||
 				 strcasestr(query_no_space, "FROM pg_attribute a") != nullptr) &&
-				strcasestr(query_no_space, "a.attrelid =") != nullptr) {
+				strcasestr(query_no_space, "a.attrelid =") != nullptr &&
+				strcasestr(query_no_space, "a.attname") != nullptr &&
+				strcasestr(query_no_space, "pg_get_expr") != nullptr) {
 				matched_describe_pattern = true;
 
 				// Use table name from session (already escaped in first query)
@@ -4499,6 +4506,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 				// If we couldn't match table name, return error
 				error = l_strdup("describe mode not initialized - first describe query not executed");
+				proxy_error("Error: %s\n", error);
+				SPA->send_error_msg_to_client(sess, error);
 				run_query = false;
 				goto __run_query;
 			}
