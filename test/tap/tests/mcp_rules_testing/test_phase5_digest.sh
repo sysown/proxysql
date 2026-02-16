@@ -206,7 +206,7 @@ main() {
 
     # Test 5.16: Execute a query and verify it appears in digest
     log_info "Executing unique query: SELECT COUNT(*) FROM test_phase5_table"
-    PAYLOAD_1='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT COUNT(*) FROM test_phase5_table"}},"id":1}'
+    PAYLOAD_1='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT COUNT(*) FROM test_phase5_table","target_id":"'"${MCP_TARGET_ID}"'"}},"id":1}'
     mcp_request "query" "${PAYLOAD_1}" >/dev/null
     sleep 1
     DIGEST_COUNT_AFTER_1=$(exec_admin_silent "SELECT COUNT(*) FROM stats_mcp_query_digest WHERE tool_name = 'run_sql_readonly';")
@@ -233,7 +233,7 @@ main() {
 
     # Test 5.18: Execute different query and verify new digest entry
     log_info "Executing different query: SELECT * FROM another_phase5_table LIMIT 10"
-    PAYLOAD_2='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM another_phase5_table LIMIT 10"}},"id":2}'
+    PAYLOAD_2='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM another_phase5_table LIMIT 10","target_id":"'"${MCP_TARGET_ID}"'"}},"id":2}'
     DIGEST_COUNT_BEFORE_2=$(exec_admin_silent "SELECT COUNT(*) FROM stats_mcp_query_digest WHERE tool_name = 'run_sql_readonly';")
     log_verbose "Digest count before query 2: ${DIGEST_COUNT_BEFORE_2}"
     mcp_request "query" "${PAYLOAD_2}" >/dev/null

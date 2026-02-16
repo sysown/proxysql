@@ -157,7 +157,7 @@ main() {
 
     # Test 4.12: Execute MCP query matching rule 100 and verify hit counter increments
     log_info "Executing query matching rule 100..."
-    PAYLOAD_100='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM test_table"}},"id":1}'
+    PAYLOAD_100='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM test_table","target_id":"'"${MCP_TARGET_ID}"'"}},"id":1}'
     mcp_request "query" "${PAYLOAD_100}" >/dev/null
     sleep 1
     HITS_AFTER_100=$(get_hits 100)
@@ -169,7 +169,7 @@ main() {
 
     # Test 4.13: Execute MCP query matching rule 101 and verify hit counter increments
     log_info "Executing query matching rule 101..."
-    PAYLOAD_101='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"DROP TABLE IF EXISTS dummy_table"}},"id":2}'
+    PAYLOAD_101='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"DROP TABLE IF EXISTS dummy_table","target_id":"'"${MCP_TARGET_ID}"'"}},"id":2}'
     mcp_request "query" "${PAYLOAD_101}" >/dev/null
     sleep 1
     HITS_AFTER_101=$(get_hits 101)
@@ -192,7 +192,7 @@ main() {
 
     # Test 4.15: Execute query NOT matching any rule and verify no test rule counter increments
     log_info "Executing query NOT matching any test rule..."
-    PAYLOAD_NO_MATCH='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM other_table"}},"id":3}'
+    PAYLOAD_NO_MATCH='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM other_table","target_id":"'"${MCP_TARGET_ID}"'"}},"id":3}'
     HITS_BEFORE_NO_MATCH_100=$(get_hits 100)
     HITS_BEFORE_NO_MATCH_101=$(get_hits 101)
     mcp_request "query" "${PAYLOAD_NO_MATCH}" >/dev/null

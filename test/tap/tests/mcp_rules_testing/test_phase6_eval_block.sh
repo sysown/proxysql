@@ -74,7 +74,7 @@ test_is_allowed() {
 
     local payload
     payload=$(cat <<EOF
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}"}},"id":1}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}","target_id":"${MCP_TARGET_ID}"}},"id":1}
 EOF
 )
 
@@ -98,7 +98,7 @@ test_is_blocked() {
 
     local payload
     payload=$(cat <<EOF
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}"}},"id":1}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}","target_id":"${MCP_TARGET_ID}"}},"id":1}
 EOF
 )
 
