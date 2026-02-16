@@ -8001,7 +8001,14 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 
 	if (!GloMCPH) return (char*)"MCP Handler not started: command impossible to run";
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
-	if (!qth) return (char*)"Query Tool Handler not initialized";
+	if (!qth) {
+		proxy_warning("MCP query rules load requested but Query Tool Handler is NULL, attempting MCP server self-recovery\n");
+		load_mcp_server();
+		qth = GloMCPH->query_tool_handler;
+		if (!qth) {
+			return (char*)"Query Tool Handler not initialized";
+		}
+	}
 
 	// Get the discovery schema catalog
 	Discovery_Schema* catalog = qth->get_catalog();

@@ -321,6 +321,8 @@ void Query_Tool_Handler::close() {
 }
 
 int Query_Tool_Handler::init_connection_pool() {
+	// Ensure re-initialization is idempotent when topology/auth changes at runtime.
+	close();
 	refresh_target_registry();
 
 	pthread_mutex_lock(&pool_lock);
@@ -428,8 +430,8 @@ int Query_Tool_Handler::init_connection_pool() {
 
 	pthread_mutex_unlock(&pool_lock);
 	if ((pool_size + pg_pool_size) == 0) {
-		proxy_error("Query_Tool_Handler: No executable targets available\n");
-		return -1;
+		proxy_warning("Query_Tool_Handler: No executable targets available yet (handler remains initialized)\n");
+		return 0;
 	}
 
 	proxy_info(
@@ -570,45 +572,89 @@ const Query_Tool_Handler::QueryTarget* Query_Tool_Handler::resolve_target(const 
 }
 
 void* Query_Tool_Handler::get_connection(const std::string& target_id) {
+	const auto find_available_connection = [&](const std::string& resolved_target, const std::string& expected_auth_profile_id) -> void* {
+		pthread_mutex_lock(&pool_lock);
+		for (auto& conn : connection_pool) {
+			if (!conn.in_use && conn.target_id == resolved_target && conn.auth_profile_id == expected_auth_profile_id) {
+				conn.in_use = true;
+				void* mysql_ptr = conn.mysql;
+				pthread_mutex_unlock(&pool_lock);
+				return mysql_ptr;
+			}
+		}
+		pthread_mutex_unlock(&pool_lock);
+		return NULL;
+	};
+
+	refresh_target_registry();
 	const std::string resolved_target = target_id.empty() ? default_target_id : target_id;
 	const QueryTarget* target = resolve_target(resolved_target);
-	if (target == NULL) {
+	if (target == NULL || !target->executable) {
+		proxy_error("Query_Tool_Handler: target '%s' is unknown or not executable\n", resolved_target.c_str());
 		return NULL;
 	}
 
-	pthread_mutex_lock(&pool_lock);
+	void* mysql_ptr = find_available_connection(resolved_target, target->auth_profile_id);
+	if (mysql_ptr) {
+		return mysql_ptr;
+	}
 
-	for (auto& conn : connection_pool) {
-		if (!conn.in_use && conn.target_id == resolved_target && conn.auth_profile_id == target->auth_profile_id) {
-			conn.in_use = true;
-			pthread_mutex_unlock(&pool_lock);
-			return conn.mysql;
+	// Self-heal path: runtime targets/backends may have changed after handler startup.
+	if (init_connection_pool() == 0) {
+		refresh_target_registry();
+		const QueryTarget* refreshed_target = resolve_target(resolved_target);
+		if (refreshed_target && refreshed_target->executable) {
+			mysql_ptr = find_available_connection(resolved_target, refreshed_target->auth_profile_id);
+			if (mysql_ptr) {
+				return mysql_ptr;
+			}
 		}
 	}
 
-	pthread_mutex_unlock(&pool_lock);
 	proxy_error("Query_Tool_Handler: No available connection for target '%s'\n", resolved_target.c_str());
 	return NULL;
 }
 
 void* Query_Tool_Handler::get_pgsql_connection(const std::string& target_id) {
+	const auto find_available_pg_connection = [&](const std::string& resolved_target, const std::string& expected_auth_profile_id) -> void* {
+		pthread_mutex_lock(&pool_lock);
+		for (auto& conn : pgsql_connection_pool) {
+			if (!conn.in_use && conn.target_id == resolved_target && conn.auth_profile_id == expected_auth_profile_id) {
+				conn.in_use = true;
+				void* pgconn_ptr = conn.pgconn;
+				pthread_mutex_unlock(&pool_lock);
+				return pgconn_ptr;
+			}
+		}
+		pthread_mutex_unlock(&pool_lock);
+		return NULL;
+	};
+
+	refresh_target_registry();
 	const std::string resolved_target = target_id.empty() ? default_target_id : target_id;
 	const QueryTarget* target = resolve_target(resolved_target);
-	if (target == NULL) {
+	if (target == NULL || !target->executable) {
+		proxy_error("Query_Tool_Handler: target '%s' is unknown or not executable\n", resolved_target.c_str());
 		return NULL;
 	}
 
-	pthread_mutex_lock(&pool_lock);
+	void* pgconn_ptr = find_available_pg_connection(resolved_target, target->auth_profile_id);
+	if (pgconn_ptr) {
+		return pgconn_ptr;
+	}
 
-	for (auto& conn : pgsql_connection_pool) {
-		if (!conn.in_use && conn.target_id == resolved_target && conn.auth_profile_id == target->auth_profile_id) {
-			conn.in_use = true;
-			pthread_mutex_unlock(&pool_lock);
-			return conn.pgconn;
+	// Self-heal path: runtime targets/backends may have changed after handler startup.
+	if (init_connection_pool() == 0) {
+		refresh_target_registry();
+		const QueryTarget* refreshed_target = resolve_target(resolved_target);
+		if (refreshed_target && refreshed_target->executable) {
+			pgconn_ptr = find_available_pg_connection(resolved_target, refreshed_target->auth_profile_id);
+			if (pgconn_ptr) {
+				return pgconn_ptr;
+			}
 		}
 	}
 
-	pthread_mutex_unlock(&pool_lock);
 	proxy_error("Query_Tool_Handler: No available pgsql connection for target '%s'\n", resolved_target.c_str());
 	return NULL;
 }
