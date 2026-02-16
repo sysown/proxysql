@@ -1631,25 +1631,28 @@ __internal_loop:
 
 __exit_process_mysql_query:
 	if (qr == NULL || qr->apply == false) {
-		// now it is time to check mysql_query_rules_fast_routing
-		// it is only check if "apply" is not true
-		const char * u = sess->client_myds->myconn->userinfo->username;
-		const char * s = sess->client_myds->myconn->userinfo->schemaname;
+		// Skip fast routing for mirror sessions - they already have their destination
+		if (sess->mirror == false) {
+			// now it is time to check mysql_query_rules_fast_routing
+			// it is only check if "apply" is not true
+			const char * u = sess->client_myds->myconn->userinfo->username;
+			const char * s = sess->client_myds->myconn->userinfo->schemaname;
 
-		int dst_hg = -1;
+			int dst_hg = -1;
 
-		if (_thr_SQP_rules_fast_routing != nullptr) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			dst_hg = search_rules_fast_routing_dest_hg(&_thr_SQP_rules_fast_routing, u, s, flagIN, false);
-		} else if (rules_fast_routing != nullptr) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			// NOTE: A pointer to the member 'this->rules_fast_routing' is required, since the value of the
-			// member could have changed before the function acquires the internal lock. See function doc.
-			dst_hg = search_rules_fast_routing_dest_hg(&this->rules_fast_routing, u, s, flagIN, true);
-		}
+			if (_thr_SQP_rules_fast_routing != nullptr) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+				dst_hg = search_rules_fast_routing_dest_hg(&_thr_SQP_rules_fast_routing, u, s, flagIN, false);
+			} else if (rules_fast_routing != nullptr) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+				// NOTE: A pointer to the member 'this->rules_fast_routing' is required, since the value of the
+				// member could have changed before the function acquires the internal lock. See function doc.
+				dst_hg = search_rules_fast_routing_dest_hg(&this->rules_fast_routing, u, s, flagIN, true);
+			}
 
-		if (dst_hg != -1) {
-			ret->destination_hostgroup = dst_hg;
+			if (dst_hg != -1) {
+				ret->destination_hostgroup = dst_hg;
+			}
 		}
 	}
 	
