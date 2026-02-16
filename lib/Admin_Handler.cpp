@@ -4538,6 +4538,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_tsdb ORDER BY Variable_name");
 		query_length = strlen(query) + 1;
+		SPA->stats___tsdb();
 		goto __run_query;
 	}
 
