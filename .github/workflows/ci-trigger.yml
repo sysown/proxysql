@@ -16,18 +16,18 @@ jobs:
         set +e
         #set -x
 
-        #RUNNAME="${{ github.head_ref || github.ref_name }} CI-builds ${{ github.event.after || github.sha }}"
-        RUNNAME="${{ github.head_ref || github.ref_name }} CI-builds ${{ github.sha }}"
-        echo "Get run id: '${RUNNAME}' ..."
+        RUNNAME1="${{ github.head_ref || github.ref_name }} CI-builds ${{ github.event.after || github.sha }}"
+        RUNNAME2="${{ github.head_ref || github.ref_name }} CI-builds ${{ github.sha }}"
+        echo "Get run id: '${RUNNAME1}|${RUNNAME2}' ..."
         sleep 5
-        RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep "${RUNNAME}" | grep -Po '(?<=workflow_run)\s+\d+')
+        RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}" | grep -Po '(?<=workflow_run)\s+\d+')
         while [[ -z ${RUNID} ]]; do
           sleep 5
-          RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep "${RUNNAME}" | grep -Po '(?<=workflow_run)\s+\d+')
+          RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}" | grep -Po '(?<=workflow_run)\s+\d+')
         done
-        echo "Got run id: '${RUNNAME}' : '${RUNID}'"
+        echo "Got run id: '${RUNNAME1}|${RUNNAME2}' : '${RUNID}'"
         
-        echo "Trigger workflow_run[in_progress]: '${RUNNAME}'"
+        echo "Trigger workflow_run[in_progress]: '${RUNNAME1|${RUNNAME2}'"
         sleep 5
         # this blocks until the run is finished
         gh -R ${{ github.repository }} run watch -i 30 ${RUNID} >/dev/null
