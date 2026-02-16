@@ -2977,6 +2977,35 @@ void ProxySQL_Admin::init_mcp_variables() {
 		flush_mcp_variables___runtime_to_database(configdb, false, false, false, false, false);
 		flush_mcp_variables___runtime_to_database(admindb, false, true, false, false, false);
 		flush_mcp_variables___database_to_runtime(admindb, true, "", 0);
+
+		// Load MCP target/auth profiles into runtime tables and then in-memory map.
+		admindb->execute("DELETE FROM runtime_mcp_auth_profiles");
+		admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles");
+		admindb->execute("DELETE FROM runtime_mcp_target_profiles");
+		admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles");
+
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		const char* q =
+			"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
+			" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
+			" a.db_username, a.db_password, a.default_schema"
+			" FROM runtime_mcp_target_profiles t"
+			" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
+			" WHERE t.active=1"
+			" ORDER BY t.target_id";
+		admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		if (error) {
+			proxy_error("Failed to load MCP target auth map: %s\n", error);
+			free(error);
+			if (resultset) {
+				delete resultset;
+			}
+		} else {
+			GloMCPH->load_target_auth_map(resultset);
+		}
 	}
 }
 

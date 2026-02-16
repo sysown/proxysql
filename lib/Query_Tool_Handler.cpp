@@ -8,7 +8,9 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "Query_Tool_Handler.h"
+#include "MCP_Thread.h"
 #include "proxysql_debug.h"
+#include "proxysql_admin.h"
 #include "Static_Harvester.h"
 
 #include <vector>
@@ -18,6 +20,9 @@ using json = nlohmann::json;
 
 // MySQL client library
 #include <mysql.h>
+#include <libpq-fe.h>
+
+extern ProxySQL_Admin *GloAdmin;
 
 // ============================================================
 // JSON Helper Functions
@@ -203,6 +208,7 @@ Query_Tool_Handler::Query_Tool_Handler(
 	: catalog(NULL),
 	  harvester(NULL),
 	  pool_size(0),
+	  pg_pool_size(0),
 	  max_rows(200),
 	  timeout_ms(2000),
 	  allow_select_star(false)
@@ -302,58 +308,42 @@ void Query_Tool_Handler::close() {
 	connection_pool.clear();
 	pool_size = 0;
 
+	for (auto& conn : pgsql_connection_pool) {
+		if (conn.pgconn) {
+			PQfinish(static_cast<PGconn*>(conn.pgconn));
+			conn.pgconn = NULL;
+		}
+	}
+	pgsql_connection_pool.clear();
+	pg_pool_size = 0;
+
 	pthread_mutex_unlock(&pool_lock);
 }
 
 int Query_Tool_Handler::init_connection_pool() {
-	// Parse hosts
-	std::vector<std::string> host_list;
-	std::istringstream h(mysql_hosts);
-	std::string host;
-	while (std::getline(h, host, ',')) {
-		host.erase(0, host.find_first_not_of(" \t"));
-		host.erase(host.find_last_not_of(" \t") + 1);
-		if (!host.empty()) {
-			host_list.push_back(host);
-		}
-	}
-
-	// Parse ports
-	std::vector<int> port_list;
-	std::istringstream p(mysql_ports);
-	std::string port;
-	while (std::getline(p, port, ',')) {
-		port.erase(0, port.find_first_not_of(" \t"));
-		port.erase(port.find_last_not_of(" \t") + 1);
-		if (!port.empty()) {
-			port_list.push_back(atoi(port.c_str()));
-		}
-	}
-
-	// Ensure ports array matches hosts array size
-	while (port_list.size() < host_list.size()) {
-		port_list.push_back(3306);
-	}
-
-	if (host_list.empty()) {
-		proxy_error("Query_Tool_Handler: No hosts configured\n");
-		return -1;
-	}
+	refresh_target_registry();
 
 	pthread_mutex_lock(&pool_lock);
+	pool_size = 0;
+	pg_pool_size = 0;
 
-	for (size_t i = 0; i < host_list.size(); i++) {
+	for (const auto& target : target_registry) {
+		if (!target.executable || target.protocol != "mysql") {
+			continue;
+		}
 		MySQLConnection conn;
-		conn.host = host_list[i];
-		conn.port = port_list[i];
+		conn.target_id = target.target_id;
+		conn.auth_profile_id = target.auth_profile_id;
+		conn.host = target.host;
+		conn.port = target.port;
 		conn.in_use = false;
+		conn.current_schema = target.default_schema;
 
 		MYSQL* mysql = mysql_init(NULL);
 		if (!mysql) {
 			proxy_error("Query_Tool_Handler: mysql_init failed for %s:%d\n",
 				conn.host.c_str(), conn.port);
-			pthread_mutex_unlock(&pool_lock);
-			return -1;
+			continue;
 		}
 
 		unsigned int timeout = 5;
@@ -364,9 +354,9 @@ int Query_Tool_Handler::init_connection_pool() {
 		if (!mysql_real_connect(
 			mysql,
 			conn.host.c_str(),
-			mysql_user.c_str(),
-			mysql_password.c_str(),
-			mysql_schema.empty() ? NULL : mysql_schema.c_str(),
+			target.db_username.c_str(),
+			target.db_password.c_str(),
+			target.default_schema.empty() ? NULL : target.default_schema.c_str(),
 			conn.port,
 			NULL,
 			CLIENT_MULTI_STATEMENTS
@@ -374,28 +364,222 @@ int Query_Tool_Handler::init_connection_pool() {
 			proxy_error("Query_Tool_Handler: mysql_real_connect failed for %s:%d: %s\n",
 				conn.host.c_str(), conn.port, mysql_error(mysql));
 			mysql_close(mysql);
-			pthread_mutex_unlock(&pool_lock);
-			return -1;
+			continue;
 		}
 
 		conn.mysql = mysql;
 		connection_pool.push_back(conn);
 		pool_size++;
 
-		proxy_info("Query_Tool_Handler: Connected to %s:%d\n",
-			conn.host.c_str(), conn.port);
+		proxy_info("Query_Tool_Handler: Connected target '%s' to %s:%d\n",
+			conn.target_id.c_str(), conn.host.c_str(), conn.port);
+
+		if (default_target_id.empty()) {
+			default_target_id = conn.target_id;
+		}
+	}
+
+	for (const auto& target : target_registry) {
+		if (!target.executable || target.protocol != "pgsql") {
+			continue;
+		}
+
+		PgSQLConnection conn;
+		conn.target_id = target.target_id;
+		conn.auth_profile_id = target.auth_profile_id;
+		conn.host = target.host;
+		conn.port = target.port;
+		conn.in_use = false;
+		conn.current_schema = target.default_schema;
+
+		std::ostringstream conninfo;
+		conninfo << "host=" << conn.host
+		         << " port=" << conn.port
+		         << " user=" << target.db_username
+		         << " password=" << target.db_password
+		         << " connect_timeout=5";
+		if (!target.default_schema.empty()) {
+			conninfo << " dbname=" << target.default_schema;
+		}
+
+		PGconn* pgconn = PQconnectdb(conninfo.str().c_str());
+		if (pgconn == NULL || PQstatus(pgconn) != CONNECTION_OK) {
+			proxy_error(
+				"Query_Tool_Handler: PQconnectdb failed for %s:%d: %s\n",
+				conn.host.c_str(), conn.port, pgconn ? PQerrorMessage(pgconn) : "null connection"
+			);
+			if (pgconn) {
+				PQfinish(pgconn);
+			}
+			continue;
+		}
+
+		conn.pgconn = pgconn;
+		pgsql_connection_pool.push_back(conn);
+		pg_pool_size++;
+
+		proxy_info("Query_Tool_Handler: Connected target '%s' to pgsql %s:%d\n",
+			conn.target_id.c_str(), conn.host.c_str(), conn.port);
+
+		if (default_target_id.empty()) {
+			default_target_id = conn.target_id;
+		}
 	}
 
 	pthread_mutex_unlock(&pool_lock);
-	proxy_info("Query_Tool_Handler: Connection pool initialized with %d connection(s)\n", pool_size);
+	if ((pool_size + pg_pool_size) == 0) {
+		proxy_error("Query_Tool_Handler: No executable targets available\n");
+		return -1;
+	}
+
+	proxy_info(
+		"Query_Tool_Handler: Connection pools initialized mysql=%d pgsql=%d, default target '%s'\n",
+		pool_size, pg_pool_size, default_target_id.c_str()
+	);
 	return 0;
 }
 
-void* Query_Tool_Handler::get_connection() {
+void Query_Tool_Handler::refresh_target_registry() {
+	target_registry.clear();
+	default_target_id.clear();
+
+	if (!GloMCPH) {
+		return;
+	}
+
+	// Refresh MCP target/auth map from runtime profile tables before resolving targets.
+	if (GloAdmin && GloAdmin->admindb) {
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		const char* q =
+			"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
+			" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
+			" a.db_username, a.db_password, a.default_schema"
+			" FROM runtime_mcp_target_profiles t"
+			" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
+			" WHERE t.active=1"
+			" ORDER BY t.target_id";
+		GloAdmin->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		if (error) {
+			proxy_warning("Query_Tool_Handler: failed refreshing target auth map: %s\n", error);
+			free(error);
+			if (resultset) {
+				delete resultset;
+			}
+		} else {
+			GloMCPH->load_target_auth_map(resultset);
+		}
+	}
+
+	const auto profiles = GloMCPH->get_all_target_auth_contexts();
+
+	const auto resolve_endpoint = [&](
+		const std::string& protocol,
+		int hostgroup_id,
+		std::string& host,
+		int& port,
+		int& backends
+	) -> bool {
+		if (GloAdmin == NULL || GloAdmin->admindb == NULL) {
+			return false;
+		}
+		const char* table_name = (protocol == "pgsql") ? "runtime_pgsql_servers" : "runtime_mysql_servers";
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+
+		std::ostringstream sql;
+		sql << "SELECT hostname, port FROM " << table_name
+		    << " WHERE hostgroup_id=" << hostgroup_id
+		    << " AND UPPER(status)='ONLINE'"
+		    << " ORDER BY weight DESC, hostname, port";
+		GloAdmin->admindb->execute_statement(sql.str().c_str(), &error, &cols, &affected_rows, &resultset);
+		if (error) {
+			proxy_warning("Query_Tool_Handler: endpoint resolution failed for %s/%d: %s\n",
+				protocol.c_str(), hostgroup_id, error);
+			free(error);
+			if (resultset) {
+				delete resultset;
+			}
+			return false;
+		}
+		if (!resultset || resultset->rows.empty()) {
+			if (resultset) {
+				delete resultset;
+			}
+			return false;
+		}
+
+		backends = resultset->rows.size();
+		host = resultset->rows[0]->fields[0] ? resultset->rows[0]->fields[0] : "";
+		port = resultset->rows[0]->fields[1] ? atoi(resultset->rows[0]->fields[1]) : ((protocol == "pgsql") ? 5432 : 3306);
+		delete resultset;
+		return !host.empty();
+	};
+
+	for (const auto& ctx : profiles) {
+		QueryTarget target;
+		target.target_id = ctx.target_id;
+		target.protocol = ctx.protocol;
+		target.hostgroup_id = ctx.hostgroup_id;
+		target.auth_profile_id = ctx.auth_profile_id;
+		target.db_username = ctx.db_username;
+		target.db_password = ctx.db_password;
+		target.default_schema = ctx.default_schema;
+		target.description = ctx.description;
+		target.executable = false;
+
+		int backend_count = 0;
+		if (resolve_endpoint(target.protocol, target.hostgroup_id, target.host, target.port, backend_count)) {
+			target.executable = !target.db_username.empty();
+			if (target.description.empty()) {
+				target.description = "Hostgroup " + std::to_string(target.hostgroup_id) +
+					" (" + std::to_string(backend_count) + " backend(s))";
+			}
+		} else {
+			if (target.description.empty()) {
+				target.description = "Hostgroup " + std::to_string(target.hostgroup_id) + " (no ONLINE backends)";
+			}
+		}
+
+		target_registry.push_back(target);
+	}
+
+	for (const auto& target : target_registry) {
+		if (target.executable) {
+			default_target_id = target.target_id;
+			break;
+		}
+	}
+}
+
+const Query_Tool_Handler::QueryTarget* Query_Tool_Handler::resolve_target(const std::string& target_id) {
+	const std::string& resolved_target_id = target_id.empty() ? default_target_id : target_id;
+	if (resolved_target_id.empty()) {
+		return NULL;
+	}
+	for (const auto& target : target_registry) {
+		if (target.target_id == resolved_target_id) {
+			return &target;
+		}
+	}
+	return NULL;
+}
+
+void* Query_Tool_Handler::get_connection(const std::string& target_id) {
+	const std::string resolved_target = target_id.empty() ? default_target_id : target_id;
+	const QueryTarget* target = resolve_target(resolved_target);
+	if (target == NULL) {
+		return NULL;
+	}
+
 	pthread_mutex_lock(&pool_lock);
 
 	for (auto& conn : connection_pool) {
-		if (!conn.in_use) {
+		if (!conn.in_use && conn.target_id == resolved_target && conn.auth_profile_id == target->auth_profile_id) {
 			conn.in_use = true;
 			pthread_mutex_unlock(&pool_lock);
 			return conn.mysql;
@@ -403,7 +587,29 @@ void* Query_Tool_Handler::get_connection() {
 	}
 
 	pthread_mutex_unlock(&pool_lock);
-	proxy_error("Query_Tool_Handler: No available connection\n");
+	proxy_error("Query_Tool_Handler: No available connection for target '%s'\n", resolved_target.c_str());
+	return NULL;
+}
+
+void* Query_Tool_Handler::get_pgsql_connection(const std::string& target_id) {
+	const std::string resolved_target = target_id.empty() ? default_target_id : target_id;
+	const QueryTarget* target = resolve_target(resolved_target);
+	if (target == NULL) {
+		return NULL;
+	}
+
+	pthread_mutex_lock(&pool_lock);
+
+	for (auto& conn : pgsql_connection_pool) {
+		if (!conn.in_use && conn.target_id == resolved_target && conn.auth_profile_id == target->auth_profile_id) {
+			conn.in_use = true;
+			pthread_mutex_unlock(&pool_lock);
+			return conn.pgconn;
+		}
+	}
+
+	pthread_mutex_unlock(&pool_lock);
+	proxy_error("Query_Tool_Handler: No available pgsql connection for target '%s'\n", resolved_target.c_str());
 	return NULL;
 }
 
@@ -415,7 +621,16 @@ void Query_Tool_Handler::return_connection(void* mysql_ptr) {
 	for (auto& conn : connection_pool) {
 		if (conn.mysql == mysql_ptr) {
 			conn.in_use = false;
-			break;
+			pthread_mutex_unlock(&pool_lock);
+			return;
+		}
+	}
+
+	for (auto& conn : pgsql_connection_pool) {
+		if (conn.pgconn == mysql_ptr) {
+			conn.in_use = false;
+			pthread_mutex_unlock(&pool_lock);
+			return;
 		}
 	}
 
@@ -435,12 +650,101 @@ Query_Tool_Handler::MySQLConnection* Query_Tool_Handler::find_connection(void* m
 	return nullptr;
 }
 
-std::string Query_Tool_Handler::execute_query(const std::string& query) {
-	void* mysql = get_connection();
-	if (!mysql) {
-		return "{\"error\": \"No available connection\"}";
+// Helper to find pgsql connection wrapper by PGconn pointer (thread-safe, acquires pool_lock)
+Query_Tool_Handler::PgSQLConnection* Query_Tool_Handler::find_pgsql_connection(void* pgconn_ptr) {
+	pthread_mutex_lock(&pool_lock);
+	for (auto& conn : pgsql_connection_pool) {
+		if (conn.pgconn == pgconn_ptr) {
+			pthread_mutex_unlock(&pool_lock);
+			return &conn;
+		}
+	}
+	pthread_mutex_unlock(&pool_lock);
+	return nullptr;
+}
+
+std::string Query_Tool_Handler::execute_query(const std::string& query, const std::string& target_id) {
+	const QueryTarget* target = resolve_target(target_id);
+	if (target == NULL) {
+		json j;
+		j["success"] = false;
+		j["error"] = std::string("Unknown target: ") +
+			(target_id.empty() ? default_target_id : target_id);
+		return j.dump();
 	}
 
+	if (target->protocol == "pgsql") {
+		void* pgconn_v = get_pgsql_connection(target_id);
+		if (!pgconn_v) {
+			json j;
+			j["success"] = false;
+			j["error"] = std::string("No available pgsql connection for target: ") +
+				(target_id.empty() ? default_target_id : target_id);
+			return j.dump();
+		}
+		PGconn* pgconn = static_cast<PGconn*>(pgconn_v);
+		PGresult* res = PQexec(pgconn, query.c_str());
+		if (res == NULL) {
+			return_connection(pgconn_v);
+			json j;
+			j["success"] = false;
+			j["error"] = std::string("PQexec returned null result");
+			return j.dump();
+		}
+
+		ExecStatusType st = PQresultStatus(res);
+		if (st != PGRES_TUPLES_OK && st != PGRES_COMMAND_OK) {
+			std::string err = PQresultErrorMessage(res);
+			PQclear(res);
+			return_connection(pgconn_v);
+			json j;
+			j["success"] = false;
+			j["error"] = err;
+			return j.dump();
+		}
+
+		if (st == PGRES_COMMAND_OK) {
+			const char* tuples = PQcmdTuples(res);
+			long affected = 0;
+			if (tuples && tuples[0] != '\0') {
+				affected = atol(tuples);
+			}
+			PQclear(res);
+			return_connection(pgconn_v);
+			json j;
+			j["success"] = true;
+			j["affected_rows"] = affected;
+			return j.dump();
+		}
+
+		int num_fields = PQnfields(res);
+		int num_rows = PQntuples(res);
+		json results = json::array();
+		for (int r = 0; r < num_rows; r++) {
+			json row_data = json::array();
+			for (int c = 0; c < num_fields; c++) {
+				row_data.push_back(PQgetisnull(res, r, c) ? "" : PQgetvalue(res, r, c));
+			}
+			results.push_back(row_data);
+		}
+		PQclear(res);
+		return_connection(pgconn_v);
+
+		json j;
+		j["success"] = true;
+		j["columns"] = num_fields;
+		j["rows"] = results;
+		return j.dump();
+	}
+
+	void* mysql = get_connection(target_id);
+	if (!mysql) {
+		json j;
+		j["success"] = false;
+		j["error"] = std::string("No available mysql connection for target: ") +
+			(target_id.empty() ? default_target_id : target_id);
+		return j.dump();
+	}
 	MYSQL* mysql_ptr = static_cast<MYSQL*>(mysql);
 
 	if (mysql_query(mysql_ptr, query.c_str())) {
@@ -490,13 +794,119 @@ std::string Query_Tool_Handler::execute_query(const std::string& query) {
 // Execute query with optional schema switching
 std::string Query_Tool_Handler::execute_query_with_schema(
 	const std::string& query,
-	const std::string& schema
+	const std::string& schema,
+	const std::string& target_id
 ) {
-	void* mysql = get_connection();
-	if (!mysql) {
-		return "{\"error\": \"No available connection\"}";
+	const QueryTarget* target = resolve_target(target_id);
+	if (target == NULL) {
+		json j;
+		j["success"] = false;
+		j["error"] = std::string("Unknown target: ") +
+			(target_id.empty() ? default_target_id : target_id);
+		return j.dump();
 	}
 
+	if (target->protocol == "pgsql") {
+		void* pgconn_v = get_pgsql_connection(target_id);
+		if (!pgconn_v) {
+			json j;
+			j["success"] = false;
+			j["error"] = std::string("No available pgsql connection for target: ") +
+				(target_id.empty() ? default_target_id : target_id);
+			return j.dump();
+		}
+		PGconn* pgconn = static_cast<PGconn*>(pgconn_v);
+		PgSQLConnection* conn_wrapper = find_pgsql_connection(pgconn_v);
+
+		if (!schema.empty() && conn_wrapper && conn_wrapper->current_schema != schema) {
+			std::string validated_schema = validate_sql_identifier_sqlite(schema);
+			if (validated_schema.empty()) {
+				return_connection(pgconn_v);
+				json j;
+				j["success"] = false;
+				j["error"] = "Invalid schema name: contains unsafe characters";
+				return j.dump();
+			}
+			std::string set_search_path = "SET search_path TO " + validated_schema;
+			PGresult* set_res = PQexec(pgconn, set_search_path.c_str());
+			if (set_res == NULL || PQresultStatus(set_res) != PGRES_COMMAND_OK) {
+				std::string err = set_res ? PQresultErrorMessage(set_res) : "set search_path failed";
+				if (set_res) {
+					PQclear(set_res);
+				}
+				return_connection(pgconn_v);
+				json j;
+				j["success"] = false;
+				j["error"] = err;
+				return j.dump();
+			}
+			PQclear(set_res);
+			conn_wrapper->current_schema = validated_schema;
+		}
+
+		PGresult* res = PQexec(pgconn, query.c_str());
+		if (res == NULL) {
+			return_connection(pgconn_v);
+			json j;
+			j["success"] = false;
+			j["error"] = std::string("PQexec returned null result");
+			return j.dump();
+		}
+
+		ExecStatusType st = PQresultStatus(res);
+		if (st != PGRES_TUPLES_OK && st != PGRES_COMMAND_OK) {
+			std::string err = PQresultErrorMessage(res);
+			PQclear(res);
+			return_connection(pgconn_v);
+			json j;
+			j["success"] = false;
+			j["error"] = err;
+			return j.dump();
+		}
+
+		if (st == PGRES_COMMAND_OK) {
+			const char* tuples = PQcmdTuples(res);
+			long affected = 0;
+			if (tuples && tuples[0] != '\0') {
+				affected = atol(tuples);
+			}
+			PQclear(res);
+			return_connection(pgconn_v);
+			json j;
+			j["success"] = true;
+			j["affected_rows"] = affected;
+			return j.dump();
+		}
+
+		int num_fields = PQnfields(res);
+		int num_rows = PQntuples(res);
+		json results = json::array();
+		for (int r = 0; r < num_rows; r++) {
+			json row_data = json::array();
+			for (int c = 0; c < num_fields; c++) {
+				row_data.push_back(PQgetisnull(res, r, c) ? "" : PQgetvalue(res, r, c));
+			}
+			results.push_back(row_data);
+		}
+
+		PQclear(res);
+		return_connection(pgconn_v);
+
+		json j;
+		j["success"] = true;
+		j["columns"] = num_fields;
+		j["rows"] = results;
+		return j.dump();
+	}
+
+	void* mysql = get_connection(target_id);
+	if (!mysql) {
+		json j;
+		j["success"] = false;
+		j["error"] = std::string("No available mysql connection for target: ") +
+			(target_id.empty() ? default_target_id : target_id);
+		return j.dump();
+	}
 	MYSQL* mysql_ptr = static_cast<MYSQL*>(mysql);
 	MySQLConnection* conn_wrapper = find_connection(mysql);
 
@@ -687,17 +1097,24 @@ json Query_Tool_Handler::get_tool_list() {
 	// INVENTORY TOOLS
 	// ============================================================
 	tools.push_back(create_tool_schema(
+		"list_targets",
+		"List logical query targets. Each target maps internally to a ProxySQL hostgroup and routing policy.",
+		{},
+		{}
+	));
+
+	tools.push_back(create_tool_schema(
 		"list_schemas",
 		"List all available schemas/databases",
 		{},
-		{{"page_token", "string"}, {"page_size", "integer"}}
+		{{"page_token", "string"}, {"page_size", "integer"}, {"target_id", "string"}}
 	));
 
 	tools.push_back(create_tool_schema(
 		"list_tables",
 		"List tables in a schema",
 		{"schema"},
-		{{"page_token", "string"}, {"page_size", "integer"}, {"name_filter", "string"}}
+		{{"page_token", "string"}, {"page_size", "integer"}, {"name_filter", "string"}, {"target_id", "string"}}
 	));
 
 	// ============================================================
@@ -732,16 +1149,16 @@ json Query_Tool_Handler::get_tool_list() {
 	// ============================================================
 	tools.push_back(create_tool_schema(
 		"run_sql_readonly",
-		"Execute a read-only SQL query with safety guardrails enforced. Optional schema parameter switches database context before query execution.",
+		"Execute a read-only SQL query with safety guardrails enforced. Optional schema parameter switches database context before query execution. target_id routes the query to a logical backend target.",
 		{"sql"},
-		{{"schema", "string"}, {"max_rows", "integer"}, {"timeout_sec", "integer"}}
+		{{"schema", "string"}, {"target_id", "string"}, {"max_rows", "integer"}, {"timeout_sec", "integer"}}
 	));
 
 	tools.push_back(create_tool_schema(
 		"explain_sql",
 		"Explain a query execution plan using EXPLAIN or EXPLAIN ANALYZE",
 		{"sql"},
-		{}
+		{{"target_id", "string"}}
 	));
 
 	// ============================================================
@@ -988,9 +1405,39 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	// ============================================================
 	// INVENTORY TOOLS
 	// ============================================================
-	if (tool_name == "list_schemas") {
+	if (tool_name == "list_targets") {
+		refresh_target_registry();
+		json targets = json::array();
+		for (const auto& target : target_registry) {
+			json t;
+			t["target_id"] = target.target_id;
+			t["description"] = target.description;
+			json capabilities = json::array();
+			capabilities.push_back("inventory");
+			if (target.executable) {
+				capabilities.push_back("readonly_sql");
+				capabilities.push_back("explain");
+			}
+			t["capabilities"] = capabilities;
+			targets.push_back(t);
+		}
+		json payload;
+		payload["targets"] = targets;
+		payload["default_target_id"] = default_target_id;
+		result = create_success_response(payload);
+	}
+
+	else if (tool_name == "list_schemas") {
+		std::string target_id = json_string(arguments, "target_id");
 		std::string page_token = json_string(arguments, "page_token");
 		int page_size = json_int(arguments, "page_size", 50);
+		if (!target_id.empty()) {
+			refresh_target_registry();
+			const QueryTarget* target = resolve_target(target_id);
+			if (target == NULL) {
+				return create_error_response("Unknown target_id: " + target_id);
+			}
+		}
 
 		// Query catalog's schemas table instead of live database
 		char* error = NULL;
@@ -1038,9 +1485,25 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 	else if (tool_name == "list_tables") {
 		std::string schema = json_string(arguments, "schema");
+		std::string target_id = json_string(arguments, "target_id");
 		std::string page_token = json_string(arguments, "page_token");
 		int page_size = json_int(arguments, "page_size", 50);
 		std::string name_filter = json_string(arguments, "name_filter");
+		(void)page_token;
+		(void)page_size;
+
+		refresh_target_registry();
+		const QueryTarget* target = resolve_target(target_id);
+		if (target == NULL) {
+			result = create_error_response(
+				target_id.empty() ? "No executable default target available" : "Unknown target_id: " + target_id
+			);
+			return result;
+		}
+		if (!target->executable) {
+			result = create_error_response("Target is not executable by this handler");
+			return result;
+		}
 
 		// Validate schema identifier if provided
 		if (!schema.empty()) {
@@ -1053,17 +1516,27 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			}
 		}
 
-		// TODO: Implement using MySQL connection
 		std::ostringstream sql;
-		sql << "SHOW TABLES";
-		if (!schema.empty()) {
-			sql << " FROM " << schema;
+		if (target->protocol == "pgsql") {
+			sql << "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE'";
+			if (!schema.empty()) {
+				sql << " AND table_schema='" << escape_string_literal(schema) << "'";
+			}
+			if (!name_filter.empty()) {
+				sql << " AND table_name LIKE '" << escape_string_literal(name_filter) << "'";
+			}
+			sql << " ORDER BY table_name";
+		} else {
+			sql << "SHOW TABLES";
+			if (!schema.empty()) {
+				sql << " FROM " << schema;
+			}
+			if (!name_filter.empty()) {
+				// Escape the name_filter to prevent SQL injection
+				sql << " LIKE '" << escape_string_literal(name_filter) << "'";
+			}
 		}
-		if (!name_filter.empty()) {
-			// Escape the name_filter to prevent SQL injection
-			sql << " LIKE '" << escape_string_literal(name_filter) << "'";
-		}
-		std::string query_result = execute_query(sql.str());
+		std::string query_result = execute_query_with_schema(sql.str(), schema, target->target_id);
 		result = create_success_response(json::parse(query_result));
 	}
 
@@ -1733,12 +2206,28 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 	else if (tool_name == "run_sql_readonly") {
 		std::string sql = json_string(arguments, "sql");
 		std::string schema = json_string(arguments, "schema");
+		std::string target_id = json_string(arguments, "target_id");
 		int max_rows = json_int(arguments, "max_rows", 200);
 		int timeout_sec = json_int(arguments, "timeout_sec", 2);
+		(void)max_rows;
+		(void)timeout_sec;
 
 		if (sql.empty()) {
 			result = create_error_response("sql is required");
 		} else {
+			refresh_target_registry();
+			const QueryTarget* target = resolve_target(target_id);
+			if (target == NULL) {
+				result = create_error_response(
+					target_id.empty() ? "No executable default target available" : "Unknown target_id: " + target_id
+				);
+				return result;
+			}
+			if (!target->executable) {
+				result = create_error_response("Target is not executable by this handler");
+				return result;
+			}
+
 			// ============================================================
 			// MCP QUERY RULES EVALUATION
 			// ============================================================
@@ -1796,7 +2285,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			} else if (is_dangerous_query(sql)) {
 				result = create_error_response("SQL contains dangerous operations");
 			} else {
-				std::string query_result = execute_query_with_schema(sql, schema);
+				std::string query_result = execute_query_with_schema(sql, schema, target->target_id);
 				try {
 					json result_json = json::parse(query_result);
 					// Check if query actually failed
@@ -1844,10 +2333,24 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 
 	else if (tool_name == "explain_sql") {
 		std::string sql = json_string(arguments, "sql");
+		std::string target_id = json_string(arguments, "target_id");
 		if (sql.empty()) {
 			result = create_error_response("sql is required");
 		} else {
-			std::string query_result = execute_query("EXPLAIN " + sql);
+			refresh_target_registry();
+			const QueryTarget* target = resolve_target(target_id);
+			if (target == NULL) {
+				result = create_error_response(
+					target_id.empty() ? "No executable default target available" : "Unknown target_id: " + target_id
+				);
+				return result;
+			}
+			if (!target->executable) {
+				result = create_error_response("Target is not executable by this handler");
+				return result;
+			}
+
+			std::string query_result = execute_query("EXPLAIN " + sql, target->target_id);
 			try {
 				result = create_success_response(json::parse(query_result));
 			} catch (...) {

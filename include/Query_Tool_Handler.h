@@ -28,12 +28,28 @@ class Static_Harvester;
  */
 class Query_Tool_Handler : public MCP_Tool_Handler {
 private:
+	// Logical query targets discovered from runtime hostgroups
+	struct QueryTarget {
+		std::string target_id;     ///< Opaque MCP-visible target identifier
+		std::string description;   ///< Human-readable target description
+		std::string protocol;      ///< Internal protocol: mysql|pgsql
+		int hostgroup_id;          ///< Internal hostgroup identifier
+		std::string auth_profile_id; ///< Server-side auth profile identifier
+		std::string db_username;   ///< Backend DB username (from auth profile)
+		std::string db_password;   ///< Backend DB password (from auth profile)
+		std::string default_schema; ///< Backend default schema/database
+		std::string host;          ///< Concrete host used by executor
+		int port;                  ///< Concrete port used by executor
+		bool executable;           ///< True if current handler can execute against this target
+	};
+
 	// MySQL connection configuration
 	std::string mysql_hosts;
 	std::string mysql_ports;
 	std::string mysql_user;
 	std::string mysql_password;
 	std::string mysql_schema;
+	std::string default_target_id;
 
 	// Discovery components (NEW - replaces MySQL_Tool_Handler wrapper)
 	Discovery_Schema* catalog;       ///< Discovery catalog (replaces old MySQL_Catalog)
@@ -42,14 +58,28 @@ private:
 	// Connection pool for MySQL queries
 	struct MySQLConnection {
 		void* mysql;           ///< MySQL connection handle (MYSQL*)
+		std::string target_id;
+		std::string auth_profile_id;
+		std::string host;
+		int port;
+		bool in_use;
+		std::string current_schema;  ///< Track current schema for this connection
+	};
+	struct PgSQLConnection {
+		void* pgconn;          ///< PostgreSQL connection handle (PGconn*)
+		std::string target_id;
+		std::string auth_profile_id;
 		std::string host;
 		int port;
 		bool in_use;
 		std::string current_schema;  ///< Track current schema for this connection
 	};
 	std::vector<MySQLConnection> connection_pool;
+	std::vector<PgSQLConnection> pgsql_connection_pool;
+	std::vector<QueryTarget> target_registry;
 	pthread_mutex_t pool_lock;
-	int pool_size;
+	int pool_size;      ///< MySQL pool size
+	int pg_pool_size;   ///< PostgreSQL pool size
 
 	// Query guardrails
 	int max_rows;
@@ -107,9 +137,20 @@ private:
 	int init_connection_pool();
 
 	/**
+	 * @brief Discover logical targets from runtime hostgroups
+	 */
+	void refresh_target_registry();
+
+	/**
+	 * @brief Resolve target id (or default target if empty)
+	 */
+	const QueryTarget* resolve_target(const std::string& target_id);
+
+	/**
 	 * @brief Get a connection from the pool
 	 */
-	void* get_connection();
+	void* get_connection(const std::string& target_id);
+	void* get_pgsql_connection(const std::string& target_id);
 
 	/**
 	 * @brief Return a connection to the pool
@@ -123,11 +164,12 @@ private:
 	 * @note Caller should NOT hold pool_lock when calling this
 	 */
 	MySQLConnection* find_connection(void* mysql_ptr);
+	PgSQLConnection* find_pgsql_connection(void* pgconn_ptr);
 
 	/**
 	 * @brief Execute a query and return results as JSON
 	 */
-	std::string execute_query(const std::string& query);
+	std::string execute_query(const std::string& query, const std::string& target_id = "");
 
 	/**
 	 * @brief Execute a query with optional schema switching
@@ -137,7 +179,8 @@ private:
 	 */
 	std::string execute_query_with_schema(
 		const std::string& query,
-		const std::string& schema
+		const std::string& schema,
+		const std::string& target_id
 	);
 
 	/**

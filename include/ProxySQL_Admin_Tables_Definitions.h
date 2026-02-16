@@ -396,6 +396,56 @@
   "  comment VARCHAR" \
   ")"
 
+// MCP backend authentication profiles (server-side credentials)
+#define ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES "CREATE TABLE mcp_auth_profiles (" \
+  "  auth_profile_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  db_username VARCHAR NOT NULL ," \
+  "  db_password VARCHAR NOT NULL ," \
+  "  default_schema VARCHAR DEFAULT '' ," \
+  "  use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  ssl_mode VARCHAR DEFAULT '' ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_AUTH_PROFILES "CREATE TABLE runtime_mcp_auth_profiles (" \
+  "  auth_profile_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  db_username VARCHAR NOT NULL ," \
+  "  db_password VARCHAR NOT NULL ," \
+  "  default_schema VARCHAR DEFAULT '' ," \
+  "  use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  ssl_mode VARCHAR DEFAULT '' ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+// MCP target routing profiles: target_id -> (protocol, hostgroup, auth_profile, policy)
+#define ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES "CREATE TABLE mcp_target_profiles (" \
+  "  target_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  protocol VARCHAR NOT NULL CHECK (protocol IN ('mysql','pgsql')) ," \
+  "  hostgroup_id INT CHECK (hostgroup_id >= 0) NOT NULL ," \
+  "  auth_profile_id VARCHAR NOT NULL ," \
+  "  description VARCHAR DEFAULT '' ," \
+  "  max_rows INT CHECK (max_rows > 0) NOT NULL DEFAULT 200 ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) NOT NULL DEFAULT 2000 ," \
+  "  allow_explain INT CHECK (allow_explain IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  allow_discovery INT CHECK (allow_discovery IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_TARGET_PROFILES "CREATE TABLE runtime_mcp_target_profiles (" \
+  "  target_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  protocol VARCHAR NOT NULL CHECK (protocol IN ('mysql','pgsql')) ," \
+  "  hostgroup_id INT CHECK (hostgroup_id >= 0) NOT NULL ," \
+  "  auth_profile_id VARCHAR NOT NULL ," \
+  "  description VARCHAR DEFAULT '' ," \
+  "  max_rows INT CHECK (max_rows > 0) NOT NULL DEFAULT 200 ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) NOT NULL DEFAULT 2000 ," \
+  "  allow_explain INT CHECK (allow_explain IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  allow_discovery INT CHECK (allow_discovery IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
 // MCP query digest statistics table
 #define STATS_SQLITE_TABLE_MCP_QUERY_DIGEST "CREATE TABLE stats_mcp_query_digest (" \
   "  tool_name VARCHAR NOT NULL ," \
