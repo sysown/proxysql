@@ -20,6 +20,8 @@ using json = nlohmann::json;
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <memory>
+#include <random>
 
 // MySQL client library
 #include <mysql.h>
@@ -27,53 +29,107 @@ using json = nlohmann::json;
 
 extern ProxySQL_Admin *GloAdmin;
 
+static bool is_pgsql_protocol(const std::string& protocol) {
+	return protocol == "pgsql";
+}
+
+static std::unique_ptr<SQLite3_result> dump_runtime_servers_for_protocol(const std::string& protocol) {
+	if (is_pgsql_protocol(protocol)) {
+		if (PgHGM == NULL) {
+			return nullptr;
+		}
+		return std::unique_ptr<SQLite3_result>(PgHGM->dump_table_pgsql("pgsql_servers"));
+	}
+
+	if (MyHGM == NULL) {
+		return nullptr;
+	}
+	return std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql("mysql_servers"));
+}
+
+static int runtime_status_col_idx(const std::string& protocol) {
+	return is_pgsql_protocol(protocol) ? 3 : 4;
+}
+
+static int runtime_weight_col_idx(const std::string& protocol) {
+	return is_pgsql_protocol(protocol) ? 4 : 5;
+}
+
+static std::string uppercase_or_unknown(const char* s) {
+	if (s == NULL) {
+		return "UNKNOWN";
+	}
+	std::string out(s);
+	std::transform(out.begin(), out.end(), out.begin(), ::toupper);
+	return out.empty() ? "UNKNOWN" : out;
+}
+
+static bool is_runtime_online_status(const std::string& status) {
+	return status == "ONLINE";
+}
+
+static size_t pick_weighted_random_index(const std::vector<int>& weights) {
+	long long total_weight = 0;
+	for (size_t i = 0; i < weights.size(); i++) {
+		if (weights[i] > 0) {
+			total_weight += weights[i];
+		}
+	}
+	if (total_weight <= 0) {
+		return 0;
+	}
+
+	static thread_local std::mt19937_64 rng(std::random_device{}());
+	std::uniform_int_distribution<long long> dist(1, total_weight);
+	const long long pick = dist(rng);
+
+	long long cumulative = 0;
+	for (size_t i = 0; i < weights.size(); i++) {
+		if (weights[i] > 0) {
+			cumulative += weights[i];
+			if (pick <= cumulative) {
+				return i;
+			}
+		}
+	}
+	return 0;
+}
+
 static std::string get_runtime_hostgroup_status_summary(const std::string& protocol, int hostgroup_id) {
-	if (GloAdmin == NULL || GloAdmin->admindb == NULL) {
-		return "runtime status unavailable (admin db not ready)";
+	std::unique_ptr<SQLite3_result> resultset = dump_runtime_servers_for_protocol(protocol);
+	if (!resultset) {
+		return std::string("runtime status unavailable (") + protocol + " hostgroup manager not ready)";
 	}
 
-	const char* table_name = (protocol == "pgsql") ? "runtime_pgsql_servers" : "runtime_mysql_servers";
-	char* error = NULL;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* resultset = NULL;
-	std::ostringstream sql;
-	sql << "SELECT UPPER(COALESCE(status,'NULL')) AS status, COUNT(*)"
-	    << " FROM " << table_name
-	    << " WHERE hostgroup_id=" << hostgroup_id
-	    << " GROUP BY UPPER(COALESCE(status,'NULL'))"
-	    << " ORDER BY status";
-
-	GloAdmin->admindb->execute_statement(sql.str().c_str(), &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		std::string err = std::string("failed reading ") + table_name + ": " + error;
-		free(error);
-		if (resultset) {
-			delete resultset;
+	std::map<std::string, int> status_counts;
+	for (const auto* row : resultset->rows) {
+		if (row == NULL || row->cnt < 1 || row->fields[0] == NULL) {
+			continue;
 		}
-		return err;
+		const int row_hostgroup_id = atoi(row->fields[0]);
+		if (row_hostgroup_id != hostgroup_id) {
+			continue;
+		}
+		const int status_idx = runtime_status_col_idx(protocol);
+		const char* status_raw = (status_idx < row->cnt) ? row->fields[status_idx] : NULL;
+		status_counts[uppercase_or_unknown(status_raw)]++;
 	}
 
-	if (!resultset || resultset->rows.empty()) {
-		if (resultset) {
-			delete resultset;
-		}
+	if (status_counts.empty()) {
 		std::ostringstream msg;
-		msg << "no rows in " << table_name << " for hostgroup " << hostgroup_id;
+		msg << "no rows in HGM runtime snapshot for hostgroup " << hostgroup_id;
 		return msg.str();
 	}
 
 	std::ostringstream out;
-	for (size_t i = 0; i < resultset->rows.size(); i++) {
-		if (i) {
+	bool first = true;
+	for (const auto& kv : status_counts) {
+		if (!first) {
 			out << ", ";
 		}
-		SQLite3_row* row = resultset->rows[i];
-		const char* status = (row->cnt > 0 && row->fields[0]) ? row->fields[0] : "UNKNOWN";
-		const char* cnt = (row->cnt > 1 && row->fields[1]) ? row->fields[1] : "0";
-		out << status << "=" << cnt;
+		first = false;
+		out << kv.first << "=" << kv.second;
 	}
-	delete resultset;
 	return out.str();
 }
 
@@ -514,42 +570,58 @@ void Query_Tool_Handler::refresh_target_registry() {
 		int& port,
 		int& backends
 	) -> bool {
-		if (GloAdmin == NULL || GloAdmin->admindb == NULL) {
-			return false;
-		}
-		const char* table_name = (protocol == "pgsql") ? "runtime_pgsql_servers" : "runtime_mysql_servers";
-		char* error = NULL;
-		int cols = 0;
-		int affected_rows = 0;
-		SQLite3_result* resultset = NULL;
-
-		std::ostringstream sql;
-		sql << "SELECT hostname, port FROM " << table_name
-		    << " WHERE hostgroup_id=" << hostgroup_id
-		    << " AND UPPER(status)='ONLINE'"
-		    << " ORDER BY weight DESC, hostname, port";
-		GloAdmin->admindb->execute_statement(sql.str().c_str(), &error, &cols, &affected_rows, &resultset);
-		if (error) {
-			proxy_warning("Query_Tool_Handler: endpoint resolution failed for %s/%d: %s\n",
-				protocol.c_str(), hostgroup_id, error);
-			free(error);
-			if (resultset) {
-				delete resultset;
-			}
-			return false;
-		}
-		if (!resultset || resultset->rows.empty()) {
-			if (resultset) {
-				delete resultset;
-			}
+		std::unique_ptr<SQLite3_result> resultset = dump_runtime_servers_for_protocol(protocol);
+		if (!resultset) {
 			return false;
 		}
 
-		backends = resultset->rows.size();
-		host = resultset->rows[0]->fields[0] ? resultset->rows[0]->fields[0] : "";
-		port = resultset->rows[0]->fields[1] ? atoi(resultset->rows[0]->fields[1]) : ((protocol == "pgsql") ? 5432 : 3306);
-		delete resultset;
-		return !host.empty();
+		struct CandidateEndpoint {
+			int weight = 0;
+			std::string host;
+			int port = 0;
+		};
+
+		std::vector<CandidateEndpoint> candidates;
+		for (const auto* row : resultset->rows) {
+			if (row == NULL || row->cnt < 4 || row->fields[0] == NULL) {
+				continue;
+			}
+
+			const int row_hostgroup_id = atoi(row->fields[0]);
+			if (row_hostgroup_id != hostgroup_id) {
+				continue;
+			}
+
+			const int status_idx = runtime_status_col_idx(protocol);
+			const std::string status = uppercase_or_unknown((status_idx < row->cnt) ? row->fields[status_idx] : NULL);
+			if (!is_runtime_online_status(status)) {
+				continue;
+			}
+
+			CandidateEndpoint candidate;
+			candidate.host = row->fields[1] ? row->fields[1] : "";
+			candidate.port = row->fields[2] ? atoi(row->fields[2]) : (is_pgsql_protocol(protocol) ? 5432 : 3306);
+			const int weight_idx = runtime_weight_col_idx(protocol);
+			candidate.weight = (weight_idx < row->cnt && row->fields[weight_idx]) ? atoi(row->fields[weight_idx]) : 0;
+			if (!candidate.host.empty()) {
+				candidates.push_back(candidate);
+			}
+		}
+
+		if (candidates.empty()) {
+			return false;
+		}
+
+		backends = candidates.size();
+		std::vector<int> weights;
+		weights.reserve(candidates.size());
+		for (size_t i = 0; i < candidates.size(); i++) {
+			weights.push_back(candidates[i].weight);
+		}
+		const size_t picked_idx = pick_weighted_random_index(weights);
+		host = candidates[picked_idx].host;
+		port = candidates[picked_idx].port;
+		return true;
 	};
 
 	for (const auto& ctx : profiles) {
@@ -1167,7 +1239,7 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 	// Whitelist validation: query must start with an allowed read-only keyword
 	// This ensures the query is of a known-safe type (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE)
 	// Only queries matching these specific patterns are allowed through
-	if (upper.find("SELECT") == 0 && upper.find("FROM") != std::string::npos) {
+	if (upper.find("SELECT") == 0) {
 		return true;
 	}
 	if (upper.find("WITH") == 0) {
@@ -1193,7 +1265,8 @@ bool Query_Tool_Handler::is_dangerous_query(const std::string& query) {
 	// Extremely dangerous operations
 	std::vector<std::string> critical = {
 		"DROP DATABASE", "DROP TABLE", "TRUNCATE", "DELETE FROM", "DELETE FROM",
-		"GRANT", "REVOKE", "CREATE USER", "ALTER USER", "SET PASSWORD"
+		"GRANT", "REVOKE", "CREATE USER", "ALTER USER", "SET PASSWORD",
+		"INTO OUTFILE", "INTO DUMPFILE"
 	};
 
 	for (const auto& phrase : critical) {

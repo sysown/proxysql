@@ -216,7 +216,7 @@ int PgSQL_Static_Harvester::harvest_schemas(const std::string& only_schema) {
 	}
 
 	std::ostringstream sql;
-	sql << "SELECT schema_name, default_character_set_name, default_collation_name "
+	sql << "SELECT schema_name, COALESCE(default_character_set_name,''), '' "
 	    << "FROM information_schema.schemata "
 	    << "WHERE schema_name NOT IN ('pg_catalog','information_schema') "
 	    << "AND schema_name NOT LIKE 'pg_toast%'";

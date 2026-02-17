@@ -48,7 +48,18 @@ tap_not_ok() {
 
 extract_run_id() {
     local payload="$1"
-    echo "${payload}" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1
+    local norm
+    norm="$(echo "${payload}" | sed 's/\\"/"/g')"
+    echo "${norm}" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1
+}
+
+json_has_kv() {
+    local payload="$1"
+    local key="$2"
+    local value="$3"
+    local norm
+    norm="$(echo "${payload}" | sed 's/\\"/"/g')"
+    echo "${norm}" | grep -Eq "\"${key}\"[[:space:]]*:[[:space:]]*\"${value}\""
 }
 
 echo "msg: 1..${PLAN}"
@@ -67,8 +78,8 @@ else
 fi
 
 targets_resp="$(mcp_request "query" '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_targets","arguments":{}},"id":1}')"
-if echo "${targets_resp}" | grep -q "\"target_id\":\"${MCP_MYSQL_TARGET_ID}\"" && \
-   echo "${targets_resp}" | grep -q "\"target_id\":\"${MCP_PGSQL_TARGET_ID}\""; then
+if json_has_kv "${targets_resp}" "target_id" "${MCP_MYSQL_TARGET_ID}" && \
+   json_has_kv "${targets_resp}" "target_id" "${MCP_PGSQL_TARGET_ID}"; then
     tap_ok "list_targets contains mysql+pgsql target_id"
 else
     tap_not_ok "list_targets contains mysql+pgsql target_id" "${targets_resp}"
@@ -76,14 +87,14 @@ fi
 
 mysql_harvest_resp="$(mcp_request "query" "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"discovery.run_static\",\"arguments\":{\"target_id\":\"${MCP_MYSQL_TARGET_ID}\",\"schema_filter\":\"${MYSQL_DATABASE}\",\"notes\":\"tap mysql static harvest\"}},\"id\":2}")"
 MYSQL_RUN_ID="$(extract_run_id "${mysql_harvest_resp}")"
-if [[ -n "${MYSQL_RUN_ID}" ]] && echo "${mysql_harvest_resp}" | grep -q "\"target_id\":\"${MCP_MYSQL_TARGET_ID}\"" && echo "${mysql_harvest_resp}" | grep -q "\"protocol\":\"mysql\""; then
+if [[ -n "${MYSQL_RUN_ID}" ]] && json_has_kv "${mysql_harvest_resp}" "target_id" "${MCP_MYSQL_TARGET_ID}" && json_has_kv "${mysql_harvest_resp}" "protocol" "mysql"; then
     tap_ok "discovery.run_static mysql target returns run_id/protocol"
 else
     tap_not_ok "discovery.run_static mysql target returns run_id/protocol" "${mysql_harvest_resp}"
 fi
 
 mysql_catalog_resp="$(mcp_request "query" "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"catalog.list_objects\",\"arguments\":{\"target_id\":\"${MCP_MYSQL_TARGET_ID}\",\"run_id\":\"${MYSQL_RUN_ID}\",\"object_type\":\"table\",\"schema_name\":\"${MYSQL_DATABASE}\",\"page_size\":200}},\"id\":3}")"
-if echo "${mysql_catalog_resp}" | grep -q "\"object_name\":\"${MYSQL_SEEDED_TABLE}\""; then
+if json_has_kv "${mysql_catalog_resp}" "object_name" "${MYSQL_SEEDED_TABLE}"; then
     tap_ok "catalog.list_objects mysql run exposes seeded mysql table"
 else
     tap_not_ok "catalog.list_objects mysql run exposes seeded mysql table" "${mysql_catalog_resp}"
@@ -91,21 +102,21 @@ fi
 
 pgsql_harvest_resp="$(mcp_request "query" "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"discovery.run_static\",\"arguments\":{\"target_id\":\"${MCP_PGSQL_TARGET_ID}\",\"schema_filter\":\"public\",\"notes\":\"tap pgsql static harvest\"}},\"id\":4}")"
 PGSQL_RUN_ID="$(extract_run_id "${pgsql_harvest_resp}")"
-if [[ -n "${PGSQL_RUN_ID}" ]] && echo "${pgsql_harvest_resp}" | grep -q "\"target_id\":\"${MCP_PGSQL_TARGET_ID}\"" && echo "${pgsql_harvest_resp}" | grep -q "\"protocol\":\"pgsql\""; then
+if [[ -n "${PGSQL_RUN_ID}" ]] && json_has_kv "${pgsql_harvest_resp}" "target_id" "${MCP_PGSQL_TARGET_ID}" && json_has_kv "${pgsql_harvest_resp}" "protocol" "pgsql"; then
     tap_ok "discovery.run_static pgsql target returns run_id/protocol"
 else
     tap_not_ok "discovery.run_static pgsql target returns run_id/protocol" "${pgsql_harvest_resp}"
 fi
 
 pgsql_catalog_resp="$(mcp_request "query" "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"catalog.list_objects\",\"arguments\":{\"target_id\":\"${MCP_PGSQL_TARGET_ID}\",\"run_id\":\"${PGSQL_RUN_ID}\",\"object_type\":\"table\",\"schema_name\":\"public\",\"page_size\":200}},\"id\":5}")"
-if echo "${pgsql_catalog_resp}" | grep -q "\"object_name\":\"${PGSQL_SEEDED_TABLE}\""; then
+if json_has_kv "${pgsql_catalog_resp}" "object_name" "${PGSQL_SEEDED_TABLE}"; then
     tap_ok "catalog.list_objects pgsql run exposes seeded pgsql table"
 else
     tap_not_ok "catalog.list_objects pgsql run exposes seeded pgsql table" "${pgsql_catalog_resp}"
 fi
 
 cross_target_resp="$(mcp_request "query" "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"catalog.list_objects\",\"arguments\":{\"target_id\":\"${MCP_PGSQL_TARGET_ID}\",\"run_id\":\"${MYSQL_RUN_ID}\",\"object_type\":\"table\",\"page_size\":10}},\"id\":6}")"
-if echo "${cross_target_resp}" | grep -q "\"error\"" && echo "${cross_target_resp}" | grep -q "target_id"; then
+if echo "${cross_target_resp}" | grep -q "\"isError\":true" && echo "${cross_target_resp}" | grep -qi "target_id"; then
     tap_ok "catalog run_id cannot be resolved across target_id boundaries"
 else
     tap_not_ok "catalog run_id cannot be resolved across target_id boundaries" "${cross_target_resp}"
