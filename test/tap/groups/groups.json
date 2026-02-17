@@ -269,6 +269,10 @@
   "test_mcp_rag_metrics-t": [ "ai-g1" ],
   "vector_db_performance-t": [ "ai-g1" ],
   "vector_features-t": [ "ai-g1" ],
+  "test_mcp_claude_headless_flow-t": [ "ai-g1" ],
+  "test_mcp_llm_discovery_phaseb-t": [ "ai-g1" ],
+  "vector_features-t": [ "ai-g1" ],
+  "test_mcp_static_harvest-t": [ "ai-g1" ],
   "unit-strip_schema_from_query-t": [ "unit-tests-g1" ]
 
 }
