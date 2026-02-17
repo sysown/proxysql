@@ -498,8 +498,8 @@ void Query_Tool_Handler::refresh_target_registry() {
 		std::ostringstream sql;
 		sql << "SELECT hostname, port FROM " << table_name
 		    << " WHERE hostgroup_id=" << hostgroup_id
-		    << " AND (status IS NULL OR UPPER(status) <> 'OFFLINE_HARD')"
-		    << " ORDER BY CASE WHEN UPPER(COALESCE(status,''))='ONLINE' THEN 0 ELSE 1 END, weight DESC, hostname, port";
+		    << " AND UPPER(status)='ONLINE'"
+		    << " ORDER BY weight DESC, hostname, port";
 		GloAdmin->admindb->execute_statement(sql.str().c_str(), &error, &cols, &affected_rows, &resultset);
 		if (error) {
 			proxy_warning("Query_Tool_Handler: endpoint resolution failed for %s/%d: %s\n",
@@ -584,6 +584,67 @@ const Query_Tool_Handler::QueryTarget* Query_Tool_Handler::resolve_target(const 
 	return NULL;
 }
 
+std::string Query_Tool_Handler::format_target_unavailable_error(const std::string& target_id) const {
+	const std::string resolved_target_id = target_id.empty() ? default_target_id : target_id;
+	if (resolved_target_id.empty()) {
+		if (target_registry.empty()) {
+			return "No MCP targets loaded in runtime_mcp_target_profiles";
+		}
+
+		std::ostringstream oss;
+		oss << "No executable default target available. Loaded targets: ";
+		for (size_t i = 0; i < target_registry.size(); i++) {
+			const QueryTarget& t = target_registry[i];
+			if (i) {
+				oss << ", ";
+			}
+			oss << t.target_id << "[protocol=" << t.protocol << ", hostgroup=" << t.hostgroup_id;
+			if (!t.executable) {
+				if (t.db_username.empty()) {
+					oss << ", reason=empty db_username in auth_profile_id=" << t.auth_profile_id;
+				} else if (t.host.empty()) {
+					oss << ", reason=no ONLINE backend in runtime_" << (t.protocol == "pgsql" ? "pgsql" : "mysql")
+					    << "_servers";
+				} else {
+					oss << ", reason=not executable";
+				}
+			} else {
+				oss << ", executable=1";
+			}
+			oss << "]";
+		}
+		return oss.str();
+	}
+
+	for (const auto& t : target_registry) {
+		if (t.target_id != resolved_target_id) {
+			continue;
+		}
+		if (t.executable) {
+			return "Target is executable";
+		}
+
+		std::ostringstream oss;
+		oss << "Target '" << t.target_id << "' is not executable"
+		    << " [protocol=" << t.protocol
+		    << ", hostgroup=" << t.hostgroup_id
+		    << ", auth_profile_id=" << t.auth_profile_id << "]";
+
+		if (t.db_username.empty()) {
+			oss << ": auth profile has empty db_username";
+		} else if (t.host.empty()) {
+			oss << ": no ONLINE backend in runtime_" << (t.protocol == "pgsql" ? "pgsql" : "mysql")
+			    << "_servers for hostgroup " << t.hostgroup_id;
+		} else {
+			oss << ": backend " << t.host << ":" << t.port << " resolved but target is still non-executable";
+		}
+
+		return oss.str();
+	}
+
+	return std::string("Unknown target_id: ") + resolved_target_id;
+}
+
 void* Query_Tool_Handler::get_connection(const std::string& target_id) {
 	const auto find_available_connection = [&](const std::string& resolved_target, const std::string& expected_auth_profile_id) -> void* {
 		pthread_mutex_lock(&pool_lock);
@@ -603,7 +664,8 @@ void* Query_Tool_Handler::get_connection(const std::string& target_id) {
 	const std::string resolved_target = target_id.empty() ? default_target_id : target_id;
 	const QueryTarget* target = resolve_target(resolved_target);
 	if (target == NULL || !target->executable) {
-		proxy_error("Query_Tool_Handler: target '%s' is unknown or not executable\n", resolved_target.c_str());
+		std::string reason = format_target_unavailable_error(target_id);
+		proxy_error("Query_Tool_Handler: %s\n", reason.c_str());
 		return NULL;
 	}
 
@@ -647,7 +709,8 @@ void* Query_Tool_Handler::get_pgsql_connection(const std::string& target_id) {
 	const std::string resolved_target = target_id.empty() ? default_target_id : target_id;
 	const QueryTarget* target = resolve_target(resolved_target);
 	if (target == NULL || !target->executable) {
-		proxy_error("Query_Tool_Handler: target '%s' is unknown or not executable\n", resolved_target.c_str());
+		std::string reason = format_target_unavailable_error(target_id);
+		proxy_error("Query_Tool_Handler: %s\n", reason.c_str());
 		return NULL;
 	}
 
@@ -1560,7 +1623,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			return result;
 		}
 		if (!target->executable) {
-			result = create_error_response("Target is not executable by this handler");
+			result = create_error_response(format_target_unavailable_error(target_id));
 			return result;
 		}
 
@@ -2283,7 +2346,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				return result;
 			}
 			if (!target->executable) {
-				result = create_error_response("Target is not executable by this handler");
+				result = create_error_response(format_target_unavailable_error(target_id));
 				return result;
 			}
 
@@ -2408,7 +2471,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				return result;
 			}
 			if (!target->executable) {
-				result = create_error_response("Target is not executable by this handler");
+				result = create_error_response(format_target_unavailable_error(target_id));
 				return result;
 			}
 

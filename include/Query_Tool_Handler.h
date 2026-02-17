@@ -145,6 +145,7 @@ private:
 	 * @brief Resolve target id (or default target if empty)
 	 */
 	const QueryTarget* resolve_target(const std::string& target_id);
+	std::string format_target_unavailable_error(const std::string& target_id) const;
 
 	/**
 	 * @brief Get a connection from the pool
