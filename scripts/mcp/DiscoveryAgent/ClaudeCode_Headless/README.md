@@ -35,7 +35,7 @@ cd scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/
 # Phase 1: Static harvest (no Claude Code needed)
 
 # Option A: Using the convenience script (recommended)
-./static_harvest.sh --schema test
+./static_harvest.sh --target-id tap_mysql_default --schema test
 
 # Option B: Using curl directly
 curl -k -X POST https://localhost:6071/mcp/query \
@@ -47,6 +47,7 @@ curl -k -X POST https://localhost:6071/mcp/query \
     "params": {
       "name": "discovery.run_static",
       "arguments": {
+        "target_id": "tap_mysql_default",
         "schema_filter": "test"
       }
     }
@@ -56,6 +57,7 @@ curl -k -X POST https://localhost:6071/mcp/query \
 cp mcp_config.example.json mcp_config.json
 ./two_phase_discovery.py \
     --mcp-config mcp_config.json \
+    --target-id tap_mysql_default \
     --schema test \
     --dry-run  # Preview without executing
 ```
