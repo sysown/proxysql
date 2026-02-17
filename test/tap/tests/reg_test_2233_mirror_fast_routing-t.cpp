@@ -9,21 +9,14 @@
  *
  * ## Backend Configuration
  *
- * The test supports two modes:
- *
- * ### Mode 1: SQLite3 Server (default, no MySQL required)
- * ProxySQL acts as its own backend using the SQLite3 server feature.
+ * This test uses ProxySQL's SQLite3 Server as the backend (port 6030).
+ * No external MySQL server is required.
  *
  *   # Start ProxySQL with SQLite3 server enabled
  *   proxysql --sqlite3-server
  *
- *   # Run the test (connects to backend on port 6030)
+ *   # Run the test
  *   ./reg_test_2233_mirror_fast_routing-t
- *
- * ### Mode 2: Real MySQL backend (for CI)
- * Set MYSQL_PORT to point to a real MySQL server.
- *
- *   MYSQL_PORT=13306 ./reg_test_2233_mirror_fast_routing-t
  *
  * ## Environment Variables
  *
@@ -36,9 +29,6 @@
  *   - TAP_ADMINPORT: ProxySQL admin port (default: 6032)
  *   - TAP_ADMINUSERNAME: ProxySQL admin username
  *   - TAP_ADMINPASSWORD: ProxySQL admin password
- *
- * Test-specific variables:
- *   - MYSQL_PORT: Backend MySQL/SQLite port (default: 6030 for SQLite3 Server)
  */
 
 #include <cstdlib>
@@ -67,15 +57,15 @@ const int MIRROR_HOSTGROUP = 2;
 const int FAST_ROUTING_HOSTGROUP = 1;
 const int DEFAULT_HOSTGROUP = 0;
 
-// Backend port: default to SQLite3 Server (6030), override via MYSQL_PORT for real MySQL
-const int BACKEND_PORT = get_env_int("MYSQL_PORT", 6030);
+// SQLite3 Server port (ProxySQL's built-in SQLite backend)
+const int SQLITE3_SERVER_PORT = 6030;
 
-std::vector<std::string> build_setup_queries(int port) {
+std::vector<std::string> build_setup_queries() {
 	std::vector<std::string> queries = {
 		"DELETE FROM mysql_servers WHERE hostgroup_id IN (0, 1, 2)",
-		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '127.0.0.1', " + std::to_string(port) + ")",
-		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (1, '127.0.0.1', " + std::to_string(port) + ")",
-		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (2, '127.0.0.1', " + std::to_string(port) + ")",
+		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '127.0.0.1', " + std::to_string(SQLITE3_SERVER_PORT) + ")",
+		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (1, '127.0.0.1', " + std::to_string(SQLITE3_SERVER_PORT) + ")",
+		"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (2, '127.0.0.1', " + std::to_string(SQLITE3_SERVER_PORT) + ")",
 		"LOAD MYSQL SERVERS TO RUNTIME",
 		"DELETE FROM mysql_query_rules",
 		"DELETE FROM mysql_query_rules_fast_routing",
@@ -109,7 +99,7 @@ int main(int argc, char** argv) {
 	diag("ProxySQL host: %s, admin port: %d, client port: %d", cl.host, cl.admin_port, cl.port);
 	diag("ProxySQL admin user: %s", cl.admin_username);
 	diag("ProxySQL client user: %s", cl.username);
-	diag("Backend port: %d (%s)", BACKEND_PORT, BACKEND_PORT == 6030 ? "SQLite3 Server" : "MySQL");
+	diag("Backend: SQLite3 Server on port %d", SQLITE3_SERVER_PORT);
 	diag("Mirror hostgroup: %d", MIRROR_HOSTGROUP);
 	diag("Fast routing hostgroup: %d", FAST_ROUTING_HOSTGROUP);
 	diag("Default hostgroup: %d", DEFAULT_HOSTGROUP);
@@ -131,7 +121,7 @@ int main(int argc, char** argv) {
 
 	// Setup servers and clear rules
 	diag("=== Setting up test environment ===");
-	std::vector<std::string> setup_queries = build_setup_queries(BACKEND_PORT);
+	std::vector<std::string> setup_queries = build_setup_queries();
 	if (run_queries(proxysql_admin, setup_queries)) {
 		return exit_status();
 	}
@@ -160,12 +150,10 @@ int main(int argc, char** argv) {
 	}
 
 	// Create fast routing rule with destination_hostgroup=1
-	// Use 'main' schema for SQLite3 Server, 'information_schema' for MySQL
-	std::string schema_name = (BACKEND_PORT == 6030) ? "main" : "information_schema";
-	diag("Using schema name: %s (based on backend type)", schema_name.c_str());
+	// SQLite3 Server uses 'main' as the default schema
 	std::string fast_routing_rule = "INSERT INTO mysql_query_rules_fast_routing "
 		"(username, schemaname, flagIN, destination_hostgroup, comment) "
-		"VALUES ('" + std::string(cl.username) + "', '" + schema_name + "', 0, " +
+		"VALUES ('" + std::string(cl.username) + "', 'main', 0, " +
 		std::to_string(FAST_ROUTING_HOSTGROUP) + ", 'test_fast_routing')";
 	diag("Creating fast routing rule: %s", fast_routing_rule.c_str());
 	if (mysql_query(proxysql_admin, fast_routing_rule.c_str())) {
