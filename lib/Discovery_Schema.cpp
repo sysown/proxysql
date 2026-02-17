@@ -84,21 +84,53 @@ void Discovery_Schema::close() {
 	}
 }
 
-int Discovery_Schema::resolve_run_id(const std::string& run_id_or_schema) {
+int Discovery_Schema::resolve_run_id(const std::string& target_id, const std::string& run_id_or_schema) {
+	if (target_id.empty()) {
+		proxy_warning("resolve_run_id called without target_id\n");
+		return -1;
+	}
+
 	// If it's already a number (run_id), return it
 	if (!run_id_or_schema.empty() && std::isdigit(run_id_or_schema[0])) {
-		return std::stoi(run_id_or_schema);
+		int run_id = std::stoi(run_id_or_schema);
+		char* error = NULL;
+		int cols = 0, affected = 0;
+		SQLite3_result* resultset = NULL;
+		std::string esc_target_id = target_id;
+		replace_str(esc_target_id, "'", "''");
+		std::ostringstream verify_sql;
+		verify_sql << "SELECT 1 FROM runs WHERE run_id=" << run_id
+		           << " AND target_id='" << esc_target_id << "' LIMIT 1;";
+		db->execute_statement(verify_sql.str().c_str(), &error, &cols, &affected, &resultset);
+		if (error) {
+			proxy_error("Failed to validate run_id '%d' for target '%s': %s\n", run_id, target_id.c_str(), error);
+			free(error);
+			if (resultset) {
+				delete resultset;
+			}
+			return -1;
+		}
+		bool found = (resultset && resultset->rows_count > 0);
+		if (resultset) {
+			delete resultset;
+		}
+		return found ? run_id : -1;
 	}
 
 	// It's a schema name - find the latest run_id for this schema
 	char* error = NULL;
 	int cols = 0, affected = 0;
 	SQLite3_result* resultset = NULL;
+	std::string esc_target_id = target_id;
+	std::string esc_run_id_or_schema = run_id_or_schema;
+	replace_str(esc_target_id, "'", "''");
+	replace_str(esc_run_id_or_schema, "'", "''");
 
 	std::ostringstream sql;
 	sql << "SELECT r.run_id FROM runs r "
 	    << "INNER JOIN schemas s ON s.run_id = r.run_id "
-	    << "WHERE s.schema_name = '" << run_id_or_schema << "' "
+	    << "WHERE r.target_id = '" << esc_target_id << "' "
+	    << "AND s.schema_name = '" << esc_run_id_or_schema << "' "
 	    << "ORDER BY r.started_at DESC LIMIT 1;";
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
@@ -111,7 +143,7 @@ int Discovery_Schema::resolve_run_id(const std::string& run_id_or_schema) {
 	if (!resultset || resultset->rows_count == 0) {
 		proxy_warning("No run found for schema '%s'\n", run_id_or_schema.c_str());
 		if (resultset) {
-			free(resultset);
+			delete resultset;
 			resultset = NULL;
 		}
 		return -1;
@@ -120,13 +152,84 @@ int Discovery_Schema::resolve_run_id(const std::string& run_id_or_schema) {
 	SQLite3_row* row = resultset->rows[0];
 	int run_id = atoi(row->fields[0]);
 
-	free(resultset);
+	delete resultset;
 	return run_id;
 }
 
 int Discovery_Schema::init_schema() {
 	// Enable foreign keys
 	db->execute("PRAGMA foreign_keys = ON");
+
+	// The prototype schema had MySQL-only runs metadata. Backward compatibility is intentionally
+	// not preserved: if we detect legacy runs layout, rebuild catalog tables from scratch.
+	{
+		char* error = NULL;
+		int cols = 0, affected = 0;
+		SQLite3_result* resultset = NULL;
+		db->execute_statement("PRAGMA table_info(runs);", &error, &cols, &affected, &resultset);
+		if (error) {
+			proxy_error("Discovery_Schema: failed reading runs table layout: %s\n", error);
+			free(error);
+			if (resultset) {
+				delete resultset;
+			}
+			return -1;
+		}
+
+		bool has_rows = (resultset && !resultset->rows.empty());
+		bool has_target_id = false;
+		bool has_protocol = false;
+		bool has_server_version = false;
+		for (size_t i = 0; resultset && i < resultset->rows.size(); i++) {
+			SQLite3_row* row = resultset->rows[i];
+			const char* col_name = (row->cnt > 1 && row->fields[1]) ? row->fields[1] : "";
+			if (!strcmp(col_name, "target_id")) {
+				has_target_id = true;
+			} else if (!strcmp(col_name, "protocol")) {
+				has_protocol = true;
+			} else if (!strcmp(col_name, "server_version")) {
+				has_server_version = true;
+			}
+		}
+		if (resultset) {
+			delete resultset;
+		}
+
+		if (has_rows && (!has_target_id || !has_protocol || !has_server_version)) {
+			proxy_warning("Discovery_Schema: legacy catalog schema detected, rebuilding catalog tables\n");
+			db->execute("PRAGMA foreign_keys = OFF");
+			db->execute("DROP TABLE IF EXISTS schema_docs");
+			db->execute("DROP TABLE IF EXISTS query_tool_calls");
+			db->execute("DROP TABLE IF EXISTS rag_search_log");
+			db->execute("DROP TABLE IF EXISTS llm_search_log");
+			db->execute("DROP TABLE IF EXISTS llm_notes");
+			db->execute("DROP TABLE IF EXISTS llm_question_templates");
+			db->execute("DROP TABLE IF EXISTS llm_metrics");
+			db->execute("DROP TABLE IF EXISTS llm_domain_members");
+			db->execute("DROP TABLE IF EXISTS llm_domains");
+			db->execute("DROP TABLE IF EXISTS llm_relationships");
+			db->execute("DROP TABLE IF EXISTS llm_object_summaries");
+			db->execute("DROP TABLE IF EXISTS agent_events");
+			db->execute("DROP TABLE IF EXISTS agent_runs");
+			db->execute("DROP TABLE IF EXISTS stats_mcp_query_digest_reset");
+			db->execute("DROP TABLE IF EXISTS stats_mcp_query_digest");
+			db->execute("DROP TABLE IF EXISTS mcp_query_rules");
+			db->execute("DROP TABLE IF EXISTS profiles");
+			db->execute("DROP TABLE IF EXISTS inferred_relationships");
+			db->execute("DROP TABLE IF EXISTS view_dependencies");
+			db->execute("DROP TABLE IF EXISTS foreign_key_columns");
+			db->execute("DROP TABLE IF EXISTS foreign_keys");
+			db->execute("DROP TABLE IF EXISTS index_columns");
+			db->execute("DROP TABLE IF EXISTS indexes");
+			db->execute("DROP TABLE IF EXISTS columns");
+			db->execute("DROP TABLE IF EXISTS objects");
+			db->execute("DROP TABLE IF EXISTS schemas");
+			db->execute("DROP TABLE IF EXISTS runs");
+			db->execute("DROP TABLE IF EXISTS fts_objects");
+			db->execute("DROP TABLE IF EXISTS fts_llm");
+			db->execute("PRAGMA foreign_keys = ON");
+		}
+	}
 
 	// Create all tables
 	int rc = create_deterministic_tables();
@@ -166,13 +269,16 @@ int Discovery_Schema::create_deterministic_tables() {
 	db->execute(
 		"CREATE TABLE IF NOT EXISTS runs ("
 		"  run_id        INTEGER PRIMARY KEY , "
+		"  target_id     TEXT NOT NULL , "
+		"  protocol      TEXT NOT NULL CHECK(protocol IN ('mysql','pgsql')) , "
 		"  started_at    TEXT NOT NULL DEFAULT (datetime('now')) , "
 		"  finished_at   TEXT , "
 		"  source_dsn    TEXT , "
-		"  mysql_version TEXT , "
+		"  server_version TEXT , "
 		"  notes         TEXT"
 		");"
 	);
+	db->execute("CREATE INDEX IF NOT EXISTS idx_runs_target_started ON runs(target_id, started_at DESC);");
 
 	// Schemas table
 	db->execute(
@@ -650,20 +756,24 @@ int Discovery_Schema::create_fts_tables() {
 // ============================================================================
 
 int Discovery_Schema::create_run(
+	const std::string& target_id,
+	const std::string& protocol,
 	const std::string& source_dsn,
-	const std::string& mysql_version,
+	const std::string& server_version,
 	const std::string& notes
 ) {
 	sqlite3_stmt* stmt = NULL;
-	const char* sql = "INSERT INTO runs(source_dsn, mysql_version, notes) VALUES(?1, ?2 ,  ?3);";
+	const char* sql = "INSERT INTO runs(target_id, protocol, source_dsn, server_version, notes) VALUES(?1, ?2, ?3, ?4, ?5);";
 
 	auto [rc, stmt_unique] = db->prepare_v2(sql);
 	stmt = stmt_unique.get();
 	if (rc != SQLITE_OK) return -1;
 
-	(*proxy_sqlite3_bind_text)(stmt, 1, source_dsn.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_text)(stmt, 2, mysql_version.c_str(), -1, SQLITE_TRANSIENT);
-	(*proxy_sqlite3_bind_text)(stmt, 3, notes.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 1, target_id.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 2, protocol.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, source_dsn.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 4, server_version.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 5, notes.c_str(), -1, SQLITE_TRANSIENT);
 
 	SAFE_SQLITE3_STEP2(stmt);
 	int run_id = (int)(*proxy_sqlite3_last_insert_rowid)(db->get_db());
@@ -693,7 +803,7 @@ std::string Discovery_Schema::get_run_info(int run_id) {
 	SQLite3_result* resultset = NULL;
 
 	std::ostringstream sql;
-	sql << "SELECT run_id, started_at, finished_at, source_dsn, mysql_version ,  notes "
+	sql << "SELECT run_id, target_id, protocol, started_at, finished_at, source_dsn, server_version ,  notes "
 	    << "FROM runs WHERE run_id = " << run_id << ";";
 
 	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
@@ -702,11 +812,13 @@ std::string Discovery_Schema::get_run_info(int run_id) {
 	if (resultset && !resultset->rows.empty()) {
 		SQLite3_row* row = resultset->rows[0];
 		result["run_id"] = run_id;
-		result["started_at"] = std::string(row->fields[0] ? row->fields[0] : "");
-		result["finished_at"] = std::string(row->fields[1] ? row->fields[1] : "");
-		result["source_dsn"] = std::string(row->fields[2] ? row->fields[2] : "");
-		result["mysql_version"] = std::string(row->fields[3] ? row->fields[3] : "");
-		result["notes"] = std::string(row->fields[4] ? row->fields[4] : "");
+		result["target_id"] = std::string(row->fields[1] ? row->fields[1] : "");
+		result["protocol"] = std::string(row->fields[2] ? row->fields[2] : "");
+		result["started_at"] = std::string(row->fields[3] ? row->fields[3] : "");
+		result["finished_at"] = std::string(row->fields[4] ? row->fields[4] : "");
+		result["source_dsn"] = std::string(row->fields[5] ? row->fields[5] : "");
+		result["server_version"] = std::string(row->fields[6] ? row->fields[6] : "");
+		result["notes"] = std::string(row->fields[7] ? row->fields[7] : "");
 	} else {
 		result["error"] = "Run not found";
 	}

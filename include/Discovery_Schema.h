@@ -206,27 +206,32 @@ public:
 	void close();
 
 	/**
-	 * @brief Resolve schema name or run_id to a run_id
+	 * @brief Resolve schema name or run_id to a run_id within a target scope
 	 *
 	 * If input is a numeric run_id, returns it as-is.
 	 * If input is a schema name, finds the latest run_id for that schema.
 	 *
+	 * @param target_id Required target scope identifier
 	 * @param run_id_or_schema Either a numeric run_id or a schema name
 	 * @return run_id on success, -1 if schema not found
 	 */
-	int resolve_run_id(const std::string& run_id_or_schema);
+	int resolve_run_id(const std::string& target_id, const std::string& run_id_or_schema);
 
 	/**
 	 * @brief Create a new discovery run
 	 *
+	 * @param target_id Logical target identifier that produced this run
+	 * @param protocol Backend protocol for this run (mysql|pgsql)
 	 * @param source_dsn Data source identifier (e.g., "mysql://host:port/")
-	 * @param mysql_version MySQL server version
+	 * @param server_version Backend server version string
 	 * @param notes Optional notes for this run
 	 * @return run_id on success, -1 on error
 	 */
 	int create_run(
+		const std::string& target_id,
+		const std::string& protocol,
 		const std::string& source_dsn,
-		const std::string& mysql_version,
+		const std::string& server_version,
 		const std::string& notes = ""
 	);
 

@@ -9,6 +9,7 @@
 
 // Forward declaration to avoid circular include
 class Static_Harvester;
+class PgSQL_Static_Harvester;
 
 /**
  * @brief Query Tool Handler for /mcp/query endpoint
@@ -43,17 +44,12 @@ private:
 		bool executable;           ///< True if current handler can execute against this target
 	};
 
-	// MySQL connection configuration
-	std::string mysql_hosts;
-	std::string mysql_ports;
-	std::string mysql_user;
-	std::string mysql_password;
-	std::string mysql_schema;
 	std::string default_target_id;
 
 	// Discovery components (NEW - replaces MySQL_Tool_Handler wrapper)
 	Discovery_Schema* catalog;       ///< Discovery catalog (replaces old MySQL_Catalog)
-	Static_Harvester* harvester;       ///< Static harvester for Phase 1
+	Static_Harvester* mysql_harvester;       ///< MySQL static harvester for Phase 1
+	PgSQL_Static_Harvester* pgsql_harvester; ///< PostgreSQL static harvester for Phase 1
 
 	// Connection pool for MySQL queries
 	struct MySQLConnection {
@@ -218,11 +214,6 @@ public:
 	 * @brief Constructor (creates catalog and harvester)
 	 */
 	Query_Tool_Handler(
-		const std::string& hosts,
-		const std::string& ports,
-		const std::string& user,
-		const std::string& password,
-		const std::string& schema,
 		const std::string& catalog_path
 	);
 
@@ -247,7 +238,7 @@ public:
 	/**
 	 * @brief Get the static harvester
 	 */
-	Static_Harvester* get_harvester() const { return harvester; }
+	Static_Harvester* get_harvester() const { return mysql_harvester; }
 
 	/**
 	 * @brief Get tool usage statistics (thread-safe copy)
