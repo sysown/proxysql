@@ -175,6 +175,7 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 **Purpose**: Safe database exploration and query execution
 
 **Tools**:
+- `list_targets` - List logical backend targets (hostgroup-backed routing handles)
 - `list_schemas` - List databases
 - `list_tables` - List tables in schema
 - `describe_table` - Get table structure
@@ -202,8 +203,52 @@ Each MCP endpoint has its own dedicated tool handler with specific tools designe
 - Data analysis and discovery
 - Query optimization assistance
 - Two-phase discovery (static harvest + LLM analysis)
+- Multi-backend routing via opaque `target_id` values instead of direct host/protocol details
 
 **Authentication**: `mcp-query_endpoint_auth` (Bearer token)
+
+#### Query Target Routing Model
+
+`/mcp/query` now supports a dynamic routing model based on logical targets:
+
+- Clients call `list_targets` to discover routable targets.
+- Each target exposes:
+  - `target_id` (opaque identifier)
+  - `description` (human-readable summary)
+  - `capabilities` (for example `inventory`, `readonly_sql`, `explain`)
+- Query tools (for example `run_sql_readonly`, `explain_sql`, `list_tables`) accept an optional `target_id`.
+- If `target_id` is omitted, the server uses a default executable target when available.
+
+Internally, the server resolves each `target_id` to runtime hostgroup metadata, a configured auth profile, and protocol-specific execution paths.
+
+Credential separation model:
+
+- MCP endpoint authentication (Bearer token) identifies and authorizes the MCP client.
+- Backend database credentials are server-managed in MCP runtime profile tables:
+  - `runtime_mcp_target_profiles`
+  - `runtime_mcp_auth_profiles`
+- Query execution pools are keyed by `target_id + auth_profile_id`.
+
+Current execution support:
+
+- `mysql` targets: `list_tables`, `run_sql_readonly`, `explain_sql`
+- `pgsql` targets: `list_tables`, `run_sql_readonly`, `explain_sql`
+
+#### MCP Query Rules and Stats
+
+MCP query rules support routing-aware filters so one endpoint can enforce different policies per logical target:
+
+- `username`: backend DB username from the resolved auth profile
+- `target_id`: logical MCP target selected by the client (or resolved default target)
+- `schemaname`: optional schema/database context
+- `tool_name`: MCP tool name (for example `run_sql_readonly`)
+
+The runtime and stats views expose these fields:
+
+- `runtime_mcp_query_rules`: includes `username` and `target_id` columns
+- `stats_mcp_query_rules`: includes `rule_id`, `username`, `target_id`, `hits`
+
+This allows policy verification and hit analysis per logical route without exposing backend host/protocol details to MCP clients.
 
 ---
 

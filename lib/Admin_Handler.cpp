@@ -2534,6 +2534,168 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	// MCP QUERY RULES COMMAND HANDLERS
 	// ============================================================
 #ifdef PROXYSQLGENAI
+	// ============================================================
+	// MCP PROFILES COMMAND HANDLERS (auth + target together)
+	// ============================================================
+	if ((query_no_space_length > 17) &&
+		((!strncasecmp("SAVE MCP PROFILES ", query_no_space, 18)) ||
+		 (!strncasecmp("LOAD MCP PROFILES ", query_no_space, 18)))) {
+
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		proxy_info("Received %s command\n", query_no_space);
+
+		const auto load_target_auth_map_from_runtime = [&]() -> bool {
+			char* error = NULL;
+			int cols = 0;
+			int affected_rows = 0;
+			SQLite3_result* resultset = NULL;
+			const char* q =
+				"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
+				" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
+				" a.db_username, a.db_password, a.default_schema"
+				" FROM runtime_mcp_target_profiles t"
+				" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
+				" WHERE t.active=1"
+				" ORDER BY t.target_id";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+			if (error) {
+				proxy_error("Failed to load MCP target auth map: %s\n", error);
+				free(error);
+				if (resultset) {
+					delete resultset;
+				}
+				return false;
+			}
+			if (GloMCPH) {
+				GloMCPH->load_target_auth_map(resultset);
+			} else if (resultset) {
+				delete resultset;
+			}
+			return true;
+		};
+
+		// LOAD MCP PROFILES FROM DISK / TO MEMORY
+		if (
+			(query_no_space_length == strlen("LOAD MCP PROFILES FROM DISK") &&
+			 !strncasecmp("LOAD MCP PROFILES FROM DISK", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES TO MEMORY") &&
+			 !strncasecmp("LOAD MCP PROFILES TO MEMORY", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_auth_profiles SELECT * FROM disk.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM main.mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_target_profiles SELECT * FROM disk.mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to load MCP profiles from disk");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// SAVE MCP PROFILES TO DISK
+		if (
+			(query_no_space_length == strlen("SAVE MCP PROFILES TO DISK") &&
+			 !strncasecmp("SAVE MCP PROFILES TO DISK", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM disk.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM disk.mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO disk.mcp_target_profiles SELECT * FROM main.mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to save MCP profiles to disk");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// LOAD MCP PROFILES TO RUNTIME / FROM MEMORY
+		if (
+			(query_no_space_length == strlen("LOAD MCP PROFILES TO RUNTIME") &&
+			 !strncasecmp("LOAD MCP PROFILES TO RUNTIME", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES TO RUN") &&
+			 !strncasecmp("LOAD MCP PROFILES TO RUN", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES FROM MEMORY") &&
+			 !strncasecmp("LOAD MCP PROFILES FROM MEMORY", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("LOAD MCP PROFILES FROM MEM") &&
+			 !strncasecmp("LOAD MCP PROFILES FROM MEM", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM runtime_mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM runtime_mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to load MCP profiles to runtime");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			if (!load_target_auth_map_from_runtime()) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to refresh MCP runtime profile map");
+				return false;
+			}
+			// Ensure MCP server/query handler reflects the newly loaded runtime profiles.
+			// This recovers cases where MCP server was started before profiles were available.
+			SPA->load_mcp_server();
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+
+		// SAVE MCP PROFILES FROM RUNTIME / TO MEMORY
+		if (
+			(query_no_space_length == strlen("SAVE MCP PROFILES TO MEMORY") &&
+			 !strncasecmp("SAVE MCP PROFILES TO MEMORY", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("SAVE MCP PROFILES TO MEM") &&
+			 !strncasecmp("SAVE MCP PROFILES TO MEM", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("SAVE MCP PROFILES FROM RUNTIME") &&
+			 !strncasecmp("SAVE MCP PROFILES FROM RUNTIME", query_no_space, query_no_space_length)) ||
+			(query_no_space_length == strlen("SAVE MCP PROFILES FROM RUN") &&
+			 !strncasecmp("SAVE MCP PROFILES FROM RUN", query_no_space, query_no_space_length))
+		) {
+			if (!SPA->admindb->execute("BEGIN")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to BEGIN transaction");
+				return false;
+			}
+			if (!SPA->admindb->execute("DELETE FROM main.mcp_auth_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_auth_profiles SELECT * FROM runtime_mcp_auth_profiles") ||
+			    !SPA->admindb->execute("DELETE FROM main.mcp_target_profiles") ||
+			    !SPA->admindb->execute("INSERT OR REPLACE INTO main.mcp_target_profiles SELECT * FROM runtime_mcp_target_profiles")) {
+				SPA->admindb->execute("ROLLBACK");
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to save MCP profiles from runtime");
+				return false;
+			}
+			if (!SPA->admindb->execute("COMMIT")) {
+				SPA->send_error_msg_to_client(sess, (char *)"Failed to COMMIT transaction");
+				return false;
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+	}
+
 	// Supported commands:
 	//   LOAD MCP QUERY RULES FROM DISK  - Copy from disk to memory
 	//   LOAD MCP QUERY RULES TO MEMORY  - Copy from disk to memory (alias)

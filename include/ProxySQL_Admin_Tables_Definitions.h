@@ -356,6 +356,7 @@
   "  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ," \
   "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ," \
   "  username VARCHAR ," \
+  "  target_id VARCHAR ," \
   "  schemaname VARCHAR ," \
   "  tool_name VARCHAR ," \
   "  match_pattern VARCHAR ," \
@@ -380,6 +381,7 @@
   "  rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ," \
   "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 ," \
   "  username VARCHAR ," \
+  "  target_id VARCHAR ," \
   "  schemaname VARCHAR ," \
   "  tool_name VARCHAR ," \
   "  match_pattern VARCHAR ," \
@@ -394,6 +396,56 @@
   "  log INT CHECK (log IN (0,1)) ," \
   "  apply INT CHECK (apply IN (0,1)) NOT NULL DEFAULT 1 ," \
   "  comment VARCHAR" \
+  ")"
+
+// MCP backend authentication profiles (server-side credentials)
+#define ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES "CREATE TABLE mcp_auth_profiles (" \
+  "  auth_profile_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  db_username VARCHAR NOT NULL ," \
+  "  db_password VARCHAR NOT NULL ," \
+  "  default_schema VARCHAR DEFAULT '' ," \
+  "  use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  ssl_mode VARCHAR DEFAULT '' ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_AUTH_PROFILES "CREATE TABLE runtime_mcp_auth_profiles (" \
+  "  auth_profile_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  db_username VARCHAR NOT NULL ," \
+  "  db_password VARCHAR NOT NULL ," \
+  "  default_schema VARCHAR DEFAULT '' ," \
+  "  use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  ssl_mode VARCHAR DEFAULT '' ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+// MCP target routing profiles: target_id -> (protocol, hostgroup, auth_profile, policy)
+#define ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES "CREATE TABLE mcp_target_profiles (" \
+  "  target_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  protocol VARCHAR NOT NULL CHECK (protocol IN ('mysql','pgsql')) ," \
+  "  hostgroup_id INT CHECK (hostgroup_id >= 0) NOT NULL ," \
+  "  auth_profile_id VARCHAR NOT NULL ," \
+  "  description VARCHAR DEFAULT '' ," \
+  "  max_rows INT CHECK (max_rows > 0) NOT NULL DEFAULT 200 ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) NOT NULL DEFAULT 2000 ," \
+  "  allow_explain INT CHECK (allow_explain IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  allow_discovery INT CHECK (allow_discovery IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR DEFAULT ''" \
+  ")"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MCP_TARGET_PROFILES "CREATE TABLE runtime_mcp_target_profiles (" \
+  "  target_id VARCHAR PRIMARY KEY NOT NULL ," \
+  "  protocol VARCHAR NOT NULL CHECK (protocol IN ('mysql','pgsql')) ," \
+  "  hostgroup_id INT CHECK (hostgroup_id >= 0) NOT NULL ," \
+  "  auth_profile_id VARCHAR NOT NULL ," \
+  "  description VARCHAR DEFAULT '' ," \
+  "  max_rows INT CHECK (max_rows > 0) NOT NULL DEFAULT 200 ," \
+  "  timeout_ms INT CHECK (timeout_ms >= 0) NOT NULL DEFAULT 2000 ," \
+  "  allow_explain INT CHECK (allow_explain IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  allow_discovery INT CHECK (allow_discovery IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 ," \
+  "  comment VARCHAR DEFAULT ''" \
   ")"
 
 // MCP query digest statistics table
@@ -426,12 +478,14 @@
   "  PRIMARY KEY(tool_name, run_id, digest)" \
   ")"
 
-// MCP query rules statistics table - shows hit counters for each rule
-// This table contains only rule_id and hits count.
+// MCP query rules statistics table - shows hit counters and rule filters.
+// target_id/username are copied from the in-memory rule definition.
 // It is automatically populated when stats_mcp_query_rules is queried.
 // The hits counter increments each time a rule matches during query processing.
 #define STATS_SQLITE_TABLE_MCP_QUERY_RULES "CREATE TABLE stats_mcp_query_rules (" \
   "  rule_id INTEGER PRIMARY KEY NOT NULL ," \
+  "  username VARCHAR ," \
+  "  target_id VARCHAR ," \
   "  hits INTEGER NOT NULL" \
   ")"
 

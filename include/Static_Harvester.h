@@ -155,7 +155,7 @@ public:
 	 * @param notes Optional notes for this run
 	 * @return run_id on success, -1 on error
 	 */
-	int start_run(const std::string& notes = "");
+	int start_run(const std::string& target_id, const std::string& notes = "");
 
 	/**
 	 * @brief Finish the current discovery run
@@ -281,7 +281,7 @@ public:
 	 * @param notes Optional run notes
 	 * @return run_id on success, -1 on error
 	 */
-	int run_full_harvest(const std::string& only_schema = "", const std::string& notes = "");
+	int run_full_harvest(const std::string& target_id, const std::string& only_schema = "", const std::string& notes = "");
 
 	/**
 	 * @brief Get harvest statistics

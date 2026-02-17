@@ -32,6 +32,10 @@ class CommandLine {
 	char* admin_username = strdup("admin");
 	char* admin_password = strdup("admin");
 
+	// proxysql mcp connection
+	int mcp_port = 6071;
+	char* mcp_auth_token = strdup("");
+
 	// mysql admin connection
 	char* mysql_host = strdup("127.0.0.1");
 	int mysql_port = 3306;
@@ -69,4 +73,3 @@ class CommandLine {
 };
 
 #endif // #ifndef COMMAND_LINE_H
-
