@@ -383,6 +383,12 @@ public:
                 j_resp = metrics;
             }
         } else if (req_path == "/api/tsdb/query") {
+            if (!GloProxyStats || !GloProxyStats->statsdb_disk) {
+                j_resp = json {{"error", "TSDB not initialized"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+                add_headers(response);
+                return response;
+            }
             string metric = req.get_arg("metric");
             if (metric.empty()) {
                 j_resp = json {{"error", "Missing 'metric' parameter"}};
@@ -417,13 +423,23 @@ public:
                     json row;
                     row["ts"] = atol(res->rows[i]->fields[0]);
                     row["metric"] = res->rows[i]->fields[1];
-                    row["labels"] = json::parse(res->rows[i]->fields[2]);
+                    try {
+                        row["labels"] = json::parse(res->rows[i]->fields[2]);
+                    } catch (const json::parse_error& e) {
+                        row["labels"] = res->rows[i]->fields[2];
+                    }
                     row["value"] = atof(res->rows[i]->fields[3]);
                     j_resp.push_back(row);
                 }
                 delete res;
             }
         } else if (req_path == "/api/tsdb/status") {
+            if (!GloProxyStats) {
+                j_resp = json {{"error", "TSDB not initialized"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+                add_headers(response);
+                return response;
+            }
             ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
             j_resp["total_series"] = status.total_series;
             j_resp["total_datapoints"] = status.total_datapoints;
