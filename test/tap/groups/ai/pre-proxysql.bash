@@ -72,10 +72,26 @@ create_pgsql_monitor_user() {
     fi
 }
 
+seed_mysql_test_data() {
+    echo "[INFO] AI pre-hook: seeding MySQL static-harvest test data"
+    mysql -h"${TAP_MYSQLHOST}" -P"${TAP_MYSQLPORT}" -u"${TAP_MYSQLUSERNAME}" -p"${TAP_MYSQLPASSWORD}" < "${SCRIPT_DIR}/mysql-seed.sql"
+}
+
+seed_pgsql_test_data() {
+    echo "[INFO] AI pre-hook: seeding PostgreSQL static-harvest test data"
+    if command -v psql >/dev/null 2>&1; then
+        PGPASSWORD="${AI_PGSQL_PASSWORD}" psql -h "${AI_PGSQL_HOST}" -p "${AI_PGSQL_PORT}" -U "${AI_PGSQL_USER}" -d "${AI_PGSQL_DB}" -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/pgsql-seed.sql"
+    else
+        compose exec -T pgsql psql -U "${AI_PGSQL_USER}" -d "${AI_PGSQL_DB}" -v ON_ERROR_STOP=1 < "${SCRIPT_DIR}/pgsql-seed.sql"
+    fi
+}
+
 echo "[INFO] AI pre-hook: starting group-local containers"
 "${SCRIPT_DIR}/docker-compose-init.bash"
 create_mysql_monitor_user
 create_pgsql_monitor_user
+seed_mysql_test_data
+seed_pgsql_test_data
 
 echo "[INFO] AI pre-hook: configuring ProxySQL MCP and backend routing"
 

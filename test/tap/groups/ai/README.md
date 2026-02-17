@@ -13,6 +13,9 @@ Both are started from `test/tap/groups/ai/docker-compose.yml`.
 
 - `pre-proxysql.bash`
   - starts local containers (`docker-compose-init.bash`)
+  - seeds deterministic static-harvest datasets on both backends:
+    - MySQL: `tap_mysql_static_customers`, `tap_mysql_static_orders`
+    - PostgreSQL: `tap_pgsql_static_accounts`, `tap_pgsql_static_events`
   - enables MCP
   - configures backend hostgroups and MCP profiles/targets:
     - MySQL target: `tap_mysql_default`
@@ -41,8 +44,16 @@ bash test/tap/tests/test_mcp_query_rules-t.sh
 bash test/tap/groups/ai/post-proxysql.bash
 ```
 
+For static-harvest phase-A suite (mysql + pgsql targets):
+
+```bash
+source test/tap/groups/ai/env.sh
+bash test/tap/groups/ai/pre-proxysql.bash
+bash test/tap/tests/test_mcp_static_harvest-t.sh
+bash test/tap/groups/ai/post-proxysql.bash
+```
+
 ## Notes
 
 - All variables can be overridden from the environment before running hooks.
 - The scripts still work in Jenkins-driven TAP flows because they do not require Jenkins-only paths.
-
