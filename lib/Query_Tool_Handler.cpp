@@ -26,6 +26,56 @@ using json = nlohmann::json;
 
 extern ProxySQL_Admin *GloAdmin;
 
+static std::string get_runtime_hostgroup_status_summary(const std::string& protocol, int hostgroup_id) {
+	if (GloAdmin == NULL || GloAdmin->admindb == NULL) {
+		return "runtime status unavailable (admin db not ready)";
+	}
+
+	const char* table_name = (protocol == "pgsql") ? "runtime_pgsql_servers" : "runtime_mysql_servers";
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	std::ostringstream sql;
+	sql << "SELECT UPPER(COALESCE(status,'NULL')) AS status, COUNT(*)"
+	    << " FROM " << table_name
+	    << " WHERE hostgroup_id=" << hostgroup_id
+	    << " GROUP BY UPPER(COALESCE(status,'NULL'))"
+	    << " ORDER BY status";
+
+	GloAdmin->admindb->execute_statement(sql.str().c_str(), &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		std::string err = std::string("failed reading ") + table_name + ": " + error;
+		free(error);
+		if (resultset) {
+			delete resultset;
+		}
+		return err;
+	}
+
+	if (!resultset || resultset->rows.empty()) {
+		if (resultset) {
+			delete resultset;
+		}
+		std::ostringstream msg;
+		msg << "no rows in " << table_name << " for hostgroup " << hostgroup_id;
+		return msg.str();
+	}
+
+	std::ostringstream out;
+	for (size_t i = 0; i < resultset->rows.size(); i++) {
+		if (i) {
+			out << ", ";
+		}
+		SQLite3_row* row = resultset->rows[i];
+		const char* status = (row->cnt > 0 && row->fields[0]) ? row->fields[0] : "UNKNOWN";
+		const char* cnt = (row->cnt > 1 && row->fields[1]) ? row->fields[1] : "0";
+		out << status << "=" << cnt;
+	}
+	delete resultset;
+	return out.str();
+}
+
 // ============================================================
 // JSON Helper Functions
 //
@@ -599,15 +649,15 @@ std::string Query_Tool_Handler::format_target_unavailable_error(const std::strin
 				oss << ", ";
 			}
 			oss << t.target_id << "[protocol=" << t.protocol << ", hostgroup=" << t.hostgroup_id;
-			if (!t.executable) {
-				if (t.db_username.empty()) {
-					oss << ", reason=empty db_username in auth_profile_id=" << t.auth_profile_id;
-				} else if (t.host.empty()) {
-					oss << ", reason=no ONLINE backend in runtime_" << (t.protocol == "pgsql" ? "pgsql" : "mysql")
-					    << "_servers";
-				} else {
-					oss << ", reason=not executable";
-				}
+		if (!t.executable) {
+			if (t.db_username.empty()) {
+				oss << ", reason=empty db_username in auth_profile_id=" << t.auth_profile_id;
+			} else if (t.host.empty()) {
+				oss << ", reason=no ONLINE backend, statuses={"
+				    << get_runtime_hostgroup_status_summary(t.protocol, t.hostgroup_id) << "}";
+			} else {
+				oss << ", reason=not executable";
+			}
 			} else {
 				oss << ", executable=1";
 			}
@@ -633,8 +683,8 @@ std::string Query_Tool_Handler::format_target_unavailable_error(const std::strin
 		if (t.db_username.empty()) {
 			oss << ": auth profile has empty db_username";
 		} else if (t.host.empty()) {
-			oss << ": no ONLINE backend in runtime_" << (t.protocol == "pgsql" ? "pgsql" : "mysql")
-			    << "_servers for hostgroup " << t.hostgroup_id;
+			oss << ": no ONLINE backend in hostgroup " << t.hostgroup_id
+			    << ", statuses={" << get_runtime_hostgroup_status_summary(t.protocol, t.hostgroup_id) << "}";
 		} else {
 			oss << ": backend " << t.host << ":" << t.port << " resolved but target is still non-executable";
 		}
