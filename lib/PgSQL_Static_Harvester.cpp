@@ -161,17 +161,41 @@ bool PgSQL_Static_Harvester::is_valid_schema_name(const std::string& name) {
 	return true;
 }
 
-std::string PgSQL_Static_Harvester::escape_sql_string(const std::string& str) {
-	std::string escaped;
-	escaped.reserve(str.length() * 2);
-	for (char c : str) {
-		if (c == '\'') {
-			escaped += "''";
-		} else {
-			escaped += c;
-		}
+// Helper function to look up object_id using parameterized queries.
+// This is defense-in-depth: schema_name and object_name are already validated
+// by is_valid_schema_name(), but using parameterized queries ensures complete
+// protection against SQL injection for the catalog database.
+int PgSQL_Static_Harvester::lookup_object_id(const std::string& schema_name, const std::string& object_name, const char* object_types) {
+	if (!catalog || !catalog->get_db()) return -1;
+
+	int rc = SQLITE_OK;
+	sqlite3_stmt* stmt = NULL;
+
+	// Note: object_types parameter is used for future extensibility but currently
+	// we only query for 'table' and 'view' types which covers all current use cases.
+	// The parameter is kept for API consistency with the header declaration.
+	(void)object_types;
+
+	auto [prep_rc, stmt_unique] = catalog->get_db()->prepare_v2(
+		"SELECT object_id FROM objects WHERE run_id=?1 AND schema_name=?2 AND object_name=?3 AND object_type IN ('table','view') LIMIT 1;"
+	);
+	stmt = stmt_unique.get();
+	if (prep_rc != SQLITE_OK) {
+		proxy_error("PgSQL_Static_Harvester: Failed to prepare object lookup statement\n");
+		return -1;
 	}
-	return escaped;
+
+	(*proxy_sqlite3_bind_int64)(stmt, 1, current_run_id);
+	(*proxy_sqlite3_bind_text)(stmt, 2, schema_name.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 3, object_name.c_str(), -1, SQLITE_TRANSIENT);
+
+	SAFE_SQLITE3_STEP2(stmt);
+	int object_id = -1;
+	if (rc == SQLITE_ROW) {
+		object_id = (*proxy_sqlite3_column_int)(stmt, 0);
+	}
+	(*proxy_sqlite3_finalize)(stmt);
+	return object_id;
 }
 
 int PgSQL_Static_Harvester::start_run(const std::string& target_id, const std::string& notes) {
@@ -339,27 +363,12 @@ int PgSQL_Static_Harvester::harvest_columns(const std::string& only_schema) {
 	int count = 0;
 	for (const auto& r : rows) {
 		if (r.size() < 12) continue;
-		char* error = NULL;
-		int cols = 0, affected = 0;
-		SQLite3_result* resultset = NULL;
-		std::ostringstream obj_sql;
-		obj_sql << "SELECT object_id FROM objects "
-		        << "WHERE run_id=" << current_run_id
-		        << " AND schema_name='" << escape_sql_string(r[0]) << "'"
-		        << " AND object_name='" << escape_sql_string(r[1]) << "'"
-		        << " AND object_type IN ('table','view') LIMIT 1;";
-		catalog->get_db()->execute_statement(obj_sql.str().c_str(), &error, &cols, &affected, &resultset);
-		if (error || !resultset || resultset->rows.empty()) {
-			if (error) {
-				free(error);
-			}
-			if (resultset) {
-				delete resultset;
-			}
+
+		// Use parameterized query to look up object_id (safe from SQL injection)
+		int object_id = lookup_object_id(r[0], r[1], "table,view");
+		if (object_id < 0) {
 			continue;
 		}
-		int object_id = atoi(resultset->rows[0]->fields[0]);
-		delete resultset;
 
 		int is_time = 0;
 		if (r[4] == "date" || r[4] == "time" || r[4] == "timestamp" ||
@@ -420,27 +429,11 @@ int PgSQL_Static_Harvester::harvest_indexes(const std::string& only_schema) {
 		if (rows_for_index.empty()) continue;
 		const auto& first = rows_for_index[0];
 
-		char* error = NULL;
-		int cols = 0, affected = 0;
-		SQLite3_result* resultset = NULL;
-		std::ostringstream obj_sql;
-		obj_sql << "SELECT object_id FROM objects "
-		        << "WHERE run_id=" << current_run_id
-		        << " AND schema_name='" << escape_sql_string(first[0]) << "'"
-		        << " AND object_name='" << escape_sql_string(first[1]) << "'"
-		        << " AND object_type='table' LIMIT 1;";
-		catalog->get_db()->execute_statement(obj_sql.str().c_str(), &error, &cols, &affected, &resultset);
-		if (error || !resultset || resultset->rows.empty()) {
-			if (error) {
-				free(error);
-			}
-			if (resultset) {
-				delete resultset;
-			}
+		// Use parameterized query to look up object_id (safe from SQL injection)
+		int object_id = lookup_object_id(first[0], first[1], "table");
+		if (object_id < 0) {
 			continue;
 		}
-		int object_id = atoi(resultset->rows[0]->fields[0]);
-		delete resultset;
 
 		int is_primary = (first[2] == "PRIMARY" || first[2] == first[1] + "_pkey") ? 1 : 0;
 		int index_id = catalog->insert_index(
@@ -495,29 +488,13 @@ int PgSQL_Static_Harvester::harvest_foreign_keys(const std::string& only_schema)
 		if (r.size() < 10) continue;
 		std::string fk_key = r[0] + "." + r[1] + "." + r[2];
 		if (fk_key != last_fk_key) {
-			char* error = NULL;
-			int cols = 0, affected = 0;
-			SQLite3_result* resultset = NULL;
-			std::ostringstream obj_sql;
-			obj_sql << "SELECT object_id FROM objects "
-			        << "WHERE run_id=" << current_run_id
-			        << " AND schema_name='" << escape_sql_string(r[0]) << "'"
-			        << " AND object_name='" << escape_sql_string(r[1]) << "'"
-			        << " AND object_type='table' LIMIT 1;";
-			catalog->get_db()->execute_statement(obj_sql.str().c_str(), &error, &cols, &affected, &resultset);
-			if (error || !resultset || resultset->rows.empty()) {
-				if (error) {
-					free(error);
-				}
-				if (resultset) {
-					delete resultset;
-				}
+			// Use parameterized query to look up object_id (safe from SQL injection)
+			int child_object_id = lookup_object_id(r[0], r[1], "table");
+			if (child_object_id < 0) {
 				last_fk_id = -1;
 				last_fk_key.clear();
 				continue;
 			}
-			int child_object_id = atoi(resultset->rows[0]->fields[0]);
-			delete resultset;
 			last_fk_id = catalog->insert_foreign_key(
 				current_run_id, child_object_id, r[2], r[4], r[5], r[8], r[9]
 			);
@@ -551,21 +528,31 @@ int PgSQL_Static_Harvester::harvest_view_definitions(const std::string& only_sch
 	int count = 0;
 	for (const auto& row : rows) {
 		if (row.size() < 3) continue;
-		char* error = NULL;
-		int cols = 0, affected = 0;
-		std::ostringstream update_sql;
-		update_sql << "UPDATE objects SET definition_sql = '" << escape_sql_string(row[2]) << "' "
-		           << "WHERE run_id = " << current_run_id
-		           << " AND schema_name = '" << escape_sql_string(row[0]) << "'"
-		           << " AND object_name = '" << escape_sql_string(row[1]) << "'"
-		           << " AND object_type = 'view';";
-		catalog->get_db()->execute_statement(update_sql.str().c_str(), &error, &cols, &affected);
-		if (error) {
-			free(error);
+
+		// Use parameterized query for UPDATE (safe from SQL injection)
+		int rc = SQLITE_OK;
+		sqlite3_stmt* stmt = NULL;
+		const char* sql = "UPDATE objects SET definition_sql = ?1 WHERE run_id = ?2 AND schema_name = ?3 AND object_name = ?4 AND object_type = 'view';";
+		auto [prep_rc, stmt_unique] = catalog->get_db()->prepare_v2(sql);
+		stmt = stmt_unique.get();
+		if (prep_rc != SQLITE_OK) {
+			proxy_error("PgSQL_Static_Harvester: Failed to prepare view definition update statement\n");
+			continue;
 		}
-		if (affected > 0) {
-			count++;
+
+		(*proxy_sqlite3_bind_text)(stmt, 1, row[2].c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_int64)(stmt, 2, current_run_id);
+		(*proxy_sqlite3_bind_text)(stmt, 3, row[0].c_str(), -1, SQLITE_TRANSIENT);
+		(*proxy_sqlite3_bind_text)(stmt, 4, row[1].c_str(), -1, SQLITE_TRANSIENT);
+
+		SAFE_SQLITE3_STEP2(stmt);
+		if (rc == SQLITE_DONE) {
+			int changes = (*proxy_sqlite3_changes)(catalog->get_db()->get_db());
+			if (changes > 0) {
+				count++;
+			}
 		}
+		(*proxy_sqlite3_finalize)(stmt);
 	}
 	return count;
 }

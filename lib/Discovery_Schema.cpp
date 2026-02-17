@@ -90,69 +90,51 @@ int Discovery_Schema::resolve_run_id(const std::string& target_id, const std::st
 		return -1;
 	}
 
+	int rc = SQLITE_OK;
+	sqlite3_stmt* stmt = NULL;
+
 	// If it's already a number (run_id), return it
 	if (!run_id_or_schema.empty() && std::isdigit(run_id_or_schema[0])) {
 		int run_id = std::stoi(run_id_or_schema);
-		char* error = NULL;
-		int cols = 0, affected = 0;
-		SQLite3_result* resultset = NULL;
-		std::string esc_target_id = target_id;
-		replace_str(esc_target_id, "'", "''");
-		std::ostringstream verify_sql;
-		verify_sql << "SELECT 1 FROM runs WHERE run_id=" << run_id
-		           << " AND target_id='" << esc_target_id << "' LIMIT 1;";
-		db->execute_statement(verify_sql.str().c_str(), &error, &cols, &affected, &resultset);
-		if (error) {
-			proxy_error("Failed to validate run_id '%d' for target '%s': %s\n", run_id, target_id.c_str(), error);
-			free(error);
-			if (resultset) {
-				delete resultset;
-			}
+		const char* sql = "SELECT 1 FROM runs WHERE run_id=?1 AND target_id=?2 LIMIT 1;";
+		auto [prep_rc, stmt_unique] = db->prepare_v2(sql);
+		stmt = stmt_unique.get();
+		if (prep_rc != SQLITE_OK) {
+			proxy_error("Failed to prepare statement for run_id validation\n");
 			return -1;
 		}
-		bool found = (resultset && resultset->rows_count > 0);
-		if (resultset) {
-			delete resultset;
-		}
+		(*proxy_sqlite3_bind_int64)(stmt, 1, run_id);
+		(*proxy_sqlite3_bind_text)(stmt, 2, target_id.c_str(), -1, SQLITE_TRANSIENT);
+		SAFE_SQLITE3_STEP2(stmt);
+		bool found = (rc == SQLITE_ROW);
+		(*proxy_sqlite3_finalize)(stmt);
 		return found ? run_id : -1;
 	}
 
 	// It's a schema name - find the latest run_id for this schema
-	char* error = NULL;
-	int cols = 0, affected = 0;
-	SQLite3_result* resultset = NULL;
-	std::string esc_target_id = target_id;
-	std::string esc_run_id_or_schema = run_id_or_schema;
-	replace_str(esc_target_id, "'", "''");
-	replace_str(esc_run_id_or_schema, "'", "''");
-
-	std::ostringstream sql;
-	sql << "SELECT r.run_id FROM runs r "
-	    << "INNER JOIN schemas s ON s.run_id = r.run_id "
-	    << "WHERE r.target_id = '" << esc_target_id << "' "
-	    << "AND s.schema_name = '" << esc_run_id_or_schema << "' "
-	    << "ORDER BY r.started_at DESC LIMIT 1;";
-
-	db->execute_statement(sql.str().c_str(), &error, &cols, &affected, &resultset);
-	if (error) {
-		proxy_error("Failed to resolve run_id for schema '%s': %s\n", run_id_or_schema.c_str(), error);
-		free(error);
+	const char* sql =
+		"SELECT r.run_id FROM runs r "
+		"INNER JOIN schemas s ON s.run_id = r.run_id "
+		"WHERE r.target_id = ?1 AND s.schema_name = ?2 "
+		"ORDER BY r.started_at DESC LIMIT 1;";
+	auto [prep_rc, stmt_unique] = db->prepare_v2(sql);
+	stmt = stmt_unique.get();
+	if (prep_rc != SQLITE_OK) {
+		proxy_error("Failed to prepare statement for schema resolution\n");
 		return -1;
 	}
+	(*proxy_sqlite3_bind_text)(stmt, 1, target_id.c_str(), -1, SQLITE_TRANSIENT);
+	(*proxy_sqlite3_bind_text)(stmt, 2, run_id_or_schema.c_str(), -1, SQLITE_TRANSIENT);
 
-	if (!resultset || resultset->rows_count == 0) {
+	SAFE_SQLITE3_STEP2(stmt);
+	if (rc != SQLITE_ROW) {
 		proxy_warning("No run found for schema '%s'\n", run_id_or_schema.c_str());
-		if (resultset) {
-			delete resultset;
-			resultset = NULL;
-		}
+		(*proxy_sqlite3_finalize)(stmt);
 		return -1;
 	}
 
-	SQLite3_row* row = resultset->rows[0];
-	int run_id = atoi(row->fields[0]);
-
-	delete resultset;
+	int run_id = (*proxy_sqlite3_column_int)(stmt, 0);
+	(*proxy_sqlite3_finalize)(stmt);
 	return run_id;
 }
 

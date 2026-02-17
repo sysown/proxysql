@@ -32,7 +32,8 @@ private:
 	int execute_query(const std::string& query, std::vector<std::vector<std::string>>& results);
 	std::string get_pgsql_version();
 	static bool is_valid_schema_name(const std::string& name);
-	static std::string escape_sql_string(const std::string& str);
+	// Helper to look up object_id using parameterized query (safe from SQL injection)
+	int lookup_object_id(const std::string& schema_name, const std::string& object_name, const char* object_types);
 
 public:
 	PgSQL_Static_Harvester(
