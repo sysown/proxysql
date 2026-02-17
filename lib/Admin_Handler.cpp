@@ -973,14 +973,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
+#endif // DEBUG
+
 	if (query_no_space_length == strlen("PROXYSQL TSDB DOWNSAMPLE") && !strncasecmp("PROXYSQL TSDB DOWNSAMPLE", query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL TSDB DOWNSAMPLE command\n");
-		GloProxyStats->tsdb_downsample_metrics();
+		if (GloProxyStats) {
+			GloProxyStats->tsdb_downsample_metrics();
+		}
 		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
-#endif // DEBUG
 
 	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
@@ -1911,9 +1914,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)) ||
 			(!strncasecmp("SAVE TSDB VARIABLES ", query_no_space, 20)) || (!strncasecmp("LOAD TSDB VARIABLES ", query_no_space, 20)))) {
 
-			const bool is_pgsql = (query_no_space[5] == 'P' || query_no_space[5] == 'p') ? true : false;
-			const bool is_genai = (query_no_space[5] == 'G' || query_no_space[5] == 'g') ? true : false;
-			const bool is_tsdb = (query_no_space[5] == 'T' || query_no_space[5] == 't') ? true : false;
+			const bool is_pgsql = strcasestr(query_no_space, "PGSQL") ? true : false;
+			const bool is_genai = strcasestr(query_no_space, "GENAI") ? true : false;
+			const bool is_tsdb = strcasestr(query_no_space, "TSDB") ? true : false;
 			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : (is_tsdb ? "tsdb_variables" : "mysql_variables"));
 
 			if (is_tsdb) {

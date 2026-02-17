@@ -2522,19 +2522,20 @@ __end_while_pool:
 					GloProxyStats->system_memory_sets();
 				}
 #endif
-				if (GloProxyStats->tsdb_sampler_timetoget(curtime)) {
-					GloProxyStats->tsdb_sampler_loop();
-				}
-				if (GloProxyStats->tsdb_downsample_timetoget(curtime)) {
-					GloProxyStats->tsdb_downsample_metrics();
-				}
-				                                if (GloProxyStats->tsdb_monitor_timetoget(curtime)) {
-				                                        GloProxyStats->tsdb_monitor_loop();
-				                                }
-				                                if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
-				                                        GloProxyStats->tsdb_retention_cleanup();
-				                                }
-				                        }		if (S_amll.get_version()!=version) {
+			if (GloProxyStats->tsdb_sampler_timetoget(curtime)) {
+				GloProxyStats->tsdb_sampler_loop();
+			}
+			if (GloProxyStats->tsdb_downsample_timetoget(curtime)) {
+				GloProxyStats->tsdb_downsample_metrics();
+			}
+			if (GloProxyStats->tsdb_monitor_timetoget(curtime)) {
+				GloProxyStats->tsdb_monitor_loop();
+			}
+			if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
+				GloProxyStats->tsdb_retention_cleanup();
+			}
+		}
+		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
 			version=S_amll.get_version();
 			for (i=1; i<nfds; i++) {
@@ -3023,6 +3024,8 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 		int matching_rows=0;
 		if (error) {
 			proxy_error("Error on %s : %s\n", q, error);
+			sqlite3_free(error);
+			if (resultset) delete resultset;
 			return;
 		} else {
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -3041,29 +3044,51 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 	if (runtime) {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'");
 	}
-	char *a;
-	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+
+	const char *query_a;
+	const char *query_b = "INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 	if (replace) {
-		a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+		query_a = "REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 	} else {
-		a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"tsdb-%s\",\"%s\")";
+		query_a = "INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 	}
+
+	stmt_unique_ptr u_stmt_a { nullptr };
+	stmt_unique_ptr u_stmt_b { nullptr };
+	int rc;
+
+	std::tie(rc, u_stmt_a) = db->prepare_v2(query_a);
+	ASSERT_SQLITE_OK(rc, db);
+	if (runtime) {
+		std::tie(rc, u_stmt_b) = db->prepare_v2(query_b);
+		ASSERT_SQLITE_OK(rc, db);
+	}
+
 	char **varnames = GloProxyStats->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val = GloProxyStats->get_variable(varnames[i]);
 		const char* safe_val = (val ? val : "");
-		size_t l = strlen(a) + 200;
-		l += strlen(varnames[i]);
-		l += strlen(safe_val);
-		char *query=(char *)malloc(l);
-		snprintf(query, l, a, varnames[i], safe_val);
-		db->execute(query);
+		char qualified_name[128];
+		snprintf(qualified_name, sizeof(qualified_name), "tsdb-%s", varnames[i]);
+
+		// Bind and execute for query_a
+		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_step)(u_stmt_a.get());
+		if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+		rc = (*proxy_sqlite3_reset)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_clear_bindings)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
+
 		if (runtime) {
-			snprintf(query, l, b, varnames[i], safe_val);
-			db->execute(query);
+			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_step)(u_stmt_b.get());
+			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+			rc = (*proxy_sqlite3_reset)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_clear_bindings)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
 		}
+
 		if (val) free(val);
-		free(query);
 		free(varnames[i]);
 	}
 	free(varnames);

@@ -52,6 +52,7 @@ extern ClickHouse_Server *GloClickHouseServer;
 #endif
 
 extern char * Chart_bundle_js_c;
+extern char * TSDB_Dashboard_html_c;
 extern char * font_awesome;
 extern char * main_bundle_min_css_c;
 #define RATE_LIMIT_PAGE "<html><head><title>Rate Limit Page</title></head><body>Rate Limit Reached</body></html>"
@@ -438,47 +439,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		return MHD_NO;              /* unexpected method */
 
 	if (strcmp(url,"/tsdb")==0) {
-		string s = "<!DOCTYPE html><html><head><title>ProxySQL TSDB Dashboard</title>";
-		s += "<script src=\"/Chart.bundle.js\"></script>";
-		s += "<style>body{font-family:sans-serif;margin:20px} .container{max-width:1000px;margin:0 auto} .controls{margin-bottom:20px;padding:15px;background:#f5f5f5;border-radius:5px} select,input,button{padding:8px;margin-right:10px} #chart-container{height:500px;position:relative}</style></head><body>";
-		s += "<div class=\"container\"><h1>TSDB Dashboard</h1>";
-		s += "<div class=\"controls\">";
-		s += "Metric: <select id=\"metric-select\"><option>Loading...</option></select> ";
-		s += "Range: <select id=\"range-select\"><option value=\"3600\">Last Hour</option><option value=\"86400\">Last Day</option><option value=\"604800\">Last Week</option></select> ";
-		s += "<button onclick=\"loadData()\">Refresh</button>";
-		s += "</div>";
-		s += "<div id=\"chart-container\"><canvas id=\"tsdbChart\"></canvas></div>";
-		s += "<script>";
-		s += "let myChart = null;";
-		s += "async function loadMetrics() {";
-		s += "  const resp = await fetch('/api/tsdb/metrics');";
-		s += "  const metrics = await resp.json();";
-		s += "  const select = document.getElementById('metric-select');";
-		s += "  select.innerHTML = '';";
-		s += "  metrics.forEach(m => { const opt = document.createElement('option'); opt.value = m; opt.text = m; select.appendChild(opt); });";
-		s += "  if (metrics.length > 0) loadData();";
-		s += "}";
-		s += "async function loadData() {";
-		s += "  const metric = document.getElementById('metric-select').value;";
-		s += "  const range = document.getElementById('range-select').value;";
-		s += "  const now = Math.floor(Date.now() / 1000);";
-		s += "  const from = now - parseInt(range);";
-		s += "  const resp = await fetch(`/api/tsdb/query?metric=${metric}&from=${from}&to=${now}`);";
-		s += "  const data = await resp.json();";
-		s += "  const ctx = document.getElementById('tsdbChart').getContext('2d');";
-		s += "  if (myChart) myChart.destroy();";
-		s += "  const datasets = {};";
-		s += "  data.forEach(d => {";
-		s += "    const label = JSON.stringify(d.labels);";
-		s += "    if (!datasets[label]) datasets[label] = { label: label, data: [], borderColor: '#' + Math.floor(Math.random()*16777215).toString(16), fill: false };";
-		s += "    datasets[label].data.push({ x: new Date(d.ts * 1000), y: d.value });";
-		s += "  });";
-		s += "  myChart = new Chart(ctx, { type: 'line', data: { datasets: Object.values(datasets) }, options: { scales: { xAxes: [{ type: 'time', time: { unit: 'minute' } }] }, maintainAspectRatio: false } });";
-		s += "}";
-		s += "window.onload = loadMetrics;";
-		s += "</script></div></body></html>";
-
-		response = MHD_create_response_from_buffer (s.length(), (void *) s.c_str(), MHD_RESPMEM_MUST_COPY);
+		response = MHD_create_response_from_buffer (strlen(TSDB_Dashboard_html_c), (void *) TSDB_Dashboard_html_c, MHD_RESPMEM_PERSISTENT);
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 		MHD_destroy_response (response);
 		return ret;

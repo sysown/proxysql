@@ -12,6 +12,7 @@ using json = nlohmann::json;
 
 #include <fcntl.h>
 #include <sys/times.h>
+#include <poll.h>
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -172,24 +173,31 @@ char *ProxySQL_Statistics::get_variable(const char *name) {
     return NULL;
 }
 
+static const char* tsdb_variable_names[] = {
+    "enabled",
+    "sample_interval",
+    "retention_days",
+    "monitor_enabled",
+    "monitor_interval",
+    NULL
+};
+
 char **ProxySQL_Statistics::get_variables_list() {
-    char **list = (char **)malloc(sizeof(char *) * 6);
-    list[0] = strdup("enabled");
-    list[1] = strdup("sample_interval");
-    list[2] = strdup("retention_days");
-    list[3] = strdup("monitor_enabled");
-    list[4] = strdup("monitor_interval");
-    list[5] = NULL;
+    int count = 0;
+    while (tsdb_variable_names[count]) count++;
+    char **list = (char **)malloc(sizeof(char *) * (count + 1));
+    for (int i = 0; i < count; i++) {
+        list[i] = strdup(tsdb_variable_names[i]);
+    }
+    list[count] = NULL;
     return list;
 }
 
 bool ProxySQL_Statistics::has_variable(const char *name) {
     if (name == NULL) return false;
-    if (!strcasecmp(name, "enabled")) return true;
-    if (!strcasecmp(name, "sample_interval")) return true;
-    if (!strcasecmp(name, "retention_days")) return true;
-    if (!strcasecmp(name, "monitor_enabled")) return true;
-    if (!strcasecmp(name, "monitor_interval")) return true;
+    for (int i = 0; tsdb_variable_names[i]; i++) {
+        if (!strcasecmp(name, tsdb_variable_names[i])) return true;
+    }
     return false;
 }
 
@@ -1473,6 +1481,12 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
     int cols, affected_rows;
     char *error = NULL;
     statsdb_disk->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("tsdb_downsample_metrics: %s\n", error);
+        sqlite3_free(error);
+        if (resultset) delete resultset;
+        return;
+    }
 
     time_t last_hour = 0;
     if (resultset && resultset->rows_count > 0 && resultset->rows[0]->fields[0]) {
@@ -1545,6 +1559,10 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
     statsdb_disk->execute_statement(
         "SELECT COUNT(DISTINCT metric_name || CHAR(31) || labels) FROM tsdb_metrics",
         &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        sqlite3_free(error);
+        error = NULL;
+    }
     if (resultset && resultset->rows_count > 0) {
         status.total_series = atol(resultset->rows[0]->fields[0]);
         delete resultset;
@@ -1555,6 +1573,10 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
     statsdb_disk->execute_statement(
         "SELECT COUNT(*) FROM tsdb_metrics",
         &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        sqlite3_free(error);
+        error = NULL;
+    }
     if (resultset && resultset->rows_count > 0) {
         status.total_datapoints = atol(resultset->rows[0]->fields[0]);
         delete resultset;
@@ -1565,6 +1587,10 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
     statsdb_disk->execute_statement(
         "SELECT MIN(timestamp), MAX(timestamp) FROM tsdb_metrics",
         &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        sqlite3_free(error);
+        error = NULL;
+    }
     if (resultset && resultset->rows_count > 0) {
         if (resultset->rows[0]->fields[0]) {
             status.oldest_datapoint = atol(resultset->rows[0]->fields[0]);
@@ -1590,7 +1616,7 @@ bool ProxySQL_Statistics::tsdb_sampler_timetoget(unsigned long long curtime) {
         return false;
     }
     if (curtime > next_timer_tsdb_sampler) {
-        next_timer_tsdb_sampler = curtime + variables.tsdb_sample_interval * 1000000;
+        next_timer_tsdb_sampler = curtime + (unsigned long long)variables.tsdb_sample_interval * 1000000ULL;
         return true;
     }
     return false;
@@ -1612,7 +1638,7 @@ bool ProxySQL_Statistics::tsdb_monitor_timetoget(unsigned long long curtime) {
         return false;
     }
     if (curtime > next_timer_tsdb_monitor) {
-        next_timer_tsdb_monitor = curtime + variables.tsdb_monitor_interval * 1000000;
+        next_timer_tsdb_monitor = curtime + (unsigned long long)variables.tsdb_monitor_interval * 1000000ULL;
         return true;
     }
     return false;
@@ -1732,6 +1758,7 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
     if (GloVars.prometheus_registry) {
         auto metrics = GloVars.prometheus_registry->Collect();
         time_t now = time(NULL);
+        statsdb_disk->execute("BEGIN");
         for (const auto& family : metrics) {
             for (const auto& metric : family.metric) {
                 std::map<std::string, std::string> labels;
@@ -1780,6 +1807,7 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
                 }
             }
         }
+        statsdb_disk->execute("COMMIT");
     }
 
 }
@@ -1814,14 +1842,31 @@ probe_result_t probe_backend(int hg, std::string host, int port, time_t now) {
             if (sock < 0) {
                 continue;
             }
-            struct timeval tv;
-            tv.tv_sec = 1;
-            tv.tv_usec = 0;
-            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+            // Set non-blocking
+            int flags = fcntl(sock, F_GETFL, 0);
+            fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 
             auto start = std::chrono::steady_clock::now();
             int cres = connect(sock, ai->ai_addr, ai->ai_addrlen);
+            
+            if (cres < 0) {
+                if (errno == EINPROGRESS) {
+                    struct pollfd fds[1];
+                    fds[0].fd = sock;
+                    fds[0].events = POLLOUT;
+                    int p_res = poll(fds, 1, 1000); // 1s timeout
+                    if (p_res > 0) {
+                        int error = 0;
+                        socklen_t len = sizeof(error);
+                        getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len);
+                        if (error == 0) {
+                            cres = 0;
+                        }
+                    }
+                }
+            }
+
             auto end = std::chrono::steady_clock::now();
             connect_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             close(sock);
@@ -1849,6 +1894,9 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
     GloAdmin->admindb->execute_statement(
         "SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers",
         &err_msg, &cols, &affected_rows, &resultset);
+    if (err_msg) {
+        sqlite3_free(err_msg);
+    }
 
     if (resultset) {
         time_t now = time(NULL);
@@ -1864,10 +1912,12 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
             }
         }
 
+        statsdb_disk->execute("BEGIN");
         for (auto& f : futures) {
             probe_result_t res = f.get();
             insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
         }
+        statsdb_disk->execute("COMMIT");
         delete resultset;
     }
 }
