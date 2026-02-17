@@ -2660,6 +2660,19 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 
 			// 3. Error message (block action)
 			if (rule->error_msg) {
+				std::string q_preview = current_query;
+				if (q_preview.length() > 256) {
+					q_preview = q_preview.substr(0, 256) + "...";
+				}
+				proxy_info(
+					"MCP query rule %d BLOCK matched: tool=%s target_id=%s schema=%s error_msg='%s' query='%s'\n",
+					rule->rule_id,
+					tool_name.c_str(),
+					target_id.c_str(),
+					schemaname.c_str(),
+					rule->error_msg,
+					q_preview.c_str()
+				);
 				if (qpo->error_msg) {
 					free(qpo->error_msg);
 				}
@@ -2668,6 +2681,14 @@ MCP_Query_Processor_Output* Discovery_Schema::evaluate_mcp_query_rules(
 
 			// 4. OK message (allow with response)
 			if (rule->ok_msg) {
+				proxy_info(
+					"MCP query rule %d OK_MSG matched: tool=%s target_id=%s schema=%s ok_msg='%s'\n",
+					rule->rule_id,
+					tool_name.c_str(),
+					target_id.c_str(),
+					schemaname.c_str(),
+					rule->ok_msg
+				);
 				if (qpo->OK_msg) {
 					free(qpo->OK_msg);
 				}

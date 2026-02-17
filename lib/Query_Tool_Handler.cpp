@@ -857,6 +857,10 @@ std::string Query_Tool_Handler::execute_query(const std::string& query, const st
 		PGconn* pgconn = static_cast<PGconn*>(pgconn_v);
 		PGresult* res = PQexec(pgconn, query.c_str());
 		if (res == NULL) {
+			proxy_error(
+				"Query_Tool_Handler: PQexec returned null result for target='%s' query='%s'\n",
+				target->target_id.c_str(), query.c_str()
+			);
 			return_connection(pgconn_v);
 			json j;
 			j["success"] = false;
@@ -867,6 +871,10 @@ std::string Query_Tool_Handler::execute_query(const std::string& query, const st
 		ExecStatusType st = PQresultStatus(res);
 		if (st != PGRES_TUPLES_OK && st != PGRES_COMMAND_OK) {
 			std::string err = PQresultErrorMessage(res);
+			proxy_error(
+				"Query_Tool_Handler: pgsql query failed for target='%s': %s | query='%s'\n",
+				target->target_id.c_str(), err.c_str(), query.c_str()
+			);
 			PQclear(res);
 			return_connection(pgconn_v);
 			json j;
@@ -920,7 +928,10 @@ std::string Query_Tool_Handler::execute_query(const std::string& query, const st
 	MYSQL* mysql_ptr = static_cast<MYSQL*>(mysql);
 
 	if (mysql_query(mysql_ptr, query.c_str())) {
-		proxy_error("Query_Tool_Handler: Query failed: %s\n", mysql_error(mysql_ptr));
+		proxy_error(
+			"Query_Tool_Handler: mysql query failed for target='%s': %s | query='%s'\n",
+			target->target_id.c_str(), mysql_error(mysql_ptr), query.c_str()
+		);
 		return_connection(mysql);
 		json j;
 		j["success"] = false;
@@ -1003,6 +1014,10 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 			PGresult* set_res = PQexec(pgconn, set_search_path.c_str());
 			if (set_res == NULL || PQresultStatus(set_res) != PGRES_COMMAND_OK) {
 				std::string err = set_res ? PQresultErrorMessage(set_res) : "set search_path failed";
+				proxy_error(
+					"Query_Tool_Handler: failed SET search_path for target='%s' schema='%s': %s\n",
+					target->target_id.c_str(), validated_schema.c_str(), err.c_str()
+				);
 				if (set_res) {
 					PQclear(set_res);
 				}
@@ -1018,6 +1033,10 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 
 		PGresult* res = PQexec(pgconn, query.c_str());
 		if (res == NULL) {
+			proxy_error(
+				"Query_Tool_Handler: PQexec returned null result for target='%s' query='%s'\n",
+				target->target_id.c_str(), query.c_str()
+			);
 			return_connection(pgconn_v);
 			json j;
 			j["success"] = false;
@@ -1028,6 +1047,10 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 		ExecStatusType st = PQresultStatus(res);
 		if (st != PGRES_TUPLES_OK && st != PGRES_COMMAND_OK) {
 			std::string err = PQresultErrorMessage(res);
+			proxy_error(
+				"Query_Tool_Handler: pgsql query with schema failed for target='%s': %s | schema='%s' query='%s'\n",
+				target->target_id.c_str(), err.c_str(), schema.c_str(), query.c_str()
+			);
 			PQclear(res);
 			return_connection(pgconn_v);
 			json j;
@@ -1100,7 +1123,10 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 
 	// Execute the actual query
 	if (mysql_query(mysql_ptr, query.c_str())) {
-		proxy_error("Query_Tool_Handler: Query failed: %s\n", mysql_error(mysql_ptr));
+		proxy_error(
+			"Query_Tool_Handler: mysql query with schema failed for target='%s': %s | schema='%s' query='%s'\n",
+			target->target_id.c_str(), mysql_error(mysql_ptr), schema.c_str(), query.c_str()
+		);
 		return_connection(mysql);
 		json j;
 		j["success"] = false;
