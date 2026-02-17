@@ -67,9 +67,19 @@ cp mcp_config.example.json mcp_config.json
 | File | Purpose |
 |------|---------|
 | `two_phase_discovery.py` | Orchestration script for Phase 2 |
+| `run_real_claude_e2e.sh` | Manual real-CLI E2E runner (phase A + phase B) |
 | `mcp_config.example.json` | Example MCP configuration for Claude Code |
 | `prompts/two_phase_discovery_prompt.md` | System prompt for LLM agent |
 | `prompts/two_phase_user_prompt.md` | User prompt template |
+
+### Manual Real Claude E2E
+
+```bash
+./run_real_claude_e2e.sh \
+  --target-id tap_mysql_default \
+  --schema testdb \
+  --mcp-config ./mcp_config.json
+```
 
 ### Documentation
 

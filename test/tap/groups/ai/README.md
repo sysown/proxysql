@@ -53,6 +53,27 @@ bash test/tap/tests/test_mcp_static_harvest-t.sh
 bash test/tap/groups/ai/post-proxysql.bash
 ```
 
+For phase-B MCP discovery primitives (agent/llm/catalog tools, CI-safe):
+
+```bash
+source test/tap/groups/ai/env.sh
+bash test/tap/groups/ai/pre-proxysql.bash
+bash test/tap/tests/test_mcp_llm_discovery_phaseb-t.sh
+bash test/tap/groups/ai/post-proxysql.bash
+```
+
+For Claude headless flow smoke (dry-run + optional real Claude execution):
+
+```bash
+source test/tap/groups/ai/env.sh
+bash test/tap/groups/ai/pre-proxysql.bash
+bash test/tap/tests/test_mcp_claude_headless_flow-t.sh
+# Optional real run:
+# TAP_RUN_REAL_CLAUDE=1 TAP_CLAUDE_MCP_CONFIG=./scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/mcp_config.json \
+#   bash test/tap/tests/test_mcp_claude_headless_flow-t.sh
+bash test/tap/groups/ai/post-proxysql.bash
+```
+
 ## Notes
 
 - All variables can be overridden from the environment before running hooks.
