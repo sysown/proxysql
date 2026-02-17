@@ -750,6 +750,9 @@ handler_again:
 
 	case ASYNC_STMT_EXECUTE_START:
 		stmt_execute_start();
+		__sync_fetch_and_add(&parent->queries_sent, 1);
+		update_bytes_sent(query.length + 5);
+		statuses.questions++;
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_EXECUTE_CONT);
 		} else {
@@ -808,7 +811,7 @@ handler_again:
 
 	case ASYNC_RESYNC_START:
 		if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
-			proxy_warning("Resync not required — connection already synchronized.\n");
+			proxy_warning("Resync not required - connection already synchronized.\n");
 			NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 		}
 		resync_start();
