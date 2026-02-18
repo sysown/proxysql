@@ -291,6 +291,9 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"connect_timeout_server_max",
 	(char*)"eventslog_filename",
 	(char*)"eventslog_filesize",
+	(char*)"eventslog_buffer_history_size",
+	(char*)"eventslog_table_memory_size",
+	(char*)"eventslog_buffer_max_query_length",
 	(char*)"eventslog_default_log",
 	(char*)"eventslog_format",
 	(char*)"auditlog_filename",
@@ -1129,6 +1132,9 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.interfaces = strdup((char*)"");
 	variables.eventslog_filename = strdup((char*)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize = 100 * 1024 * 1024;
+	variables.eventslog_buffer_history_size = 0;
+	variables.eventslog_table_memory_size = 10000;
+	variables.eventslog_buffer_max_query_length = 32 * 1024;
 	variables.eventslog_default_log = 0;
 	variables.eventslog_format = 1;
 	variables.auditlog_filename = strdup((char*)"");
@@ -2240,6 +2246,9 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		// logs
 		VariablesPointers_int["auditlog_filesize"] = make_tuple(&variables.auditlog_filesize, 1024 * 1024, 1 * 1024 * 1024 * 1024, false);
 		VariablesPointers_int["eventslog_filesize"] = make_tuple(&variables.eventslog_filesize, 1024 * 1024, 1 * 1024 * 1024 * 1024, false);
+		VariablesPointers_int["eventslog_buffer_history_size"] = make_tuple(&variables.eventslog_buffer_history_size, 0, 8 * 1024 * 1024, false);
+		VariablesPointers_int["eventslog_table_memory_size"] = make_tuple(&variables.eventslog_table_memory_size, 0, 8 * 1024 * 1024, false);
+		VariablesPointers_int["eventslog_buffer_max_query_length"] = make_tuple(&variables.eventslog_buffer_max_query_length, 128, 32 * 1024 * 1024, false);
 		VariablesPointers_int["eventslog_default_log"] = make_tuple(&variables.eventslog_default_log, 0, 1, false);
 		// various
 		VariablesPointers_int["long_query_time"] = make_tuple(&variables.long_query_time, 0, 20 * 24 * 3600 * 1000, false);
@@ -4011,6 +4020,12 @@ void PgSQL_Thread::refresh_variables() {
 
 	if (pgsql_thread___eventslog_filename) free(pgsql_thread___eventslog_filename);
 	pgsql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
+	pgsql_thread___eventslog_buffer_history_size = GloPTH->get_variable_int((char*)"eventslog_buffer_history_size");
+	if (GloPgSQL_Logger && GloPgSQL_Logger->PgLogCB->getBufferSize() != static_cast<size_t>(pgsql_thread___eventslog_buffer_history_size)) {
+		GloPgSQL_Logger->PgLogCB->setBufferSize(pgsql_thread___eventslog_buffer_history_size);
+	}
+	pgsql_thread___eventslog_table_memory_size = GloPTH->get_variable_int((char*)"eventslog_table_memory_size");
+	pgsql_thread___eventslog_buffer_max_query_length = GloPTH->get_variable_int((char*)"eventslog_buffer_max_query_length");
 	pgsql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
 	pgsql_thread___eventslog_format = GloPTH->get_variable_int((char*)"eventslog_format");
 	pgsql_thread___eventslog_filename = GloPTH->get_variable_string((char*)"eventslog_filename");

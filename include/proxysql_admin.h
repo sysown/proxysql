@@ -326,6 +326,8 @@ class ProxySQL_Admin {
 		int stats_mysql_query_cache;
 		int stats_mysql_query_digest_to_disk;
 		int stats_mysql_eventslog_sync_buffer_to_disk;
+		/** @brief Periodic disk sync interval (seconds) for PostgreSQL eventslog buffer. */
+		int stats_pgsql_eventslog_sync_buffer_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
 		bool restapi_enabled;
