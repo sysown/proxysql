@@ -69,7 +69,7 @@ CREATE TABLE stats_mysql_commands_counters (
     cnt_1s INT NOT NULL,
     cnt_5s INT NOT NULL,
     cnt_10s INT NOT NULL,
-    cnt_INFs INT NOT NULL
+    cnt_INFs
 )
 ```
 
@@ -777,7 +777,7 @@ CREATE TABLE stats_pgsql_commands_counters (
     cnt_1s INT NOT NULL,
     cnt_5s INT NOT NULL,
     cnt_10s INT NOT NULL,
-    cnt_INFs INT NOT NULL
+    cnt_INFs
 )
 ```
 
@@ -1726,7 +1726,7 @@ Some tables require explicit flush operations to make data visible.
 Query events are first collected into a **circular buffer** in memory, not directly into SQLite tables.
 
 **Data Flow:**
-```text
+```
 Query executes
     ↓
 MySQL_Logger::log_request() adds event to circular buffer (MyLogCB)

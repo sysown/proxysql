@@ -30,7 +30,6 @@ static const char* mcp_thread_variables_names[] = {
 	"query_endpoint_auth",
 	"admin_endpoint_auth",
 	"cache_endpoint_auth",
-	"ai_endpoint_auth",
 	"rag_endpoint_auth",
 	"timeout_ms",
 	// MySQL Tool Handler configuration
@@ -57,7 +56,6 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_query_endpoint_auth = strdup("");
 	variables.mcp_admin_endpoint_auth = strdup("");
 	variables.mcp_cache_endpoint_auth = strdup("");
-	variables.mcp_ai_endpoint_auth = strdup("");
 	variables.mcp_rag_endpoint_auth = strdup("");
 	variables.mcp_timeout_ms = 30000;
 	// MySQL Tool Handler default values
@@ -80,7 +78,6 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	admin_tool_handler = NULL;
 	cache_tool_handler = NULL;
 	stats_tool_handler = NULL;
-	ai_tool_handler = NULL;
 	rag_tool_handler = NULL;
 }
 
@@ -95,8 +92,6 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 		free(variables.mcp_admin_endpoint_auth);
 	if (variables.mcp_cache_endpoint_auth)
 		free(variables.mcp_cache_endpoint_auth);
-	if (variables.mcp_ai_endpoint_auth)
-		free(variables.mcp_ai_endpoint_auth);
 	if (variables.mcp_rag_endpoint_auth)
 		free(variables.mcp_rag_endpoint_auth);
 	// Free MySQL Tool Handler variables
@@ -141,10 +136,6 @@ MCP_Threads_Handler::~MCP_Threads_Handler() {
 	if (stats_tool_handler) {
 		delete stats_tool_handler;
 		stats_tool_handler = NULL;
-	}
-	if (ai_tool_handler) {
-		delete ai_tool_handler;
-		ai_tool_handler = NULL;
 	}
 	if (rag_tool_handler) {
 		delete rag_tool_handler;
@@ -216,10 +207,6 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 	}
 	if (!strcmp(name, "cache_endpoint_auth")) {
 		sprintf(val, "%s", variables.mcp_cache_endpoint_auth ? variables.mcp_cache_endpoint_auth : "");
-		return 0;
-	}
-	if (!strcmp(name, "ai_endpoint_auth")) {
-		sprintf(val, "%s", variables.mcp_ai_endpoint_auth ? variables.mcp_ai_endpoint_auth : "");
 		return 0;
 	}
 	if (!strcmp(name, "rag_endpoint_auth")) {
@@ -317,12 +304,6 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		if (variables.mcp_cache_endpoint_auth)
 			free(variables.mcp_cache_endpoint_auth);
 		variables.mcp_cache_endpoint_auth = strdup(value);
-		return 0;
-	}
-	if (!strcmp(name, "ai_endpoint_auth")) {
-		if (variables.mcp_ai_endpoint_auth)
-			free(variables.mcp_ai_endpoint_auth);
-		variables.mcp_ai_endpoint_auth = strdup(value);
 		return 0;
 	}
 	if (!strcmp(name, "rag_endpoint_auth")) {

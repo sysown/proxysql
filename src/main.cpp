@@ -1668,9 +1668,8 @@ void ProxySQL_Main_init_phase3___start_all() {
 	if (GloVars.global.genai) {
 		if (GloGATH)
 			GloAdmin->init_genai_variables();
-		if (GloMCPH) {
-			GloAdmin->init_mcp_variables();
-		}
+		if (GloMCPH)
+		GloAdmin->init_mcp_variables();
 	}
 #endif /* PROXYSQLGENAI */
 
