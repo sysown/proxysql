@@ -120,12 +120,36 @@ static bool get_metric_value(const map<string, double>& metrics_vals, const stri
 }
 
 /**
- * @brief Creates a `runtime_global_variables` query for a variable.
- * @param var_name Runtime variable name.
+ * @brief Creates a query for a variable value from the supplied admin table.
+ * @param table Source table name (`runtime_global_variables` or `global_variables`).
+ * @param var_name Variable name.
  * @return SQL query returning the variable value.
  */
-static string runtime_var_query(const char* var_name) {
-	return "SELECT variable_value FROM runtime_global_variables WHERE variable_name='" + string(var_name) + "'";
+static string variable_value_query(const char* table, const char* var_name) {
+	return "SELECT variable_value FROM " + string(table) + " WHERE variable_name='" + string(var_name) + "'";
+}
+
+/**
+ * @brief Fetches an admin variable first from runtime table, then global table.
+ * @tparam T Target value type used by `mysql_query_ext_val`.
+ * @param admin Open admin connection.
+ * @param var_name Variable name.
+ * @param default_val Value used if query/parsing fails.
+ * @return Parsed variable value and error code.
+ */
+template <typename T>
+static ext_val_t<T> fetch_var_with_fallback(MYSQL* admin, const char* var_name, const T& default_val) {
+	const ext_val_t<T> runtime_val {
+		mysql_query_ext_val(admin, variable_value_query("runtime_global_variables", var_name), default_val)
+	};
+	if (runtime_val.err == EXIT_SUCCESS) {
+		return runtime_val;
+	}
+
+	const ext_val_t<T> global_val {
+		mysql_query_ext_val(admin, variable_value_query("global_variables", var_name), default_val)
+	};
+	return global_val;
 }
 
 /**
@@ -148,16 +172,16 @@ static old_log_vars_t fetch_old_log_vars(MYSQL* admin) {
 	old_log_vars_t old_vars {};
 
 	const ext_val_t<string> eventslog_filename {
-		mysql_query_ext_val(admin, runtime_var_query("mysql-eventslog_filename"), string(""))
+		fetch_var_with_fallback(admin, "mysql-eventslog_filename", string(""))
 	};
 	const ext_val_t<int32_t> eventslog_default_log {
-		mysql_query_ext_val(admin, runtime_var_query("mysql-eventslog_default_log"), int32_t(1))
+		fetch_var_with_fallback(admin, "mysql-eventslog_default_log", int32_t(1))
 	};
 	const ext_val_t<int32_t> eventslog_format {
-		mysql_query_ext_val(admin, runtime_var_query("mysql-eventslog_format"), int32_t(2))
+		fetch_var_with_fallback(admin, "mysql-eventslog_format", int32_t(2))
 	};
 	const ext_val_t<int32_t> eventslog_rate_limit {
-		mysql_query_ext_val(admin, runtime_var_query("mysql-eventslog_rate_limit"), int32_t(1))
+		fetch_var_with_fallback(admin, "mysql-eventslog_rate_limit", int32_t(1))
 	};
 
 	if (
