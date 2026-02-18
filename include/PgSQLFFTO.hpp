@@ -4,6 +4,7 @@
 #include "TrafficObserver.hpp"
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 class PgSQL_Session;
 
@@ -33,6 +34,10 @@ private:
 
     std::string m_current_query;
     unsigned long long m_query_start_time;
+
+    // Binary Protocol Tracking (PostgreSQL Extended Query)
+    std::unordered_map<std::string, std::string> m_statements; // name -> query
+    std::unordered_map<std::string, std::string> m_portals;   // portal -> name
 
     void process_client_message(char type, const unsigned char* payload, size_t len);
     void process_server_message(char type, const unsigned char* payload, size_t len);

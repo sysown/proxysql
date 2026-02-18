@@ -27,7 +27,6 @@ PgSQLFFTO::~PgSQLFFTO() {
 
 void PgSQLFFTO::on_client_data(const char* buf, size_t len) {
     if (!buf || len == 0) return;
-
     m_client_buffer.insert(m_client_buffer.end(), buf, buf + len);
 
     while (m_client_buffer.size() >= 5) {
@@ -35,21 +34,16 @@ void PgSQLFFTO::on_client_data(const char* buf, size_t len) {
         uint32_t msg_len;
         memcpy(&msg_len, &m_client_buffer[1], 4);
         msg_len = ntohl(msg_len);
-
-        if (m_client_buffer.size() < 1 + msg_len) {
-            break; 
-        }
+        if (m_client_buffer.size() < 1 + msg_len) break;
 
         const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + 5;
         process_client_message(type, payload, msg_len - 4);
-
         m_client_buffer.erase(m_client_buffer.begin(), m_client_buffer.begin() + 1 + msg_len);
     }
 }
 
 void PgSQLFFTO::on_server_data(const char* buf, size_t len) {
     if (!buf || len == 0) return;
-
     m_server_buffer.insert(m_server_buffer.end(), buf, buf + len);
 
     while (m_server_buffer.size() >= 5) {
@@ -57,14 +51,10 @@ void PgSQLFFTO::on_server_data(const char* buf, size_t len) {
         uint32_t msg_len;
         memcpy(&msg_len, &m_server_buffer[1], 4);
         msg_len = ntohl(msg_len);
-
-        if (m_server_buffer.size() < 1 + msg_len) {
-            break; 
-        }
+        if (m_server_buffer.size() < 1 + msg_len) break;
 
         const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_server_buffer.data()) + 5;
         process_server_message(type, payload, msg_len - 4);
-
         m_server_buffer.erase(m_server_buffer.begin(), m_server_buffer.begin() + 1 + msg_len);
     }
 }
@@ -79,20 +69,28 @@ void PgSQLFFTO::on_close() {
 
 void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, size_t len) {
     if (type == 'Q') { // Simple Query
-        if (len > 0) {
-            m_current_query = std::string(reinterpret_cast<const char*>(payload), len);
-            m_query_start_time = monotonic_time();
-            m_state = AWAITING_RESPONSE;
-        }
-    } else if (type == 'P') { // Parse (Extended Query)
-        const char* query = reinterpret_cast<const char*>(payload);
-        while (*query != '\0' && (size_t)(query - reinterpret_cast<const char*>(payload)) < len) {
-            query++;
-        }
-        if (*query == '\0' && (size_t)(query + 1 - reinterpret_cast<const char*>(payload)) < len) {
-            m_current_query = std::string(query + 1); 
-            m_query_start_time = monotonic_time();
-            m_state = AWAITING_RESPONSE;
+        m_current_query = std::string(reinterpret_cast<const char*>(payload), len);
+        m_query_start_time = monotonic_time();
+        m_state = AWAITING_RESPONSE;
+    } else if (type == 'P') { // Parse
+        std::string stmt_name = reinterpret_cast<const char*>(payload);
+        const char* query = reinterpret_cast<const char*>(payload) + stmt_name.length() + 1;
+        m_statements[stmt_name] = query;
+    } else if (type == 'B') { // Bind
+        std::string portal_name = reinterpret_cast<const char*>(payload);
+        const char* stmt_ptr = reinterpret_cast<const char*>(payload) + portal_name.length() + 1;
+        std::string stmt_name = stmt_ptr;
+        m_portals[portal_name] = stmt_name;
+    } else if (type == 'E') { // Execute
+        std::string portal_name = reinterpret_cast<const char*>(payload);
+        auto pit = m_portals.find(portal_name);
+        if (pit != m_portals.end()) {
+            auto sit = m_statements.find(pit->second);
+            if (sit != m_statements.end()) {
+                m_current_query = sit->second;
+                m_query_start_time = monotonic_time();
+                m_state = AWAITING_RESPONSE;
+            }
         }
     } else if (type == 'X') { // Terminate
         on_close();
@@ -101,7 +99,6 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
 
 void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, size_t len) {
     if (m_state == IDLE) return;
-
     if (type == 'C' || type == 'Z' || type == 'E') {
         unsigned long long duration = monotonic_time() - m_query_start_time;
         report_query_stats(m_current_query, duration);
@@ -124,17 +121,14 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     SQP_par_t qp;
     memset(&qp, 0, sizeof(qp));
     char* fst_cmnt = NULL;
-    
     char* digest_text = pgsql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, qp.buf, &opts);
+    
     if (digest_text) {
         qp.digest_text = digest_text;
         qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
-        
         char* ca = (char*)"";
-        if (pgsql_thread___query_digests_track_hostname) {
-            if (m_session->client_myds && m_session->client_myds->addr.addr) {
-                ca = m_session->client_myds->addr.addr;
-            }
+        if (pgsql_thread___query_digests_track_hostname && m_session->client_myds && m_session->client_myds->addr.addr) {
+            ca = m_session->client_myds->addr.addr;
         }
 
         uint64_t hash2;
@@ -149,7 +143,6 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         myhash.Final(&qp.digest_total, &hash2);
 
         GloPgQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, 0, 0);
-        
         free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);

@@ -82,6 +82,11 @@ To verify that FFTO is capturing traffic in Fast Forward mode:
    ```
 4. Confirm that queries which were previously "invisible" in FF mode are now being recorded.
 
-## 8. Limitations
-- **Multi-packet query execution**: Very large queries that exceed the max buffer size will cause FFTO to bypass the session.
-- **Binary Protocols**: FFTO currently focuses on the text-based query protocols; specialized binary protocols (like some X-Protocol features) may require future extensions.
+## 8. Protocol Support
+- **Text and Binary Protocols**: FFTO supports both standard text-based queries and the binary protocol used by prepared statements.
+- **MySQL Binary Protocol**: Corrects captures `COM_STMT_PREPARE` and `COM_STMT_EXECUTE`, tracking statement IDs to their respective SQL text.
+- **PostgreSQL Extended Query**: Supports the multi-phase `Parse` -> `Bind` -> `Execute` sequence by tracking Statement and Portal mappings.
+
+## 9. Limitations
+- **Large Payloads**: Packets exceeding the `*-ffto_max_buffer_size` threshold cause FFTO to be bypassed for that session.
+- **X-Protocol**: Currently optimized for classic MySQL and PostgreSQL protocols.

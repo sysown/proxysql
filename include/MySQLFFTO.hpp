@@ -4,6 +4,8 @@
 #include "TrafficObserver.hpp"
 #include <vector>
 #include <string>
+#include <unordered_map>
+#include <stdint.h>
 
 class MySQL_Session;
 
@@ -23,9 +25,9 @@ public:
 private:
     enum State {
         IDLE,
+        AWAITING_PREPARE_OK,
         AWAITING_RESULTSET,
-        READING_RESULTSET,
-        AWAITING_OK_ERR
+        READING_RESULTSET
     };
 
     MySQL_Session* m_session;
@@ -34,7 +36,11 @@ private:
     std::vector<char> m_server_buffer;
     
     std::string m_current_query;
+    std::string m_pending_prepare_query;
     unsigned long long m_query_start_time;
+
+    // Binary Protocol Tracking: statement_id -> query_text
+    std::unordered_map<uint32_t, std::string> m_statements;
 
     void process_client_packet(const unsigned char* data, size_t len);
     void process_server_packet(const unsigned char* data, size_t len);
