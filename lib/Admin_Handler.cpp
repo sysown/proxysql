@@ -3190,6 +3190,33 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (!strncasecmp("DUMP PGSQL EVENTSLOG ", query_no_space, strlen("DUMP PGSQL EVENTSLOG "))) {
+		int num_rows = 0;
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+		proxy_info("Received command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+
+		std::map<std::string, std::pair<SQLite3DB*, SQLite3DB*>> commandMap = {
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO MEMORY", {SPA->statsdb, nullptr}},
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO DISK",   {nullptr,      SPA->statsdb_disk}},
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO BOTH",   {SPA->statsdb, SPA->statsdb_disk}}
+		};
+
+		string s = string(query_no_space);
+		auto it = commandMap.find(s);
+		if (it != commandMap.end()) {
+			if (GloPgSQL_Logger != nullptr) {
+				num_rows = GloPgSQL_Logger->processEvents(it->second.first, it->second.second);
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, num_rows, query_no_space);
+		} else {
+			proxy_warning("Received invalid command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+			const string err_msg = "Invalid DUMP PGSQL EVENTSLOG command";
+			SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+		}
+		run_query = false;
+		goto __run_query;
+	}
+
 
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query

@@ -2511,6 +2511,26 @@ __end_while_pool:
 				curtime2 = curtime2/1000;
 				proxy_info("Automatically saved stats_mysql_query_digest to disk: %llums to write %d entries\n", curtime2-curtime1, r1);
 			}
+			if (GloProxyStats->MySQL_Logger_dump_eventslog_timetoget(curtime)) {
+				if (GloMyLogger != nullptr) {
+					unsigned long long curtime1 = monotonic_time();
+					int r1 = GloMyLogger->processEvents(nullptr, SPA->statsdb_disk);
+					unsigned long long curtime2 = monotonic_time();
+					curtime1 = curtime1 / 1000;
+					curtime2 = curtime2 / 1000;
+					proxy_info("Automatically dumped MySQL eventslog buffer to disk: %llums to write %d entries\n", curtime2 - curtime1, r1);
+				}
+			}
+			if (GloProxyStats->PgSQL_Logger_dump_eventslog_timetoget(curtime)) {
+				if (GloPgSQL_Logger != nullptr) {
+					unsigned long long curtime1 = monotonic_time();
+					int r1 = GloPgSQL_Logger->processEvents(nullptr, SPA->statsdb_disk);
+					unsigned long long curtime2 = monotonic_time();
+					curtime1 = curtime1 / 1000;
+					curtime2 = curtime2 / 1000;
+					proxy_info("Automatically dumped PgSQL eventslog buffer to disk: %llums to write %d entries\n", curtime2 - curtime1, r1);
+				}
+			}
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
 			}
