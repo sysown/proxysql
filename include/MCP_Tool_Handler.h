@@ -185,17 +185,23 @@ protected:
 		return response;
 	}
 
-	/**
-	 * @brief Convert a SQLite3_result into a JSON array of row objects.
-	 *
-	 * Each row becomes a JSON object keyed by column name. Field values
-	 * that look numeric are stored as integers or doubles; NULL fields
-	 * become JSON null; everything else is stored as a string.
-	 *
-	 * @param resultset The SQLite3_result to convert (may be NULL).
-	 * @param cols      Number of columns in the result set.
-	 * @return JSON array of row objects (empty array when resultset is NULL or has no rows).
-	 */
+		/**
+		 * @brief Convert a SQLite3_result into a JSON array of row objects.
+		 *
+		 * Each row becomes a JSON object keyed by column name. Field values
+		 * are parsed using the following precedence:
+		 * 1) signed 64-bit integer
+		 * 2) unsigned 64-bit integer (for large counters)
+		 * 3) finite double
+		 * 4) raw string fallback
+		 *
+		 * Conversion guards against overflow (`ERANGE`) and avoids non-finite
+		 * floating-point JSON values (`NaN`, `+/-Inf`). NULL fields become JSON null.
+		 *
+		 * @param resultset The SQLite3_result to convert (may be NULL).
+		 * @param cols      Number of columns in the result set.
+		 * @return JSON array of row objects (empty array when resultset is NULL or has no rows).
+		 */
 	static json resultset_to_json(SQLite3_result* resultset, int cols);
 };
 

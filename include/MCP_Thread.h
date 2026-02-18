@@ -71,6 +71,7 @@ public:
 		char* mcp_query_endpoint_auth;          ///< Authentication for /mcp/query endpoint
 		char* mcp_admin_endpoint_auth;          ///< Authentication for /mcp/admin endpoint
 		char* mcp_cache_endpoint_auth;          ///< Authentication for /mcp/cache endpoint
+		char* mcp_ai_endpoint_auth;             ///< Authentication for /mcp/ai endpoint
 		char* mcp_rag_endpoint_auth;            ///< Authentication for /mcp/rag endpoint
 
 		int mcp_timeout_ms;                     ///< Request timeout in milliseconds (default: 30000)

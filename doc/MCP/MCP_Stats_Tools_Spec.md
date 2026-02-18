@@ -6,6 +6,7 @@ This document specifies the MCP tools available on the `/stats` endpoint for mon
 
 - [1. Overview](#1-overview)
 - [2. Response Format Convention](#2-response-format-convention)
+- [2.1 Time Field Conventions](#21-time-field-conventions)
 - [3. Tool Categories](#3-tool-categories)
 - [4. Live Data Tools](#4-live-data-tools)
   - [4.1 show_status](#41-show_status)
@@ -41,6 +42,7 @@ The `/stats` endpoint provides tools for monitoring ProxySQL performance, health
 - **Utility Tools** - Data management operations (flush, sync)
 
 All tools support both MySQL and PostgreSQL where applicable, controlled by a `db_type` parameter.
+`flush_query_log` and `flush_queries` are write-capable operations and should be protected via endpoint authentication.
 
 ---
 

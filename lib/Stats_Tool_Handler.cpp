@@ -1,8 +1,10 @@
 #ifdef PROXYSQLGENAI
 
 #include <cstring>
+#include <cerrno>
 #include <cstdlib>
 #include <ctime>
+#include <cmath>
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -61,6 +63,41 @@ static const std::map<std::string, std::vector<std::string>> CATEGORY_PREFIXES =
 				"Servers_table_version", "mysql_listener_paused", "pgsql_listener_paused", "OpenSSL_"}},
 	{"mirror", {"Mirror_"}}
 };
+
+/**
+ * @brief Parse and validate a backend filter in `host:port` format.
+ *
+ * The helper enforces a strict numeric port with range `[1, 65535]`.
+ * On error it returns false and provides a short diagnostic message
+ * in @p error so the caller can both log and return a user-facing error.
+ *
+ * @param server_filter Raw filter string provided by tool arguments.
+ * @param host Output host part when parsing succeeds.
+ * @param port Output TCP port when parsing succeeds.
+ * @param error Output validation message when parsing fails.
+ * @return true when parsing succeeds and @p host/@p port are valid.
+ */
+static bool parse_server_filter(const std::string& server_filter, std::string& host, int& port, std::string& error) {
+	size_t colon = server_filter.rfind(':');
+	if (colon == std::string::npos || colon == 0 || colon == server_filter.size() - 1) {
+		error = "expected format host:port";
+		return false;
+	}
+
+	host = server_filter.substr(0, colon);
+	std::string port_str = server_filter.substr(colon + 1);
+
+	char* end = nullptr;
+	errno = 0;
+	long parsed_port = strtol(port_str.c_str(), &end, 10);
+	if (end == port_str.c_str() || *end != '\0' || errno != 0 || parsed_port < 1 || parsed_port > 65535) {
+		error = "port must be an integer in range [1,65535]";
+		return false;
+	}
+
+	port = static_cast<int>(parsed_port);
+	return true;
+}
 
 // ============================================================================
 // Constructor / Destructor / Init / Close
@@ -167,18 +204,44 @@ bool Stats_Tool_Handler::get_interval_config(const std::string& interval, int& s
 }
 
 int Stats_Tool_Handler::calculate_percentile(const std::vector<int>& buckets, const std::vector<int>& thresholds, double percentile) {
-	int total = 0;
+	if (buckets.empty() || thresholds.empty()) {
+		return 0;
+	}
+
+	if (percentile < 0.0) {
+		percentile = 0.0;
+	} else if (percentile > 1.0) {
+		percentile = 1.0;
+	}
+
+	if (percentile == 0.0) {
+		for (size_t i = 0; i < buckets.size() && i < thresholds.size(); i++) {
+			if (buckets[i] > 0) {
+				return thresholds[i];
+			}
+		}
+		return 0;
+	}
+
+	long long total = 0;
 	for (int count : buckets) {
-		total += count;
+		if (count > 0) {
+			total += count;
+		}
 	}
 
 	if (total == 0) return 0;
 
-	int target = (int)(total * percentile);
-	int cumulative = 0;
+	long long target = static_cast<long long>(std::ceil(static_cast<long double>(total) * percentile));
+	if (target < 1) {
+		target = 1;
+	}
+	long long cumulative = 0;
 
 	for (size_t i = 0; i < buckets.size() && i < thresholds.size(); i++) {
-		cumulative += buckets[i];
+		if (buckets[i] > 0) {
+			cumulative += buckets[i];
+		}
 		if (cumulative >= target) {
 			return thresholds[i];
 		}
@@ -958,6 +1021,9 @@ json Stats_Tool_Handler::handle_show_status(const json& arguments) {
 				combined += ")";
 				conditions.push_back(combined);
 			}
+		} else {
+			proxy_error("show_status: unknown category '%s'\n", category.c_str());
+			return create_error_response("Unknown category: " + category);
 		}
 	}
 
@@ -1058,7 +1124,14 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 	SQLite3_result* count_rs = NULL;
 	int count_cols = 0;
 	int total_sessions = 0;
-	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (!count_err.empty()) {
+		if (count_rs) {
+			delete count_rs;
+		}
+		proxy_error("show_processlist: failed to count rows: %s\n", count_err.c_str());
+		return create_error_response("Failed to count processlist rows: " + count_err);
+	}
 	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
 		total_sessions = std::stoi(count_rs->rows[0]->fields[0]);
 	}
@@ -1187,7 +1260,14 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 	SQLite3_result* count_rs = NULL;
 	int count_cols = 0;
 	int total_digests = 0;
-	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (!count_err.empty()) {
+		if (count_rs) {
+			delete count_rs;
+		}
+		proxy_error("show_queries: failed to count digests: %s\n", count_err.c_str());
+		return create_error_response("Failed to count digest rows: " + count_err);
+	}
 	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
 		total_digests = std::stoi(count_rs->rows[0]->fields[0]);
 	}
@@ -1386,17 +1466,14 @@ json Stats_Tool_Handler::handle_show_connections(const json& arguments) {
 		sql += " AND hostgroup = " + std::to_string(hostgroup);
 	}
 	if (!server.empty()) {
-		size_t colon = server.find(':');
-		if (colon != std::string::npos) {
-			std::string host = server.substr(0, colon);
-			std::string port_str = server.substr(colon + 1);
-			try {
-				int port = std::stoi(port_str);
-				sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + std::to_string(port);
-			} catch (...) {
-				// Invalid port - skip server filter
-			}
+		std::string host;
+		int port = 0;
+		std::string parse_err;
+		if (!parse_server_filter(server, host, port, parse_err)) {
+			proxy_error("show_connections: invalid server filter '%s': %s\n", server.c_str(), parse_err.c_str());
+			return create_error_response("Invalid server filter '" + server + "': " + parse_err);
 		}
+		sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + std::to_string(port);
 	}
 	if (!status.empty()) {
 		sql += " AND status = '" + sql_escape(status) + "'";
@@ -1614,7 +1691,14 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 	int count_cols = 0;
 	int total_error_types = 0;
 	long long total_error_count = 0;
-	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (!count_err.empty()) {
+		if (count_rs) {
+			delete count_rs;
+		}
+		proxy_error("show_errors: failed to count rows: %s\n", count_err.c_str());
+		return create_error_response("Failed to count error rows: " + count_err);
+	}
 	if (count_rs && count_rs->rows_count > 0) {
 		total_error_types = count_rs->rows[0]->fields[0] ? std::stoi(count_rs->rows[0]->fields[0]) : 0;
 		total_error_count = count_rs->rows[0]->fields[1] ? std::stoll(count_rs->rows[0]->fields[1]) : 0;
@@ -1891,7 +1975,14 @@ json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
 	SQLite3_result* count_rs = NULL;
 	int count_cols = 0;
 	int total_rules = 0;
-	execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	if (!count_err.empty()) {
+		if (count_rs) {
+			delete count_rs;
+		}
+		proxy_error("show_query_rules: failed to count rows: %s\n", count_err.c_str());
+		return create_error_response("Failed to count query rule rows: " + count_err);
+	}
 	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
 		total_rules = std::stoi(count_rs->rows[0]->fields[0]);
 	}
@@ -2169,7 +2260,14 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 	int mcols = 0;
 	long long total_queries = 0;
 	long long total_client_connections = 0;
-	execute_admin_query(metrics_sql.c_str(), &metrics_rs, &mcols);
+	std::string metrics_err = execute_admin_query(metrics_sql.c_str(), &metrics_rs, &mcols);
+	if (!metrics_err.empty()) {
+		if (metrics_rs) {
+			delete metrics_rs;
+		}
+		proxy_error("show_cluster: failed to query metrics: %s\n", metrics_err.c_str());
+		return create_error_response("Failed to query cluster metrics: " + metrics_err);
+	}
 
 	if (metrics_rs) {
 		for (const auto& mrow : metrics_rs->rows) {
@@ -2206,7 +2304,14 @@ json Stats_Tool_Handler::handle_show_cluster(const json& arguments) {
 
 		SQLite3_result* cksum_rs = NULL;
 		int ccols = 0;
-		execute_admin_query(cksum_sql.c_str(), &cksum_rs, &ccols);
+		std::string cksum_err = execute_admin_query(cksum_sql.c_str(), &cksum_rs, &ccols);
+		if (!cksum_err.empty()) {
+			if (cksum_rs) {
+				delete cksum_rs;
+			}
+			proxy_error("show_cluster: failed to query checksums: %s\n", cksum_err.c_str());
+			return create_error_response("Failed to query cluster checksums: " + cksum_err);
+		}
 
 		std::set<std::string> sync_nodes, out_of_sync_nodes;
 
@@ -2558,17 +2663,14 @@ json Stats_Tool_Handler::handle_show_connection_history(const json& arguments) {
 			sql += " AND hostgroup = " + std::to_string(hostgroup);
 		}
 		if (!server.empty()) {
-			size_t colon = server.find(':');
-			if (colon != std::string::npos) {
-				std::string host = server.substr(0, colon);
-				std::string port_str = server.substr(colon + 1);
-				try {
-					int port = std::stoi(port_str);
-					sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + std::to_string(port);
-				} catch (...) {
-					// Invalid port - skip server filter
-				}
+			std::string host;
+			int port = 0;
+			std::string parse_err;
+			if (!parse_server_filter(server, host, port, parse_err)) {
+				proxy_error("show_connection_history: invalid server filter '%s': %s\n", server.c_str(), parse_err.c_str());
+				return create_error_response("Invalid server filter '" + server + "': " + parse_err);
 			}
+			sql += " AND srv_host = '" + sql_escape(host) + "' AND srv_port = " + std::to_string(port);
 		}
 
 		sql += " ORDER BY timestamp, hostgroup, srv_host";

@@ -360,19 +360,29 @@ static inline void set_thread_name(const char(&name)[LEN], const bool en = true)
 std::string get_client_addr(struct sockaddr* client_addr);
 
 /**
- * @brief Escape single quotes in a string for safe SQL insertion.
- * @param input The string to escape.
- * @return A new string with single quotes doubled and backslashes escaped.
+ * @brief Escape a value for safe use inside a single-quoted SQL literal.
+ *
+ * This helper follows SQLite/SQL literal escaping rules and doubles only
+ * single quote characters (`'` -> `''`). It intentionally does not apply
+ * backslash escaping.
+ *
+ * @param input Raw untrusted value to place in a quoted SQL string literal.
+ * @return Escaped value safe to embed between single quotes.
  */
 std::string sql_escape(const std::string& input);
 
 /**
- * @brief Calculate an approximate percentile value from histogram bucket counts.
- * @param buckets Vector of counts per histogram bucket.
- * @param thresholds Vector of upper-bound threshold values for each bucket (same length as buckets).
- * @param percentile The percentile to calculate, in the range [0.0, 1.0].
- * @return The threshold value of the bucket in which the target percentile falls,
- *         or 0 if the buckets are empty.
+ * @brief Estimate a percentile from histogram bucket counts.
+ *
+ * The function validates input shape (`buckets.size() == thresholds.size()`),
+ * clamps `percentile` to `[0.0, 1.0]`, and uses 64-bit accumulation to avoid
+ * overflow on high-volume counters. For `percentile == 0.0`, it returns the
+ * first non-empty bucket threshold.
+ *
+ * @param buckets Histogram counts per bucket (non-negative values expected).
+ * @param thresholds Upper-bound value for each bucket, same index/length as buckets.
+ * @param percentile Requested percentile in `[0.0, 1.0]` (values outside are clamped).
+ * @return Matching threshold, or `0` when no valid/non-empty histogram exists.
  */
 int calculate_percentile_from_histogram(
 	const std::vector<int>& buckets,

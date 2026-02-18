@@ -172,7 +172,7 @@ ProxySQL uses different column names for the same concept between MySQL and Post
 
 Query events use a circular buffer that must be explicitly flushed to tables.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Query Execution                              │
 └─────────────────────────────────────────────────────────────────┘
@@ -242,7 +242,7 @@ json Stats_Tool_Handler::handle_flush_query_log(const json& arguments) {
 
 Query digest statistics are maintained in an in-memory hash map, not SQLite.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Query Completes                              │
 └─────────────────────────────────────────────────────────────────┘
@@ -307,7 +307,7 @@ json Stats_Tool_Handler::handle_flush_queries(const json& arguments) {
 
 Historical tables are populated by periodic timers and aggregated into hourly tables.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │              Admin Thread Timer Check                            │
 │              (every poll cycle)                                  │
@@ -917,22 +917,50 @@ std::vector<int> bucket_thresholds = {
 };
 
 int calculate_percentile(const std::vector<int>& bucket_counts, double percentile) {
-    int total = 0;
-    for (int count : bucket_counts) {
-        total += count;
+    if (bucket_counts.empty() || bucket_thresholds.empty()) {
+        return 0;
     }
-    
-    int target = total * percentile;
-    int cumulative = 0;
-    
-    for (size_t i = 0; i < bucket_counts.size(); i++) {
-        cumulative += bucket_counts[i];
+
+    if (percentile < 0.0) {
+        percentile = 0.0;
+    } else if (percentile > 1.0) {
+        percentile = 1.0;
+    }
+
+    long long total = 0;
+    for (int count : bucket_counts) {
+        if (count > 0) {
+            total += count;
+        }
+    }
+
+    if (total == 0) {
+        return 0;
+    }
+
+    if (percentile == 0.0) {
+        for (size_t i = 0; i < bucket_counts.size() && i < bucket_thresholds.size(); i++) {
+            if (bucket_counts[i] > 0) {
+                return bucket_thresholds[i];
+            }
+        }
+        return 0;
+    }
+
+    long long target = std::ceil(total * percentile);
+    if (target < 1) target = 1;
+    long long cumulative = 0;
+
+    for (size_t i = 0; i < bucket_counts.size() && i < bucket_thresholds.size(); i++) {
+        if (bucket_counts[i] > 0) {
+            cumulative += bucket_counts[i];
+        }
         if (cumulative >= target) {
             return bucket_thresholds[i];
         }
     }
-    
-    return bucket_thresholds.back();
+
+    return bucket_thresholds.empty() ? 0 : bucket_thresholds.back();
 }
 
 json calculate_percentiles(SQLite3_row* row) {

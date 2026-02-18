@@ -111,18 +111,30 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	handler->admin_tool_handler = new Admin_Tool_Handler(handler);
 	if (handler->admin_tool_handler->init() == 0) {
 		proxy_info("Admin Tool Handler initialized\n");
+	} else {
+		proxy_error("Failed to initialize Admin Tool Handler\n");
+		delete handler->admin_tool_handler;
+		handler->admin_tool_handler = NULL;
 	}
 
 	// 4. Cache Tool Handler
 	handler->cache_tool_handler = new Cache_Tool_Handler(handler);
 	if (handler->cache_tool_handler->init() == 0) {
 		proxy_info("Cache Tool Handler initialized\n");
+	} else {
+		proxy_error("Failed to initialize Cache Tool Handler\n");
+		delete handler->cache_tool_handler;
+		handler->cache_tool_handler = NULL;
 	}
 
 	// 5. Stats Tool Handler
 	handler->stats_tool_handler = new Stats_Tool_Handler(handler);
 	if (handler->stats_tool_handler->init() == 0) {
 		proxy_info("Stats Tool Handler initialized\n");
+	} else {
+		proxy_error("Failed to initialize Stats Tool Handler\n");
+		delete handler->stats_tool_handler;
+		handler->stats_tool_handler = NULL;
 	}
 
 	// 6. AI Tool Handler (for LLM and other AI features)
@@ -143,30 +155,23 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 
 	// Register MCP endpoints
 	// Each endpoint gets its own dedicated tool handler
-	std::unique_ptr<httpserver::http_resource> config_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->config_tool_handler, "config"));
-	ws->register_resource("/mcp/config", config_resource.get(), true);
-	_endpoints.push_back({"/mcp/config", std::move(config_resource)});
+	auto register_endpoint = [&](const std::string& uri, MCP_Tool_Handler* tool, const std::string& name) {
+		if (!tool) {
+			proxy_warning("Skipping MCP endpoint %s: %s Tool Handler not initialized\n", uri.c_str(), name.c_str());
+			return;
+		}
+		std::unique_ptr<httpserver::http_resource> resource(
+			new MCP_JSONRPC_Resource(handler, tool, name)
+		);
+		ws->register_resource(uri, resource.get(), true);
+		_endpoints.push_back({uri, std::move(resource)});
+	};
 
-	std::unique_ptr<httpserver::http_resource> stats_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->stats_tool_handler, "stats"));
-	ws->register_resource("/mcp/stats", stats_resource.get(), true);
-	_endpoints.push_back({"/mcp/stats", std::move(stats_resource)});
-
-	std::unique_ptr<httpserver::http_resource> query_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->query_tool_handler, "query"));
-	ws->register_resource("/mcp/query", query_resource.get(), true);
-	_endpoints.push_back({"/mcp/query", std::move(query_resource)});
-
-	std::unique_ptr<httpserver::http_resource> admin_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->admin_tool_handler, "admin"));
-	ws->register_resource("/mcp/admin", admin_resource.get(), true);
-	_endpoints.push_back({"/mcp/admin", std::move(admin_resource)});
-
-	std::unique_ptr<httpserver::http_resource> cache_resource =
-		std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->cache_tool_handler, "cache"));
-	ws->register_resource("/mcp/cache", cache_resource.get(), true);
-	_endpoints.push_back({"/mcp/cache", std::move(cache_resource)});
+	register_endpoint("/mcp/config", handler->config_tool_handler, "config");
+	register_endpoint("/mcp/stats", handler->stats_tool_handler, "stats");
+	register_endpoint("/mcp/query", handler->query_tool_handler, "query");
+	register_endpoint("/mcp/admin", handler->admin_tool_handler, "admin");
+	register_endpoint("/mcp/cache", handler->cache_tool_handler, "cache");
 
 	// 6. AI endpoint (for LLM and other AI features)
 	if (handler->ai_tool_handler) {
@@ -177,7 +182,6 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	}
 
 	// 7. RAG endpoint (for Retrieval-Augmented Generation)
-	extern AI_Features_Manager *GloAI;
 	if (GloAI) {
 		// Use same catalog path as query_tool_handler for logging
 		std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
@@ -198,16 +202,15 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->rag_tool_handler = NULL;
 	}
 
-	int endpoint_count = (handler->ai_tool_handler ? 1 : 0) + (handler->rag_tool_handler ? 1 : 0) + 5;
-	std::string endpoints_list = "/mcp/config, /mcp/stats, /mcp/query, /mcp/admin, /mcp/cache";
-	if (handler->ai_tool_handler) {
-		endpoints_list += ", /mcp/ai";
+	std::string endpoints_list;
+	for (size_t i = 0; i < _endpoints.size(); i++) {
+		if (i > 0) {
+			endpoints_list += ", ";
+		}
+		endpoints_list += _endpoints[i].first;
 	}
-	if (handler->rag_tool_handler) {
-		endpoints_list += ", /mcp/rag";
-	}
-	proxy_info("Registered %d MCP endpoints with dedicated tool handlers: %s\n",
-	          endpoint_count, endpoints_list.c_str());
+	proxy_info("Registered %zu MCP endpoints with dedicated tool handlers: %s\n",
+		_endpoints.size(), endpoints_list.empty() ? "(none)" : endpoints_list.c_str());
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {

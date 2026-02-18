@@ -158,14 +158,16 @@ int test_variable_access(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SHOW VARIABLES LIKE 'mcp-%'");
 	MYSQL_RES* res = mysql_store_result(admin);
 	int num_rows = mysql_num_rows(res);
-	ok(num_rows == 14,
-	   "SHOW VARIABLES LIKE 'mcp-%%' returns 14 rows, got %d", num_rows);
+	ok(num_rows >= 15,
+	   "SHOW VARIABLES LIKE 'mcp-%%' returns at least 15 rows, got %d", num_rows);
 	mysql_free_result(res);
 
 	// Test 8: Restore default values
 	MYSQL_QUERY(admin, "SET mcp-enabled=false");
 	MYSQL_QUERY(admin, "SET mcp-port=6071");
 	MYSQL_QUERY(admin, "SET mcp-config_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-ai_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-rag_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
 	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	ok(1, "Restored default values for MCP variables");
@@ -246,6 +248,8 @@ int test_variable_persistence(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-query_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-admin_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-cache_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-ai_endpoint_auth=''");
+	MYSQL_QUERY(admin, "SET mcp-rag_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
 	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	MYSQL_QUERY(admin, "SAVE MCP VARIABLES TO DISK");

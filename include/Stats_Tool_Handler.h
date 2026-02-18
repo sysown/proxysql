@@ -4,6 +4,8 @@
 #ifdef PROXYSQLGENAI
 
 #include <map>
+#include <string>
+#include <vector>
 
 #include "MCP_Tool_Handler.h"
 #include "MCP_Thread.h"
@@ -209,11 +211,16 @@ private:
 	bool get_interval_config(const std::string& interval, int& seconds, bool& use_hourly);
 
 	/**
-	 * @brief Calculate percentile from histogram buckets
-	 * @param buckets Vector of bucket counts
-	 * @param thresholds Vector of bucket thresholds in microseconds
-	 * @param percentile Percentile to calculate (0.0 to 1.0)
-	 * @return Estimated percentile value in microseconds
+	 * @brief Estimate a latency percentile from histogram buckets.
+	 *
+	 * This helper clamps percentile bounds, handles the p0 edge case by
+	 * returning the first non-empty bucket, and uses 64-bit accumulation
+	 * to avoid overflow when counters are very large.
+	 *
+	 * @param buckets Bucket counts (aligned by index with @p thresholds).
+	 * @param thresholds Bucket upper bounds in microseconds.
+	 * @param percentile Requested percentile in `[0.0, 1.0]`.
+	 * @return Estimated percentile latency in microseconds, or 0 when empty/invalid.
 	 */
 	int calculate_percentile(const std::vector<int>& buckets, const std::vector<int>& thresholds, double percentile);
 
