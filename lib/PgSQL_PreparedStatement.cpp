@@ -13,16 +13,19 @@ extern PgSQL_STMT_Manager *GloPgStmt;
 
 const int PS_GLOBAL_STATUS_FIELD_NUM = 8;
 
-static uint64_t stmt_compute_hash(const char *user,
-	const char *database, const char *query, unsigned int query_length, const Parse_Param_Types& param_types) {
+static uint64_t stmt_compute_hash_opts(const char *user,
+	const char *database, const char *query, unsigned int query_length,
+	const Parse_Param_Types& param_types,
+	bool strip_query_comments
+) {
 	// two random seperators
 	static const char DELIM1[] = "-ZiODNjvcNHTFaARXoqqSPDqQe-";
 	static const char DELIM2[] = "-aSfpWDoswfuRsJXqZKfcelzCL-";
 	static const char DELIM3[] = "-rQkhRVXdvgVYsmiqZCMikjKmP-";
 
-	// NOSONAR: strlen is safe here 
+	// NOSONAR: strlen is safe here
 	size_t user_length = strlen(user); // NOSONAR
-	// NOSONAR: strlen is safe here 
+	// NOSONAR: strlen is safe here
 	size_t database_length = strlen(database); // NOSONAR
 	size_t delim1_length = sizeof(DELIM1) - 1;
 	size_t delim2_length = sizeof(DELIM2) - 1;
@@ -47,7 +50,22 @@ static uint64_t stmt_compute_hash(const char *user,
 	memcpy(buf + l, DELIM1, delim1_length); l += delim1_length; // write delimiter1
 	memcpy(buf + l, database, database_length); l += database_length; // write database
 	memcpy(buf + l, DELIM2, delim2_length); l += delim2_length; // write delimiter2
-	memcpy(buf + l, query, query_length);	l += query_length; 	// write query
+
+	// write query
+	char *nquery = NULL;
+	if (strip_query_comments) {
+		nquery = pgsql_query_strip_comments((char *)query, query_length, false);
+		if (nquery != NULL) {
+			query = nquery;
+			query_length = strlen(nquery);
+		}
+	}
+	memcpy(buf + l, query, query_length);
+	l += query_length;
+	if (nquery != NULL) {
+		free(nquery);
+	}
+
 	if (!param_types.empty()) {
 		uint16_t size = param_types.size();
 		memcpy(buf + l, DELIM3, delim3_length); l += delim3_length; // write delimiter3
@@ -56,6 +74,15 @@ static uint64_t stmt_compute_hash(const char *user,
 	}
 	uint64_t hash = SpookyHash::Hash64(buf, l, 0);
 	return hash;
+}
+
+inline static uint64_t stmt_compute_hash(const char *user,
+	const char *database, const char *query, unsigned int query_length,
+	const Parse_Param_Types& param_types
+) {
+	return stmt_compute_hash_opts(
+		user, database, query, query_length, param_types,
+		!pgsql_thread___query_digests_keep_comment);
 }
 
 void PgSQL_STMT_Global_info::compute_hash() {
@@ -80,7 +107,7 @@ PgSQL_STMT_Global_info::PgSQL_STMT_Global_info(uint64_t id, const char *_user, c
 	first_comment = _first_comment ? strdup(_first_comment) : nullptr;
 	parse_param_types = std::move(_ppt);
 	PgQueryCmd = PGSQL_QUERY__UNINITIALIZED;
-	
+
 	if (_h) {
 		hash = _h;
 	} else {

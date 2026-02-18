@@ -18,9 +18,10 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 
-static uint64_t stmt_compute_hash(char *user,
-                                  char *schema, char *query,
-                                  unsigned int query_length) {
+static uint64_t stmt_compute_hash_opts(char *user,
+                                       char *schema, char *query,
+                                       unsigned int query_length,
+                                       bool strip_query_comments) {
 	int l = 0;
 	l += strlen(user);
 	l += strlen(schema);
@@ -50,12 +51,31 @@ static uint64_t stmt_compute_hash(char *user,
 	l += strlen(_COMPUTE_HASH_DEL2_);
 
 	// write query
+	char *nquery = NULL;
+	if (strip_query_comments) {
+		nquery = mysql_query_strip_comments((char *)query, query_length, false);
+		if (nquery != NULL) {
+			query = nquery;
+			query_length = strlen(nquery);
+		}
+	}
 	memcpy(buf + l, query, query_length);
 	l += query_length;
+	if (nquery != NULL) {
+		free(nquery);
+	}
 
 	uint64_t hash = SpookyHash::Hash64(buf, l, 0);
 	free(buf);
 	return hash;
+}
+
+inline static uint64_t stmt_compute_hash(char *user,
+                                         char *schema, char *query,
+                                         unsigned int query_length) {
+	return stmt_compute_hash_opts(
+		user, schema, query, query_length,
+		!mysql_thread___query_digests_keep_comment);
 }
 
 void MySQL_STMT_Global_info::compute_hash() {
