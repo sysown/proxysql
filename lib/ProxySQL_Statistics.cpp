@@ -3,6 +3,8 @@
 #include "cpp.h"
 
 #include "ProxySQL_Statistics.hpp"
+#include "MySQL_HostGroups_Manager.h"
+#include "PgSQL_HostGroups_Manager.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -19,6 +21,7 @@ using json = nlohmann::json;
 #include <cmath>
 #include <sstream>
 #include <netdb.h>
+#include <future>
 
 namespace {
 std::string escape_sql_string_literal(const std::string& value) {
@@ -58,6 +61,33 @@ std::string format_prometheus_label_double(const double value) {
 	oss.precision(17);
 	oss << value;
 	return oss.str();
+}
+
+struct probe_target_t {
+	int hg;
+	std::string host;
+	int port;
+};
+
+void append_probe_targets(SQLite3_result* resultset, std::vector<probe_target_t>& targets) {
+	if (!resultset) {
+		return;
+	}
+	for (int i = 0; i < static_cast<int>(resultset->rows_count); i++) {
+		SQLite3_row* row = resultset->rows[i];
+		if (!row || !row->fields[0] || !row->fields[1] || !row->fields[2]) {
+			continue;
+		}
+
+		const int hg = atoi(row->fields[0]);
+		const std::string host = row->fields[1];
+		const int port = atoi(row->fields[2]);
+
+		if (host.empty() || port <= 0 || port > 65535) {
+			continue;
+		}
+		targets.push_back({hg, host, port});
+	}
 }
 } // namespace
 
@@ -1813,8 +1843,6 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
 
 }
 
-#include <future>
-
 struct probe_result_t {
     int hg;
     std::string host;
@@ -1883,42 +1911,43 @@ probe_result_t probe_backend(int hg, std::string host, int port, time_t now) {
 
 // TSDB Monitor Loop
 void ProxySQL_Statistics::tsdb_monitor_loop() {
-    if (!variables.tsdb_enabled || !variables.tsdb_monitor_enabled) return;
+	if (!variables.tsdb_enabled || !variables.tsdb_monitor_enabled || !statsdb_disk) return;
 
-    // Get backend servers from runtime_mysql_servers
-    if (!GloAdmin || !GloAdmin->admindb) return;
+	std::vector<probe_target_t> targets;
 
-    char *err_msg = NULL;
-    int cols = 0;
-    int affected_rows = 0;
-    SQLite3_result *resultset = NULL;
-    GloAdmin->admindb->execute_statement(
-        "SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers",
-        &err_msg, &cols, &affected_rows, &resultset);
-    if (err_msg) {
-        free(err_msg);
-    }
+	// Pull backend servers through the same hostgroup-manager paths used to build runtime tables.
+	if (MyHGM) {
+		SQLite3_result* mysql_servers = MyHGM->dump_table_mysql("mysql_servers");
+		append_probe_targets(mysql_servers, targets);
+		if (mysql_servers) {
+			delete mysql_servers;
+		}
+	}
 
-    if (resultset) {
-        time_t now = time(NULL);
-        std::vector<std::future<probe_result_t>> futures;
-        for (int i = 0; i < static_cast<int>(resultset->rows_count); i++) {
-            int hg = atoi(resultset->rows[i]->fields[0]);
-            const char* host = resultset->rows[i]->fields[1];
-            const std::string host_s = (host ? host : "");
-            int port = atoi(resultset->rows[i]->fields[2]);
+	if (PgHGM) {
+		SQLite3_result* pgsql_servers = PgHGM->dump_table_pgsql("pgsql_servers");
+		append_probe_targets(pgsql_servers, targets);
+		if (pgsql_servers) {
+			delete pgsql_servers;
+		}
+	}
 
-            if (!host_s.empty()) {
-                futures.push_back(std::async(std::launch::async, probe_backend, hg, host_s, port, now));
-            }
-        }
+	if (targets.empty()) {
+		return;
+	}
 
-        statsdb_disk->execute("BEGIN");
-        for (auto& f : futures) {
-            probe_result_t res = f.get();
-            insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
-        }
-        statsdb_disk->execute("COMMIT");
-        delete resultset;
-    }
+	time_t now = time(NULL);
+	std::vector<std::future<probe_result_t>> futures;
+	futures.reserve(targets.size());
+
+	for (const auto& target : targets) {
+		futures.push_back(std::async(std::launch::async, probe_backend, target.hg, target.host, target.port, now));
+	}
+
+	statsdb_disk->execute("BEGIN");
+	for (auto& f : futures) {
+		probe_result_t res = f.get();
+		insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
+	}
+	statsdb_disk->execute("COMMIT");
 }

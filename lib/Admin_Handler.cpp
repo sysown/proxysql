@@ -1946,10 +1946,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'genai-%'");
 				}
 				else if (is_tsdb) {
-					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'tsdb-\\%'");
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'tsdb-%'");
 				}
 				else {
-					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-\\%'");
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
 				}
 				*ql = strlen(*q) + 1;
 				return true;
@@ -1958,16 +1958,16 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length)) {
 				l_free(*ql, *q);
 				if (is_pgsql) {
-					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'pgsql-\\%'");
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'pgsql-%'");
 				}
 				else if (is_genai) {
-					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'genai-\\%'");
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'genai-%'");
 				}
 				else if (is_tsdb) {
-					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'tsdb-\\%'");
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'tsdb-%'");
 				}
 				else {
-					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-\\%'");
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
 				}
 				*ql = strlen(*q) + 1;
 				return true;
@@ -2084,13 +2084,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 		if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
 			l_free(*ql, *q);
-			*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mcp-\\%'");
+			*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mcp-%'");
 			*ql = strlen(*q) + 1;
 			return true;
 		}
 		if (is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length)) {
 			l_free(*ql, *q);
-			*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mcp-\\%'");
+			*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mcp-%'");
 			*ql = strlen(*q) + 1;
 			return true;
 		}
@@ -4183,7 +4183,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 		// MCP (Model Context Protocol) VARIABLES CHECKSUM
 		if (strlen(query_no_space)==strlen("CHECKSUM DISK MCP VARIABLES") && !strncasecmp("CHECKSUM DISK MCP VARIABLES", query_no_space, strlen(query_no_space))){
-			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-\\%' ORDER BY variable_name";
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
 			tablename=(char *)"MCP VARIABLES";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
@@ -4193,7 +4193,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MCP VARIABLES") && !strncasecmp("CHECKSUM MEM MCP VARIABLES", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MCP VARIABLES") && !strncasecmp("CHECKSUM MCP VARIABLES", query_no_space, strlen(query_no_space)))){
-			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-\\%' ORDER BY variable_name";
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
 			tablename=(char *)"MCP VARIABLES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
@@ -4541,7 +4541,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (query_no_space_length == strlen("SHOW TSDB VARIABLES") && !strncasecmp("SHOW TSDB VARIABLES", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
-		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'tsdb-\\%' ORDER BY variable_name");
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'tsdb-%' ORDER BY variable_name");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
@@ -4564,7 +4564,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (query_no_space_length == strlen("SHOW MCP VARIABLES") && !strncasecmp("SHOW MCP VARIABLES", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
-		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mcp-\\%' ORDER BY variable_name");
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}

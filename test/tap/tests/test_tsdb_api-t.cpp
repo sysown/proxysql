@@ -53,6 +53,11 @@ long http_get(const char *url, string &response_out, const char* userpwd = "stat
 
 	CURL *curl_handle;
 	curl_handle = curl_easy_init();
+	if (!curl_handle) {
+		diag("curl_easy_init() failed");
+		if (chunk.response) free(chunk.response);
+		return 0;
+	}
 
 	curl_easy_setopt(curl_handle, CURLOPT_URL, url);
 	curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);

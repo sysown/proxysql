@@ -3019,7 +3019,7 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'tsdb-\\%'";
+		char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'tsdb-%'";
 		db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
 		int matching_rows=0;
 		if (error) {
@@ -3039,10 +3039,10 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 		}
 	}
 	if (del) {
-		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'tsdb-\\%'");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'tsdb-%'");
 	}
 	if (runtime) {
-		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-\\%'");
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'");
 	}
 
 	const char *query_a;

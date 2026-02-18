@@ -112,7 +112,7 @@ int main() {
 	string count;
 	bool count_ok = fetch_single_string(
 		admin,
-		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-\\%'",
+		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'",
 		count
 	);
 	ok(count_ok && count == "5", "Five tsdb-* runtime variables are present (found %s)", count.c_str());
@@ -189,8 +189,8 @@ int main() {
 	ok(rc == 0, "Second SHOW TSDB STATUS call successful");
 	drain_results(admin);
 
-	fetch_single_string(admin, "SELECT Variable_Value FROM stats_tsdb WHERE Variable_Name='Total_Datapoints'", count);
-	ok(atoi(count.c_str()) > 0, "SHOW TSDB STATUS reports datapoints > 0 (found %s)", count.c_str());
+	bool dp_ok = fetch_single_string(admin, "SELECT Variable_Value FROM stats_tsdb WHERE Variable_Name='Total_Datapoints'", count);
+	ok(dp_ok && atoi(count.c_str()) > 0, "SHOW TSDB STATUS reports datapoints > 0 (found %s)", count.c_str());
 
 	// 12. Test Downsampling command
 	diag("Testing TSDB downsampling via command...");
@@ -201,7 +201,7 @@ int main() {
 	diag("Verifying downsampled data...");
 	string ds_count;
 	bool ds_ok = fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour", ds_count);
-	ok(ds_ok && atoi(ds_count.c_str()) >= 0, "tsdb_metrics_hour table is accessible (count: %s)", ds_count.c_str());
+	ok(ds_ok && atoi(ds_count.c_str()) > 0, "Downsample produced rows in tsdb_metrics_hour (count: %s)", ds_count.c_str());
 
 	mysql_close(admin);
 	return exit_status();
