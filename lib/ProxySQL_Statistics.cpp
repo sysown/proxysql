@@ -206,7 +206,7 @@ ProxySQL_Statistics::~ProxySQL_Statistics() {
 	drop_tables_defs(tables_defs_statsdb_disk);
 	delete tables_defs_statsdb_disk;
 	delete statsdb_mem;
-//	delete statsdb_disk;
+	delete statsdb_disk;
 }
 
 void ProxySQL_Statistics::init() {
