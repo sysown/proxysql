@@ -52,7 +52,7 @@ extern ClickHouse_Server *GloClickHouseServer;
 #endif
 
 extern char * Chart_bundle_js_c;
-extern char * TSDB_Dashboard_html_c;
+extern const char * TSDB_Dashboard_html_c;
 extern char * font_awesome;
 extern char * main_bundle_min_css_c;
 #define RATE_LIMIT_PAGE "<html><head><title>Rate Limit Page</title></head><body>Rate Limit Reached</body></html>"

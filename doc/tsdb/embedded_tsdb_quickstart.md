@@ -3,7 +3,7 @@
 ## 1. Enable TSDB
 
 ```sql
-SET tsdb-enabled='1';
+SET tsdb-enabled=1;
 LOAD TSDB VARIABLES TO RUNTIME;
 SAVE TSDB VARIABLES TO DISK;
 ```
@@ -11,7 +11,7 @@ SAVE TSDB VARIABLES TO DISK;
 Optional backend probe collection:
 
 ```sql
-SET tsdb-monitor_enabled='1';
+SET tsdb-monitor_enabled=1;
 LOAD TSDB VARIABLES TO RUNTIME;
 SAVE TSDB VARIABLES TO DISK;
 ```

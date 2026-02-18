@@ -41,13 +41,12 @@ Embedded time-series storage in SQLite for ProxySQL runtime metrics and backend 
   - `LOAD TSDB VARIABLES TO RUNTIME`
   - `SAVE TSDB VARIABLES TO DISK`
   - `SHOW TSDB VARIABLES`
-
-## Current API Surface
-
-- C++ methods in `ProxySQL_Statistics` for insert, query, status, sampler/monitor loops.
-- SQL querying through `statsdb_disk.tsdb_*` tables.
-- REST API endpoints:
-  - `/api/tsdb/metrics`
-  - `/api/tsdb/query`
-  - `/api/tsdb/status`
-- Web Dashboard at `/tsdb`.
+  
+  ## Current API Surface
+  
+  - C++ methods in `ProxySQL_Statistics` for insert, query, status, sampler/monitor loops.
+  - SQL querying through `stats_history.tsdb_*` tables.
+  - REST API endpoints:
+    - `/api/tsdb/metrics`
+    - `/api/tsdb/query`
+    - `/api/tsdb/status`- Web Dashboard at `/tsdb`.

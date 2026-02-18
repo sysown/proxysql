@@ -1,4 +1,4 @@
-char * TSDB_Dashboard_html_c = (char *) R"HTML(
+const char * TSDB_Dashboard_html_c = R"HTML(
 <!DOCTYPE html>
 <html>
 <head>
@@ -77,7 +77,7 @@ char * TSDB_Dashboard_html_c = (char *) R"HTML(
             const from = now - parseInt(range);
 
             try {
-                const resp = await fetch(`/api/tsdb/query?metric=${metric}&from=${from}&to=${now}`);
+                const resp = await fetch(`/api/tsdb/query?metric=${encodeURIComponent(metric)}&from=${from}&to=${now}`);
                 if (!resp.ok) throw new Error('Query failed');
                 const data = await resp.json();
                 

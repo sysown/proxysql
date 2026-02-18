@@ -112,7 +112,7 @@ int main() {
 	string count;
 	bool count_ok = fetch_single_string(
 		admin,
-		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'",
+		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-\\%'",
 		count
 	);
 	ok(count_ok && count == "5", "Five tsdb-* runtime variables are present (found %s)", count.c_str());
@@ -127,7 +127,7 @@ int main() {
 	string disk_enabled;
 	bool disk_ok = fetch_single_string(
 		admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='tsdb-enabled'",
+		"SELECT variable_value FROM disk.global_variables WHERE variable_name='tsdb-enabled'",
 		disk_enabled
 	);
 	ok(disk_ok && disk_enabled == "1", "TSDB variable is persisted to disk (value: %s)", disk_enabled.c_str());
@@ -200,8 +200,8 @@ int main() {
 	
 	diag("Verifying downsampled data...");
 	string ds_count;
-	fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour", ds_count);
-	ok(atoi(ds_count.c_str()) >= 0, "tsdb_metrics_hour table is accessible (count: %s)", ds_count.c_str());
+	bool ds_ok = fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour", ds_count);
+	ok(ds_ok && atoi(ds_count.c_str()) >= 0, "tsdb_metrics_hour table is accessible (count: %s)", ds_count.c_str());
 
 	mysql_close(admin);
 	return exit_status();

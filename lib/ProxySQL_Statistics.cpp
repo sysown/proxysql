@@ -118,34 +118,36 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 	variables.tsdb_monitor_interval = 10;
 }
 
+static const struct {
+    const char *name;
+    int min_val;
+    int max_val;
+} tsdb_variable_meta[] = {
+    {"enabled", 0, 1},
+    {"sample_interval", 1, 3600},
+    {"retention_days", 1, 3650},
+    {"monitor_enabled", 0, 1},
+    {"monitor_interval", 1, 3600},
+    {NULL, 0, 0}
+};
+
 bool ProxySQL_Statistics::set_variable(const char *name, const char *value) {
     if (name == NULL || value == NULL) return false;
-    int intv = atoi(value);
+    char *endptr;
+    long intv = strtol(value, &endptr, 10);
+    if (*endptr != '\0') return false; // Not a valid integer
 
-    if (!strcasecmp(name, "enabled")) {
-        if (intv == 0 || intv == 1) {
-            variables.tsdb_enabled = intv;
-            return true;
-        }
-    } else if (!strcasecmp(name, "sample_interval")) {
-        if (intv >= 1 && intv <= 3600) {
-            variables.tsdb_sample_interval = intv;
-            return true;
-        }
-    } else if (!strcasecmp(name, "retention_days")) {
-        if (intv >= 1 && intv <= 3650) {
-            variables.tsdb_retention_days = intv;
-            return true;
-        }
-    } else if (!strcasecmp(name, "monitor_enabled")) {
-        if (intv == 0 || intv == 1) {
-            variables.tsdb_monitor_enabled = intv;
-            return true;
-        }
-    } else if (!strcasecmp(name, "monitor_interval")) {
-        if (intv >= 1 && intv <= 3600) {
-            variables.tsdb_monitor_interval = intv;
-            return true;
+    for (int i=0; tsdb_variable_meta[i].name; i++) {
+        if (!strcasecmp(name, tsdb_variable_meta[i].name)) {
+            if (intv >= tsdb_variable_meta[i].min_val && intv <= tsdb_variable_meta[i].max_val) {
+                if (i == 0) variables.tsdb_enabled = (int)intv;
+                else if (i == 1) variables.tsdb_sample_interval = (int)intv;
+                else if (i == 2) variables.tsdb_retention_days = (int)intv;
+                else if (i == 3) variables.tsdb_monitor_enabled = (int)intv;
+                else if (i == 4) variables.tsdb_monitor_interval = (int)intv;
+                return true;
+            }
+            return false;
         }
     }
     return false;
@@ -173,21 +175,12 @@ char *ProxySQL_Statistics::get_variable(const char *name) {
     return NULL;
 }
 
-static const char* tsdb_variable_names[] = {
-    "enabled",
-    "sample_interval",
-    "retention_days",
-    "monitor_enabled",
-    "monitor_interval",
-    NULL
-};
-
 char **ProxySQL_Statistics::get_variables_list() {
     int count = 0;
-    while (tsdb_variable_names[count]) count++;
+    while (tsdb_variable_meta[count].name) count++;
     char **list = (char **)malloc(sizeof(char *) * (count + 1));
     for (int i = 0; i < count; i++) {
-        list[i] = strdup(tsdb_variable_names[i]);
+        list[i] = strdup(tsdb_variable_meta[i].name);
     }
     list[count] = NULL;
     return list;
@@ -195,8 +188,8 @@ char **ProxySQL_Statistics::get_variables_list() {
 
 bool ProxySQL_Statistics::has_variable(const char *name) {
     if (name == NULL) return false;
-    for (int i = 0; tsdb_variable_names[i]; i++) {
-        if (!strcasecmp(name, tsdb_variable_names[i])) return true;
+    for (int i = 0; tsdb_variable_meta[i].name; i++) {
+        if (!strcasecmp(name, tsdb_variable_meta[i].name)) return true;
     }
     return false;
 }
@@ -1423,14 +1416,14 @@ void ProxySQL_Statistics::insert_tsdb_metric(const std::string& metric_name,
         labels_str = "{}";
     }
 
-    rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp);
-    rc = (*proxy_sqlite3_bind_text)(statement, 2, metric_name.c_str(), -1, SQLITE_TRANSIENT);
-    rc = (*proxy_sqlite3_bind_text)(statement, 3, labels_str.c_str(), -1, SQLITE_TRANSIENT);
-    rc = (*proxy_sqlite3_bind_double)(statement, 4, value);
+    rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_text)(statement, 2, metric_name.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_text)(statement, 3, labels_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_double)(statement, 4, value); ASSERT_SQLITE_OK(rc, statsdb_disk);
 
     SAFE_SQLITE3_STEP2(statement);
-    (*proxy_sqlite3_clear_bindings)(statement);
-    (*proxy_sqlite3_reset)(statement);
+    rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
 }
 
 // TSDB Backend Health Insertion
@@ -1455,16 +1448,16 @@ void ProxySQL_Statistics::insert_backend_health(int hostgroup,
 
     sqlite3_stmt *statement = stmt_insert_backend_health;
 
-    rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp);
-    rc = (*proxy_sqlite3_bind_int)(statement, 2, hostgroup);
-    rc = (*proxy_sqlite3_bind_text)(statement, 3, hostname.c_str(), -1, SQLITE_TRANSIENT);
-    rc = (*proxy_sqlite3_bind_int)(statement, 4, port);
-    rc = (*proxy_sqlite3_bind_int)(statement, 5, probe_up ? 1 : 0);
-    rc = (*proxy_sqlite3_bind_int)(statement, 6, connect_ms);
+    rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 2, hostgroup); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_text)(statement, 3, hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 4, port); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 5, probe_up ? 1 : 0); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 6, connect_ms); ASSERT_SQLITE_OK(rc, statsdb_disk);
 
     SAFE_SQLITE3_STEP2(statement);
-    (*proxy_sqlite3_clear_bindings)(statement);
-    (*proxy_sqlite3_reset)(statement);
+    rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
 }
 
 // TSDB Downsampling
@@ -1483,7 +1476,7 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
     statsdb_disk->execute_statement(query, &error, &cols, &affected_rows, &resultset);
     if (error) {
         proxy_error("tsdb_downsample_metrics: %s\n", error);
-        sqlite3_free(error);
+        free(error);
         if (resultset) delete resultset;
         return;
     }
@@ -1560,11 +1553,13 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
         "SELECT COUNT(DISTINCT metric_name || CHAR(31) || labels) FROM tsdb_metrics",
         &error, &cols, &affected_rows, &resultset);
     if (error) {
-        sqlite3_free(error);
+        free(error);
         error = NULL;
     }
-    if (resultset && resultset->rows_count > 0) {
-        status.total_series = atol(resultset->rows[0]->fields[0]);
+    if (resultset) {
+        if (resultset->rows_count > 0 && resultset->rows[0]->fields[0]) {
+            status.total_series = atol(resultset->rows[0]->fields[0]);
+        }
         delete resultset;
     }
 
@@ -1574,11 +1569,13 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
         "SELECT COUNT(*) FROM tsdb_metrics",
         &error, &cols, &affected_rows, &resultset);
     if (error) {
-        sqlite3_free(error);
+        free(error);
         error = NULL;
     }
-    if (resultset && resultset->rows_count > 0) {
-        status.total_datapoints = atol(resultset->rows[0]->fields[0]);
+    if (resultset) {
+        if (resultset->rows_count > 0 && resultset->rows[0]->fields[0]) {
+            status.total_datapoints = atol(resultset->rows[0]->fields[0]);
+        }
         delete resultset;
     }
 
@@ -1588,15 +1585,17 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
         "SELECT MIN(timestamp), MAX(timestamp) FROM tsdb_metrics",
         &error, &cols, &affected_rows, &resultset);
     if (error) {
-        sqlite3_free(error);
+        free(error);
         error = NULL;
     }
-    if (resultset && resultset->rows_count > 0) {
-        if (resultset->rows[0]->fields[0]) {
-            status.oldest_datapoint = atol(resultset->rows[0]->fields[0]);
-        }
-        if (resultset->rows[0]->fields[1]) {
-            status.newest_datapoint = atol(resultset->rows[0]->fields[1]);
+    if (resultset) {
+        if (resultset->rows_count > 0) {
+            if (resultset->rows[0]->fields[0]) {
+                status.oldest_datapoint = atol(resultset->rows[0]->fields[0]);
+            }
+            if (resultset->rows[0]->fields[1]) {
+                status.newest_datapoint = atol(resultset->rows[0]->fields[1]);
+            }
         }
         delete resultset;
     }
@@ -1711,6 +1710,7 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
     statsdb_disk->execute_statement((char*)query.c_str(), &error, &cols, &affected_rows, &resultset);
     if (error) {
         proxy_error("query_tsdb_metrics failed: %s -- sql: %s\n", error, query.c_str());
+        free(error);
         if (resultset) {
             delete resultset;
         }
@@ -1742,6 +1742,7 @@ SQLite3_result* ProxySQL_Statistics::get_backend_health_metrics(time_t from, tim
     statsdb_disk->execute_statement((char*)query.c_str(), &error, &cols, &affected_rows, &resultset);
     if (error) {
         proxy_error("get_backend_health_metrics failed: %s -- sql: %s\n", error, query.c_str());
+        free(error);
         if (resultset) {
             delete resultset;
         }
@@ -1895,7 +1896,7 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
         "SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers",
         &err_msg, &cols, &affected_rows, &resultset);
     if (err_msg) {
-        sqlite3_free(err_msg);
+        free(err_msg);
     }
 
     if (resultset) {

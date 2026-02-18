@@ -30,9 +30,10 @@
 
 ## Configuration Lifecycle
 
-TSDB configuration is handled by a dedicated module (`tsdb-*`) and is applied with:
+TSDB configuration is handled via standard global variables with the `tsdb-` prefix. Changes are applied and persisted using the following dedicated administrative commands:
 
 - `LOAD TSDB VARIABLES TO RUNTIME`
 - `SAVE TSDB VARIABLES TO DISK`
 
-No dedicated TSDB load/save command family is implemented.
+These commands function similarly to their `MYSQL` and `PGSQL` counterparts, moving configuration between memory and disk storage.
+

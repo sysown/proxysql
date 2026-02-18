@@ -51,7 +51,6 @@ long http_get(const char *url, string &response_out, const char* userpwd = "stat
 	chunk.response = NULL;
 	chunk.size = 0;
 
-	curl_global_init(CURL_GLOBAL_ALL);
 	CURL *curl_handle;
 	curl_handle = curl_easy_init();
 
@@ -88,6 +87,7 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
+	curl_global_init(CURL_GLOBAL_ALL);
 	plan(10);
 
 	MYSQL* admin = mysql_init(NULL);
@@ -98,12 +98,12 @@ int main() {
 
 	// 1. Enable TSDB and REST API
 	diag("Enabling TSDB, Web, and REST API...");
-	mysql_query(admin, "SET tsdb-enabled='1'");
-	mysql_query(admin, "SET tsdb-sample_interval='1'");
-	mysql_query(admin, "SET admin-restapi_enabled='1'");
-	mysql_query(admin, "SET admin-web_enabled='1'");
-	mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
-	mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	mysql_query(admin, "SET tsdb-enabled='1'"); drain_results(admin);
+	mysql_query(admin, "SET tsdb-sample_interval='1'"); drain_results(admin);
+	mysql_query(admin, "SET admin-restapi_enabled='1'"); drain_results(admin);
+	mysql_query(admin, "SET admin-web_enabled='1'"); drain_results(admin);
+	mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME"); drain_results(admin);
+	mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME"); drain_results(admin);
 	drain_results(admin);
 
 	// 2. Wait for background loops to collect data and HTTP server to start

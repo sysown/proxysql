@@ -171,7 +171,7 @@ extern char * binary_sha1;
 extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
 bool ProxySQL_Admin::flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset) {
-	string q = "SELECT substr(variable_name," + to_string(modname.length()+2) + ") vn, variable_value FROM global_variables WHERE variable_name LIKE '" + modname + "-%'";
+	string q = "SELECT substr(variable_name," + to_string(modname.length()+2) + ") vn, variable_value FROM global_variables WHERE variable_name LIKE '" + modname + "-\\%'";
 	admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", q.c_str(), error);
@@ -1372,7 +1372,7 @@ void ProxySQL_Admin::flush_mcp_variables___database_to_runtime(SQLite3DB* db, bo
 	int cols = 0;
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
-	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+	char* q = (char*)"SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE 'mcp-\\%'";
 	db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", q, error);
@@ -1419,7 +1419,7 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		int cols = 0;
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
-		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-%'";
+		char* q = (char*)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-\\%'";
 		db->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		int matching_rows = 0;
 		if (error) {
@@ -1440,7 +1440,7 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 	}
 	if (del) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MCP variables from global_variables\n");
-		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mcp-%'");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mcp-\\%'");
 	}
 	static char* a;
 	static char* b;
@@ -1460,7 +1460,7 @@ void ProxySQL_Admin::flush_mcp_variables___runtime_to_database(SQLite3DB* db, bo
 		GloMCPH->wrlock();
 	}
 	if (runtime) {
-		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-%'");
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mcp-\\%'");
 	}
 	char** varnames = GloMCPH->get_variables_list();
 	int var_count = 0;

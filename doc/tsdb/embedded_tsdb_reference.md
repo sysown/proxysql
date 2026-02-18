@@ -2,7 +2,7 @@
 
 ## Configuration Variables
 
-TSDB variables are TSDB variables:
+The behavior of the TSDB subsystem is controlled by the following global variables:
 
 | Variable | Type | Default | Range | Description |
 |---|---|---:|---|---|
@@ -15,7 +15,7 @@ TSDB variables are TSDB variables:
 ### Apply Changes
 
 ```sql
-SET tsdb-enabled='1';
+SET tsdb-enabled=1;
 LOAD TSDB VARIABLES TO RUNTIME;
 SAVE TSDB VARIABLES TO DISK;
 ```
