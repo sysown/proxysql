@@ -129,17 +129,72 @@ void Stats_Tool_Handler::close() {
 // Helper Methods
 // ============================================================================
 
-std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_result** resultset, int* cols) {
+/**
+ * @brief Execute a statement against Admin in-memory DB under Admin global SQL mutex.
+ *
+ * This method is the temporary correctness bridge for MCP stats tools:
+ * the tools build SQL directly over `stats.*` tables, but most of these tables are
+ * refreshed on demand by Admin interception logic. To preserve data freshness when MCP
+ * bypasses Admin SQL parsing, this helper optionally triggers
+ * `ProxySQL_Admin::GenericRefreshStatistics()` before running the statement.
+ *
+ * The refresh and statement execution are performed while holding
+ * `GloAdmin->sql_query_global_mutex`, mirroring Admin session serialization.
+ *
+ * @param sql SQL statement to execute.
+ * @param resultset Output result set pointer. Set to NULL on failure.
+ * @param cols Output column count pointer. Set to 0 on failure.
+ * @param refresh_before_query If true, run GenericRefreshStatistics for @p sql before execution.
+ * @return Empty string on success, or descriptive error text on failure.
+ */
+std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_result** resultset, int* cols, bool refresh_before_query) {
 	if (!GloAdmin || !GloAdmin->admindb) {
 		return "ProxySQL Admin not available";
+	}
+	if (!resultset || !cols) {
+		return "Invalid output pointers for admin query execution";
+	}
+	if (!sql || sql[0] == '\0') {
+		*resultset = NULL;
+		*cols = 0;
+		return "Empty SQL query";
+	}
+
+	*resultset = NULL;
+	*cols = 0;
+
+	int lock_rc = pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+	if (lock_rc != 0) {
+		return std::string("Failed to lock sql_query_global_mutex: ") + std::strerror(lock_rc);
+	}
+
+	if (refresh_before_query) {
+		GloAdmin->GenericRefreshStatistics(sql, static_cast<unsigned int>(strlen(sql)), false);
 	}
 
 	char* error = NULL;
 	int affected_rows = 0;
-	*resultset = NULL;
-	*cols = 0;
-
 	GloAdmin->admindb->execute_statement(sql, &error, cols, &affected_rows, resultset);
+
+	int unlock_rc = pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	if (unlock_rc != 0) {
+		if (error) {
+			std::string err_msg(error);
+			free(error);
+			if (*resultset) {
+				delete *resultset;
+				*resultset = NULL;
+			}
+			return "Admin query error: " + err_msg +
+				"; also failed to unlock sql_query_global_mutex: " + std::string(std::strerror(unlock_rc));
+		}
+		if (*resultset) {
+			delete *resultset;
+			*resultset = NULL;
+		}
+		*cols = 0;
+		return std::string("Failed to unlock sql_query_global_mutex: ") + std::strerror(unlock_rc);
+	}
 
 	if (error) {
 		std::string err_msg(error);
@@ -1124,7 +1179,7 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 	SQLite3_result* count_rs = NULL;
 	int count_cols = 0;
 	int total_sessions = 0;
-	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols, false);
 	if (!count_err.empty()) {
 		if (count_rs) {
 			delete count_rs;
@@ -1260,7 +1315,7 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 	SQLite3_result* count_rs = NULL;
 	int count_cols = 0;
 	int total_digests = 0;
-	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols, false);
 	if (!count_err.empty()) {
 		if (count_rs) {
 			delete count_rs;
@@ -1691,7 +1746,7 @@ json Stats_Tool_Handler::handle_show_errors(const json& arguments) {
 	int count_cols = 0;
 	int total_error_types = 0;
 	long long total_error_count = 0;
-	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols, false);
 	if (!count_err.empty()) {
 		if (count_rs) {
 			delete count_rs;
@@ -1975,7 +2030,7 @@ json Stats_Tool_Handler::handle_show_query_rules(const json& arguments) {
 	SQLite3_result* count_rs = NULL;
 	int count_cols = 0;
 	int total_rules = 0;
-	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols);
+	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols, false);
 	if (!count_err.empty()) {
 		if (count_rs) {
 			delete count_rs;

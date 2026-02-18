@@ -177,13 +177,32 @@ private:
 	// =========================================================================
 
 	/**
-	 * @brief Execute a SQL query against GloAdmin->admindb
-	 * @param sql The SQL query to execute
-	 * @param resultset Output pointer for the result set (caller must delete)
-	 * @param cols Output for number of columns
-	 * @return Empty string on success, error message on failure
+	 * @brief Execute a SQL query against `GloAdmin->admindb` with Admin-session semantics.
+	 *
+	 * This helper intentionally mirrors the critical part of the Admin SQL execution path
+	 * used by `ProxySQL_Admin::admin_session_handler()`:
+	 *
+	 * 1. Acquire `GloAdmin->sql_query_global_mutex` to serialize access to the internal
+	 *    in-memory SQLite databases.
+	 * 2. Optionally invoke `ProxySQL_Admin::GenericRefreshStatistics()` on the current SQL
+	 *    statement so `stats_*` tables are repopulated before they are read.
+	 * 3. Execute the SQL statement via `admindb->execute_statement()`.
+	 * 4. Release `sql_query_global_mutex`.
+	 *
+	 * Using this flow avoids stale reads from runtime-populated `stats.*` tables when tools
+	 * access them directly through `admindb`.
+	 *
+	 * @param sql SQL statement to execute. Must not be `nullptr` or empty.
+	 * @param resultset Output pointer receiving the result set on success. Caller owns it.
+	 * @param cols Output pointer receiving the number of columns on success.
+	 * @param refresh_before_query
+	 *   If true (default), call `GenericRefreshStatistics()` before executing @p sql.
+	 *   Set to false for secondary queries (for example `COUNT(*)` immediately after a
+	 *   primary read) to avoid redundant expensive refresh passes.
+	 *
+	 * @return Empty string on success, otherwise a human-readable error message.
 	 */
-	std::string execute_admin_query(const char* sql, SQLite3_result** resultset, int* cols);
+	std::string execute_admin_query(const char* sql, SQLite3_result** resultset, int* cols, bool refresh_before_query = true);
 
 	/**
 	 * @brief Execute a SQL query against GloAdmin->statsdb_disk (historical data)
