@@ -79,7 +79,7 @@ void LogBuffer::flush_to_file(std::fstream* logfile) {
 
 bool flush_and_rotate(
 	LogBuffer& buffer,
-	std::fstream* logfile,
+	std::fstream*& logfile,
 	unsigned int& current_log_size,
 	unsigned int max_log_file_size,
 	std::function<void()> lock_fn,

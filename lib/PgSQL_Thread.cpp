@@ -1764,8 +1764,6 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 				// if we are switching format, we need to switch file too
 				if (GloPgSQL_Logger) {
 					proxy_info("Switching query logging format from %d to %d\n", variables.eventslog_format, intv);
-					// write existing logs (if any) to file before switching the file
- 					GloPgSQL_Logger->flush();
 					GloPgSQL_Logger->flush_log();
 				}
 				variables.eventslog_format = intv;

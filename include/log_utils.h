@@ -146,6 +146,7 @@ private:
 	std::uniform_real_distribution<double> dist; ///< Uniform distribution [0.0, 1.0)
 
 public:
+	std::mutex buffer_lock; ///< Protects cross-thread flush operations on thread-local buffers.
 	LogBuffer events;  ///< Event log buffer and timestamp
 	LogBuffer audit;   ///< Audit log buffer and timestamp
 	
@@ -198,7 +199,7 @@ LogBufferThreadContext* GetLogBufferThreadContext(std::unordered_map<pthread_t, 
  */
 bool flush_and_rotate(
 	LogBuffer& buffer,
-	std::fstream* logfile,
+	std::fstream*& logfile,
 	unsigned int& current_log_size,
 	unsigned int max_log_file_size,
 	std::function<void()> lock_fn,

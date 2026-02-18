@@ -551,7 +551,7 @@ public:
 	/**
 	 * @brief Flushes the log files.
 	 */
-	void flush();
+	void flush(bool force = false);
 
 	/**
 	 * @brief Acquires a write lock.

@@ -2042,8 +2042,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				// if we are switching format, we need to switch file too
 				if (GloMyLogger) {
 					proxy_info("Switching query logging format from %d to %d\n", variables.eventslog_format , intv);
-					// write existing logs (if any) to file before switching the file
-					GloMyLogger->flush();
 					GloMyLogger->flush_log();
 				}
 				variables.eventslog_format=intv;

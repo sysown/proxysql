@@ -126,7 +126,7 @@ class PgSQL_Logger {
 	void audit_set_base_filename();
 	void log_request(PgSQL_Session *, PgSQL_Data_Stream *);
 	void log_audit_entry(PGSQL_LOG_EVENT_TYPE, PgSQL_Session *, PgSQL_Data_Stream *, char *e = NULL);
-	void flush();
+	void flush(bool force = false);
 	void wrlock();
 	void wrunlock();
 };

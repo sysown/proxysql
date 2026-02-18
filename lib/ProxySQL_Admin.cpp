@@ -1095,13 +1095,9 @@ void flush_logs_handler() {
 
 void ProxySQL_Admin::flush_logs() {
 	if (GloMyLogger) {
-		// flush any buffered logs before flushing log file
- 		GloMyLogger->flush();
 		GloMyLogger->flush_log();
 	}
 	if (GloPgSQL_Logger) {
-		// flush any buffered logs before flushing log file
- 		GloPgSQL_Logger->flush();
 		GloPgSQL_Logger->flush_log();
 	}
 	this->flush_error_log();

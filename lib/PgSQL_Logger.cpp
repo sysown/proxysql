@@ -14,6 +14,7 @@ using json = nlohmann::json;
 
 #include <dirent.h>
 #include <libgen.h>
+#include <vector>
 
 
 #ifdef DEBUG
@@ -494,22 +495,23 @@ PgSQL_Logger::~PgSQL_Logger() {
  		std::lock_guard<std::mutex> lock(log_thread_contexts_lock);
  		for (const auto& kv : log_thread_contexts) {
  			LogBufferThreadContext* log_ctx = kv.second.get();
- 			if (!log_ctx->events.empty()) {
- 				flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
- 					[this]() { wrlock(); },
- 					[this]() { wrunlock(); },
- 					nullptr,
+			std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
+			if (!log_ctx->events.empty()) {
+				flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
+					[this]() { wrlock(); },
+					[this]() { wrunlock(); },
+					nullptr,
 					0
- 				);
- 			}
- 			if (!log_ctx->audit.empty()) {
- 				flush_and_rotate(log_ctx->audit, audit.logfile, audit.current_log_size, audit.max_log_file_size,
- 					[this]() { wrlock(); },
- 					[this]() { wrunlock(); },
- 					nullptr,
+				);
+			}
+			if (!log_ctx->audit.empty()) {
+				flush_and_rotate(log_ctx->audit, audit.logfile, audit.current_log_size, audit.max_log_file_size,
+					[this]() { wrlock(); },
+					[this]() { wrunlock(); },
+					nullptr,
 					0
- 				);
- 			}
+				);
+			}
  		}
  	}
 
@@ -541,6 +543,7 @@ void PgSQL_Logger::wrunlock() {
 
 void PgSQL_Logger::flush_log() {
 	if (audit.enabled==false && events.enabled==false) return;
+	flush(true);
 	wrlock();
 	events_flush_log_unlocked();
 	audit_flush_log_unlocked();
@@ -569,6 +572,7 @@ void PgSQL_Logger::events_close_log_unlocked() {
 		events.logfile->close();
 		delete events.logfile;
 		events.logfile=NULL;
+		set_events_logfile_open(false);
 	}
 }
 
@@ -578,6 +582,7 @@ void PgSQL_Logger::audit_close_log_unlocked() {
 		audit.logfile->close();
 		delete audit.logfile;
 		audit.logfile=NULL;
+		set_audit_logfile_open(false);
 	}
 }
 
@@ -853,17 +858,18 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	//wrlock();
 	
 	if (is_events_logfile_open()) {
- 		me.write(&log_ctx->events, sess);
- 		if (log_ctx->events.size() > static_cast<size_t>(pgsql_thread___eventslog_flush_size)) {
- 			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
- 			flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
- 				[this]() { wrlock(); },
- 				[this]() { wrunlock(); },
- 				[this]() { events_flush_log_unlocked(); },
- 				monotonic_time()
- 			);
- 		}
- 	}
+		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
+		me.write(&log_ctx->events, sess);
+		if (log_ctx->events.size() > static_cast<size_t>(pgsql_thread___eventslog_flush_size)) {
+			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
+			flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
+				[this]() { wrlock(); },
+				[this]() { wrunlock(); },
+				[this]() { events_flush_log_unlocked(); },
+				monotonic_time()
+			);
+		}
+	}
 
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
@@ -1006,16 +1012,17 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 	//wrlock();
 
 	if (is_audit_logfile_open()) {
- 		me.write(&log_ctx->audit, sess);
- 		if (log_ctx->audit.size() > static_cast<size_t>(pgsql_thread___auditlog_flush_size)) {
- 			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of audit.logfile that leads to the program coredump
- 			flush_and_rotate(log_ctx->audit, audit.logfile, audit.current_log_size, audit.max_log_file_size,
- 				[this]() { wrlock(); },
- 				[this]() { wrunlock(); },
- 				[this]() { audit_flush_log_unlocked(); },
- 				monotonic_time());
- 		}
- 	}
+		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
+		me.write(&log_ctx->audit, sess);
+		if (log_ctx->audit.size() > static_cast<size_t>(pgsql_thread___auditlog_flush_size)) {
+			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of audit.logfile that leads to the program coredump
+			flush_and_rotate(log_ctx->audit, audit.logfile, audit.current_log_size, audit.max_log_file_size,
+				[this]() { wrlock(); },
+				[this]() { wrunlock(); },
+				[this]() { audit_flush_log_unlocked(); },
+				monotonic_time());
+		}
+	}
 
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
@@ -1025,43 +1032,85 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 	}
 }
 
-void PgSQL_Logger::flush() {
-	LogBufferThreadContext* log_ctx = get_log_thread_context();
- 	const uint64_t current_time = monotonic_time();
+void PgSQL_Logger::flush(bool force) {
+	const uint64_t current_time = monotonic_time();
 
- 	// eventslog
- 	if (is_events_logfile_open()) {
- 		if (log_ctx->events.size() > 0 &&
+	if (force) {
+		std::vector<LogBufferThreadContext*> contexts;
+		{
+			std::lock_guard<std::mutex> lock(log_thread_contexts_lock);
+			contexts.reserve(log_thread_contexts.size());
+			for (const auto& kv : log_thread_contexts) {
+				contexts.push_back(kv.second.get());
+			}
+		}
+
+		for (LogBufferThreadContext* ctx : contexts) {
+			std::lock_guard<std::mutex> ctx_lock(ctx->buffer_lock);
+			if (is_events_logfile_open() && !ctx->events.empty()) {
+				flush_and_rotate(
+					ctx->events,
+					events.logfile,
+					events.current_log_size,
+					events.max_log_file_size,
+					[this]() { wrlock(); },
+					[this]() { wrunlock(); },
+					nullptr,
+					current_time
+				);
+			}
+			if (is_audit_logfile_open() && !ctx->audit.empty()) {
+				flush_and_rotate(
+					ctx->audit,
+					audit.logfile,
+					audit.current_log_size,
+					audit.max_log_file_size,
+					[this]() { wrlock(); },
+					[this]() { wrunlock(); },
+					nullptr,
+					current_time
+				);
+			}
+		}
+		return;
+	}
+
+	LogBufferThreadContext* log_ctx = get_log_thread_context();
+	std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
+
+	// eventslog
+	if (is_events_logfile_open()) {
+		if (log_ctx->events.size() > 0 &&
 			(current_time - log_ctx->events.get_last_flush_time()) > static_cast<uint64_t>(pgsql_thread___eventslog_flush_timeout) * 1000) {
- 			flush_and_rotate(
+			flush_and_rotate(
 				log_ctx->events,
 				events.logfile,
 				events.current_log_size,
 				events.max_log_file_size,
- 				[this]() { wrlock(); },
- 				[this]() { wrunlock(); },
- 				[this]() { events_flush_log_unlocked(); },
- 				current_time
- 			);
+				[this]() { wrlock(); },
+				[this]() { wrunlock(); },
+				[this]() { events_flush_log_unlocked(); },
+				current_time
+			);
 		}
- 	}
+	}
 
- 	// auditlogs
- 	if (is_audit_logfile_open()) {
- 		if (log_ctx->audit.size() > 0 &&
+	// auditlogs
+	if (is_audit_logfile_open()) {
+		if (log_ctx->audit.size() > 0 &&
 			(current_time - log_ctx->audit.get_last_flush_time()) > static_cast<uint64_t>(pgsql_thread___auditlog_flush_timeout) * 1000) {
- 			flush_and_rotate(
+			flush_and_rotate(
 				log_ctx->audit,
 				audit.logfile,
 				audit.current_log_size,
 				audit.max_log_file_size,
- 				[this]() { wrlock(); },
- 				[this]() { wrunlock(); },
- 				[this]() { audit_flush_log_unlocked(); },
- 				current_time
- 			);
+				[this]() { wrlock(); },
+				[this]() { wrunlock(); },
+				[this]() { audit_flush_log_unlocked(); },
+				current_time
+			);
 		}
- 	}
+	}
 }
 
 unsigned int PgSQL_Logger::events_find_next_id() {
