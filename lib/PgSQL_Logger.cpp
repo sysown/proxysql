@@ -24,6 +24,7 @@ using json = nlohmann::json;
 #define PROXYSQL_PGSQL_LOGGER_VERSION "2.5.0421" DEB
 
 extern PgSQL_Logger *GloPgSQL_Logger;
+extern PgSQL_Threads_Handler* GloPTH;
 
 using metric_name = std::string;
 using metric_help = std::string;
@@ -147,6 +148,34 @@ static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t l
 	return len;
 }
 
+/**
+ * @brief Returns runtime max query length for PostgreSQL events buffer copies.
+ *
+ * @details The PGSQL events dump commands can run from either Admin protocol
+ * endpoint (MySQL/6032 or PostgreSQL/6132). To keep behavior identical across
+ * both, this helper reads the canonical runtime value from `GloPTH->variables`
+ * when available, instead of relying on protocol-thread TLS state.
+ */
+static size_t get_pgsql_eventslog_buffer_max_query_length_runtime() {
+	if (GloPTH != nullptr) {
+		return static_cast<size_t>(GloPTH->variables.eventslog_buffer_max_query_length);
+	}
+	return static_cast<size_t>(pgsql_thread___eventslog_buffer_max_query_length);
+}
+
+/**
+ * @brief Returns runtime max in-memory rows for `stats_pgsql_query_events`.
+ *
+ * @details See `get_pgsql_eventslog_buffer_max_query_length_runtime()` for
+ * rationale on using `GloPTH->variables` rather than protocol-thread TLS.
+ */
+static size_t get_pgsql_eventslog_table_memory_size_runtime() {
+	if (GloPTH != nullptr) {
+		return static_cast<size_t>(GloPTH->variables.eventslog_table_memory_size);
+	}
+	return static_cast<size_t>(pgsql_thread___eventslog_table_memory_size);
+}
+
 PgSQL_Event::PgSQL_Event (PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len) {
 	thread_id=_thread_id;
 	username=_username;
@@ -187,7 +216,7 @@ PgSQL_Event::PgSQL_Event(const PgSQL_Event& other) {
 		schemaname = strdup(other.schemaname);
 	}
 	if (other.query_ptr != nullptr) {
-		size_t maxQueryLen = pgsql_thread___eventslog_buffer_max_query_length;
+		size_t maxQueryLen = get_pgsql_eventslog_buffer_max_query_length_runtime();
 		size_t lenToCopy = std::min(other.query_len, maxQueryLen);
 		query_ptr = (char*)malloc(lenToCopy + 1);
 		memcpy(query_ptr, other.query_ptr, lenToCopy);
@@ -1423,7 +1452,7 @@ int PgSQL_Logger::processEvents(SQLite3DB* statsdb, SQLite3DB* statsdb_disk) {
 
 	if (statsdb != nullptr) {
 		unsigned long long memoryStartTimeMicros = monotonic_time();
-		size_t maxInMemorySize = pgsql_thread___eventslog_table_memory_size;
+		size_t maxInMemorySize = get_pgsql_eventslog_table_memory_size_runtime();
 		size_t numEventsToInsert = std::min(events.size(), maxInMemorySize);
 
 		if (events.size() >= maxInMemorySize) {

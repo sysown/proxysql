@@ -107,6 +107,10 @@ PostgreSQL-specific dump commands are now available:
 
 Command handling executes `GloPgSQL_Logger->processEvents(...)` with the selected sink targets.
 
+These commands are exposed by the shared Admin module and are available from both Admin protocol endpoints:
+- MySQL protocol on port `6032`
+- PostgreSQL protocol on port `6132`
+
 Implemented in:
 - `lib/Admin_Handler.cpp`
 
