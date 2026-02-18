@@ -41,6 +41,47 @@ Handles the message-oriented PostgreSQL protocol.
 - **Compression**: Similarly, FFTO operates on uncompressed protocol data, as ProxySQL handles compression/decompression during the packet transfer phase.
 
 ## 6. Performance and Memory Management
-- **Maximum Payload Enforcement**: If a single packet payload exceeds the `*-ffto_max_buffer_size` threshold, the FFTO instance for that session is disabled. This prevents excessive memory usage on connections transferring large BLOBs.
-- **Hashing Optimization**: Leverages ProxySQL's thread-local `Query_Processor` cache to avoid redundant hashing of identical query patterns.
-- **Hooks**: Integration points are in `MySQL_Session::fast_forward()` and `PgSQL_Session::fast_forward()`.
+- **Maximum Payload Enforcement**: If a single packet payload exceeds the `*-ffto_max_buffer_size` threshold, the FFTO instance for that session is disabled (bypassed). This prevents excessive memory usage on connections transferring large BLOBs or large result sets.
+- **Fragmentation Handling**: The FFTO maintains internal buffers (`m_client_buffer`, `m_server_buffer`) to reconstruct full protocol messages from fragmented network packets.
+- **Hashing Optimization**: Leverages ProxySQL's thread-local `Query_Processor` cache and `SpookyHash` to avoid redundant hashing of identical query patterns, ensuring metric parity with standard query processing.
+- **Hooks**: Integration points are in `MySQL_Session::handler()` and `PgSQL_Session::handler()` within the `FAST_FORWARD` state.
+
+## 7. Configuration and Verification
+
+### 7.1. Global Variables
+The following variables can be adjusted at runtime via the Admin interface:
+
+```sql
+-- Enable/Disable FFTO
+UPDATE global_variables SET variable_value='true' WHERE variable_name='mysql-ffto_enabled';
+UPDATE global_variables SET variable_value='true' WHERE variable_name='pgsql-ffto_enabled';
+
+-- Set max buffer size (default 1MB)
+UPDATE global_variables SET variable_value='2097152' WHERE variable_name='mysql-ffto_max_buffer_size';
+
+LOAD MYSQL VARIABLES TO RUNTIME;
+LOAD PGSQL VARIABLES TO RUNTIME;
+```
+
+### 7.2. Verification
+To verify that FFTO is capturing traffic in Fast Forward mode:
+
+1. Enable `debug` logging or monitor the specific debug modules:
+   ```sql
+   -- For MySQL
+   UPDATE global_variables SET variable_value=1 WHERE variable_name='mysql-debug';
+   -- For PostgreSQL
+   UPDATE global_variables SET variable_value=1 WHERE variable_name='pgsql-debug';
+   LOAD MYSQL VARIABLES TO RUNTIME;
+   LOAD PGSQL VARIABLES TO RUNTIME;
+   ```
+2. Run queries through a session configured for Fast Forward (e.g., via query rules with `fast_forward=1`).
+3. Check the `stats_mysql_query_digest` or `stats_pgsql_query_digest` tables:
+   ```sql
+   SELECT count_star, sum_time, digest_text FROM stats_mysql_query_digest;
+   ```
+4. Confirm that queries which were previously "invisible" in FF mode are now being recorded.
+
+## 8. Limitations
+- **Multi-packet query execution**: Very large queries that exceed the max buffer size will cause FFTO to bypass the session.
+- **Binary Protocols**: FFTO currently focuses on the text-based query protocols; specialized binary protocols (like some X-Protocol features) may require future extensions.
