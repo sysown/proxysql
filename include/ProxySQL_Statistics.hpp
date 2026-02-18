@@ -92,6 +92,10 @@
 
 
 #define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS "CREATE TABLE history_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT , errno INT , error TEXT)"
+/**
+ * @brief On-disk PostgreSQL query events table used by advanced events logging.
+ */
+#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS "CREATE TABLE history_pgsql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , database TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , rows_sent INTEGER , client_stmt_name TEXT , sqlstate TEXT , error TEXT)"
 
 class ProxySQL_Statistics {
 	SQLite3DB *statsdb_mem; // internal statistics DB
@@ -105,6 +109,7 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_mysql_query_digest_to_disk;
 	unsigned long long next_timer_system_cpu;
 	unsigned long long last_timer_mysql_dump_eventslog_to_disk = 0;
+	unsigned long long last_timer_pgsql_dump_eventslog_to_disk = 0;
 #ifndef NOJEM
 	unsigned long long next_timer_system_memory;
 #endif
@@ -121,6 +126,8 @@ class ProxySQL_Statistics {
 		int stats_system_cpu;
 		int stats_mysql_query_digest_to_disk;
 		int stats_mysql_eventslog_sync_buffer_to_disk;
+		/** @brief Periodic disk sync interval (seconds) for PostgreSQL eventslog buffer. */
+		int stats_pgsql_eventslog_sync_buffer_to_disk;
 #ifndef NOJEM
 		int stats_system_memory;
 #endif
@@ -142,6 +149,12 @@ class ProxySQL_Statistics {
 	 * The dump interval is retrieved from the ProxySQL configuration.  If the dump interval is 0, no dumping is performed.
 	 */
 	bool MySQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros);
+	/**
+	 * @brief Checks if it's time to dump PostgreSQL eventslog buffer to disk.
+	 * @param currentTimeMicros The current time in microseconds.
+	 * @return True when periodic PostgreSQL events dump should run.
+	 */
+	bool PgSQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros);
 
 #ifndef NOJEM
 	bool system_memory_timetoget(unsigned long long);
