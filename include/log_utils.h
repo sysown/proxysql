@@ -11,6 +11,10 @@
 #include <functional>
 #include <pthread.h>
 
+namespace prometheus {
+class Counter;
+}
+
 /**
  * @brief Manages a string buffer and a flush timestamp for logging.
  * 
@@ -206,5 +210,12 @@ bool flush_and_rotate(
 	std::function<void()> unlock_fn,
 	std::function<void()> rotate_fn,
 	uint64_t reset_time = 0);
+
+/**
+ * @brief Returns the protocol-scoped query logger counter.
+ * @param protocol Protocol label (e.g. "mysql" or "pgsql").
+ * @return Counter pointer or nullptr if Prometheus registry isn't available.
+ */
+prometheus::Counter* get_logger_queries_logged_counter(const std::string& protocol);
 
 #endif /* __CLASS_LOG_UTILS_H */

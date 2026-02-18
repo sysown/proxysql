@@ -97,6 +97,10 @@ class PgSQL_Logger {
 		std::fstream *logfile;
 		std::atomic<bool> logfile_open{false};
 	} audit;
+	struct {
+		std::atomic<unsigned long long> total_queries_logged { 0 };
+		prometheus::Counter* p_queries_logged_total { nullptr };
+	} prom_metrics;
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_t wmutex;
 #else
@@ -130,6 +134,7 @@ class PgSQL_Logger {
 	void log_request(PgSQL_Session *, PgSQL_Data_Stream *);
 	void log_audit_entry(PGSQL_LOG_EVENT_TYPE, PgSQL_Session *, PgSQL_Data_Stream *, char *e = NULL);
 	void flush(bool force = false);
+	void p_update_metrics();
 	void wrlock();
 	void wrunlock();
 };

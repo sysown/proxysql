@@ -385,6 +385,7 @@ private:
 		std::atomic<unsigned long long> totalEventsCopiedToDisk;
 		std::atomic<unsigned long long> eventsAddedToBufferCount;     ///< Total number of events added to the buffer.
 		std::atomic<unsigned long long> eventsCurrentlyInBufferCount; ///< Number of events currently in the buffer.
+		std::atomic<unsigned long long> totalQueriesLogged;           ///< Total number of queries accepted by events logger.
 	} metrics;
 
 	/**
@@ -393,6 +394,7 @@ private:
 	struct {
 		std::array<prometheus::Counter*, p_ml_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_ml_gauge::__size> p_gauge_array {};
+		prometheus::Counter* p_queries_logged_total { nullptr };
 	} prom_metrics;
 
 	// Mutex or rwlock for thread safety

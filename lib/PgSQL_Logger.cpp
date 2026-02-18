@@ -859,6 +859,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	if (events.enabled) {
 		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
 		me.write(&log_ctx->events, sess);
+		prom_metrics.total_queries_logged.fetch_add(1, std::memory_order_relaxed);
 		if (log_ctx->events.size() > static_cast<size_t>(pgsql_thread___eventslog_flush_size)) {
 			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
 			flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
@@ -1108,6 +1109,18 @@ void PgSQL_Logger::flush(bool force) {
 				current_time
 			);
 		}
+	}
+}
+
+void PgSQL_Logger::p_update_metrics() {
+	if (this->prom_metrics.p_queries_logged_total == nullptr) {
+		this->prom_metrics.p_queries_logged_total = get_logger_queries_logged_counter("pgsql");
+	}
+	if (this->prom_metrics.p_queries_logged_total != nullptr) {
+		p_update_counter(
+			this->prom_metrics.p_queries_logged_total,
+			this->prom_metrics.total_queries_logged.load(std::memory_order_relaxed)
+		);
 	}
 }
 

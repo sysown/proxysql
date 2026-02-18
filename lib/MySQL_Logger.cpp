@@ -27,6 +27,40 @@ using json = nlohmann::json;
 
 extern MySQL_Logger *GloMyLogger;
 
+prometheus::Counter* get_logger_queries_logged_counter(const std::string& protocol) {
+	static std::mutex p_logger_counter_lock {};
+	static prometheus::Family<prometheus::Counter>* p_logged_queries_family { nullptr };
+	static std::unordered_map<std::string, prometheus::Counter*> p_logged_queries_counters {};
+
+	if (protocol.empty() || GloVars.prometheus_registry == nullptr) {
+		return nullptr;
+	}
+
+	std::lock_guard<std::mutex> lock(p_logger_counter_lock);
+
+	const auto& c_it = p_logged_queries_counters.find(protocol);
+	if (c_it != p_logged_queries_counters.end()) {
+		return c_it->second;
+	}
+
+	if (p_logged_queries_family == nullptr) {
+		p_logged_queries_family = std::addressof(
+			prometheus::BuildCounter()
+			.Name("proxysql_query_logger_logged_queries_total")
+			.Help("Total number of queries accepted by protocol query loggers.")
+			.Register(*GloVars.prometheus_registry)
+		);
+	}
+
+	const std::map<std::string, std::string> labels {
+		{ "protocol", protocol }
+	};
+	prometheus::Counter* p_counter = std::addressof(p_logged_queries_family->Add(labels));
+	p_logged_queries_counters.insert({ protocol, p_counter });
+
+	return p_counter;
+}
+
 using metric_name = std::string;
 using metric_help = std::string;
 using metric_tags = std::map<std::string, std::string>;
@@ -1181,7 +1215,7 @@ void MySQL_Event::extractStmtExecuteMetadataToJson(json &j) {
 extern MySQL_Query_Processor* GloMyQPro;
 
 //MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
-MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
+MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
 	events.enabled=false;
 	events.base_filename=NULL;
 	events.datadir=NULL;
@@ -1611,6 +1645,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	if (events.enabled) {
 		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
 		me.write(&log_ctx->events, sess);
+		metrics.totalQueriesLogged.fetch_add(1, std::memory_order_relaxed);
 		if (log_ctx->events.size() > static_cast<size_t>(mysql_thread___eventslog_flush_size)) {
 			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
 			flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
@@ -2186,6 +2221,7 @@ std::unordered_map<std::string, unsigned long long> MySQL_Logger::getAllMetrics(
     allMetrics["totalGetAllEventsTimeMicros"] = metrics.totalGetAllEventsTimeMicros;
     allMetrics["totalEventsCopiedToMemory"] = metrics.totalEventsCopiedToMemory;
     allMetrics["totalEventsCopiedToDisk"] = metrics.totalEventsCopiedToDisk;
+    allMetrics["totalQueriesLogged"] = metrics.totalQueriesLogged;
     //allMetrics["eventsAddedToBufferCount"] = metrics.eventsAddedToBufferCount;
     //allMetrics["eventsDroppedFromBufferCount"] = metrics.eventsDroppedFromBufferCount;
     allMetrics["circularBufferEventsAddedCount"] = MyLogCB->getEventsAddedCount();
@@ -2211,6 +2247,13 @@ void MySQL_Logger::p_update_metrics() {
 
 	p_update_counter(counters[ml_c::circular_buffer_events_added_count], MyLogCB->getEventsAddedCount());
 	p_update_counter(counters[ml_c::circular_buffer_events_dropped_count], MyLogCB->getEventsDroppedCount());
+
+	if (this->prom_metrics.p_queries_logged_total == nullptr) {
+		this->prom_metrics.p_queries_logged_total = get_logger_queries_logged_counter("mysql");
+	}
+	if (this->prom_metrics.p_queries_logged_total != nullptr) {
+		p_update_counter(this->prom_metrics.p_queries_logged_total, metrics.totalQueriesLogged.load(std::memory_order_relaxed));
+	}
 
 	using ml_g = p_ml_gauge;
 	const auto& gauges { this->prom_metrics.p_gauge_array };
