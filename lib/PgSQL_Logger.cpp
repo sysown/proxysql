@@ -726,7 +726,6 @@ void PgSQL_Logger::audit_set_datadir(char *s) {
 
 void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	if (events.enabled==false) return;
-	if (!is_events_logfile_open()) return;
 	// 'PgSQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
 	// due to a failed 'CONNECTION_RESET'. Because this scenario isn't a client request, we just return.
 	if (sess->client_myds==NULL || sess->client_myds->myconn== NULL) return;
@@ -857,7 +856,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	// right before the write to disk
 	//wrlock();
 	
-	if (is_events_logfile_open()) {
+	if (events.enabled) {
 		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
 		me.write(&log_ctx->events, sess);
 		if (log_ctx->events.size() > static_cast<size_t>(pgsql_thread___eventslog_flush_size)) {
@@ -881,7 +880,6 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 
 void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess, PgSQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
-	if (!is_audit_logfile_open()) return;
 
 	if (sess == NULL) return;
 	if (sess->client_myds == NULL)  return; 
@@ -1011,7 +1009,7 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 	// right before the write to disk
 	//wrlock();
 
-	if (is_audit_logfile_open()) {
+	if (audit.enabled) {
 		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
 		me.write(&log_ctx->audit, sess);
 		if (log_ctx->audit.size() > static_cast<size_t>(pgsql_thread___auditlog_flush_size)) {

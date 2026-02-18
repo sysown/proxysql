@@ -1476,7 +1476,6 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	int elmhs = mysql_thread___eventslog_buffer_history_size;
 	if (elmhs == 0) {
 		if (events.enabled==false) return;
-		if (!is_events_logfile_open()) return;
 	}
 	// 'MySQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
 	// due to a failed 'CONNECTION_RESET'. Because this scenario isn't a client request, we just return.
@@ -1609,7 +1608,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	// right before the write to disk
 	//wrlock();
 
-	if (is_events_logfile_open()) {
+	if (events.enabled) {
 		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
 		me.write(&log_ctx->events, sess);
 		if (log_ctx->events.size() > static_cast<size_t>(mysql_thread___eventslog_flush_size)) {
@@ -1644,7 +1643,6 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 
 void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
-	if (!is_audit_logfile_open()) return;
 
 	if (sess == NULL) return;
 	if (sess->client_myds == NULL) return;
@@ -1772,7 +1770,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	// right before the write to disk
 	//wrlock();
 
-	if (is_audit_logfile_open()) {
+	if (audit.enabled) {
 		std::lock_guard<std::mutex> ctx_lock(log_ctx->buffer_lock);
 		me.write(&log_ctx->audit, sess);
 		if (log_ctx->audit.size() > static_cast<size_t>(mysql_thread___auditlog_flush_size)) {
