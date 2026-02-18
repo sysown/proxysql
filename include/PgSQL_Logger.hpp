@@ -109,6 +109,7 @@ class PgSQL_Event {
 	char* sqlstate;
 	char* errmsg;
 	bool free_on_delete;
+	bool free_error_on_delete;
 	
 	public:
 	/**
@@ -119,6 +120,10 @@ class PgSQL_Event {
 	 * @brief Deep-copy constructor used by circular buffer insertion.
 	 */
 	PgSQL_Event(const PgSQL_Event& other);
+	/**
+	 * @brief Copy assignment is disabled to prevent shallow pointer ownership bugs.
+	 */
+	PgSQL_Event& operator=(const PgSQL_Event&) = delete;
 	/**
 	 * @brief Frees event-owned allocations for deep-copied instances.
 	 */

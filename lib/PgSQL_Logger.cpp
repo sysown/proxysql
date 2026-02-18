@@ -203,6 +203,7 @@ PgSQL_Event::PgSQL_Event (PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * 
 	sqlstate = NULL;
 	errmsg = NULL;
 	free_on_delete = false; // do not own pointers by default
+	free_error_on_delete = false; // only error fields can be independently owned
 	memset(buf, 0, sizeof(buf));
 }
 
@@ -247,6 +248,7 @@ PgSQL_Event::PgSQL_Event(const PgSQL_Event& other) {
 	}
 
 	free_on_delete = true;
+	free_error_on_delete = false;
 }
 
 PgSQL_Event::~PgSQL_Event() {
@@ -272,6 +274,13 @@ PgSQL_Event::~PgSQL_Event() {
 		if (client_stmt_name != nullptr) {
 			free(client_stmt_name); client_stmt_name = nullptr;
 		}
+		if (sqlstate != nullptr) {
+			free(sqlstate); sqlstate = nullptr;
+		}
+		if (errmsg != nullptr) {
+			free(errmsg); errmsg = nullptr;
+		}
+	} else if (free_error_on_delete == true) {
 		if (sqlstate != nullptr) {
 			free(sqlstate); sqlstate = nullptr;
 		}
@@ -317,8 +326,19 @@ void PgSQL_Event::set_server(int _hid, const char *ptr, int len) {
 }
 
 void PgSQL_Event::set_error(const char* _sqlstate, const char* _errmsg) {
-	sqlstate = const_cast<char*>(_sqlstate);
-	errmsg = const_cast<char*>(_errmsg);
+	if (free_on_delete == false && free_error_on_delete == true) {
+		if (sqlstate != nullptr) {
+			free(sqlstate);
+			sqlstate = nullptr;
+		}
+		if (errmsg != nullptr) {
+			free(errmsg);
+			errmsg = nullptr;
+		}
+	}
+	sqlstate = (_sqlstate != nullptr) ? strdup(_sqlstate) : nullptr;
+	errmsg = (_errmsg != nullptr) ? strdup(_errmsg) : nullptr;
+	free_error_on_delete = true;
 }
 
 uint64_t PgSQL_Event::write(std::fstream *f, PgSQL_Session *sess) {
@@ -1458,17 +1478,24 @@ int PgSQL_Logger::processEvents(SQLite3DB* statsdb, SQLite3DB* statsdb_disk) {
 		if (events.size() >= maxInMemorySize) {
 			statsdb->execute("DELETE FROM stats_pgsql_query_events");
 		} else {
-			int current_rows = statsdb->return_one_int((char*)"SELECT COUNT(*) FROM stats_pgsql_query_events");
-			int rows_to_keep = maxInMemorySize - events.size();
+			int current_rows_i = statsdb->return_one_int((char*)"SELECT COUNT(*) FROM stats_pgsql_query_events");
+			size_t current_rows = (current_rows_i > 0) ? static_cast<size_t>(current_rows_i) : 0;
+			size_t rows_to_keep = maxInMemorySize - events.size();
 			if (current_rows > rows_to_keep) {
-				int rows_to_delete = (current_rows - rows_to_keep);
+				size_t rows_to_delete = (current_rows - rows_to_keep);
 				std::string query = "SELECT MAX(id) FROM (SELECT id FROM stats_pgsql_query_events ORDER BY id LIMIT " + std::to_string(rows_to_delete) + ")";
 				int maxIdToDelete = statsdb->return_one_int(query.c_str());
 				std::string delete_stmt = "DELETE FROM stats_pgsql_query_events WHERE id <= " + std::to_string(maxIdToDelete);
 				statsdb->execute(delete_stmt.c_str());
 			}
 		}
-		insertPgSQLEventsIntoDb(statsdb, "stats_pgsql_query_events", numEventsToInsert, events.begin());
+		if (numEventsToInsert > 0) {
+			auto begin_it = events.begin();
+			if (events.size() > numEventsToInsert) {
+				begin_it = events.end() - numEventsToInsert;
+			}
+			insertPgSQLEventsIntoDb(statsdb, "stats_pgsql_query_events", numEventsToInsert, begin_it);
+		}
 		unsigned long long memoryEndTimeMicros = monotonic_time();
 		metrics.memoryCopyCount++;
 		metrics.totalMemoryCopyTimeMicros += (memoryEndTimeMicros - memoryStartTimeMicros);
