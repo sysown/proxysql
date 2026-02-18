@@ -8,19 +8,24 @@
 #include "command_line.h"
 #include "utils.h"
 
-void verify_digest(MYSQL* admin, const char* template_text, int expected_count) {
+void verify_digest(MYSQL* admin, const char* template_text, int expected_count, uint64_t expected_rows_affected = 0, uint64_t expected_rows_sent = 0) {
     char query[1024];
-    sprintf(query, "SELECT count_star FROM stats_mysql_query_digest WHERE digest_text LIKE '%%%s%%'", template_text);
+    sprintf(query, "SELECT count_star, sum_rows_affected, sum_rows_sent FROM stats_mysql_query_digest WHERE digest_text LIKE '%%%s%%'", template_text);
     int rc = run_q(admin, query);
     if (rc != 0) {
-        ok(0, "Failed to query stats_mysql_query_digest");
+        ok(0, "Failed to query stats_mysql_query_digest for %s", template_text);
         return;
     }
     MYSQL_RES* res = mysql_store_result(admin);
     MYSQL_ROW row = mysql_fetch_row(res);
     if (row) {
         int count = atoi(row[0]);
+        uint64_t rows_affected = strtoull(row[1], NULL, 10);
+        uint64_t rows_sent = strtoull(row[2], NULL, 10);
+
         ok(count >= expected_count, "Found digest: %s (count: %d, expected: %d)", template_text, count, expected_count);
+        ok(rows_affected == expected_rows_affected, "Affected rows for %s: %llu (expected: %llu)", template_text, (unsigned long long)rows_affected, (unsigned long long)expected_rows_affected);
+        ok(rows_sent == expected_rows_sent, "Sent rows for %s: %llu (expected: %llu)", template_text, (unsigned long long)rows_sent, (unsigned long long)expected_rows_sent);
     } else {
         ok(0, "Digest NOT found: %s", template_text);
     }
@@ -35,11 +40,10 @@ int main(int argc, char** argv) {
     }
 
     // We plan for:
-    // 1. Connection setup
-    // 2. Text CRUD (6 queries)
-    // 3. Binary Prepared Stmts (2 templates)
-    // 4. Cleanup
-    plan(10);
+    // 1. Connection setup (2 ok)
+    // 2. Text CRUD (6 queries, each with 3 verifications = 18 ok)
+    // 3. Binary Prepared Stmts (1 insert, 1 select. 2 templates, each with 3 verifications = 6 ok)
+    plan(2 + (6*3) + (2*3)); // 2 + 18 + 6 = 26
 
     MYSQL* admin = mysql_init(NULL);
     if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -65,20 +69,22 @@ int main(int argc, char** argv) {
     // --- Part 1: Text Protocol CRUD ---
     mysql_query(conn, "DROP TABLE IF EXISTS ffto_test");
     mysql_query(conn, "CREATE TABLE ffto_test (id INT PRIMARY KEY, val VARCHAR(255))");
-    mysql_query(conn, "INSERT INTO ffto_test VALUES (1, 'val1'), (2, 'val2')");
-    mysql_query(conn, "UPDATE ffto_test SET val = 'updated' WHERE id = 1");
-    mysql_query(conn, "SELECT val FROM ffto_test WHERE id = 1");
-    mysql_query(conn, "DELETE FROM ffto_test WHERE id = 2");
+    mysql_query(conn, "INSERT INTO ffto_test VALUES (1, 'val1'), (2, 'val2')"); // 2 rows affected
+    mysql_query(conn, "UPDATE ffto_test SET val = 'updated' WHERE id = 1");     // 1 row affected
+    mysql_query(conn, "SELECT val FROM ffto_test WHERE id = 1");                // 1 row sent
+    mysql_query(conn, "DELETE FROM ffto_test WHERE id = 2");                     // 1 row affected
 
     // Verify Text Stats
-    verify_digest(admin, "DROP TABLE IF EXISTS ffto_test", 1);
-    verify_digest(admin, "CREATE TABLE ffto_test", 1);
-    verify_digest(admin, "INSERT INTO ffto_test VALUES", 1);
-    verify_digest(admin, "UPDATE ffto_test SET val", 1);
-    verify_digest(admin, "SELECT val FROM ffto_test WHERE id", 1);
-    verify_digest(admin, "DELETE FROM ffto_test WHERE id", 1);
+    verify_digest(admin, "DROP TABLE IF EXISTS ffto_test", 1, 0, 0); // DDL doesn't affect rows
+    verify_digest(admin, "CREATE TABLE ffto_test", 1, 0, 0);       // DDL doesn't affect rows
+    verify_digest(admin, "INSERT INTO ffto_test VALUES", 1, 2, 0);
+    verify_digest(admin, "UPDATE ffto_test SET val", 1, 1, 0);
+    verify_digest(admin, "SELECT val FROM ffto_test WHERE id", 1, 0, 1); // 1 row sent
+    verify_digest(admin, "DELETE FROM ffto_test WHERE id", 1, 1, 0);
 
     // --- Part 2: Binary Protocol (Prepared Statements) ---
+    MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest"); // Reset stats for prepared statements
+    
     MYSQL_STMT *stmt = mysql_stmt_init(conn);
     const char* ins_query = "INSERT INTO ffto_test (id, val) VALUES (?, ?)";
     mysql_stmt_prepare(stmt, ins_query, strlen(ins_query));
@@ -97,11 +103,11 @@ int main(int argc, char** argv) {
     bind[1].length = &str_len;
 
     mysql_stmt_bind_param(stmt, bind);
-    mysql_stmt_execute(stmt); // Run once
-    mysql_stmt_execute(stmt); // Run twice to check count_star
+    mysql_stmt_execute(stmt); // Run once, 1 row affected
+    mysql_stmt_execute(stmt); // Run twice to check count_star, 1 row affected
 
     // Verify Binary Stats
-    verify_digest(admin, "INSERT INTO ffto_test (id, val) VALUES (?, ?)", 2);
+    verify_digest(admin, "INSERT INTO ffto_test (id, val) VALUES (?, ?)", 2, 2, 0); // Each execute affects 1 row, executed twice = 2
 
     mysql_stmt_close(stmt);
 

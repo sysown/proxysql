@@ -3,7 +3,6 @@
 #include "MySQL_Thread.h"
 #include "MySQL_Session.h"
 #include "MySQL_Data_Stream.h"
-#include "MySQL_Query_Processor.h"
 #include "MySQL_Protocol.h"
 #include "MySQL_Variables.h"
 #include "MySQLFFTO.hpp"
@@ -14,8 +13,44 @@
 #include "c_tokenizer.h"
 #include <iostream>
 #include <cstring>
+#include <algorithm> // For std::min
 
 extern MySQL_Query_Processor* GloMyQPro;
+
+// Helper to read MySQL length-encoded integers
+static uint64_t read_lenenc_int(const unsigned char* &buf, size_t &len) {
+    if (len == 0) return 0;
+
+    uint8_t first_byte = buf[0];
+    buf++;
+    len--;
+
+    if (first_byte < 0xFB) {
+        return first_byte;
+    } else if (first_byte == 0xFC) {
+        if (len < 2) return 0; // Not enough data
+        uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8);
+        buf += 2;
+        len -= 2;
+        return value;
+    } else if (first_byte == 0xFD) {
+        if (len < 3) return 0; // Not enough data
+        uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8) | (static_cast<uint64_t>(buf[2]) << 16);
+        buf += 3;
+        len -= 3;
+        return value;
+    } else if (first_byte == 0xFE) {
+        if (len < 8) return 0; // Not enough data
+        uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8) | (static_cast<uint64_t>(buf[2]) << 16) |
+                         (static_cast<uint64_t>(buf[3]) << 24) | (static_cast<uint64_t>(buf[4]) << 32) |
+                         (static_cast<uint64_t>(buf[5]) << 40) | (static_cast<uint64_t>(buf[6]) << 48) |
+                         (static_cast<uint64_t>(buf[7]) << 56);
+        buf += 8;
+        len -= 8;
+        return value;
+    }
+    return 0; // 0xFB is NULL, which we'll treat as 0 for affected_rows
+}
 
 MySQLFFTO::MySQLFFTO(MySQL_Session* session) 
     : m_session(session), m_state(IDLE), m_query_start_time(0) {
@@ -106,17 +141,34 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
             m_state = IDLE;
         }
     } else if (m_state == AWAITING_RESULTSET || m_state == READING_RESULTSET) {
-        if (first_byte == 0x00 || first_byte == 0xFF || (first_byte == 0xFE && len < 9)) {
+        if (first_byte == 0x00) { // OK_Packet
+            const unsigned char* pos = data + 1; // Skip OK byte
+            size_t remaining_len = len - 1;
+
+            uint64_t affected_rows = read_lenenc_int(pos, remaining_len);
+            uint64_t last_insert_id = read_lenenc_int(pos, remaining_len); // We don't use this but consume it
+
             unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration);
+            report_query_stats(m_current_query, duration, affected_rows, 0); // rows_sent is 0 for non-SELECT OK
+            m_state = IDLE;
+        } else if (first_byte == 0xFF) { // ERR_Packet
+            unsigned long long duration = monotonic_time() - m_query_start_time;
+            report_query_stats(m_current_query, duration); // No affected_rows/rows_sent for ERR
+            m_state = IDLE;
+        } else if (first_byte == 0xFE && len < 9) { // EOF_Packet (usually end of result set)
+            unsigned long long duration = monotonic_time() - m_query_start_time;
+            report_query_stats(m_current_query, duration); // No affected_rows/rows_sent for EOF
             m_state = IDLE;
         } else {
+            // Assume it's a result set packet (e.g., column definitions or data rows)
+            // For now, we don't count rows here for simplicity and to maintain "fast forward" philosophy.
+            // If m_current_query is a SELECT, rows_sent could be counted here.
             m_state = READING_RESULTSET;
         }
     }
 }
 
-void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long duration_us) {
+void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long duration_us, uint64_t affected_rows, uint64_t rows_sent) {
     if (query.empty() || !GloMyQPro) return;
 
     options opts;
@@ -136,6 +188,7 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     if (digest_text) {
         qp.digest_text = digest_text;
         qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
+        
         char* ca = (char*)"";
         if (mysql_thread___query_digests_track_hostname && m_session->client_myds && m_session->client_myds->addr.addr) {
             ca = m_session->client_myds->addr.addr;
@@ -152,7 +205,8 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         myhash.Update(ca, strlen(ca));
         myhash.Final(&qp.digest_total, &hash2);
 
-        GloMyQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, 0, 0);
+        GloMyQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
+        
         free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);
