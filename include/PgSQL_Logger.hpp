@@ -2,6 +2,10 @@
 #define __CLASS_PGSQL_LOGGER_H
 #include "proxysql.h"
 #include "cpp.h"
+#include <atomic>
+
+class LogBuffer;
+class LogBufferThreadContext;
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
@@ -56,10 +60,10 @@ class PgSQL_Event {
 	
 	public:
 	PgSQL_Event(PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
-	uint64_t write(std::fstream *f, PgSQL_Session *sess);
-	uint64_t write_query_format_1(std::fstream *f);
-	uint64_t write_query_format_2_json(std::fstream *f);
-	void write_auth(std::fstream *f, PgSQL_Session *sess);
+	uint64_t write(LogBuffer *f, PgSQL_Session *sess);
+	uint64_t write_query_format_1(LogBuffer *f);
+	uint64_t write_query_format_2_json(LogBuffer *f);
+	void write_auth(LogBuffer *f, PgSQL_Session *sess);
 	void set_client_stmt_name(char* client_stmt_name);
 	void set_query(const char *ptr, int len);
 	void set_server(int _hid, const char *ptr, int len);
@@ -75,22 +79,34 @@ class PgSQL_Logger {
 		char *base_filename;
 		char *datadir;
 		unsigned int log_file_id;
+		unsigned int current_log_size;
 		unsigned int max_log_file_size;
 		std::fstream *logfile;
+		std::atomic<bool> logfile_open{false};
 	} events;
 	struct {
 		bool enabled;
 		char *base_filename;
 		char *datadir;
 		unsigned int log_file_id;
+		unsigned int current_log_size;
 		unsigned int max_log_file_size;
 		std::fstream *logfile;
+		std::atomic<bool> logfile_open{false};
 	} audit;
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
 	pthread_mutex_t wmutex;
 #else
 	rwlock_t rwlock;
 #endif
+	std::unordered_map<pthread_t, std::unique_ptr<LogBufferThreadContext>> log_thread_contexts;
+ 	std::mutex log_thread_contexts_lock;
+
+ 	LogBufferThreadContext* get_log_thread_context();
+ 	bool is_events_logfile_open() const;
+ 	void set_events_logfile_open(bool open);
+ 	bool is_audit_logfile_open() const;
+ 	void set_audit_logfile_open(bool open);
 	void events_close_log_unlocked();
 	void events_open_log_unlocked();
 	void audit_close_log_unlocked();

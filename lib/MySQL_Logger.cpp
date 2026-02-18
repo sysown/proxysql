@@ -5,12 +5,12 @@ using json = nlohmann::json;
 #include <fstream>
 #include "proxysql.h"
 #include "cpp.h"
-#include <string.h>
 
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+#include "log_utils.h"
 
 #include <dirent.h>
 #include <libgen.h>
@@ -503,7 +503,7 @@ void MySQL_Event::set_server(int _hid, const char *ptr, int len) {
 	hid=_hid;
 }
 
-uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
+uint64_t MySQL_Event::write(LogBuffer *f, MySQL_Session *sess) {
 	uint64_t total_bytes=0;
 	switch (et) {
 		case PROXYSQL_COM_QUERY:
@@ -541,17 +541,20 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 	return total_bytes;
 }
 
-void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
+void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 	json j = {};
 	j["timestamp"] = start_time/1000;
 	{
 		time_t timer=start_time/1000/1000;
-		struct tm* tm_info;
-		tm_info = localtime(&timer);
+		struct tm tm_info;
 		char buffer1[36];
 		char buffer2[64];
-		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
-		sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
+		if (localtime_r(&timer, &tm_info)) {
+ 			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
+ 			sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
+ 		} else {
+ 			snprintf(buffer2, sizeof(buffer2), "invalid_date");
+ 		}
 		j["time"] = buffer2;
 	}
 	j["thread_id"] = thread_id;
@@ -629,12 +632,15 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 				uint64_t timediff = curtime_mono - sess->start_time;
 				uint64_t orig_time = curtime_real - timediff;
 				time_t timer= (orig_time)/1000/1000;
-				struct tm* tm_info;
-				tm_info = localtime(&timer);
+				struct tm tm_info;
 				char buffer1[36];
 				char buffer2[64];
-				strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
-				sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
+				if (localtime_r(&timer, &tm_info)) {
+ 					strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
+ 					sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
+ 				} else {
+ 					snprintf(buffer2, sizeof(buffer2), "invalid_date");
+ 				}
 				j["creation_time"] = buffer2;
 				//unsigned long long life = sess->thread->curtime - sess->start_time;
 				//life/=1000;
@@ -659,11 +665,11 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 	// right before the write to disk
 	//GloMyLogger->wrlock();
 	//move wrlock() function to log_audit_entry() function, avoid to get a null pointer in a multithreaded environment
-	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
+	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << '\n';
 }
 
 /**
- * @brief Writes a query event to the given file stream in a specifically encoded format.
+ * @brief Writes a query event to the given LogBuffer in a specifically encoded format.
  *
  * This function assembles and writes a MySQL query event record to the provided std::fstream.
  * It computes the total byte size of the record by encoding various fields (such as thread ID, username, schema name,
@@ -701,25 +707,25 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
  *     minimizing the duration for which the resource is locked.
  *   - The function depends on external helper routines:
  *       • mysql_encode_length: to determine the number of bytes required to store an integer in a variable-length format.
- *       • write_encoded_length: to actually write the encoded lengths to the buffer and then to the file stream.
+ *       • write_encoded_length: to actually write the encoded lengths to the buffer and then to the LogBuffer.
  *       • getValueForBind: to convert parameter data bound to a query into a string representation.
  *
- * @param f[in,out] Pointer to a std::fstream object representing the file stream to write the query event record.
+ * @param f[in,out] Pointer to a LogBuffer object to write the query event record.
  *
- * @return Returns the total size in bytes (as a uint64_t) that was written to the file stream.
+ * @return Returns the total size in bytes (as a uint64_t) that was written to the LogBuffer.
  *
  * @note The function assumes that the session and associated metadata for prepared statements (stmt_meta) are valid and
  *       available when processing a COM_STMT_EXECUTE event.
  *
- * @warning Ensure that the passed file stream pointer is valid and opened for writing, as no internal checks on the stream's state
- *          are performed.
+ * @warning Ensure that the passed LogBuffer pointer is valid and events.logfile is opened for writing, as no internal checks
+ * 		 on the stream's state
  *
  * @see mysql_encode_length, write_encoded_length, getValueForBind, stmt_execute_metadata_t, MYSQL_BIND
  *
  * Returns:
  *   The total number of bytes written for the event log.
  */
-uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
+uint64_t MySQL_Event::write_query_format_1(LogBuffer *f) {
 	uint64_t total_bytes=0;
 	total_bytes+=1; // et
 	total_bytes+=mysql_encode_length(thread_id, NULL);
@@ -906,7 +912,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 				// - Calculates the required bitmap size as (num_params + 7) / 8 bytes where each bit represents
 				//   whether a parameter value is null.
 				// - Iterates over each parameter, setting the corresponding bit in the bitmap if the parameter is null.
-				// - Writes the complete null bitmap to the file stream.
+				// - Writes the complete null bitmap to the LogBuffer.
 				size_t bitmap_size = (num_params + 7) / 8;  // one bit per parameter
 				std::vector<unsigned char> null_bitmap(bitmap_size, 0);
 				for (uint16_t i = 0; i < num_params; i++) {
@@ -922,7 +928,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 				for (uint16_t i = 0; i < num_params; i++) {
 					// - Writes the parameter type:
 					//   * Retrieves a 2-byte parameter type from the MYSQL_BIND structure associated with the current parameter.
-					//   * Writes these 2 bytes directly to the file stream.
+					//   * Writes these 2 bytes directly to the LogBuffer.
 					const MYSQL_BIND *bind = meta->binds ? &meta->binds[i] : nullptr;
 					uint16_t param_type = (bind ? bind->buffer_type : 0);
 					// Write parameter type (2 bytes).
@@ -977,11 +983,11 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 }
 
 /**
- * @brief Writes the MySQL event details in JSON format to a file stream.
+ * @brief Writes the MySQL event details in JSON format to LogBuffer.
  *
  * This method generates a JSON object containing various details about the MySQL event,
  * including query information, timestamps, execution metadata, error information, and
- * performance metrics. The resulting JSON string is then written to the provided file stream.
+ * performance metrics. The resulting JSON string is then written to the provided LogBuffer.
  *
  * The JSON object includes the following keys (when applicable):
  * - "hostgroup_id": The hostgroup identifier if set; otherwise, it defaults to -1.
@@ -1009,13 +1015,13 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
  * Additionally, for executed statements (PROXYSQL_COM_STMT_EXECUTE), if session data is available,
  * prepared statement parameters and added to the JSON.
  *
- * The generated JSON is dumped into the given file stream with error replacement settings to ensure
+ * The generated JSON is dumped into the given LogBuffer with error replacement settings to ensure
  * proper serialization even in the presence of encoding errors.
  *
- * @param[out] f Pointer to a std::fstream where the JSON string will be written.
+ * @param[out] f Pointer to a LogBuffer where the JSON string will be written.
  * @return uint64_t Always returns 0, as the current implementation does not compute total bytes written.
  */
-uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
+uint64_t MySQL_Event::write_query_format_2_json(LogBuffer *f) {
 	json j = {};
 	uint64_t total_bytes=0;
 	if (hid!=UINT64_MAX) {
@@ -1079,23 +1085,29 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	j["starttime_timestamp_us"] = start_time;
 	{
 		time_t timer=start_time/1000/1000;
-		struct tm* tm_info;
-		tm_info = localtime(&timer);
+		struct tm tm_info;
 		char buffer1[36];
 		char buffer2[64];
-		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
-		sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
+		if (localtime_r(&timer, &tm_info)) {
+ 			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
+ 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
+ 		} else {
+ 			snprintf(buffer2, sizeof(buffer2), "invalid_date");
+ 		}
 		j["starttime"] = buffer2;
 	}
 	j["endtime_timestamp_us"] = end_time;
 	{
 		time_t timer=end_time/1000/1000;
-		struct tm* tm_info;
-		tm_info = localtime(&timer);
+		struct tm tm_info;
 		char buffer1[36];
 		char buffer2[64];
-		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
-		sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
+		if (localtime_r(&timer, &tm_info)) {
+ 			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
+ 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
+ 		} else {
+ 			snprintf(buffer2, sizeof(buffer2), "invalid_date");
+ 		}
 		j["endtime"] = buffer2;
 	}
 	j["duration_us"] = end_time-start_time;
@@ -1119,7 +1131,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	//GloMyLogger->wrlock();
 		//move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
 
-	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
+	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << '\n';
 	return total_bytes; // always 0
 }
 
@@ -1185,9 +1197,11 @@ MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
 #endif
 	events.logfile=NULL;
 	events.log_file_id=0;
+	events.current_log_size=0;
 	events.max_log_file_size=100*1024*1024;
 	audit.logfile=NULL;
 	audit.log_file_id=0;
+	audit.current_log_size=0;
 	audit.max_log_file_size=100*1024*1024;
 	MyLogCB = new MySQL_Logger_CircularBuffer(0);
 
@@ -1201,6 +1215,29 @@ MySQL_Logger::MySQL_Logger() : metrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} {
 };
 
 MySQL_Logger::~MySQL_Logger() {
+	// Flush all per-thread buffers before destroying the logger
+ 	{
+ 		std::lock_guard<std::mutex> lock(log_thread_contexts_lock);
+ 		for (const auto& kv : log_thread_contexts) {
+ 			LogBufferThreadContext* log_ctx = kv.second.get();
+ 			if (!log_ctx->events.empty()) {
+ 				flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
+ 					[this]() { wrlock(); },
+ 					[this]() { wrunlock(); },
+ 					nullptr,
+					0
+ 				);
+ 			}
+ 			if (!log_ctx->audit.empty()) {
+ 				flush_and_rotate(log_ctx->audit, audit.logfile, audit.current_log_size, audit.max_log_file_size,
+ 					[this]() { wrlock(); },
+ 					[this]() { wrunlock(); },
+ 					nullptr,
+					0
+ 				);
+ 			}
+ 		}
+ 	}
 	if (events.datadir) {
 		free(events.datadir);
 	}
@@ -1236,6 +1273,21 @@ void MySQL_Logger::flush_log() {
 	wrunlock();
 }
 
+bool MySQL_Logger::is_events_logfile_open() const {
+ 	return events.logfile_open.load();
+}
+
+void MySQL_Logger::set_events_logfile_open(bool open) {
+	events.logfile_open.store(open);
+}
+
+bool MySQL_Logger::is_audit_logfile_open() const {
+	return audit.logfile_open.load();
+}
+
+void MySQL_Logger::set_audit_logfile_open(bool open) {
+	audit.logfile_open.store(open);
+}
 
 void MySQL_Logger::events_close_log_unlocked() {
 	if (events.logfile) {
@@ -1286,9 +1338,12 @@ void MySQL_Logger::events_open_log_unlocked() {
 	events.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
 	try {
 		events.logfile->open(filen , std::ios::out | std::ios::binary);
+		events.current_log_size = 0;
+ 		set_events_logfile_open(true);
 		proxy_info("Starting new mysql event log file %s\n", filen);
 		if (mysql_thread___eventslog_format == 1) {
 			// create a new event, type PROXYSQL_METADATA, that writes the ProxySQL version as part of the payload
+			LogBufferThreadContext *log_ctx = get_log_thread_context();
 			json j = {};
 			j["version"] = string(PROXYSQL_VERSION);
 			string msg = j.dump();
@@ -1305,13 +1360,18 @@ void MySQL_Logger::events_open_log_unlocked() {
 				nullptr               // no session associated
 			);
 			metaEvent.set_query((char *)"",0);
-			metaEvent.write(events.logfile, nullptr);
+			metaEvent.write(&log_ctx->events, nullptr);
+ 			log_ctx->events.flush_to_file(events.logfile);
+ 			events.current_log_size += log_ctx->events.size();
+			log_ctx->events.reset(monotonic_time());
 		}
 	}
 	catch (const std::ofstream::failure&) {
 		proxy_error("Error creating new mysql event log file %s\n", filen);
 		delete events.logfile;
 		events.logfile=NULL;
+		events.current_log_size = 0;
+ 		set_events_logfile_open(false);
 	}
 	free(filen);
 };
@@ -1335,12 +1395,16 @@ void MySQL_Logger::audit_open_log_unlocked() {
 	audit.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
 	try {
 		audit.logfile->open(filen , std::ios::out | std::ios::binary);
+		audit.current_log_size = 0;
+ 		set_audit_logfile_open(true);
 		proxy_info("Starting new audit log file %s\n", filen);
 	}
 	catch (const std::ofstream::failure&) {
 		proxy_error("Error creating new audit log file %s\n", filen);
 		delete audit.logfile;
 		audit.logfile=NULL;
+		audit.current_log_size=0;
+		set_audit_logfile_open(false);
 	}
 	free(filen);
 };
@@ -1409,11 +1473,19 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	int elmhs = mysql_thread___eventslog_buffer_history_size;
 	if (elmhs == 0) {
 		if (events.enabled==false) return;
-		if (events.logfile==NULL) return;
+		if (!is_events_logfile_open()) return;
 	}
 	// 'MySQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
 	// due to a failed 'CONNECTION_RESET'. Because this scenario isn't a client request, we just return.
 	if (sess->client_myds==NULL || sess->client_myds->myconn== NULL) return;
+
+	// Obtain current thread's log ctx
+ 	LogBufferThreadContext* log_ctx = get_log_thread_context();
+
+ 	// Sample event logs. Set mysql-eventslog_rate_limit=1 (default) to log all events
+ 	if (mysql_thread___eventslog_rate_limit > 1)
+ 		if (!log_ctx->should_log(mysql_thread___eventslog_rate_limit))
+ 			return;
 
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 
@@ -1533,21 +1605,20 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
 	//wrlock();
-	
 
-	if ((events.enabled == true) && (events.logfile != nullptr)) {
-		//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
-		GloMyLogger->wrlock();
+	if (is_events_logfile_open()) {
+ 		me.write(&log_ctx->events, sess);
+ 		if (log_ctx->events.size() > static_cast<size_t>(mysql_thread___eventslog_flush_size)) {
+ 			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
+ 			flush_and_rotate(log_ctx->events, events.logfile, events.current_log_size, events.max_log_file_size,
+ 				[this]() { wrlock(); },
+ 				[this]() { wrunlock(); },
+ 				[this]() { events_flush_log_unlocked(); },
+ 				monotonic_time()
+ 			);
+ 		}
+ 	}
 
-		me.write(events.logfile, sess);
-
-
-		unsigned long curpos=events.logfile->tellp();
-		if (curpos > events.max_log_file_size) {
-			events_flush_log_unlocked();
-		}
-		wrunlock();
-	}
 	if (MyLogCB->buffer_size != 0) {
 		MySQL_Event *me2 = new MySQL_Event(me);
 		MyLogCB->insert(me2);
@@ -1569,10 +1640,13 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 
 void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
-	if (audit.logfile==NULL) return;
+	if (!is_audit_logfile_open()) return;
 
 	if (sess == NULL) return;
 	if (sess->client_myds == NULL) return;
+
+	// Obtain current thread's log ctx
+ 	LogBufferThreadContext* log_ctx = get_log_thread_context();
 
 	MySQL_Connection_userinfo *ui= NULL;
 	if (sess) {
@@ -1694,16 +1768,18 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	// right before the write to disk
 	//wrlock();
 
-	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
-	GloMyLogger->wrlock();
-	me.write(audit.logfile, sess);
-
-
-	unsigned long curpos=audit.logfile->tellp();
-	if (curpos > audit.max_log_file_size) {
-		audit_flush_log_unlocked();
-	}
-	wrunlock();
+	if (is_audit_logfile_open()) {
+ 		me.write(&log_ctx->audit, sess);
+ 		if (log_ctx->audit.size() > static_cast<size_t>(mysql_thread___auditlog_flush_size)) {
+ 			//add a mutex lock in a multithreaded environment, avoid to get a null pointer of audit.logfile that leads to the program coredump
+ 			flush_and_rotate(log_ctx->audit, audit.logfile, audit.current_log_size, audit.max_log_file_size,
+ 				[this]() { wrlock(); },
+ 				[this]() { wrunlock(); },
+ 				[this]() { audit_flush_log_unlocked(); },
+ 				monotonic_time()
+ 			);
+ 		}
+ 	}
 
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);
@@ -1714,14 +1790,42 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 }
 
 void MySQL_Logger::flush() {
-	wrlock();
-	if (events.logfile) {
-		events.logfile->flush();
-	}
-	if (audit.logfile) {
-		audit.logfile->flush();
-	}
-	wrunlock();
+ 	LogBufferThreadContext* log_ctx = get_log_thread_context();
+ 	const uint64_t current_time = monotonic_time();
+
+ 	// eventslog
+ 	if (is_events_logfile_open()) {
+ 		if (log_ctx->events.size() > 0 &&
+ 			(current_time - log_ctx->events.get_last_flush_time()) > static_cast<uint64_t>(mysql_thread___eventslog_flush_timeout) * 1000) {
+ 			flush_and_rotate(
+ 				log_ctx->events,
+ 				events.logfile,
+ 				events.current_log_size,
+ 				events.max_log_file_size,
+ 				[this]() { wrlock(); },
+ 				[this]() { wrunlock(); },
+ 				[this]() { events_flush_log_unlocked(); },
+ 				current_time
+ 			);
+ 		}
+ 	}
+
+ 	// auditlogs
+ 	if (is_audit_logfile_open()) {
+ 		if (log_ctx->audit.size() > 0 && 
+			(current_time - log_ctx->audit.get_last_flush_time()) > static_cast<uint64_t>(mysql_thread___auditlog_flush_timeout) * 1000) {
+ 			flush_and_rotate(
+				log_ctx->audit,
+				audit.logfile,
+				audit.current_log_size,
+				audit.max_log_file_size,
+ 				[this]() { wrlock(); },
+ 				[this]() { wrunlock(); },
+ 				[this]() { audit_flush_log_unlocked(); },
+ 				current_time
+ 			);
+		}
+ 	}
 }
 
 unsigned int MySQL_Logger::events_find_next_id() {
@@ -2065,4 +2169,8 @@ void MySQL_Logger::p_update_metrics() {
 	using ml_g = p_ml_gauge;
 	const auto& gauges { this->prom_metrics.p_gauge_array };
 	gauges[ml_g::circular_buffer_events_size]->Set(MyLogCB->size());
+}
+
+LogBufferThreadContext* MySQL_Logger::get_log_thread_context() {
+	return GetLogBufferThreadContext(log_thread_contexts, log_thread_contexts_lock, monotonic_time());
 }
