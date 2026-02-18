@@ -65,6 +65,14 @@ static const std::map<std::string, std::vector<std::string>> CATEGORY_PREFIXES =
 };
 
 /**
+ * Hard upper bound for configurable `mcp_stats_show_queries_max_rows`.
+ *
+ * The runtime MCP variable can reduce this value, but cannot exceed it.
+ * It protects the process from unbounded Top-K windows.
+ */
+static constexpr uint32_t SHOW_QUERIES_MAX_LIMIT_HARDCODED = 1000;
+
+/**
  * @brief Parse and validate a backend filter in `host:port` format.
  *
  * The helper enforces a strict numeric port with range `[1, 65535]`.
@@ -96,6 +104,52 @@ static bool parse_server_filter(const std::string& server_filter, std::string& h
 	}
 
 	port = static_cast<int>(parsed_port);
+	return true;
+}
+
+/**
+ * @brief Parse digest filter string into uint64 digest identifier.
+ *
+ * Accepted input formats:
+ * - hexadecimal with prefix (`0x1234ABCD`)
+ * - hexadecimal without prefix (`1234ABCD`)
+ * - decimal unsigned integer
+ *
+ * @param digest_filter Input digest text from MCP arguments.
+ * @param digest_value Parsed numeric digest output.
+ * @param error Parsing error details if conversion fails.
+ * @return true on successful conversion.
+ */
+static bool parse_digest_filter(const std::string& digest_filter, uint64_t& digest_value, std::string& error) {
+	if (digest_filter.empty()) {
+		error = "empty digest filter";
+		return false;
+	}
+
+	char* end = nullptr;
+	errno = 0;
+
+	int base = 10;
+	std::string input = digest_filter;
+	if (input.size() > 2 && input[0] == '0' && (input[1] == 'x' || input[1] == 'X')) {
+		base = 16;
+	}
+
+	uint64_t parsed = strtoull(input.c_str(), &end, base);
+	if (end == input.c_str() || *end != '\0' || errno != 0) {
+		/**
+		 * Retry as hexadecimal without `0x` prefix (common digest representation).
+		 */
+		errno = 0;
+		end = nullptr;
+		parsed = strtoull(input.c_str(), &end, 16);
+		if (end == input.c_str() || *end != '\0' || errno != 0) {
+			error = "digest must be a valid unsigned integer (decimal or hex)";
+			return false;
+		}
+	}
+
+	digest_value = parsed;
 	return true;
 }
 
@@ -428,13 +482,22 @@ json Stats_Tool_Handler::get_tool_list() {
 					{"type", "integer"},
 					{"description", "Filter by hostgroup ID"}
 				}},
-				{"digest", {
-					{"type", "string"},
-					{"description", "Filter by specific query digest"}
+					{"digest", {
+						{"type", "string"},
+						{"description", "Filter by specific query digest"}
+					}},
+					{"match_digest_text", {
+						{"type", "string"},
+						{"description", "Substring filter over digest_text"}
+					}},
+					{"digest_text_case_sensitive", {
+						{"type", "boolean"},
+						{"description", "Case-sensitive matching for match_digest_text (default: false)"},
+						{"default", false}
+					}}
 				}}
-			}}
-		}
-	));
+			}
+		));
 
 	tools.push_back(create_tool_description(
 		"show_commands",
@@ -1236,9 +1299,9 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 /**
  * @brief Returns aggregated query performance statistics by digest pattern
  *
- * Queries the stats_mysql_query_digest or stats_pgsql_query_digest tables
- * for query performance metrics including execution count, timing statistics,
- * and row counts. Results can be sorted and filtered by various criteria.
+ * Reads in-memory digest structures through Admin/Query Processor Top-K API.
+ * This avoids stale reads from runtime-populated `stats_*_query_digest` tables
+ * while preserving MCP filter and sorting semantics.
  *
  * @param arguments JSON object with optional parameters:
  *   - db_type: "mysql" (default) or "pgsql"
@@ -1251,6 +1314,8 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
  *   - username: Filter by username
  *   - hostgroup: Filter by hostgroup ID
  *   - digest: Filter by specific digest hash
+ *   - match_digest_text: Optional digest text substring filter
+ *   - digest_text_case_sensitive: Optional case-sensitive toggle for digest text filter
  *
  * @return JSON response with queries array containing performance metrics
  */
@@ -1265,114 +1330,125 @@ json Stats_Tool_Handler::handle_show_queries(const json& arguments) {
 	std::string username = arguments.value("username", "");
 	int hostgroup = arguments.value("hostgroup", -1);
 	std::string digest = arguments.value("digest", "");
+	std::string match_digest_text = arguments.value("match_digest_text", "");
+	bool digest_text_case_sensitive = arguments.value("digest_text_case_sensitive", false);
 
-	std::string table = (db_type == "pgsql") ? "stats_pgsql_query_digest" : "stats_mysql_query_digest";
-	std::string schema_col = (db_type == "pgsql") ? "database" : "schemaname";
+	if (limit < 0) {
+		return create_error_response("limit must be >= 0");
+	}
+	if (offset < 0) {
+		return create_error_response("offset must be >= 0");
+	}
+	if (min_count < 0) {
+		return create_error_response("min_count must be >= 0");
+	}
+	if (min_time_us < 0) {
+		return create_error_response("min_time_us must be >= 0");
+	}
 
-	std::string sql = "SELECT hostgroup, " + schema_col + " AS database, username, client_address, digest, "
-		"digest_text, count_star, first_seen, last_seen, "
-		"sum_time, min_time, max_time, sum_rows_affected, sum_rows_sent "
-		"FROM stats." + table + " WHERE 1=1";
+	query_digest_sort_by_t sort_mode = query_digest_sort_by_t::count_star;
+	if (sort_by == "avg_time") {
+		sort_mode = query_digest_sort_by_t::avg_time;
+	} else if (sort_by == "sum_time") {
+		sort_mode = query_digest_sort_by_t::sum_time;
+	} else if (sort_by == "max_time") {
+		sort_mode = query_digest_sort_by_t::max_time;
+	} else if (sort_by == "rows_sent") {
+		sort_mode = query_digest_sort_by_t::rows_sent;
+	} else if (sort_by != "count") {
+		return create_error_response("Invalid sort_by: " + sort_by);
+	}
 
-	if (min_count > 0) {
-		sql += " AND count_star >= " + std::to_string(min_count);
-	}
-	if (!database.empty()) {
-		sql += " AND " + schema_col + " = '" + sql_escape(database) + "'";
-	}
-	if (!username.empty()) {
-		sql += " AND username = '" + sql_escape(username) + "'";
-	}
-	if (hostgroup >= 0) {
-		sql += " AND hostgroup = " + std::to_string(hostgroup);
-	}
+	query_digest_filter_opts_t filters {};
+	filters.schemaname = database;
+	filters.username = username;
+	filters.hostgroup = hostgroup;
+	filters.match_digest_text = match_digest_text;
+	filters.digest_text_case_sensitive = digest_text_case_sensitive;
+	filters.min_count = static_cast<uint32_t>(min_count);
+	filters.min_avg_time_us = static_cast<uint64_t>(min_time_us);
+
 	if (!digest.empty()) {
-		sql += " AND digest = '" + sql_escape(digest) + "'";
-	}
-	if (min_time_us > 0) {
-		sql += " AND (sum_time / count_star) >= " + std::to_string(min_time_us);
-	}
-
-	// Sort order
-	std::string order_col = "count_star";
-	if (sort_by == "avg_time") order_col = "(sum_time / count_star)";
-	else if (sort_by == "sum_time") order_col = "sum_time";
-	else if (sort_by == "max_time") order_col = "max_time";
-	else if (sort_by == "rows_sent") order_col = "sum_rows_sent";
-
-	sql += " ORDER BY " + order_col + " DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
-
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query digest: " + err);
-	}
-
-	// Get total count
-	std::string count_sql = "SELECT COUNT(*) FROM stats." + table;
-	SQLite3_result* count_rs = NULL;
-	int count_cols = 0;
-	int total_digests = 0;
-	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols, false);
-	if (!count_err.empty()) {
-		if (count_rs) {
-			delete count_rs;
+		std::string parse_err;
+		uint64_t digest_value = 0;
+		if (!parse_digest_filter(digest, digest_value, parse_err)) {
+			proxy_error("show_queries: invalid digest filter '%s': %s\n", digest.c_str(), parse_err.c_str());
+			return create_error_response("Invalid digest filter '" + digest + "': " + parse_err);
 		}
-		proxy_error("show_queries: failed to count digests: %s\n", count_err.c_str());
-		return create_error_response("Failed to count digest rows: " + count_err);
+		filters.has_digest = true;
+		filters.digest = digest_value;
 	}
-	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
-		total_digests = std::stoi(count_rs->rows[0]->fields[0]);
+
+	uint32_t configured_cap = 200;
+	if (mcp_handler) {
+		int configured_value = mcp_handler->variables.mcp_stats_show_queries_max_rows;
+		if (configured_value > 0) {
+			configured_cap = static_cast<uint32_t>(configured_value);
+		}
 	}
-	if (count_rs) delete count_rs;
+	if (configured_cap > SHOW_QUERIES_MAX_LIMIT_HARDCODED) {
+		configured_cap = SHOW_QUERIES_MAX_LIMIT_HARDCODED;
+	}
+
+	const uint32_t requested_limit = static_cast<uint32_t>(limit);
+	const uint32_t requested_offset = static_cast<uint32_t>(offset);
+	const uint32_t effective_limit = std::min(requested_limit, configured_cap);
+	const uint32_t capped_offset = std::min(requested_offset, configured_cap);
+
+	if (!GloAdmin) {
+		return create_error_response("ProxySQL Admin not available");
+	}
+
+	query_digest_topk_result_t topk_result {};
+	if (db_type == "pgsql") {
+		topk_result = GloAdmin->QueryDigestTopK<SERVER_TYPE_PGSQL>(
+			filters, sort_mode, effective_limit, capped_offset, configured_cap
+		);
+	} else if (db_type == "mysql") {
+		topk_result = GloAdmin->QueryDigestTopK<SERVER_TYPE_MYSQL>(
+			filters, sort_mode, effective_limit, capped_offset, configured_cap
+		);
+	} else {
+		return create_error_response("Invalid db_type: " + db_type);
+	}
 
 	json queries = json::array();
-	long long total_query_count = 0;
-	long long total_time = 0;
+	for (const auto& row : topk_result.rows) {
+		char digest_hex[24];
+		snprintf(digest_hex, sizeof(digest_hex), "0x%016llX", static_cast<unsigned long long>(row.digest));
+		const uint64_t avg_time = row.count_star > 0 ? (row.sum_time / row.count_star) : 0;
 
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			long long count_star = row->fields[6] ? std::stoll(row->fields[6]) : 0;
-			long long sum_time = row->fields[9] ? std::stoll(row->fields[9]) : 0;
-			long long min_time = row->fields[10] ? std::stoll(row->fields[10]) : 0;
-			long long max_time = row->fields[11] ? std::stoll(row->fields[11]) : 0;
-			long long avg_time = (count_star > 0) ? sum_time / count_star : 0;
-
-			total_query_count += count_star;
-			total_time += sum_time;
-
-			json q;
-			q["digest"] = row->fields[4] ? row->fields[4] : "";
-			q["digest_text"] = row->fields[5] ? row->fields[5] : "";
-			q["hostgroup"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-			q["database"] = row->fields[1] ? row->fields[1] : "";
-			q["username"] = row->fields[2] ? row->fields[2] : "";
-			q["client_address"] = row->fields[3] ? row->fields[3] : "";
-			q["count_star"] = count_star;
-			q["first_seen"] = row->fields[7] ? std::stoll(row->fields[7]) : 0;
-			q["last_seen"] = row->fields[8] ? std::stoll(row->fields[8]) : 0;
-			q["sum_time_us"] = sum_time;
-			q["min_time_us"] = min_time;
-			q["max_time_us"] = max_time;
-			q["avg_time_us"] = avg_time;
-			q["sum_rows_affected"] = row->fields[12] ? std::stoll(row->fields[12]) : 0;
-			q["sum_rows_sent"] = row->fields[13] ? std::stoll(row->fields[13]) : 0;
-
-			queries.push_back(q);
-		}
-		delete resultset;
+		json q;
+		q["digest"] = digest_hex;
+		q["digest_text"] = row.digest_text;
+		q["hostgroup"] = row.hid;
+		q["database"] = row.schemaname;
+		q["username"] = row.username;
+		q["client_address"] = row.client_address;
+		q["count_star"] = row.count_star;
+		q["first_seen"] = row.first_seen;
+		q["last_seen"] = row.last_seen;
+		q["sum_time_us"] = row.sum_time;
+		q["min_time_us"] = row.min_time;
+		q["max_time_us"] = row.max_time;
+		q["avg_time_us"] = avg_time;
+		q["sum_rows_affected"] = row.rows_affected;
+		q["sum_rows_sent"] = row.rows_sent;
+		queries.push_back(q);
 	}
 
 	json result;
 	result["db_type"] = db_type;
-	result["total_digests"] = total_digests;
+	result["total_digests"] = topk_result.matched_count;
 	result["queries"] = queries;
 	result["summary"] = {
-		{"total_queries", total_query_count},
-		{"total_time_us", total_time}
+		{"total_queries", topk_result.matched_total_queries},
+		{"total_time_us", topk_result.matched_total_time_us}
 	};
+	result["requested_limit"] = requested_limit;
+	result["requested_offset"] = requested_offset;
+	result["effective_limit"] = effective_limit;
+	result["limit_cap"] = configured_cap;
 
 	return create_success_response(result);
 }

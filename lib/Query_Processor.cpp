@@ -5,6 +5,10 @@ using json = nlohmann::json;
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
+#include <queue>
+#include <cstring>
+#include <cctype>
+#include <functional>
 #include <thread>
 #include <future>
 #include "re2/re2.h"
@@ -91,6 +95,133 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 		s+= sizeof(RE2 *) + sizeof(RE2);
 	}
 	return s;
+}
+
+/**
+ * @brief Lightweight candidate wrapper used by in-memory query digest Top-K.
+ */
+struct query_digest_topk_candidate_t {
+	const QP_query_digest_stats* qds {nullptr};
+	uint64_t sort_value {0};
+};
+
+/**
+ * @brief Compute the primary sort metric for a digest row.
+ *
+ * @param qds Source digest row.
+ * @param sort_by Requested primary sort mode.
+ * @return Primary sort metric in descending order domain.
+ */
+static uint64_t query_digest_sort_metric(
+	const QP_query_digest_stats* qds,
+	query_digest_sort_by_t sort_by
+) {
+	switch (sort_by) {
+		case query_digest_sort_by_t::avg_time:
+			return qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+		case query_digest_sort_by_t::sum_time:
+			return qds->sum_time;
+		case query_digest_sort_by_t::max_time:
+			return qds->max_time;
+		case query_digest_sort_by_t::rows_sent:
+			return qds->rows_sent;
+		case query_digest_sort_by_t::count_star:
+		default:
+			return qds->count_star;
+	}
+}
+
+/**
+ * @brief Determine whether candidate @p lhs ranks ahead of @p rhs.
+ *
+ * Ordering is stable and deterministic:
+ * 1) primary selected sort metric (DESC)
+ * 2) `sum_time` (DESC)
+ * 3) `count_star` (DESC)
+ * 4) `digest` (ASC)
+ * 5) `hid` (ASC)
+ * 6) `username` (ASC lexical)
+ * 7) `schemaname` (ASC lexical)
+ * 8) `client_address` (ASC lexical)
+ *
+ * @param lhs Left candidate.
+ * @param rhs Right candidate.
+ * @return true if lhs should appear before rhs in output.
+ */
+static bool query_digest_candidate_better(
+	const query_digest_topk_candidate_t& lhs,
+	const query_digest_topk_candidate_t& rhs
+) {
+	if (lhs.sort_value != rhs.sort_value) {
+		return lhs.sort_value > rhs.sort_value;
+	}
+	if (lhs.qds->sum_time != rhs.qds->sum_time) {
+		return lhs.qds->sum_time > rhs.qds->sum_time;
+	}
+	if (lhs.qds->count_star != rhs.qds->count_star) {
+		return lhs.qds->count_star > rhs.qds->count_star;
+	}
+	if (lhs.qds->digest != rhs.qds->digest) {
+		return lhs.qds->digest < rhs.qds->digest;
+	}
+	if (lhs.qds->hid != rhs.qds->hid) {
+		return lhs.qds->hid < rhs.qds->hid;
+	}
+
+	const int user_cmp = strcmp(lhs.qds->username ? lhs.qds->username : "", rhs.qds->username ? rhs.qds->username : "");
+	if (user_cmp != 0) {
+		return user_cmp < 0;
+	}
+	const int schema_cmp = strcmp(lhs.qds->schemaname ? lhs.qds->schemaname : "", rhs.qds->schemaname ? rhs.qds->schemaname : "");
+	if (schema_cmp != 0) {
+		return schema_cmp < 0;
+	}
+	return strcmp(lhs.qds->client_address ? lhs.qds->client_address : "", rhs.qds->client_address ? rhs.qds->client_address : "") < 0;
+}
+
+/**
+ * @brief Check whether a digest text contains a requested substring.
+ *
+ * @param digest_text Candidate digest text (`nullptr` means no match).
+ * @param needle Substring filter.
+ * @param case_sensitive Whether comparison should be case-sensitive.
+ * @return true when @p needle occurs in @p digest_text.
+ */
+static bool query_digest_text_matches(
+	const char* digest_text,
+	const std::string& needle,
+	bool case_sensitive
+) {
+	if (!digest_text) {
+		return false;
+	}
+	if (needle.empty()) {
+		return true;
+	}
+	if (case_sensitive) {
+		return strstr(digest_text, needle.c_str()) != nullptr;
+	}
+
+	/**
+	 * Case-insensitive ASCII substring search. Digest text is generated from SQL
+	 * tokenization and does not require locale-dependent collation.
+	 */
+	const size_t needle_len = needle.size();
+	for (const char* p = digest_text; *p; ++p) {
+		size_t i = 0;
+		while (i < needle_len && p[i]) {
+			const unsigned char lhs = static_cast<unsigned char>(p[i]);
+			const unsigned char rhs = static_cast<unsigned char>(needle[i]);
+			if (std::tolower(lhs) != std::tolower(rhs)) {
+				break;
+			}
+			++i;
+		}
+		if (i == needle_len) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_regex) {
@@ -1033,6 +1164,158 @@ SQLite3_result * Query_Processor<QP_DERIVED>::get_query_digests() {
 			proxy_info("Running query on stats_pgsql_query_digest: locked for %llums to retrieve %lu entries\n", curtime2 - curtime1, map_size);
 		}
 	}
+	return result;
+}
+
+template <typename QP_DERIVED>
+query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
+	const query_digest_filter_opts_t& filters,
+	query_digest_sort_by_t sort_by,
+	uint32_t limit,
+	uint32_t offset,
+	uint32_t max_window
+) {
+	query_digest_topk_result_t result {};
+
+	/**
+	 * Keep at most `window_size = min(max_window, limit + offset)` best rows.
+	 * This preserves deterministic paging semantics while bounding memory.
+	 */
+	uint64_t window_size_u64 = static_cast<uint64_t>(limit) + static_cast<uint64_t>(offset);
+	if (max_window > 0 && window_size_u64 > max_window) {
+		window_size_u64 = max_window;
+	}
+	const size_t window_size = static_cast<size_t>(window_size_u64);
+
+	const auto matches_filters = [this, &filters](const QP_query_digest_stats* qds) -> bool {
+		if (filters.hostgroup >= 0 && qds->hid != filters.hostgroup) {
+			return false;
+		}
+		if (!filters.schemaname.empty()) {
+			const char* schema = qds->schemaname ? qds->schemaname : "";
+			if (strcmp(schema, filters.schemaname.c_str()) != 0) {
+				return false;
+			}
+		}
+		if (!filters.username.empty()) {
+			const char* user = qds->username ? qds->username : "";
+			if (strcmp(user, filters.username.c_str()) != 0) {
+				return false;
+			}
+		}
+		if (!filters.match_digest_text.empty()) {
+			const char* digest_text = qds->get_digest_text(&digest_text_umap);
+			if (!query_digest_text_matches(digest_text, filters.match_digest_text, filters.digest_text_case_sensitive)) {
+				return false;
+			}
+		}
+		if (filters.has_digest && qds->digest != filters.digest) {
+			return false;
+		}
+		if (filters.min_count > 0 && qds->count_star < filters.min_count) {
+			return false;
+		}
+		if (filters.min_avg_time_us > 0) {
+			const uint64_t avg_time = qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+			if (avg_time < filters.min_avg_time_us) {
+				return false;
+			}
+		}
+		return true;
+	};
+
+	const auto better = [](const query_digest_topk_candidate_t& lhs, const query_digest_topk_candidate_t& rhs) -> bool {
+		return query_digest_candidate_better(lhs, rhs);
+	};
+
+	/**
+	 * The priority queue uses `better` as comparator so the heap top is the
+	 * current "worst" row among retained candidates.
+	 */
+	std::priority_queue<
+		query_digest_topk_candidate_t,
+		std::vector<query_digest_topk_candidate_t>,
+		std::function<bool(const query_digest_topk_candidate_t&, const query_digest_topk_candidate_t&)>
+	> heap(better);
+
+	pthread_rwlock_rdlock(&digest_rwlock);
+
+	for (const auto& it : digest_umap) {
+		const QP_query_digest_stats* qds = static_cast<const QP_query_digest_stats*>(it.second);
+		if (!qds || !matches_filters(qds)) {
+			continue;
+		}
+
+		result.matched_count++;
+		result.matched_total_queries += qds->count_star;
+		result.matched_total_time_us += qds->sum_time;
+
+		if (window_size == 0) {
+			continue;
+		}
+
+		query_digest_topk_candidate_t cand {};
+		cand.qds = qds;
+		cand.sort_value = query_digest_sort_metric(qds, sort_by);
+
+		if (heap.size() < window_size) {
+			heap.push(cand);
+		} else if (better(cand, heap.top())) {
+			heap.pop();
+			heap.push(cand);
+		}
+	}
+
+	std::vector<query_digest_topk_candidate_t> selected;
+	selected.reserve(heap.size());
+	while (!heap.empty()) {
+		selected.push_back(heap.top());
+		heap.pop();
+	}
+	std::sort(selected.begin(), selected.end(), better);
+
+	time_t now = 0;
+	time(&now);
+	const uint64_t monotonic_now_us = monotonic_time();
+
+	for (const auto& cand : selected) {
+		const QP_query_digest_stats* qds = cand.qds;
+		query_digest_topk_row_t row {};
+		row.hid = qds->hid;
+		row.schemaname = qds->schemaname ? qds->schemaname : "";
+		row.username = qds->username ? qds->username : "";
+		row.client_address = qds->client_address ? qds->client_address : "";
+		row.digest = qds->digest;
+		row.digest_text = qds->get_digest_text(&digest_text_umap);
+		row.count_star = qds->count_star;
+		row.first_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->first_seen / 1000000);
+		row.last_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->last_seen / 1000000);
+		row.sum_time = qds->sum_time;
+		row.min_time = qds->min_time;
+		row.max_time = qds->max_time;
+		row.rows_affected = qds->rows_affected;
+		row.rows_sent = qds->rows_sent;
+		result.rows.push_back(std::move(row));
+	}
+
+	pthread_rwlock_unlock(&digest_rwlock);
+
+	/**
+	 * Apply pagination on the post-sort retained window.
+	 */
+	if (offset >= result.rows.size()) {
+		result.rows.clear();
+	} else {
+		const size_t begin = static_cast<size_t>(offset);
+		const size_t end = std::min(result.rows.size(), begin + static_cast<size_t>(limit));
+		std::vector<query_digest_topk_row_t> paged;
+		paged.reserve(end - begin);
+		for (size_t i = begin; i < end; ++i) {
+			paged.push_back(std::move(result.rows[i]));
+		}
+		result.rows.swap(paged);
+	}
+
 	return result;
 }
 

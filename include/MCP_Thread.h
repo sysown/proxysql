@@ -75,6 +75,14 @@ public:
 		char* mcp_rag_endpoint_auth;            ///< Authentication for /mcp/rag endpoint
 
 		int mcp_timeout_ms;                     ///< Request timeout in milliseconds (default: 30000)
+			/**
+			 * @brief Runtime cap for `stats.show_queries` retained Top-K window.
+			 *
+			 * The MCP handler enforces this as a configurable upper bound for the
+			 * caller-requested page (`limit + offset`). It is further bounded by a
+			 * hardcoded safety maximum in `Stats_Tool_Handler`.
+			 */
+			int mcp_stats_show_queries_max_rows;
 		// MySQL Tool Handler configuration
 		char* mcp_mysql_hosts;                  ///< Comma-separated list of MySQL hosts
 		char* mcp_mysql_ports;                  ///< Comma-separated list of MySQL ports

@@ -16,6 +16,7 @@
 #include "ProxySQL_RESTAPI_Server.hpp"
 
 #include "proxysql_typedefs.h"
+#include "query_digest_topk.h"
 
 #define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    2 * 1024 * 1024  //  2 MiB
 #define PROCESSLIST_MAX_QUERY_LEN_MIN        1 * 1024         //  1 KiB
@@ -847,6 +848,28 @@ class ProxySQL_Admin {
 
 	template <enum SERVER_TYPE pt>
 	int FlushDigestTableToDisk(SQLite3DB *);
+	/**
+	 * @brief Return Top-K query digests directly from Query Processor memory.
+	 *
+	 * This API bypasses runtime-populated `stats.*` tables and is intended for
+	 * callers that need fresh in-memory digest statistics (for example MCP tools).
+	 *
+	 * @tparam pt Protocol selector (`SERVER_TYPE_MYSQL` or `SERVER_TYPE_PGSQL`).
+	 * @param filters Row-level filter predicates.
+	 * @param sort_by Primary metric used for ordering.
+	 * @param limit Requested page size.
+	 * @param offset Requested page offset.
+	 * @param max_window Optional retained window cap; `0` disables this cap.
+	 * @return Aggregated match counters plus paged Top-K rows.
+	 */
+	template <enum SERVER_TYPE pt>
+	query_digest_topk_result_t QueryDigestTopK(
+		const query_digest_filter_opts_t& filters,
+		query_digest_sort_by_t sort_by,
+		uint32_t limit,
+		uint32_t offset,
+		uint32_t max_window
+	);
 
 	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
 	void map_test_mysql_firewall_whitelist_rules_cleanup();
@@ -886,6 +909,7 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
 	bool ProxySQL_Test___WatchDog(int type);
+	bool ProxySQL_Test___Verify_QueryDigestTopK(int rounds, int limit_max, int offset_max, int* passed, int* failed);
 #endif
 	template<typename S>
 	friend void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);

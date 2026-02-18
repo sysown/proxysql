@@ -33,6 +33,7 @@ static const char* mcp_thread_variables_names[] = {
 	"ai_endpoint_auth",
 	"rag_endpoint_auth",
 	"timeout_ms",
+	"stats_show_queries_max_rows",
 	// MySQL Tool Handler configuration
 	"mysql_hosts",
 	"mysql_ports",
@@ -60,6 +61,7 @@ MCP_Threads_Handler::MCP_Threads_Handler() {
 	variables.mcp_ai_endpoint_auth = strdup("");
 	variables.mcp_rag_endpoint_auth = strdup("");
 	variables.mcp_timeout_ms = 30000;
+	variables.mcp_stats_show_queries_max_rows = 200;
 	// MySQL Tool Handler default values
 	variables.mcp_mysql_hosts = strdup("127.0.0.1");
 	variables.mcp_mysql_ports = strdup("3306");
@@ -230,6 +232,10 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 		sprintf(val, "%d", variables.mcp_timeout_ms);
 		return 0;
 	}
+	if (!strcmp(name, "stats_show_queries_max_rows")) {
+		sprintf(val, "%d", variables.mcp_stats_show_queries_max_rows);
+		return 0;
+	}
 	// MySQL Tool Handler configuration
 	if (!strcmp(name, "mysql_hosts")) {
 		sprintf(val, "%s", variables.mcp_mysql_hosts ? variables.mcp_mysql_hosts : "");
@@ -335,6 +341,18 @@ int MCP_Threads_Handler::set_variable(const char* name, const char* value) {
 		int timeout = atoi(value);
 		if (timeout >= 0) {
 			variables.mcp_timeout_ms = timeout;
+			return 0;
+		}
+		return -1;
+	}
+	if (!strcmp(name, "stats_show_queries_max_rows")) {
+		/**
+		 * Hard safety cap: do not allow configuring values above 1000.
+		 * This keeps MCP show_queries bounded even if callers request large pages.
+		 */
+		int max_rows = atoi(value);
+		if (max_rows >= 1 && max_rows <= 1000) {
+			variables.mcp_stats_show_queries_max_rows = max_rows;
 			return 0;
 		}
 		return -1;
