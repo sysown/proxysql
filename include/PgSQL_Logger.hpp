@@ -12,6 +12,9 @@
 
 #define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
+/**
+ * @brief Counter metric indices for PostgreSQL advanced query logging.
+ */
 struct p_pl_counter {
 	enum metric {
 		memory_copy_count = 0,
@@ -29,6 +32,9 @@ struct p_pl_counter {
 	};
 };
 
+/**
+ * @brief Gauge metric indices for PostgreSQL advanced query logging.
+ */
 struct p_pl_gauge {
 	enum metric {
 		circular_buffer_events_size,
@@ -36,6 +42,9 @@ struct p_pl_gauge {
 	};
 };
 
+/**
+ * @brief Metric map tuple indexes used by Prometheus helper initializers.
+ */
 struct pl_metrics_map_idx {
 	enum index {
 		counters = 0,
@@ -43,6 +52,9 @@ struct pl_metrics_map_idx {
 	};
 };
 
+/**
+ * @brief PostgreSQL event types captured by advanced logging.
+ */
 enum class PGSQL_LOG_EVENT_TYPE {
 	SIMPLE_QUERY,
 	AUTH_OK,
@@ -63,6 +75,9 @@ enum class PGSQL_LOG_EVENT_TYPE {
 	STMT_PREPARE
 };
 
+/**
+ * @brief Query or connection event payload written to PostgreSQL logs/sinks.
+ */
 class PgSQL_Event {
 	private:
 	uint32_t thread_id;
@@ -96,18 +111,58 @@ class PgSQL_Event {
 	bool free_on_delete;
 	
 	public:
+	/**
+	 * @brief Builds an event object using session/query context.
+	 */
 	PgSQL_Event(PGSQL_LOG_EVENT_TYPE _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
+	/**
+	 * @brief Deep-copy constructor used by circular buffer insertion.
+	 */
 	PgSQL_Event(const PgSQL_Event& other);
+	/**
+	 * @brief Frees event-owned allocations for deep-copied instances.
+	 */
 	~PgSQL_Event();
+	/**
+	 * @brief Serializes this event into the configured events/audit file format.
+	 * @return Number of bytes written for binary format, 0 for JSON format.
+	 */
 	uint64_t write(std::fstream *f, PgSQL_Session *sess);
+	/**
+	 * @brief Writes binary format payload for query events.
+	 */
 	uint64_t write_query_format_1(std::fstream *f);
+	/**
+	 * @brief Writes JSON format payload for query events.
+	 */
 	uint64_t write_query_format_2_json(std::fstream *f);
+	/**
+	 * @brief Writes JSON payload for authentication/audit events.
+	 */
 	void write_auth(std::fstream *f, PgSQL_Session *sess);
+	/**
+	 * @brief Sets client prepared statement name associated with this event.
+	 */
 	void set_client_stmt_name(char* client_stmt_name);
+	/**
+	 * @brief Sets event query text and effective query length.
+	 */
 	void set_query(const char *ptr, int len);
+	/**
+	 * @brief Sets backend endpoint and hostgroup information.
+	 */
 	void set_server(int _hid, const char *ptr, int len);
+	/**
+	 * @brief Sets event extra info text payload.
+	 */
 	void set_extra_info(char *);
+	/**
+	 * @brief Sets affected rows flag/value for this event.
+	 */
 	void set_affected_rows(uint64_t ar);
+	/**
+	 * @brief Sets rows-sent flag/value for this event.
+	 */
 	void set_rows_sent(uint64_t rs);
 	/**
 	 * @brief Sets SQLSTATE and textual error information associated with this event.
@@ -130,14 +185,41 @@ private:
 
 public:
 	std::atomic<size_t> buffer_size;
+	/**
+	 * @brief Creates a bounded circular buffer with the supplied capacity.
+	 */
 	explicit PgSQL_Logger_CircularBuffer(size_t size);
+	/**
+	 * @brief Destroys the circular buffer and frees retained events.
+	 */
 	~PgSQL_Logger_CircularBuffer();
+	/**
+	 * @brief Inserts one event, evicting older entries when full.
+	 */
 	void insert(PgSQL_Event* event);
+	/**
+	 * @brief Drains all buffered events into @p events and clears the buffer.
+	 */
 	void get_all_events(std::vector<PgSQL_Event*>& events);
+	/**
+	 * @brief Returns current number of retained events.
+	 */
 	size_t size();
+	/**
+	 * @brief Returns configured buffer capacity.
+	 */
 	size_t getBufferSize() const;
+	/**
+	 * @brief Updates buffer capacity and drops oldest events if oversized.
+	 */
 	void setBufferSize(size_t newSize);
+	/**
+	 * @brief Returns total number of inserted events.
+	 */
 	unsigned long long getEventsAddedCount() const { return eventsAddedCount; }
+	/**
+	 * @brief Returns total number of dropped/evicted events.
+	 */
 	unsigned long long getEventsDroppedCount() const { return eventsDroppedCount; }
 };
 
@@ -192,7 +274,13 @@ class PgSQL_Logger {
 	unsigned int events_find_next_id();
 	unsigned int audit_find_next_id();
 	public:
+	/**
+	 * @brief Constructs PostgreSQL logger state, circular buffer, and metrics.
+	 */
 	PgSQL_Logger();
+	/**
+	 * @brief Destroys logger-owned resources and buffered events.
+	 */
 	~PgSQL_Logger();
 	void print_version();
 	void flush_log();
