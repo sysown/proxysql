@@ -2709,6 +2709,10 @@ void update_modules_metrics() {
 	if (GloMyLogger) {
 		GloMyLogger->p_update_metrics();
 	}
+	// Update PostgreSQL logger metrics
+	if (GloPgSQL_Logger) {
+		GloPgSQL_Logger->p_update_metrics();
+	}
 	// Update admin metrics
 	GloAdmin->p_update_metrics();
 }

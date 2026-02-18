@@ -18,6 +18,7 @@
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Logger.hpp"
+#include "PgSQL_Logger.hpp"
 #ifdef PROXYSQLGENAI
 #include "MCP_Thread.h"
 #include "Query_Tool_Handler.h"
@@ -51,6 +52,7 @@ extern PgSQL_Query_Processor* GloPgQPro;
 extern ProxySQL_Cluster *GloProxyCluster;
 
 extern MySQL_Logger *GloMyLogger;
+extern PgSQL_Logger *GloPgSQL_Logger;
 
 void ProxySQL_Admin::p_update_metrics() {
 	// Update proxysql_uptime
@@ -782,6 +784,19 @@ void ProxySQL_Admin::stats___pgsql_global() {
 		statsdb->execute(query);
 		free(query);
 	}
+
+	if (GloPgSQL_Logger != nullptr) {
+		const string prefix = "PgSQL_Logger_";
+		std::unordered_map<std::string, unsigned long long> metrics = GloPgSQL_Logger->getAllMetrics();
+		for (std::unordered_map<std::string, unsigned long long>::iterator it = metrics.begin(); it != metrics.end(); it++) {
+			string var_name = prefix + it->first;
+			query = (char*)malloc(strlen(a) + var_name.length() + 32 + 16);
+			snprintf(query, strlen(a) + var_name.length() + 32 + 16, a, var_name.c_str(), std::to_string(it->second).c_str());
+			statsdb->execute(query);
+			free(query);
+		}
+	}
+
 	statsdb->execute("COMMIT");
 }
 
