@@ -76,7 +76,7 @@ test_is_timed_out() {
 
     local payload
     payload=$(cat <<EOF
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}","timeout":${timeout_sec}}},"id":1}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${sql}","target_id":"${MCP_TARGET_ID}","timeout":${timeout_sec}}},"id":1}
 EOF
 )
 
@@ -175,7 +175,7 @@ main() {
 
     # Test that a quick query without timeout rule executes successfully
     run_test "T8.3: Quick query without SLEEP executes successfully" \
-        bash -c "timeout 5 curl -k -s -X POST 'https://${MCP_HOST}:${MCP_PORT}/mcp/query' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"run_sql_readonly\",\"arguments\":{\"sql\":\"SELECT phase8_data FROM quick_table\"}},\"id\":1}' | grep -q 'phase8_data'"
+        bash -c "timeout 5 curl -k -s -X POST 'https://${MCP_HOST}:${MCP_PORT}/mcp/query' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"run_sql_readonly\",\"arguments\":{\"sql\":\"SELECT phase8_data FROM quick_table\",\"target_id\":\"${MCP_TARGET_ID}\"}},\"id\":1}' | grep -q 'phase8_data'"
 
     # Display runtime rules
     echo ""

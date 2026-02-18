@@ -1,6 +1,6 @@
 # MCP Module Testing Suite
 
-This directory contains scripts to test the ProxySQL MCP (Model Context Protocol) module with MySQL connection pool and exploration tools.
+This directory contains scripts to test the ProxySQL MCP (Model Context Protocol) module with target-profile routing and exploration tools across MySQL and PostgreSQL backends.
 
 ## Table of Contents
 
@@ -10,6 +10,8 @@ This directory contains scripts to test the ProxySQL MCP (Model Context Protocol
 4. [Quick Start (Copy/Paste)](#quick-start-copypaste)
 5. [Detailed Documentation](#detailed-documentation)
 6. [Troubleshooting](#troubleshooting)
+
+> Note: parts of this README still show legacy single-MySQL examples (`mcp-mysql_*`). The current MCP routing model uses target/auth profiles (`runtime_mcp_target_profiles`, `runtime_mcp_auth_profiles`) and `target_id` in query/discovery/catalog/llm workflows.
 
 ---
 
@@ -32,7 +34,7 @@ MCP (Model Context Protocol) is a JSON-RPC 2.0 protocol that allows AI/LLM appli
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │         ProxySQL Admin Interface (Port 6032)                 │   │
-│  │   Configure: mcp-enabled, mcp-mysql_hosts, mcp-port, etc.    │   │
+│  │   Configure: mcp-enabled, mcp-port, MCP profiles, etc.    │   │
 │  └──────────────────────────┬──────────────────────────────────┘   │
 │                             │                                       │
 │  ┌──────────────────────────▼──────────────────────────────────┐   │
@@ -151,7 +153,7 @@ Where:
 | **Relationships** | `suggest_joins`, `find_reference_candidates` | Infer table relationships |
 | **Profiling** | `table_profile`, `column_profile` | Analyze data distributions and statistics |
 | **Catalog** | `catalog_upsert`, `catalog_get`, `catalog_search`, `catalog_delete`, `catalog_list`, `catalog_merge` | Store/retrieve LLM discoveries |
-| **Discovery** | `discovery.run_static` | Run Phase 1 of two-phase discovery |
+| **Discovery** | `discovery.run_static` | Run Phase 1 of two-phase discovery for a specific `target_id` |
 | **Agent Coordination** | `agent.run_start`, `agent.run_finish`, `agent.event_append` | Coordinate LLM agent discovery runs |
 | **LLM Interaction** | `llm.summary_upsert`, `llm.summary_get`, `llm.relationship_upsert`, `llm.domain_upsert`, `llm.domain_set_members`, `llm.metric_upsert`, `llm.question_template_add`, `llm.note_add`, `llm.search` | Store and retrieve LLM-generated insights |
 | **RAG** | `rag.search_fts`, `rag.search_vector`, `rag.search_hybrid`, `rag.get_chunks`, `rag.get_docs`, `rag.fetch_from_source`, `rag.admin.stats` | Retrieval-Augmented Generation tools |
@@ -179,11 +181,8 @@ Where:
 | `mcp-cache_endpoint_auth` | (empty) | Auth token for /cache endpoint |
 | `mcp-ai_endpoint_auth` | (empty) | Auth token for /ai endpoint |
 | `mcp-timeout_ms` | 30000 | Query timeout in milliseconds |
-| `mcp-mysql_hosts` | 127.0.0.1 | MySQL server(s) for tool execution |
-| `mcp-mysql_ports` | 3306 | MySQL port(s) |
-| `mcp-mysql_user` | (empty) | MySQL username for connections |
-| `mcp-mysql_password` | (empty) | MySQL password for connections |
-| `mcp-mysql_schema` | (empty) | Default schema for connections |
+| `runtime_mcp_target_profiles` | n/a | Logical targets (`target_id`, protocol, hostgroup, auth profile) |
+| `runtime_mcp_auth_profiles` | n/a | Backend credentials bound to target profiles |
 
 **RAG Configuration Variables:**
 
@@ -219,11 +218,11 @@ Where:
 - **Observe_Tool_Handler** - Monitoring and metrics
 - **AI_Tool_Handler** - AI and LLM features
 
-### 3. MySQL Connection Pools
+### 3. Protocol-Aware Connection Pools
 
 **Location:** Each Tool_Handler manages its own connection pool
 
-**Purpose:** Manages reusable connections to backend MySQL servers for tool execution.
+**Purpose:** Manages reusable connections to backend MySQL/PostgreSQL targets for tool execution.
 
 **Features:**
 - Thread-safe connection pooling with `pthread_mutex_t`

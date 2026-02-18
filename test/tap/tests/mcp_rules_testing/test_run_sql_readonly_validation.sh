@@ -135,7 +135,8 @@ test_rejected_query() {
   "params": {
     "name": "run_sql_readonly",
     "arguments": {
-      "sql": ${sql_query}
+      "sql": ${sql_query},
+      "target_id": "${MCP_TARGET_ID}"
     }
   },
   "id": ${TOTAL_TESTS}
@@ -205,7 +206,8 @@ test_allowed_query() {
   "params": {
     "name": "run_sql_readonly",
     "arguments": {
-      "sql": ${sql_query}
+      "sql": ${sql_query},
+      "target_id": "${MCP_TARGET_ID}"
     }
   },
   "id": ${TOTAL_TESTS}

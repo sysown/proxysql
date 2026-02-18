@@ -822,8 +822,14 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	// MCP query rules
 	insert_into_tables_defs(tables_defs_admin, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MCP_QUERY_RULES);
+	insert_into_tables_defs(tables_defs_admin, "mcp_auth_profiles", ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES);
+	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_auth_profiles", ADMIN_SQLITE_TABLE_RUNTIME_MCP_AUTH_PROFILES);
+	insert_into_tables_defs(tables_defs_admin, "mcp_target_profiles", ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
+	insert_into_tables_defs(tables_defs_admin, "runtime_mcp_target_profiles", ADMIN_SQLITE_TABLE_RUNTIME_MCP_TARGET_PROFILES);
 
 	insert_into_tables_defs(tables_defs_config, "mcp_query_rules", ADMIN_SQLITE_TABLE_MCP_QUERY_RULES);
+	insert_into_tables_defs(tables_defs_config, "mcp_auth_profiles", ADMIN_SQLITE_TABLE_MCP_AUTH_PROFILES);
+	insert_into_tables_defs(tables_defs_config, "mcp_target_profiles", ADMIN_SQLITE_TABLE_MCP_TARGET_PROFILES);
 #endif /* PROXYSQLGENAI */
 
 	insert_into_tables_defs(tables_defs_config, "pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS);

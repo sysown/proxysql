@@ -9,6 +9,13 @@ class PgSQL_SrvC;
 class MySrvList;
 class PgSQL_SrvList;
 
+// Forward declaration for WebUI monitoring metrics collector
+namespace ProxySQL {
+namespace Monitoring {
+class MetricsCollector;
+}
+}
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -666,6 +673,7 @@ class Base_HostGroups_Manager {
 
 	friend class MySQL_HostGroups_Manager;
 	friend class PgSQL_HostGroups_Manager;
+	friend class ProxySQL::Monitoring::MetricsCollector;
 
 };
 

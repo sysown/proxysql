@@ -11,6 +11,7 @@ Perform LLM-driven discovery using the MCP catalog and persist your findings bac
 
 ## Inputs
 
+- **target_id**: `<TARGET_ID>` (required for all catalog/agent/llm tool calls)
 - **run_id**: **use the provided run_id from the static harvest**
 - **model_name**: `<MODEL_NAME_HERE>` - e.g., "claude-3.5-sonnet"
 - **desired coverage**:
@@ -21,7 +22,7 @@ Perform LLM-driven discovery using the MCP catalog and persist your findings bac
 ## Required Outputs (persisted via MCP)
 
 ### 1) Agent Run Tracking
-- Start an agent run bound to the provided run_id via `agent.run_start`
+- Start an agent run bound to the provided target/run via `agent.run_start`
 - Record discovery plan and budgets via `agent.event_append`
 - Finish the run via `agent.run_finish`
 
@@ -64,7 +65,8 @@ Perform LLM-driven discovery using the MCP catalog and persist your findings bac
 
 # Phase 2: LLM Agent Discovery - Start here
 run_id = <USE_THE_PROVIDED_RUN_ID>
-call agent.run_start(run_id=run_id, model_name="<MODEL_NAME_HERE>")
+target_id = "<TARGET_ID>"
+call agent.run_start(target_id=target_id, run_id=run_id, model_name="<MODEL_NAME_HERE>")
 # → returns agent_run_id
 ```
 
@@ -72,8 +74,8 @@ call agent.run_start(run_id=run_id, model_name="<MODEL_NAME_HERE>")
 
 ```python
 # Understand what was harvested
-call catalog.list_objects(run_id=run_id, order_by="name", page_size=100)
-call catalog.search(run_id=run_id, query="<KEYWORD>", limit=25)
+call catalog.list_objects(target_id=target_id, run_id=run_id, order_by="name", page_size=100)
+call catalog.search(target_id=target_id, run_id=run_id, query="<KEYWORD>", limit=25)
 ```
 
 ### Step 3: Execute Staged Discovery
@@ -91,9 +93,9 @@ call agent.event_append(agent_run_id, "decision", {"plan": "...", "budgets": {..
 
 # Stage 2: Summarize objects in batches
 for each batch:
-    call catalog.get_object(run_id, object_id, include_profiles=true)
-    call catalog.get_relationships(run_id, object_id)
-    call llm.summary_upsert(agent_run_id, run_id, object_id, summary={...}, confidence=0.8, sources={...})
+    call catalog.get_object(target_id, run_id, object_id, include_profiles=true)
+    call catalog.get_relationships(target_id, run_id, object_id)
+    call llm.summary_upsert(target_id, agent_run_id, run_id, object_id, summary={...}, confidence=0.8, sources={...})
 
 # Stage 3: Enhance relationships
 for each missing or unclear join:
@@ -101,20 +103,20 @@ for each missing or unclear join:
 
 # Stage 4: Build domains
 for each domain (billing, sales, auth, etc.):
-    call llm.domain_upsert(agent_run_id, run_id, domain_key, title, description, confidence=0.8)
-    call llm.domain_set_members(agent_run_id, run_id, domain_key, members=[...])
+    call llm.domain_upsert(target_id, agent_run_id, run_id, domain_key, title, description, confidence=0.8)
+    call llm.domain_set_members(target_id, agent_run_id, run_id, domain_key, members=[...])
 
 # Stage 5: Create answerability artifacts
 for each metric:
-    call llm.metric_upsert(agent_run_id, run_id, metric_key, title, description, sql_template, depends, confidence=0.7)
+    call llm.metric_upsert(target_id, agent_run_id, run_id, metric_key, title, description, sql_template, depends, confidence=0.7)
 
 for each question template:
     # Extract table/view names from example_sql or template_json
     related_objects = ["Customer", "Invoice", "InvoiceLine"]  # JSON array of object names
-    call llm.question_template_add(agent_run_id, run_id, title, question_nl, template, example_sql, related_objects, confidence=0.7)
+    call llm.question_template_add(target_id, run_id, title, question_nl, template, agent_run_id, example_sql, related_objects, confidence=0.7)
 
 # Final summary
-call llm.note_add(agent_run_id, run_id, "global", title="Database Summary", body="...", tags=["final"])
+call llm.note_add(target_id, agent_run_id, run_id, "global", title="Database Summary", body="...", tags=["final"])
 
 # Cleanup
 call agent.event_append(agent_run_id, "decision", {"status": "complete", "summaries": 50, "domains": 5, "metrics": 15, "templates": 25})
@@ -135,6 +137,6 @@ call agent.run_finish(agent_run_id, "success")
 ## Begin Now
 
 Start with Stage 0:
-1. Use the provided run_id from the static harvest (DO NOT call discovery.run_static)
-2. Call `agent.run_start` with that run_id
+1. Use the provided target_id and run_id from the static harvest (DO NOT call discovery.run_static)
+2. Call `agent.run_start` with target_id + run_id
 3. Proceed with the discovery stages

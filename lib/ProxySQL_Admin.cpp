@@ -2997,6 +2997,35 @@ void ProxySQL_Admin::init_mcp_variables() {
 		flush_mcp_variables___runtime_to_database(configdb, false, false, false, false, false);
 		flush_mcp_variables___runtime_to_database(admindb, false, true, false, false, false);
 		flush_mcp_variables___database_to_runtime(admindb, true, "", 0);
+
+		// Load MCP target/auth profiles into runtime tables and then in-memory map.
+		admindb->execute("DELETE FROM runtime_mcp_auth_profiles");
+		admindb->execute("INSERT OR REPLACE INTO runtime_mcp_auth_profiles SELECT * FROM main.mcp_auth_profiles");
+		admindb->execute("DELETE FROM runtime_mcp_target_profiles");
+		admindb->execute("INSERT OR REPLACE INTO runtime_mcp_target_profiles SELECT * FROM main.mcp_target_profiles");
+
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+		SQLite3_result* resultset = NULL;
+		const char* q =
+			"SELECT t.target_id, t.protocol, t.hostgroup_id, t.auth_profile_id,"
+			" t.max_rows, t.timeout_ms, t.allow_explain, t.allow_discovery, t.description,"
+			" a.db_username, a.db_password, a.default_schema"
+			" FROM runtime_mcp_target_profiles t"
+			" JOIN runtime_mcp_auth_profiles a ON a.auth_profile_id=t.auth_profile_id"
+			" WHERE t.active=1"
+			" ORDER BY t.target_id";
+		admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		if (error) {
+			proxy_error("Failed to load MCP target auth map: %s\n", error);
+			free(error);
+			if (resultset) {
+				delete resultset;
+			}
+		} else {
+			GloMCPH->load_target_auth_map(resultset);
+		}
 	}
 }
 
@@ -3525,6 +3554,13 @@ void ProxySQL_Admin::load_mcp_server() {
 			if (current_use_ssl != server_use_ssl) {
 				needs_restart = true;
 				restart_reason += "SSL mode";
+			}
+			if (GloMCPH->query_tool_handler == NULL) {
+				needs_restart = true;
+				if (!restart_reason.empty()) {
+					restart_reason += " ";
+				}
+				restart_reason += "tool handler initialization";
 			}
 
 			if (needs_restart) {
@@ -8075,13 +8111,20 @@ char* ProxySQL_Admin::load_mcp_query_rules_to_runtime() {
 
 	if (!GloMCPH) return (char*)"MCP Handler not started: command impossible to run";
 	Query_Tool_Handler* qth = GloMCPH->query_tool_handler;
-	if (!qth) return (char*)"Query Tool Handler not initialized";
+	if (!qth) {
+		proxy_warning("MCP query rules load requested but Query Tool Handler is NULL, attempting MCP server self-recovery\n");
+		load_mcp_server();
+		qth = GloMCPH->query_tool_handler;
+		if (!qth) {
+			return (char*)"Query Tool Handler not initialized";
+		}
+	}
 
 	// Get the discovery schema catalog
 	Discovery_Schema* catalog = qth->get_catalog();
 	if (!catalog) return (char*)"Discovery Schema catalog not initialized";
 
-	char* query = (char*)"SELECT rule_id, active, username, schemaname,"
+	char* query = (char*)"SELECT rule_id, active, username, target_id, schemaname,"
 		" tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
 		" replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment FROM"
 		" main.mcp_query_rules WHERE active=1 ORDER BY rule_id";
@@ -8139,23 +8182,23 @@ void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
 		admindb->execute("DELETE FROM mcp_query_rules");
 	}
 
-	// Get current rules from Discovery_Schema (same 17 columns for both tables)
+	// Get current rules from Discovery_Schema (same 18 columns for both tables)
 	SQLite3_result* resultset = catalog->get_mcp_query_rules();
 	if (resultset) {
 		char *a = NULL;
 		if (_runtime) {
-			a = (char *)"INSERT INTO runtime_mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+			a = (char *)"INSERT INTO runtime_mcp_query_rules (rule_id, active, username, target_id, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 		} else {
-			a = (char *)"INSERT INTO mcp_query_rules (rule_id, active, username, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+			a = (char *)"INSERT INTO mcp_query_rules (rule_id, active, username, target_id, schemaname, tool_name, match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT, replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 		}
-		int num_fields = 17; // same for both tables
+		int num_fields = 18; // same for both tables
 
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 			SQLite3_row* r = *it;
 
 			// Build query with escaped values
 			int arg_len = 0;
-			char* buffs[17];
+			char* buffs[18];
 			for (int i = 0; i < num_fields; i++) {
 				if (r->fields[i]) {
 					char* o = escape_string_single_quotes(r->fields[i], false);
@@ -8180,20 +8223,21 @@ void ProxySQL_Admin::save_mcp_query_rules_from_runtime(bool _runtime) {
 				buffs[0],  // rule_id
 				buffs[1],  // active
 				buffs[2],  // username
-				buffs[3],  // schemaname
-				buffs[4],  // tool_name
-				buffs[5],  // match_pattern
-				buffs[6],  // negate_match_pattern
-				buffs[7],  // re_modifiers
-				buffs[8],  // flagIN
-				buffs[9],  // flagOUT
-				buffs[10], // replace_pattern
-				buffs[11], // timeout_ms
-				buffs[12], // error_msg
-				buffs[13], // OK_msg
-				buffs[14], // log
-				buffs[15], // apply
-				buffs[16]  // comment
+				buffs[3],  // target_id
+				buffs[4],  // schemaname
+				buffs[5],  // tool_name
+				buffs[6],  // match_pattern
+				buffs[7],  // negate_match_pattern
+				buffs[8],  // re_modifiers
+				buffs[9],  // flagIN
+				buffs[10], // flagOUT
+				buffs[11], // replace_pattern
+				buffs[12], // timeout_ms
+				buffs[13], // error_msg
+				buffs[14], // OK_msg
+				buffs[15], // log
+				buffs[16], // apply
+				buffs[17]  // comment
 			);
 
 			admindb->execute(query);

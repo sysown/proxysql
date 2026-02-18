@@ -97,11 +97,6 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	std::string catalog_path = std::string(GloVars.datadir) + "/mcp_catalog.db";
 
 	handler->query_tool_handler = new Query_Tool_Handler(
-		handler->variables.mcp_mysql_hosts ? handler->variables.mcp_mysql_hosts : "",
-		handler->variables.mcp_mysql_ports ? handler->variables.mcp_mysql_ports : "",
-		handler->variables.mcp_mysql_user ? handler->variables.mcp_mysql_user : "",
-		handler->variables.mcp_mysql_password ? handler->variables.mcp_mysql_password : "",
-		handler->variables.mcp_mysql_schema ? handler->variables.mcp_mysql_schema : "",
 		catalog_path.c_str()
 	);
 	if (handler->query_tool_handler->init() == 0) {

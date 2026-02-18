@@ -2772,7 +2772,7 @@ void ProxySQL_Admin::stats___mcp_query_digest(bool reset) {
 //
 // The function:
 //   1. Deletes all existing rows from stats_mcp_query_rules
-//   2. Reads rule_id and hits from Discovery Schema's in-memory rules
+//   2. Reads rule_id, username, target_id and hits from Discovery Schema's in-memory rules
 //   3. Inserts fresh data into stats_mcp_query_rules table
 //
 // Note: Unlike digest stats, query rules stats do not support reset-on-read.
@@ -2796,7 +2796,7 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 	statsdb->execute("DELETE FROM stats_mcp_query_rules");
 
 	// Use prepared statement to prevent SQL injection
-	const char* query_str = "INSERT INTO stats_mcp_query_rules VALUES (?1, ?2)";
+	const char* query_str = "INSERT INTO stats_mcp_query_rules VALUES (?1, ?2, ?3, ?4)";
 	sqlite3_stmt* statement = nullptr;
 	auto [rc1, statement_unique] = statsdb->prepare_v2(query_str);
 	int rc = rc1;
@@ -2806,9 +2806,11 @@ void ProxySQL_Admin::stats___mcp_query_rules() {
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
 
-		// Bind both columns using positional parameters
+		// Bind all columns using positional parameters
 		rc = (*proxy_sqlite3_bind_text)(statement, 1, r->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 		rc = (*proxy_sqlite3_bind_text)(statement, 2, r->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb);

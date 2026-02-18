@@ -8,6 +8,9 @@
 #include <pthread.h>
 #include <cstring>
 #include <cstdlib>
+#include <map>
+#include <string>
+#include <vector>
 
 // Forward declarations
 class ProxySQL_MCP_Server;
@@ -20,6 +23,7 @@ class Cache_Tool_Handler;
 class Observe_Tool_Handler;
 class AI_Tool_Handler;
 class RAG_Tool_Handler;
+class SQLite3_result;
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration
@@ -37,6 +41,21 @@ private:
 	pthread_rwlock_t rwlock;  ///< Read-write lock for thread-safe access
 
 public:
+	struct MCP_Target_Auth_Context {
+		std::string target_id;
+		std::string protocol;
+		int hostgroup_id;
+		std::string auth_profile_id;
+		std::string db_username;
+		std::string db_password;
+		std::string default_schema;
+		int max_rows;
+		int timeout_ms;
+		bool allow_explain;
+		bool allow_discovery;
+		std::string description;
+	};
+
 	/**
 	 * @brief Structure holding MCP module configuration variables
 	 *
@@ -201,6 +220,25 @@ public:
 	 * Outputs the MCP module version to stderr.
 	 */
 	void print_version();
+
+	/**
+	 * @brief Load MCP target/auth profiles from a joined runtime resultset into memory map
+	 * @return 0 on success, -1 on failure
+	 */
+	int load_target_auth_map(SQLite3_result* resultset);
+
+	/**
+	 * @brief Resolve backend auth/policy context for a target_id
+	 */
+	bool get_target_auth_context(const std::string& target_id, MCP_Target_Auth_Context& out_ctx);
+
+	/**
+	 * @brief Return all active target auth contexts (thread-safe copy)
+	 */
+	std::vector<MCP_Target_Auth_Context> get_all_target_auth_contexts();
+
+private:
+	std::map<std::string, MCP_Target_Auth_Context> target_auth_map;
 };
 
 // Global instance of the MCP Threads Handler

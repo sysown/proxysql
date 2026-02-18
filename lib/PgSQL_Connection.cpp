@@ -726,13 +726,24 @@ handler_again:
 		break;
 
 	case ASYNC_STMT_DESCRIBE_START:
+	{
 		stmt_describe_start();
+		__sync_fetch_and_add(&parent->queries_sent, 1);
+		size_t bytes_sent = 7 + 5; // 7 for DESCRIBE header, 5 for SYNC/FLUSH
+		if (query.extended_query_info->stmt_type == 'P') {
+			bytes_sent += query.extended_query_info->stmt_client_portal_name ? (strlen(query.extended_query_info->stmt_client_portal_name) + 1) : 0;
+		} else {
+			bytes_sent += query.backend_stmt_name ? (strlen(query.backend_stmt_name) + 1) : 0;
+		}
+		update_bytes_sent(bytes_sent);
+		statuses.questions++;
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_DESCRIBE_CONT);
 		} else {
 			NEXT_IMMEDIATE(ASYNC_STMT_DESCRIBE_END);
 		}
-		break;
+	}
+	break;
 	case ASYNC_STMT_DESCRIBE_CONT:
 		if (event) {
 			stmt_describe_cont(event);
@@ -750,6 +761,9 @@ handler_again:
 
 	case ASYNC_STMT_EXECUTE_START:
 		stmt_execute_start();
+		__sync_fetch_and_add(&parent->queries_sent, 1);
+		update_bytes_sent(query.extended_query_info->bind_msg->get_raw_pkt().size + 5);
+		statuses.questions++;
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_EXECUTE_CONT);
 		} else {
@@ -808,10 +822,11 @@ handler_again:
 
 	case ASYNC_RESYNC_START:
 		if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
-			proxy_warning("Resync not required — connection already synchronized.\n");
+			proxy_warning("Resync not required - connection already synchronized.\n");
 			NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 		}
 		resync_start();
+		update_bytes_sent(5); // SYNC message
 		if (async_exit_status) {
 			next_event(ASYNC_RESYNC_CONT);
 		} else {
