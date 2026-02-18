@@ -312,12 +312,12 @@ int main(int argc, char** argv) {
 	MYSQL* admin = nullptr;
 	bool admin_connected = false;
 
-	plan(15);
+	plan(16);
 
 	const int env_rc = cl.getEnv();
 	ok(env_rc == 0, "Required TAP environment variables are available");
 	if (env_rc != 0) {
-		skip(14, "missing TAP environment");
+		skip(15, "missing TAP environment");
 		return exit_status();
 	}
 
@@ -330,7 +330,7 @@ int main(int argc, char** argv) {
 	admin = mysql_init(nullptr);
 	ok(admin != nullptr, "Admin MYSQL handle initialized");
 	if (admin == nullptr) {
-		skip(13, "admin handle initialization failed");
+		skip(14, "admin handle initialization failed");
 		return exit_status();
 	}
 
@@ -339,7 +339,7 @@ int main(int argc, char** argv) {
 	);
 	ok(admin_connected, "Connected to ProxySQL admin");
 	if (!admin_connected) {
-		skip(12, "admin connection failed");
+		skip(13, "admin connection failed");
 		mysql_close(admin);
 		return exit_status();
 	}
@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
 
 	ok(setup_rc == EXIT_SUCCESS, "Configured mysql-eventslog and forced initial rotation");
 	if (setup_rc != EXIT_SUCCESS) {
-		skip(11, "eventslog setup failed");
+		skip(12, "eventslog setup failed");
 		restore_old_log_vars(admin, old_vars);
 		mysql_close(admin);
 		return exit_status();
