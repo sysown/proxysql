@@ -27,8 +27,19 @@ int main(int argc, char** argv) {
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' WHERE variable_name='mysql-ffto_enabled'");
     MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='100' WHERE variable_name='mysql-ffto_max_buffer_size'");
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-    MYSQL_QUERY(admin, "UPDATE mysql_users SET fast_forward=1");
+
+    // Ensure user exists
+    char user_query[1024];
+    sprintf(user_query, "INSERT OR REPLACE INTO mysql_users (username, password, default_hostgroup, fast_forward) VALUES ('%s', '%s', 0, 1)", cl.username, cl.password);
+    MYSQL_QUERY(admin, user_query);
     MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
+
+    // Ensure backend server exists
+    char server_query[1024];
+    sprintf(server_query, "INSERT OR REPLACE INTO mysql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.mysql_host, cl.mysql_port);
+    MYSQL_QUERY(admin, server_query);
+    MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
     MYSQL_QUERY(admin, "DELETE FROM stats_mysql_query_digest");
 
     MYSQL* conn = mysql_init(NULL);
