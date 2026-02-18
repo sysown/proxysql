@@ -172,11 +172,22 @@ int main() {
 		"SELECT COUNT(*) FROM history_pgsql_query_events WHERE sqlstate IS NULL",
 		success_rows
 	);
+	if (!success_rows_ok || success_rows < num_queries) {
+		diag(
+			"Expected >= %d successful rows, got %lld (query_ok=%s)",
+			num_queries,
+			success_rows,
+			success_rows_ok ? "true" : "false"
+		);
+	}
 	ok(success_rows_ok && success_rows >= num_queries, "History table includes expected successful rows");
 
 	bool cleanup_ok = true;
 	cleanup_ok = cleanup_ok && exec_ok(admin_conn.get(), "SET admin-stats_pgsql_eventslog_sync_buffer_to_disk=0");
+	cleanup_ok = cleanup_ok && exec_ok(admin_conn.get(), "SET pgsql-eventslog_default_log=0");
+	cleanup_ok = cleanup_ok && exec_ok(admin_conn.get(), "SET pgsql-eventslog_buffer_history_size=0");
 	cleanup_ok = cleanup_ok && exec_ok(admin_conn.get(), "LOAD ADMIN VARIABLES TO RUNTIME");
+	cleanup_ok = cleanup_ok && exec_ok(admin_conn.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 	ok(cleanup_ok, "Cleanup completed and auto-dump scheduler disabled");
 
 	return exit_status();
