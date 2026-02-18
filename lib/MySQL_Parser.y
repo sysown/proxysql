@@ -35,10 +35,11 @@ int mysql_yylex (union MYSQL_YYSTYPE *yylval_param, MYSQL_YYLTYPE* yyloc, yyscan
 %token TOKEN_SELECT TOKEN_FROM TOKEN_INSERT TOKEN_INTO TOKEN_VALUES
 %token TOKEN_LPAREN TOKEN_RPAREN TOKEN_SEMICOLON TOKEN_ASTERISK
 %token TOKEN_PLUS TOKEN_MINUS TOKEN_DIVIDE TOKEN_DIV
-%token TOKEN_SET TOKEN_NAMES TOKEN_CHARACTER TOKEN_CHARSET TOKEN_GLOBAL TOKEN_SESSION TOKEN_PERSIST TOKEN_PERSIST_ONLY
+%token TOKEN_SET TOKEN_NAMES TOKEN_CHARACTER TOKEN_CHARSET TOKEN_GLOBAL TOKEN_SESSION TOKEN_LOCAL TOKEN_PERSIST TOKEN_PERSIST_ONLY
 %token TOKEN_DOT TOKEN_DEFAULT TOKEN_COLLATE TOKEN_COMMA
 %token TOKEN_SPECIAL TOKEN_DOUBLESPECIAL
 %token TOKEN_GLOBAL_VAR_PREFIX TOKEN_SESSION_VAR_PREFIX TOKEN_PERSIST_VAR_PREFIX
+%token TOKEN_COLON_EQUAL
 
 %token TOKEN_DELETE TOKEN_LOW_PRIORITY TOKEN_QUICK TOKEN_IGNORE_SYM
 %token TOKEN_USING TOKEN_ORDER TOKEN_BY TOKEN_LIMIT TOKEN_ASC TOKEN_DESC TOKEN_WHERE
@@ -109,6 +110,7 @@ int mysql_yylex (union MYSQL_YYSTYPE *yylval_param, MYSQL_YYLTYPE* yyloc, yyscan
 
 %token <str_val> TOKEN_QUIT
 %token <str_val> TOKEN_IDENTIFIER
+%token <str_val> TOKEN_USER_VARIABLE_NAME
 %token <str_val> TOKEN_STRING_LITERAL
 %token <str_val> TOKEN_NUMBER_LITERAL
 
@@ -121,6 +123,7 @@ int mysql_yylex (union MYSQL_YYSTYPE *yylval_param, MYSQL_YYLTYPE* yyloc, yyscan
 %type <node_val> aggregate_function_call function_call_placeholder opt_search_modifier opt_with_query_expansion
 %type <node_val> expr_list opt_expr_list
 %type <node_val> set_names_stmt set_charset_stmt charset_name_or_default collation_name_choice
+%type <node_val> assignment_operator
 %type <node_val> subquery_parts_args subquery_part any_token opt_of
 
 %type <node_val> opt_delete_options delete_option delete_option_item_list
@@ -954,6 +957,11 @@ set_transaction_statement:
 		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "SESSION"));
 		$$->add_child($3);
 	}
+	| TOKEN_LOCAL TOKEN_TRANSACTION transaction_characteristic_list {
+		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_SET_TRANSACTION, "SET_TRANSACTION");
+		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "SESSION"));
+		$$->add_child($3);
+	}
 	| TOKEN_GLOBAL TOKEN_TRANSACTION transaction_characteristic_list {
 		 $$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_SET_TRANSACTION, "SET_TRANSACTION");
 		 $$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "GLOBAL"));
@@ -1025,7 +1033,8 @@ set_option_value_list:
 set_option_value:
 	set_names_stmt { $$ = $1; }
 	| set_charset_stmt { $$ = $1; }
-	| variable_to_set TOKEN_EQUAL expr {
+	| variable_to_set assignment_operator expr {
+		(void)$2;
 		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT);
 		$$->add_child($1);
 		$$->add_child($3);
@@ -1033,7 +1042,8 @@ set_option_value:
 		$$->val_init_pos = @3.first_column;
 		$$->val_end_pos = @3.last_column;
 	}
-	| variable_to_set TOKEN_EQUAL TOKEN_DEFAULT {
+	| variable_to_set assignment_operator TOKEN_DEFAULT {
+		(void)$2;
 		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT);
 		$$->add_child($1);
 		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VALUE_LITERAL, "DEFAULT"));
@@ -1041,7 +1051,8 @@ set_option_value:
 		$$->val_init_pos = @3.first_column;
 		$$->val_end_pos = @3.last_column;
 	}
-	| variable_to_set TOKEN_EQUAL TOKEN_ON {
+	| variable_to_set assignment_operator TOKEN_ON {
+		(void)$2;
 		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT);
 		$$->add_child($1);
 		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VALUE_LITERAL, "ON"));
@@ -1049,7 +1060,8 @@ set_option_value:
 		$$->val_init_pos = @3.first_column;
 		$$->val_end_pos = @3.last_column;
 	}
-	| variable_to_set TOKEN_EQUAL TOKEN_ALL {
+	| variable_to_set assignment_operator TOKEN_ALL {
+		(void)$2;
 		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT);
 		$$->add_child($1);
 		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VALUE_LITERAL, "ALL"));
@@ -1057,7 +1069,8 @@ set_option_value:
 		$$->val_init_pos = @3.first_column;
 		$$->val_end_pos = @3.last_column;
 	}
-	| variable_to_set TOKEN_EQUAL TOKEN_BINARY {
+	| variable_to_set assignment_operator TOKEN_BINARY {
+		(void)$2;
 		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT);
 		$$->add_child($1);
 		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VALUE_LITERAL, "BINARY"));
@@ -1065,7 +1078,8 @@ set_option_value:
 		$$->val_init_pos = @3.first_column;
 		$$->val_end_pos = @3.last_column;
 	}
-	| variable_to_set TOKEN_EQUAL TOKEN_ROW {
+	| variable_to_set assignment_operator TOKEN_ROW {
+		(void)$2;
 		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT);
 		$$->add_child($1);
 		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VALUE_LITERAL, "ROW"));
@@ -1073,7 +1087,8 @@ set_option_value:
 		$$->val_init_pos = @3.first_column;
 		$$->val_end_pos = @3.last_column;
 	}
-	| variable_to_set TOKEN_EQUAL TOKEN_SYSTEM {
+	| variable_to_set assignment_operator TOKEN_SYSTEM {
+		(void)$2;
 		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_ASSIGNMENT);
 		$$->add_child($1);
 		$$->add_child(new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VALUE_LITERAL, "SYSTEM"));
@@ -1081,6 +1096,11 @@ set_option_value:
 		$$->val_init_pos = @3.first_column;
 		$$->val_end_pos = @3.last_column;
 	}
+	;
+
+assignment_operator:
+	TOKEN_EQUAL { $$ = nullptr; }
+	| TOKEN_COLON_EQUAL { $$ = nullptr; }
 	;
 
 // Expression grammar rules:
@@ -1368,6 +1388,7 @@ any_token:
 	| TOKEN_CHARACTER { $$ = nullptr; }
 	| TOKEN_GLOBAL { $$ = nullptr; }
 	| TOKEN_SESSION { $$ = nullptr; }
+	| TOKEN_LOCAL { $$ = nullptr; }
 	| TOKEN_PERSIST { $$ = nullptr; }
 	| TOKEN_PERSIST_ONLY { $$ = nullptr; }
 	| TOKEN_DEFAULT { $$ = nullptr; }
@@ -1496,6 +1517,7 @@ any_token:
 	| TOKEN_DOUBLESPECIAL { $$ = nullptr; }
 	| TOKEN_SPECIAL { $$ = nullptr; }
 	| TOKEN_IDENTIFIER { $$ = nullptr; delete $1; }
+	| TOKEN_USER_VARIABLE_NAME { $$ = nullptr; delete $1; }
 	| '*' { $$ = nullptr; }
 	| '+' { $$ = nullptr; }
 	| '-' { $$ = nullptr; }
@@ -1509,6 +1531,7 @@ any_token:
 	| TOKEN_DOT { $$ = nullptr; }
 	| TOKEN_COMMA { $$ = nullptr; }
 	| TOKEN_EQUAL { $$ = nullptr; }
+	| TOKEN_COLON_EQUAL { $$ = nullptr; }
 	| TOKEN_LESS { $$ = nullptr; }
 	| TOKEN_GREATER { $$ = nullptr; }
 	| TOKEN_LESS_EQUAL { $$ = nullptr; }
@@ -1644,11 +1667,17 @@ variable_to_set:
 	;
 
 user_variable:
-	TOKEN_SPECIAL TOKEN_IDENTIFIER {
-		// TODO: Should we consider *always* moving the value?
-		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_USER_VARIABLE, std::move(*$2));
-		// $2's value moved, node itself deleted
+	TOKEN_SPECIAL identifier_node {
+		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_USER_VARIABLE, std::move($2->value));
 		delete $2;
+	}
+	| TOKEN_SPECIAL string_literal_node {
+		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_USER_VARIABLE, std::move($2->value));
+		delete $2;
+	}
+	| TOKEN_USER_VARIABLE_NAME {
+		$$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_USER_VARIABLE, std::move(*$1));
+		delete $1;
 	}
 	;
 
@@ -1659,6 +1688,7 @@ system_variable_unqualified:
 variable_scope:
 	TOKEN_GLOBAL        { $$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "GLOBAL"); }
 	| TOKEN_SESSION       { $$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "SESSION"); }
+	| TOKEN_LOCAL         { $$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "SESSION"); }
 	| TOKEN_PERSIST       { $$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "PERSIST"); }
 	| TOKEN_PERSIST_ONLY  { $$ = new MySQLParser::AstNode(MySQLParser::NodeType::NODE_VARIABLE_SCOPE, "PERSIST_ONLY"); }
 	;

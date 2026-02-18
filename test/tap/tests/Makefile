@@ -245,6 +245,10 @@ test_set_parser_sql_mode-t: test_set_parser_sql_mode.cpp $(TAP_LDIR)/libtap.so $
 	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_PATH)/src/proxysql_global.cpp $(IDIRS) $(LDIRS) \
 		$(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
+test_set_parser_extended_syntax-t: test_set_parser_extended_syntax.cpp $(TAP_LDIR)/libtap.so $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+	$(CXX) $<  -DEXCLUDE_TRACKING_VARIABLES $(PROXYSQL_PATH)/src/proxysql_global.cpp $(IDIRS) $(LDIRS) \
+		$(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+
 setparser_test3-t: setparser_test3
 	ln -fs setparser_test3 setparser_test3-t
 

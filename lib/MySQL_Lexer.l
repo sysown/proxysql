@@ -100,6 +100,7 @@ union MYSQL_YYSTYPE;
 	"CHARSET"             { return TOKEN_CHARSET; }
 	"GLOBAL"              { return TOKEN_GLOBAL; }
 	"SESSION"             { return TOKEN_SESSION; }
+	"LOCAL"               { return TOKEN_LOCAL; }
 	"PERSIST"             { return TOKEN_PERSIST; }
 	"PERSIST_ONLY"        { return TOKEN_PERSIST_ONLY;}
 	"DEFAULT"             { return TOKEN_DEFAULT; }
@@ -252,10 +253,15 @@ union MYSQL_YYSTYPE;
 	"@@PERSIST."          { return TOKEN_PERSIST_VAR_PREFIX; } /* MySQL 8 specific */
 	"@@PERSIST_ONLY."     { return TOKEN_PERSIST_ONLY_VAR_PREFIX; } /* MySQL 8 specific */
 	"@@"                  { return TOKEN_DOUBLESPECIAL; } /* For @@varname */
+	"@"[a-zA-Z_][a-zA-Z0-9_$]*(\.[a-zA-Z0-9_$]+)* {
+		/* Unquoted user variable with dot support (e.g. @user.var). */
+		yylval_param->str_val = new std::string(yytext + 1);
+		return TOKEN_USER_VARIABLE_NAME;
+	}
 	"@"                   { return TOKEN_SPECIAL; } /* For @uservar */
 
 	/* Generic Identifier - MUST BE AFTER specific keywords */
-	[a-zA-Z_][a-zA-Z0-9_]* {
+	[a-zA-Z_][a-zA-Z0-9_$]* {
 		SAVE_TOKEN_STRING;
 		return TOKEN_IDENTIFIER;
 	}
@@ -280,6 +286,7 @@ union MYSQL_YYSTYPE;
 	","                   { return TOKEN_COMMA; }
 
 	"="                   { return TOKEN_EQUAL; }
+	":="                  { return TOKEN_COLON_EQUAL; }
 	"<"                   { return TOKEN_LESS; }
 	">"                   { return TOKEN_GREATER; }
 	"<="                  { return TOKEN_LESS_EQUAL; }
@@ -422,4 +429,3 @@ union MYSQL_YYSTYPE;
 
 %%
 /* C code to be included at the end of the lexer */
-
