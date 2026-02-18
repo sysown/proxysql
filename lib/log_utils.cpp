@@ -123,24 +123,19 @@ bool LogBufferThreadContext::should_log(int rate_limit) {
 
 LogBufferThreadContext* GetLogBufferThreadContext(std::unordered_map<pthread_t, std::unique_ptr<LogBufferThreadContext>>& log_thread_contexts, std::mutex& log_thread_contexts_lock, uint64_t current_time) {
 	pthread_t tid = pthread_self();
-	{
-		std::lock_guard<std::mutex> lock(log_thread_contexts_lock);
-		auto it = log_thread_contexts.find(tid);
-		if (it != log_thread_contexts.end()) {
-			return it->second.get();
-		}
+	std::lock_guard<std::mutex> lock(log_thread_contexts_lock);
+	auto it = log_thread_contexts.find(tid);
+	if (it != log_thread_contexts.end()) {
+		return it->second.get();
 	}
-	
+
 	// Context doesn't exist for this thread, create it with proper initialization
 	auto new_context = std::make_unique<LogBufferThreadContext>();
-	LogBufferThreadContext* ptr = new_context.get();
 	// init() is already called in the constructor, which initializes both events and audit buffers
-	ptr->events.set_last_flush_time(current_time);
-	ptr->audit.set_last_flush_time(current_time);
-	
-	{
-		std::lock_guard<std::mutex> lock(log_thread_contexts_lock);
-		log_thread_contexts[tid] = std::move(new_context);
-	}
-	return ptr;
+	new_context->events.set_last_flush_time(current_time);
+	new_context->audit.set_last_flush_time(current_time);
+
+	LogBufferThreadContext* ptr = new_context.get();
+	auto [insert_it, inserted] = log_thread_contexts.emplace(tid, std::move(new_context));
+	return inserted ? ptr : insert_it->second.get();
 }

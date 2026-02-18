@@ -3,6 +3,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include <atomic>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 #ifndef PROXYJSON
 #define PROXYJSON
