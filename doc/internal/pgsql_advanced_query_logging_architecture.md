@@ -192,6 +192,7 @@ Implemented in:
 ## 9. Validation and Acceptance Mapping
 Implemented acceptance validation via TAP test:
 - `test/tap/tests/pgsql_query_logging_memory-t.cpp`
+- `test/tap/tests/pgsql_query_logging_autodump-t.cpp`
 
 Coverage:
 - table schema shape validation (`stats_pgsql_query_events`, `history_pgsql_query_events`)
@@ -199,6 +200,7 @@ Coverage:
 - success/error event accounting in memory and history tables
 - `sqlstate` capture for representative PostgreSQL errors
 - non-empty textual `error` capture for error rows
+- scheduler-driven periodic dump to `history_pgsql_query_events` via `admin-stats_pgsql_eventslog_sync_buffer_to_disk`
 
 TAP group registration:
-- `test/tap/groups/groups.json` (`pgsql_query_logging_memory-t`)
+- `test/tap/groups/groups.json` (`pgsql_query_logging_memory-t`, `pgsql_query_logging_autodump-t`)
