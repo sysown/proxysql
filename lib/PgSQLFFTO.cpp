@@ -14,14 +14,13 @@
 #include <cstring>
 #include <regex>
 
-extern PgSQL_Query_Processor* GloPgQPro;
+extern class PgSQL_Query_Processor* GloPgQPro;
 
 // Helper to extract rows affected/sent from PostgreSQL CommandComplete tag
 static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t len, bool& is_select) {
     std::string command_tag(reinterpret_cast<const char*>(payload), len);
     is_select = false;
 
-    // Regex to find "INSERT OID N", "UPDATE N", "DELETE N", "SELECT N", "MOVE N", "FETCH N"
     std::regex re("(INSERT|UPDATE|DELETE|SELECT|MOVE|FETCH)\\s+\\S*\\s*(\\d+)");
     std::smatch matches;
 
@@ -34,14 +33,9 @@ static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t le
             }
             return rows;
         }
-    } else {
-        // Handle other commands like "CREATE TABLE", "DROP TABLE", etc., which return "COMMAND" (0 rows affected)
-        // or "SET" (0 rows affected)
-        // For simplicity, if no number is found, assume 0 affected/sent rows for now.
     }
     return 0;
 }
-
 
 PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session) 
     : m_session(session), m_state(IDLE), m_query_start_time(0) {
@@ -96,20 +90,20 @@ void PgSQLFFTO::on_close() {
 }
 
 void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, size_t len) {
-    if (type == 'Q') { // Simple Query
+    if (type == 'Q') {
         m_current_query = std::string(reinterpret_cast<const char*>(payload), len);
         m_query_start_time = monotonic_time();
         m_state = AWAITING_RESPONSE;
-    } else if (type == 'P') { // Parse
+    } else if (type == 'P') {
         std::string stmt_name = reinterpret_cast<const char*>(payload);
         const char* query = reinterpret_cast<const char*>(payload) + stmt_name.length() + 1;
         m_statements[stmt_name] = query;
-    } else if (type == 'B') { // Bind
+    } else if (type == 'B') {
         std::string portal_name = reinterpret_cast<const char*>(payload);
         const char* stmt_ptr = reinterpret_cast<const char*>(payload) + portal_name.length() + 1;
         std::string stmt_name = stmt_ptr;
         m_portals[portal_name] = stmt_name;
-    } else if (type == 'E') { // Execute
+    } else if (type == 'E') {
         std::string portal_name = reinterpret_cast<const char*>(payload);
         auto pit = m_portals.find(portal_name);
         if (pit != m_portals.end()) {
@@ -120,29 +114,23 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
                 m_state = AWAITING_RESPONSE;
             }
         }
-    } else if (type == 'X') { // Terminate
+    } else if (type == 'X') {
         on_close();
     }
 }
 
 void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, size_t len) {
     if (m_state == IDLE) return;
-
-    if (type == 'C') { // CommandComplete
+    if (type == 'C') {
         unsigned long long duration = monotonic_time() - m_query_start_time;
-        
         bool is_select = false;
         uint64_t rows = extract_pg_rows_affected(payload, len, is_select);
-        
-        if (is_select) {
-            report_query_stats(m_current_query, duration, 0, rows); // rows_sent for SELECT
-        } else {
-            report_query_stats(m_current_query, duration, rows, 0); // affected_rows for INSERT/UPDATE/DELETE
-        }
+        if (is_select) report_query_stats(m_current_query, duration, 0, rows);
+        else report_query_stats(m_current_query, duration, rows, 0);
         m_state = IDLE;
-    } else if (type == 'Z' || type == 'E') { // ReadyForQuery or ErrorResponse
+    } else if (type == 'Z' || type == 'E') {
         unsigned long long duration = monotonic_time() - m_query_start_time;
-        report_query_stats(m_current_query, duration); // No affected/sent rows for Z or E
+        report_query_stats(m_current_query, duration);
         m_state = IDLE;
     }
 }
@@ -167,7 +155,6 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     if (digest_text) {
         qp.digest_text = digest_text;
         qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
-        
         char* ca = (char*)"";
         if (pgsql_thread___query_digests_track_hostname && m_session->client_myds && m_session->client_myds->addr.addr) {
             ca = m_session->client_myds->addr.addr;
@@ -185,7 +172,6 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         myhash.Final(&qp.digest_total, &hash2);
 
         GloPgQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
-        
         free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);

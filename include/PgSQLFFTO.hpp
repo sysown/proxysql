@@ -41,7 +41,7 @@ private:
 
     void process_client_message(char type, const unsigned char* payload, size_t len);
     void process_server_message(char type, const unsigned char* payload, size_t len);
-    void report_query_stats(const std::string& query, unsigned long long duration_us);
+    void report_query_stats(const std::string& query, unsigned long long duration_us, uint64_t affected_rows = 0, uint64_t rows_sent = 0);
 };
 
 #endif // PGSQL_FFTO_HPP
