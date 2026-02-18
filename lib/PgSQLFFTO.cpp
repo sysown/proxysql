@@ -16,21 +16,16 @@
 
 extern class PgSQL_Query_Processor* GloPgQPro;
 
-// Helper to extract rows affected/sent from PostgreSQL CommandComplete tag
 static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t len, bool& is_select) {
     std::string command_tag(reinterpret_cast<const char*>(payload), len);
     is_select = false;
-
     std::regex re("(INSERT|UPDATE|DELETE|SELECT|MOVE|FETCH)\\s+\\S*\\s*(\\d+)");
     std::smatch matches;
-
     if (std::regex_search(command_tag, matches, re)) {
         if (matches.size() == 3) {
             std::string command_type = matches[1].str();
             uint64_t rows = std::stoull(matches[2].str());
-            if (command_type == "SELECT" || command_type == "FETCH" || command_type == "MOVE") {
-                is_select = true;
-            }
+            if (command_type == "SELECT" || command_type == "FETCH" || command_type == "MOVE") is_select = true;
             return rows;
         }
     }
@@ -50,14 +45,10 @@ PgSQLFFTO::~PgSQLFFTO() {
 void PgSQLFFTO::on_client_data(const char* buf, size_t len) {
     if (!buf || len == 0) return;
     m_client_buffer.insert(m_client_buffer.end(), buf, buf + len);
-
     while (m_client_buffer.size() >= 5) {
         char type = m_client_buffer[0];
-        uint32_t msg_len;
-        memcpy(&msg_len, &m_client_buffer[1], 4);
-        msg_len = ntohl(msg_len);
+        uint32_t msg_len; memcpy(&msg_len, &m_client_buffer[1], 4); msg_len = ntohl(msg_len);
         if (m_client_buffer.size() < 1 + msg_len) break;
-
         const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + 5;
         process_client_message(type, payload, msg_len - 4);
         m_client_buffer.erase(m_client_buffer.begin(), m_client_buffer.begin() + 1 + msg_len);
@@ -67,14 +58,10 @@ void PgSQLFFTO::on_client_data(const char* buf, size_t len) {
 void PgSQLFFTO::on_server_data(const char* buf, size_t len) {
     if (!buf || len == 0) return;
     m_server_buffer.insert(m_server_buffer.end(), buf, buf + len);
-
     while (m_server_buffer.size() >= 5) {
         char type = m_server_buffer[0];
-        uint32_t msg_len;
-        memcpy(&msg_len, &m_server_buffer[1], 4);
-        msg_len = ntohl(msg_len);
+        uint32_t msg_len; memcpy(&msg_len, &m_server_buffer[1], 4); msg_len = ntohl(msg_len);
         if (m_server_buffer.size() < 1 + msg_len) break;
-
         const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_server_buffer.data()) + 5;
         process_server_message(type, payload, msg_len - 4);
         m_server_buffer.erase(m_server_buffer.begin(), m_server_buffer.begin() + 1 + msg_len);
@@ -129,14 +116,21 @@ void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, 
         else report_query_stats(m_current_query, duration, rows, 0);
         m_state = IDLE;
     } else if (type == 'Z' || type == 'E') {
-        unsigned long long duration = monotonic_time() - m_query_start_time;
-        report_query_stats(m_current_query, duration);
+        // ReadyForQuery or ErrorResponse. We don't always want to report stats here if 'C' already did it.
+        // But if we didn't get 'C', report what we have.
+        if (m_state == AWAITING_RESPONSE) {
+            unsigned long long duration = monotonic_time() - m_query_start_time;
+            report_query_stats(m_current_query, duration);
+        }
         m_state = IDLE;
     }
 }
 
 void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long duration_us, uint64_t affected_rows, uint64_t rows_sent) {
-    if (query.empty() || !GloPgQPro) return;
+    if (query.empty() || !GloPgQPro || !m_session) return;
+    if (!m_session->client_myds || !m_session->client_myds->myconn || !m_session->client_myds->myconn->userinfo) return;
+    auto* ui = m_session->client_myds->myconn->userinfo;
+    if (!ui->username || !ui->schemaname) return;
 
     options opts;
     opts.lowercase = pgsql_thread___query_digests_lowercase;
@@ -147,32 +141,23 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     opts.groups_grouping_limit = pgsql_thread___query_digests_groups_grouping_limit;
     opts.max_query_length = pgsql_thread___query_digests_max_query_length;
 
-    SQP_par_t qp;
-    memset(&qp, 0, sizeof(qp));
+    SQP_par_t qp; memset(&qp, 0, sizeof(qp));
     char* fst_cmnt = NULL;
     char* digest_text = pgsql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, qp.buf, &opts);
-    
     if (digest_text) {
         qp.digest_text = digest_text;
         qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
         char* ca = (char*)"";
-        if (pgsql_thread___query_digests_track_hostname && m_session->client_myds && m_session->client_myds->addr.addr) {
-            ca = m_session->client_myds->addr.addr;
-        }
-
-        uint64_t hash2;
-        SpookyHash myhash;
-        myhash.Init(19, 3);
-        auto* ui = m_session->client_myds->myconn->userinfo;
+        if (pgsql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
+        uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
         myhash.Update(ui->username, strlen(ui->username));
         myhash.Update(&qp.digest, sizeof(qp.digest));
         myhash.Update(ui->schemaname, strlen(ui->schemaname));
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
         myhash.Update(ca, strlen(ca));
         myhash.Final(&qp.digest_total, &hash2);
-
         GloPgQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
-        free(digest_text);
+        if (digest_text != qp.buf) free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);
 }

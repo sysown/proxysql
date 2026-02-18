@@ -9,10 +9,6 @@
 
 class MySQL_Session;
 
-/**
- * @class MySQLFFTO
- * @brief MySQL-specific implementation of TrafficObserver.
- */
 class MySQLFFTO : public TrafficObserver {
 public:
     explicit MySQLFFTO(MySQL_Session* session);
@@ -26,8 +22,9 @@ private:
     enum State {
         IDLE,
         AWAITING_PREPARE_OK,
-        AWAITING_RESULTSET,
-        READING_RESULTSET
+        AWAITING_RESPONSE,
+        READING_COLUMNS,
+        READING_ROWS
     };
 
     MySQL_Session* m_session;
@@ -38,8 +35,9 @@ private:
     std::string m_current_query;
     std::string m_pending_prepare_query;
     unsigned long long m_query_start_time;
+    uint64_t m_affected_rows;
+    uint64_t m_rows_sent;
 
-    // Binary Protocol Tracking: statement_id -> query_text
     std::unordered_map<uint32_t, std::string> m_statements;
 
     void process_client_packet(const unsigned char* data, size_t len);

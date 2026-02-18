@@ -18,43 +18,34 @@
 
 extern class MySQL_Query_Processor* GloMyQPro;
 
-// Helper to read MySQL length-encoded integers
 static uint64_t read_lenenc_int(const unsigned char* &buf, size_t &len) {
     if (len == 0) return 0;
-
     uint8_t first_byte = buf[0];
-    buf++;
-    len--;
-
-    if (first_byte < 0xFB) {
-        return first_byte;
-    } else if (first_byte == 0xFC) {
+    buf++; len--;
+    if (first_byte < 0xFB) return first_byte;
+    if (first_byte == 0xFC) {
         if (len < 2) return 0;
         uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8);
-        buf += 2;
-        len -= 2;
-        return value;
-    } else if (first_byte == 0xFD) {
+        buf += 2; len -= 2; return value;
+    }
+    if (first_byte == 0xFD) {
         if (len < 3) return 0;
         uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8) | (static_cast<uint64_t>(buf[2]) << 16);
-        buf += 3;
-        len -= 3;
-        return value;
-    } else if (first_byte == 0xFE) {
+        buf += 3; len -= 3; return value;
+    }
+    if (first_byte == 0xFE) {
         if (len < 8) return 0;
         uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8) | (static_cast<uint64_t>(buf[2]) << 16) |
                          (static_cast<uint64_t>(buf[3]) << 24) | (static_cast<uint64_t>(buf[4]) << 32) |
                          (static_cast<uint64_t>(buf[5]) << 40) | (static_cast<uint64_t>(buf[6]) << 48) |
                          (static_cast<uint64_t>(buf[7]) << 56);
-        buf += 8;
-        len -= 8;
-        return value;
+        buf += 8; len -= 8; return value;
     }
     return 0;
 }
 
 MySQLFFTO::MySQLFFTO(MySQL_Session* session) 
-    : m_session(session), m_state(IDLE), m_query_start_time(0) {
+    : m_session(session), m_state(IDLE), m_query_start_time(0), m_affected_rows(0), m_rows_sent(0) {
     m_client_buffer.reserve(1024);
     m_server_buffer.reserve(4096);
 }
@@ -66,12 +57,10 @@ MySQLFFTO::~MySQLFFTO() {
 void MySQLFFTO::on_client_data(const char* buf, size_t len) {
     if (!buf || len == 0) return;
     m_client_buffer.insert(m_client_buffer.end(), buf, buf + len);
-
     while (m_client_buffer.size() >= sizeof(mysql_hdr)) {
         const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_client_buffer.data());
         uint32_t pkt_len = hdr->pkt_length;
         if (m_client_buffer.size() < sizeof(mysql_hdr) + pkt_len) break;
-
         const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + sizeof(mysql_hdr);
         process_client_packet(payload, pkt_len);
         m_client_buffer.erase(m_client_buffer.begin(), m_client_buffer.begin() + sizeof(mysql_hdr) + pkt_len);
@@ -81,12 +70,10 @@ void MySQLFFTO::on_client_data(const char* buf, size_t len) {
 void MySQLFFTO::on_server_data(const char* buf, size_t len) {
     if (!buf || len == 0) return;
     m_server_buffer.insert(m_server_buffer.end(), buf, buf + len);
-
     while (m_server_buffer.size() >= sizeof(mysql_hdr)) {
         const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_server_buffer.data());
         uint32_t pkt_len = hdr->pkt_length;
         if (m_server_buffer.size() < sizeof(mysql_hdr) + pkt_len) break;
-
         const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_server_buffer.data()) + sizeof(mysql_hdr);
         process_server_packet(payload, pkt_len);
         m_server_buffer.erase(m_server_buffer.begin(), m_server_buffer.begin() + sizeof(mysql_hdr) + pkt_len);
@@ -96,7 +83,7 @@ void MySQLFFTO::on_server_data(const char* buf, size_t len) {
 void MySQLFFTO::on_close() {
     if (m_state != IDLE && m_query_start_time != 0) {
         unsigned long long duration = monotonic_time() - m_query_start_time;
-        report_query_stats(m_current_query, duration);
+        report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
         m_state = IDLE;
     }
 }
@@ -104,23 +91,23 @@ void MySQLFFTO::on_close() {
 void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
     if (len == 0) return;
     uint8_t command = data[0];
-
     if (command == _MYSQL_COM_QUERY) {
         m_current_query = std::string(reinterpret_cast<const char*>(data + 1), len - 1);
         m_query_start_time = monotonic_time();
-        m_state = AWAITING_RESULTSET;
+        m_state = AWAITING_RESPONSE;
+        m_affected_rows = 0; m_rows_sent = 0;
     } else if (command == _MYSQL_COM_STMT_PREPARE) {
         m_pending_prepare_query = std::string(reinterpret_cast<const char*>(data + 1), len - 1);
         m_state = AWAITING_PREPARE_OK;
     } else if (command == _MYSQL_COM_STMT_EXECUTE) {
         if (len >= 5) {
-            uint32_t stmt_id;
-            memcpy(&stmt_id, data + 1, 4);
+            uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
             auto it = m_statements.find(stmt_id);
             if (it != m_statements.end()) {
                 m_current_query = it->second;
                 m_query_start_time = monotonic_time();
-                m_state = AWAITING_RESULTSET;
+                m_state = AWAITING_RESPONSE;
+                m_affected_rows = 0; m_rows_sent = 0;
             }
         }
     } else if (command == _MYSQL_COM_QUIT) {
@@ -133,34 +120,57 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
     uint8_t first_byte = data[0];
 
     if (m_state == AWAITING_PREPARE_OK) {
-        if (first_byte == 0x00 && len >= 5) {
-            uint32_t stmt_id;
-            memcpy(&stmt_id, data + 1, 4);
+        if (first_byte == 0x00 && len >= 9) {
+            uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
             m_statements[stmt_id] = m_pending_prepare_query;
             m_state = IDLE;
         } else if (first_byte == 0xFF) {
             m_state = IDLE;
         }
-    } else if (m_state == AWAITING_RESULTSET || m_state == READING_RESULTSET) {
-        if (first_byte == 0x00) {
-            const unsigned char* pos = data + 1;
-            size_t remaining_len = len - 1;
-            uint64_t affected_rows = read_lenenc_int(pos, remaining_len);
+    } else if (m_state == AWAITING_RESPONSE) {
+        if (first_byte == 0x00) { // OK
+            const unsigned char* pos = data + 1; size_t rem = len - 1;
+            m_affected_rows = read_lenenc_int(pos, rem);
             unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration, affected_rows, 0);
+            report_query_stats(m_current_query, duration, m_affected_rows, 0);
             m_state = IDLE;
-        } else if (first_byte == 0xFF || (first_byte == 0xFE && len < 9)) {
+        } else if (first_byte == 0xFF) { // ERR
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration);
             m_state = IDLE;
+        } else if (first_byte == 0xFE && len < 9) { // EOF
+            m_state = IDLE;
+        } else { // Result Set started (first_byte is column count)
+            m_state = READING_COLUMNS;
+        }
+    } else if (m_state == READING_COLUMNS) {
+        if (first_byte == 0xFE && len < 9) { // EOF after columns
+            m_state = READING_ROWS;
+        } else if (first_byte == 0x00 && len >= 7 && (m_session->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF)) {
+            m_state = READING_ROWS;
+        }
+    } else if (m_state == READING_ROWS) {
+        if (first_byte == 0xFE && len < 9) { // EOF after rows
+            unsigned long long duration = monotonic_time() - m_query_start_time;
+            report_query_stats(m_current_query, duration, 0, m_rows_sent);
+            m_state = IDLE;
+        } else if (first_byte == 0x00 && len >= 7 && (m_session->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF)) {
+            unsigned long long duration = monotonic_time() - m_query_start_time;
+            report_query_stats(m_current_query, duration, 0, m_rows_sent);
+            m_state = IDLE;
+        } else if (first_byte == 0xFF) { // ERR
+            m_state = IDLE;
         } else {
-            m_state = READING_RESULTSET;
+            m_rows_sent++;
         }
     }
 }
 
 void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long duration_us, uint64_t affected_rows, uint64_t rows_sent) {
-    if (query.empty() || !GloMyQPro) return;
+    if (query.empty() || !GloMyQPro || !m_session) return;
+    if (!m_session->client_myds || !m_session->client_myds->myconn || !m_session->client_myds->myconn->userinfo) return;
+    auto* ui = m_session->client_myds->myconn->userinfo;
+    if (!ui->username || !ui->schemaname) return;
 
     options opts;
     opts.lowercase = mysql_thread___query_digests_lowercase;
@@ -171,32 +181,23 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     opts.groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
     opts.max_query_length = mysql_thread___query_digests_max_query_length;
 
-    SQP_par_t qp;
-    memset(&qp, 0, sizeof(qp));
+    SQP_par_t qp; memset(&qp, 0, sizeof(qp));
     char* fst_cmnt = NULL;
     char* digest_text = mysql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, qp.buf, &opts);
-    
     if (digest_text) {
         qp.digest_text = digest_text;
         qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
         char* ca = (char*)"";
-        if (mysql_thread___query_digests_track_hostname && m_session->client_myds && m_session->client_myds->addr.addr) {
-            ca = m_session->client_myds->addr.addr;
-        }
-
-        uint64_t hash2;
-        SpookyHash myhash;
-        myhash.Init(19, 3);
-        auto* ui = m_session->client_myds->myconn->userinfo;
+        if (mysql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
+        uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
         myhash.Update(ui->username, strlen(ui->username));
         myhash.Update(&qp.digest, sizeof(qp.digest));
         myhash.Update(ui->schemaname, strlen(ui->schemaname));
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
         myhash.Update(ca, strlen(ca));
         myhash.Final(&qp.digest_total, &hash2);
-
         GloMyQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
-        free(digest_text);
+        if (digest_text != qp.buf) free(digest_text);
     }
     if (fst_cmnt) free(fst_cmnt);
 }
