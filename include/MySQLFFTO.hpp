@@ -9,39 +9,93 @@
 
 class MySQL_Session;
 
+/**
+ * @class MySQLFFTO
+ * @brief Observer class for MySQL traffic when Fast-Forward mode is active.
+ *
+ * This class implements a state machine to track MySQL protocol interactions (text and binary)
+ * to extract query metrics (affected_rows, rows_sent) and record them in ProxySQL's query digests.
+ * It is used specifically in Fast-Forward mode where ProxySQL would otherwise bypass statistics gathering.
+ */
 class MySQLFFTO : public TrafficObserver {
 public:
+    /**
+     * @brief Constructor for MySQLFFTO.
+     * @param session The associated MySQL session.
+     */
     explicit MySQLFFTO(MySQL_Session* session);
+
+    /**
+     * @brief Destructor for MySQLFFTO. Ensures cleanup and reports any pending query stats.
+     */
     virtual ~MySQLFFTO();
 
+    /**
+     * @brief Entry point for data received from the client.
+     * @param buf Pointer to the raw data buffer.
+     * @param len Length of the data in bytes.
+     */
     void on_client_data(const char* buf, size_t len) override;
+
+    /**
+     * @brief Entry point for data received from the MySQL server.
+     * @param buf Pointer to the raw data buffer.
+     * @param len Length of the data in bytes.
+     */
     void on_server_data(const char* buf, size_t len) override;
+
+    /**
+     * @brief Called when the session is closing. Ensures the final query's metrics are reported.
+     */
     void on_close() override;
 
 private:
+    /**
+     * @enum State
+     * @brief Represents the internal state of the MySQL protocol parser.
+     */
     enum State {
-        IDLE,
-        AWAITING_PREPARE_OK,
-        AWAITING_RESPONSE,
-        READING_COLUMNS,
-        READING_ROWS
+        IDLE,                 ///< No query is currently active.
+        AWAITING_PREPARE_OK,  ///< A COM_STMT_PREPARE has been sent; waiting for the server's response.
+        AWAITING_RESPONSE,    ///< A query has been sent; waiting for the first server response packet.
+        READING_COLUMNS,      ///< Processing column metadata packets for a result set.
+        READING_ROWS          ///< Processing actual row data packets for a result set.
     };
 
-    MySQL_Session* m_session;
-    State m_state;
-    std::vector<char> m_client_buffer;
-    std::vector<char> m_server_buffer;
+    MySQL_Session* m_session; ///< Pointer to the session being observed.
+    State m_state;            ///< Current state of the protocol parser.
+    std::vector<char> m_client_buffer; ///< Temporary buffer for client-side packet reassembly.
+    std::vector<char> m_server_buffer; ///< Temporary buffer for server-side packet reassembly.
     
-    std::string m_current_query;
-    std::string m_pending_prepare_query;
-    unsigned long long m_query_start_time;
-    uint64_t m_affected_rows;
-    uint64_t m_rows_sent;
+    std::string m_current_query;          ///< The query currently being tracked.
+    std::string m_pending_prepare_query;  ///< The SQL text of a pending prepare statement.
+    unsigned long long m_query_start_time; ///< Start timestamp of the current query in microseconds.
+    uint64_t m_affected_rows;             ///< Number of rows affected by the current DML query.
+    uint64_t m_rows_sent;                 ///< Number of rows returned by the current SELECT query.
 
-    std::unordered_map<uint32_t, std::string> m_statements;
+    std::unordered_map<uint32_t, std::string> m_statements; ///< Map of stmt_id to original SQL query for prepared statements.
 
+    /**
+     * @brief Processes individual MySQL packets from the client.
+     * @param data Pointer to the packet payload.
+     * @param len Length of the packet payload.
+     */
     void process_client_packet(const unsigned char* data, size_t len);
+
+    /**
+     * @brief Processes individual MySQL packets from the server.
+     * @param data Pointer to the packet payload.
+     * @param len Length of the packet payload.
+     */
     void process_server_packet(const unsigned char* data, size_t len);
+
+    /**
+     * @brief Computes and records query metrics into the ProxySQL query digests.
+     * @param query The SQL query text.
+     * @param duration_us Query execution duration in microseconds.
+     * @param affected_rows Number of rows affected.
+     * @param rows_sent Number of rows returned.
+     */
     void report_query_stats(const std::string& query, unsigned long long duration_us, uint64_t affected_rows = 0, uint64_t rows_sent = 0);
 };
 

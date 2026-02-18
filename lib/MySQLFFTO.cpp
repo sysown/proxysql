@@ -18,6 +18,16 @@
 
 extern class MySQL_Query_Processor* GloMyQPro;
 
+/**
+ * @brief Helper function to read a length-encoded integer from a MySQL packet buffer.
+ * 
+ * Length-encoded integers are a variable-length data format used in the MySQL protocol
+ * to represent integer values efficiently.
+ * 
+ * @param buf Reference to a pointer to the current position in the buffer. Updated on return.
+ * @param len Reference to the remaining length of the buffer. Updated on return.
+ * @return The decoded 64-bit integer value.
+ */
 static uint64_t read_lenenc_int(const unsigned char* &buf, size_t &len) {
     if (len == 0) return 0;
     uint8_t first_byte = buf[0];

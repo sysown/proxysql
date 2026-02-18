@@ -16,6 +16,18 @@
 
 extern class PgSQL_Query_Processor* GloPgQPro;
 
+/**
+ * @brief Parses the PostgreSQL CommandComplete ('C') message payload to extract row counts.
+ * 
+ * PostgreSQL encodes row counts into the message tag string (e.g., "INSERT 0 10", "SELECT 50").
+ * This function uses regular expressions to extract these values and determine if the message
+ * corresponds to a result-generating command (SELECT, FETCH, MOVE) or a DML command.
+ * 
+ * @param payload Pointer to the CommandComplete message payload (the tag string).
+ * @param len Length of the payload.
+ * @param is_select [OUT] Boolean flag set to true if the command is a result-set operation.
+ * @return The number of rows affected or sent.
+ */
 static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t len, bool& is_select) {
     std::string command_tag(reinterpret_cast<const char*>(payload), len);
     is_select = false;
