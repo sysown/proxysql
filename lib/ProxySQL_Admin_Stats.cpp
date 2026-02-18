@@ -787,13 +787,16 @@ void ProxySQL_Admin::stats___pgsql_global() {
 
 	if (GloPgSQL_Logger != nullptr) {
 		const string prefix = "PgSQL_Logger_";
+		const string q_row_insert { "INSERT INTO stats_pgsql_global VALUES (?1, ?2)" };
+		int rc = 0;
+		stmt_unique_ptr u_row_stmt { nullptr };
+		std::tie(rc, u_row_stmt) = statsdb->prepare_v2(q_row_insert.c_str());
+		ASSERT_SQLITE_OK(rc, statsdb);
+		sqlite3_stmt* const row_stmt { u_row_stmt.get() };
 		std::unordered_map<std::string, unsigned long long> metrics = GloPgSQL_Logger->getAllMetrics();
 		for (std::unordered_map<std::string, unsigned long long>::iterator it = metrics.begin(); it != metrics.end(); it++) {
 			string var_name = prefix + it->first;
-			query = (char*)malloc(strlen(a) + var_name.length() + 32 + 16);
-			snprintf(query, strlen(a) + var_name.length() + 32 + 16, a, var_name.c_str(), std::to_string(it->second).c_str());
-			statsdb->execute(query);
-			free(query);
+			sqlite3_global_stats_row_step(statsdb, row_stmt, var_name.c_str(), it->second);
 		}
 	}
 
