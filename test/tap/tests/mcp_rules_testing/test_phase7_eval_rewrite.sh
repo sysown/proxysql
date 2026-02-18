@@ -80,7 +80,7 @@ test_is_rewritten() {
 
     local payload
     payload=$(cat <<EOF
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${original_sql}"}},"id":1}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"${tool_name}","arguments":{"sql":"${original_sql}","target_id":"${MCP_TARGET_ID}"}},"id":1}
 EOF
 )
 

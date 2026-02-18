@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/resource.h>
+#include <unistd.h>
 #include <assert.h>
 
 #include "../deps/json/json.hpp"
@@ -391,5 +392,25 @@ int calculate_percentile_from_histogram(
  * @return int Error code (0 = success, -1 = setsockopt failed, -2 = invalid parameters)
  */
 int check_port_availability(int port_num, bool* port_free);
+
+// Forward declaration for GloMTH wait helper
+class MySQL_Threads_Handler;
+extern MySQL_Threads_Handler *GloMTH;
+
+/**
+ * @brief Wait for GloMTH to be initialized with a bounded timeout
+ *
+ * Waits up to 10 seconds for GloMTH initialization.
+ * Returns true if GloMTH is initialized, false if timeout.
+ *
+ * @return bool true if GloMTH is ready, false otherwise
+ */
+static inline bool wait_for_glo_mth() {
+	for (int i = 0; i < 200; ++i) { // ~10s total
+		if (GloMTH) return true;
+		usleep(50000);
+	}
+	return false;
+}
 
 #endif

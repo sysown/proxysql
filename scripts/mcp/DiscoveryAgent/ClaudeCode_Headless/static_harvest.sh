@@ -6,12 +6,12 @@
 # No Claude Code required.
 #
 # Usage:
-#   ./static_harvest.sh [--schema SCHEMA] [--notes NOTES] [--endpoint URL]
+#   ./static_harvest.sh --target-id TARGET_ID [--schema SCHEMA] [--notes NOTES] [--endpoint URL]
 #
 # Examples:
-#   ./static_harvest.sh                                    # Harvest all schemas
-#   ./static_harvest.sh --schema sales                     # Harvest specific schema
-#   ./static_harvest.sh --schema production --notes "Prod DB discovery"
+#   ./static_harvest.sh --target-id tap_mysql_default
+#   ./static_harvest.sh --target-id tap_mysql_default --schema sales
+#   ./static_harvest.sh --target-id tap_pgsql_default --schema public --notes "Prod DB discovery"
 #   ./static_harvest.sh --endpoint https://192.168.1.100:6071/mcp/query
 
 set -e
@@ -20,12 +20,17 @@ set -e
 ENDPOINT="${PROXYSQL_MCP_ENDPOINT:-https://127.0.0.1:6071/mcp/query}"
 SCHEMA_FILTER=""
 NOTES=""
+TARGET_ID="${MCP_TARGET_ID:-}"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --schema)
             SCHEMA_FILTER="$2"
+            shift 2
+            ;;
+        --target-id)
+            TARGET_ID="$2"
             shift 2
             ;;
         --notes)
@@ -37,9 +42,10 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            echo "Usage: $0 [--schema SCHEMA] [--notes NOTES] [--endpoint URL]"
+            echo "Usage: $0 --target-id TARGET_ID [--schema SCHEMA] [--notes NOTES] [--endpoint URL]"
             echo ""
             echo "Options:"
+            echo "  --target-id ID      Logical MCP target_id (required)"
             echo "  --schema SCHEMA    Restrict harvest to one MySQL schema (optional)"
             echo "  --notes NOTES      Optional notes for this discovery run"
             echo "  --endpoint URL     ProxySQL MCP endpoint (default: PROXYSQL_MCP_ENDPOINT env var or https://127.0.0.1:6071/mcp/query)"
@@ -49,9 +55,9 @@ while [[ $# -gt 0 ]]; do
             echo "  PROXYSQL_MCP_ENDPOINT  Default MCP endpoint URL"
             echo ""
             echo "Examples:"
-            echo "  $0                                      # Harvest all schemas"
-            echo "  $0 --schema sales                      # Harvest specific schema"
-            echo "  $0 --schema production --notes 'Prod DB discovery'"
+            echo "  $0 --target-id tap_mysql_default"
+            echo "  $0 --target-id tap_mysql_default --schema sales"
+            echo "  $0 --target-id tap_pgsql_default --schema public --notes 'Prod DB discovery'"
             exit 0
             ;;
         *)
@@ -62,8 +68,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -z "$TARGET_ID" ]]; then
+    echo "Error: --target-id is required"
+    echo "Use --help for usage information"
+    exit 1
+fi
+
 # Build JSON arguments
 JSON_ARGS="{}"
+JSON_ARGS=$(echo "$JSON_ARGS" | jq --arg target_id "$TARGET_ID" '. + {target_id: $target_id}')
 
 if [[ -n "$SCHEMA_FILTER" ]]; then
     JSON_ARGS=$(echo "$JSON_ARGS" | jq --arg schema "$SCHEMA_FILTER" '. + {schema_filter: $schema}')
@@ -89,6 +102,7 @@ JSON_REQUEST=$(jq -n \
 # Display what we're doing
 echo "=== Phase 1: Static Harvest ==="
 echo "Endpoint: $ENDPOINT"
+echo "Target ID: $TARGET_ID"
 if [[ -n "$SCHEMA_FILTER" ]]; then
     echo "Schema: $SCHEMA_FILTER"
 else

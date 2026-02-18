@@ -121,6 +121,7 @@ The following variables control authentication (Bearer tokens) for specific MCP 
 
 The Query Tool Handler provides LLM-based tools for MySQL database exploration and two-phase discovery, including:
 - **inventory** - List databases and tables
+- **targets** - Discover logical routing targets (`list_targets`)
 - **structure** - Get table schema
 - **profiling** - Analyze query performance
 - **sampling** - Sample table data
@@ -131,10 +132,29 @@ The Query Tool Handler provides LLM-based tools for MySQL database exploration a
 - **agent** - Agent coordination tools
 - **llm** - LLM interaction tools
 
+### Dynamic Target Discovery and Routing
+
+Query tools use a logical `target_id` routing model with server-managed credentials:
+
+- Use `list_targets` to retrieve discoverable backend targets.
+- Active targets come from `runtime_mcp_target_profiles` joined with `runtime_mcp_auth_profiles`.
+- The MCP server maps `target_id -> auth_profile_id` and applies backend credentials internally.
+- MCP clients must never send backend credentials in tool arguments.
+- Clients should pass `target_id` to query tools instead of host/protocol details.
+
+### Backend Credential Model
+
+Backend credentials are defined in MCP tables, not in client requests:
+
+- `mcp_auth_profiles` / `runtime_mcp_auth_profiles`
+- `mcp_target_profiles` / `runtime_mcp_target_profiles`
+
+The in-memory target/auth map is loaded by `MCP_Threads_Handler` from runtime tables and used by the query executor connection pools.
+
 #### `mcp-mysql_hosts`
 - **Type:** String (comma-separated)
 - **Default:** `"127.0.0.1"`
-- **Description:** Comma-separated list of MySQL host addresses
+- **Description:** Legacy POC variable used by non-routed components (for example static harvester defaults). Routed query execution uses MCP profile tables.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -145,7 +165,7 @@ The Query Tool Handler provides LLM-based tools for MySQL database exploration a
 #### `mcp-mysql_ports`
 - **Type:** String (comma-separated)
 - **Default:** `"3306"`
-- **Description:** Comma-separated list of MySQL ports (corresponds to `mcp-mysql_hosts`)
+- **Description:** Legacy POC variable used by non-routed components (for example static harvester defaults). Routed query execution uses MCP profile tables.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -156,7 +176,7 @@ The Query Tool Handler provides LLM-based tools for MySQL database exploration a
 #### `mcp-mysql_user`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** MySQL username for tool handler connections
+- **Description:** Legacy POC variable. Routed query execution uses credentials from `mcp_auth_profiles`.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -167,7 +187,7 @@ The Query Tool Handler provides LLM-based tools for MySQL database exploration a
 #### `mcp-mysql_password`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** MySQL password for tool handler connections
+- **Description:** Legacy POC variable. Routed query execution uses credentials from `mcp_auth_profiles`.
 - **Runtime:** Yes
 - **Note:** Password is stored in plaintext in `global_variables`. Use restrictive MySQL user permissions.
 - **Example:**
@@ -179,7 +199,7 @@ The Query Tool Handler provides LLM-based tools for MySQL database exploration a
 #### `mcp-mysql_schema`
 - **Type:** String
 - **Default:** `""` (empty)
-- **Description:** Default database/schema to use for tool operations
+- **Description:** Legacy POC variable. Routed query execution uses `default_schema` from `mcp_auth_profiles`.
 - **Runtime:** Yes
 - **Example:**
   ```sql
@@ -220,6 +240,27 @@ LOAD MCP VARIABLES TO RUNTIME;
 
 -- Save to disk
 SAVE MCP VARIABLES TO DISK;
+```
+
+### Profile Commands
+
+Unified command family for MCP backend profiles (auth + target together):
+
+```sql
+-- Disk -> Memory
+LOAD MCP PROFILES FROM DISK;
+LOAD MCP PROFILES TO MEMORY;
+
+-- Memory -> Runtime
+LOAD MCP PROFILES TO RUNTIME;
+LOAD MCP PROFILES FROM MEMORY;
+
+-- Runtime -> Memory
+SAVE MCP PROFILES TO MEMORY;
+SAVE MCP PROFILES FROM RUNTIME;
+
+-- Memory -> Disk
+SAVE MCP PROFILES TO DISK;
 ```
 
 ### Checksum Commands

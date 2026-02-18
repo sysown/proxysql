@@ -80,7 +80,7 @@ test_query_not_executed() {
     initial_count=$(exec_mysql_silent "SELECT COUNT(*) FROM ${MYSQL_DATABASE}.status_table;")
 
     local payload
-    payload="{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"${tool_name}\",\"arguments\":{\"sql\":\"${sql}\"}},\"id\":1}"
+    payload="{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"${tool_name}\",\"arguments\":{\"sql\":\"${sql}\",\"target_id\":\"${MCP_TARGET_ID}\"}},\"id\":1}"
 
     # Execute the MCP request
     mcp_request "query" "${payload}" >/dev/null 2>&1
@@ -105,7 +105,7 @@ test_returns_okmsg() {
     local expected_okmsg="$3"
 
     local payload
-    payload="{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"${tool_name}\",\"arguments\":{\"sql\":\"${sql}\"}},\"id\":1}"
+    payload="{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"${tool_name}\",\"arguments\":{\"sql\":\"${sql}\",\"target_id\":\"${MCP_TARGET_ID}\"}},\"id\":1}"
 
     local response
     response=$(mcp_request "query" "${payload}")
@@ -212,7 +212,7 @@ main() {
     log_test "T9.1: Verify OK message response is successful (not error)"
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
-    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"PING"}},"id":1}'
+    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"PING","target_id":"'"${MCP_TARGET_ID}"'"}},"id":1}'
     response=$(mcp_request "query" "$payload")
     log_verbose "Response: ${response}"
 
@@ -239,7 +239,7 @@ main() {
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
     # Execute a PING query (should be intercepted by OK_msg rule)
-    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"PING"}},"id":1}'
+    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"PING","target_id":"'"${MCP_TARGET_ID}"'"}},"id":1}'
     response=$(mcp_request "query" "$payload")
     log_verbose "Response: ${response}"
 
@@ -268,7 +268,7 @@ main() {
     log_test "T9.2: Verify health_check queries are not tracked"
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
-    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM health_check;"}},"id":1}'
+    payload='{"jsonrpc":"2.0","method":"tools/call","params":{"name":"run_sql_readonly","arguments":{"sql":"SELECT * FROM health_check;","target_id":"'"${MCP_TARGET_ID}"'"}},"id":1}'
     response=$(mcp_request "query" "$payload")
     log_verbose "Response: ${response}"
 

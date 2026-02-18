@@ -239,6 +239,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	connect_tries = 0;
 	poll_fds_idx = -1;
 	//resultset_length = 0;
+	fd = -1;
 
 	revents = 0;
 
@@ -255,6 +256,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	encrypted = false;
 	switching_auth_stage = 0;
 	switching_auth_type = 0;
+	tmp_charset = 0;
 	x509_subject_alt_name = NULL;
 	ssl = NULL;
 	rbio_ssl = NULL;

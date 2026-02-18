@@ -71,6 +71,23 @@ void add_mcp_load_save_commands(std::vector<std::string>& queries) {
 }
 
 /**
+ * @brief Helper function to add LOAD/SAVE command variants for MCP PROFILES
+ */
+void add_mcp_profile_commands(std::vector<std::string>& queries) {
+	queries.push_back("LOAD MCP PROFILES TO MEMORY");
+	queries.push_back("LOAD MCP PROFILES FROM DISK");
+	queries.push_back("LOAD MCP PROFILES FROM MEMORY");
+	queries.push_back("LOAD MCP PROFILES FROM MEM");
+	queries.push_back("LOAD MCP PROFILES TO RUNTIME");
+	queries.push_back("LOAD MCP PROFILES TO RUN");
+	queries.push_back("SAVE MCP PROFILES TO MEMORY");
+	queries.push_back("SAVE MCP PROFILES TO MEM");
+	queries.push_back("SAVE MCP PROFILES FROM RUNTIME");
+	queries.push_back("SAVE MCP PROFILES FROM RUN");
+	queries.push_back("SAVE MCP PROFILES TO DISK");
+}
+
+/**
  * @brief Get the value of an MCP variable as a string
  *
  * @param admin MySQL connection to admin interface
@@ -150,11 +167,6 @@ int test_variable_access(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-port=6071");
 	MYSQL_QUERY(admin, "SET mcp-config_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
-	MYSQL_QUERY(admin, "SET mcp-mysql_hosts='127.0.0.1'");
-	MYSQL_QUERY(admin, "SET mcp-mysql_ports='3306'");
-	MYSQL_QUERY(admin, "SET mcp-mysql_user=''");
-	MYSQL_QUERY(admin, "SET mcp-mysql_password=''");
-	MYSQL_QUERY(admin, "SET mcp-mysql_schema=''");
 	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	ok(1, "Restored default values for MCP variables");
 
@@ -235,11 +247,6 @@ int test_variable_persistence(MYSQL* admin) {
 	MYSQL_QUERY(admin, "SET mcp-admin_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-cache_endpoint_auth=''");
 	MYSQL_QUERY(admin, "SET mcp-timeout_ms=30000");
-	MYSQL_QUERY(admin, "SET mcp-mysql_hosts='127.0.0.1'");
-	MYSQL_QUERY(admin, "SET mcp-mysql_ports='3306'");
-	MYSQL_QUERY(admin, "SET mcp-mysql_user=''");
-	MYSQL_QUERY(admin, "SET mcp-mysql_password=''");
-	MYSQL_QUERY(admin, "SET mcp-mysql_schema=''");
 	MYSQL_QUERY(admin, "SET mcp-catalog_path='mcp_catalog.db'");
 	MYSQL_QUERY(admin, "SAVE MCP VARIABLES TO DISK");
 	ok(1, "Restored default values and saved to disk");
@@ -356,9 +363,10 @@ int main() {
 	// Build the list of LOAD/SAVE commands to test
 	std::vector<std::string> queries;
 	add_mcp_load_save_commands(queries);
+	add_mcp_profile_commands(queries);
 
 	// Each command test = 2 tests (execution + optional result check)
-	// LOAD/SAVE commands: 14 commands
+	// LOAD/SAVE commands: variables + profiles
 	// Variable access tests: 8 tests
 	// Persistence tests: 8 tests
 	// CHECKSUM tests: 8 tests (4 commands × 2)

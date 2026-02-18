@@ -244,10 +244,12 @@
   "test_ssl_fast_forward-3_libmysql-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "test_ignore_min_gtid-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-query_digests_stages_test-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
+  "pgsql_admin_metacmds-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-monitor_ssl_connections_test-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-parameterized_kill_queries_test-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-reg_test_5284_frontend_ssl_enforcement-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-reg_test_5273_bind_parameter_format-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
+  "pgsql-reg_test_5352_prepared_statement_refcount_race-t": [ "default-g4", "mysql-auto_increment_delay_multiplex=0-g4", "mysql-multiplexing=false-g4", "mysql-query_digests=0-g4", "mysql-query_digests_keep_comment=1-g4" ],
   "ai_error_handling_edge_cases-t": [ "ai-g1" ],
   "ai_llm_retry_scenarios-t": [ "ai-g1" ],
   "ai_validation-t": [ "ai-g1" ],
@@ -258,6 +260,7 @@
   "genai_embedding_rerank-t": [ "ai-g1" ],
   "genai_module-t": [ "ai-g1" ],
   "mcp_module-t": [ "ai-g1" ],
+  "mcp_query_run_sql_readonly-t": [ "ai-g1" ],
   "nl2sql_integration-t": [ "ai-g1" ],
   "nl2sql_internal-t": [ "ai-g1" ],
   "nl2sql_model_selection-t": [ "ai-g1" ],
@@ -267,6 +270,10 @@
   "test_mcp_rag_metrics-t": [ "ai-g1" ],
   "vector_db_performance-t": [ "ai-g1" ],
   "vector_features-t": [ "ai-g1" ],
+  "test_mcp_claude_headless_flow-t": [ "ai-g1" ],
+  "test_mcp_llm_discovery_phaseb-t": [ "ai-g1" ],
+  "vector_features-t": [ "ai-g1" ],
+  "test_mcp_static_harvest-t": [ "ai-g1" ],
   "unit-strip_schema_from_query-t": [ "unit-tests-g1" ]
 
 }

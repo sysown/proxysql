@@ -22,6 +22,7 @@ MYSQL_DATABASE="${TEST_DB_NAME:-${MYSQL_DATABASE:-testdb}}"
 # MCP server configuration
 MCP_HOST="${TAP_ADMINHOST:-${MCP_HOST:-127.0.0.1}}"
 MCP_PORT="${TAP_MCPPORT:-${MCP_PORT:-6071}}"
+MCP_TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
 
 # Colors
 RED='\033[0;31m'

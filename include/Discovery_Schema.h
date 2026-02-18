@@ -26,6 +26,7 @@ struct MCP_Query_Rule {
 	int rule_id;
 	bool active;
 	char *username;
+	char *target_id;
 	char *schemaname;
 	char *tool_name;
 	char *match_pattern;
@@ -43,7 +44,7 @@ struct MCP_Query_Rule {
 	uint64_t hits;            // in-memory only, not persisted to table
 	void* regex_engine;      // compiled regex (RE2)
 
-	MCP_Query_Rule() : rule_id(0), active(false), username(NULL), schemaname(NULL),
+	MCP_Query_Rule() : rule_id(0), active(false), username(NULL), target_id(NULL), schemaname(NULL),
 	                   tool_name(NULL), match_pattern(NULL), negate_match_pattern(false),
 	                   re_modifiers(1), flagIN(0), flagOUT(0), replace_pattern(NULL),
 	                   timeout_ms(0), error_msg(NULL), ok_msg(NULL), log(false), apply(true),
@@ -205,27 +206,32 @@ public:
 	void close();
 
 	/**
-	 * @brief Resolve schema name or run_id to a run_id
+	 * @brief Resolve schema name or run_id to a run_id within a target scope
 	 *
 	 * If input is a numeric run_id, returns it as-is.
 	 * If input is a schema name, finds the latest run_id for that schema.
 	 *
+	 * @param target_id Required target scope identifier
 	 * @param run_id_or_schema Either a numeric run_id or a schema name
 	 * @return run_id on success, -1 if schema not found
 	 */
-	int resolve_run_id(const std::string& run_id_or_schema);
+	int resolve_run_id(const std::string& target_id, const std::string& run_id_or_schema);
 
 	/**
 	 * @brief Create a new discovery run
 	 *
+	 * @param target_id Logical target identifier that produced this run
+	 * @param protocol Backend protocol for this run (mysql|pgsql)
 	 * @param source_dsn Data source identifier (e.g., "mysql://host:port/")
-	 * @param mysql_version MySQL server version
+	 * @param server_version Backend server version string
 	 * @param notes Optional notes for this run
 	 * @return run_id on success, -1 on error
 	 */
 	int create_run(
+		const std::string& target_id,
+		const std::string& protocol,
 		const std::string& source_dsn,
-		const std::string& mysql_version,
+		const std::string& server_version,
 		const std::string& notes = ""
 	);
 
@@ -849,6 +855,8 @@ public:
 	 */
 	MCP_Query_Processor_Output* evaluate_mcp_query_rules(
 		const std::string& tool_name,
+		const std::string& username,
+		const std::string& target_id,
 		const std::string& schemaname,
 		const nlohmann::json& arguments,
 		const std::string& original_query

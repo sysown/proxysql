@@ -96,7 +96,7 @@ _OBJ_CXX += GenAI_Thread.oo \
 	Admin_Tool_Handler.oo Cache_Tool_Handler.oo Stats_Tool_Handler.oo \
 	AI_Features_Manager.oo LLM_Bridge.oo LLM_Clients.oo Anomaly_Detector.oo AI_Vector_Storage.oo AI_Tool_Handler.oo \
 	RAG_Tool_Handler.oo \
-	Discovery_Schema.oo Static_Harvester.oo
+	Discovery_Schema.oo Static_Harvester.oo PgSQL_Static_Harvester.oo
 endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))

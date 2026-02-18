@@ -918,8 +918,8 @@ void ProxySQL_Main_init_main_modules() {
 	GloPgAuth=NULL;
 	GloPTH=NULL;
 #ifdef PROXYSQLGENAI
-	GloMCPH=NULL;
-	GloGATH=NULL;
+	GloMCPH=new MCP_Threads_Handler();
+	GloGATH=new GenAI_Threads_Handler();
 	GloAI=NULL;
 #endif /* PROXYSQLGENAI */
 #ifdef PROXYSQLCLICKHOUSE
@@ -957,17 +957,14 @@ void ProxySQL_Main_init_main_modules() {
 
 #ifdef PROXYSQLGENAI
 void ProxySQL_Main_init_GenAI_module() {
-	GloGATH = new GenAI_Threads_Handler();
 	GloGATH->init();
 	proxy_info("GenAI Threads Handler initialized\n");
-
 	GloAI = new AI_Features_Manager();
 	GloAI->init();
 	proxy_info("AI Features module initialized\n");
 }
 
 void ProxySQL_Main_init_MCP_module() {
-	GloMCPH = new MCP_Threads_Handler();
 	GloMCPH->init();
 	proxy_info("MCP module initialized\n");
 }

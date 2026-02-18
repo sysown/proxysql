@@ -7,10 +7,12 @@ set -e
 
 MCP_ENDPOINT="${PROXYSQL_MCP_ENDPOINT:-https://127.0.0.1:6071/mcp/query}"
 RUN_ID="${1:-10}"
+TARGET_ID="${2:-${MCP_TARGET_ID:-tap_mysql_default}}"
 
 echo "=== Catalog Tools Test ==="
 echo "Using MCP endpoint: $MCP_ENDPOINT"
 echo "Using run_id: $RUN_ID"
+echo "Using target_id: $TARGET_ID"
 echo ""
 
 echo "1. Testing catalog.list_objects..."
@@ -24,6 +26,7 @@ curl -k -s -X POST "$MCP_ENDPOINT" \
       "name": "catalog.list_objects",
       "arguments": {
         "run_id": '$RUN_ID',
+        "target_id": "'$TARGET_ID'",
         "order_by": "name",
         "page_size": 5
       }
@@ -42,6 +45,7 @@ curl -k -s -X POST "$MCP_ENDPOINT" \
       "name": "catalog.get_object",
       "arguments": {
         "run_id": '$RUN_ID',
+        "target_id": "'$TARGET_ID'",
         "object_key": "codebase_community_template.users"
       }
     }
@@ -60,6 +64,7 @@ curl -k -s -X POST "$MCP_ENDPOINT" \
       "arguments": {
         "agent_run_id": 1,
         "run_id": '$RUN_ID',
+        "target_id": "'$TARGET_ID'",
         "object_id": 55,
         "summary": "{\"hypothesis\":\"Test user table\",\"grain\":\"one row per user\",\"primary_key\":[\"user_id\"],\"time_columns\":[\"created_at\"],\"example_questions\":[\"How many users do we have?\",\"Count users by registration date\"]}",
         "confidence": 0.9,

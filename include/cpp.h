@@ -51,6 +51,7 @@
 #include "ProxySQL_MCP_Server.hpp"
 #include "Query_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
+#include "PgSQL_Static_Harvester.h"
 #include "Static_Harvester.h"
 #endif /* PROXYSQLGENAI */
 

@@ -389,7 +389,7 @@ std::string Static_Harvester::escape_sql_string(const std::string& str) {
 //   - Only one run can be active at a time per harvester instance
 //   - Automatically connects to MySQL if not already connected
 //   - Records source DSN and MySQL version in the run metadata
-int Static_Harvester::start_run(const std::string& notes) {
+int Static_Harvester::start_run(const std::string& target_id, const std::string& notes) {
 	if (current_run_id >= 0) {
 		proxy_error("Static_Harvester: Run already active (run_id=%d)\n", current_run_id);
 		return -1;
@@ -399,7 +399,7 @@ int Static_Harvester::start_run(const std::string& notes) {
 		return -1;
 	}
 
-	current_run_id = catalog->create_run(source_dsn, mysql_version, notes);
+	current_run_id = catalog->create_run(target_id, "mysql", source_dsn, mysql_version, notes);
 	if (current_run_id < 0) {
 		proxy_error("Static_Harvester: Failed to create run\n");
 		return -1;
@@ -1278,8 +1278,8 @@ int Static_Harvester::rebuild_fts_index() {
 //
 // Returns:
 //   run_id on success, -1 on error
-int Static_Harvester::run_full_harvest(const std::string& only_schema, const std::string& notes) {
-	if (start_run(notes) < 0) {
+int Static_Harvester::run_full_harvest(const std::string& target_id, const std::string& only_schema, const std::string& notes) {
+	if (start_run(target_id, notes) < 0) {
 		return -1;
 	}
 

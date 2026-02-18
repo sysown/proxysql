@@ -364,8 +364,7 @@ Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
-	QueryParserArgs.digest_text=NULL;
-	QueryParserArgs.first_comment=NULL;
+	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	stmt_info=NULL;
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
@@ -402,8 +401,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=0;
 	mysql_stmt=NULL;
 	stmt_meta=NULL;
-	QueryParserArgs.digest_text=NULL;
-	QueryParserArgs.first_comment=NULL;
+	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	start_time=sess->thread->curtime;
 	init(_p, len, mysql_header);
 	if (mysql_thread___commands_stats || mysql_thread___query_digests) {
@@ -8883,7 +8881,9 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 	// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
 	// it will make the 'unexp_com_pings' field obsolete.
 	///////////////////////////////////////////////////////////////////////////////////////////////
-	if (client_myds->unexp_com_pings) {
+	// Fix #5355: Add null pointer check for client_myds to prevent use-after-free crash
+	// when session is deleted while RequestEnd() is still executing (e.g., during COM_CHANGE_USER timeout)
+	if (client_myds && client_myds->unexp_com_pings) {
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 
 		if (client_myds->unexp_com_pings) {

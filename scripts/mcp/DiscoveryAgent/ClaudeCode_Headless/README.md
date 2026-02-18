@@ -35,7 +35,7 @@ cd scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/
 # Phase 1: Static harvest (no Claude Code needed)
 
 # Option A: Using the convenience script (recommended)
-./static_harvest.sh --schema test
+./static_harvest.sh --target-id tap_mysql_default --schema test
 
 # Option B: Using curl directly
 curl -k -X POST https://localhost:6071/mcp/query \
@@ -47,6 +47,7 @@ curl -k -X POST https://localhost:6071/mcp/query \
     "params": {
       "name": "discovery.run_static",
       "arguments": {
+        "target_id": "tap_mysql_default",
         "schema_filter": "test"
       }
     }
@@ -56,6 +57,7 @@ curl -k -X POST https://localhost:6071/mcp/query \
 cp mcp_config.example.json mcp_config.json
 ./two_phase_discovery.py \
     --mcp-config mcp_config.json \
+    --target-id tap_mysql_default \
     --schema test \
     --dry-run  # Preview without executing
 ```
@@ -65,9 +67,19 @@ cp mcp_config.example.json mcp_config.json
 | File | Purpose |
 |------|---------|
 | `two_phase_discovery.py` | Orchestration script for Phase 2 |
+| `run_real_claude_e2e.sh` | Manual real-CLI E2E runner (phase A + phase B) |
 | `mcp_config.example.json` | Example MCP configuration for Claude Code |
 | `prompts/two_phase_discovery_prompt.md` | System prompt for LLM agent |
 | `prompts/two_phase_user_prompt.md` | User prompt template |
+
+### Manual Real Claude E2E
+
+```bash
+./run_real_claude_e2e.sh \
+  --target-id tap_mysql_default \
+  --schema testdb \
+  --mcp-config ./mcp_config.json
+```
 
 ### Documentation
 

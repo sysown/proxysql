@@ -90,12 +90,23 @@ curl -k -X POST "https://127.0.0.1:6071/mcp/query?token=YOUR_TOKEN" \
 
 ### Inventory Tools
 
+#### list_targets
+List logical query targets. Each target identifier maps internally to a ProxySQL hostgroup and routing policy.
+
+Notes:
+- Targets are loaded from server-side runtime profile tables and include backend auth mapping.
+- MCP clients only use `target_id`; backend credentials are never sent in tool calls.
+
+**Parameters:**
+- None
+
 #### list_schemas
 List all available schemas/databases.
 
 **Parameters:**
 - `page_token` (string, optional) - Pagination token
 - `page_size` (integer, optional) - Results per page (default: 50)
+- `target_id` (string, optional) - Logical query target identifier
 
 #### list_tables
 List tables in a schema.
@@ -105,6 +116,10 @@ List tables in a schema.
 - `page_token` (string, optional) - Pagination token
 - `page_size` (integer, optional) - Results per page (default: 50)
 - `name_filter` (string, optional) - Filter table names by pattern
+- `target_id` (string, optional) - Logical query target identifier
+
+**Routing behavior:**
+- Uses `SHOW TABLES` for MySQL targets and `information_schema.tables` for PostgreSQL targets.
 
 ### Structure Tools
 
@@ -171,8 +186,13 @@ Execute a read-only SQL query with safety guardrails enforced.
 
 **Parameters:**
 - `sql` (string, **required**) - SQL query to execute
+- `target_id` (string, optional) - Logical query target identifier
 - `max_rows` (integer, optional) - Maximum rows to return (default: 200)
 - `timeout_sec` (integer, optional) - Query timeout (default: 2)
+
+**Routing behavior:**
+- If `target_id` points to a MySQL target, query executes with MySQL protocol.
+- If `target_id` points to a PostgreSQL target, query executes with PostgreSQL protocol.
 
 **Safety rules:**
 - Must start with SELECT
@@ -184,6 +204,10 @@ Explain a query execution plan using EXPLAIN or EXPLAIN ANALYZE.
 
 **Parameters:**
 - `sql` (string, **required**) - SQL query to explain
+- `target_id` (string, optional) - Logical query target identifier
+
+**Routing behavior:**
+- Uses protocol-specific execution based on `target_id` (`mysql` or `pgsql` target).
 
 ### Relationship Inference Tools
 

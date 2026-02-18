@@ -33,16 +33,16 @@ def main():
         epilog="""
 Examples:
   # Discovery all schemas
-  %(prog)s --mcp-config mcp_config.json
+  %(prog)s --mcp-config mcp_config.json --target-id tap_mysql_default --schema test
 
   # Discovery specific schema
-  %(prog)s --mcp-config mcp_config.json --schema sales
+  %(prog)s --mcp-config mcp_config.json --target-id tap_mysql_default --schema sales
 
   # Discovery specific schema (REQUIRED)
-  %(prog)s --mcp-config mcp_config.json --schema Chinook
+  %(prog)s --mcp-config mcp_config.json --target-id tap_pgsql_default --schema public
 
   # With custom model
-  %(prog)s --mcp-config mcp_config.json --schema sales --model claude-3-opus-20240229
+  %(prog)s --mcp-config mcp_config.json --target-id tap_mysql_default --schema sales --model claude-3-opus-20240229
         """
     )
 
@@ -54,7 +54,12 @@ Examples:
     parser.add_argument(
         "--schema",
         required=True,
-        help="MySQL schema/database to discover (REQUIRED)"
+        help="Schema/database to discover (REQUIRED)"
+    )
+    parser.add_argument(
+        "--target-id",
+        required=True,
+        help="MCP target_id to use for static harvest and catalog/LLM tools (REQUIRED)"
     )
     parser.add_argument(
         "--model",
@@ -112,6 +117,7 @@ Examples:
                 "params": {
                         "name": "discovery.run_static",
                         "arguments": {
+                            "target_id": args.target_id,
                             "schema_filter": args.schema
                         }
                 }
@@ -137,11 +143,11 @@ Examples:
     if not run_id:
         print("Error: Could not determine run_id.", file=sys.stderr)
         print("Either:")
-        print("  1. Run: ./static_harvest.sh --schema <your_schema> first")
-        print("  2. Or use: ./two_phase_discovery.py --run-id <run_id> --schema <schema>")
+        print("  1. Run: ./static_harvest.sh --target-id <target_id> --schema <your_schema> first")
+        print("  2. Or use: ./two_phase_discovery.py --run-id <run_id> --target-id <target_id> --schema <schema>")
         sys.exit(1)
 
-    print(f"[*] Using run_id: {run_id} from existing static harvest")
+    print(f"[*] Using run_id: {run_id} for target_id: {args.target_id}")
 
     # Load prompts
     try:
@@ -155,6 +161,7 @@ Examples:
     # Replace placeholders in user prompt
     schema_filter = args.schema if args.schema else "all schemas"
     user_prompt = user_prompt.replace("<USE_THE_PROVIDED_RUN_ID>", str(run_id))
+    user_prompt = user_prompt.replace("<TARGET_ID>", args.target_id)
     user_prompt = user_prompt.replace("<MODEL_NAME_HERE>", args.model)
     user_prompt = user_prompt.replace("<SCHEMA_FILTER>", schema_filter)
 
@@ -163,6 +170,7 @@ Examples:
         print("[DRY RUN] Two-Phase Database Discovery")
         print(f"  MCP Config: {args.mcp_config}")
         print(f"  Schema: {schema_filter}")
+        print(f"  Target ID: {args.target_id}")
         print(f"  Model: {args.model}")
         print(f"  Catalog Path: {args.catalog_path}")
         print()
@@ -193,6 +201,7 @@ Examples:
     # Launch Claude Code with the prompts
     print("[*] Launching Claude Code for two-phase discovery...")
     print(f"    Schema: {schema_filter}")
+    print(f"    Target ID: {args.target_id}")
     print(f"    Model: {args.model}")
     print(f"    Catalog: {args.catalog_path}")
     print(f"    MCP Config: {args.mcp_config}")
