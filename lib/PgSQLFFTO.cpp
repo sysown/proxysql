@@ -1,0 +1,156 @@
+#include "proxysql.h"
+#include "PgSQL_HostGroups_Manager.h"
+#include "PgSQL_Thread.h"
+#include "PgSQL_Session.h"
+#include "PgSQL_Data_Stream.h"
+#include "PgSQL_Query_Processor.h"
+#include "PgSQLFFTO.hpp"
+#ifndef SPOOKYV2
+#include "SpookyV2.h"
+#define SPOOKYV2
+#endif
+#include "c_tokenizer.h"
+#include <arpa/inet.h>
+#include <cstring>
+
+extern PgSQL_Query_Processor* GloPgQPro;
+
+PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session) 
+    : m_session(session), m_state(IDLE), m_query_start_time(0) {
+    m_client_buffer.reserve(1024);
+    m_server_buffer.reserve(4096);
+}
+
+PgSQLFFTO::~PgSQLFFTO() {
+    on_close();
+}
+
+void PgSQLFFTO::on_client_data(const char* buf, size_t len) {
+    if (!buf || len == 0) return;
+
+    m_client_buffer.insert(m_client_buffer.end(), buf, buf + len);
+
+    while (m_client_buffer.size() >= 5) {
+        char type = m_client_buffer[0];
+        uint32_t msg_len;
+        memcpy(&msg_len, &m_client_buffer[1], 4);
+        msg_len = ntohl(msg_len);
+
+        if (m_client_buffer.size() < 1 + msg_len) {
+            break; 
+        }
+
+        const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + 5;
+        process_client_message(type, payload, msg_len - 4);
+
+        m_client_buffer.erase(m_client_buffer.begin(), m_client_buffer.begin() + 1 + msg_len);
+    }
+}
+
+void PgSQLFFTO::on_server_data(const char* buf, size_t len) {
+    if (!buf || len == 0) return;
+
+    m_server_buffer.insert(m_server_buffer.end(), buf, buf + len);
+
+    while (m_server_buffer.size() >= 5) {
+        char type = m_server_buffer[0];
+        uint32_t msg_len;
+        memcpy(&msg_len, &m_server_buffer[1], 4);
+        msg_len = ntohl(msg_len);
+
+        if (m_server_buffer.size() < 1 + msg_len) {
+            break; 
+        }
+
+        const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_server_buffer.data()) + 5;
+        process_server_message(type, payload, msg_len - 4);
+
+        m_server_buffer.erase(m_server_buffer.begin(), m_server_buffer.begin() + 1 + msg_len);
+    }
+}
+
+void PgSQLFFTO::on_close() {
+    if (m_state != IDLE && m_query_start_time != 0) {
+        unsigned long long duration = monotonic_time() - m_query_start_time;
+        report_query_stats(m_current_query, duration);
+        m_state = IDLE;
+    }
+}
+
+void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, size_t len) {
+    if (type == 'Q') { // Simple Query
+        if (len > 0) {
+            m_current_query = std::string(reinterpret_cast<const char*>(payload), len);
+            m_query_start_time = monotonic_time();
+            m_state = AWAITING_RESPONSE;
+        }
+    } else if (type == 'P') { // Parse (Extended Query)
+        const char* query = reinterpret_cast<const char*>(payload);
+        while (*query != '\0' && (size_t)(query - reinterpret_cast<const char*>(payload)) < len) {
+            query++;
+        }
+        if (*query == '\0' && (size_t)(query + 1 - reinterpret_cast<const char*>(payload)) < len) {
+            m_current_query = std::string(query + 1); 
+            m_query_start_time = monotonic_time();
+            m_state = AWAITING_RESPONSE;
+        }
+    } else if (type == 'X') { // Terminate
+        on_close();
+    }
+}
+
+void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, size_t len) {
+    if (m_state == IDLE) return;
+
+    if (type == 'C' || type == 'Z' || type == 'E') {
+        unsigned long long duration = monotonic_time() - m_query_start_time;
+        report_query_stats(m_current_query, duration);
+        m_state = IDLE;
+    }
+}
+
+void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long duration_us) {
+    if (query.empty() || !GloPgQPro) return;
+
+    options opts;
+    opts.lowercase = pgsql_thread___query_digests_lowercase;
+    opts.replace_null = pgsql_thread___query_digests_replace_null;
+    opts.replace_number = !pgsql_thread___query_digests_no_digits;
+    opts.keep_comment = pgsql_thread___query_digests_keep_comment;
+    opts.grouping_limit = pgsql_thread___query_digests_grouping_limit;
+    opts.groups_grouping_limit = pgsql_thread___query_digests_groups_grouping_limit;
+    opts.max_query_length = pgsql_thread___query_digests_max_query_length;
+
+    SQP_par_t qp;
+    memset(&qp, 0, sizeof(qp));
+    char* fst_cmnt = NULL;
+    
+    char* digest_text = pgsql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, qp.buf, &opts);
+    if (digest_text) {
+        qp.digest_text = digest_text;
+        qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
+        
+        char* ca = (char*)"";
+        if (pgsql_thread___query_digests_track_hostname) {
+            if (m_session->client_myds && m_session->client_myds->addr.addr) {
+                ca = m_session->client_myds->addr.addr;
+            }
+        }
+
+        uint64_t hash2;
+        SpookyHash myhash;
+        myhash.Init(19, 3);
+        auto* ui = m_session->client_myds->myconn->userinfo;
+        myhash.Update(ui->username, strlen(ui->username));
+        myhash.Update(&qp.digest, sizeof(qp.digest));
+        myhash.Update(ui->schemaname, strlen(ui->schemaname));
+        myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
+        myhash.Update(ca, strlen(ca));
+        myhash.Final(&qp.digest_total, &hash2);
+
+        GloPgQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, 0, 0);
+        
+        free(digest_text);
+    }
+    if (fst_cmnt) free(fst_cmnt);
+}

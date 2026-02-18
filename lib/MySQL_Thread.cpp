@@ -519,6 +519,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"protocol_compression_level",
 	(char *)"ignore_min_gtid_annotations",
 	(char *)"fast_forward_grace_close_ms",
+	(char *)"ffto_enabled",
+	(char *)"ffto_max_buffer_size",
 	NULL
 };
 
@@ -1347,6 +1349,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.fast_forward_grace_close_ms=5000;
+	variables.ffto_enabled=true;
+	variables.ffto_max_buffer_size=1048576;
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
@@ -2424,6 +2428,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
 		VariablesPointers_bool["enable_client_deprecate_eof"]     = make_tuple(&variables.enable_client_deprecate_eof,     false);
 		VariablesPointers_bool["enable_server_deprecate_eof"]     = make_tuple(&variables.enable_server_deprecate_eof,     false);
+		VariablesPointers_bool["ffto_enabled"]                    = make_tuple(&variables.ffto_enabled,                    false);
 		VariablesPointers_bool["enable_load_data_local_infile"]   = make_tuple(&variables.enable_load_data_local_infile,   false);
 		VariablesPointers_bool["enforce_autocommit_on_reads"]     = make_tuple(&variables.enforce_autocommit_on_reads,     false);
 		VariablesPointers_bool["firewall_whitelist_enabled"]      = make_tuple(&variables.firewall_whitelist_enabled,      false);
@@ -2557,6 +2562,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
 		VariablesPointers_int["fast_forward_grace_close_ms"]   = make_tuple(&variables.fast_forward_grace_close_ms,   0,      3600*1000, false);
+		VariablesPointers_int["ffto_max_buffer_size"]          = make_tuple(&variables.ffto_max_buffer_size,          0, 1024*1024*1024, false);
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
@@ -4506,6 +4512,8 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(connect_timeout_server_max);
 	REFRESH_VARIABLE_INT(free_connections_pct);
 	REFRESH_VARIABLE_INT(fast_forward_grace_close_ms);
+	REFRESH_VARIABLE_BOOL(ffto_enabled);
+	REFRESH_VARIABLE_INT(ffto_max_buffer_size);
 	REFRESH_VARIABLE_INT(select_version_forwarding);
 #ifdef IDLE_THREADS
 	REFRESH_VARIABLE_INT(session_idle_ms);

@@ -445,6 +445,8 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"stats_time_query_processor",
 	(char*)"query_cache_stores_empty_result",
 	(char*)"data_packets_history_size",
+	(char*)"ffto_enabled",
+	(char*)"ffto_max_buffer_size",
 	NULL
 };
 
@@ -1020,6 +1022,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.server_encoding = strdup((char*)"UTF8");
 	variables.shun_on_failures = 5;
 	variables.shun_recovery_time_sec = 10;
+	variables.ffto_enabled = true;
+	variables.ffto_max_buffer_size = 1048576;
 	variables.unshun_algorithm = 0;
 	variables.query_retries_on_failure = 1;
 	variables.client_host_cache_size = 0;
@@ -2101,6 +2105,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
 		VariablesPointers_bool["log_unhealthy_connections"] = make_tuple(&variables.log_unhealthy_connections, false);
+		VariablesPointers_bool["ffto_enabled"] = make_tuple(&variables.ffto_enabled, false);
 		VariablesPointers_bool["monitor_enabled"] = make_tuple(&variables.monitor_enabled, false);
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"] = make_tuple(&variables.monitor_wait_timeout, false);
@@ -2218,6 +2223,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["poll_timeout_on_failure"] = make_tuple(&variables.poll_timeout_on_failure, 10, 20000, false);
 		VariablesPointers_int["shun_on_failures"] = make_tuple(&variables.shun_on_failures, 0, 10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"] = make_tuple(&variables.shun_recovery_time_sec, 0, 3600 * 24 * 365, false);
+		VariablesPointers_int["ffto_max_buffer_size"] = make_tuple(&variables.ffto_max_buffer_size, 0, 1024 * 1024 * 1024, false);
 		VariablesPointers_int["unshun_algorithm"] = make_tuple(&variables.unshun_algorithm, 0, 1, false);
 		VariablesPointers_int["hostgroup_manager_verbose"] = make_tuple(&variables.hostgroup_manager_verbose, 0, 3, false);
 		VariablesPointers_int["tcp_keepalive_time"] = make_tuple(&variables.tcp_keepalive_time, 0, 7200, false);
@@ -3866,6 +3872,8 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___throttle_ratio_server_to_client = GloPTH->get_variable_int((char*)"throttle_ratio_server_to_client");
 	pgsql_thread___shun_on_failures = GloPTH->get_variable_int((char*)"shun_on_failures");
 	pgsql_thread___shun_recovery_time_sec = GloPTH->get_variable_int((char*)"shun_recovery_time_sec");
+	pgsql_thread___ffto_enabled = (bool)GloPTH->get_variable_int((char*)"ffto_enabled");
+	pgsql_thread___ffto_max_buffer_size = GloPTH->get_variable_int((char*)"ffto_max_buffer_size");
 	pgsql_thread___hostgroup_manager_verbose = GloPTH->get_variable_int((char*)"hostgroup_manager_verbose");
 	pgsql_thread___default_max_latency_ms = GloPTH->get_variable_int((char*)"default_max_latency_ms");
 	pgsql_thread___unshun_algorithm = GloPTH->get_variable_int((char*)"unshun_algorithm");

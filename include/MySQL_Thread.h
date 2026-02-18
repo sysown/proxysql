@@ -415,6 +415,8 @@ class MySQL_Threads_Handler
 		bool monitor_wait_timeout;
 		bool monitor_writer_is_also_reader;
 		bool monitor_replication_lag_group_by_host;
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
 		//! Read only check timeout. Unit: 'ms'.

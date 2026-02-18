@@ -24,6 +24,7 @@ using json = nlohmann::json;
 #include "PgSQL_Variables.h"
 #include "ProxySQL_Cluster.hpp"
 #include "PgSQL_Query_Cache.h"
+#include "PgSQLFFTO.hpp"
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_ExplicitTxnStateMgr.h"
 #include "PgSQL_Extended_Query_Message.h"
@@ -244,6 +245,7 @@ PgSQL_Session::PgSQL_Session() {
 	user_attributes = NULL;
 	schema_locked = false;
 	session_fast_forward = SESSION_FORWARD_TYPE_NONE;
+	ffto_bypassed = false;
 	//started_sending_data_to_client = false;
 	handler_function = NULL;
 	client_myds = NULL;
@@ -311,6 +313,9 @@ void PgSQL_Session::reset() {
 }
 
 PgSQL_Session::~PgSQL_Session() {
+	if (m_ffto) {
+		m_ffto->on_close();
+	}
 
 	if (locked_on_hostgroup >= 0) {
 		thread->status_variables.stvar[st_var_hostgroup_locked]--;
@@ -2280,6 +2285,19 @@ __implicit_sync:
 			}
 			break;
 		case FAST_FORWARD:
+			if (pgsql_thread___ffto_enabled && !ffto_bypassed) {
+				if (pkt.size > (size_t)pgsql_thread___ffto_max_buffer_size) {
+					ffto_bypassed = true;
+					m_ffto.reset();
+				} else {
+					if (!m_ffto) {
+						m_ffto = std::make_unique<PgSQLFFTO>(this);
+					}
+					if (m_ffto) {
+						m_ffto->on_client_data((const char*)pkt.ptr, pkt.size);
+					}
+				}
+			}
 			mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 			break;
 			// This state is required because it covers the following situation:
@@ -2710,6 +2728,16 @@ handler_again:
 		if (mybe->server_myds->mypolls == NULL) {
 			// register the PgSQL_Data_Stream
 			thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+		}
+		if (pgsql_thread___ffto_enabled && !ffto_bypassed) {
+			if (!m_ffto) {
+				m_ffto = std::make_unique<PgSQLFFTO>(this);
+			}
+			if (m_ffto) {
+				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
+					m_ffto->on_server_data((const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr, mybe->server_myds->PSarrayIN->pdata[i].size);
+				}
+			}
 		}
 		client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 

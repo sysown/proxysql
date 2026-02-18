@@ -139,6 +139,8 @@ inline void Query_Info::set_end_time(unsigned long long time) {
 #endif // CLOCK_MONOTONIC_RAW
 }
 
+class TrafficObserver;
+
 /**
  * @class MySQL_Session
  * @brief Manages a client session, including query parsing, backend connections, and state transitions.
@@ -484,9 +486,13 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
 
-	Session_Regex **match_regexes;
-
-	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
+			Session_Regex **match_regexes;
+			std::unique_ptr<TrafficObserver> m_ffto;
+			bool ffto_bypassed;
+		
+			ProxySQL_Node_Address * proxysql_node_address;
+		
+	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
