@@ -326,7 +326,7 @@ void PgSQL_Event::set_server(int _hid, const char *ptr, int len) {
 }
 
 void PgSQL_Event::set_error(const char* _sqlstate, const char* _errmsg) {
-	if (free_on_delete == false && free_error_on_delete == true) {
+	if (free_on_delete == true || free_error_on_delete == true) {
 		if (sqlstate != nullptr) {
 			free(sqlstate);
 			sqlstate = nullptr;
@@ -1056,7 +1056,7 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 		}
 		wrunlock();
 	}
-	if (PgLogCB->buffer_size != 0) {
+	if (PgLogCB->buffer_size.load(std::memory_order_relaxed) != 0) {
 		PgSQL_Event* me2 = new PgSQL_Event(me);
 		PgLogCB->insert(me2);
 	}
@@ -1339,12 +1339,13 @@ PgSQL_Logger_CircularBuffer::~PgSQL_Logger_CircularBuffer() {
 void PgSQL_Logger_CircularBuffer::insert(PgSQL_Event* event) {
 	std::lock_guard<std::mutex> lock(mutex);
 	eventsAddedCount++;
-	if (buffer_size == 0) {
+	const size_t current_buffer_size = buffer_size.load(std::memory_order_relaxed);
+	if (current_buffer_size == 0) {
 		delete event;
 		eventsDroppedCount++;
 		return;
 	}
-	while (event_buffer.size() >= buffer_size) {
+	while (event_buffer.size() >= current_buffer_size) {
 		delete event_buffer.front();
 		event_buffer.pop_front();
 		eventsDroppedCount++;
@@ -1365,13 +1366,13 @@ size_t PgSQL_Logger_CircularBuffer::size() {
 }
 
 size_t PgSQL_Logger_CircularBuffer::getBufferSize() const {
-	return buffer_size;
+	return buffer_size.load(std::memory_order_relaxed);
 }
 
 void PgSQL_Logger_CircularBuffer::setBufferSize(size_t newSize) {
 	std::lock_guard<std::mutex> lock(mutex);
-	buffer_size = newSize;
-	while (event_buffer.size() > buffer_size) {
+	buffer_size.store(newSize, std::memory_order_relaxed);
+	while (event_buffer.size() > newSize) {
 		delete event_buffer.front();
 		event_buffer.pop_front();
 		eventsDroppedCount++;
