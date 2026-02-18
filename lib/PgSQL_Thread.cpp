@@ -4021,6 +4021,9 @@ void PgSQL_Thread::refresh_variables() {
 	if (pgsql_thread___eventslog_filename) free(pgsql_thread___eventslog_filename);
 	pgsql_thread___eventslog_filesize = GloPTH->get_variable_int((char*)"eventslog_filesize");
 	pgsql_thread___eventslog_buffer_history_size = GloPTH->get_variable_int((char*)"eventslog_buffer_history_size");
+	if (GloPgSQL_Logger && GloPgSQL_Logger->PgLogCB->getBufferSize() != static_cast<size_t>(pgsql_thread___eventslog_buffer_history_size)) {
+		GloPgSQL_Logger->PgLogCB->setBufferSize(pgsql_thread___eventslog_buffer_history_size);
+	}
 	pgsql_thread___eventslog_table_memory_size = GloPTH->get_variable_int((char*)"eventslog_table_memory_size");
 	pgsql_thread___eventslog_buffer_max_query_length = GloPTH->get_variable_int((char*)"eventslog_buffer_max_query_length");
 	pgsql_thread___eventslog_default_log = GloPTH->get_variable_int((char*)"eventslog_default_log");
