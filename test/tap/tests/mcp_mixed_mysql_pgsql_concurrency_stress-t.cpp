@@ -46,16 +46,16 @@ using json = nlohmann::json;
 
 namespace {
 
-/** Number of MySQL worker threads. */
-static constexpr int k_mysql_worker_threads = 12;
-/** Number of PgSQL worker threads. */
-static constexpr int k_pgsql_worker_threads = 12;
-/** Total stress runtime in seconds. */
-static constexpr int k_runtime_seconds = 14;
-/** Configured MCP cap for `stats.show_processlist`. */
-static constexpr int k_processlist_cap = 120;
-/** Configured MCP cap for `stats.show_queries`. */
-static constexpr int k_show_queries_cap = 180;
+/** Default number of MySQL worker threads. */
+static constexpr int k_default_mysql_worker_threads = 12;
+/** Default number of PgSQL worker threads. */
+static constexpr int k_default_pgsql_worker_threads = 12;
+/** Default stress runtime in seconds. */
+static constexpr int k_default_runtime_seconds = 14;
+/** Default MCP cap for `stats.show_processlist`. */
+static constexpr int k_default_processlist_cap = 120;
+/** Default MCP cap for `stats.show_queries`. */
+static constexpr int k_default_show_queries_cap = 180;
 /** Requested processlist limit used to verify cap metadata. */
 static constexpr int k_processlist_requested_limit = 500;
 /** Requested show_queries limit used to verify cap metadata. */
@@ -68,6 +68,21 @@ static constexpr uint64_t k_min_total_mysql_queries = 300;
 static constexpr uint64_t k_min_total_pgsql_queries = 300;
 /** Fixed schema used for MySQL workload table. */
 static constexpr const char* k_mysql_workload_schema = "test";
+
+/** Lower bound for generated processlist cap profile values. */
+static constexpr int k_min_processlist_cap = 10;
+/** Lower bound for generated show_queries cap profile values. */
+static constexpr int k_min_show_queries_cap = 10;
+/** Maximum allowed worker threads per protocol from environment. */
+static constexpr int k_max_worker_threads = 256;
+/** Maximum allowed runtime in seconds from environment. */
+static constexpr int k_max_runtime_seconds = 1800;
+/** Maximum allowed cap-churn interval in milliseconds from environment. */
+static constexpr int k_max_cap_churn_interval_ms = 10000;
+/** Minimum allowed cap-churn interval in milliseconds from environment. */
+static constexpr int k_min_cap_churn_interval_ms = 50;
+/** Default cap-churn interval in milliseconds. */
+static constexpr int k_default_cap_churn_interval_ms = 700;
 
 using MYSQLConnPtr = std::unique_ptr<MYSQL, decltype(&mysql_close)>;
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
@@ -122,6 +137,90 @@ struct show_queries_poll_stats_t {
 };
 
 /**
+ * @brief Parse an integer environment variable with range clamping.
+ *
+ * If the variable is absent or invalid, the default value is returned.
+ *
+ * @param name Environment variable name.
+ * @param default_value Value used when the variable is absent or invalid.
+ * @param min_value Lower accepted bound.
+ * @param max_value Upper accepted bound.
+ * @return Parsed and clamped value.
+ */
+int env_int_clamped(const char* name, int default_value, int min_value, int max_value) {
+	const char* value = std::getenv(name);
+	if (!value || std::strlen(value) == 0) {
+		return default_value;
+	}
+
+	char* end = nullptr;
+	long parsed = std::strtol(value, &end, 10);
+	if (!end || *end != '\0') {
+		return default_value;
+	}
+
+	if (parsed < static_cast<long>(min_value)) {
+		return min_value;
+	}
+	if (parsed > static_cast<long>(max_value)) {
+		return max_value;
+	}
+	return static_cast<int>(parsed);
+}
+
+/**
+ * @brief Parse a boolean environment variable.
+ *
+ * Accepted true values: `1`, `true`, `yes`, `on` (case-insensitive).
+ * Accepted false values: `0`, `false`, `no`, `off` (case-insensitive).
+ * Any other value falls back to the provided default.
+ *
+ * @param name Environment variable name.
+ * @param default_value Value used when the variable is absent or invalid.
+ * @return Parsed boolean value.
+ */
+bool env_bool(const char* name, bool default_value) {
+	const char* raw = std::getenv(name);
+	if (!raw || std::strlen(raw) == 0) {
+		return default_value;
+	}
+
+	std::string value(raw);
+	std::transform(value.begin(), value.end(), value.begin(), [] (unsigned char c) {
+		return static_cast<char>(std::tolower(c));
+	});
+
+	if (value == "1" || value == "true" || value == "yes" || value == "on") {
+		return true;
+	}
+	if (value == "0" || value == "false" || value == "no" || value == "off") {
+		return false;
+	}
+	return default_value;
+}
+
+/**
+ * @brief Build a three-level cap profile used for optional live cap churn.
+ *
+ * The returned profile always includes @p max_cap and one or two lower levels,
+ * then removes duplicates while preserving ascending order.
+ *
+ * @param max_cap Highest cap value in the profile.
+ * @param min_cap Minimum cap value to enforce.
+ * @return Ordered unique cap profile.
+ */
+std::vector<int> build_cap_profile(int max_cap, int min_cap) {
+	std::vector<int> caps = {
+		std::max(min_cap, max_cap / 3),
+		std::max(min_cap, max_cap / 2),
+		std::max(min_cap, max_cap)
+	};
+	std::sort(caps.begin(), caps.end());
+	caps.erase(std::unique(caps.begin(), caps.end()), caps.end());
+	return caps;
+}
+
+/**
  * @brief Execute an admin SQL statement and consume any result set.
  *
  * @param admin Open admin connection.
@@ -152,14 +251,19 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
  * @param cl TAP command-line configuration.
  * @return true if all setup statements succeeded.
  */
-bool configure_mcp_runtime(MYSQL* admin, const CommandLine& cl) {
+bool configure_mcp_runtime(
+	MYSQL* admin,
+	const CommandLine& cl,
+	int processlist_cap,
+	int show_queries_cap
+) {
 	const std::vector<std::string> statements = {
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
 		"SET mcp-enabled=true",
 		"SET mcp-stats_endpoint_auth=''",
-		"SET mcp-stats_show_processlist_max_rows=" + std::to_string(k_processlist_cap),
-		"SET mcp-stats_show_queries_max_rows=" + std::to_string(k_show_queries_cap),
+		"SET mcp-stats_show_processlist_max_rows=" + std::to_string(processlist_cap),
+		"SET mcp-stats_show_queries_max_rows=" + std::to_string(show_queries_cap),
 		"LOAD MCP VARIABLES TO RUNTIME"
 	};
 
@@ -688,11 +792,81 @@ void run_pgsql_worker(
 }
 
 /**
+ * @brief Continuously churn MCP cap variables while traffic and polling run.
+ *
+ * This thread cycles configured processlist/query caps and reloads MCP runtime
+ * variables. It is optional and enabled only when `MCP_MIXED_STRESS_ENABLE_CAP_CHURN`
+ * is true.
+ *
+ * @param cl TAP command-line configuration.
+ * @param stop Stop flag set by main thread.
+ * @param processlist_caps Ordered processlist cap profile.
+ * @param show_queries_caps Ordered show_queries cap profile.
+ * @param interval_ms Delay between cap updates.
+ */
+void run_mcp_cap_churner(
+	const CommandLine& cl,
+	const std::atomic<bool>& stop,
+	const std::vector<int>& processlist_caps,
+	const std::vector<int>& show_queries_caps,
+	int interval_ms
+) {
+	if (processlist_caps.empty() || show_queries_caps.empty()) {
+		return;
+	}
+
+	std::string connect_error;
+	MYSQLConnPtr admin_conn = create_mysql_connection(
+		cl.admin_host,
+		cl.admin_port,
+		cl.admin_username,
+		cl.admin_password,
+		connect_error
+	);
+	if (!admin_conn) {
+		diag("MCP cap churner: cannot open admin connection: %s", connect_error.c_str());
+		return;
+	}
+
+	size_t idx = 0;
+	while (!stop.load(std::memory_order_relaxed)) {
+		const int processlist_cap = processlist_caps[idx % processlist_caps.size()];
+		const int show_queries_cap = show_queries_caps[idx % show_queries_caps.size()];
+
+		const bool ok =
+			run_admin_stmt(
+				admin_conn.get(),
+				"SET mcp-stats_show_processlist_max_rows=" + std::to_string(processlist_cap),
+				"MCP cap churner"
+			) &&
+			run_admin_stmt(
+				admin_conn.get(),
+				"SET mcp-stats_show_queries_max_rows=" + std::to_string(show_queries_cap),
+				"MCP cap churner"
+			) &&
+			run_admin_stmt(admin_conn.get(), "LOAD MCP VARIABLES TO RUNTIME", "MCP cap churner");
+
+		if (!ok) {
+			diag(
+				"MCP cap churner: failed updating caps to processlist=%d show_queries=%d",
+				processlist_cap,
+				show_queries_cap
+			);
+		}
+
+		++idx;
+		std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+	}
+}
+
+/**
  * @brief MCP poller validating `stats.show_processlist` for a specific protocol.
  *
  * @param cl TAP command-line configuration.
  * @param db_type MCP db_type (`mysql` or `pgsql`).
  * @param filter_token Token expected in filtered `info` values.
+ * @param accepted_caps Cap values accepted in metadata assertions.
+ * @param dynamic_cap_check Whether `limit_cap` can vary across calls.
  * @param stop Stop flag set by main thread.
  * @param stats Shared processlist poll counters.
  */
@@ -700,6 +874,8 @@ void run_processlist_poller(
 	const CommandLine& cl,
 	const std::string& db_type,
 	const std::string& filter_token,
+	const std::vector<int>& accepted_caps,
+	bool dynamic_cap_check,
 	const std::atomic<bool>& stop,
 	processlist_poll_stats_t& stats
 ) {
@@ -733,9 +909,17 @@ void run_processlist_poller(
 			const int requested_limit = result_obj.value("requested_limit", -1);
 			const int effective_limit = result_obj.value("effective_limit", -1);
 			const int limit_cap = result_obj.value("limit_cap", -1);
+
+			bool cap_match = false;
+			if (dynamic_cap_check) {
+				cap_match = std::find(accepted_caps.begin(), accepted_caps.end(), limit_cap) != accepted_caps.end();
+			} else {
+				cap_match = !accepted_caps.empty() && (limit_cap == accepted_caps.back());
+			}
+
 			if (!(requested_limit == k_processlist_requested_limit &&
 			      effective_limit >= 0 &&
-			      limit_cap == k_processlist_cap &&
+			      cap_match &&
 			      effective_limit <= limit_cap)) {
 				stats.metadata_failures.fetch_add(1, std::memory_order_relaxed);
 			}
@@ -807,6 +991,8 @@ void run_processlist_poller(
  * @param cl TAP command-line configuration.
  * @param db_type MCP db_type (`mysql` or `pgsql`).
  * @param filter_token Token expected in filtered `digest_text` values.
+ * @param accepted_caps Cap values accepted in metadata assertions.
+ * @param dynamic_cap_check Whether `limit_cap` can vary across calls.
  * @param stop Stop flag set by main thread.
  * @param stats Shared show_queries poll counters.
  */
@@ -814,6 +1000,8 @@ void run_show_queries_poller(
 	const CommandLine& cl,
 	const std::string& db_type,
 	const std::string& filter_token,
+	const std::vector<int>& accepted_caps,
+	bool dynamic_cap_check,
 	const std::atomic<bool>& stop,
 	show_queries_poll_stats_t& stats
 ) {
@@ -846,9 +1034,17 @@ void run_show_queries_poller(
 			const int requested_limit = result_obj.value("requested_limit", -1);
 			const int effective_limit = result_obj.value("effective_limit", -1);
 			const int limit_cap = result_obj.value("limit_cap", -1);
+
+			bool cap_match = false;
+			if (dynamic_cap_check) {
+				cap_match = std::find(accepted_caps.begin(), accepted_caps.end(), limit_cap) != accepted_caps.end();
+			} else {
+				cap_match = !accepted_caps.empty() && (limit_cap == accepted_caps.back());
+			}
+
 			if (!(requested_limit == k_show_queries_requested_limit &&
 			      effective_limit >= 0 &&
-			      limit_cap == k_show_queries_cap &&
+			      cap_match &&
 			      effective_limit <= limit_cap)) {
 				stats.metadata_failures.fetch_add(1, std::memory_order_relaxed);
 			}
@@ -924,6 +1120,61 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	const int mysql_worker_threads = env_int_clamped(
+		"MCP_MIXED_STRESS_MYSQL_WORKERS",
+		k_default_mysql_worker_threads,
+		1,
+		k_max_worker_threads
+	);
+	const int pgsql_worker_threads = env_int_clamped(
+		"MCP_MIXED_STRESS_PGSQL_WORKERS",
+		k_default_pgsql_worker_threads,
+		1,
+		k_max_worker_threads
+	);
+	const int runtime_seconds = env_int_clamped(
+		"MCP_MIXED_STRESS_RUNTIME_SEC",
+		k_default_runtime_seconds,
+		1,
+		k_max_runtime_seconds
+	);
+	const int processlist_cap_max = env_int_clamped(
+		"MCP_MIXED_STRESS_PROCESSLIST_CAP",
+		k_default_processlist_cap,
+		k_min_processlist_cap,
+		1000
+	);
+	const int show_queries_cap_max = env_int_clamped(
+		"MCP_MIXED_STRESS_SHOW_QUERIES_CAP",
+		k_default_show_queries_cap,
+		k_min_show_queries_cap,
+		1000
+	);
+	const bool cap_churn_enabled = env_bool("MCP_MIXED_STRESS_ENABLE_CAP_CHURN", false);
+	const int cap_churn_interval_ms = env_int_clamped(
+		"MCP_MIXED_STRESS_CAP_CHURN_INTERVAL_MS",
+		k_default_cap_churn_interval_ms,
+		k_min_cap_churn_interval_ms,
+		k_max_cap_churn_interval_ms
+	);
+
+	const std::vector<int> processlist_cap_profile = cap_churn_enabled
+		? build_cap_profile(processlist_cap_max, k_min_processlist_cap)
+		: std::vector<int>{processlist_cap_max};
+	const std::vector<int> show_queries_cap_profile = cap_churn_enabled
+		? build_cap_profile(show_queries_cap_max, k_min_show_queries_cap)
+		: std::vector<int>{show_queries_cap_max};
+
+	diag(
+		"Mixed MCP stress config: runtime=%ds mysql_workers=%d pgsql_workers=%d cap_churn=%d processlist_cap_max=%d show_queries_cap_max=%d",
+		runtime_seconds,
+		mysql_worker_threads,
+		pgsql_worker_threads,
+		cap_churn_enabled ? 1 : 0,
+		processlist_cap_max,
+		show_queries_cap_max
+	);
+
 	MYSQL* admin = nullptr;
 	bool can_continue = true;
 
@@ -935,7 +1186,12 @@ int main(int argc, char** argv) {
 	}
 
 	if (can_continue) {
-		const bool configured = configure_mcp_runtime(admin, cl);
+		const bool configured = configure_mcp_runtime(
+			admin,
+			cl,
+			processlist_cap_profile.back(),
+			show_queries_cap_profile.back()
+		);
 		ok(configured, "Configured MCP runtime for mixed MySQL+PgSQL stress");
 		if (!configured) {
 			skip(45, "Cannot continue without MCP runtime configuration");
@@ -1023,9 +1279,9 @@ int main(int argc, char** argv) {
 	if (can_continue) {
 		std::atomic<bool> stop {false};
 		std::vector<std::thread> workers;
-		workers.reserve(static_cast<size_t>(k_mysql_worker_threads + k_pgsql_worker_threads));
+		workers.reserve(static_cast<size_t>(mysql_worker_threads + pgsql_worker_threads));
 
-		for (int i = 0; i < k_mysql_worker_threads; ++i) {
+		for (int i = 0; i < mysql_worker_threads; ++i) {
 			workers.emplace_back(
 				run_mysql_worker,
 				i,
@@ -1035,7 +1291,7 @@ int main(int argc, char** argv) {
 				std::ref(mysql_workload_stats)
 			);
 		}
-		for (int i = 0; i < k_pgsql_worker_threads; ++i) {
+		for (int i = 0; i < pgsql_worker_threads; ++i) {
 			workers.emplace_back(
 				run_pgsql_worker,
 				i,
@@ -1051,6 +1307,8 @@ int main(int argc, char** argv) {
 			std::cref(cl),
 			std::string("mysql"),
 			std::string("SLEEP("),
+			std::cref(processlist_cap_profile),
+			cap_churn_enabled,
 			std::cref(stop),
 			std::ref(mysql_processlist_stats)
 		);
@@ -1059,6 +1317,8 @@ int main(int argc, char** argv) {
 			std::cref(cl),
 			std::string("pgsql"),
 			std::string("pg_sleep"),
+			std::cref(processlist_cap_profile),
+			cap_churn_enabled,
 			std::cref(stop),
 			std::ref(pgsql_processlist_stats)
 		);
@@ -1067,6 +1327,8 @@ int main(int argc, char** argv) {
 			std::cref(cl),
 			std::string("mysql"),
 			std::string("SLEEP"),
+			std::cref(show_queries_cap_profile),
+			cap_churn_enabled,
 			std::cref(stop),
 			std::ref(mysql_show_queries_stats)
 		);
@@ -1075,11 +1337,25 @@ int main(int argc, char** argv) {
 			std::cref(cl),
 			std::string("pgsql"),
 			std::string("PG_SLEEP"),
+			std::cref(show_queries_cap_profile),
+			cap_churn_enabled,
 			std::cref(stop),
 			std::ref(pgsql_show_queries_stats)
 		);
 
-		std::this_thread::sleep_for(std::chrono::seconds(k_runtime_seconds));
+		std::thread cap_churner;
+		if (cap_churn_enabled) {
+			cap_churner = std::thread(
+				run_mcp_cap_churner,
+				std::cref(cl),
+				std::cref(stop),
+				std::cref(processlist_cap_profile),
+				std::cref(show_queries_cap_profile),
+				cap_churn_interval_ms
+			);
+		}
+
+		std::this_thread::sleep_for(std::chrono::seconds(runtime_seconds));
 		stop.store(true, std::memory_order_relaxed);
 
 		for (auto& t : workers) {
@@ -1099,6 +1375,9 @@ int main(int argc, char** argv) {
 		if (pgsql_show_queries_poller.joinable()) {
 			pgsql_show_queries_poller.join();
 		}
+		if (cap_churner.joinable()) {
+			cap_churner.join();
+		}
 	}
 
 	if (can_continue) {
@@ -1113,10 +1392,10 @@ int main(int argc, char** argv) {
 		const uint64_t mysql_max_failed_queries = std::max<uint64_t>(5, mysql_total_queries / 200);
 
 		ok(
-			mysql_connected_workers >= static_cast<uint64_t>(k_mysql_worker_threads / 2),
+			mysql_connected_workers >= static_cast<uint64_t>(mysql_worker_threads / 2),
 			"MySQL: at least half of worker connections succeeded (%llu/%d)",
 			static_cast<unsigned long long>(mysql_connected_workers),
-			k_mysql_worker_threads
+			mysql_worker_threads
 		);
 		ok(
 			mysql_total_queries >= k_min_total_mysql_queries,
@@ -1154,10 +1433,10 @@ int main(int argc, char** argv) {
 		const uint64_t pg_max_failed_queries = std::max<uint64_t>(5, pg_total_queries / 200);
 
 		ok(
-			pg_connected_workers >= static_cast<uint64_t>(k_pgsql_worker_threads / 2),
+			pg_connected_workers >= static_cast<uint64_t>(pgsql_worker_threads / 2),
 			"PgSQL: at least half of worker connections succeeded (%llu/%d)",
 			static_cast<unsigned long long>(pg_connected_workers),
-			k_pgsql_worker_threads
+			pgsql_worker_threads
 		);
 		ok(
 			pg_total_queries >= k_min_total_pgsql_queries,
