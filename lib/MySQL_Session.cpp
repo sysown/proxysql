@@ -6023,7 +6023,7 @@ handler_again:
 				// register the mysql_data_stream
 				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
-			if (mysql_thread___ffto_enabled) {
+			if (mysql_thread___ffto_enabled && !ffto_bypassed) {
 				if (!m_ffto) {
 					m_ffto = std::make_unique<MySQLFFTO>(this);
 				}

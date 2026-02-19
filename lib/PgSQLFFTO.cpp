@@ -155,7 +155,8 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
 
     SQP_par_t qp; memset(&qp, 0, sizeof(qp));
     char* fst_cmnt = NULL;
-    char* digest_text = pgsql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, qp.buf, &opts);
+    char* digest_text = pgsql_query_digest_and_first_comment(query.c_str(), query.length(), &fst_cmnt, 
+        ((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
     if (digest_text) {
         qp.digest_text = digest_text;
         qp.digest = SpookyHash::Hash64(digest_text, strlen(digest_text), 0);
