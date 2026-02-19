@@ -904,6 +904,7 @@ public:
 		bool monitor_replication_lag_group_by_host;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
+		int monitor_replication_lag_interval_window;
 		//! Read only check timeout. Unit: 'ms'.
 		int monitor_replication_lag_timeout;
 		int monitor_replication_lag_count;

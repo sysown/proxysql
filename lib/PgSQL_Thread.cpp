@@ -318,12 +318,14 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_read_only_interval_window",
 	(char*)"monitor_read_only_timeout",
 	(char*)"monitor_read_only_max_timeout_count",
+	(char*)"monitor_replication_lag_interval",
+	(char*)"monitor_replication_lag_interval_window",
+	(char*)"monitor_replication_lag_timeout",
+	(char*)"monitor_replication_lag_count",
+	(char*)"monitor_replication_lag_use_percona_heartbeat",
 /*
 	(char*)"monitor_aws_rds_topology_discovery_interval",
 	(char*)"monitor_replication_lag_group_by_host",
-	(char*)"monitor_replication_lag_interval",
-	(char*)"monitor_replication_lag_timeout",
-	(char*)"monitor_replication_lag_count",
 	(char*)"monitor_groupreplication_healthcheck_interval",
 	(char*)"monitor_groupreplication_healthcheck_timeout",
 	(char*)"monitor_groupreplication_healthcheck_max_timeout_count",
@@ -337,7 +339,6 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_password",
 	(char*)"monitor_dbname",
 /*
-	(char*)"monitor_replication_lag_use_percona_heartbeat",
 	(char*)"monitor_query_interval",
 	(char*)"monitor_query_timeout",
 	(char*)"monitor_slave_lag_when_null",
@@ -1048,6 +1049,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_read_only_max_timeout_count = 3;
 	variables.monitor_replication_lag_group_by_host = false;
 	variables.monitor_replication_lag_interval = 10000;
+	variables.monitor_replication_lag_interval_window = 10;
 	variables.monitor_replication_lag_timeout = 1000;
 	variables.monitor_replication_lag_count = 1;
 /* TODO: Remove
@@ -1073,9 +1075,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_username = strdup((char*)"monitor");
 	variables.monitor_password = strdup((char*)"monitor");
 	variables.monitor_dbname = strdup((char*)"postgres");
-/* TODO: Remove
 	variables.monitor_replication_lag_use_percona_heartbeat = strdup((char*)"");
-*/
 	variables.monitor_wait_timeout = true;
 	variables.monitor_writer_is_also_reader = true;
 	variables.max_allowed_packet = 64 * 1024 * 1024;
@@ -1285,9 +1285,7 @@ char* PgSQL_Threads_Handler::get_variable_string(char* name) {
 		if (!strcmp(name, "monitor_username")) return strdup(variables.monitor_username);
 		if (!strcmp(name, "monitor_password")) return strdup(variables.monitor_password);
 		if (!strcmp(name, "monitor_dbname")) return strdup(variables.monitor_dbname);
-/*
 		if (!strcmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
-*/
 	}
 	if (!strncmp(name, "ssl_", 4)) {
 		if (!strcmp(name, "ssl_p2s_ca")) {
@@ -1581,9 +1579,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		if (!strcasecmp(name, "monitor_username")) return strdup(variables.monitor_username);
 		if (!strcasecmp(name, "monitor_password")) return strdup(variables.monitor_password);
 		if (!strcasecmp(name, "monitor_dbname")) return strdup(variables.monitor_dbname);
-/*
 		if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
-*/
 	}
 	if (!strcasecmp(name, "threads")) {
 		sprintf(intbuf, "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
@@ -2157,10 +2153,12 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_read_only_interval_window"] = make_tuple(&variables.monitor_read_only_interval_window, 0, 100, false);
 		VariablesPointers_int["monitor_read_only_timeout"] = make_tuple(&variables.monitor_read_only_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_read_only_max_timeout_count"] = make_tuple(&variables.monitor_read_only_max_timeout_count, 1, 1000 * 1000, false);
-/*
 		VariablesPointers_int["monitor_replication_lag_interval"] = make_tuple(&variables.monitor_replication_lag_interval, 100, 7 * 24 * 3600 * 1000, false);
+		VariablesPointers_int["monitor_replication_lag_interval_window"] = make_tuple(&variables.monitor_replication_lag_interval_window, 0, 100, false);
 		VariablesPointers_int["monitor_replication_lag_timeout"] = make_tuple(&variables.monitor_replication_lag_timeout, 100, 600 * 1000, false);
 		VariablesPointers_int["monitor_replication_lag_count"] = make_tuple(&variables.monitor_replication_lag_count, 1, 10, false);
+
+/*
 
 		VariablesPointers_int["monitor_groupreplication_healthcheck_interval"] = make_tuple(&variables.monitor_groupreplication_healthcheck_interval, 100, 7 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["monitor_groupreplication_healthcheck_timeout"] = make_tuple(&variables.monitor_groupreplication_healthcheck_timeout, 100, 600 * 1000, false);
@@ -2765,6 +2763,10 @@ PgSQL_Thread::~PgSQL_Thread() {
 	if (pgsql_thread___monitor_username) { free(pgsql_thread___monitor_username); pgsql_thread___monitor_username = NULL; }
 	if (pgsql_thread___monitor_password) { free(pgsql_thread___monitor_password); pgsql_thread___monitor_password = NULL; }
 	if (pgsql_thread___monitor_dbname) { free(pgsql_thread___monitor_dbname); pgsql_thread___monitor_dbname = NULL; }
+	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) {
+		free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
+		pgsql_thread___monitor_replication_lag_use_percona_heartbeat = NULL;
+	}
 
 	/*
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username = NULL; }
@@ -3913,9 +3915,6 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_username = GloPTH->get_variable_string((char*)"monitor_username");
 	if (mysql_thread___monitor_password) free(mysql_thread___monitor_password);
 	mysql_thread___monitor_password = GloPTH->get_variable_string((char*)"monitor_password");
-	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
-	mysql_thread___monitor_replication_lag_use_percona_heartbeat = GloPTH->get_variable_string((char*)"monitor_replication_lag_use_percona_heartbeat");
-
 	mysql_thread___monitor_wait_timeout = (bool)GloPTH->get_variable_int((char*)"monitor_wait_timeout");
 	*/
 	pgsql_thread___monitor_writer_is_also_reader = (bool)GloPTH->get_variable_int((char*)"monitor_writer_is_also_reader");
@@ -3930,9 +3929,15 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_ping_timeout = GloPTH->get_variable_int((char*)"monitor_ping_timeout");
 	pgsql_thread___monitor_read_only_interval = GloPTH->get_variable_int((char*)"monitor_read_only_interval");
 	pgsql_thread___monitor_read_only_interval_window = GloPTH->get_variable_int((char*)"monitor_read_only_interval_window");
+	pgsql_thread___monitor_replication_lag_interval = GloPTH->get_variable_int((char*)"monitor_replication_lag_interval");
+	pgsql_thread___monitor_replication_lag_interval_window = GloPTH->get_variable_int((char*)"monitor_replication_lag_interval_window");
+	pgsql_thread___monitor_replication_lag_timeout = GloPTH->get_variable_int((char*)"monitor_replication_lag_timeout");
+	pgsql_thread___monitor_replication_lag_count = GloPTH->get_variable_int((char*)"monitor_replication_lag_count");
 	pgsql_thread___monitor_read_only_timeout = GloPTH->get_variable_int((char*)"monitor_read_only_timeout");
 	pgsql_thread___monitor_read_only_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_read_only_max_timeout_count");
 	pgsql_thread___monitor_threads = GloPTH->get_variable_int((char*)"monitor_threads");
+	if (pgsql_thread___monitor_replication_lag_use_percona_heartbeat) free(pgsql_thread___monitor_replication_lag_use_percona_heartbeat);
+	pgsql_thread___monitor_replication_lag_use_percona_heartbeat = GloPTH->get_variable_string((char*)"monitor_replication_lag_use_percona_heartbeat");
 	if (pgsql_thread___monitor_username) free(pgsql_thread___monitor_username);
 	pgsql_thread___monitor_username = GloPTH->get_variable_string((char*)"monitor_username");
 	if (pgsql_thread___monitor_password) free(pgsql_thread___monitor_password);
@@ -3945,7 +3950,6 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_replication_lag_group_by_host = (bool)GloPTH->get_variable_int((char*)"monitor_replication_lag_group_by_host");
 	mysql_thread___monitor_replication_lag_interval = GloPTH->get_variable_int((char*)"monitor_replication_lag_interval");
 	mysql_thread___monitor_replication_lag_timeout = GloPTH->get_variable_int((char*)"monitor_replication_lag_timeout");
-	mysql_thread___monitor_replication_lag_count = GloPTH->get_variable_int((char*)"monitor_replication_lag_count");
 	mysql_thread___monitor_groupreplication_healthcheck_interval = GloPTH->get_variable_int((char*)"monitor_groupreplication_healthcheck_interval");
 	mysql_thread___monitor_groupreplication_healthcheck_timeout = GloPTH->get_variable_int((char*)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count = GloPTH->get_variable_int((char*)"monitor_groupreplication_healthcheck_max_timeout_count");
@@ -4567,6 +4571,18 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		{
 			pta[0] = (char*)"PgSQL_Monitor_read_only_check_ERR";
 			sprintf(buf, "%lu", GloPgMon->readonly_check_ERR);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_replication_lag_check_OK";
+			sprintf(buf, "%lu", GloPgMon->repl_lag_check_OK);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"PgSQL_Monitor_replication_lag_check_ERR";
+			sprintf(buf, "%lu", GloPgMon->repl_lag_check_ERR);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
