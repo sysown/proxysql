@@ -1,7 +1,7 @@
 #ifndef TRAFFIC_OBSERVER_HPP
 #define TRAFFIC_OBSERVER_HPP
 
-#include <stddef.h>
+#include <cstddef>
 
 /**
  * @class TrafficObserver
@@ -13,21 +13,21 @@
  */
 class TrafficObserver {
 public:
-    virtual ~TrafficObserver() {}
+    virtual ~TrafficObserver() = default;
 
     /**
      * @brief Called when data is received from the client.
      * @param buf Pointer to the raw protocol data buffer.
      * @param len Length of the data in the buffer.
      */
-    virtual void on_client_data(const char* buf, size_t len) = 0;
+    virtual void on_client_data(const char* buf, std::size_t len) = 0;
 
     /**
      * @brief Called when data is received from the server.
      * @param buf Pointer to the raw protocol data buffer.
      * @param len Length of the data in the buffer.
      */
-    virtual void on_server_data(const char* buf, size_t len) = 0;
+    virtual void on_server_data(const char* buf, std::size_t len) = 0;
 
     /**
      * @brief Called when the session is closing.

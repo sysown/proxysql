@@ -64,29 +64,47 @@ MySQLFFTO::~MySQLFFTO() {
     on_close();
 }
 
-void MySQLFFTO::on_client_data(const char* buf, size_t len) {
+void MySQLFFTO::on_client_data(const char* buf, std::size_t len) {
     if (!buf || len == 0) return;
     m_client_buffer.insert(m_client_buffer.end(), buf, buf + len);
-    while (m_client_buffer.size() >= sizeof(mysql_hdr)) {
-        const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_client_buffer.data());
+    while (m_client_buffer.size() - m_client_offset >= sizeof(mysql_hdr)) {
+        const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_client_buffer.data() + m_client_offset);
         uint32_t pkt_len = hdr->pkt_length;
-        if (m_client_buffer.size() < sizeof(mysql_hdr) + pkt_len) break;
-        const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + sizeof(mysql_hdr);
+        if (m_client_buffer.size() - m_client_offset < sizeof(mysql_hdr) + pkt_len) break;
+        const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_client_buffer.data()) + m_client_offset + sizeof(mysql_hdr);
         process_client_packet(payload, pkt_len);
-        m_client_buffer.erase(m_client_buffer.begin(), m_client_buffer.begin() + sizeof(mysql_hdr) + pkt_len);
+        m_client_offset += sizeof(mysql_hdr) + pkt_len;
+    }
+    if (m_client_offset > 0) {
+        if (m_client_offset >= m_client_buffer.size()) {
+            m_client_buffer.clear();
+            m_client_offset = 0;
+        } else if (m_client_offset > 4096) { // Compact if offset is large
+            m_client_buffer.erase(m_client_buffer.begin(), m_client_buffer.begin() + m_client_offset);
+            m_client_offset = 0;
+        }
     }
 }
 
-void MySQLFFTO::on_server_data(const char* buf, size_t len) {
+void MySQLFFTO::on_server_data(const char* buf, std::size_t len) {
     if (!buf || len == 0) return;
     m_server_buffer.insert(m_server_buffer.end(), buf, buf + len);
-    while (m_server_buffer.size() >= sizeof(mysql_hdr)) {
-        const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_server_buffer.data());
+    while (m_server_buffer.size() - m_server_offset >= sizeof(mysql_hdr)) {
+        const mysql_hdr* hdr = reinterpret_cast<const mysql_hdr*>(m_server_buffer.data() + m_server_offset);
         uint32_t pkt_len = hdr->pkt_length;
-        if (m_server_buffer.size() < sizeof(mysql_hdr) + pkt_len) break;
-        const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_server_buffer.data()) + sizeof(mysql_hdr);
+        if (m_server_buffer.size() - m_server_offset < sizeof(mysql_hdr) + pkt_len) break;
+        const unsigned char* payload = reinterpret_cast<const unsigned char*>(m_server_buffer.data()) + m_server_offset + sizeof(mysql_hdr);
         process_server_packet(payload, pkt_len);
-        m_server_buffer.erase(m_server_buffer.begin(), m_server_buffer.begin() + sizeof(mysql_hdr) + pkt_len);
+        m_server_offset += sizeof(mysql_hdr) + pkt_len;
+    }
+    if (m_server_offset > 0) {
+        if (m_server_offset >= m_server_buffer.size()) {
+            m_server_buffer.clear();
+            m_server_offset = 0;
+        } else if (m_server_offset > 4096) { // Compact if offset is large
+            m_server_buffer.erase(m_server_buffer.begin(), m_server_buffer.begin() + m_server_offset);
+            m_server_offset = 0;
+        }
     }
 }
 
@@ -120,6 +138,11 @@ void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
                 m_affected_rows = 0; m_rows_sent = 0;
             }
         }
+    } else if (command == _MYSQL_COM_STMT_CLOSE) {
+        if (len >= 5) {
+            uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
+            m_statements.erase(stmt_id);
+        }
     } else if (command == _MYSQL_COM_QUIT) {
         on_close();
     }
@@ -128,6 +151,11 @@ void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
 void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
     if (len == 0 || m_state == IDLE) return;
     uint8_t first_byte = data[0];
+
+    bool deprecate_eof = false;
+    if (m_session && m_session->client_myds && m_session->client_myds->myconn) {
+        deprecate_eof = (m_session->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF);
+    }
 
     if (m_state == AWAITING_PREPARE_OK) {
         if (first_byte == 0x00 && len >= 9) {
@@ -156,7 +184,7 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
     } else if (m_state == READING_COLUMNS) {
         if (first_byte == 0xFE && len < 9) { // EOF after columns
             m_state = READING_ROWS;
-        } else if (first_byte == 0x00 && len >= 7 && (m_session->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF)) {
+        } else if (first_byte == 0xFE && len >= 9 && deprecate_eof) {
             m_state = READING_ROWS;
         }
     } else if (m_state == READING_ROWS) {
@@ -164,7 +192,7 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, 0, m_rows_sent);
             m_state = IDLE;
-        } else if (first_byte == 0x00 && len >= 7 && (m_session->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF)) {
+        } else if (first_byte == 0xFE && len >= 9 && deprecate_eof) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, 0, m_rows_sent);
             m_state = IDLE;

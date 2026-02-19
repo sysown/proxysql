@@ -54,14 +54,14 @@ int main(int argc, char** argv) {
     for(int i=0; i<200; i++) large_query += "x";
     large_query += "'";
     
-    mysql_query(conn, large_query.c_str());
+    MYSQL_QUERY(conn, large_query.c_str());
 
     // Verify that NO digest was recorded for this query because it was bypassed
-    int rc = run_q(admin, "SELECT count(*) FROM stats_mysql_query_digest WHERE digest_text LIKE '%xxxx%'");
+    int rc = run_q(admin, "SELECT count(*) FROM stats_mysql_query_digest");
     MYSQL_RES* res = mysql_store_result(admin);
     MYSQL_ROW row = mysql_fetch_row(res);
     int count = atoi(row[0]);
-    ok(count == 0, "Query larger than threshold was correctly bypassed (count: %d)", count);
+    ok(count == 0, "No digests recorded for queries exceeding threshold (count: %d)", count);
     
     mysql_free_result(res);
     mysql_close(conn);

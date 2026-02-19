@@ -30,6 +30,8 @@ void verify_pg_digest(MYSQL* admin, const char* template_text, int expected_coun
     int rc = run_q(admin, query);
     if (rc != 0) {
         ok(0, "Failed to query stats_pgsql_query_digest for %s", template_text);
+        ok(0, "Skipping PG rows_affected check due to query failure");
+        ok(0, "Skipping PG rows_sent check due to query failure");
         return;
     }
     MYSQL_RES* res = mysql_store_result(admin);
@@ -44,6 +46,8 @@ void verify_pg_digest(MYSQL* admin, const char* template_text, int expected_coun
         ok(rows_sent == expected_rows_sent, "Sent rows for %s: %llu (expected: %llu)", row[3], (unsigned long long)rows_sent, (unsigned long long)expected_rows_sent);
     } else {
         ok(0, "PG Digest NOT found for pattern: %s", template_text);
+        ok(0, "Skipping PG rows_affected check (digest not found)");
+        ok(0, "Skipping PG rows_sent check (digest not found)");
         diag("Dumping stats_pgsql_query_digest for debugging:");
         run_q(admin, "SELECT digest_text, count_star FROM stats_pgsql_query_digest");
         MYSQL_RES* dump_res = mysql_store_result(admin);

@@ -729,14 +729,15 @@ void MySQL_Session::reset() {
 		delete mybes;
 		mybes=NULL;
 	}
-	mybe=NULL;
-
-	with_gtid = false;
-	backend_closed_in_fast_forward = false;
-	fast_forward_grace_start_time = 0;
-
-	//gtid_trxid = 0;
-	gtid_hid = -1;
+	        mybe=NULL;
+	
+	        with_gtid = false;
+	        backend_closed_in_fast_forward = false;
+	        fast_forward_grace_start_time = 0;
+	        ffto_bypassed = false;
+	        m_ffto.reset();
+	
+	        //gtid_trxid = 0;	gtid_hid = -1;
 	memset(gtid_buf,0,sizeof(gtid_buf));
 	if (session_type == PROXYSQL_SESSION_SQLITE) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
@@ -6023,17 +6024,16 @@ handler_again:
 				// register the mysql_data_stream
 				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
-			if (mysql_thread___ffto_enabled && !ffto_bypassed) {
-				if (!m_ffto) {
-					m_ffto = std::make_unique<MySQLFFTO>(this);
-				}
-				if (m_ffto) {
-					for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
-						m_ffto->on_server_data((const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr, mybe->server_myds->PSarrayIN->pdata[i].size);
-					}
-				}
-			}
-			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
+			                        if (mysql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
+			                                for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
+			                                        if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)mysql_thread___ffto_max_buffer_size) {
+			                                                ffto_bypassed = true;
+			                                                m_ffto.reset();
+			                                                break;
+			                                        }
+			                                        m_ffto->on_server_data((const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr, mybe->server_myds->PSarrayIN->pdata[i].size);
+			                                }
+			                        }			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 			while (mybe->server_myds->PSarrayIN->len) mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len-1,NULL);
 			break;
 		case CONNECTING_CLIENT:

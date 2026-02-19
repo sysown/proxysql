@@ -29,6 +29,8 @@ void verify_digest(MYSQL* admin, const char* template_text, int expected_count, 
     int rc = run_q(admin, query);
     if (rc != 0) {
         ok(0, "Failed to query stats_mysql_query_digest for %s", template_text);
+        ok(0, "Skipping rows_affected check due to query failure");
+        ok(0, "Skipping rows_sent check due to query failure");
         return;
     }
     MYSQL_RES* res = mysql_store_result(admin);
@@ -43,6 +45,8 @@ void verify_digest(MYSQL* admin, const char* template_text, int expected_count, 
         ok(rows_sent == expected_rows_sent, "Sent rows for %s: %llu (expected: %llu)", row[3], (unsigned long long)rows_sent, (unsigned long long)expected_rows_sent);
     } else {
         ok(0, "Digest NOT found for pattern: %s", template_text);
+        ok(0, "Skipping rows_affected check (digest not found)");
+        ok(0, "Skipping rows_sent check (digest not found)");
         // Dump the table to see what's actually in there
         diag("Dumping stats_mysql_query_digest for debugging:");
         run_q(admin, "SELECT digest_text, count_star FROM stats_mysql_query_digest");

@@ -306,13 +306,13 @@ void PgSQL_Session::reset() {
 			}
 		}
 	}
-	if (client_myds && client_myds->myconn) {
-		client_myds->myconn->reset();
-	}
-	extended_query_phase = EXTQ_PHASE_IDLE;
-}
-
-PgSQL_Session::~PgSQL_Session() {
+	                if (client_myds && client_myds->myconn) {
+	                        client_myds->myconn->reset();
+	                }
+	                extended_query_phase = EXTQ_PHASE_IDLE;
+	                ffto_bypassed = false;
+	                m_ffto.reset();
+	        }PgSQL_Session::~PgSQL_Session() {
 	if (m_ffto) {
 		m_ffto->on_close();
 	}
@@ -2729,17 +2729,16 @@ handler_again:
 			// register the PgSQL_Data_Stream
 			thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 		}
-		if (pgsql_thread___ffto_enabled && !ffto_bypassed) {
-			if (!m_ffto) {
-				m_ffto = std::make_unique<PgSQLFFTO>(this);
-			}
-			if (m_ffto) {
-				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
-					m_ffto->on_server_data((const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr, mybe->server_myds->PSarrayIN->pdata[i].size);
-				}
-			}
-		}
-		client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
+		                if (pgsql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
+		                        for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
+		                                if (mybe->server_myds->PSarrayIN->pdata[i].size > (size_t)pgsql_thread___ffto_max_buffer_size) {
+		                                        ffto_bypassed = true;
+		                                        m_ffto.reset();
+		                                        break;
+		                                }
+		                                m_ffto->on_server_data((const char*)mybe->server_myds->PSarrayIN->pdata[i].ptr, mybe->server_myds->PSarrayIN->pdata[i].size);
+		                        }
+		                }		client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 
 		constexpr unsigned char ready_packet[] = { 0x5A, 0x00, 0x00, 0x00, 0x05 };
 		bool is_copy_ready_packet = false;

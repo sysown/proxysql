@@ -486,11 +486,11 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
 
-			Session_Regex **match_regexes;
-			std::unique_ptr<TrafficObserver> m_ffto;
-			bool ffto_bypassed;
-		
-			ProxySQL_Node_Address * proxysql_node_address;
+	Session_Regex **match_regexes;
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed;
+
+	ProxySQL_Node_Address * proxysql_node_address;
 		
 	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;

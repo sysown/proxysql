@@ -1505,7 +1505,6 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 #endif /* PROXYSQLGENAI */
 	ProxySQL_Main_init_Admin_module(boostrap_info);
-	proxy_info("TEST_LOG: ProxySQL is starting\n");
 	GloMTH->print_version();
 
 	{

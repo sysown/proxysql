@@ -28,21 +28,21 @@ public:
     /**
      * @brief Destructor for MySQLFFTO. Ensures cleanup and reports any pending query stats.
      */
-    virtual ~MySQLFFTO();
+    ~MySQLFFTO() override;
 
     /**
      * @brief Entry point for data received from the client.
      * @param buf Pointer to the raw data buffer.
      * @param len Length of the data in bytes.
      */
-    void on_client_data(const char* buf, size_t len) override;
+    void on_client_data(const char* buf, std::size_t len) override;
 
     /**
      * @brief Entry point for data received from the MySQL server.
      * @param buf Pointer to the raw data buffer.
      * @param len Length of the data in bytes.
      */
-    void on_server_data(const char* buf, size_t len) override;
+    void on_server_data(const char* buf, std::size_t len) override;
 
     /**
      * @brief Called when the session is closing. Ensures the final query's metrics are reported.
@@ -66,6 +66,8 @@ private:
     State m_state;            ///< Current state of the protocol parser.
     std::vector<char> m_client_buffer; ///< Temporary buffer for client-side packet reassembly.
     std::vector<char> m_server_buffer; ///< Temporary buffer for server-side packet reassembly.
+    std::size_t m_client_offset {0};   ///< Current read offset in m_client_buffer.
+    std::size_t m_server_offset {0};   ///< Current read offset in m_server_buffer.
     
     std::string m_current_query;          ///< The query currently being tracked.
     std::string m_pending_prepare_query;  ///< The SQL text of a pending prepare statement.

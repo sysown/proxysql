@@ -10,10 +10,6 @@ class PgSQL_Session;
 
 /**
  * @class PgSQLFFTO
- * @brief PostgreSQL-specific implementation of TrafficObserver.
- */
-/**
- * @class PgSQLFFTO
  * @brief Observer class for PostgreSQL traffic in Fast-Forward mode.
  *
  * Implements a PostgreSQL protocol observer to track query metrics (affected_rows, rows_sent)
@@ -31,21 +27,21 @@ public:
     /**
      * @brief Destructor for PgSQLFFTO. Ensures cleanup and metrics reporting.
      */
-    virtual ~PgSQLFFTO();
+    ~PgSQLFFTO() override;
 
     /**
      * @brief Entry point for data received from the PostgreSQL client.
      * @param buf Pointer to the raw data buffer.
      * @param len Length of the data in bytes.
      */
-    void on_client_data(const char* buf, size_t len) override;
+    void on_client_data(const char* buf, std::size_t len) override;
 
     /**
      * @brief Entry point for data received from the PostgreSQL server.
      * @param buf Pointer to the raw data buffer.
      * @param len Length of the data in bytes.
      */
-    void on_server_data(const char* buf, size_t len) override;
+    void on_server_data(const char* buf, std::size_t len) override;
 
     /**
      * @brief Called when the PostgreSQL session is closing. Ensures final stats are reported.
@@ -66,9 +62,13 @@ private:
     State m_state;            ///< Current state of the protocol observer.
     std::vector<char> m_client_buffer; ///< Temporary buffer for client message reassembly.
     std::vector<char> m_server_buffer; ///< Temporary buffer for server message reassembly.
+    std::size_t m_client_offset {0};   ///< Current read offset in m_client_buffer.
+    std::size_t m_server_offset {0};   ///< Current read offset in m_server_buffer.
 
     std::string m_current_query;           ///< The SQL query currently being tracked.
     unsigned long long m_query_start_time;  ///< Start timestamp of the current query in microseconds.
+    uint64_t m_affected_rows {0};          ///< Accumulated affected rows for the current query.
+    uint64_t m_rows_sent {0};              ///< Accumulated rows sent for the current query.
 
     // Binary Protocol Tracking (PostgreSQL Extended Query)
     std::unordered_map<std::string, std::string> m_statements; ///< Map of statement names to original SQL text.

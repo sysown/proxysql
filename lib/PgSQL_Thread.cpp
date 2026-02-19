@@ -2223,7 +2223,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["poll_timeout_on_failure"] = make_tuple(&variables.poll_timeout_on_failure, 10, 20000, false);
 		VariablesPointers_int["shun_on_failures"] = make_tuple(&variables.shun_on_failures, 0, 10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"] = make_tuple(&variables.shun_recovery_time_sec, 0, 3600 * 24 * 365, false);
-		VariablesPointers_int["ffto_max_buffer_size"] = make_tuple(&variables.ffto_max_buffer_size, 0, 1024 * 1024 * 1024, false);
+		VariablesPointers_int["ffto_max_buffer_size"] = make_tuple(&variables.ffto_max_buffer_size, 1, 1024 * 1024 * 1024, false);
 		VariablesPointers_int["unshun_algorithm"] = make_tuple(&variables.unshun_algorithm, 0, 1, false);
 		VariablesPointers_int["hostgroup_manager_verbose"] = make_tuple(&variables.hostgroup_manager_verbose, 0, 3, false);
 		VariablesPointers_int["tcp_keepalive_time"] = make_tuple(&variables.tcp_keepalive_time, 0, 7200, false);

@@ -2562,7 +2562,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
 		VariablesPointers_int["fast_forward_grace_close_ms"]   = make_tuple(&variables.fast_forward_grace_close_ms,   0,      3600*1000, false);
-		VariablesPointers_int["ffto_max_buffer_size"]          = make_tuple(&variables.ffto_max_buffer_size,          0, 1024*1024*1024, false);
+		VariablesPointers_int["ffto_max_buffer_size"]          = make_tuple(&variables.ffto_max_buffer_size,          1, 1024*1024*1024, false);
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
