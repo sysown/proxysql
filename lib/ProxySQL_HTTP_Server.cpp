@@ -52,6 +52,7 @@ extern ClickHouse_Server *GloClickHouseServer;
 #endif
 
 extern char * Chart_bundle_js_c;
+extern const char * TSDB_Dashboard_html_c;
 extern char * font_awesome;
 extern char * main_bundle_min_css_c;
 #define RATE_LIMIT_PAGE "<html><head><title>Rate Limit Page</title></head><body>Rate Limit Reached</body></html>"
@@ -436,6 +437,13 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 	if (0 != strcmp (method, "GET"))
 		return MHD_NO;              /* unexpected method */
+
+	if (strcmp(url,"/tsdb")==0) {
+		response = MHD_create_response_from_buffer (strlen(TSDB_Dashboard_html_c), (void *) TSDB_Dashboard_html_c, MHD_RESPMEM_PERSISTENT);
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
 
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");

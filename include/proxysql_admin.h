@@ -326,6 +326,8 @@ class ProxySQL_Admin {
 		int stats_mysql_query_cache;
 		int stats_mysql_query_digest_to_disk;
 		int stats_mysql_eventslog_sync_buffer_to_disk;
+		/** @brief Periodic disk sync interval (seconds) for PostgreSQL eventslog buffer. */
+		int stats_pgsql_eventslog_sync_buffer_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
 		bool restapi_enabled;
@@ -687,6 +689,12 @@ class ProxySQL_Admin {
 	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
+	// TSDB
+	void init_tsdb_variables();
+	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void load_tsdb_variables_to_runtime();
+	void save_tsdb_variables_from_runtime();
+
 	void load_or_update_global_settings(SQLite3DB *);
 
 	void load_mysql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mysql_variables___database_to_runtime(admindb, true, checksum, epoch); }
@@ -712,6 +720,7 @@ class ProxySQL_Admin {
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
 	void stats___mysql_global();
+	void stats___tsdb();
 	void stats___mysql_users();
 
 	void stats___pgsql_global();

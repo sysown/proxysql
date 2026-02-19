@@ -177,6 +177,12 @@ test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
 .aider*
 GEMINI.md
 
+# generated MySQL parser artifacts
+lib/MySQL_Lexer.yy.c
+lib/MySQL_Parser.output
+lib/MySQL_Parser.tab.c
+lib/MySQL_Parser.tab.h
+
 # Database discovery output files
 discovery_*.md
 database_discovery_report.md

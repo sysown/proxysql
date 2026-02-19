@@ -1026,6 +1026,12 @@ public:
 		int poll_timeout_on_failure;
 		char* eventslog_filename;
 		int eventslog_filesize;
+		/** @brief Circular buffer size for PostgreSQL advanced events logging. */
+		int eventslog_buffer_history_size;
+		/** @brief Maximum rows retained in stats_pgsql_query_events in-memory table. */
+		int eventslog_table_memory_size;
+		/** @brief Maximum query length copied into PostgreSQL eventslog circular buffer. */
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
 		int eventslog_flush_timeout;
