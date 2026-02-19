@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
+#include <limits>
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -20,6 +21,8 @@ using json = nlohmann::json;
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
+extern MySQL_Threads_Handler *GloMTH;
+extern PgSQL_Threads_Handler *GloPTH;
 
 // Latency bucket thresholds in microseconds for commands_counters histogram
 static const std::vector<int> LATENCY_BUCKET_THRESHOLDS = {
@@ -71,6 +74,14 @@ static const std::map<std::string, std::vector<std::string>> CATEGORY_PREFIXES =
  * It protects the process from unbounded Top-K windows.
  */
 static constexpr uint32_t SHOW_QUERIES_MAX_LIMIT_HARDCODED = 1000;
+
+/**
+ * Hard upper bound for configurable `mcp_stats_show_processlist_max_rows`.
+ *
+ * The runtime MCP variable can reduce this value, but cannot exceed it.
+ * It protects the process from unbounded processlist page windows.
+ */
+static constexpr uint32_t SHOW_PROCESSLIST_MAX_LIMIT_HARDCODED = 1000;
 
 /**
  * @brief Parse and validate a backend filter in `host:port` format.
@@ -412,13 +423,46 @@ json Stats_Tool_Handler::get_tool_list() {
 					{"type", "string"},
 					{"description", "Filter by username"}
 				}},
+				{"database", {
+					{"type", "string"},
+					{"description", "Filter by schema/database name"}
+				}},
 				{"hostgroup", {
 					{"type", "integer"},
 					{"description", "Filter by hostgroup ID"}
 				}},
+				{"command", {
+					{"type", "string"},
+					{"description", "Filter by command/status (for example Query, Sleep, Connect)"}
+				}},
+				{"session_id", {
+					{"type", "integer"},
+					{"description", "Filter by ProxySQL SessionID"}
+				}},
 				{"min_time_ms", {
 					{"type", "integer"},
 					{"description", "Only show sessions running longer than N milliseconds"}
+				}},
+				{"match_info", {
+					{"type", "string"},
+					{"description", "Substring filter on current query text/info"}
+				}},
+				{"info_case_sensitive", {
+					{"type", "boolean"},
+					{"description", "Case-sensitive matching for match_info (default: false)"},
+					{"default", false}
+				}},
+				{"sort_by", {
+					{"type", "string"},
+					{"enum", {"time_ms", "session_id", "username", "hostgroup", "command"}},
+					{"description", "Sort key (default: time_ms)"},
+					{"default", "time_ms"}
+				}},
+				{"sort_order", {
+					{"type", "string"},
+					{"enum", {"asc", "desc"}},
+					{"description", "Sort direction (default: desc)"},
+					{"default", "desc"}
 				}},
 				{"limit", {
 					{"type", "integer"},
@@ -1185,108 +1229,223 @@ json Stats_Tool_Handler::handle_show_status(const json& arguments) {
 /**
  * @brief Shows all currently active sessions being processed by ProxySQL
  *
- * Returns detailed information about each active session including client/backend
- * connection details, current command, execution time, and query info. Includes
- * summary statistics grouped by user, hostgroup, and command type.
+ * Reads live in-memory processlist state via `SQL3_Processlist()` and applies
+ * typed filters/sort/pagination through `processlist_query_options_t`.
+ *
+ * This avoids stale reads from runtime-populated `stats_*_processlist` tables.
  *
  * @param arguments JSON object with optional parameters:
  *   - db_type: "mysql" (default) or "pgsql"
  *   - username: Filter by username
+ *   - database: Filter by schema/database
  *   - hostgroup: Filter by hostgroup ID
+ *   - command: Filter by command/status text
+ *   - session_id: Filter by SessionID
  *   - min_time_ms: Only show sessions running longer than N milliseconds
+ *   - match_info: Optional substring filter on query/info text
+ *   - info_case_sensitive: Optional case-sensitive toggle for match_info
+ *   - sort_by: "time_ms" (default), "session_id", "username", "hostgroup", "command"
+ *   - sort_order: "desc" (default) or "asc"
  *   - limit: Maximum number of sessions to return (default: 100)
  *   - offset: Skip first N results (default: 0)
  *
- * @return JSON response with sessions array and summary statistics
+ * @return JSON response with filtered session rows and summary buckets.
  */
 json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 	std::string db_type = arguments.value("db_type", "mysql");
 	std::string username = arguments.value("username", "");
+	std::string database = arguments.value("database", "");
 	int hostgroup = arguments.value("hostgroup", -1);
+	std::string command = arguments.value("command", "");
+	long long session_id = arguments.value("session_id", -1LL);
 	int min_time_ms = arguments.value("min_time_ms", -1);
+	std::string match_info = arguments.value("match_info", "");
+	bool info_case_sensitive = arguments.value("info_case_sensitive", false);
+	std::string sort_by = arguments.value("sort_by", "time_ms");
+	std::string sort_order = arguments.value("sort_order", "desc");
 	int limit = arguments.value("limit", 100);
 	int offset = arguments.value("offset", 0);
 
-	std::string table = (db_type == "pgsql") ? "stats_pgsql_processlist" : "stats_mysql_processlist";
-	std::string db_col = (db_type == "pgsql") ? "database" : "db";
-
-	std::string sql = "SELECT ThreadID, SessionID, user, " + db_col + ", cli_host, cli_port, "
-		"hostgroup, srv_host, srv_port, command, time_ms, info "
-		"FROM stats." + table + " WHERE 1=1";
-
-	if (!username.empty()) {
-		sql += " AND user = '" + sql_escape(username) + "'";
+	if (limit < 0) {
+		return create_error_response("limit must be >= 0");
 	}
-	if (hostgroup >= 0) {
-		sql += " AND hostgroup = " + std::to_string(hostgroup);
+	if (offset < 0) {
+		return create_error_response("offset must be >= 0");
 	}
-	if (min_time_ms >= 0) {
-		sql += " AND time_ms >= " + std::to_string(min_time_ms);
+	if (hostgroup < -1) {
+		return create_error_response("hostgroup must be >= -1");
+	}
+	if (min_time_ms < -1) {
+		return create_error_response("min_time_ms must be >= -1");
+	}
+	if (session_id < -1) {
+		return create_error_response("session_id must be >= -1");
+	}
+	if (session_id > static_cast<long long>(std::numeric_limits<uint32_t>::max())) {
+		return create_error_response("session_id is too large");
 	}
 
-	sql += " ORDER BY time_ms DESC LIMIT " + std::to_string(limit) + " OFFSET " + std::to_string(offset);
-
-	SQLite3_result* resultset = NULL;
-	int cols = 0;
-	std::string err = execute_admin_query(sql.c_str(), &resultset, &cols);
-
-	if (!err.empty()) {
-		return create_error_response("Failed to query processlist: " + err);
+	processlist_sort_by_t sort_mode = processlist_sort_by_t::time_ms;
+	if (sort_by == "session_id") {
+		sort_mode = processlist_sort_by_t::session_id;
+	} else if (sort_by == "username") {
+		sort_mode = processlist_sort_by_t::username;
+	} else if (sort_by == "hostgroup") {
+		sort_mode = processlist_sort_by_t::hostgroup;
+	} else if (sort_by == "command") {
+		sort_mode = processlist_sort_by_t::command;
+	} else if (sort_by != "time_ms") {
+		return create_error_response("Invalid sort_by: " + sort_by);
 	}
+
+	bool sort_desc = true;
+	if (sort_order == "asc") {
+		sort_desc = false;
+	} else if (sort_order != "desc") {
+		return create_error_response("Invalid sort_order: " + sort_order);
+	}
+
+	if (!GloAdmin) {
+		return create_error_response("ProxySQL Admin not available");
+	}
+
+	const bool is_pgsql = (db_type == "pgsql");
+	if (!is_pgsql && db_type != "mysql") {
+		return create_error_response("Invalid db_type: " + db_type);
+	}
+	if (is_pgsql && !GloPTH) {
+		return create_error_response("PgSQL threads handler not available");
+	}
+	if (!is_pgsql && !GloMTH) {
+		return create_error_response("MySQL threads handler not available");
+	}
+
+	uint32_t configured_cap = 200;
+	if (mcp_handler) {
+		const int configured_value = mcp_handler->variables.mcp_stats_show_processlist_max_rows;
+		if (configured_value > 0) {
+			configured_cap = static_cast<uint32_t>(configured_value);
+		}
+	}
+	if (configured_cap > SHOW_PROCESSLIST_MAX_LIMIT_HARDCODED) {
+		configured_cap = SHOW_PROCESSLIST_MAX_LIMIT_HARDCODED;
+	}
+
+	const uint32_t requested_limit = static_cast<uint32_t>(limit);
+	const uint32_t requested_offset = static_cast<uint32_t>(offset);
+	const uint32_t effective_limit = std::min(requested_limit, configured_cap);
+	const uint32_t capped_offset = std::min(requested_offset, configured_cap);
+
+	processlist_query_options_t query_opts {};
+	query_opts.enabled = true;
+	query_opts.username = username;
+	query_opts.database = database;
+	query_opts.hostgroup = hostgroup;
+	query_opts.command = command;
+	query_opts.min_time_ms = min_time_ms;
+	query_opts.has_session_id = (session_id >= 0);
+	query_opts.session_id = (session_id >= 0) ? static_cast<uint32_t>(session_id) : 0;
+	query_opts.match_info = match_info;
+	query_opts.info_case_sensitive = info_case_sensitive;
+	query_opts.sort_by = sort_mode;
+	query_opts.sort_desc = sort_desc;
+	query_opts.limit = effective_limit;
+	query_opts.offset = capped_offset;
+
+	processlist_config_t base_cfg {};
+#ifdef IDLE_THREADS
+	base_cfg.show_idle_session = is_pgsql
+		? GloPTH->variables.session_idle_show_processlist
+		: GloMTH->variables.session_idle_show_processlist;
+#endif
+	base_cfg.show_extended = is_pgsql
+		? GloPTH->variables.show_processlist_extended
+		: GloMTH->variables.show_processlist_extended;
+	base_cfg.max_query_length = is_pgsql
+		? GloPTH->variables.processlist_max_query_length
+		: GloMTH->variables.processlist_max_query_length;
+	base_cfg.query_options = query_opts;
+
+	/**
+	 * Compute the full matched cardinality before pagination so the MCP payload
+	 * can expose deterministic metadata (`total_sessions`) regardless of page.
+	 */
+	processlist_config_t count_cfg = base_cfg;
+	count_cfg.query_options.sort_by = processlist_sort_by_t::none;
+	count_cfg.query_options.disable_pagination = true;
+
+	SQLite3_result* count_rs = is_pgsql ? GloPTH->SQL3_Processlist(count_cfg) : GloMTH->SQL3_Processlist(count_cfg);
+	if (!count_rs) {
+		return create_error_response("Failed to read in-memory processlist for total count");
+	}
+	const int total_sessions = count_rs->rows_count;
+	delete count_rs;
+
+	SQLite3_result* resultset = is_pgsql ? GloPTH->SQL3_Processlist(base_cfg) : GloMTH->SQL3_Processlist(base_cfg);
+	if (!resultset) {
+		return create_error_response("Failed to read in-memory processlist rows");
+	}
+
+	auto to_int64 = [](const char* value) -> int64_t {
+		if (!value || !value[0]) {
+			return 0;
+		}
+		char* end = nullptr;
+		errno = 0;
+		long long parsed = strtoll(value, &end, 10);
+		if (end == value || *end != '\0' || errno != 0) {
+			return 0;
+		}
+		return static_cast<int64_t>(parsed);
+	};
 
 	json sessions = json::array();
 	std::map<std::string, int> by_user, by_hostgroup, by_command;
+	const int command_idx = is_pgsql ? 13 : 11;
+	const int time_ms_idx = is_pgsql ? 14 : 12;
+	const int info_idx = is_pgsql ? 15 : 13;
 
-	// Get total count
-	std::string count_sql = "SELECT COUNT(*) FROM stats." + table;
-	SQLite3_result* count_rs = NULL;
-	int count_cols = 0;
-	int total_sessions = 0;
-	std::string count_err = execute_admin_query(count_sql.c_str(), &count_rs, &count_cols, false);
-	if (!count_err.empty()) {
-		if (count_rs) {
-			delete count_rs;
+	for (const auto& row : resultset->rows) {
+		json session;
+		session["session_id"] = static_cast<uint64_t>(to_int64(row->fields[1]));
+		session["thread_id"] = static_cast<int>(to_int64(row->fields[0]));
+		session["user"] = row->fields[2] ? row->fields[2] : "";
+		session["database"] = row->fields[3] ? row->fields[3] : "";
+		session["client_host"] = row->fields[4] ? row->fields[4] : "";
+		session["client_port"] = static_cast<int>(to_int64(row->fields[5]));
+		session["hostgroup"] = static_cast<int>(to_int64(row->fields[6]));
+		session["local_backend_host"] = row->fields[7] ? row->fields[7] : "";
+		session["local_backend_port"] = static_cast<int>(to_int64(row->fields[8]));
+		session["backend_host"] = row->fields[9] ? row->fields[9] : "";
+		session["backend_port"] = static_cast<int>(to_int64(row->fields[10]));
+		if (is_pgsql) {
+			session["backend_pid"] = static_cast<int>(to_int64(row->fields[11]));
+			session["backend_state"] = row->fields[12] ? row->fields[12] : "";
 		}
-		proxy_error("show_processlist: failed to count rows: %s\n", count_err.c_str());
-		return create_error_response("Failed to count processlist rows: " + count_err);
-	}
-	if (count_rs && count_rs->rows_count > 0 && count_rs->rows[0]->fields[0]) {
-		total_sessions = std::stoi(count_rs->rows[0]->fields[0]);
-	}
-	if (count_rs) delete count_rs;
+		session["command"] = row->fields[command_idx] ? row->fields[command_idx] : "";
+		session["time_ms"] = static_cast<int>(to_int64(row->fields[time_ms_idx]));
+		session["info"] = row->fields[info_idx] ? row->fields[info_idx] : "";
+		sessions.push_back(session);
 
-	if (resultset) {
-		for (const auto& row : resultset->rows) {
-			json session;
-			session["session_id"] = row->fields[1] ? std::stoll(row->fields[1]) : 0;
-			session["thread_id"] = row->fields[0] ? std::stoi(row->fields[0]) : 0;
-			session["user"] = row->fields[2] ? row->fields[2] : "";
-			session["database"] = row->fields[3] ? row->fields[3] : "";
-			session["client_host"] = row->fields[4] ? row->fields[4] : "";
-			session["client_port"] = row->fields[5] ? std::stoi(row->fields[5]) : 0;
-			session["hostgroup"] = row->fields[6] ? std::stoi(row->fields[6]) : 0;
-			session["backend_host"] = row->fields[7] ? row->fields[7] : "";
-			session["backend_port"] = row->fields[8] ? std::stoi(row->fields[8]) : 0;
-			session["command"] = row->fields[9] ? row->fields[9] : "";
-			session["time_ms"] = row->fields[10] ? std::stoi(row->fields[10]) : 0;
-			session["info"] = row->fields[11] ? row->fields[11] : "";
-			sessions.push_back(session);
-
-			// Aggregate summaries
-			std::string u = row->fields[2] ? row->fields[2] : "unknown";
-			std::string hg = row->fields[6] ? row->fields[6] : "unknown";
-			std::string cmd = row->fields[9] ? row->fields[9] : "unknown";
-			by_user[u]++;
-			by_hostgroup[hg]++;
-			by_command[cmd]++;
-		}
-		delete resultset;
+		const std::string summary_user = row->fields[2] ? row->fields[2] : "unknown";
+		const std::string summary_hg = row->fields[6] ? row->fields[6] : "unknown";
+		const std::string summary_cmd = row->fields[command_idx] ? row->fields[command_idx] : "unknown";
+		by_user[summary_user]++;
+		by_hostgroup[summary_hg]++;
+		by_command[summary_cmd]++;
 	}
+	delete resultset;
 
 	json result;
 	result["db_type"] = db_type;
 	result["total_sessions"] = total_sessions;
 	result["sessions"] = sessions;
+	result["requested_limit"] = requested_limit;
+	result["requested_offset"] = requested_offset;
+	result["effective_limit"] = effective_limit;
+	result["limit_cap"] = configured_cap;
+	result["sort_by"] = sort_by;
+	result["sort_order"] = sort_desc ? "desc" : "asc";
 	result["summary"] = {
 		{"by_user", by_user},
 		{"by_hostgroup", by_hostgroup},

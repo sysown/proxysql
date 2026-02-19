@@ -242,12 +242,62 @@ struct peer_pgsql_servers_v2_t {
 	peer_pgsql_servers_v2_t(SQLite3_result*, const pgsql_servers_v2_checksum_t&);
 };
 
+/**
+ * @brief Sort keys supported by in-memory processlist queries.
+ *
+ * These keys are intentionally limited to fields that are available for both
+ * MySQL and PgSQL processlist rows so callers can use a single contract.
+ */
+enum class processlist_sort_by_t {
+	none,       ///< Keep producer order (no explicit sorting).
+	time_ms,    ///< Sort by session runtime in milliseconds.
+	session_id, ///< Sort by ProxySQL session id.
+	username,   ///< Sort by authenticated username.
+	hostgroup,  ///< Sort by current hostgroup id.
+	command     ///< Sort by command/status text.
+};
+
+/**
+ * @brief Typed filtering, ordering, and pagination options for processlist.
+ *
+ * The options are consumed by `MySQL_Threads_Handler::SQL3_Processlist()` and
+ * `PgSQL_Threads_Handler::SQL3_Processlist()` to query live in-memory session
+ * state without going through runtime-populated `stats_*_processlist` tables.
+ *
+ * All string filters are exact matches unless noted otherwise.
+ */
+struct processlist_query_options_t {
+	bool enabled {false};                   ///< Enables query-options processing.
+	std::string username {};                ///< Optional exact username filter.
+	std::string database {};                ///< Optional exact schema/database filter.
+	int hostgroup {-1};                     ///< Optional hostgroup filter (`-1` disables).
+	std::string command {};                 ///< Optional exact command/status filter.
+	int min_time_ms {-1};                   ///< Optional minimum runtime (`-1` disables).
+	bool has_session_id {false};            ///< Whether @ref session_id is active.
+	uint32_t session_id {0};                ///< Optional exact session identifier.
+	std::string match_info {};              ///< Optional substring filter on `info`.
+	bool info_case_sensitive {false};       ///< Case sensitivity mode for @ref match_info.
+	processlist_sort_by_t sort_by {processlist_sort_by_t::none}; ///< Optional primary sort key.
+	bool sort_desc {true};                  ///< Sort direction for @ref sort_by.
+	bool disable_pagination {false};        ///< If true, ignore @ref limit and @ref offset.
+	uint32_t limit {0};                     ///< Page size (`0` means return zero rows).
+	uint32_t offset {0};                    ///< Number of rows to skip before page.
+};
+
+/**
+ * @brief Processlist extraction configuration.
+ *
+ * This structure combines legacy processlist rendering controls
+ * (`show_extended`, `max_query_length`) with optional query-time filters,
+ * ordering, and pagination in @ref query_options.
+ */
 struct processlist_config_t {
 #ifdef IDLE_THREADS
 	bool show_idle_session;
 #endif
 	int show_extended;
 	int max_query_length;
+	processlist_query_options_t query_options {};
 };
 
 class ProxySQL_Admin {

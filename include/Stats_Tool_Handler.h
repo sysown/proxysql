@@ -58,7 +58,7 @@ private:
 
 	/**
 	 * @brief Shows all currently active sessions
-	 * @param arguments JSON with db_type, username, hostgroup, min_time_ms, limit, offset
+	 * @param arguments JSON with db_type, filters, sort_by, sort_order, limit, offset
 	 */
 	json handle_show_processlist(const json& arguments);
 

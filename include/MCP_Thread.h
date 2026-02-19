@@ -83,6 +83,14 @@ public:
 			 * hardcoded safety maximum in `Stats_Tool_Handler`.
 			 */
 			int mcp_stats_show_queries_max_rows;
+			/**
+			 * @brief Runtime cap for `stats.show_processlist` returned rows.
+			 *
+			 * The handler applies this as an upper bound for caller-requested page
+			 * size (`limit`). The configurable value is itself clamped by a
+			 * hardcoded safety maximum in `Stats_Tool_Handler`.
+			 */
+			int mcp_stats_show_processlist_max_rows;
 		// MySQL Tool Handler configuration
 		char* mcp_mysql_hosts;                  ///< Comma-separated list of MySQL hosts
 		char* mcp_mysql_ports;                  ///< Comma-separated list of MySQL ports
